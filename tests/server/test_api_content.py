@@ -70,6 +70,7 @@ def test_batch_write_request_accepts_write_parity_options():
             BatchWriteOperation(
                 uri="viking://resources/demo/a.md",
                 content="updated",
+                resolve_conflicts=True,
                 tags=["team=search"],
                 tag_mode="append",
                 acl={
@@ -83,6 +84,7 @@ def test_batch_write_request_accepts_write_parity_options():
     assert request.processing_mode == "vectors_only"
     assert request.defer_processing is False
     assert request.operations[0].tags == ["team=search"]
+    assert request.operations[0].resolve_conflicts is True
     assert request.operations[0].tag_mode == "append"
     assert request.operations[0].acl.acl_mode == "restricted"
 
@@ -110,6 +112,7 @@ async def test_batch_write_forwards_processing_mode_and_operation_metadata(monke
                 BatchWriteOperation(
                     uri="viking://resources/demo/a.md",
                     content="updated",
+                    resolve_conflicts=True,
                     tags=["team=search"],
                     tag_mode="append",
                     acl={"acl_mode": "restricted", "entries": []},
@@ -122,6 +125,7 @@ async def test_batch_write_forwards_processing_mode_and_operation_metadata(monke
     assert seen["processing_mode"] == "vectors_only"
     assert seen["defer_processing"] is True
     operation = seen["operations"][0]
+    assert operation["resolve_conflicts"] is True
     assert operation["tags"] == ["team=search"]
     assert operation["tag_mode"] == "append"
     assert operation["acl"]["acl_mode"] == "restricted"

@@ -308,6 +308,34 @@ class ContentWriteCoordinator:
             if isinstance(content, str) and isinstance(uri, str):
                 operation["content"] = await self._sanitize_text(content, uri=uri, ctx=ctx)
 
+    @staticmethod
+    def _resolve_conflict_edit(
+        previous_content: str,
+        final_bytes: bytes,
+        ingest_options: IngestOptions | None,
+        *,
+        user_id: str,
+    ) -> tuple[bytes, IngestOptions, list[str] | None]:
+        resolved, conflict_tags = resolve_manual_conflicts(
+            previous_content, final_bytes.decode("utf-8"), user_id=user_id
+        )
+        options = ingest_options or IngestOptions()
+        if conflict_tags is None:
+            return final_bytes, options, None
+        return (
+            resolved.encode("utf-8"),
+            replace(
+                options,
+                search_tags=merge_search_tags(options.search_tags, conflict_tags),
+                search_tag_mode=(
+                    "append"
+                    if options.search_tags is None
+                    else IngestOptions.vector_search_tag_mode(options.search_tag_mode)
+                ),
+            ),
+            conflict_tags,
+        )
+
     async def write(
         self,
         *,
@@ -717,6 +745,10 @@ class ContentWriteCoordinator:
             operation["ingest_options"] != IngestOptions() for operation in normalized_operations
         ):
             raise InvalidArgumentError("defer_processing does not support tags or ACL updates")
+        if defer_processing and any(
+            operation["resolve_conflicts"] for operation in normalized_operations
+        ):
+            raise InvalidArgumentError("defer_processing does not support resolve_conflicts")
         await self._sanitize_batch_operations(normalized_operations, ctx=ctx)
         for operation in normalized_operations:
             operation["content"] = normalize_account_memory_template_write(
@@ -810,6 +842,34 @@ class ContentWriteCoordinator:
                 pending.append((operation, exists, write_mode))
 
             if not file_only and not defer_processing:
+                for operation, existed, _ in pending:
+                    uri = operation["uri"]
+                    if not (
+                        operation["resolve_conflicts"]
+                        and existed
+                        and operation["mode"] == "replace"
+                        and context_type_for_uri(uri) == "resource"
+                        and uri.lower().endswith(".md")
+                    ):
+                        continue
+                    previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
+                    final_bytes = self._render_final_bytes(
+                        uri,
+                        operation["content"],
+                        mode="replace",
+                        existing_raw=previous_content,
+                        is_new_file=False,
+                    )
+                    (
+                        operation["content"],
+                        operation["ingest_options"],
+                        operation["conflict_tags"],
+                    ) = self._resolve_conflict_edit(
+                        previous_content,
+                        final_bytes,
+                        operation["ingest_options"],
+                        user_id=ctx.user.user_id,
+                    )
                 prepared_resources = await self._prepare_batch_resource_plans(
                     pending=pending,
                     ctx=ctx,
@@ -854,6 +914,10 @@ class ContentWriteCoordinator:
                         if prepared is not None:
                             final_content = prepared.final_bytes
                             committed_resource_plans.append(prepared)
+                        if not final_content.strip() and operation.get("conflict_tags") is not None:
+                            await self._upsert_uri_tags(
+                                uri=uri, tags=operation["conflict_tags"], mode="append", ctx=ctx
+                            )
                         if (
                             not file_only
                             and context_type_for_uri(uri)
@@ -1139,6 +1203,15 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(
                     f"batch-write append does not support binary content: {uri}"
                 )
+            resolve_conflicts = raw.get("resolve_conflicts", False)
+            if not isinstance(resolve_conflicts, bool):
+                raise InvalidArgumentError(
+                    f"batch-write resolve_conflicts must be a boolean: {uri}"
+                )
+            if resolve_conflicts and has_content_base64:
+                raise InvalidArgumentError(
+                    f"batch-write resolve_conflicts requires text content: {uri}"
+                )
             if context_type == "memory" and mode in {"create", "upsert"}:
                 self._validate_create_extension(uri)
             if context_type == "memory" and mode == "append":
@@ -1167,6 +1240,7 @@ class ContentWriteCoordinator:
                     "mode": mode,
                     "expected_sha256": raw.get("expected_sha256"),
                     "if_absent": if_absent,
+                    "resolve_conflicts": resolve_conflicts,
                     "ingest_options": ingest_options,
                 }
             )
@@ -1965,21 +2039,9 @@ class ContentWriteCoordinator:
                 is_new_file=is_new_file,
             )
             if resolve_conflicts:
-                resolved, conflict_tags = resolve_manual_conflicts(
-                    previous_content, final_bytes.decode("utf-8"), user_id=ctx.user.user_id
+                final_bytes, ingest_options, conflict_tags = self._resolve_conflict_edit(
+                    previous_content, final_bytes, ingest_options, user_id=ctx.user.user_id
                 )
-                final_bytes = resolved.encode("utf-8")
-                if conflict_tags is not None:
-                    options = ingest_options or IngestOptions()
-                    ingest_options = replace(
-                        options,
-                        search_tags=merge_search_tags(options.search_tags, conflict_tags),
-                        search_tag_mode=(
-                            "append"
-                            if options.search_tags is None
-                            else IngestOptions.vector_search_tag_mode(options.search_tag_mode)
-                        ),
-                    )
             request = RequestIntent.from_ingest_options(
                 target_uri=uri,
                 processing_mode=processing_mode,

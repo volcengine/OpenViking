@@ -72,6 +72,7 @@ class BatchWriteOperation(BaseModel):
     expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     # Atomically create only when the target does not exist.
     if_absent: bool = False
+    resolve_conflicts: bool = False
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None

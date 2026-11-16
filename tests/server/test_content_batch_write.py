@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1019,6 +1020,116 @@ async def test_batch_same_content_applies_tags(
     assert vfs.writes == [uri]
     refresh = _last_content_write_refresh(_coordinator_queue_for_unit_tests)
     assert refresh["file_ingest_options"][uri]["search_tags"] == ["team=search"]
+
+
+@pytest.mark.asyncio
+async def test_batch_resolve_conflicts_updates_content_and_tags(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://resources/wiki"
+    uri = f"{root}/a.md"
+    conflict = {"state": "unfixed", "match_text": "Conflicting content"}
+    previous = (
+        "# Original\n\nConflicting content\n\nAdditional context.\n\n"
+        "<!-- CONFLICTS_CONTENT\n"
+        + json.dumps(conflict)
+        + "\n-->"
+    )
+    edited = "# Updated\n\nResolved content.\n\nAdditional context.\n"
+    vfs = _VFS(root, {uri: previous})
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": uri,
+                "content": edited,
+                "mode": "replace",
+                "resolve_conflicts": True,
+                "tags": ["team=search"],
+                "tag_mode": "append",
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    stored = vfs.files[uri]
+    assert stored.startswith(edited)
+    resolution = json.loads(stored.split("<!-- CONFLICTS_CONTENT", 1)[1].split("-->", 1)[0])
+    assert resolution["state"] == "fixed"
+    assert resolution["resolution_basis"] == "人工修复"
+    refresh = _last_content_write_refresh(_coordinator_queue_for_unit_tests)
+    assert set(refresh["file_ingest_options"][uri]["search_tags"]) == {
+        "team=search",
+        "has_conflict=false",
+        "conflict_num=0",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defer_processing", [False, True])
+async def test_batch_resolve_conflicts_rejects_unsupported_processing(
+    defer_processing,
+):
+    root = "viking://resources/wiki"
+    uri = f"{root}/a.md"
+    vfs = _VFS(root, {uri: "old"})
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    operation = {
+        "uri": uri,
+        "content_base64": base64.b64encode(b"binary").decode(),
+        "resolve_conflicts": True,
+    }
+    if defer_processing:
+        operation = {"uri": uri, "content": "new", "resolve_conflicts": True}
+
+    with pytest.raises(InvalidArgumentError, match="resolve_conflicts"):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[operation],
+            ctx=ctx,
+            wait=False,
+            defer_processing=defer_processing,
+        )
+
+    assert vfs.writes == []
+
+
+@pytest.mark.asyncio
+async def test_batch_invalid_conflict_history_fails_before_any_write():
+    root = "viking://resources/wiki"
+    first = f"{root}/a.md"
+    invalid = f"{root}/b.md"
+    vfs = _VFS(
+        root,
+        {
+            first: "old",
+            invalid: "old\n\n<!-- CONFLICTS_CONTENT\nnot-json\n-->",
+        },
+    )
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    with pytest.raises(InvalidArgumentError, match="CONFLICTS_CONTENT"):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[
+                {"uri": first, "content": "updated"},
+                {
+                    "uri": invalid,
+                    "content": "updated",
+                    "resolve_conflicts": True,
+                },
+            ],
+            ctx=ctx,
+            wait=False,
+        )
+
+    assert vfs.writes == []
 
 
 @pytest.mark.asyncio
