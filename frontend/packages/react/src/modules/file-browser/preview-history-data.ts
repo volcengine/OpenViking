@@ -3,15 +3,25 @@ import { isOvClientError } from '../../client/errors.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { PreviewHistoryEntry } from './preview-workflow-types.js';
 
+interface NativeCommit {
+  oid: string;
+  message: string;
+  author?: { time_seconds: number };
+  committer?: { time_seconds: number };
+}
 interface VersionPage {
-  versions: {
-    version_id: string;
-    version_number: number;
-    snapshot_id: string;
-    snapshot_path: string;
-    created_at: number;
-    message?: string;
-  }[];
+  versions: (
+    | NativeCommit
+    | {
+        version_id: string;
+        version_number: number;
+        snapshot_id: string;
+        snapshot_path: string;
+        created_at: number;
+        message?: string;
+      }
+  )[];
+  next_before_snapshot?: string | null;
   next_before_version?: string | null;
 }
 export async function readPreviewHistory(
@@ -24,25 +34,45 @@ export async function readPreviewHistory(
     try {
       const entries: PreviewHistoryEntry[] = [];
       let before: string | undefined;
+      let cursorField = 'before_snapshot';
+      const seen = new Set<string>();
       do {
         const page = await client.request<VersionPage>({
           method: 'GET',
           path: OV_PATHS.snapshotVersions,
-          query: { uri, limit: 100, before_version: before },
+          query: { uri, limit: 100, [cursorField]: before },
           options,
         });
         entries.push(
-          ...page.versions.map((entry) => ({
-            id: entry.version_id,
-            snapshot: entry.snapshot_id,
-            path: entry.snapshot_path,
-            title: String(entry.version_number),
-            numbered: true,
-            note: entry.message,
-            timestamp: entry.created_at,
-          })),
+          ...page.versions.map((entry) =>
+            'oid' in entry
+              ? {
+                  id: entry.oid,
+                  snapshot: entry.oid,
+                  path: uri,
+                  title: entry.message,
+                  note: entry.message,
+                  timestamp:
+                    entry.committer?.time_seconds ?? entry.author?.time_seconds,
+                }
+              : {
+                  id: entry.version_id,
+                  snapshot: entry.snapshot_id,
+                  path: entry.snapshot_path,
+                  title: String(entry.version_number),
+                  numbered: true,
+                  note: entry.message,
+                  timestamp: entry.created_at,
+                },
+          ),
         );
-        before = page.next_before_version ?? undefined;
+        cursorField =
+          'next_before_snapshot' in page ? 'before_snapshot' : 'before_version';
+        before =
+          page.next_before_snapshot ?? page.next_before_version ?? undefined;
+        if (before && seen.has(before))
+          throw new TypeError('Snapshot cursor did not advance');
+        if (before) seen.add(before);
       } while (before);
       return entries;
     } catch (error) {
@@ -50,9 +80,7 @@ export async function readPreviewHistory(
       if (!isOvClientError(error) || error.statusCode !== 404) throw error;
     }
   }
-  const result = await client.request<
-    { oid: string; message: string; author: { time_seconds: number } }[]
-  >({
+  const result = await client.request<NativeCommit[]>({
     method: 'GET',
     path: OV_PATHS.snapshotLog,
     query: { paths: [uri], limit: 500 },
@@ -64,6 +92,6 @@ export async function readPreviewHistory(
     path: uri,
     title: entry.message,
     note: entry.message,
-    timestamp: entry.author.time_seconds,
+    timestamp: entry.committer?.time_seconds ?? entry.author?.time_seconds,
   }));
 }

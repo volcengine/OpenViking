@@ -4,6 +4,8 @@
 
 ## en-US
 
+Support switching named compilation configurations through directory-style tabs, native Git snapshot history, and Wiki edits with explicit snapshots.
+
 Propagate pending Wiki conflicts from deeply nested files to every ancestor directory, including collapsed subtrees, and refresh cleared markers. Preserve conflict tags loaded after an older empty index, and let refreshed conflict results override historical compilation counts. Skip inaccessible directory placeholders while traversing containers with readable descendants. Respect write-permission changes in open configuration editors, compare the first version against an empty baseline, and refresh the current version after a restore conflict before allowing another confirmation.
 
 Align compilation settings with directory and Skill pickers, full-path tooltips, frequency radio cards and time selection. Add file selection, historical comparison and file restore to Wiki history in a full-width document panel with the FileViewer diff renderer, hide history for ordinary resource files and while editing, improve pack upload, and keep model names and dashboard tooltips readable.
@@ -13,6 +15,8 @@ Keep history loading indicators centred, show initial picker loading immediately
 Complete theme fallbacks on migrated workflow roots, align dark surfaces, schedule selection borders, history badges and diff legends, and apply the console theme to Switch sizes and unavailable states. Preserve the FileViewer's native diff colours. Show the empty state when a selected directory file has no historical versions, including after retrying a failed request.
 
 ## zh-CN
+
+支持通过目录风格的页签切换编译配置、原生 Git 快照历史，以及显式保留 Wiki 编辑快照。
 
 Wiki 深层文件的待处理冲突沿祖先目录逐级显示，目录折叠时保留，刷新后清除已解决的标记；旧空索引不覆盖后来加载到的冲突标签，刷新结果优先于历史编译统计；跳过无权限目录占位，保留可展开目录的可读后代遍历。已打开的配置编辑器响应写权限变化，首个版本默认与空内容比较，版本回滚冲突后刷新当前版本，供用户再次确认。
 

@@ -103,9 +103,9 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
     await click(button('Retry', workflow()));
     assert.equal(
       workflow().querySelector('time')?.dateTime,
-      new Date(1794268800000).toISOString(),
+      new Date(1825804800000).toISOString(),
     );
-    assert.match(workflow().querySelector('time').textContent, /2026/);
+    assert.match(workflow().querySelector('time').textContent, /2027/);
     assert.deepEqual(
       fetch.calls.find((call) => call.path.endsWith('/snapshot/log')).query,
       { paths: uri, limit: '500' },
@@ -119,7 +119,7 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
   }
 });
 
-test('Compile directory history renders native log author dates', async () => {
+test('Compile directory history renders native log committer dates', async () => {
   const fetch = fixture(
     target,
     true,
@@ -149,7 +149,7 @@ test('Compile directory history renders native log author dates', async () => {
     assert.match(
       workflow().querySelector('[aria-label="Select historical version"]')
         .textContent,
-      /2026-11-10/,
+      /2027-11-10/,
     );
   } finally {
     await view.unmount();

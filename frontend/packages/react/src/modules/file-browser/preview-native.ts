@@ -43,11 +43,12 @@ export function readCompileConfig(
   client: OvClient,
   uri: string,
   options: OvRequestOptions,
+  compileName?: string,
 ) {
   return client.request<CompileConfig>({
     method: 'GET',
     path: OV_PATHS.compileConfig,
-    query: { to: uri },
+    query: compileName ? { compile_name: compileName } : { to: uri },
     options,
   });
 }

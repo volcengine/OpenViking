@@ -68,7 +68,7 @@ test('a configuration dialog keeps its resolved target and success state while a
     assert.equal(
       fetch.calls.filter((call) => call.path.endsWith('/compile/configs'))
         .length,
-      0,
+      1,
     );
   } finally {
     await view.unmount();

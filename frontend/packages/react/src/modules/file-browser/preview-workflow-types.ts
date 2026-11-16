@@ -20,8 +20,16 @@ export interface FileBrowserWorkflowLabels {
   importChoose: string;
   importDrop: string;
   importFormat: string;
+  configuration: string;
+  configurationEmpty: string;
   historyEmpty: string;
   historyLimit: string;
+  snapshotPrompt: string;
+  snapshotChoice: string;
+  keepSnapshot: string;
+  skipSnapshot: string;
+  snapshotFileSaved: string;
+  done: string;
   snapshotNote: string;
   saveSnapshot: string;
   snapshotSaved: string;
@@ -75,6 +83,8 @@ export interface PreviewWorkflowProps {
   onClose: () => void;
 }
 export interface CompileConfig {
+  compile_name?: string;
+  args?: Record<string, unknown>;
   to: string;
   from: string[];
   skill: string;

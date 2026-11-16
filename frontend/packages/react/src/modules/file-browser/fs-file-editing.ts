@@ -37,9 +37,8 @@ export function createFileEditing(
           uri,
           content,
           mode: 'replace',
-          edit_source: 'manual',
           // The native write contract preserves and updates Wiki conflict history.
-          ...(wiki ? { resolve_conflicts: true } : {}),
+          ...(wiki ? { resolve_conflicts: true, use_snapshot: true } : {}),
         },
         options,
       });

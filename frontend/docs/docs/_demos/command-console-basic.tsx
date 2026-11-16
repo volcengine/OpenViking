@@ -21,6 +21,7 @@ function CommandConsoleDemo({ locale }: { locale: 'en-US' | 'zh-CN' }) {
         records={records}
         value={value}
         locale={locale}
+        busy={records.some((record) => record.status === 'pending')}
         commands={createCommandConsoleCommands(locale)}
         commandGroups={createCommandConsoleCommandGroups(locale)}
         onValueChange={setValue}

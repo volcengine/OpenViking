@@ -75,8 +75,9 @@ test('standalone preview offers editing only on the active editable level', asyn
   }
 });
 
-test('FileBrowser saves edits without waiting for background work or creating a snapshot', async () => {
-  const uri = 'viking://resources/guide.md';
+test('FileBrowser saves edits before offering an optional snapshot without waiting for background work', async () => {
+  const rootUri = 'viking://user/alice/memories';
+  const uri = `${rootUri}/guide.md`;
   let fullReads = 0;
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
@@ -108,7 +109,7 @@ test('FileBrowser saves edits without waiting for background work or creating a 
     createElement(
       OpenVikingProvider,
       { fetch },
-      createElement(FileBrowser, { uri, readOnly }),
+      createElement(FileBrowser, { rootUri, uri, readOnly }),
     );
   const view = await mount(render(false));
   try {
@@ -125,7 +126,10 @@ test('FileBrowser saves edits without waiting for background work or creating a 
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
     assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
     assert.equal(requests.countOf('/api/v1/tasks/content-write'), 0);
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.match(
+      document.querySelector('[role="dialog"]')?.textContent ?? '',
+      /Keep a snapshot\?/,
+    );
     assert.equal(view.container.querySelector('.cm-content'), null);
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));

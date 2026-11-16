@@ -91,6 +91,9 @@ export function PreviewCompileEdit({
           method: 'POST',
           path: OV_PATHS.compileConfigUpdate,
           body: {
+            ...(next.compile_name
+              ? { compile_name: next.compile_name, args: next.args }
+              : {}),
             to: next.to,
             from: next.from,
             skill: next.skill,
