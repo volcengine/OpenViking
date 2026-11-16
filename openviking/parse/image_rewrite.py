@@ -10,6 +10,7 @@ images themselves are stored next to the markdown file referencing them).
 
 import json
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
@@ -392,7 +393,11 @@ def _rewrite_content(
         """viking:// URI for *path* if the mapping covers it, else None."""
         image_name = mappings.get(path)
         if image_name and image_name in available_images:
-            return f"{image_dir}/{image_name}"
+            # A raw filename can contain characters that break a Markdown/HTML
+            # destination (spaces, ')', '#'). Percent-encode only what we emit:
+            # the filesystem name and the mapping key keep their original
+            # spelling. See #7725.
+            return f"{image_dir}/{urllib.parse.quote(image_name, safe='')}"
         logger.warning(
             f"[image_rewrite] Image not found in VikingFS: path = {path}, "
             f"image_dir = {image_dir}, leaving reference unchanged"
