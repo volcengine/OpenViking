@@ -51,6 +51,7 @@ export async function readWikiConflictIndex(
         for (const entry of page.result) {
           let path = normalizeResourceUri(entry.uri);
           if (path.slice(0, path.lastIndexOf('/')) !== directory) continue;
+          if (entry.access === 'denied') continue;
           if (entry.isDir) pending.push(path);
           if (!entry.tags?.includes('has_conflict=true')) continue;
           while (within(path, root)) {

@@ -21,6 +21,7 @@ export function resolveDashboard(
   uri: string,
   rows: readonly FileTreeRow[],
   targets: readonly { to: string; conflicts_num?: number }[],
+  indexedConflict?: boolean,
 ): FileBrowserDashboard | undefined {
   if (isExperienceDirectory(uri) || isExperienceFile(uri))
     return { kind: 'experience', uri };
@@ -60,11 +61,12 @@ export function resolveDashboard(
     isRoot: targetUri === uri,
     pendingConflicts: descendantConflict
       ? true
-      : tagged
-        ? tagged === 'has_conflict=true'
-        : owner?.to === uri && owner.conflicts_num !== undefined
-          ? owner.conflicts_num > 0
-          : undefined,
+      : (indexedConflict ??
+        (tagged
+          ? tagged === 'has_conflict=true'
+          : owner?.to === uri && owner.conflicts_num !== undefined
+            ? owner.conflicts_num > 0
+            : undefined)),
   };
 }
 

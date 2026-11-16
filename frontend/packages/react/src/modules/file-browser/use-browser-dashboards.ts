@@ -101,19 +101,9 @@ export function useBrowserDashboards({
       target === uri ? (canonicalUri ?? target) : target,
       knownRows,
       targets,
+      conflicts.presence(identifyUri(target)),
     );
-    return match
-      ? {
-          ...match,
-          pendingConflicts:
-            match.kind === 'wiki'
-              ? match.pendingConflicts ||
-                (conflicts.presence(identifyUri(target)) ??
-                  match.pendingConflicts)
-              : undefined,
-          uri: target,
-        }
-      : undefined;
+    return match ? { ...match, uri: target } : undefined;
   };
   const dashboards = new Map(
     rows
