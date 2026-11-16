@@ -319,7 +319,7 @@ VERSION=${VERSION%-"$PLATFORM"}
 # Termux archives deliberately contain no desktop Node. Link the APT-owned
 # native binary so the existing launcher, PM2 and rollback paths stay shared.
 if [ "$os" = termux ]; then
-  [ ! -e "$PENDING/$DIR/node" ] || { rm -rf "$PENDING"; die 'Termux archives must not bundle Node'; }
+  { [ ! -e "$PENDING/$DIR/node" ] && [ ! -L "$PENDING/$DIR/node" ]; } || { rm -rf "$PENDING"; die 'Termux archives must not bundle Node'; }
   mkdir -p "$PENDING/$DIR/node/bin"
   ln -s "$TERMUX_NODE" "$PENDING/$DIR/node/bin/node"
   if ! "$TERMUX_NODE" "$PENDING/$DIR/packages/daemon/scripts/check-pi.mjs" >/dev/null 2>&1 \
