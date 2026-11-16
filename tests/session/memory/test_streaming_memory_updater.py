@@ -1013,24 +1013,84 @@ async def test_submit_plans_cross_session_writes_and_deletes_together(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_merge_requests_rejects_uri_conflicts_between_operation_kinds():
-    updater = StreamingMemoryUpdater(registry=_registry())
-    request = MemoryUpdateRequest(
-        operations=ResolvedOperations(
-            upsert_operations=[_note_op("conflict")],
-            delete_file_contents=[_note_delete_file("conflict")],
-            errors=[],
-        ),
-        messages=[],
-        ctx=_ctx(),
-        metadata={"session_id": "session-a"},
+@pytest.mark.parametrize(
+    "case", ["add_delete", "edit_delete", "forget", "add_edit", "write_failure"]
+)
+async def test_submit_reconciles_same_session_uri_conflicts(monkeypatch, case):
+    add = _note_op("canonical")
+    edit = _note_update_op("canonical")
+    uri = add.uris[0]
+    old_file = edit.old_memory_file_content
+    files = {uri: MemoryFileUtils.write(old_file)}
+    fs = InMemoryVikingFS(files)
+    fs.rm = AsyncMock(wraps=fs.rm)
+    if case == "write_failure":
+        fs.write_file = AsyncMock(side_effect=OSError("injected write failure"))
+    monkeypatch.setattr("openviking.storage.viking_fs._base._instance", fs)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", OpenVikingConfig())
+    monkeypatch.setattr(PatchMergeContextProvider, "search_files", AsyncMock(return_value=[uri]))
+
+    intent = "forget the note" if case == "forget" else "keep the updated note"
+
+    async def complete(messages, **kwargs):
+        patches = next(
+            m["content"] for m in messages if m["content"].startswith("# Memory File Patches")
+        )
+        assert "new canonical" in patches
+        if case == "add_edit":
+            assert "canonical content" in patches
+        else:
+            assert any(intent in m["content"] for m in messages)
+        if case == "forget":
+            return "notes_1.delete()\nsdk.commit()"
+        return (
+            "notes_1.content.edit(search='old canonical', replace='merged canonical')\nsdk.commit()"
+        )
+
+    resolver = _TestVLMResolver()
+    resolver.get_completion_async = AsyncMock(side_effect=complete)
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        vlm_resolver=resolver,
+        config=StreamingMemoryUpdaterConfig(max_operations_per_update=1),
     )
+    operations = ResolvedOperations(
+        upsert_operations={"edit_delete": [edit], "forget": [edit], "add_edit": [add, edit]}.get(
+            case, [add]
+        ),
+        delete_file_contents=[] if case == "add_edit" else [old_file],
+        errors=[],
+    )
+    try:
+        result = await updater.submit(
+            MemoryUpdateRequest(
+                operations=operations,
+                messages=[Message(id="m1", role="user", parts=[TextPart(text=intent)])],
+                ctx=_ctx(),
+                metadata={"session_id": "session-a", "source_extraction_id": "a1"},
+            )
+        )
+    finally:
+        await updater.close()
 
-    merged = await updater._merge_requests([request])
-
-    assert merged.upsert_operations == []
-    assert merged.delete_file_contents == []
-    assert "Conflicting add/update/delete results" in merged.errors[0]
+    if case in {"edit_delete", "forget", "add_edit"}:
+        resolver.get_completion_async.assert_awaited_once()
+    else:
+        resolver.get_completion_async.assert_not_awaited()
+    if case == "forget":
+        assert not result.apply_result.errors
+        assert result.apply_result.deleted_uris == [uri]
+        assert uri not in fs.files
+        return
+    fs.rm.assert_not_awaited()
+    assert not result.apply_result.deleted_uris
+    if case == "write_failure":
+        assert "injected write failure" in str(result.apply_result.errors)
+        assert fs.files == files
+    else:
+        assert not result.apply_result.errors
+        expected = "canonical content" if case == "add_delete" else "merged canonical"
+        assert MemoryFileUtils.read(fs.files[uri]).plain_content() == expected
 
 
 def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source():

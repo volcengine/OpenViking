@@ -548,7 +548,7 @@ class StreamingMemoryUpdater:
                     await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
-        """Plan cross-session proposals together within one peer, type and template batch."""
+        """Reconcile conflicting writes within one peer, memory type and template batch."""
         operations = _combine_resolved_operations(request.operations for request in requests)
         if operations.has_errors():
             return operations
@@ -569,7 +569,8 @@ class StreamingMemoryUpdater:
         }
         contested = replacements.keys() & (new_targets | edit_targets)
         cross_session = _requests_span_sessions(requests)
-        if cross_session:
+        mixed_edits = set() if cross_session else edit_targets & (new_targets | contested)
+        if cross_session or mixed_edits:
             # A dict can only express agreed replacements. Pass every alternative to the planner.
             for uri in disputed:
                 operations.delete_replacements.pop(uri, None)
@@ -596,20 +597,30 @@ class StreamingMemoryUpdater:
         # Independent patches on the same old file require a single final write.
         # Same-session sequential updates retain their existing order.
         writes = Counter(uri for op in operations.upsert_operations for uri in op.uris)
-        conflicts = set(writes).intersection(file.uri for file in operations.delete_file_contents)
+        splits = detect_split_replacements(operations)
         if not cross_session:
-            conflicts.update(new_targets & edit_targets)
-        elif not operations.upsert_operations and not operations.delete_file_contents:
-            conflicts.update(contested | disputed)
+            # A same-session write supersedes a pure delete of its own target.
+            # Replacements and splits also migrate links, so retain those for validation.
+            operations.delete_file_contents = [
+                file
+                for file in operations.delete_file_contents
+                if file.uri not in writes
+                or file.uri in operations.delete_replacements
+                or file.uri in splits
+                or file.uri in disputed
+            ]
+
+        conflicts = set(writes).intersection(file.uri for file in operations.delete_file_contents)
+        if not operations.upsert_operations and not operations.delete_file_contents:
+            conflicts.update(contested | disputed | mixed_edits)
         if cross_session:
             conflicts.update(uri for uri, count in writes.items() if count > 1)
-        splits = detect_split_replacements(operations)
         for file in operations.delete_file_contents:
             if (
-                cross_session
+                (cross_session or mixed_edits)
                 and not operations.delete_replacements.get(file.uri)
                 and file.uri not in splits
-                and (file.uri in contested or file.uri not in replacements)
+                and (file.uri not in replacements or (cross_session and file.uri in contested))
             ):
                 conflicts.add(file.uri)
             if file.uri in disputed and (
@@ -981,7 +992,7 @@ async def merge_one_memory_type_operations(
         )
 
     if force_merge:
-        fast_path, fast_path_reason = False, "cross_session_batch"
+        fast_path, fast_path_reason = False, "forced_merge"
     else:
         fast_path, fast_path_reason = await classify_memory_merge_mode(operations, schema=schema)
     if fast_path:
