@@ -195,11 +195,9 @@ async fn test_snapshot_log_store_rejects_non_root_commit_when_empty() {
         .unwrap_err();
 
     assert!(err.is_stale_latest());
-    assert!(
-        store
-            .load_latest_indexed_commit("acct_snapshot_empty", "main")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(store
+        .load_latest_indexed_commit("acct_snapshot_empty", "main")
+        .await
+        .unwrap()
+        .is_none());
 }

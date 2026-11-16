@@ -8,9 +8,10 @@ impl GitService {
     /// set, traversal continues through unrelated commits until `limit`
     /// matching commits are collected or history ends. Filtered traversal
     /// returns `GitError::LogScanLimitExceeded` when history remains after
-    /// 1,000 candidate commits.
+    /// 1,000 candidate commits. Offsets above `i64::MAX` are rejected before I/O.
     pub async fn log(&self, mut req: LogRequest) -> Result<Vec<LogEntry>, GitError> {
         validate_account_id(&req.account)?;
+        i64::try_from(req.offset).map_err(|_| GitError::InvalidLogOffset(req.offset))?;
         req.paths = normalize_log_paths(req.paths)?;
         if req.limit == 0 {
             return Ok(Vec::new());
@@ -352,8 +353,8 @@ impl GitService {
             .await?
             {
                 out.push(log_entry_from_meta(commit_oid, meta));
-                // Collect offset + limit so the merge step can skip `offset` later.
-                if out.len() >= req.offset + req.limit {
+                // Count matches after offset without adding two user-supplied integers.
+                if out.len().saturating_sub(req.offset) >= req.limit {
                     return Ok(Some(out));
                 }
             }

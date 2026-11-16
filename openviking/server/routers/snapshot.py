@@ -80,7 +80,7 @@ async def commit(
 async def log(
     branch: str = Query("main", description="Branch ref name"),
     limit: int = Query(20, ge=1, le=500, description="Max commits to return"),
-    offset: int = Query(0, ge=0, description="Skip first N matching commits"),
+    offset: int = Query(0, ge=0, le=2**63 - 1, description="Skip first N matching commits"),
     paths: Optional[List[str]] = Query(
         None,
         max_length=MAX_LOG_FILTER_PATHS,
