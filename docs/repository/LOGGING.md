@@ -146,6 +146,8 @@ Every field above must exist. Explicitly nullable fields use `null`, rendered in
 
 ### 3.3 Output form
 
+Current scope: the logging-standard rollout changes existing log levels, content, formatting and initialization. The existing Usage/Audit store persists usage and HTTP request records, but does not handle the security-operation `audit.*` events described here. The audit helper, event coverage, schema, persistence, queries and retention for those events remain a separate feature backlog; this rollout does not add them.
+
 Audit needs **two sinks**, not one:
 
 1. **Structured event**: the target is a queryable, retention-managed primary channel through the event bus and `usage_audit` projection. The existing `try_publish_event()` is best-effort, and the current projection does not handle these `audit.*` events. Implementation must add event handling, persistence, and failure reporting; calling the publisher does not prove that audit data was persisted.
@@ -153,10 +155,10 @@ Audit needs **two sinks**, not one:
 
 Collection of log copies must check both `logger=openviking.audit` and an explicit audit `event` field, and validate the required fields. Do not route every `WARNING` in the process into audit; see 8.10.6 for third-party warnings.
 
-Use `log_audit()` from `openviking.observability.events`. It validates one closed schema, emits a dedicated log copy, and publishes the same record to the Usage/Audit worker and SQLite `security_audit` table. Queue acceptance does not acknowledge durable storage; unavailable subscribers, queue drops, and persistence failures produce `ERROR`. Business call sites are being integrated in subsequent module batches. Its responsibilities are:
+All call sites use the proposed `log_audit()` helper. The examples below describe its target interface, **not an API currently available for import**. Its responsibilities are:
 
 - Callers explicitly supply `event`, `result`, actor, account, target, and `error_code`; do not infer identity or targets from arbitrary request parameters.
-- The helper captures event time `ts`, derives `action`, and obtains `request_id` and `trace_id` from execution context. Callers may supply a single `source_ip` from trusted transport metadata and an allowlisted product/version `user_agent`; the helper validates them again. Missing or unsafe values remain `null`.
+- The helper captures event time `ts`, derives `action`, and obtains `request_id`, `trace_id`, `source_ip`, and `user_agent` from execution context. Without context, retain those fields with `null` values.
 - Validate and transform fields under 4.2, then send **the same complete record** to both destinations. The log copy uses the fixed message `"audit event"` with all business fields in `extra`, rendered by the formatter in 8.10. Collectors must not parse message text to discover event names or identities.
 
 For example, after an ACL grant completes:
@@ -183,6 +185,9 @@ Constraints:
 - At a validation, publication, or persistence failure boundary, the audit infrastructure emits one safe `ERROR` without rolling back the business transaction. Do not swallow failures and claim that both writes succeeded.
 - Audit records must never be swallowed by a business-layer `except Exception`.
 - Never put plaintext keys, passwords, tokens, or full request bodies in an audit message.
+
+
+
 
 ### 3.4 Anti-pattern
 
@@ -548,7 +553,7 @@ The problem is not merely "`WARNING` is used in the wrong places" — **the audi
 
 ### 7.4 Implementation baseline before module rollout
 
-The inventory below records the baseline before PR #7769 and the runtime foundation batch. The foundation now uses `INFO` by default, migrates tracer to stdlib logging, unifies Python/root and Rust/C++ output, and disables duplicate Uvicorn access logs in standalone servers. It also provides the audit helper and persistence path; business audit integration and remaining call-site cleanup continue in later batches.
+The inventory below records the baseline before PR #7769 and the runtime foundation batch. The foundation now uses `INFO` by default, migrates tracer to stdlib logging, unifies Python/root and Rust/C++ output, and disables duplicate Uvicorn access logs in standalone servers. Bootstrap status retains direct console prints. Security-operation audit capabilities remain a separate feature backlog; existing log call-site cleanup continues in later batches.
 
 1. **The default level suppresses `INFO`**: `LogConfig.level` defaults to `WARNING` (`openviking_cli/utils/config/log_config.py:12`) while the fallback in `_load_log_config()` is `INFO` (`openviking_cli/utils/logger.py:684`). Once fallbacks and retries move to `INFO`, default deployments will not see them at all.
 2. **Non-lazy formatting**: enabling ruff's `G` rules reports 480 issues — 449 `G004` (f-string logging), 27 `G201` (`.error(..., exc_info=True)` instead of `.exception()`), and 4 `G001`. `pyproject.toml` currently selects only `E/W/F/I/C/B`, so CI does not catch them.
@@ -649,6 +654,8 @@ Keep a message under 2 KB and structured field values under 1 KB. Truncate and m
 
 ### 8.10 Common output format and initialization
 
+Bootstrap progress, dependency checks, startup results and failure diagnostics use direct `print(..., flush=True)` output so operators can see them regardless of `log.level` or file logging. Errors go to stderr; other status messages go to stdout. This console output still obeys the content rules in section 4, and is checked separately from formatted runtime logs.
+
 The following target requirements cover server logs from Python, Rust, C++, TypeScript, third-party dependencies, and child-process output merged into server logs. See 8.10.4–8.10.5 for standalone CLI and SDK host boundaries. Convert formats in initialization and adapter layers; business code must not assemble log headers.
 
 #### 8.10.1 Time
@@ -690,7 +697,7 @@ Text output has the fixed order `ts level logger pid request_id trace_id message
 
 #### 8.10.4 Initialization and output ownership
 
-- The server entry point owns logging configuration. Install minimal common output before loading dependencies that configure logging or creating components, and retain the same format contract after loading configuration. Report configuration-loading failures through this output too.
+- The server entry point owns logging configuration. Install minimal common output before loading dependencies that configure logging or creating components, and retain the same format contract after loading configuration. Report bootstrap configuration-loading failures directly to stderr with `print(..., flush=True)`.
 - Integrate Python root and managed loggers, including at least Uvicorn, MCP, and APScheduler. Define handler ownership and propagation so each event appears once per destination; audit dual writes and OTel export are separate destinations.
 - Business modules must not install their own `basicConfig`, RichHandler, or formatter. Handle dependency initialization side effects in the integration layer so later components cannot change output formats or thresholds.
 - Migrate owned loguru calls to `get_logger()`. If retained temporarily, bridge them in one direction to the common output and remove duplicate sinks. Rust/C++ must implement the same contract in native adapters; replacing `%l` / `%(levelname)s` alone does not establish format consistency.
@@ -702,7 +709,7 @@ Text output has the fixed order `ts level logger pid request_id trace_id message
 
 - Server stdout/stderr, files, systemd, and container collection output use UTF-8 without ANSI colors, Rich columns, automatic wrapping, progress bars, or omitted repeated timestamps. Each event occupies one physical line; wrapping by a viewer is not application output.
 - Redact permitted stack traces under 4.8, then escape newlines within the same record. Do not emit bare continuation lines that cannot be attributed to an event. JSON mode likewise uses one object per line.
-- Runtime logs for startup/shutdown, dependency checks, and child-process management must use the common logger. Do not bypass formatting, levels, or redaction with `print()`, `console.print()`, or direct stdout/stderr writes.
+- Bootstrap progress, dependency checks, startup results and bootstrap-managed process diagnostics retain direct `print(..., flush=True)` output. Other runtime logs use the common logger. Console messages still require safe content; raw credentials, exception text and child-process bodies must not be printed.
 - Interactive CLI help, command results, and progress displays may use dedicated terminal rendering; these are not server runtime logs. When stdout carries machine-readable results or a stdio protocol, diagnostic logs must go to stderr without contaminating that stream.
 
 #### 8.10.6 Third-party semantics and audit isolation
@@ -717,7 +724,7 @@ Text output has the fixed order `ts level logger pid request_id trace_id message
 For changes to logging initialization or adapters, capture actual stdout/stderr or log files and verify at least:
 
 - Under UTC and Asia/Shanghai environments, a fixed event time produces the same UTC timestamp with identical precision and format.
-- Startup, configuration failure, normal requests, exceptions, shutdown, and output from Python, MCP/APScheduler, and Rust/C++ satisfy the required fields and single-line contract.
+- Formatted runtime logs for normal requests, exceptions, shutdown, Python, MCP/APScheduler and Rust/C++ satisfy the required fields and single-line contract. Check bootstrap startup/configuration-failure messages separately: they remain visible on stdout/stderr under high log thresholds and file output.
 - Non-TTY redirection contains no ANSI sequences, Rich columns, omitted timestamps, or bare continuation lines. Components honor thresholds such as `INFO` and `WARNING`, with dedicated cases for native level-mapping limitations.
 - Repeated initialization, reloads, and multiple workers produce each event exactly once per destination, with the correct PID and no request-context leakage into other requests.
 - A third-party `WARNING` remains operational while an `openviking.audit` event reaches audit; the two are not confused.
@@ -733,15 +740,15 @@ Land one module batch before starting the next. Refresh from upstream before eac
 | Batch | Scope | Status |
 | --- | --- | --- |
 | 1 | Model logs and safe payload summaries | Merged in #7769 |
-| 2 | Logging initialization, observability, audit foundation, Python/Rust/C++ output | Implemented; business audit call sites remain for later batches |
-| 3 | Authentication, accounts, ACL, and ROOT invocation audit | After batch 2 merges |
-| 4 | Business service audit | After batch 3 merges |
+| 2 | Logging initialization, observability logs, Python/Rust/C++ output | Implemented; adds no audit capabilities |
+| 3 | Existing authentication, account, ACL, and ROOT-related logs | After batch 2 merges |
+| 4 | Existing business service logs | After batch 3 merges |
 | 5 | Parsing, ingestion, and connectors | After batch 4 merges |
 | 6 | Storage and queues | After batch 5 merges |
 | 7 | Retrieval, core, and utilities | After batch 6 merges |
 | 8 | Sessions, memory, compilation, CLI, and Gateway | After batch 7 merges |
 
-The priority inventory below is the original rollout backlog. Apply it within the module batches above.
+The priority inventory below is the original policy backlog. Apply existing-log remediation within the module batches above; new audit capabilities remain outside this rollout.
 
 | Priority | Item | Scope | Note |
 | --- | --- | --- | --- |
@@ -752,12 +759,12 @@ The priority inventory below is the original rollout backlog. Apply it within th
 | P0 | Add the `openviking.audit` logger and a `log_audit()` helper | Prerequisite for audit integration | Centralize schema, field transformations, event projection, and dual-write failure reporting; verify persistence before integrating business events |
 | P1 | Enable ruff `G` rules | CI | Scope existing violations with `per-file-ignores`, then burn down 480 |
 | P1 | Add `log_safety.py` (`short_hash`, `safe_uri_for_log`, `safe_path_for_log`, `safe_log_fields`) | New module | Single entry point for the transformations in 4.4–4.8 |
-| P1 | Unify server logging initialization and final output | Python/root, Uvicorn, MCP/APScheduler, tracer, Rust/C++ | Implement 8.10, including startup `print()` migration, tracer loguru migration/bridging, audit isolation, and actual-output acceptance; do not wait for repository-wide cleanup |
+| P1 | Unify server logging initialization and final output | Python/root, Uvicorn, MCP/APScheduler, tracer, Rust/C++ | Implement 8.10, including visible bootstrap console output, tracer loguru migration/bridging, and actual-output acceptance; do not wait for repository-wide cleanup |
 | P2 | Demote `WARNING` per 7.2 | ~190 sites | Batch by module, one regression test per batch |
 | P2 | Aggregate loop logging | ~30 files | Summary plus detail |
 | P2 | Remediate path logging (34 sites) and indirect `peer_id` leakage | ~34 sites | Relative path plus short hash |
 | P3 | De-duplicate access logs | 2 sites | Decide owner: `uvicorn.access` or `observability.http` |
-| P3 | Clean up remaining runtime-log `print()` calls | Remaining sites across the repository | Server startup is already P1; distinguish interactive CLI display and protocol output under 8.10.5 instead of replacing mechanically |
+| P3 | Clean up remaining runtime-log `print()` calls | Remaining sites across the repository | Retain bootstrap console output; distinguish interactive CLI display and protocol output under 8.10.5 instead of replacing mechanically |
 | P4 | Optional JSON formatter | 1 handler | For field-based collection |
 
 ### PR checklist

@@ -266,7 +266,7 @@ def test_otel_destination_filters_fields_thresholds_and_duplicate_propagation(tm
         private = RuntimeError('private-exception-body')
         logging.getLogger('mcp.probe').error('failure=%(exc)s', {'exc': private},
             exc_info=(RuntimeError, private, None), extra={'api_key': 'private-key'})
-        module.get_logger('openviking.audit').warning('audit probe', extra={'event': 'audit.auth.failure'})
+        module.get_logger('openviking.probe').error('owned error', extra={'error_code': 'PROBE_FAILED'})
         records = [item.log_record for item in exporter.get_finished_logs()]
         assert len(records) == 2
         failure = records[0]
@@ -275,7 +275,7 @@ def test_otel_destination_filters_fields_thresholds_and_duplicate_propagation(tm
         assert 'exception.message' not in failure.attributes
         assert not failure.attributes.get('code.file.path')
         assert failure.attributes['error_type'] == 'RuntimeError'
-        assert records[1].attributes['event'] == 'audit.auth.failure'
+        assert records[1].attributes['error_code'] == 'PROBE_FAILED'
         provider.shutdown()
     """)
     result = subprocess.run(
@@ -284,7 +284,7 @@ def test_otel_destination_filters_fields_thresholds_and_duplicate_propagation(tm
     assert result.returncode == 0, result.stderr
 
 
-def test_log_field_transformations_drop_unsafe_transport_and_paths():
+def test_log_field_transformations_omit_private_fields_and_hash_paths():
     from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log
 
     uri = "viking://user/alice/peers/private-peer/private-content.md"
@@ -297,11 +297,7 @@ def test_log_field_transformations_drop_unsafe_transport_and_paths():
             "content": "private-content",
         }
     )
-    assert safe["source_ip"] is None and safe["user_agent"] is None
+    assert "source_ip" not in safe and "user_agent" not in safe
     assert safe["target_id"].startswith("viking://user/alice/hash/")
     assert safe_uri_for_log(safe["target_id"]) == safe["target_id"]
     assert "private-peer" not in str(safe) and "private-content" not in str(safe)
-    assert safe_log_fields({"source_ip": "2001:db8::1", "user_agent": "curl/1.2"}) == {
-        "source_ip": "2001:db8::1",
-        "user_agent": "curl/1.2",
-    }

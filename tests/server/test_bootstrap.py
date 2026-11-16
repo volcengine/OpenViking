@@ -19,7 +19,7 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingl
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 
-def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
+def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch, capsys):
     config = ServerConfig(host="127.0.0.1", port=1933)
     captured: dict[str, object] = {}
 
@@ -70,6 +70,7 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
 
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 1933
+    assert "OpenViking HTTP Server is running on 127.0.0.1:1933" in capsys.readouterr().out
 
 
 def test_main_coerces_cli_host_all_to_none(monkeypatch):
@@ -226,12 +227,8 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         assert os.environ[app_module.WORKER_BOT_API_URL_ENV] == "http://127.0.0.1:19000"
 
 
-def test_main_logs_safe_config_diagnostics_on_validation_error(monkeypatch, caplog):
+def test_main_prints_safe_config_diagnostics_on_validation_error(monkeypatch, capsys):
     """An unknown top-level config field must exit 1 with actionable diagnostics."""
-    import logging
-
-    monkeypatch.setattr(bootstrap, "logger", logging.getLogger("test.bootstrap.config"))
-    caplog.set_level(logging.INFO, logger="test.bootstrap.config")
     config = ServerConfig(host="127.0.0.1", port=1933)
 
     monkeypatch.setattr(bootstrap, "resolve_config_path", lambda *a, **k: Path("/tmp/ov.conf"))
@@ -265,12 +262,12 @@ def test_main_logs_safe_config_diagnostics_on_validation_error(monkeypatch, capl
         bootstrap.main()
 
     assert exc.value.code == 1
-    assert "server configuration invalid" in caplog.text
-    assert "error_type=ValueError" in caplog.text
-    assert "openviking-server doctor" in caplog.text
-    assert "/tmp/ov.conf" not in caplog.text
-    assert "Unknown config field 'claude_code'" not in caplog.text
-    assert sum(record.levelno == logging.CRITICAL for record in caplog.records) == 1
+    err = capsys.readouterr().err
+    assert "Failed to load OpenViking server configuration (ValueError)." in err
+    assert "/tmp/ov.conf" not in err
+    assert "Unknown config field 'claude_code'" not in err
+    assert "openviking-server doctor" in err
+    assert "examples/ov.conf.example" in err
 
 
 def test_worker_factory_replays_bot_overrides(monkeypatch):
@@ -293,15 +290,13 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "create_app",
-        lambda worker_config, config_path: (
-            captured.update(
-                {
-                    "app_config": worker_config,
-                    "app_config_path": config_path,
-                }
-            )
-            or worker_config
-        ),
+        lambda worker_config, config_path: captured.update(
+            {
+                "app_config": worker_config,
+                "app_config_path": config_path,
+            }
+        )
+        or worker_config,
     )
 
     worker_config = app_module.create_worker_app()

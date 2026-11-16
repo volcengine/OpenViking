@@ -143,8 +143,6 @@ class _ConfiguredLevelFilter(logging.Filter):
         self.level = level
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.name == "openviking.audit":
-            return record.levelno >= logging.WARNING
         return record.levelno >= self.level
 
 
@@ -959,7 +957,7 @@ def _configure_logger_instance(
         if _otel_log_handler is not None and isinstance(_otel_log_handler, logging.Handler):
             logger.addHandler(_otel_log_handler)
     logger.propagate = propagate
-    logger.setLevel(logging.WARNING if logger.name == "openviking.audit" else level)
+    logger.setLevel(level)
     current_handlers = set(logger.handlers)
     for old_handler in old_handlers:
         if old_handler in current_handlers or old_handler is _otel_log_handler:

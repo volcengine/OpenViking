@@ -500,6 +500,8 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 
 `log` 统一控制独立服务器的 Python、Rust 和 C++ 输出。默认级别为 `INFO`，
 便于看到兜底和重试；业务过程使用 `DEBUG`。第三方日志保留原级别语义。
+Bootstrap 启动结果和失败提示直接打印到 stdout/stderr，即使设置高日志阈值
+或文件输出也会显示。
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 | --- | --- | --- | --- |
@@ -523,8 +525,8 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 
 原生输出配置改变后需要重启服务；Python 重配不能代表原生组件已经更新。
 Rust 没有 `CRITICAL`，该阈值仍映射到 `ERROR`，输出仍标为 `ERROR`。
-专用 `openviking.audit` 日志保留 `WARNING` 及以上记录，不受更高的全局阈值压制；
-其持久化使用现有 `server.observability.usage_audit` 配置。业务审计接入按模块逐批推进。
+已有 `server.observability.usage_audit` 配置管理用量及 HTTP 请求记录；
+安全操作审计落库记为独立功能待办。
 SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING_CN.md)。
 
 ## Compile API 配置

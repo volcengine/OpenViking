@@ -15,12 +15,6 @@ from .store import UsageAuditStore
 logger = logging.getLogger(__name__)
 
 
-def _audit_logger():
-    from openviking_cli.utils.logger import get_logger
-
-    return get_logger("openviking.audit")
-
-
 class UsageAuditWorker:
     """Best-effort async batch writer for usage/audit events."""
 
@@ -57,11 +51,6 @@ class UsageAuditWorker:
         """Try to enqueue one event without blocking the caller."""
         if self._closed or self._queue is None or self._loop is None:
             self.dropped_count += 1
-            if event.event_name.startswith("audit."):
-                _audit_logger().error(
-                    "audit enqueue failed error_code=AUDIT_QUEUE_UNAVAILABLE",
-                    extra={"error_code": "AUDIT_QUEUE_UNAVAILABLE"},
-                )
             return
 
         try:
@@ -79,21 +68,11 @@ class UsageAuditWorker:
         queue = self._queue
         if self._closed or queue is None:
             self.dropped_count += 1
-            if event.event_name.startswith("audit."):
-                _audit_logger().error(
-                    "audit enqueue failed error_code=AUDIT_QUEUE_UNAVAILABLE",
-                    extra={"error_code": "AUDIT_QUEUE_UNAVAILABLE"},
-                )
             return
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
             self.dropped_count += 1
-            if event.event_name.startswith("audit."):
-                _audit_logger().error(
-                    "audit enqueue failed error_code=AUDIT_QUEUE_FULL",
-                    extra={"error_code": "AUDIT_QUEUE_FULL"},
-                )
 
     async def _run(self) -> None:
         while not self._closed:
@@ -122,9 +101,7 @@ class UsageAuditWorker:
             try:
                 await self._flush(batch)
             except asyncio.CancelledError:
-                audit = any(event.event_name.startswith("audit.") for event in batch)
-                (_audit_logger() if audit else logger).log(
-                    logging.ERROR if audit else logging.INFO,
+                logger.info(
                     "Usage/Audit worker cancelled with %d in-flight events",
                     len(batch),
                 )
@@ -140,21 +117,14 @@ class UsageAuditWorker:
         try:
             await self._store.record_batch(batch)
         except Exception as exc:  # noqa: BLE001
-            audit = any(event.event_name.startswith("audit.") for event in batch)
-            level = (
-                logging.ERROR if (audit or not self._persistence_failure_reported) else logging.INFO
-            )
+            level = logging.INFO if self._persistence_failure_reported else logging.ERROR
             self._persistence_failure_reported = True
-            (_audit_logger() if audit else logger).log(
+            logger.log(
                 level,
-                "usage audit persistence failed total=%d error_type=%s error_code=AUDIT_PERSISTENCE_FAILED",
+                "usage audit persistence failed total=%d error_type=%s",
                 len(batch),
                 type(exc).__name__,
-                extra={
-                    "total": len(batch),
-                    "error_type": type(exc).__name__,
-                    "error_code": "AUDIT_PERSISTENCE_FAILED",
-                },
+                extra={"total": len(batch), "error_type": type(exc).__name__},
             )
 
     async def flush(self) -> None:
@@ -198,10 +168,4 @@ class UsageAuditWorker:
             try:
                 await asyncio.wait_for(self._flush(remaining), timeout=timeout_seconds)
             except asyncio.TimeoutError:
-                audit = any(event.event_name.startswith("audit.") for event in remaining)
-                (_audit_logger() if audit else logger).log(
-                    logging.ERROR if audit else logging.INFO,
-                    "usage audit shutdown flush timed out total=%d error_code=AUDIT_PERSISTENCE_FAILED",
-                    len(remaining),
-                    extra={"total": len(remaining), "error_code": "AUDIT_PERSISTENCE_FAILED"},
-                )
+                logger.info("Usage/Audit shutdown flush timed out")

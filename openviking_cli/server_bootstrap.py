@@ -107,12 +107,10 @@ def main():
         with bind_log_execution_trace():
             _real_main()
     except Exception as exc:
-        import logging
-
-        logging.getLogger("openviking.server.bootstrap").critical(
-            "server startup failed error_type=%s",
-            type(exc).__name__,
-            extra={"error_type": type(exc).__name__},
+        print(
+            f"OpenViking server startup failed ({type(exc).__name__}).",
+            file=sys.stderr,
+            flush=True,
         )
         raise SystemExit(1) from None
 

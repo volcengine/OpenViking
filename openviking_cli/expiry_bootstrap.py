@@ -7,9 +7,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import os
 import signal
+import sys
 from pathlib import Path
 
 
@@ -109,8 +109,10 @@ def main(argv: list[str] | None = None) -> int:
             # Validation errors are already safely formatted. Avoid emitting
             # chained validation tracebacks containing raw configuration input.
             write_startup_status(current_startup_status, "failed", str(exc))
-            logging.critical(
-                "expiry publisher configuration failed error_type=%s", type(exc).__name__
+            print(
+                f"Expiry publisher configuration failed ({type(exc).__name__}).",
+                file=sys.stderr,
+                flush=True,
             )
             return 1
         configure_server_logging()
@@ -131,7 +133,11 @@ def main(argv: list[str] | None = None) -> int:
                 write_startup_status(startup_status, "failed", str(exc))
             except Exception:
                 pass
-        logging.critical("expiry publisher failed error_type=%s", type(exc).__name__)
+        print(
+            f"Expiry publisher failed ({type(exc).__name__}).",
+            file=sys.stderr,
+            flush=True,
+        )
         return 1
 
 

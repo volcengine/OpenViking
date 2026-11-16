@@ -524,7 +524,9 @@ This setting limits independent asynchronous reindex requests. URI-overlapping r
 
 `log` controls Python, Rust, and C++ output in the standalone server. The default
 level is `INFO` so fallbacks and retries remain visible; business progress uses
-`DEBUG`. Third-party logs retain their original level semantics.
+`DEBUG`. Third-party logs retain their original level semantics. Bootstrap startup
+results and failure diagnostics print directly to stdout/stderr and remain visible
+even with a high log threshold or file output.
 
 | Field | Type / values | Default | Purpose |
 | --- | --- | --- | --- |
@@ -549,10 +551,9 @@ other custom formats and unknown levels fail configuration validation.
 
 Native output changes require a server restart; reconfiguring Python does not update
 native components. Rust has no `CRITICAL` level, so that threshold still maps to
-`ERROR` and emitted events remain `ERROR`. The dedicated `openviking.audit` logger
-retains `WARNING` and higher records even under a higher global threshold. Its
-persistence uses the existing `server.observability.usage_audit` settings. Business
-audit integration proceeds module by module. SDK imports do not take ownership of
+`ERROR` and emitted events remain `ERROR`. The existing
+`server.observability.usage_audit` settings manage usage and HTTP request records;
+security-operation audit persistence remains a separate feature backlog. SDK imports do not take ownership of
 the host root logger. See the [logging policy](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md) for content rules.
 
 ## Compile API Settings
