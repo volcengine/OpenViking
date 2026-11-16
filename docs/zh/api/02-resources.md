@@ -799,42 +799,65 @@ shared 模式的响应示例：
 
 ---
 
-### 复制或移动共享资源
+### 复制共享资源
 
-这些接口只操作 `viking://resources/` 下的资源。源 URI 和目标 URI
-都必须位于该共享子树下；不接受共享资源根本身或私有资源命名空间。
-访问权限检查和响应字段沿用对应的[文件系统操作](03-filesystem.md)。
+复制文件或目录及其向量记录。源 URI 和目标 URI 都必须位于
+`viking://resources/` 子树下；不接受共享资源根本身或私有资源命名空间。
+这些操作沿用对应文件系统操作的访问权限检查。
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/resources/cp` | 复制文件或目录及其向量记录 |
-| POST | `/api/v1/resources/mv` | 移动或重命名共享资源 |
+**HTTP**
+
+```http
+POST /api/v1/resources/cp
+```
 
 | 请求体参数 | 类型 | 必填 | 默认值 | 说明 |
 |------------|------|------|--------|------|
 | `from_uri` | string | 是 | - | 源共享资源 URI |
 | `to_uri` | string | 是 | - | 目标共享资源 URI |
-| `recursive` | boolean | 否 | `false` | 递归复制目录；仅 `cp` 支持 |
+| `recursive` | boolean | 否 | `false` | 递归复制目录 |
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/resources/cp \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   --data '{"from_uri":"viking://resources/guide.md","to_uri":"viking://resources/guide-copy.md","recursive":false}'
+```
 
+成功响应的 `status` 为 `"ok"`，`result` 包含 `from`、`to` 和
+`recursive`。
+
+### 移动或重命名共享资源
+
+在共享资源子树内移动资源。源 URI 和目标 URI 都必须位于
+`viking://resources/` 子树下，命名空间限制与复制接口一致。
+
+**HTTP**
+
+```http
+POST /api/v1/resources/mv
+```
+
+| 请求体参数 | 类型 | 必填 | 说明 |
+|------------|------|------|------|
+| `from_uri` | string | 是 | 源共享资源 URI |
+| `to_uri` | string | 是 | 目标共享资源 URI |
+
+```bash
 curl -X POST http://localhost:1933/api/v1/resources/mv \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   --data '{"from_uri":"viking://resources/guide-copy.md","to_uri":"viking://resources/guide-renamed.md"}'
 ```
 
-成功响应的 `status` 为 `"ok"`，`result` 包含 `from` 和 `to`；
-复制响应还包含 `recursive`。
+成功响应的 `status` 为 `"ok"`，`result` 包含 `from` 和 `to`。
 
 ### 删除共享资源
 
 删除 `viking://resources/` 下的资源。此操作要求 MANAGE 权限，
 会删除关联向量记录、刷新父目录语义元数据，并同步受影响的 Watch。
+
+**HTTP**
 
 ```http
 DELETE /api/v1/resources?uri={uri}

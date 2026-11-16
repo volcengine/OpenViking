@@ -157,13 +157,13 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:14
+        image: postgres:17
         env:
+          POSTGRES_DB: openviking_test
           POSTGRES_USER: openviking_test
           POSTGRES_PASSWORD: integration-test-password
-          POSTGRES_DB: openviking_test
         ports:
-          - 5432:5432
+          - ${{ needs.native-runtime.outputs.test_container != '' && '5432' || '5432:5432' }}
         options: >-
           --health-cmd="pg_isready -U openviking_test -d openviking_test"
           --health-interval=5s
@@ -193,6 +193,7 @@ jobs:
           --health-timeout=5s
           --health-retries=12
     env:
+      OV_TEST_POSTGRES: ${{ format('{{"host":"{0}","port":5432,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'postgres' || '127.0.0.1') }}
       OV_TEST_MYSQL: ${{ format('{{"host":"{0}","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'mysql' || '127.0.0.1') }}
       OPENVIKING_WATCH_MYSQL_PARAMS: ${{ format('{{"host":"{0}","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'mysql' || '127.0.0.1') }}
       OPENVIKING_WATCH_POSTGRES_PARAMS: ${{ format('{{"host":"{0}","port":5432,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'postgres' || '127.0.0.1') }}
@@ -247,6 +248,7 @@ jobs:
             tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
             tests/server/test_redis_mysql_account_store.py \
             tests/service/test_task_work_contract.py \
+            tests/service/test_task_store_postgres.py \
             tests/resource/test_watch_store.py \
             tests/resource/test_watch_store_postgres.py \
             tests/resource/test_watch_process.py \

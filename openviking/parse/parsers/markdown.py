@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
 import yaml
 
@@ -600,7 +601,6 @@ class MarkdownParser(BaseParser):
             return content, None
 
         frontmatter_text = match.group(1)
-        content_without_frontmatter = content[match.end() :]
 
         try:
             # Keep scalar values as strings, matching the previous parser and keeping
@@ -608,12 +608,12 @@ class MarkdownParser(BaseParser):
             frontmatter = yaml.load(frontmatter_text, Loader=yaml.BaseLoader)
         except yaml.YAMLError:
             logger.warning("Ignoring malformed YAML frontmatter")
-            return content_without_frontmatter, None
+            return content, None
 
         if not isinstance(frontmatter, dict):
-            return content_without_frontmatter, None
+            return content, None
 
-        return content_without_frontmatter, frontmatter
+        return content[match.end() :], frontmatter
 
     def _find_headings(self, content: str) -> List[Tuple[int, int, str, int]]:
         """
@@ -931,7 +931,7 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(self._unwrap_link_destination(path_str))
+            path = Path(unquote(self._unwrap_link_destination(path_str), errors="strict"))
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():

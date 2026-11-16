@@ -50,7 +50,7 @@ def test_watch_and_legacy_mysql_stores_share_one_sql_runtime():
     connection = {"user": "u", "password": "p", "database": "d"}
     tasks = MySQLTaskWorkStore(service_name="deployment", params=connection)
     accounts = MySQLAccountStore(service_name="deployment", params=connection)
-    assert watch._sql_runtime is tasks._mysql_runtime is accounts._sql_runtime
+    assert watch._sql_runtime is tasks._sql_runtime is accounts._sql_runtime
     assert MySQLAsyncSession is SQLAsyncSession
 
 

@@ -809,44 +809,68 @@ Possible shared response:
 
 ---
 
-### Copy or Move a Shared Resource
+### Copy a Shared Resource
 
-These endpoints operate only on children of `viking://resources/`. Both source
-and destination must be in that shared subtree; the root itself and private
-resource namespaces are not accepted. Access checks and response fields follow
-the corresponding [filesystem operations](03-filesystem.md).
+Copy a file or directory together with its vector records. Both URIs must be
+children of `viking://resources/`; the root itself and private resource namespaces
+are not accepted. These operations use the same access checks as the corresponding
+filesystem operations.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/resources/cp` | Copy a file or directory together with its vector records |
-| POST | `/api/v1/resources/mv` | Move or rename a shared resource |
+**HTTP**
+
+```http
+POST /api/v1/resources/cp
+```
 
 | Body parameter | Type | Required | Default | Description |
 |----------------|------|----------|---------|-------------|
 | `from_uri` | string | Yes | - | Source shared resource URI |
 | `to_uri` | string | Yes | - | Destination shared resource URI |
-| `recursive` | boolean | No | `false` | Copy directories recursively; supported by `cp` only |
+| `recursive` | boolean | No | `false` | Copy a directory recursively |
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/resources/cp \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   --data '{"from_uri":"viking://resources/guide.md","to_uri":"viking://resources/guide-copy.md","recursive":false}'
+```
 
+The success response uses `status: "ok"` and includes `from`, `to`, and
+`recursive` in `result`.
+
+### Move or Rename a Shared Resource
+
+Move a resource within the shared subtree. Both URIs must be children of
+`viking://resources/`, with the same namespace restrictions as copying.
+
+**HTTP**
+
+```http
+POST /api/v1/resources/mv
+```
+
+| Body parameter | Type | Required | Description |
+|----------------|------|----------|-------------|
+| `from_uri` | string | Yes | Source shared resource URI |
+| `to_uri` | string | Yes | Destination shared resource URI |
+
+```bash
 curl -X POST http://localhost:1933/api/v1/resources/mv \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   --data '{"from_uri":"viking://resources/guide-copy.md","to_uri":"viking://resources/guide-renamed.md"}'
 ```
 
-Successful responses use `status: "ok"` and include `from` and `to` in
-`result`. Copy responses also include `recursive`.
+The success response uses `status: "ok"` and includes `from` and `to` in
+`result`.
 
 ### Delete a Shared Resource
 
 Delete a child of `viking://resources/`. This operation requires MANAGE access,
 removes associated vector records, refreshes parent semantic metadata, and
 synchronizes affected watches.
+
+**HTTP**
 
 ```http
 DELETE /api/v1/resources?uri={uri}

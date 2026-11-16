@@ -1,6 +1,6 @@
 {
   "name": "@openviking/magpie-plugin",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenViking integration for Magpie: memory recall/capture and model switching with automatic restart.",
   "author": "OpenViking",
   "homepage": "https://github.com/volcengine/OpenViking/tree/main/examples/magpie-memory-plugin",

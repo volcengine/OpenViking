@@ -15,6 +15,7 @@ GROUPS = (
     "accounts",
     "redis_mysql",
     "task_work_mysql",
+    "task_work_postgres",
     "watch_mysql",
     "watch_postgres",
     "watch_process_mysql",
@@ -38,6 +39,15 @@ def prepare():
     import sqlalchemy.ext.asyncio  # noqa: F401
 
     params = json.loads(os.environ["OV_TEST_MYSQL"])
+    postgres_params = json.loads(os.environ["OV_TEST_POSTGRES"])
+    with psycopg.connect(
+        **{
+            ("dbname" if key == "database" else key): value
+            for key, value in postgres_params.items()
+        },
+        connect_timeout=10,
+    ) as connection:
+        assert connection.execute("SELECT 1").fetchone() == (1,)
     watch_params = json.loads(os.environ["OPENVIKING_WATCH_MYSQL_PARAMS"])
     postgres_params = json.loads(os.environ["OPENVIKING_WATCH_POSTGRES_PARAMS"])
     postgres_params["dbname"] = postgres_params.pop("database")
@@ -74,7 +84,7 @@ def prepare():
         "encryption": {"enabled": False},
     }
     Path(os.environ["OPENVIKING_CONFIG_FILE"]).write_text(json.dumps(config), encoding="utf-8")
-    print("PostgreSQL, MySQL and Redis are reachable; account schema is installed.")
+    print("PostgreSQL, MySQL and Redis are reachable; account deployment schema is installed.")
 
 
 def database_group(case):
@@ -86,6 +96,11 @@ def database_group(case):
         return "redis_mysql"
     # Parameter IDs also contain secondary parameters, e.g. [mysql-stage].
     parameters = name.partition("[")[2].rstrip("]").split("-")
+    if "postgres" in parameters and module in {
+        "tests.service.test_task_work_contract",
+        "tests.service.test_task_store_postgres",
+    }:
+        return "task_work_postgres"
     if "mysql" in parameters:
         if module == "tests.service.test_task_work_contract":
             return "task_work_mysql"

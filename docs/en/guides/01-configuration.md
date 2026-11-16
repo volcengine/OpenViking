@@ -1462,6 +1462,49 @@ the change scripts in order; existing TaskStore tables created before
 upgrading. Do not use the FileStore tables and MySQL tables as active writers
 for the same deployment.
 
+PostgreSQL is also supported with `"provider": "postgres"`. Install
+`openviking[postgres]`, then run
+`openviking/service/sql/task_store_postgres_init.sql` using `psql` before starting
+the server. This script includes `service_name`; do not apply the MySQL change
+scripts to PostgreSQL. No Redis or pgvector extension is required:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "task_store": {
+      "provider": "postgres",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "table": "ov_tasks",
+        "sslmode": "prefer"
+      }
+    }
+  }
+}
+```
+
+PostgreSQL requires `user` and `database`; `password` is optional when the
+database authentication method permits it. Defaults are `host=127.0.0.1`,
+`port=5432`, `maxsize=10`, `connect_timeout=10`, and `sslmode=prefer`.
+`sslmode` accepts libpq's `disable`, `allow`, `prefer`, `require`, `verify-ca`,
+and `verify-full`; configure `sslrootcert`, `sslcert`, and `sslkey` as needed.
+For verified TLS, use `verify-full` with the server hostname and trusted CA.
+The runtime database role needs SELECT/INSERT/UPDATE/DELETE on all three tables.
+
+The PostgreSQL prefix follows the same character rules, with a maximum of
+37 characters to fit its 63-byte identifier limit. Quote identifiers in the
+DDL if the custom prefix contains uppercase letters. Task/Work/Event changes
+use READ COMMITTED transactions and lock the Task row before changing Work
+state. PostgreSQL preserves the same durable recovery, event history, active-task
+deduplication, and service/owner isolation as MySQL. Keep `service_name` stable
+across processes sharing tasks. Changing providers does not migrate existing
+tasks; plan the data migration before switching a deployed store.
+
 #### watch_store
 
 The default `file` provider keeps Watch tasks in the internal control file
