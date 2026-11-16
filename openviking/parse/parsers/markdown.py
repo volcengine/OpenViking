@@ -18,6 +18,7 @@ The parser handles scenarios:
 """
 
 import asyncio
+import urllib.parse
 import hashlib
 import os
 import re
@@ -931,7 +932,13 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(self._unwrap_link_destination(path_str))
+            # Markdown destinations may be percent-encoded (e.g. "space%20chart.png");
+            # decode once at the destination-to-filesystem boundary so the lookup sees
+            # the real file name. The original encoded spelling is kept as the mapping
+            # key by the caller, and the confinement checks below run on the decoded
+            # path, so encoded traversal (e.g. %2e%2e) is still rejected. See #7725.
+            decoded_dest = urllib.parse.unquote(self._unwrap_link_destination(path_str))
+            path = Path(decoded_dest)
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
