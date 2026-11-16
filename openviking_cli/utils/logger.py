@@ -10,8 +10,9 @@ import logging
 import queue
 import sys
 import threading
+import time
 from contextlib import contextmanager
-from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import Any, Iterator, Optional, Tuple
 from uuid import uuid4
@@ -20,6 +21,7 @@ from openviking.observability.context import (
     bind_execution_context,
     get_observability_context,
 )
+from openviking_cli.utils.log_rotation import ProcessSafeTimedRotatingFileHandler
 
 # Try to import opentelemetry - will be None if not installed
 try:
@@ -92,13 +94,50 @@ def _reopen_rust_tracing_file() -> None:
         sys.stderr.write(f"Warning: Failed to reopen Rust tracing log file: {exc}\n")
 
 
-class _RustAwareTimedRotatingFileHandler(TimedRotatingFileHandler):
+class _RustAwareTimedRotatingFileHandler(ProcessSafeTimedRotatingFileHandler):
     """Timed rotating file handler that refreshes the Rust tracing file handle."""
+
+    def __init__(self, filename: str | Path, **kwargs: Any) -> None:
+        self._rust_reopen_pending = False
+        super().__init__(Path(filename), **kwargs)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            super().emit(record)
+        finally:
+            if self._rust_reopen_pending:
+                self._rust_reopen_pending = False
+                _reopen_rust_tracing_file()
+
+    def _refresh_after_external_rollover(self) -> None:
+        identity = self._base_file_identity
+        super()._refresh_after_external_rollover()
+        if self._base_file_identity != identity:
+            self._rust_reopen_pending = True
 
     def doRollover(self) -> None:
         """Rotate the active Python log file and then refresh the Rust writer."""
-        super().doRollover()
-        _reopen_rust_tracing_file()
+        try:
+            super().doRollover()
+        except OSError as exc:
+            if self.stream is None and not self.delay:
+                self.stream = self._open()
+            # Retry at the next boundary, not on every subsequent record.
+            current_time = int(time.time())
+            self.rolloverAt = self.computeRollover(current_time)
+            while self.rolloverAt <= current_time:
+                self.rolloverAt += max(self.interval, 1)
+            # Never report through this handler: that would recurse into rollover.
+            try:
+                sys.stderr.write(
+                    f"Warning: log rotation failed; continuing with active log file: {exc}\n"
+                )
+            except (OSError, ValueError):
+                pass
+        finally:
+            # Even a partially failed rotation can change the active file.
+            # Reopen after emit releases the lock, since imports can log.
+            self._rust_reopen_pending = True
 
 
 @contextmanager
