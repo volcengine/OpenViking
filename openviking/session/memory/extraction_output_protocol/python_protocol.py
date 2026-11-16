@@ -300,18 +300,25 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
                 "`duplicate_1.delete(replacement=canonical)`."
             )
         if error and _is_string_literal_syntax_error(error):
-            argument_examples = (
-                "content, summary, goal, and every search=/replace=/text= snippet"
-                if self._supports_string_patch
-                else "content, summary, goal"
-            )
-            quote_guidance = (
-                " If the error is about a string literal, the offending line is shown above; a "
-                "quote or newline inside prose likely ended the string early. Rewrite every "
-                f"natural-language argument ({argument_examples}) as a triple-quoted string "
-                '("""...""") so embedded quotes and '
-                "newlines stay inside the literal."
-            )
+            if '""""' in error or "''''" in error:
+                quote_guidance = (
+                    " If a triple-quoted argument ends with a quote right before the closing "
+                    'delimiter (e.g. `""""`), escape the trailing quote as `\\"` or add a '
+                    'newline/space before the closing delimiter (`"""`) so quotes do not collide.'
+                )
+            else:
+                argument_examples = (
+                    "content, summary, goal, and every search=/replace=/text= snippet"
+                    if self._supports_string_patch
+                    else "content, summary, goal"
+                )
+                quote_guidance = (
+                    " If the error is about a string literal, the offending line is shown above; a "
+                    "quote or newline inside prose likely ended the string early. Rewrite every "
+                    f"natural-language argument ({argument_examples}) as a triple-quoted string "
+                    '("""...""") so embedded quotes and '
+                    "newlines stay inside the literal."
+                )
         if self.keep_tools_enabled_after_parse_error(error):
             tool_guidance = (
                 " The memory SDK is write-only. Call the available native "
@@ -645,18 +652,26 @@ class _PythonProgramCompiler:
         try:
             module = ast.parse(code, mode="exec")
         except SyntaxError as exc:
-            # A valid program that merely embeds Markdown in a triple-quoted
-            # string parses fine, so only fall back to the bare-Markdown hint
-            # when parsing actually fails.
-            if _looks_like_bare_markdown(code):
+            module = None
+            repaired = _repair_trailing_quote_collisions(code)
+            if repaired is not None:
+                try:
+                    module = ast.parse(repaired, mode="exec")
+                except SyntaxError:
+                    module = None
+            if module is None:
+                # A valid program that merely embeds Markdown in a triple-quoted
+                # string parses fine, so only fall back to the bare-Markdown hint
+                # when parsing actually fails.
+                if _looks_like_bare_markdown(code):
+                    raise ExtractionOutputProtocolError(
+                        "Output is bare Markdown, not a Python SDK program; put memory content inside "
+                        "a quoted sdk.create_*/sdk.set_* argument or an existing object's update() call"
+                    ) from exc
                 raise ExtractionOutputProtocolError(
-                    "Output is bare Markdown, not a Python SDK program; put memory content inside "
-                    "a quoted sdk.create_*/sdk.set_* argument or an existing object's update() call"
+                    f"Line {exc.lineno or 1}: invalid Python syntax: {exc.msg}"
+                    + _format_syntax_error_source(exc)
                 ) from exc
-            raise ExtractionOutputProtocolError(
-                f"Line {exc.lineno or 1}: invalid Python syntax: {exc.msg}"
-                + _format_syntax_error_source(exc)
-            ) from exc
         # sdk.commit() is optional: an empty program (or one without commit) simply
         # means "no changes". When present, commit() still acts as a terminator and
         # must be the final statement.
@@ -1469,16 +1484,55 @@ class _PythonProgramCompiler:
         )
 
 
+def _repair_trailing_quote_collisions(code: str) -> str | None:
+    """Repair trailing quote collisions before closing delimiters.
+
+    When prose inside triple quotes ends with a quote right before the closing
+    delimiter (e.g. four quotes before `)` or `,`), Python treats the first three quotes
+    as terminating the literal and the fourth as starting an unterminated literal.
+    Escaping the content quote(s) before the closing triple delimiter repairs the syntax.
+    """
+    if '""""' not in code and "''''" not in code:
+        return None
+
+    def _repl_double(m: re.Match[str]) -> str:
+        quotes = m.group(1)
+        tail = m.group(2)
+        n = len(quotes)
+        return ('\\"' * (n - 3)) + '"""' + tail
+
+    def _repl_single(m: re.Match[str]) -> str:
+        quotes = m.group(1)
+        tail = m.group(2)
+        n = len(quotes)
+        return ("\\'" * (n - 3)) + "'''" + tail
+
+    repaired = re.sub(r'("{4,})(\s*(?:[,)\n]|$))', _repl_double, code)
+    repaired = re.sub(r"('{4,})(\s*(?:[,)\n]|$))", _repl_single, repaired)
+    return repaired if repaired != code else None
+
+
+def _can_parse_python(code: str) -> bool:
+    try:
+        ast.parse(code, mode="exec")
+        return True
+    except SyntaxError:
+        repaired = _repair_trailing_quote_collisions(code)
+        if repaired is not None:
+            try:
+                ast.parse(repaired, mode="exec")
+                return True
+            except SyntaxError:
+                pass
+        return False
+
+
 def _extract_python_code(content: str) -> str:
     stripped = str(content or "").strip()
     if "```" not in stripped:
         return stripped
     # A bare program may contain Markdown fences inside its string literals.
-    try:
-        ast.parse(stripped, mode="exec")
-    except SyntaxError:
-        pass
-    else:
+    if _can_parse_python(stripped):
         return stripped
     match = _PYTHON_FENCE_RE.search(stripped)
     if match:
@@ -1490,11 +1544,7 @@ def _extract_python_code(content: str) -> str:
             if "```" not in code:
                 return code
             # Match through content fences, but reject separate output blocks.
-            try:
-                ast.parse(code, mode="exec")
-            except SyntaxError:
-                pass
-            else:
+            if _can_parse_python(code):
                 return code
     starts = list(_PYTHON_FENCE_START_RE.finditer(stripped))
     if len(starts) == 1 and stripped.count("```") == 1:

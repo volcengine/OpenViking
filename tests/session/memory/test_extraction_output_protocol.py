@@ -724,6 +724,20 @@ def test_python_non_string_syntax_error_omits_quote_guidance():
     assert "offending line is shown above" not in retry
 
 
+def test_python_trailing_quote_collision_retry_guidance():
+    protocol = create_extraction_output_protocol("python")
+
+    error = (
+        "Line 101: invalid Python syntax: unterminated string literal (detected at line 101)\n"
+        '  - experiences_1.content.update("""## Situation\nHe said "hello""""\n'
+        "                                      ^\n"
+    )
+    retry = protocol.render_format_retry(error)
+
+    assert "quotes do not collide" in retry
+    assert 'escape the trailing quote as `\\"`' in retry
+
+
 def test_resolution_repair_matches_protocol_output_shape():
     issues = [
         {
@@ -898,6 +912,43 @@ def test_python_syntax_error_includes_offending_source_line():
     assert "invalid Python syntax" in error
     assert "Little Women" in error
     assert "^" in error
+
+
+def test_python_parse_repairs_trailing_quote_collision():
+    context = _context([_preference_schema()])
+    protocol = create_extraction_output_protocol("python")
+
+    # Content ending with double quote right before closing delimiter
+    program1 = (
+        'canonical = sdk.create_preferences(topic="cli", content="""prefer "always""""\n, score=1)'
+    )
+    operations, error = protocol.parse(program1, context)
+    assert error is None
+    assert operations is not None
+    assert len(operations.preferences) == 1
+    assert operations.preferences[0].content == 'prefer "always"'
+
+    # Program with single quote collision
+    program2 = (
+        "canonical = sdk.create_preferences(topic='cli', content='''prefer 'always''''\n, score=1)"
+    )
+    operations, error = protocol.parse(program2, context)
+    assert error is None
+    assert operations is not None
+    assert operations.preferences[0].content == "prefer 'always'"
+
+    # Program with update on existing object and trailing quote collision
+    existing = _existing_preference(
+        "viking://user/default/memories/preferences/cli.md", "cli", "old content"
+    )
+    context_existing = _context([_preference_schema()], files=[existing])
+    _bind(protocol, context_existing)
+    program3 = 'preferences_1.content.update("""## Situation\nHe said "hello""""\n)'
+    operations, error = protocol.parse(program3, context_existing)
+    assert error is None
+    assert operations is not None
+    assert len(operations.preferences) == 1
+    assert operations.model_dump()["preferences"][0]["content"] == '## Situation\nHe said "hello"'
 
 
 @pytest.mark.parametrize("ending", ["sdk.commit(", "sdk.commit())"])
