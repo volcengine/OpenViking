@@ -380,9 +380,14 @@ export class OpenVikingClient {
   invokeMCPTool(
     toolUri: string,
     toolArguments: JsonObject = {},
+    timeoutSeconds?: number,
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/mcps/invoke", {
-      body: { uri: normalizeURI(toolUri), arguments: toolArguments },
+      body: compact({
+        uri: normalizeURI(toolUri),
+        arguments: toolArguments,
+        timeout_seconds: timeoutSeconds,
+      }),
     });
   }
   /** Create or replace a live context node backed by an MCP tool. */

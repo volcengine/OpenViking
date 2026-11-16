@@ -128,13 +128,16 @@ func (c *Client) GetMCPStatus(ctx context.Context, name string, targetURI ...str
 }
 
 // InvokeMCPTool invokes a registered MCP tool through OpenViking.
-func (c *Client) InvokeMCPTool(ctx context.Context, toolURI string, arguments map[string]any) (map[string]any, error) {
+func (c *Client) InvokeMCPTool(ctx context.Context, toolURI string, arguments map[string]any, timeoutSeconds ...float64) (map[string]any, error) {
 	if arguments == nil {
 		arguments = map[string]any{}
 	}
 	payload := map[string]any{
 		"uri":       NormalizeURI(toolURI),
 		"arguments": arguments,
+	}
+	if len(timeoutSeconds) > 0 {
+		payload["timeout_seconds"] = timeoutSeconds[0]
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/mcps/invoke", nil, payload, &result)

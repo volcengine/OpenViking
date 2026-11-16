@@ -342,11 +342,16 @@ pub(super) async fn dispatch(
                     )
                     .await
                 }
-                McpCommands::Invoke { uri, arguments } => {
+                McpCommands::Invoke {
+                    uri,
+                    arguments,
+                    timeout_seconds,
+                } => {
                     commands::mcps::invoke(
                         &client,
                         &uri,
                         &arguments,
+                        timeout_seconds,
                         ctx.output_format,
                         ctx.compact,
                     )

@@ -46,6 +46,7 @@ class InvokeMCPToolRequest(BaseModel):
 
     uri: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class MCPToolMountRequest(BaseModel):
@@ -220,7 +221,9 @@ async def invoke_mcp_tool(
     body: InvokeMCPToolRequest,
     ctx: RequestContext = Depends(get_request_context),
 ):
-    result = await get_service().mcps.invoke(body.uri, body.arguments, ctx)
+    result = await get_service().mcps.invoke(
+        body.uri, body.arguments, ctx, timeout_seconds=body.timeout_seconds
+    )
     return Response(status="ok", result=result)
 
 
