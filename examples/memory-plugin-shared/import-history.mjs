@@ -59,7 +59,7 @@ const BATCH_LIMIT = 100;
 
 // The id the live plugin gives a session, so `classify` can tell one it
 // already captured. The hook hosts (Cursor, TRAE, ZCode, Kimi Code, CodeBuddy
-// Code) take the host's id through safePart (lib/agent-hook-runtime.mjs);
+// Code, Qoder CLI) take the host's id through safePart (lib/agent-hook-runtime.mjs);
 // OpenCode and pi use it as is (deriveHarnessSessionId in lib/session-model.mjs).
 const hookLiveId = (prefix) => (id) => `${prefix}${String(id || "unknown").replace(/[^A-Za-z0-9._-]/g, "-")}`;
 const codexLiveId = (id) => `cx-${String(id || "unknown").replace(/[^A-Za-z0-9._-]/g, "_")}`;
@@ -99,6 +99,7 @@ const HARNESSES = {
   zcode: { label: "ZCode", liveId: hookLiveId("zc-") },
   kimicode: { label: "Kimi Code", liveId: hookLiveId("kc-") },
   codebuddy: { label: "CodeBuddy Code", liveId: hookLiveId("cb-") },
+  qoder: { label: "Qoder CLI", liveId: hookLiveId("qd-") },
   // Sub-agent sessions are `oc-<parent>__subagent-<child>` live; --input skips them.
   opencode: { label: "OpenCode", liveId: (id) => `oc-${id}` },
   pi: { label: "pi", liveId: (id) => `pi-${id}` },
@@ -111,17 +112,18 @@ const HARNESSES = {
 const HARNESS_ALIASES = {
   claude: "claude_code", "claude-code": "claude_code", claude_code: "claude_code", codex: "codex",
   cursor: "cursor", trae: "trae", "trae-cn": "trae_cn", trae_cn: "trae_cn", "trae-cli": "trae_cli", trae_cli: "trae_cli",
-  zcode: "zcode", kimicode: "kimicode", codebuddy: "codebuddy", opencode: "opencode", pi: "pi", dsh: "dsh", openclaw: "openclaw",
-  hermes: "hermes",
+  zcode: "zcode", kimicode: "kimicode", codebuddy: "codebuddy", qoder: "qoder", opencode: "opencode", pi: "pi", dsh: "dsh",
+  openclaw: "openclaw", hermes: "hermes",
 };
-const INPUT_NAMES = "claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, opencode, pi, dsh, openclaw, hermes";
+const INPUT_NAMES = "claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, qoder, opencode, pi, dsh, openclaw, hermes";
 // The harness name the plugin passes to its config loader, for ov.conf's
 // legacy section and the `{harness}` peer template variable. OpenClaw and
 // Hermes do not use that loader and name their peers after the agent, not
 // the directory, so no peer is derived for them.
 const PLUGIN_HARNESS = {
   claude_code: "claude-code", codex: "codex", cursor: "cursor", trae: "trae", trae_cn: "trae-cn", trae_cli: "codex",
-  zcode: "zcode", kimicode: "kimicode", codebuddy: "codebuddy", opencode: "opencode", pi: "pi", dsh: "dsh",
+  zcode: "zcode", kimicode: "kimicode", codebuddy: "codebuddy", qoder: "qoder", opencode: "opencode", pi: "pi",
+  dsh: "dsh",
 };
 
 const DEFAULTS = { since: "14d", maxSessions: 20, skipActive: "2h", maxMessageChars: 20000 };
@@ -137,8 +139,8 @@ file and --input imports that.
 
 Options:
   --harness <name>        claude (Claude Code) or codex; with --input also cursor, trae,
-                          trae-cn, trae-cli, zcode, kimicode, codebuddy, opencode, pi, dsh,
-                          openclaw, hermes
+                          trae-cn, trae-cli, zcode, kimicode, codebuddy, qoder, opencode, pi,
+                          dsh, openclaw, hermes
   --input <file.jsonl>    import the sessions in this file instead of the agent's history
   --cwd <dir>             the project whose sessions to import (default: the current directory)
   --all-projects          import sessions from every project instead
