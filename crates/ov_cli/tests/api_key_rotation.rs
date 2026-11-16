@@ -449,6 +449,10 @@ fn only_direct_compile_warns_and_stdout_is_json() {
         }
         assert!(serde_json::from_slice::<Value>(&output.stdout).unwrap()["ok"] == true);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(stderr.contains("is deprecated"), form == inputs, "{stderr}");
+        assert_eq!(
+            stderr.contains("is no longer recommended"),
+            form == inputs,
+            "{stderr}"
+        );
     }
 }
