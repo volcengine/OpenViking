@@ -2191,6 +2191,61 @@ async def test_compile_plan_repairs_semantically_invalid_response():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "expected_model_calls"),
+    [
+        pytest.param({}, 1, id="nested-only"),
+        pytest.param({"scenario": None}, 1, id="null-placeholder"),
+        pytest.param(
+            {"scenario": {"name": "Deployments", "description": "Rules for deployment."}},
+            2,
+            id="conflicting",
+        ),
+        pytest.param({"operation": "UPDATE", "target_ids": ["existing"]}, 2, id="non-new"),
+    ],
+)
+async def test_compile_plan_recovers_only_unambiguous_new_scenario_placement(
+    overrides, expected_model_calls
+):
+    source_text = "Ask for confirmation before deleting files."
+    record = _record().model_dump(exclude={"applies_when", "exception"})
+    scenario = {"name": "File operations", "description": "Rules for editing files."}
+    mutation = {
+        "operation": "NEW",
+        "record": record,
+        "scenario": scenario,
+        "evidence_spans": [source_text],
+    }
+    first = {**mutation, "record": {**record, "scenario": scenario}}
+    del first["scenario"]
+    first.update(overrides)
+    compiler = SimpleNamespace(
+        get_completion_async=AsyncMock(
+            side_effect=[
+                json.dumps({"mutations": [first]}),
+                json.dumps({"mutations": [mutation]}),
+            ]
+        )
+    )
+
+    plan = await RuleService()._build_compile_plan(
+        instruction="",
+        source_text=source_text,
+        scenarios=[],
+        rules=[],
+        ctx=_ctx(),
+        vlm=compiler,
+    )
+
+    assert plan.mutations[0].scenario == RuleScenarioRef.model_validate(scenario)
+    assert plan.mutations[0].record == RuleRecord.model_validate(record)
+    assert compiler.get_completion_async.await_count == expected_model_calls
+    if expected_model_calls == 2:
+        repair_prompt = compiler.get_completion_async.await_args_list[1].kwargs["prompt"]
+        assert "mutations.0.record.scenario" in repair_prompt
+
+
+@pytest.mark.asyncio
 async def test_compile_plan_rejects_oversized_prompt_without_trimming_state():
     service = RuleService()
     compiler = SimpleNamespace(get_completion_async=AsyncMock())
