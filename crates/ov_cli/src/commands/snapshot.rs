@@ -66,10 +66,11 @@ pub async fn dispatch(
         SnapshotCmd::Log {
             branch,
             limit,
+            offset,
             paths,
         } => {
             let value = client
-                .snapshot_log(&branch, limit, paths.as_deref())
+                .snapshot_log(&branch, limit, offset, paths.as_deref())
                 .await?;
             print_log(&value, output_format, compact);
             Ok(())

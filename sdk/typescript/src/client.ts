@@ -1391,10 +1391,10 @@ export class OpenVikingClient {
       },
     );
   }
-  /** Return snapshot history from newest to oldest. */
-  gitLog(branch = "main", limit = 20, paths?: string[]): Promise<JsonObject[]> {
+  /** Return up to limit commits for branch/paths, newest first, skipping offset matches. */
+  gitLog(branch = "main", limit = 20, paths?: string[], offset = 0): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
-      query: { branch, limit, paths },
+      query: { branch, limit, offset, paths },
     });
   }
   /** Compare one file between two snapshot refs. */

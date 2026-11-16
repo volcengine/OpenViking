@@ -80,6 +80,7 @@ async def commit(
 async def log(
     branch: str = Query("main", description="Branch ref name"),
     limit: int = Query(20, ge=1, le=500, description="Max commits to return"),
+    offset: int = Query(0, ge=0, description="Skip first N matching commits"),
     paths: Optional[List[str]] = Query(
         None,
         max_length=MAX_LOG_FILTER_PATHS,
@@ -98,7 +99,7 @@ async def log(
         else None
     )
     try:
-        result = await service.fs.log(branch=branch, limit=limit, paths=canonical_paths, ctx=_ctx)
+        result = await service.fs.log(branch=branch, limit=limit, offset=offset, paths=canonical_paths, ctx=_ctx)
     except AGFSNotFoundError:
         raise NotFoundError(branch, "git_ref")
     except (AGFSClientError, ValueError) as e:

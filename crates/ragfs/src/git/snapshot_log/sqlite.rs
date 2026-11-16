@@ -151,6 +151,7 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
         branch: &str,
         paths: &[String],
         max_id: i64,
+        offset: usize,
         limit: usize,
     ) -> Result<Vec<SnapshotLogHit>, SnapshotLogError> {
         if limit == 0 || paths.is_empty() {
@@ -173,7 +174,9 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
         builder
             .push_bind(max_id)
             .push(" GROUP BY commit_oid ORDER BY last_id DESC LIMIT ")
-            .push_bind(limit as i64);
+            .push_bind(limit as i64)
+            .push(" OFFSET ")
+            .push_bind(offset as i64);
         let rows = builder
             .build_query_as::<(String, i64)>()
             .fetch_all(&self.pool)

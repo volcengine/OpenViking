@@ -130,6 +130,7 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         branch: &str,
         paths: &[String],
         max_id: i64,
+        offset: usize,
         limit: usize,
     ) -> Result<Vec<SnapshotLogHit>, SnapshotLogError> {
         if limit == 0 || paths.is_empty() {
@@ -152,7 +153,9 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         builder
             .push_bind(max_id)
             .push(" GROUP BY commit_oid ORDER BY last_id DESC LIMIT ")
-            .push_bind(limit as i64);
+            .push_bind(limit as i64)
+            .push(" OFFSET ")
+            .push_bind(offset as i64);
         let rows = builder
             .build_query_as::<(Vec<u8>, i64)>()
             .fetch_all(&self.pool)

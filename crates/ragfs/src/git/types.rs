@@ -62,6 +62,8 @@ pub struct LogRequest {
     pub branch: String,
     /// Maximum number of matching commits to return.
     pub limit: usize,
+    /// Number of matching commits to skip before collecting results.
+    pub offset: usize,
     /// Optional account-relative paths. File paths match exactly; directory
     /// paths match commits whose subtree changed.
     pub paths: Option<Vec<String>>,

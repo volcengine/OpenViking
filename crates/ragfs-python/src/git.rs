@@ -595,6 +595,7 @@ pub fn parse_log_request(kwargs: &Bound<PyDict>) -> PyResult<LogRequest> {
         account: require_str(kwargs, "account")?,
         branch: require_str(kwargs, "branch")?,
         limit: optional_usize(kwargs, "limit", 20)?,
+        offset: optional_usize(kwargs, "offset", 0)?,
         paths: optional_string_list(kwargs, "paths")?,
     })
 }

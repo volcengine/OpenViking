@@ -26,6 +26,7 @@ async fn test_snapshot_log_commit_indexes_file_and_directory_paths() {
             account: "acct_snapshot_log".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["resources/a.md".into()]),
         })
         .await
@@ -38,6 +39,7 @@ async fn test_snapshot_log_commit_indexes_file_and_directory_paths() {
             account: "acct_snapshot_log".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["resources".into()]),
         })
         .await
@@ -77,6 +79,7 @@ async fn test_snapshot_log_file_replacing_directory_indexes_descendant_deletes()
             account: "acct_snapshot_replace".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["docs/old.md".into()]),
         })
         .await
@@ -123,6 +126,7 @@ async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
             account: "acct_snapshot_tail".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["resources/a.md".into()]),
         })
         .await
@@ -165,6 +169,7 @@ async fn test_snapshot_log_restore_indexes_project_dir_relative_paths() {
             account: "acct_snapshot_restore".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["proj/a.md".into()]),
         })
         .await

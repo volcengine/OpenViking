@@ -2675,10 +2675,11 @@ class AsyncHTTPClient:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Walk commit history newest-first."""
-        params: Dict[str, Any] = {"branch": branch, "limit": limit}
+        """Walk commit history newest-first, skipping ``offset`` matches."""
+        params: Dict[str, Any] = {"branch": branch, "limit": limit, "offset": offset}
         if paths:
             params["paths"] = paths
         response = await self._request(
@@ -3895,9 +3896,10 @@ class AsyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._client.git_log(branch=branch, limit=limit, paths=paths)
+        return await self._client.git_log(branch=branch, limit=limit, offset=offset, paths=paths)
 
     async def diff(
         self,
@@ -4001,9 +4003,10 @@ class SyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
+        return run_async(self._ns().log(branch=branch, limit=limit, offset=offset, paths=paths))
 
     def diff(
         self,
