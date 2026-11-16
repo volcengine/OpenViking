@@ -155,6 +155,73 @@ class TestWebImporter:
 
             shutil.rmtree(result.path.parent, ignore_errors=True)
 
+    async def test_import_to_directory_resolves_page_and_document_link_bases(
+        self, monkeypatch
+    ):
+        page_url = "https://example.com/docs/current/index.html"
+        page_links = {
+            "https://reference.example/guide": "https://reference.example/guide",
+            "../next": "https://example.com/docs/next",
+            "/reference": "https://example.com/reference",
+            "?page=2": "https://example.com/docs/current/index.html?page=2",
+            "#section": "https://example.com/docs/current/index.html#section",
+            "//cdn.example.com/document": "https://cdn.example.com/document",
+            "mailto:help@example.com": "mailto:help@example.com",
+        }
+        anchors = "".join(
+            f'<a href="{destination}">Link</a>' for destination in page_links
+        )
+
+        class FakeCrawler:
+            def __init__(self, config):
+                self.config = config
+
+            async def crawl(self, root_url):
+                return SimpleNamespace(
+                    pages=[
+                        SimpleNamespace(
+                            url=root_url,
+                            final_url=page_url,
+                            depth=0,
+                            status="success",
+                            html=f"<html><body><h1>Page links</h1>{anchors}</body></html>",
+                        ),
+                        SimpleNamespace(
+                            url=f"{root_url}/base",
+                            final_url=f"{page_url}/base",
+                            depth=1,
+                            status="success",
+                            html=(
+                                '<html><head><base href="https://manual.example/base/">'
+                                "</head><body><h1>Base link</h1>"
+                                '<a href="chapter">Link</a></body></html>'
+                            ),
+                        ),
+                    ],
+                    downloads=[],
+                    total_crawled=2,
+                    total_downloads=0,
+                    total_failed=0,
+                    total_skipped=0,
+                )
+
+        monkeypatch.setattr("openviking.parse.accessors.web_importer.ScrapyWebCrawler", FakeCrawler)
+
+        result = await WebImporter().import_to_directory(
+            root_url="https://example.com/redirect",
+            options=WebImportOptions(depth=1, max_pages=2),
+        )
+        try:
+            page_html = (result.path / "Page links.html").read_text(encoding="utf-8")
+            for expected in page_links.values():
+                assert f'href="{expected}"' in page_html
+            base_html = (result.path / "Base link.html").read_text(encoding="utf-8")
+            assert 'href="https://manual.example/base/chapter"' in base_html
+        finally:
+            import shutil
+
+            shutil.rmtree(result.path.parent, ignore_errors=True)
+
     async def test_import_to_directory_rejects_missing_entry(self, monkeypatch):
         class FakeCrawler:
             def __init__(self, config):
