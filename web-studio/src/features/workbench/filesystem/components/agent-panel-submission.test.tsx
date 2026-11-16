@@ -98,7 +98,7 @@ it('preserves edits and blocks duplicate submission while creation waits', async
   submit('first')
   const id = m.create.mock.calls[0][0]
   submit('second')
-  expect(screen.getByRole('textbox').value).toBe('second')
+  expect(screen.getByRole<HTMLTextAreaElement>('textbox').value).toBe('second')
   expect(m.stream).not.toHaveBeenCalled()
   await act(async () => {
     pending.resolve(id)
@@ -130,19 +130,21 @@ it('preserves the first input when creation fails', async () => {
   await act(async () => {
     pending.reject(new Error('offline'))
   })
-  expect(screen.getByRole('textbox').value).toBe('important input')
+  expect(screen.getByRole<HTMLTextAreaElement>('textbox').value).toBe(
+    'important input',
+  )
   expect(m.stream).not.toHaveBeenCalled()
 })
 
 it('clears accepted input once creation succeeds', async () => {
   const pending = setup()
   submit('first')
-  expect(screen.getByRole('textbox').value).toBe('first')
+  expect(screen.getByRole<HTMLTextAreaElement>('textbox').value).toBe('first')
   const id = m.create.mock.calls[0][0]
   await act(async () => {
     pending.resolve(id)
   })
-  expect(screen.getByRole('textbox').value).toBe('')
+  expect(screen.getByRole<HTMLTextAreaElement>('textbox').value).toBe('')
   expect(m.stream).toHaveBeenCalledTimes(1)
 })
 

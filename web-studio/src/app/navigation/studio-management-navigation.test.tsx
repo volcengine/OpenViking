@@ -56,10 +56,7 @@ it('highlights only server configuration in the service management group', () =>
     </SidebarProvider>,
   )
   const server = screen.getByRole('link', { name: 'Server configuration' })
-  const configuration = screen.getByRole('link', {
-    name: 'Configuration',
-    exact: true,
-  })
+  const configuration = screen.getByRole('link', { name: 'Configuration' })
   expect(server.hasAttribute('data-active')).toBe(true)
   expect(configuration.hasAttribute('data-active')).toBe(false)
   expect(server.closest('[data-slot="sidebar-group"]')).toBe(

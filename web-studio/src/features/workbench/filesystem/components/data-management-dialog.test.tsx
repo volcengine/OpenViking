@@ -121,7 +121,9 @@ it('keeps the selected OVPack file while switching between import and export', a
 
   expect(screen.getByRole('button', { name: 'exportAction' })).toBeTruthy()
   await user.click(screen.getByRole('tab', { name: 'importTab' }))
-  const importButton = screen.getByRole('button', { name: 'importAction' })
+  const importButton = screen.getByRole<HTMLButtonElement>('button', {
+    name: 'importAction',
+  })
   expect(importButton.disabled).toBe(true)
   expect(screen.getByText('chooseFile')).toBeTruthy()
 

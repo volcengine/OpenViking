@@ -14,6 +14,7 @@ import {
 } from 'vitest'
 
 import { Route } from '#/routes/filesystem/route'
+import type * as RouterModule from '@tanstack/react-router'
 
 const mocks = vi.hoisted(() => ({
   provider: 'opensource',
@@ -30,7 +31,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal<typeof RouterModule>()
   return {
     ...actual,
     getRouteApi: () => ({ useSearch: () => mocks.search }),

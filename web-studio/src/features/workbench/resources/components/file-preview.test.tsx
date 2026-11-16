@@ -294,7 +294,7 @@ describe('FilePreview Markdown rendering', () => {
     vi.mocked(getContentDownload).mockResolvedValue({
       data: new Blob(['image'], { type: 'image/jpeg' }),
     } as never)
-    const { container } = renderPreview(file)
+    const { container } = renderPreview(file, undefined)
     await screen.findByRole('img', { name: 'Display only' })
 
     expect(screen.queryByRole('link', { name: 'Display only' })).toBeNull()
