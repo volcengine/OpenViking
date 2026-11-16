@@ -74,32 +74,45 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Android and PRoot guests share a Linux kernel. Inspect this shell's libc,
+# not inherited Termux variables, to select the userspace ABI. A guest may
+# retain host loader mappings, so glibc/musl takes precedence over Bionic.
+case "$(uname -s)" in
+  Linux)
+    os=linux
+    [ -r "/proc/$$/maps" ] || die 'Cannot identify Linux/Android userspace: /proc must be available'
+    if ! grep -Eq '/(libc[.]so[.][0-9]+|libc-[0-9.]+[.]so|(ld-|libc[.])musl-[^ /]+[.]so[.]1)([[:space:]]|$)' "/proc/$$/maps" \
+      && grep -Eq '/libc[.]so([[:space:]]|$)' "/proc/$$/maps"; then os=android; fi
+    ;;
+  Darwin) os=darwin ;;
+  *) die "$(m "不支持 $(uname -s)；Windows 请用 install-preview.ps1（预览包），或在 WSL2 里安装" "$(uname -s) is not supported; on Windows, use install-preview.ps1 (the preview package), or install inside WSL2")" ;;
+esac
+
+environment=posix
 TERMUX_NODE=""
-if [ -n "${TERMUX_VERSION:-}" ] || { [ -n "${PREFIX:-}" ] && [ -x "${PREFIX:-}/bin/termux-info" ]; }; then
-  os=termux
+if [ "$os" = android ]; then
+  [ -n "${TERMUX_VERSION:-}" ] || { [ -n "${PREFIX:-}" ] && [ -x "${PREFIX:-}/bin/termux-info" ]; } \
+    || die 'This native Android environment is not supported; the current Android archive requires Termux'
+  environment=termux
   case "${PREFIX:-}" in /*) ;; *) die 'Termux requires an absolute PREFIX; see docs/termux.md' ;; esac
   TERMUX_NODE="$PREFIX/bin/node"
   [ -x "$TERMUX_NODE" ] && command -v bash >/dev/null 2>&1 || die 'Install Termux nodejs-lts (or nodejs) and bash; see docs/termux.md'
   "$TERMUX_NODE" -e 'const [a,b]=process.versions.node.split(".").map(Number); if(process.platform!=="android"||a<22||(a===22&&b<19))process.exit(1); new(require("node:sqlite").DatabaseSync)(":memory:").close()' >/dev/null 2>&1 \
     || die 'Native Termux Node >=22.19.0 with node:sqlite is required; Linux/glibc Node is unsupported'
-else
-  case "$(uname -s)" in
-    Linux) os=linux ;;
-    Darwin) os=darwin ;;
-    *) die "$(m "不支持 $(uname -s)；Windows 请用 install-preview.ps1（预览包），或在 WSL2 里安装" "$(uname -s) is not supported; on Windows, use install-preview.ps1 (the preview package), or install inside WSL2")" ;;
-  esac
 fi
 case "$(uname -m)" in
   x86_64|amd64) arch=x64 ;;
   aarch64|arm64) arch=arm64 ;;
   *) die "$(m "不支持 CPU 架构 $(uname -m)" "the $(uname -m) CPU architecture is not supported")" ;;
 esac
-if [ "$os" = termux ] && [ "$arch" != arm64 ]; then die 'Only native Termux arm64 artifacts are available'; fi
+if [ "$environment" = termux ] && [ "$arch" != arm64 ]; then die 'Only native Termux arm64 artifacts are available'; fi
 if [ "$os" = linux ]; then
   # The release's Node is linked against glibc; it does not start on musl (Alpine).
   if (ldd --version 2>&1 || true) | grep -qi musl; then die "$(m '不支持 musl（Alpine 等）系统' 'musl systems (Alpine and others) are not supported')"; fi
 fi
 PLATFORM="$os-$arch"
+# The archive also encodes environment-specific Node/service policy, not just ABI.
+if [ "$environment" = termux ]; then PLATFORM="termux-$arch"; fi
 
 command -v tar >/dev/null 2>&1 || die "$(m '需要 tar' 'tar is needed')"
 sha256() {
@@ -263,7 +276,7 @@ stop_legacy_instances() {
     [ -d "$legacy_home" ] || continue
     note "$(m "发现旧版安装 ~/.${legacy_name}：停止它的进程和开机自启（数据保留，不迁移）" "found a legacy install at ~/.${legacy_name}: stopping its processes and autostart (its data is kept, not migrated)")"
     # Autostart first, so nothing restarts what is stopped below.
-    if [ "$os" = termux ]; then
+    if [ "$environment" = termux ]; then
       legacy_service="${SVDIR:-$PREFIX/var/service}/$legacy_name"
       if [ -f "$legacy_service/run" ]; then
         touch "$legacy_service/down"
@@ -318,7 +331,7 @@ VERSION=${DIR#superagent-}
 VERSION=${VERSION%-"$PLATFORM"}
 # Termux archives deliberately contain no desktop Node. Link the APT-owned
 # native binary so the existing launcher, PM2 and rollback paths stay shared.
-if [ "$os" = termux ]; then
+if [ "$environment" = termux ]; then
   { [ ! -e "$PENDING/$DIR/node" ] && [ ! -L "$PENDING/$DIR/node" ]; } || { rm -rf "$PENDING"; die 'Termux archives must not bundle Node'; }
   mkdir -p "$PENDING/$DIR/node/bin"
   ln -s "$TERMUX_NODE" "$PENDING/$DIR/node/bin/node"
@@ -372,7 +385,7 @@ fi
 if [ -n "$LANG_FLAG" ]; then printf '%s\n' "$LANG_FLAG" > "$OV_SUPERAGENT_HOME/language"; fi
 
 mkdir -p "$OV_SUPERAGENT_HOME/bin"
-if [ "$os" = termux ]; then printf '#!%s/bin/sh\n' "$PREFIX"; else printf '#!/bin/sh\n'; fi > "$OV_SUPERAGENT_HOME/bin/ov-superagent"
+if [ "$environment" = termux ]; then printf '#!%s/bin/sh\n' "$PREFIX"; else printf '#!/bin/sh\n'; fi > "$OV_SUPERAGENT_HOME/bin/ov-superagent"
 cat >> "$OV_SUPERAGENT_HOME/bin/ov-superagent" <<'LAUNCHER'
 # Always the installed release: `current` moves on upgrade, this file does not.
 exec "$HOME/.ov-superagent/current/node/bin/node" "$HOME/.ov-superagent/current/packages/cli/bin/ov-superagent.mjs" "$@"

@@ -7,6 +7,23 @@ systems, but a dedicated `termux-arm64` archive. Linux/glibc archives cannot run
 natively on Android/Bionic. This is Termux support, not a generic Android app
 or PRoot distribution installation.
 
+The installer keeps **OS/ABI** separate from **installation environment**:
+
+| Userspace running the installer | OS | Environment / archive |
+|---|---|---|
+| Native Termux with Android Bionic | `android` | `termux` / `termux-arm64` |
+| A PRoot APK's Linux/glibc guest | `linux` | POSIX / `linux-<arch>` |
+| Linux/musl guest | `linux` | Unsupported by the existing Linux release |
+
+The shell's libc mappings in `/proc` determine Android versus Linux, not the
+shared Android kernel or inherited `TERMUX_VERSION` / `PREFIX`. Linux guest
+mappings take precedence if host Bionic mappings are also visible. If `/proc`
+cannot be read, detection stops rather than guessing. This does not add
+general APK/PRoot service support: run the installer **inside** the
+guest, keep its HOME/PATH/loader environment separate from the host, and use
+the guest/app's process supervision rather than assuming Termux runit. Other
+native Android APK environments are rejected until explicitly supported.
+
 The archive contains production JS dependencies, PM2, the pinned managed
 runtimes and a native lark-cli. CI builds lark-cli for Android from a reviewed,
 immutable Go source commit, preserving its MIT license and build provenance.

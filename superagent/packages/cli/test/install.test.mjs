@@ -9,12 +9,13 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { hostPlatformId } from '../../daemon/src/platform/index.mjs';
+import { findExecutable, hostPlatformId } from '../../daemon/src/platform/index.mjs';
 
 const INSTALLER = fileURLToPath(new URL('../../../scripts/install.sh', import.meta.url));
 const WINDOWS_INSTALLER = fileURLToPath(new URL('../../../scripts/windows/install-preview.ps1', import.meta.url));
 const PLATFORM = hostPlatformId;
 const TERMUX = process.platform === 'android';
+const SH = findExecutable('sh');
 
 test('installer headers use the OpenViking SuperAgent brand', () => {
   for (const installer of [INSTALLER, WINDOWS_INSTALLER]) {
@@ -63,7 +64,7 @@ exit ${nodeWorks ? 0 : 1}
   };
   const install = (...args) => {
     const env = typeof args.at(-1) === 'object' ? args.pop() : {};
-    return spawnSync('sh', [INSTALLER, '--no-setup', ...args], {
+    return spawnSync(SH, [INSTALLER, '--no-setup', ...args], {
       encoding: 'utf8',
       env: { ...(TERMUX ? { PREFIX: process.env.PREFIX, TERMUX_VERSION: process.env.TERMUX_VERSION,
         LD_PRELOAD: process.env.LD_PRELOAD, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH } : {}),
@@ -71,8 +72,41 @@ exit ${nodeWorks ? 0 : 1}
     });
   };
   const superagent = path.join(home, '.ov-superagent');
-  return { root, home, superagent, archive, install, pm2Calls: () => fs.existsSync(path.join(root, 'pm2-calls')) };
+  return { root, home, bin, superagent, archive, install, pm2Calls: () => fs.existsSync(path.join(root, 'pm2-calls')) };
 }
+
+test('userspace ABI, not leaked APK/Termux variables, selects Android versus Linux', async t => {
+  const bionic = '/apex/com.android.runtime/lib64/bionic/libc.so';
+  const cases = [
+    ['native Termux', [bionic], 'relative', /Termux requires an absolute PREFIX/],
+    ['other native APK', [bionic], '', /native Android environment is not supported/],
+    ['PRoot glibc', ['/rootfs/lib/libc.so.6'], 'relative', /no package for linux-arm64/],
+    ['PRoot APK without Termux markers', ['/rootfs/lib/libc.so.6'], '', /no package for linux-arm64/],
+    ['PRoot glibc with host mappings', [bionic, '/rootfs/lib/libc-2.39.so'], 'relative', /no package for linux-arm64/],
+    ['PRoot musl with host mappings', [bionic, '/rootfs/lib/libc.musl-aarch64.so.1'], 'relative', /musl systems/],
+  ];
+  const grep = execFileSync(SH, ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
+  const nativePath = execFileSync(SH, ['-c', 'printf "%s" "$PATH"'], { encoding: 'utf8' });
+  const quote = value => `'${String(value).replaceAll('\\', '/').replaceAll("'", "'\\''")}'`;
+  for (const [name, libraries, prefix, error] of cases) await t.test(name, t => {
+    const m = machine(t);
+    const maps = path.join(m.root, 'maps');
+    fs.writeFileSync(maps, libraries.map(file => `1000-2000 r-xp 0 00:00 0 ${file}`).join('\n'));
+    // Replace only the ABI observation, not the installer's classification.
+    fs.writeFileSync(path.join(m.bin, 'grep'), `#!/bin/sh\ncase "\${3:-}" in /proc/*/maps) exec ${quote(grep)} "$1" "$2" ${quote(maps)} ;; esac\nexec ${quote(grep)} "$@"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(m.bin, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo aarch64 ;; esac\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(m.bin, 'ldd'), `#!/bin/sh\necho '${name.includes('musl') ? 'musl libc' : 'GNU libc'}'\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(m.bin, 'curl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 }); // no network
+    const bin = execFileSync(SH, ['-c', 'cd "$1" && pwd', 'sh', m.bin], { encoding: 'utf8' }).trim();
+    const result = m.install('--version', '0.6.0', {
+      OV_SUPERAGENT_LANG: 'en', OV_SUPERAGENT_DOWNLOAD_BASE: 'https://fixture.invalid',
+      PATH: `${bin}:${nativePath}`, PREFIX: prefix, TERMUX_VERSION: prefix ? 'inherited-from-host' : '',
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, error);
+    assert.equal(fs.existsSync(path.join(m.superagent, 'current')), false);
+  });
+});
 
 test('installs a release under ~/.ov-superagent, adds the launcher and PATH, and never touches pm2', (t) => {
   const m = machine(t);
