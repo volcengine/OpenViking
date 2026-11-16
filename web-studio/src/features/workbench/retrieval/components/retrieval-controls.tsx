@@ -84,7 +84,7 @@ export function RetrievalControls({
   const toggleLevel = (level: number, checked: boolean) => {
     onOptionsChange({
       levels: checked
-        ? [...options.levels, level].toSorted()
+        ? [...options.levels, level].sort((a, b) => a - b)
         : options.levels.filter((item) => item !== level),
     })
   }
