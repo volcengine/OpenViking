@@ -1432,7 +1432,8 @@ export class Store {
       if (!turn || turn.status !== 'ACCEPTED' || turn.sessionId !== sessionId
         || turn.conversationKey !== conversationKey || cognition.authorityToken !== authorityToken
         || cognition.epoch !== turn.epoch || cognition.runtime !== runtime) throw new Error('MA steer lost turn ownership');
-      const steer = { id, status: 'POSTING', inboundSeqs, expectedUserEventId: null };
+      const steer = { id, status: 'POSTING', inboundSeqs, expectedUserEventId: null,
+        priorDeliveredThroughSeq: turn.deliveredThroughSeq };
       const next = { ...turn, authorityToken, inboundSeqs: [...new Set([...turn.inboundSeqs, ...inboundSeqs])],
         deliveredThroughSeq: Math.max(turn.deliveredThroughSeq, deliveredThroughSeq), steers: [...(turn.steers ?? []), steer] };
       this.setMetaStatement.run(`managed_turn:${runtime}`, JSON.stringify(next));
@@ -1449,6 +1450,25 @@ export class Store {
       Object.assign(steer, { status: 'ACCEPTED', expectedUserEventId });
       this.setMetaStatement.run(`managed_turn:${runtime}`, JSON.stringify(turn));
       return steer;
+    });
+  }
+
+  // MA definitely refused the steer POST (it accepted nothing): drop the steer
+  // and the inputs it admitted, so they can be sent again.
+  rejectManagedSteer(runtime, sessionId, id) {
+    return this.transaction(() => {
+      const turn = this.getManagedTurn(runtime);
+      const steer = turn?.steers?.find((item) => item.id === id);
+      if (!steer || turn.sessionId !== sessionId || steer.status !== 'POSTING'
+        || turn.authorityToken !== this.getCognitionState().authorityToken) throw new Error('MA steer rejection lost ownership');
+      const steers = turn.steers.filter((item) => item !== steer);
+      const kept = new Set(steers.flatMap((item) => item.inboundSeqs));
+      const next = { ...turn, steers,
+        inboundSeqs: turn.inboundSeqs.filter((seq) => !steer.inboundSeqs.includes(seq) || kept.has(seq)),
+        deliveredThroughSeq: Number.isSafeInteger(steer.priorDeliveredThroughSeq)
+          ? steer.priorDeliveredThroughSeq : turn.deliveredThroughSeq };
+      this.setMetaStatement.run(`managed_turn:${runtime}`, JSON.stringify(next));
+      return next;
     });
   }
 
