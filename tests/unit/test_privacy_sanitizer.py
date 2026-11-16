@@ -320,3 +320,32 @@ async def test_matcher_cache_separates_policies_and_refreshes_both_after_rotatio
             "shared-secret rotated-secret", ctx=_ctx(), prefer_credentials=preferred
         )
         assert result.content == f"{captured} {credential}"
+
+
+async def test_sanitizer_does_not_scrub_longer_words_containing_a_value():
+    catalog = _PrivacyCatalog(
+        {"custom": {"cluster": {"ssh_user": "deploy"}}}
+    )
+    sanitizer = PrivacySanitizer(catalog)
+
+    result = await sanitizer.sanitize(
+        "deployed paths and deployment notes stay intact; "
+        "the deploy account is scoped; run deploy, then verify.",
+        ctx=_ctx(),
+        uri="viking://user/alice/memories/preferences/item.md",
+    )
+
+    assert "deployed" in result.content
+    assert "deployment" in result.content
+    assert "the {{ov_privacy:alice:viking://~/privacy/custom/cluster#/values/ssh_user}} account" in result.content
+    assert "run {{ov_privacy:alice:viking://~/privacy/custom/cluster#/values/ssh_user}}, then verify." in result.content
+
+
+async def test_prepared_matcher_drops_spans_embedded_in_larger_tokens():
+    catalog = _PrivacyCatalog({"custom": {"cluster": {"ssh_user": "deploy"}}})
+    find = await PrivacySanitizer(catalog).prepare_matcher(_ctx())
+
+    spans = find("dev-deploy-user deployed deploy deploy_key")
+
+    assert len(spans) == 1
+    assert "dev-deploy-user deployed deploy deploy_key"[spans[0].start : spans[0].end] == "deploy"
