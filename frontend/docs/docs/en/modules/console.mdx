@@ -234,6 +234,8 @@ Declare tasks started by a tool in `tool-result.tasks`, with a required `id` and
 
 Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Active task notifications use the built-in loading icon; terminal states replace it with their result icon. Query failures display a warning without changing the task status.
 
+When a terminal task completes with a resource URI, **View result** opens the resource through `command.onOpenUri` or `Console.onOpenUri`. The notification remains until the user opens the result or dismisses it.
+
 Changing modes or chat sessions, clearing terminal history and dismissing notifications do not cancel backend tasks. Dismissing a notification leaves its records updating. Identity changes and Console unmount abort queries and discard stale responses. Task state and notifications are not persisted across page reloads.
 
 Adapt other backends through a stable `taskService`; `chatOptions.taskService` can override chat task queries. Different services, identities and `scopeKey` values are tracked separately. A host that fully controls `conversation` also supplies its task presentation state.

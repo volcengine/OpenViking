@@ -222,14 +222,14 @@ export interface FileBrowserProps extends Omit<
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
-   * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。
+   * 受控的当前资源 URI。挂载后由宿主切换 URI 时，模块打开预览并定位目录树。
    *
    * 用 `uri !== undefined` 判断是否受控，而不是真假值：空字符串也算宿主接管。
    * 模块不会主动清空选中——点目录行与点面包屑祖先都带具体 URI，没有「取消选中」
    * 的交互——因此这里不接受 `null`。
    *
-   * The controlled current resource URI. When given, the host owns the current
-   * resource and the module only reports switch intent.
+   * The controlled current resource URI. Host-driven changes after mount open
+   * the preview and reveal the resource in the tree.
    *
    * Control is detected with `uri !== undefined` rather than truthiness: even an empty
    * string counts as the host taking over. The module never clears the selection —
@@ -390,6 +390,8 @@ export interface FileBrowserActions {
     uri: string,
     options?: FileBrowserOpenResourceOptions,
   ) => Promise<boolean>;
+  reveal: (uri: string) => Promise<boolean>;
+  cancelReveal: () => void;
   openUri: (uri: string) => Promise<void>;
   openDashboard: (uri: string) => void;
   /** 选中条目。Selects an entry. */

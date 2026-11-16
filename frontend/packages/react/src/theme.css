@@ -124,8 +124,9 @@
   --ov-ui-bg-5-default: #f1f2f9;
   --ov-ui-plain-button-hover-default: #f5f5fc;
   --ov-ui-command-console-input-text-default: #4d5368;
-  --ov-ui-command-console-guide-text-default: #787c91;
-  --ov-ui-command-console-quick-bg-default: #f7f7f9;
+  --ov-ui-conversation-meta-default: #6b6e87;
+  --ov-ui-command-console-neutral-bg-default: #f7f7f9;
+  --ov-ui-conversation-link-default: var(--ov-ui-primary-default);
   --ov-ui-command-console-quick-hover-default: #eff1f6;
 
   /* Code surfaces used by the reference conversation renderer. */
@@ -275,8 +276,9 @@ html.dark .ov-error-boundary,
   --ov-ui-bg-5-default: #23252a;
   --ov-ui-plain-button-hover-default: var(--ov-ui-bg-4-default);
   --ov-ui-command-console-input-text-default: var(--ov-ui-text-1-default);
-  --ov-ui-command-console-guide-text-default: var(--ov-ui-text-2-default);
-  --ov-ui-command-console-quick-bg-default: var(--ov-ui-bg-4-default);
+  --ov-ui-conversation-meta-default: var(--ov-ui-text-2-default);
+  --ov-ui-command-console-neutral-bg-default: var(--ov-ui-bg-4-default);
+  --ov-ui-conversation-link-default: #8086ff;
   --ov-ui-command-console-quick-hover-default: var(--ov-ui-bg-5-default);
 
   --ov-ui-focus-default: #5f5fff;
@@ -427,9 +429,14 @@ html.dark .ov-file-browser-search {
 
 .ov-file-preview {
   --ov-ui-syntax-number-default: #722ed1;
+  --ov-ui-preview-inline-code-bg-default: #fbfbfd;
 }
 html.dark .ov-file-preview {
   --ov-ui-syntax-number-default: #b37feb;
+  --ov-ui-preview-inline-code-bg-default: var(
+    --color-bg-2,
+    var(--ov-ui-bg-2-default)
+  );
 }
 
 .ov-file-preview,
@@ -520,6 +527,7 @@ html.dark .ov-directory-tour {
 
 /* Persistent notice surface from the console Arco theme (MIT). */
 .ov-notification-stack {
+  --ov-ui-console-task-completion-icon-default: #0ea39e;
   --ov-ui-notification-bg-default: rgb(245 245 245 / 90%);
   --ov-ui-notification-shadow-default:
     0 15px 35px rgb(0 0 0 / 5%), 0 5px 15px rgb(0 0 0 / 5%);

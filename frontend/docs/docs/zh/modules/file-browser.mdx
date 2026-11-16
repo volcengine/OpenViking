@@ -98,7 +98,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------ |
 | uri                      | 受控的当前资源 URI：传入（包括空字符串）后由宿主决定，空字符串表示不选中资源                                       | `string`                                                                | -                        |
 | defaultUri               | 非受控时的初始资源 URI，省略时不选中资源                                                                           | `string`                                                                | -                        |
-| onUriChange              | 选中的资源变化后触发，参数是新的 URI；没有取消选中的操作，不会收到 `null`                                          | `(uri: string \| null) => void`                                         | -                        |
+| onUriChange              | 浏览器内部选中资源时触发，参数是新的 URI                                                                           | `(uri: string \| null) => void`                                         | -                        |
 | rootUri                  | 目录树的根，把浏览和搜索的范围限定在这个子树内                                                                     | `string`                                                                | `'viking://'`            |
 | defaultExpandedUri       | 首次加载后自动展开到的路径，逐级加载；省略时只展开根目录                                                           | `string`                                                                | -                        |
 | readOnly                 | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
@@ -419,7 +419,7 @@ import '@openviking/react/modules/file-browser/style.css';
 - 根目录 `viking://` 下按用户、会话、Agent、资源的顺序显示，其余目录随后；`rootUri` 为其他值时保持接口返回的顺序。
 - 点击文件预览正文；点击目录展开并选中它，预览区显示该目录的 L0 摘要和 L1 总览。
 - `viking://system` 下的目录保留页签和路径，不显示摘要；目录中的文件仍可预览。
-- 设置 `uri` 只切换预览的资源，不会展开目录树；需要初始就展开到某个位置时使用 `defaultExpandedUri`。
+- 首次加载时，用 `defaultExpandedUri` 展开到指定位置。挂载后更新受控 `uri` 会[打开并定位资源](#打开并定位资源)。
 - 文本文件最多读取 2000 行，超出时提示内容被截断。
 - 图片、视频、音频、PDF、Office 文档和压缩包按扩展名通过内容下载接口读取。
 - 可编辑的格式有 `.md`、`.json`、`.jsonl`、`.txt`、`.yaml`、`.yml`：进入编辑时重新读取完整内容，保存调用 `POST /api/v1/content/write`，成功后重新加载预览。
@@ -434,7 +434,9 @@ import '@openviking/react/modules/file-browser/style.css';
 
 ### 打开并定位资源
 
-`FileBrowser` 支持 React 18/19 的 ref。导入结果、搜索结果或文件链接可调用 `openResource`：模块打开预览，逐级展开祖先目录，按需加载后续页找到目标，选中并滚动到该行。其他分支的展开状态保留；重复打开同一 URI 也会再次滚动定位。
+终端链接、搜索结果和导入结果的 URI 可以通过 `uri` 传给已挂载的 `FileBrowser`。区块打开预览，逐级展开祖先目录，按需加载后续页找到目标，选中并滚动到该行。其他分支的展开状态保留。
+
+`FileBrowser` 支持通过 React 18/19 的 ref 显式导航。需要重新定位当前 URI、等待定位完成或仅打开预览时，调用 `openResource`。
 
 ```tsx
 import { useRef } from 'react';
@@ -453,7 +455,7 @@ await browserRef.current?.openResource(directoryUri);
 
 传入以 `/.abstract.md` 或 `/.overview.md` 结尾的链接时，模块打开父目录并分别切换到 L0 摘要或 L1 总览；树定位与 `onUriChange` 使用父目录 URI。同一目录内重复打开链接也会切换到指定层级，之后仍可手动切换。
 
-`reveal` 默认 `true`；传 `{ reveal: false }` 只发出打开预览的请求，发出后返回 `true`。普通 `uri` 属性变化不会展开或滚动目录树。受控模式需要宿主在 `onUriChange` 中更新 `uri` 接受打开意图。目标行选中并滚动后 Promise 返回 `true`；目标不存在、不可访问、不在 `rootUri` 下、被后续操作替代或组件卸载时返回 `false`。
+`openResource` 默认定位目标。传入 `{ reveal: false }` 时仅请求打开预览，发出请求后返回 `true`。受控模式需要宿主在 `onUriChange` 中更新 `uri` 接受打开意图。目标行选中并滚动后 Promise 返回 `true`；目标不存在、不可访问、不在 `rootUri` 下、被后续操作替代或组件卸载时返回 `false`。
 
 定位目录时，自动展开目标目录并刷新子项，文件目标仍只展开祖先，不请求文件的子项。刷新期间保留原列表，重新读取已加载范围后一次替换；原列表已读完时，新列表也读取到末页；已展开的子目录移到后续页时，继续读取到找到这些目录或列表结束。其他目录的缓存和展开状态保留；接口确认已删除的条目从新列表移除。刷新失败保留原列表与当前选择，使用目录错误行和重试；导航成功不会因子项刷新失败改为失败。
 
