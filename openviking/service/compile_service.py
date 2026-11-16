@@ -753,6 +753,7 @@ class CompileService:
             submission_payload=submitted if idempotency_key else None,
             submission_private_payload={} if compile_name else None,
             on_task_created=record_created if compile_name else None,
+            retry_enqueue=trigger == "scheduled",
         )
 
     async def on_start(self, task: TaskRecord) -> str | ExternalTaskSnapshot | None:
