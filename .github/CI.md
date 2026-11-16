@@ -83,6 +83,20 @@ The first pull still downloads the image; subsequent jobs on the same host reuse
 Docker's cached layers. Rebuild and validate periodically for OS package updates,
 then update the digest variable. Remove the variable to return to stock Ubuntu.
 
+For a local Linux build, provide the host CA bundle in the build context; minimal
+Ubuntu needs it to verify HTTPS before installing `ca-certificates`. The Dockerfile
+uses HTTPS sources and fails immediately on incomplete package indexes.
+`UBUNTU_MIRROR` optionally selects an HTTPS mirror, including its `/ubuntu` path:
+
+```sh
+ci_context=$(mktemp -d)
+cp .github/images/ubuntu24-ci.Dockerfile "$ci_context/Dockerfile"
+cp /etc/ssl/certs/ca-certificates.crt "$ci_context/bootstrap-ca-certificates.crt"
+docker build --platform linux/amd64 \
+  --build-arg UBUNTU_MIRROR=https://mirrors.aliyun.com/ubuntu \
+  -t ghcr.io/volcengine/openviking-ci-ubuntu24:local "$ci_context"
+```
+
 Before enabling routing, dispatch `_build.yml` on this branch with
 `check_linux_runner=true`, `build_wheels=false` and `build_sdist=false`. Its
 five-minute diagnostic checks Docker access, HTTPS package-index downloads and
