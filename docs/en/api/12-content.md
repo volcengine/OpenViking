@@ -354,6 +354,8 @@ Write multiple files below one Resource or Memory directory, then refresh the af
 | `telemetry` | boolean/object | No | `false` | Include operation telemetry |
 | `processing_mode` | string | No | `semantic_and_vectors` | One processing mode for the whole batch: `semantic_and_vectors` or `vectors_only` |
 | `defer_processing` | boolean | No | `false` | Save files without scheduling semantic or vector work; the caller schedules later processing |
+| `skip_conflicts` | boolean | No | `false` | Preserve targets that fail revision or existence guards and return their conflict details while compatible operations continue |
+| `edit_source` | string | No | `manual` | Version provenance for the whole batch: `manual`, `agent`, or `compile` |
 
 Each operation contains:
 
@@ -363,6 +365,9 @@ Each operation contains:
 | `content` | string | Conditional | UTF-8 text; exactly one of `content` and `content_base64` is required |
 | `content_base64` | string | Conditional | Base64-encoded bytes; not supported for Memory targets |
 | `mode` | string | No | `replace` (default), `append`, `create`, or `upsert` |
+| `expected_sha256` | string | No | Require the existing bytes to match this lowercase SHA-256 digest |
+| `if_absent` | boolean | No | Create only when the target does not exist; incompatible with `expected_sha256` and `append` |
+| `resolve_conflicts` | boolean | No | Treat this replacement as manual conflict resolution for an existing Resource Markdown file |
 | `tags` | string[] | No | - | Explicit retrieval tags for this file |
 | `tag_mode` | string | No | `replace` | Tag write mode for this file: `replace`, `append`, or `clear` |
 | `acl` | object | No | - | Direct ACL for this file; requires manage permission on the file |
@@ -375,11 +380,14 @@ Each operation contains:
 - `create`, `replace`, and `upsert` are compatible spellings for setting the requested final body: they overwrite an existing file and create a missing one. `append` appends when the file exists and creates it with the supplied body when it does not.
 - `processing_mode` applies to the whole batch; operations cannot mix semantic modes. `vectors_only` maintains changed-file vectors without refreshing parent semantics.
 - `tags`, `tag_mode`, and `acl` apply per operation. Tags travel with the file's first vector upsert; `clear` does not require `tags` and ignores supplied tag values.
+- `expected_sha256` and `if_absent` are checked while all target locks are held. With `skip_conflicts=true`, failed guards are returned in `conflicts` without overwriting those targets; permission, transport, and write failures remain errors.
+- `resolve_conflicts=true` compares the previous and edited Markdown, preserves conflict history, and updates `has_conflict` and `conflict_num` tags. It requires text content and cannot be combined with `defer_processing`; non-existing, non-Resource, non-Markdown, and non-`replace` targets keep ordinary write behavior.
 - The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Without deferral, asynchronous processing retains the file locks until the associated work settles, refreshing the affected `.overview.md` and `.abstract.md` files together.
 - Resource parent refreshes use the same best-effort behavior as `write()`: L0/L1 lock conflicts skip the directory refresh and its vector updates while preserving file writes and file processing. A later refresh is not guaranteed.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.
 - Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.
 - In the response body, `semantic_status` (`queued`, `complete`, `deferred`, or `skipped`) reports grouped parent-directory aggregation. It is `skipped` only when no parent group was enqueued; one busy parent does not hide work enqueued for another. `vector_status` reports vector maintenance for changed files.
+- Every request creates one `content_batch_write` task and enqueues one root message on the `ContentWrite` QueueFS queue. The default SQLite QueueFS backend persists it; `backend=memory` does not survive process exit. `wait=false` returns its `task_id` after enqueue; poll `GET /api/v1/tasks/{task_id}`. `wait=true` uses the same queue but waits for terminal completion and omits `task_id` from a successful result.
 - If formal content commits but asynchronous refresh enqueue fails, the body is kept. Re-run with the final body using `replace`, `create`, or `upsert`; do not blindly replay an already-successful `append`, because it would append twice.
 
 **Python SDK**
@@ -396,7 +404,8 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# Updated page\n",
-            "mode": "upsert",
+            "mode": "replace",
+            "resolve_conflicts": True,
         },
     ],
     wait=True,

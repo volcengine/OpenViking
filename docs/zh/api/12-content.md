@@ -354,6 +354,8 @@ ov write viking://resources/docs/api.md \
 | `telemetry` | boolean/object | 否 | `false` | 是否返回操作遥测信息 |
 | `processing_mode` | string | 否 | `semantic_and_vectors` | 整批统一的处理模式：`semantic_and_vectors` 或 `vectors_only` |
 | `defer_processing` | boolean | 否 | `false` | 只保存文件，不派发语义和向量处理；后处理由调用方安排 |
+| `skip_conflicts` | boolean | 否 | `false` | 保留 revision 或存在性校验冲突的目标，返回冲突详情，同时继续执行兼容的 operation |
+| `edit_source` | string | 否 | `manual` | 整批写入的版本来源：`manual`、`agent` 或 `compile` |
 
 每个 operation 包含：
 
@@ -363,6 +365,9 @@ ov write viking://resources/docs/api.md \
 | `content` | string | 条件必填 | UTF-8 文本；与 `content_base64` 必须且只能提供一个 |
 | `content_base64` | string | 条件必填 | Base64 编码的字节；Memory 目标不支持 |
 | `mode` | string | 否 | `replace`（默认）、`append`、`create` 或 `upsert` |
+| `expected_sha256` | string | 否 | 要求已有文件字节匹配指定的小写 SHA-256 digest |
+| `if_absent` | boolean | 否 | 仅在目标不存在时创建；不能与 `expected_sha256` 或 `append` 同时使用 |
+| `resolve_conflicts` | boolean | 否 | 将这次替换标记为对已有 Resource Markdown 的人工冲突解决 |
 | `tags` | string[] | 否 | - | 该文件的显式检索标签 |
 | `tag_mode` | string | 否 | `replace` | 该文件标签写入方式：`replace`、`append` 或 `clear` |
 | `acl` | object | 否 | - | 该文件的直接 ACL；需要该文件的 manage 权限 |
@@ -375,11 +380,14 @@ ov write viking://resources/docs/api.md \
 - `create`、`replace`、`upsert` 是“写成请求最终正文”的兼容写法：文件存在时覆盖，缺失时创建。`append` 在文件存在时追加，文件缺失时以请求正文创建文件。
 - `processing_mode` 对整个 batch 生效，不能在不同 operation 中混用语义模式；`vectors_only` 不刷新父目录语义，只维护变化文件的向量。
 - `tags`、`tag_mode` 与 `acl` 按 operation 生效；tags 会随该文件首次向量 upsert 写入，`clear` 不要求传 `tags` 并会忽略同时传入的标签值。
+- `expected_sha256` 和 `if_absent` 会在整批目标锁持有期间校验。设置 `skip_conflicts=true` 后，校验失败的目标会进入 `conflicts` 且不会被覆盖；权限、传输和实际写入失败仍然报错。
+- `resolve_conflicts=true` 会比较新旧 Markdown、保留冲突历史，并更新 `has_conflict` 与 `conflict_num` 标签。它只接受文本正文，不能与 `defer_processing` 同时使用；目标不存在、不是 Resource Markdown 或 mode 不是 `replace` 时仍按普通写入处理。
 - 整批先获取所有目标文件的精确锁，再校验文件状态并写入；同一目录下不涉及相同文件的写入可以并行，重叠文件的写入或父目录删除、移动仍会冲突。未启用延迟模式时，异步处理持有文件锁直到关联工作结束，统一刷新受影响的 `.overview.md` / `.abstract.md`。
 - 资源父目录刷新与 `write()` 一样采用尽力更新：L0/L1 锁冲突时跳过目录刷新及对应目录向量更新，保留原文和文件自身的处理，不保证自动补刷。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
 - 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
 - 响应体中，通过 `semantic_status`（`queued`、`complete`、`deferred` 或 `skipped`）表达按直接父目录聚合的状态；只有所有父目录都未入队时才为 `skipped`，某一个目录因锁冲突跳过不会掩盖其他目录已入队的工作。`vector_status` 表达变化文件的向量维护状态。
+- 每个请求会创建一个 `content_batch_write` Task，并向 QueueFS 的 `ContentWrite` 队列写入一条根消息。默认 SQLite QueueFS 会持久化消息；显式配置 `backend=memory` 时进程退出后不保留。`wait=false` 在消息入队后返回 `task_id`，可通过 `GET /api/v1/tasks/{task_id}` 查询；`wait=true` 同样入队，但会等待 Task 终态，并在成功结果中移除 `task_id`。
 - 若正文已提交但异步刷新入队失败，正文不会回滚。可使用相同最终正文通过 `replace`、`create` 或 `upsert` 重写；不要直接重放已经成功过的 `append`，否则会重复追加。
 
 **Python SDK**
@@ -396,7 +404,8 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# 更新后的页面\n",
-            "mode": "upsert",
+            "mode": "replace",
+            "resolve_conflicts": True,
         },
     ],
     wait=True,
