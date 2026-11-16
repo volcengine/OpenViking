@@ -6,7 +6,13 @@ import {
   type FilePreviewToolbarOptions,
   type FilePreviewHeaderSlots,
 } from '../../components/file-preview/index.js';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import {
+  FilePreviewEditContext,
+  type FilePreviewEditRequest,
+} from '../../components/file-preview/file-preview-edit-request.js';
+import { dashboardKey } from './dashboard-model.js';
+import { isEditableText } from './preview-policy.js';
 
 import type { FileBrowserLabels } from './types.js';
 
@@ -21,6 +27,7 @@ export interface FileBrowserDetailProps {
   previewSlots?: FilePreviewHeaderSlots;
   toolbar?: FilePreviewToolbarOptions;
   actions?: FilePreviewActionSource;
+  canEditConflict: boolean;
   onActiveKeyChange: (key: string) => void;
   onSave?: () => void;
 }
@@ -36,29 +43,58 @@ export function FileBrowserDetail({
   previewSlots,
   toolbar,
   actions,
+  canEditConflict,
   onActiveKeyChange,
   onSave,
 }: FileBrowserDetailProps) {
+  const [request, setRequest] = useState<FilePreviewEditRequest | null>(null);
+  const conflictFile = canEditConflict
+    ? tabs.find(
+        (tab) =>
+          tab.kind === 'file' &&
+          !tab.disabled &&
+          dashboardKey(tab.key) === activeKey &&
+          isEditableText(tab.key),
+      )
+    : undefined;
+  const editFile = conflictFile
+    ? () => {
+        const next = {
+          tabKey: conflictFile.key,
+          onConsumed: () =>
+            setRequest((pending) => (pending === next ? null : pending)),
+        };
+        setRequest(next);
+        onActiveKeyChange(conflictFile.key);
+      }
+    : null;
   return (
     <div className="ov-file-browser__detail">
-      <FilePreview
-        tabs={
-          decorateTabs(
-            tabs,
-            footer,
-            titleExtra,
-            readOnly,
-            previewSlots,
-            actions,
-            onSave,
-          ) as [FilePreviewTab, ...FilePreviewTab[]]
-        }
-        toolbar={toolbar}
-        activeKey={activeKey ?? undefined}
-        locale={locale}
-        labels={labels}
-        onActiveKeyChange={onActiveKeyChange}
-      />
+      <FilePreviewEditContext.Provider
+        value={{ request: canEditConflict ? request : null, editFile }}
+      >
+        <FilePreview
+          tabs={
+            decorateTabs(
+              tabs,
+              footer,
+              titleExtra,
+              readOnly,
+              previewSlots,
+              actions,
+              onSave,
+            ) as [FilePreviewTab, ...FilePreviewTab[]]
+          }
+          toolbar={toolbar}
+          activeKey={activeKey ?? undefined}
+          locale={locale}
+          labels={labels}
+          onActiveKeyChange={(key) => {
+            setRequest(null);
+            onActiveKeyChange(key);
+          }}
+        />
+      </FilePreviewEditContext.Provider>
     </div>
   );
 }

@@ -135,7 +135,7 @@ Each flag defaults to showing the action when the current resource supports it. 
 | Property    | Description                                                                                                                                                                                | Type      | Default |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | ------- |
 | copyPath    | The Copy path button beside the breadcrumb; shown when the preview has a path                                                                                                              | `boolean` | `true`  |
-| viewSwitch  | The Preview / Source switch; only for formats that support both views, so not for images, video or directories under `viking://system`                                                     | `boolean` | `true`  |
+| viewSwitch  | Preview / Source switch, shown outside editing for formats that support both views. Images, video and directories under `viking://system` do not support the switch                        | `boolean` | `true`  |
 | edit        | The edit button; only for writable files in an editable format, never for experience files, `viking://system` resources or L0/L1 summaries                                                 | `boolean` | `true`  |
 | copyContent | The Copy content action, which copies the previewed text or directory summary (only the displayed part if truncated); hidden for binary media and `viking://system` directories            | `boolean` | `true`  |
 | download    | The Download action, which saves the original content of a file; shown for files only                                                                                                      | `boolean` | `true`  |
@@ -530,6 +530,7 @@ Directory listings needed to locate the target, or required home alias lookups, 
 - The compile configuration (`GET /api/v1/compile/configs`) is read on demand: when a Wiki dashboard opens, or when a reserved Wiki trailer in the body needs an ownership check; ordinary browsing does not request it.
 - When `dashboardKinds` omits `'wiki'`, Wiki is no longer detected and the compile configuration is not read, so Wiki resources lose their Compile configuration and the Compile-specific history index.
 - Rows that have a dashboard show a dashboard icon in the tree; hover or focus it for an action hint, and click it to open the dashboard. The icon differs when a Wiki has pending conflicts.
+- FileBrowser uses `POST /api/v1/search/find` to check visible Wiki roots and expanded Wiki directories for L2 files tagged `has_conflict=true`. It uses the matching paths to mark direct children. A failed search leaves unknown statuses unconfirmed.
 - The tabs in the preview switch between the content and the dashboard.
 - Ordinary resources have no Wiki tab, and a detected Wiki keeps its dashboard even with no conflicts.
 - A `viking://~/...` alias and the canonical URI of the same resource are detected the same way, and the `uri` passed to `renderDashboard` keeps the spelling it came with.

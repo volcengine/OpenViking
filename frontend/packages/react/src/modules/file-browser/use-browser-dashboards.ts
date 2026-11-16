@@ -1,21 +1,17 @@
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
-import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
+import { createDashboardTab } from './dashboard-tab.js';
 import type { FileBrowserDashboardLabels } from './types.js';
 import { readCompileTargets } from './dashboard-data.js';
-import { type ReactNode, createElement, useCallback, useState } from 'react';
+import { type ReactNode, useCallback, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { readDashboardHint } from './dashboard-resource.js';
 import { isOvClientError } from '../../client/errors.js';
 import type { FileTreeRow } from '../../components/file-tree/index.js';
-import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
-import { ExperienceDashboardPane } from './experience-dashboard-pane.js';
-import { WikiDashboardPane } from './wiki-dashboard-pane.js';
-import { ExperienceBoardIcon, WikiBoardIcon } from '../../icons/index.js';
+import { useWikiConflictIndicators } from './wiki-conflict-indicators.js';
 import {
   type FileBrowserDashboard,
   resolveDashboard,
-  dashboardKey,
 } from './dashboard-model.js';
 
 export function useBrowserDashboards({
@@ -23,6 +19,7 @@ export function useBrowserDashboards({
   metadataRows,
   uri,
   rootUri,
+  identifyUri,
   generation,
   locale,
   requestOptions,
@@ -36,6 +33,7 @@ export function useBrowserDashboards({
   metadataRows: readonly FileTreeRow[];
   uri: string | null;
   rootUri: string;
+  identifyUri: (uri: string) => string;
   generation: number;
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
@@ -46,6 +44,11 @@ export function useBrowserDashboards({
   onOpenUri: (uri: string) => Promise<void>;
 }) {
   const [opened, setOpened] = useState<string | null>(null);
+  const [conflictRevision, setConflictRevision] = useState(0);
+  const refreshConflicts = useCallback(
+    () => setConflictRevision((value) => value + 1),
+    [],
+  );
   const [previousUri, setPreviousUri] = useState(uri);
   if (previousUri !== uri) {
     setPreviousUri(uri);
@@ -129,6 +132,17 @@ export function useBrowserDashboards({
     (dashboardKinds === undefined || dashboardKinds.includes(resolved.kind))
       ? resolved
       : undefined;
+  const conflictStatus = useWikiConflictIndicators(
+    rows,
+    dashboards,
+    current,
+    identifyUri,
+    generation + conflictRevision,
+    requestOptions,
+  );
+  for (const dashboard of dashboards.values())
+    dashboard.pendingConflicts = conflictStatus(dashboard);
+  if (current) current.pendingConflicts = conflictStatus(current);
   const open = useCallback(
     (target: string) => {
       setOpened(target);
@@ -137,54 +151,28 @@ export function useBrowserDashboards({
     [onOpenUri],
   );
   const close = useCallback(() => setOpened(null), []);
-  const text = resolveDashboardLabels(locale, dashboardLabels);
-  const title =
-    current?.kind === 'experience' ? text.experienceTitle : text.wikiTitle;
-  const tab: FilePreviewTab | undefined =
-    current && uri
-      ? {
-          key: dashboardKey(uri),
-          title,
-          icon: createElement(
-            current.kind === 'experience' ? ExperienceBoardIcon : WikiBoardIcon,
-            { width: 14, height: 14 },
-          ),
-          kind: 'content',
-          content:
-            renderDashboard?.(current) ??
-            (current.kind === 'experience'
-              ? createElement(ExperienceDashboardPane, {
-                  dataSource: experienceDataSource,
-                  uri,
-                  locale,
-                  requestOptions,
-                  refreshGeneration: generation,
-                  onOpenUri: (target: string) => {
-                    setOpened(null);
-                    void onOpenUri(target);
-                  },
-                })
-              : createElement(WikiDashboardPane, {
-                  uri,
-                  kind: knownRows.some(
-                    (row) =>
-                      row.kind === 'entry' &&
-                      row.uri === canonicalUri &&
-                      row.type === 'file',
-                  )
-                    ? 'file'
-                    : 'directory',
-                  locale,
-                  requestOptions,
-                  refreshGeneration: generation,
-                  onOpenUri: (target: string) => {
-                    setOpened(null);
-                    void onOpenUri(target);
-                  },
-                  onOpenDashboard: open,
-                })),
-        }
-      : undefined;
+  const tab = current
+    ? createDashboardTab(current, {
+        locale,
+        labels: dashboardLabels,
+        requestOptions,
+        generation,
+        conflictRevision,
+        isFile: knownRows.some(
+          (row) =>
+            row.kind === 'entry' &&
+            row.uri === canonicalUri &&
+            row.type === 'file',
+        ),
+        experienceDataSource,
+        renderDashboard,
+        onOpenUri: (target) => {
+          close();
+          void onOpenUri(target);
+        },
+        onOpenDashboard: open,
+      })
+    : undefined;
   return {
     isWiki: resolved?.kind === 'wiki',
     contentPending: Boolean(
@@ -196,6 +184,7 @@ export function useBrowserDashboards({
     isOpen: uri !== null && opened === uri && Boolean(current),
     open,
     close,
+    refreshConflicts,
     error: unsupported ? null : catalog.error,
     retry: catalog.retry,
   };

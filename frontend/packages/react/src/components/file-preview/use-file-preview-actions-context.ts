@@ -1,6 +1,7 @@
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { mediaKind } from './file-preview-media.js';
 import { useCallback } from 'react';
+import { useFilePreviewEditRequest } from './file-preview-edit-request.js';
 
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
@@ -91,7 +92,7 @@ export function useFilePreviewActionsContext({
     return operations.copyPath(activeTab, path);
   }, [activeTab, currentPath, operations]);
 
-  return {
+  const context: FilePreviewActions = {
     source: currentSource,
     path: currentPath,
     viewMode,
@@ -109,4 +110,6 @@ export function useFilePreviewActionsContext({
     canCopyPath: Boolean(currentPath),
     copyPath,
   };
+  useFilePreviewEditRequest(fileTab, context);
+  return context;
 }

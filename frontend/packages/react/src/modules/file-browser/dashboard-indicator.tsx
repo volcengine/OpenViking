@@ -32,11 +32,19 @@ export function DashboardIndicator({
       : dashboard.pendingConflicts
         ? WikiConflictBoardIcon
         : WikiBoardIcon;
+  const statusClass =
+    dashboard.kind !== 'wiki'
+      ? ''
+      : dashboard.pendingConflicts === true
+        ? ' ov-file-browser__dashboard--pending'
+        : dashboard.pendingConflicts === undefined
+          ? ' ov-file-browser__dashboard--unknown'
+          : '';
   return (
     <Tooltip content={label}>
       <button
         type="button"
-        className={`ov-file-browser__dashboard${dashboard.pendingConflicts ? ' ov-file-browser__dashboard--pending' : ''}`}
+        className={`ov-file-browser__dashboard${statusClass}`}
         aria-label={label}
         onClick={(event) => {
           event.stopPropagation();

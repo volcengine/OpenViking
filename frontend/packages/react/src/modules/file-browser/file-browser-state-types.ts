@@ -20,6 +20,7 @@ export interface FileBrowserApi {
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
   dashboardError: Error | null;
+  refreshWikiConflicts: () => void;
   /** 按渲染顺序排列的可见行。Visible rows in render order. */
   rows: readonly FileTreeRow[];
   /** 当前选中的行 id。Selected row id. */

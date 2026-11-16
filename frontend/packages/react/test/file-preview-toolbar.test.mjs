@@ -115,6 +115,20 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
     const reads = requests.countOf('/api/v1/content/read');
     await click(view, 'Edit');
     await waitForEditor(view.container);
+    const toolbar = view.container.querySelector('.ov-file-preview__toolbar');
+    assert.deepEqual(
+      [...toolbar.querySelectorAll('button')].map(
+        (node) => node.getAttribute('aria-label') ?? node.textContent.trim(),
+      ),
+      ['Cancel', 'Save', 'Version history'],
+    );
+    assert.ok(button(view, 'Copy path'));
+    await click(view, 'Version history');
+    const history = document.querySelector('.ov-file-history');
+    assert.match(history.querySelector('h2').textContent, /Version history/);
+    await act(async () =>
+      history.querySelector('[aria-label="Close dialog"]').click(),
+    );
     assert.equal(
       view.container.querySelector('.cm-content')?.textContent,
       '# Initial',

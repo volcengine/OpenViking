@@ -153,6 +153,7 @@ export function useFileBrowser({
     metadataRows: tree.metadataRows,
     uri: blocked ? null : activeUri,
     rootUri,
+    identifyUri,
     generation: refreshGeneration,
     locale,
     requestOptions,
@@ -292,6 +293,7 @@ export function useFileBrowser({
     dashboards: boards.dashboards,
     previewDashboard: boards.current,
     dashboardError: boards.error,
+    refreshWikiConflicts: boards.refreshConflicts,
     previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,

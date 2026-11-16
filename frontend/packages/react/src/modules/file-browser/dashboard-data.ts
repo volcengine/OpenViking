@@ -21,7 +21,8 @@ export async function readCompileTargets(
   const seen = new Set<string>();
   do {
     const result = await client.request<{
-      targets: CompileTarget[];
+      configs?: CompileTarget[];
+      targets?: CompileTarget[];
       next_cursor?: string | null;
     }>({
       method: 'GET',
@@ -29,10 +30,11 @@ export async function readCompileTargets(
       query: { limit: 100, cursor },
       options,
     });
-    if (!Array.isArray(result?.targets))
+    const page = result?.configs ?? result?.targets;
+    if (!Array.isArray(page))
       throw new TypeError('Invalid Compile target registry');
     targets.push(
-      ...result.targets.filter(
+      ...page.filter(
         (item) =>
           typeof item.to === 'string' &&
           item.compile_type !== 'memory' &&

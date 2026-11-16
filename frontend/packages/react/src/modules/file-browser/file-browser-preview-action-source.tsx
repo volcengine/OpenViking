@@ -29,6 +29,7 @@ export function previewActionContext(
       markPreviewAction(
         {
           key: 'copyContent',
+          pinned: context.editing,
           label: text.copyContent,
           icon: <CopyIcon width={16} height={16} />,
           onClick: () => navigator.clipboard.writeText(content),
@@ -40,6 +41,9 @@ export function previewActionContext(
   return {
     ...context,
     ...controls,
-    defaultActions: [[...commands, ...(items[0] ?? [])], ...items.slice(1)],
+    defaultActions:
+      context.editing && commands.length
+        ? [...items, commands]
+        : [[...commands, ...(items[0] ?? [])], ...items.slice(1)],
   };
 }

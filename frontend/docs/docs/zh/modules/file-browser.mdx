@@ -135,7 +135,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | 参数        | 说明                                                                                                                                          | 类型      | 默认值 |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------ |
 | copyPath    | 「复制路径」按钮，位于面包屑旁；预览有路径时显示                                                                                              | `boolean` | `true` |
-| viewSwitch  | 「预览 / 源码」切换；只在同时支持两种视图的格式上显示，图片、视频和 `viking://system` 下的目录不支持                                          | `boolean` | `true` |
+| viewSwitch  | 「预览 / 源码」切换，在非编辑态且格式同时支持两种视图时显示。图片、视频和 `viking://system` 下的目录不支持切换                                | `boolean` | `true` |
 | edit        | 编辑按钮；只在可写且格式可编辑的文件上显示，经验文件、`viking://system` 下的资源和 L0/L1 摘要不可编辑                                         | `boolean` | `true` |
 | copyContent | 「复制内容」操作，复制当前预览的文本或目录摘要，超过预览行数上限时只复制已显示的部分；二进制媒体和 `viking://system` 下的目录不显示           | `boolean` | `true` |
 | download    | 「下载」操作，下载文件的原始内容；只在文件上显示                                                                                              | `boolean` | `true` |
@@ -530,6 +530,7 @@ await browserRef.current?.openResource(directoryUri);
 - 编译配置（`GET /api/v1/compile/configs`）按需读取：打开 Wiki 看板，或正文中的 Wiki 保留尾注需要确认归属时才请求，普通浏览不请求。
 - `dashboardKinds` 不含 `'wiki'` 时，不再识别 Wiki，也不读取编译配置，Wiki 资源不再提供编译配置和编译版本索引。
 - 文件树里带看板的行显示看板图标，悬停或聚焦显示操作提示，点击直接打开；Wiki 有待处理冲突时图标不同。
+- FileBrowser 通过 `POST /api/v1/search/find` 查询可见的 Wiki 根目录和已展开的 Wiki 目录，按带有 `has_conflict=true` 标签的 L2 文件路径标记直属节点。查询失败时，未确认的状态保持未知。
 - 预览区的页签可以在正文和看板之间切换。
 - 普通资源没有 Wiki 页签，已识别的 Wiki 即使没有冲突也保留看板。
 - `viking://~/...` 别名和规范 URI 指向同一个资源时识别结果相同，传给 `renderDashboard` 的 `uri` 保持原来的写法。

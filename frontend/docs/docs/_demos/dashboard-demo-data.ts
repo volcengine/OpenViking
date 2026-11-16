@@ -36,7 +36,10 @@ const ok = (result: unknown) =>
     headers: { 'content-type': 'application/json' },
   });
 
-export function dashboardDemoResponse(url: URL): Response | undefined {
+export function dashboardDemoResponse(
+  url: URL,
+  init?: RequestInit,
+): Response | undefined {
   const uri = url.searchParams.get('uri') ?? '';
   switch (url.pathname) {
     case '/api/v1/compile/configs':
@@ -50,6 +53,19 @@ export function dashboardDemoResponse(url: URL): Response | undefined {
           },
         ],
       });
+    case '/api/v1/search/find': {
+      if (typeof init?.body !== 'string') return undefined;
+      const body = JSON.parse(init.body) as {
+        tags?: string[];
+        target_uri?: string;
+      };
+      if (!body.tags?.includes('has_conflict=true')) return undefined;
+      const matches =
+        body.target_uri && DEMO_WIKI_FILE.startsWith(`${body.target_uri}/`);
+      return ok({
+        resources: matches ? [{ uri: DEMO_WIKI_FILE, level: 2 }] : [],
+      });
+    }
     case '/api/v1/fs/attrs':
       return ok({
         uri,
@@ -130,7 +146,7 @@ export function dashboardDemoResponse(url: URL): Response | undefined {
   }
 }
 
-export const dashboardDemoFetch: typeof fetch = (input) => {
+export const dashboardDemoFetch: typeof fetch = (input, init) => {
   const url = new URL(
     typeof input === 'string'
       ? input
@@ -139,7 +155,7 @@ export const dashboardDemoFetch: typeof fetch = (input) => {
         : input.url,
     'https://offline.demo',
   );
-  return Promise.resolve(dashboardDemoResponse(url) ?? ok([]));
+  return Promise.resolve(dashboardDemoResponse(url, init) ?? ok([]));
 };
 
 export const wikiViewData: WikiFileData = {

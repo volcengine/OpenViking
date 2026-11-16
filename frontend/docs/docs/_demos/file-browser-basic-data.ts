@@ -162,7 +162,7 @@ export function offlineFetch(
 
   const native = nativePreviewDemoResponse(url, FILES, init);
   if (native) return Promise.resolve(native);
-  const board = dashboardDemoResponse(url);
+  const board = dashboardDemoResponse(url, init);
   if (board) return Promise.resolve(board);
 
   switch (url.pathname) {
