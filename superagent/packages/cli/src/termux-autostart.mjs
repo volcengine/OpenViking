@@ -53,8 +53,9 @@ export async function termuxAutostart(action, { homeDir, env, execFileImpl, outp
     output.write('Termux runit autostart is off.\n');
     return 0;
   }
-  const metadata = JSON.parse(fs.readFileSync(path.join(releaseLink(homeDir, env), 'termux-install.json'), 'utf8'));
-  const script = runitScript({ homeDir, env: { ...env, LARK_CLI_BIN: env.LARK_CLI_BIN || metadata.larkCli }, node: metadata.node });
+  const release = releaseLink(homeDir, env);
+  fs.accessSync(path.join(release, 'ecosystem.config.cjs'), fs.constants.R_OK);
+  const script = runitScript({ homeDir, env });
   // Write a disabled service first; runsv may discover it during setup.
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(directory, 'down'), '');

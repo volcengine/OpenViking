@@ -6,6 +6,12 @@
     "larkCli": "windows-amd64",
     "sourceOnly": true
   },
+  "termux-arm64": {
+    "os": "android",
+    "arch": "arm64",
+    "larkCli": "android-arm64",
+    "systemNode": true
+  },
   "linux-x64": {
     "os": "linux",
     "arch": "x64",

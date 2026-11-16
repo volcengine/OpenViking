@@ -33,7 +33,7 @@ This installs the latest release. To pin a version, use `curl -fsSL https://ovre
 irm https://ovrelease.tos-cn-beijing.volces.com/superagent/install.ps1 | iex
 ```
 
-**Native Termux (Android/Bionic; source install):** published Linux artifacts require glibc and do not run in Termux. Follow [Native Termux](docs/termux.md) and run `node scripts/install-termux.mjs` from a source checkout.
+**Native Termux (Android/Bionic, arm64):** configure [Termux APT prerequisites](docs/termux.md), then use the same POSIX installer with the dedicated `termux-arm64` prebuilt archive. It uses Termux Node and a bundled native lark-cli, not Linux/glibc binaries. PR workflow artifacts are available for device testing before the first release.
 
 The published desktop packages include Node, PM2, chat CLIs, Pi, and Durable. On first installation, `ov-superagent setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `ov-superagent dsh model`.
 

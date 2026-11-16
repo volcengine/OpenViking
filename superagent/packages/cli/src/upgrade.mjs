@@ -46,7 +46,7 @@ function requestUpgrade(socketPath, target) {
 
 export async function upgradeCommand(args, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
   if (!capabilities.updater) {
-    stderr.write('This source installation does not support automatic release upgrades. Stop OpenViking SuperAgent and install a new checkout manually.\n');
+    stderr.write('Automatic release upgrades are not supported on this platform. Use its installation guide to update manually.\n');
     return 1;
   }
   const [target, ...extra] = args;

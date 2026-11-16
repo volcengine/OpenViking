@@ -3,7 +3,7 @@
 // Keep this graph synchronous so CJS configuration can require the same facade.
 import * as posix from './posix.mjs';
 import * as win32 from './win32.mjs';
-import * as android from './android.mjs';
+import * as termux from './termux.mjs';
 
 // Complete OS adapter interface. All implementations must export exactly this
 // set; platform-interface.test.mjs also checks that the facade exposes each key.
@@ -37,7 +37,7 @@ export const interfaceKeys = Object.freeze([
   'hostPlatformId',
   'environmentCaseSensitive',
 ]);
-const implementation = process.platform === 'win32' ? win32 : process.platform === 'android' ? android : posix;
+const implementation = process.platform === 'win32' ? win32 : process.platform === 'android' ? termux : posix;
 export const {
   codingShell,
   spawn,

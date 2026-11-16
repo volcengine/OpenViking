@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
+# SPDX-License-Identifier: AGPL-3.0
 name: OpenViking SuperAgent Release
 
 # Tests, builds and publishes SuperAgent (superagent/) to the TOS release bucket, laid out
@@ -7,8 +9,8 @@ name: OpenViking SuperAgent Release
 #   <prefix>/install.sh, <prefix>/latest  written last, only for an
 #                                         openviking-superagent@ tag newer than
 #                                         latest (pre-releases until a stable one)
-# A pull request that touches superagent/ tests and builds linux-x64 and publishes
-# nothing. A manual run publishes the chosen branch as <version>-<commit>, a
+# A pull request tests and builds a native Termux artifact for device validation;
+# it uploads workflow artifacts only and publishes nothing. A manual run publishes the chosen branch as <version>-<commit>, a
 # preview that `latest` never points to.
 #
 # The tag must not start with v: v*.*.* pushes and releases of v* tags run the
@@ -74,9 +76,28 @@ jobs:
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           test "$RELEASE_TAG" = "openviking-superagent@$PACKAGE_VERSION"
 
+      - uses: actions/setup-go@v6
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || inputs.platforms == 'all'
+        with:
+          go-version: '1.26.3'
+          cache: false
+
       - run: npm ci --no-audit --no-fund
       - run: npm run check
       - run: npm test
+
+      - name: Build Termux device-test archive
+        if: github.event_name == 'pull_request'
+        run: node scripts/build-release.mjs --platform termux-arm64 --out "${RUNNER_TEMP}/termux-dist"
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'pull_request'
+        with:
+          name: superagent-termux-arm64-${{ github.run_id }}
+          path: ${{ runner.temp }}/termux-dist/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
       - name: Build release archives
         if: github.event_name != 'pull_request'
@@ -299,7 +320,7 @@ jobs:
             echo "curl -fsSL ${OV_SUPERAGENT_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
             echo '```'
             echo
-            echo 'Windows users: use the PowerShell one-line installer in the shared guide below. Windows previews are published separately; this command and these release assets are for macOS / Linux.'
+            echo 'Native Termux arm64: configure Termux APT and install its Node first (see the Termux guide), then use the same POSIX installer. Windows users: use the PowerShell installer; Windows previews are published separately.'
             echo
             echo "[Installation and setup guide](https://github.com/${GITHUB_REPOSITORY}/blob/feat/vika/superagent/install.md)"
           } > "${RUNNER_TEMP}/superagent-release-notes.md"

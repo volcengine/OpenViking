@@ -7,109 +7,32 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { installTermux, shellQuote } from '../../../scripts/install-termux.mjs';
 import { autostartCommand, autostartEnabled } from '../src/autostart.mjs';
 import { pm2Defaults } from '../src/control.mjs';
 import { runitScript, serviceDirectory } from '../src/termux-autostart.mjs';
-import * as android from '../../daemon/src/platform/android.mjs';
+import * as termux from '../../daemon/src/platform/termux.mjs';
 import { allowedPm2Environment } from '../../updater/src/pm2-platform.mjs';
 
-// Only the real shell/symlink/process tests need POSIX, not the policy and lifecycle tests.
-const posix = { skip: process.platform === 'win32' };
 const sourceRoot = fileURLToPath(new URL('../../../', import.meta.url));
+const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 function fixture(t, prefix = "superagent-termux-' ") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { HOME: path.join(root, 'home'), PREFIX: path.join(root, 'prefix') };
   env.PATH = path.join(env.PREFIX, 'bin');
   fs.mkdirSync(env.PATH, { recursive: true });
-  for (const name of ['sh', 'bash', 'npm', 'lark-cli']) fs.writeFileSync(path.join(env.PATH, name), '', { mode: 0o755 });
-  const source = path.join(root, 'source');
-  fs.mkdirSync(path.join(source, 'packages/cli/bin'), { recursive: true });
-  fs.writeFileSync(path.join(source, 'packages/cli/bin/ov-superagent.mjs'), '');
-  fs.writeFileSync(path.join(source, 'package.json'), '{}');
-  fs.writeFileSync(path.join(source, 'permission.json'), '{"scopes":{}}');
-  fs.writeFileSync(path.join(source, '.env'), 'private');
-  fs.writeFileSync(path.join(source, 'packages/cli/.env.local'), 'private override');
-  const calls = [];
-  return { root, env, source, calls, platform: 'android',
-    run: (...args) => calls.push(args), output: { write() {} } };
+  return { root, env, output: { write() {} } };
 }
-
-function noActiveInstall(f) {
-  assert.equal(fs.existsSync(path.join(f.env.HOME, '.ov-superagent/current')), false);
-  assert.equal(fs.existsSync(path.join(f.env.HOME, '.ov-superagent/bin/ov-superagent')), false);
-  assert.deepEqual(fs.readdirSync(path.join(f.env.HOME, '.ov-superagent/releases')), []);
-}
-
-test('Termux installs the current CLI and runs its launcher without global Node on PATH', posix, t => {
-  const f = fixture(t);
-  // Exercise the real source entrypoint, not an empty mock CLI or just sh -n.
-  const release = installTermux({ ...f, source: sourceRoot });
-  assert.equal(fs.realpathSync(path.join(f.env.HOME, '.ov-superagent/current')), release);
-  assert.equal(fs.existsSync(path.join(release, 'node_modules')), false); // npm was stubbed, not copied
-  assert.deepEqual(f.calls[1][1], ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund']);
-  assert.match(f.calls[2][1][0], /check-pi.mjs$/);
-  assert.match(f.calls[3][1][0], /check-durable.mjs$/);
-  const launcher = path.join(f.env.HOME, '.ov-superagent/bin/ov-superagent');
-  const env = { ...process.env, ...f.env };
-  const version = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'package.json'))).version;
-  const sh = execFileSync('sh', ['-c', 'command -v sh'], { encoding: 'utf8' }).trim();
-  assert.equal(execFileSync(sh, [launcher, '--version'], { env, encoding: 'utf8' }).trim(), version);
-  execFileSync('sh', ['-n', path.join(release, 'bin/pm2')]);
-  assert.throws(() => installTermux(f), /already exists/);
-  assert.equal(fs.realpathSync(path.join(f.env.HOME, '.ov-superagent/current')), release);
-});
-
-test('failed runtime check leaves no active installation, credentials or staged release', t => {
-  const f = fixture(t);
-  f.run = (_cmd, args, options) => {
-    if (args[0]?.endsWith('check-durable.mjs')) {
-      assert.equal(fs.existsSync(path.join(options.cwd, '.env')), false);
-      assert.equal(fs.existsSync(path.join(options.cwd, 'packages/cli/.env.local')), false);
-      throw new Error('broken durable');
-    }
-  };
-  assert.throws(() => installTermux(f), /broken durable/);
-  noActiveInstall(f);
-});
-
-test('missing CLI entrypoint is refused before activation and cleans the staged release', t => {
-  const f = fixture(t);
-  fs.rmSync(path.join(f.source, 'packages/cli/bin/ov-superagent.mjs'));
-  assert.throws(() => installTermux(f), { code: 'ENOENT' });
-  noActiveInstall(f);
-});
-
-test('activation refuses a raced launcher without removing it or leaving a release link', posix, t => {
-  const f = fixture(t);
-  const launcher = path.join(f.env.HOME, '.ov-superagent/bin/ov-superagent');
-  f.run = (_cmd, args) => {
-    if (args[0]?.endsWith('check-durable.mjs')) {
-      fs.mkdirSync(path.dirname(launcher), { recursive: true });
-      fs.writeFileSync(launcher, 'other installation');
-    }
-  };
-  assert.throws(() => installTermux(f), { code: 'EEXIST' });
-  assert.equal(fs.readFileSync(launcher, 'utf8'), 'other installation');
-  assert.equal(fs.existsSync(path.join(f.env.HOME, '.ov-superagent/current')), false);
-  assert.deepEqual(fs.readdirSync(path.join(f.env.HOME, '.ov-superagent/releases')), []);
-});
-
-test('non-Android install is refused before invoking dependencies', t => {
-  const f = fixture(t);
-  assert.throws(() => installTermux({ ...f, platform: 'linux' }), /native Termux/);
-  assert.deepEqual(f.calls, []);
-});
 
 test('runit enable/disable persists state, supports SVDIR and a stopped supervisor', async t => {
   const f = fixture(t);
   f.env.SVDIR = path.join(f.root, 'services');
+  f.env.LARK_CLI_BIN = '/native/lark-cli';
   const release = path.join(f.env.HOME, '.ov-superagent/current');
   fs.mkdirSync(release, { recursive: true });
-  fs.writeFileSync(path.join(release, 'termux-install.json'), JSON.stringify({ node: process.execPath, larkCli: '/native/lark-cli' }));
+  fs.writeFileSync(path.join(release, 'ecosystem.config.cjs'), 'module.exports={apps:[]}');
   const calls = [];
-  const options = { env: f.env, homeDir: f.env.HOME, platform: android,
+  const options = { env: f.env, homeDir: f.env.HOME, platform: termux,
     output: f.output, execFileImpl: async (...args) => { calls.push(args); } };
   const directory = serviceDirectory(f.env);
   assert.equal(directory, path.join(f.env.SVDIR, 'ov-superagent'));
@@ -121,7 +44,7 @@ test('runit enable/disable persists state, supports SVDIR and a stopped supervis
   assert.doesNotMatch(run, /systemctl|\.vika|VIKA_CONFIG/);
   await autostartCommand(['disable'], options);
   assert.equal(autostartEnabled(options), false);
-  assert.deepEqual(calls, []); // no sv required when termux-services is stopped
+  assert.deepEqual(calls, []);
   fs.mkdirSync(path.join(directory, 'supervise'));
   fs.writeFileSync(path.join(directory, 'supervise/ok'), '');
   await autostartCommand(['enable'], options);
@@ -139,19 +62,19 @@ test('runit shares CLI PM2 defaults and captures configuration paths, never API 
       OV_SUPERAGENT_CONFIG: path.join(f.root, "config's.json"),
       OV_SUPERAGENT_SECRETS_FILE: path.join(f.root, 'secrets.env'), OPENAI_API_KEY: 'secret-token' };
     const script = runitScript({ homeDir: env.HOME, env });
-    assert.ok(script.includes(`export PM2_HOME=${shellQuote(pm2Defaults(env).pm2Env.PM2_HOME)}\n`));
+    assert.ok(script.includes(`export PM2_HOME=${quote(pm2Defaults(env).pm2Env.PM2_HOME)}\n`));
     for (const key of ['PATH', 'OV_SUPERAGENT_CONFIG', 'OV_SUPERAGENT_SECRETS_FILE']) {
-      assert.ok(script.includes(`export ${key}=${shellQuote(env[key])}\n`));
+      assert.ok(script.includes(`export ${key}=${quote(env[key])}\n`));
     }
     assert.doesNotMatch(script, /secret-token|OPENAI_API_KEY/);
   }
   const values = allowedPm2Environment({ PREFIX: '/prefix', LD_PRELOAD: '/prefix/lib/termux-exec.so',
-    LD_LIBRARY_PATH: '/prefix/lib', TMPDIR: '/prefix/tmp', SECRET: 'x' }, [], { implementation: android });
+    LD_LIBRARY_PATH: '/prefix/lib', TMPDIR: '/prefix/tmp', SECRET: 'x' }, [], { implementation: termux });
   assert.deepEqual(values, { PREFIX: '/prefix', TMPDIR: '/prefix/tmp',
     LD_PRELOAD: '/prefix/lib/termux-exec.so', LD_LIBRARY_PATH: '/prefix/lib' });
 });
 
-test('generated service takes over CLI PM2 and stops its real app on SIGTERM', { ...posix, timeout: 45_000 }, async t => {
+test('generated service takes over CLI PM2 and stops its real app on SIGTERM', { skip: process.platform === 'win32', timeout: 45_000 }, async t => {
   const f = fixture(t, 'superagent-termux-service-');
   const release = path.join(f.env.HOME, '.ov-superagent/current');
   fs.mkdirSync(path.join(release, 'node_modules'), { recursive: true });
@@ -164,7 +87,8 @@ test('generated service takes over CLI PM2 and stops its real app on SIGTERM', {
   const ecosystem = path.join(release, 'ecosystem.config.cjs');
   fs.writeFileSync(ecosystem,
     `const {name}=JSON.parse(require('node:fs').readFileSync(process.env.OV_SUPERAGENT_CONFIG));module.exports={apps:[{name,script:__dirname+'/app.cjs',interpreter:${JSON.stringify(process.execPath)}}]};`);
-  const env = { ...f.env, PATH: process.env.PATH, TMPDIR: os.tmpdir(),
+  const env = { ...allowedPm2Environment(process.env, [], { implementation: termux }),
+    ...f.env, PATH: process.env.PATH, TMPDIR: os.tmpdir(),
     OV_SUPERAGENT_CONFIG: config, PM2_HOME: path.join(f.root, 'custom-pm2') };
   const pm2 = path.join(release, 'node_modules/pm2/bin/pm2');
   let child;

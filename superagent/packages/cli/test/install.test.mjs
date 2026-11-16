@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
@@ -9,10 +9,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { hostPlatformId } from '../../daemon/src/platform/index.mjs';
 
 const INSTALLER = fileURLToPath(new URL('../../../scripts/install.sh', import.meta.url));
 const WINDOWS_INSTALLER = fileURLToPath(new URL('../../../scripts/windows/install-preview.ps1', import.meta.url));
-const PLATFORM = `${process.platform}-${process.arch}`;
+const PLATFORM = hostPlatformId;
+const TERMUX = process.platform === 'android';
 
 test('installer headers use the OpenViking SuperAgent brand', () => {
   for (const installer of [INSTALLER, WINDOWS_INSTALLER]) {
@@ -35,13 +37,22 @@ function machine(t) {
   const archive = (version, { platform = PLATFORM, nodeWorks = true, ovWorks = true } = {}) => {
     const work = fs.mkdtempSync(path.join(root, 'build-'));
     const directory = path.join(work, `superagent-${version}-${platform}`);
-    fs.mkdirSync(path.join(directory, 'node', 'bin'), { recursive: true });
     fs.mkdirSync(path.join(directory, 'packages', 'cli', 'bin'), { recursive: true });
-    fs.writeFileSync(path.join(directory, 'node', 'bin', 'node'), `#!/bin/sh
+    if (platform.startsWith('termux-')) {
+      fs.mkdirSync(path.join(directory, 'packages/daemon/scripts'), { recursive: true });
+      for (const name of ['check-pi.mjs', 'check-durable.mjs']) fs.writeFileSync(path.join(directory, 'packages/daemon/scripts', name), '');
+      fs.mkdirSync(path.join(directory, 'node_modules/@larksuite/cli/bin'), { recursive: true });
+      fs.writeFileSync(path.join(directory, 'node_modules/@larksuite/cli/bin/lark-cli'), `#!${process.env.PREFIX}/bin/sh\nexit 0\n`, { mode: 0o755 });
+    } else {
+      fs.mkdirSync(path.join(directory, 'node', 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(directory, 'node', 'bin', 'node'), `#!/bin/sh
 case "$1" in */check-ov.mjs) exit ${ovWorks ? 0 : 1} ;; esac
 exit ${nodeWorks ? 0 : 1}
 `, { mode: 0o755 });
-    fs.writeFileSync(path.join(directory, 'packages', 'cli', 'bin', 'ov-superagent.mjs'), '');
+    }
+    fs.writeFileSync(path.join(directory, 'packages/cli/bin/ov-superagent.mjs'), `process.exit(${nodeWorks ? 0 : 1});`);
+    fs.mkdirSync(path.join(directory, 'packages/cli/src'), { recursive: true });
+    fs.writeFileSync(path.join(directory, 'packages/cli/src/check-ov.mjs'), `process.exit(${ovWorks ? 0 : 1});`);
     const file = path.join(root, `superagent-${version}-${platform}.tar.gz`);
     execFileSync('tar', ['-czf', file, '-C', work, path.basename(directory)]);
     fs.writeFileSync(`${file}.sha256`, `${createHash('sha256').update(fs.readFileSync(file)).digest('hex')}  ${path.basename(file)}\n`);
@@ -51,7 +62,9 @@ exit ${nodeWorks ? 0 : 1}
     const env = typeof args.at(-1) === 'object' ? args.pop() : {};
     return spawnSync('sh', [INSTALLER, '--no-setup', ...args], {
       encoding: 'utf8',
-      env: { HOME: home, SHELL: '/bin/bash', PATH: `${bin}:${process.env.PATH}`, ...env },
+      env: { ...(TERMUX ? { PREFIX: process.env.PREFIX, TERMUX_VERSION: process.env.TERMUX_VERSION,
+        LD_PRELOAD: process.env.LD_PRELOAD, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH } : {}),
+        HOME: home, SHELL: '/bin/bash', PATH: `${bin}:${process.env.PATH}`, SVDIR: path.join(root, 'services'), ...env },
     });
   };
   const superagent = path.join(home, '.ov-superagent');
@@ -66,6 +79,11 @@ test('installs a release under ~/.ov-superagent, adds the launcher and PATH, and
   assert.equal(fs.realpathSync(path.join(m.superagent, 'current')), fs.realpathSync(path.join(m.superagent, 'releases', '0.5.0')));
   const launcher = fs.readFileSync(path.join(m.superagent, 'bin', 'ov-superagent'), 'utf8');
   assert.equal(fs.statSync(path.join(m.superagent, 'bin', 'ov-superagent')).mode & 0o111, 0o111);
+  if (TERMUX) {
+    assert.equal(fs.realpathSync(path.join(m.superagent, 'current/node/bin/node')), fs.realpathSync(process.execPath));
+    assert.ok(launcher.startsWith(`#!${process.env.PREFIX}/bin/sh\n`));
+    execFileSync(path.join(m.superagent, 'bin/ov-superagent'), ['--version'], { env: { ...process.env, HOME: m.home } });
+  }
   assert.match(launcher, /exec "\$HOME\/\.ov-superagent\/current\/node\/bin\/node" "\$HOME\/\.ov-superagent\/current\/packages\/cli\/bin\/ov-superagent\.mjs" "\$@"/);
   for (const gone of ['vika', 'ovsa']) assert.equal(fs.existsSync(path.join(m.superagent, 'bin', gone)), false);
   assert.match(fs.readFileSync(bashRc, 'utf8'), /export PATH="\$HOME\/\.ov-superagent\/bin:\$PATH"/);

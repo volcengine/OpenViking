@@ -5,13 +5,13 @@ import assert from 'node:assert/strict';
 import * as facade from '../src/platform/index.mjs';
 import * as posix from '../src/platform/posix.mjs';
 import * as windows from '../src/platform/win32.mjs';
-import * as android from '../src/platform/android.mjs';
+import * as termux from '../src/platform/termux.mjs';
 import { capabilitiesFor } from '../src/capabilities.mjs';
 
 test('all OS implementations and the facade implement exactly the declared interface', () => {
   const expected = [...facade.interfaceKeys].sort();
   assert.equal(new Set(expected).size, expected.length);
-  for (const implementation of [posix, windows, android]) {
+  for (const implementation of [posix, windows, termux]) {
     assert.deepEqual(Object.keys(implementation).sort(), expected);
     for (const key of expected.filter(key => !['loginService', 'maxCommandLineLength'].includes(key))) {
       assert.equal(typeof implementation[key], typeof posix[key], key);
@@ -20,7 +20,7 @@ test('all OS implementations and the facade implement exactly the declared inter
     assert.ok(implementation.maxCommandLineLength === null || Number.isSafeInteger(implementation.maxCommandLineLength));
   }
   assert.deepEqual(Object.keys(facade).filter(key => key !== 'interfaceKeys').sort(), expected);
-  const selected = process.platform === 'win32' ? windows : process.platform === 'android' ? android : posix;
+  const selected = process.platform === 'win32' ? windows : process.platform === 'android' ? termux : posix;
   for (const key of expected) assert.equal(facade[key], selected[key], key);
 });
 
@@ -31,7 +31,7 @@ test('preview product support has one immutable policy, independent of adapter s
   assert.equal(unsupported.updater, false);
   assert.ok(Object.isFrozen(unsupported));
   assert.ok(Object.isFrozen(unsupported.connectors));
-  assert.deepEqual(capabilitiesFor(android), { updater: false, autostart: true, connectors: { email: true } });
+  assert.deepEqual(capabilitiesFor(termux), { updater: false, autostart: true, connectors: { email: true } });
   assert.equal(capabilitiesFor({ ...posix, hostPlatformId: 'unknown-arm64' }).updater, false);
 });
 

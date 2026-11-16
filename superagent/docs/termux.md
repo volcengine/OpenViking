@@ -2,53 +2,92 @@
 <!-- SPDX-License-Identifier: AGPL-3.0 -->
 # Native Termux (Android/Bionic)
 
-This source installation uses Termux's Node and a native lark-cli. It does not
-use glibc Linux artifacts, impersonate Linux, require PRoot, or change global
-Pi installations. The managed Pi and Durable versions are pinned to **1.5.0**.
-Both runtime checks must pass before the installer activates the release.
+Termux **arm64** uses the same POSIX installer and release layout as desktop
+systems, but a dedicated `termux-arm64` archive. Linux/glibc archives cannot run
+natively on Android/Bionic. This is Termux support, not a generic Android app
+or PRoot distribution installation.
 
-## Install
+The archive contains production JS dependencies, PM2, the pinned managed
+runtimes and a native lark-cli. CI builds lark-cli for Android from a reviewed,
+immutable Go source commit, preserving its MIT license and build provenance.
+The desktop npm dependency remains mandatory and unchanged. **No npm, Go, git
+or compiler is needed on the device**, and package download hooks are not run
+there. Global Pi and lark-cli installations are not modified.
 
-Use Termux private storage, not `/sdcard`: execution, symlinks and POSIX file
-modes are required. Install Node **>=22.19.0** with `node:sqlite`, npm, bash,
-git and tar from Termux. Optional DeepSeek Harness needs Node **24.9+**.
-Prepare a reachable OpenViking server (a remote server is fine).
+## Prepare Termux APT and dependencies
 
-Build/install a native lark-cli separately; it must implement the CLI/API used
-by SuperAgent. The desktop dependency is pinned to **1.0.99**. A different
-native build needs connector testing; `--version` alone does not establish API
-compatibility. The source installer currently requires this executable even
-when the first configured channel is not Lark.
+Use a current official Termux installation from F-Droid or the Termux GitHub
+releases. Work inside Termux private storage (`$HOME`), **not `/sdcard`**:
+executables, symlinks and POSIX permissions must work.
 
-From the checkout's `superagent/` directory:
+1. Run `termux-change-repo`. Select the **Main** repository and a reachable
+   official Termux mirror. The default official Main source is
+   `https://packages.termux.dev/apt/termux-main` (`stable main`); mirrors listed
+   by `termux-change-repo` are preferable to copying an arbitrary URL.
+2. On a fresh installation, refresh and upgrade Termux packages, then install
+   the runtime prerequisites:
+
+   ```sh
+   pkg update
+   pkg upgrade
+   pkg install nodejs-lts bash curl tar coreutils termux-exec
+   ```
+
+   `nodejs` may be used **instead of** `nodejs-lts`, not alongside it. Do not
+   install Linux Node via nvm, add Debian/Ubuntu APT sources, or use a glibc
+   distribution's binaries. Root and X11 repositories are not required.
+   Review APT upgrades and back up other applications before upgrading an
+   existing environment; the SuperAgent installer never runs `pkg` for you.
+3. Restart the Termux shell after installing loader packages, then verify:
+
+   ```sh
+   "$PREFIX/bin/node" --version
+   "$PREFIX/bin/node" -e 'new(require("node:sqlite").DatabaseSync)(":memory:").close()'
+   ```
+
+   Native Termux Node **>=22.19.0** with `node:sqlite` is required. If the
+   repository supplies an older Node, fix/update the Main mirror rather than
+   substituting a desktop binary. Keep the Termux loader environment intact.
+
+Prepare a reachable OpenViking server and model credentials, as in the
+[shared setup guide](../install.md). A remote OV server is fine. Optional
+DeepSeek Harness is installed separately and needs Node 24.9+.
+
+## Install a prebuilt archive
+
+Once a release contains `termux-arm64`, use the same command as desktop POSIX:
 
 ```sh
-export LARK_CLI_BIN="$HOME/.local/bin/lark-cli"
-node scripts/install-termux.mjs
-export PATH="$HOME/.ov-superagent/bin:$PATH"
-ov-superagent setup
-ov-superagent status
+curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/install.sh | sh
 ```
 
-Setup starts the configured instance. Later, use `ov-superagent start` after
-stopping it. The installer itself starts no services and changes no shell
-profiles. It stages application files under `~/.ov-superagent/releases`, runs
-`npm ci --omit=dev --ignore-scripts`, checks Pi and Durable, and only then
-creates `~/.ov-superagent/current` and `~/.ov-superagent/bin/ov-superagent`.
-Failed checks clean the staged release without activating it. Existing or
-concurrently created installations are never overwritten.
+Until that release is published, download the Termux artifact from a trusted
+PR workflow run. It contains the `.tar.gz` and `.sha256` files. From the matching
+source revision, install the archive locally:
 
-The launcher remembers the native lark-cli path; an explicit `LARK_CLI_BIN`
-overrides it. The unsupported npm lark wrapper is optional so npm can skip it
-on Android. No Slack CLI or desktop Node binary is downloaded; configure a
-native `SLACK_CLI_BIN` separately if needed.
+```sh
+sh scripts/install.sh --file /absolute/path/superagent-<version>-termux-arm64.tar.gz
+```
+
+The same installer verifies the checksum/platform, checks native Node, Pi,
+Durable and the bundled lark-cli, and follows the normal OV/setup checks before
+activation. It installs under `~/.ov-superagent/releases`, links the APT-owned
+Node into the release, and switches `current`. No desktop Node is extracted,
+and no npm dependency is made optional. `--no-setup` still requires working OV
+configuration; it is not a validation bypass.
+
+Use `ov-superagent setup`, `start`, `stop`, `status` and `logs` as on desktop.
+The installer adds `~/.ov-superagent/bin` to the shell PATH. An explicit
+`LARK_CLI_BIN` overrides the bundled native CLI. Slack has no bundled Termux
+artifact; provide a compatible native `SLACK_CLI_BIN` if using that connector.
 
 ## runit
 
-Install `termux-services` and restart the Termux shell to start its supervisor.
-Stop a manually started instance before enabling foreground supervision:
+For optional unattended startup:
 
 ```sh
+pkg install termux-services
+# Restart the Termux shell so its supervisor starts, then:
 ov-superagent stop
 ov-superagent autostart enable
 sv status "$PREFIX/var/service/ov-superagent"
@@ -56,58 +95,50 @@ sv status "$PREFIX/var/service/ov-superagent"
 ov-superagent autostart disable
 ```
 
-runit supervises foreground PM2, which supervises the instances and Web. Both
-the service and CLI use `~/.ov-superagent/pm2` by default. An explicit
-absolute `PM2_HOME` is honored by both; use the same override for subsequent CLI calls
-and never point it at an unrelated PM2 installation. On service startup, any
-leftover background PM2 in that selected home is stopped before foreground
-PM2 starts. Other PM2 homes are not touched.
+runit supervises foreground PM2; PM2 supervises instances and Web. Both runit
+and the CLI default to `~/.ov-superagent/pm2`. An explicit absolute `PM2_HOME`
+is honored by both; retain that override for subsequent CLI commands and
+never select an unrelated PM2 installation. Startup transfers a leftover
+background PM2 in that home to foreground supervision; other homes are not
+addressed.
 
-`SVDIR` selects another service root. Disabling writes the persistent `down`
-marker and stops a running supervisor; it also works while termux-services is
-off. It does not remove runit's supervision directory. Re-enabling removes
-`down` and signals a running supervisor.
+`SVDIR` selects another service root. Disable persists the `down` marker even
+if the supervisor is off; it stops a running service without deleting runit's
+supervision directory. Enable removes `down` and signals a running supervisor.
 
-The service captures PATH, Termux loader variables, native chat CLI paths, and
-`OV_SUPERAGENT_CONFIG` / `OV_SUPERAGENT_SECRETS_FILE` paths, **not model API key
-values**. Keep provider credentials in their runtime credential files or the
-private `~/.ov-superagent/secrets.env` file, not in `config.json`. Re-enable
-autostart after changing captured paths. `ov-superagent stop` controls apps;
-`ov-superagent autostart disable` stops supervision persistently.
+The script captures PATH, Termux loader variables, native CLI overrides and
+`OV_SUPERAGENT_CONFIG` / `OV_SUPERAGENT_SECRETS_FILE` paths, **not API key
+values**. Keep credentials in the runtime's credential files or private
+`~/.ov-superagent/secrets.env`, never `config.json`. Re-enable autostart after
+changing captured paths. `stop` controls apps; `autostart disable` persistently
+stops supervision. Reboot also needs Termux:Boot configured to start
+termux-services; Android battery/background limits still apply.
 
-Device reboot additionally requires Termux:Boot configured to start
-termux-services. Android battery/background-process restrictions still apply;
-a runit service does not bypass them.
+## Updates and rollback
 
-## Manual updates and rollback
+Automatic updater service/commands remain disabled for this initial Termux
+release path. Use the **same POSIX installer** with a newer Termux archive,
+then `ov-superagent restart`; it retains the previous code release via
+`~/.ov-superagent/rollback`. Disable runit and stop apps before changing links
+for a manual rollback, then start or re-enable the service. Back up data first:
+code rollback does not reverse configuration, database or credential changes.
+APT owns Node; restoring application code does **not** roll back Node/APT.
 
-Android has no compatible published release artifact, so automatic release
-upgrades are disabled. To update from a new source checkout:
+Legacy `~/.vika`, `~/.ovsa` and `~/.superagent` data is not migrated. Back up
+those directories and stop their services/processes before a fresh setup;
+the shared installer preserves legacy data and disables legacy autostart.
 
-1. Disable autostart if enabled, then stop SuperAgent.
-2. Back up `~/.ov-superagent/current` and `~/.ov-superagent/bin/ov-superagent`
-   under distinct names; keep the old release directory.
-3. Run the new checkout's Termux installer and start SuperAgent. If using
-   runit, re-enable autostart to regenerate its script and native paths.
-4. Verify readiness and a real message round trip before removing backups.
+## Build and validation boundaries
 
-To roll back, disable supervision and stop apps, restore both saved entries,
-then start or re-enable the service. Configuration and data stay in place;
-code rollback does **not** reverse data migrations. Back up data separately
-before upgrading. Legacy `~/.vika`, `~/.ovsa` and `~/.superagent` installations
-are not migrated: disable their old services and stop their processes before
-creating a fresh `~/.ov-superagent` installation.
+Release CI stages the unchanged npm graph on Linux, cross-builds native
+lark-cli and publishes a Termux archive alongside desktop POSIX archives.
+PR CI uploads a device-test artifact only; it does not publish releases.
+Updating the pinned lark npm version requires updating its reviewed Termux
+source commit too; a mismatch fails the build instead of silently omitting it.
 
-## Validation scope
-
-Cross-platform tests cover failure cleanup, missing-entrypoint rejection,
-configuration/PM2 paths, environment policy, and runit enable/disable state.
-Only real POSIX shell, symlink and process-lifecycle tests are skipped on
-Windows. The POSIX tests execute the installed CLI launcher, refuse a raced
-installation, and exercise foreground PM2 takeover and SIGTERM cleanup with a
-non-default configuration and PM2 home.
-
-Native Android end-to-end validation is still required for this rebased
-implementation: install, setup, Pi and Durable turns/tool calls, a real
-connector round trip, restart/session recovery, and runit stop/start. Do not
-infer these from npm installation, desktop tests, or a `--version` response.
+The existing POSIX installer tests cover activation, checksum/platform failure,
+OV refusal and rollback; Termux runs those same tests. Platform-independent
+runit state/configuration tests still run on Windows. Only the real POSIX
+PM2 process-lifecycle test is skipped there. Native device validation must
+also exercise the produced artifact, runtime/tool calls, connector readiness,
+service restart and cleanup; host-side cross-compilation alone is not proof.

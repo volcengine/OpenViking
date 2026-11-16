@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +13,7 @@ import { PLATFORMS, platform } from '../src/artifacts.mjs';
 
 test('Windows source dependency uses the checksum-verified zip/exe path, never a release build', async t => {
   assert.equal(platform('win32-x64').sourceOnly, true);
-  assert.deepEqual(Object.keys(PLATFORMS).filter(id => !PLATFORMS[id].sourceOnly), ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64']);
+  assert.deepEqual(Object.keys(PLATFORMS).filter(id => !PLATFORMS[id].sourceOnly), ['termux-arm64', 'linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64']);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-artifact-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const archive = 'lark-cli-1.0.94-windows-amd64.zip';
@@ -48,4 +48,39 @@ test('Windows source dependency uses the checksum-verified zip/exe path, never a
   const build = spawnSync(process.execPath, [fileURLToPath(new URL('../../../scripts/build-release.mjs', import.meta.url)), '--platform', 'win32-x64'], { encoding: 'utf8' });
   assert.notEqual(build.status, 0);
   assert.match(build.stderr, /Release builds are not supported/);
+});
+
+test('Termux prebuild pins native Go source without weakening the desktop npm dependency', async t => {
+  assert.equal(platform('termux-arm64').systemNode, true);
+  const manifest = JSON.parse(fs.readFileSync(new URL('../../daemon/package.json', import.meta.url), 'utf8'));
+  const pin = JSON.parse(fs.readFileSync(new URL('../../../scripts/release/lark-cli-source.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.dependencies['@larksuite/cli'], pin.version);
+  assert.equal(manifest.optionalDependencies?.['@larksuite/cli'], undefined);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-termux-artifact-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: pin.version }));
+  let compiled = false;
+  const options = { packageDir: root, platformId: 'termux-arm64',
+    execFileSyncImpl(command, args, settings) {
+      if (command === 'git' && args[0] === 'checkout') fs.writeFileSync(path.join(settings.cwd, 'LICENSE'), 'upstream MIT license');
+      if (command === 'git' && args[0] === 'fetch') assert.equal(args.at(-1), pin.commit);
+      if (command === 'git' && args[0] === 'rev-parse') return `${pin.commit}\n`;
+      if (command === 'go' && args[0] === 'version') return 'go version fixture';
+      if (command === 'go' && args[0] === 'build') {
+        assert.equal(settings.env.GOOS, 'android');
+        assert.equal(settings.env.GOARCH, 'arm64');
+        assert.equal(settings.env.CGO_ENABLED, '0');
+        fs.writeFileSync(args[args.indexOf('-o') + 1], 'native Bionic binary');
+        compiled = true;
+      }
+      return '';
+    } };
+  const result = await installLarkCliBinary(options);
+  assert.ok(compiled);
+  assert.equal(result.commit, pin.commit);
+  assert.equal(fs.readFileSync(path.join(root, 'LICENSE'), 'utf8'), 'upstream MIT license');
+  const metadata = JSON.parse(fs.readFileSync(path.join(root, 'termux-build.json'), 'utf8'));
+  assert.equal(metadata.commit, pin.commit);
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '0.0.0' }));
+  await assert.rejects(installLarkCliBinary(options), /source pin/);
 });

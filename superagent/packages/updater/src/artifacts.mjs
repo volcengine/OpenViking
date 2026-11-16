@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import { hostPlatformId } from '../../daemon/src/platform/index.mjs';
@@ -14,7 +14,7 @@ import { pipeline } from 'node:stream/promises';
 // the build and publish scripts and the updater.
 
 // The platforms an OpenViking SuperAgent release ships for, and how Node.js and lark-cli name them.
-// Source-only targets may download dependencies but cannot build releases.
+// Source-only targets cannot build releases; systemNode targets use Termux's APT Node.
 // musl (Alpine) remains unsupported.
 
 export const PLATFORMS = Object.freeze(createRequire(import.meta.url)('../artifact-platforms.json'));

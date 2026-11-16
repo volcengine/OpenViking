@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 // Builds the release archives the installer and updater download: one
 // superagent-<version>-<platform>.tar.gz per platform, each holding the committed
 // code, its production dependencies, the pinned lark-cli and Slack CLI binaries and the
 // official Node it runs on, plus a release manifest with their SHA-256s.
+// Termux shares the staged JS dependencies but uses APT Node and a Go-built
+// Android/Bionic lark-cli; it has no compatible official Slack CLI artifact.
 //
 //   node scripts/build-release.mjs [--ref HEAD] [--platform linux-x64 ...|--all]
 //                                  [--out dist] [--version X] [--download-base URL]
@@ -94,27 +96,31 @@ async function buildPlatform({ stage, platformId, version, commit, nodeVersion, 
   fs.rmSync(root, { recursive: true, force: true });
   fs.cpSync(stage, root, { recursive: true, verbatimSymlinks: true });
 
-  const node = await nodeBinary(nodeVersion, platformId, cache);
-  const unpacked = path.join(out, 'work', `.node-${platformId}`);
-  fs.rmSync(unpacked, { recursive: true, force: true });
-  fs.mkdirSync(unpacked, { recursive: true });
-  execFileSync('tar', ['-xzf', node.file, '-C', unpacked, `${node.name}/bin/node`, `${node.name}/LICENSE`]);
-  fs.mkdirSync(path.join(root, 'node', 'bin'), { recursive: true });
-  fs.renameSync(path.join(unpacked, node.name, 'bin', 'node'), path.join(root, 'node', 'bin', 'node'));
-  fs.renameSync(path.join(unpacked, node.name, 'LICENSE'), path.join(root, 'node', 'LICENSE'));
-  fs.rmSync(unpacked, { recursive: true, force: true });
+  const systemNode = platform(platformId).systemNode === true;
+  if (!systemNode) {
+    const node = await nodeBinary(nodeVersion, platformId, cache);
+    const unpacked = path.join(out, 'work', `.node-${platformId}`);
+    fs.rmSync(unpacked, { recursive: true, force: true });
+    fs.mkdirSync(unpacked, { recursive: true });
+    execFileSync('tar', ['-xzf', node.file, '-C', unpacked, `${node.name}/bin/node`, `${node.name}/LICENSE`]);
+    fs.mkdirSync(path.join(root, 'node', 'bin'), { recursive: true });
+    fs.renameSync(path.join(unpacked, node.name, 'bin', 'node'), path.join(root, 'node', 'bin', 'node'));
+    fs.renameSync(path.join(unpacked, node.name, 'LICENSE'), path.join(root, 'node', 'LICENSE'));
+    fs.rmSync(unpacked, { recursive: true, force: true });
+  }
 
   say(`fetching lark-cli for ${platformId} ...`);
-  await installLarkCliBinary({ packageDir: path.join(root, 'node_modules', '@larksuite', 'cli'), platformId });
-  const slack = await installSlackCliBinary({ root, platformId });
+  const lark = await installLarkCliBinary({ packageDir: path.join(root, 'node_modules', '@larksuite', 'cli'), platformId });
+  const slack = systemNode ? null : await installSlackCliBinary({ root, platformId });
 
   const metadata = {
-    name: 'superagent', version, commit, platform: platformId, node: nodeVersion, slackCli: slack.version,
+    name: 'superagent', version, commit, platform: platformId, node: systemNode ? null : nodeVersion,
+    ...(slack ? { slackCli: slack.version } : { larkCli: lark.version, larkCliCommit: lark.commit }),
     builtAt: new Date().toISOString(), ...(downloadBase ? { downloadBase: downloadBase.replace(/\/+$/, '') } : {}),
   };
   fs.writeFileSync(path.join(root, 'release.json'), `${JSON.stringify(metadata, null, 2)}\n`);
 
-  if (platformId === hostPlatform()) {
+  if (!systemNode && platformId === hostPlatform()) {
     // Only a release for this machine can be started here; CI checks the rest on their own runners.
     const run = (command, args) => execFileSync(command, args, { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }).trim();
     say(`smoke test: ${run(path.join(root, 'node', 'bin', 'node'), ['--version'])}, `

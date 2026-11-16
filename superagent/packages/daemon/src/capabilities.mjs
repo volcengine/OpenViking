@@ -8,7 +8,8 @@ const artifactPlatforms = createRequire(import.meta.url)('../../updater/artifact
 export function capabilitiesFor(implementation) {
   return Object.freeze({
     updater: implementation.supportsShellScripts && !!artifactPlatforms[implementation.hostPlatformId]
-      && artifactPlatforms[implementation.hostPlatformId].sourceOnly !== true,
+      && artifactPlatforms[implementation.hostPlatformId].sourceOnly !== true
+      && artifactPlatforms[implementation.hostPlatformId].systemNode !== true,
     autostart: implementation.loginService !== null,
     connectors: Object.freeze({ email: true }),
   });
