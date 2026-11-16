@@ -44,7 +44,7 @@ The registration throws without one.
    Never point these at the owner's real homes: some CLIs write to the real config even when only part of the home is redirected. TraeX, for example, needs `TRAE_HOME`, not just `TRAECLI_HOME`.
 
    CLIs differ from their help text. Two examples:
-   - Pi 1.4.0 ignores `--no-extensions` once an `--extension` is present, but honors `-ne`. Resolve enabled user/project extensions with Pi's package manager before passing paths back; walking only `extensions/` loses settings and package sources. Keep `codemode` and `tool-search` as well as `mcp`: other MCP servers need those indirect tools. Preserve the original agent directory so model and MCP configuration, credential storage and locks keep their usual paths.
+   - Managed Pi 1.5.0 ignores `--no-extensions` once an `--extension` is present, but honors `-ne`. Resolve enabled user/project extensions with Pi's package manager before passing paths back; walking only `extensions/` loses settings and package sources. Keep `codemode` and `tool-search` as well as `mcp`: other MCP servers need those indirect tools. Preserve the original agent directory so model and MCP configuration, credential storage and locks keep their usual paths.
    - Codex merges `-c mcp_servers={}` instead of replacing the table.
 
    Only the real binary tells you which way it behaves.

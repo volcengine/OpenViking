@@ -65,7 +65,7 @@ For startup errors, run `ov-superagent logs <instance>`. Failed app-server hands
 
 Claude Code requires 2.1.259 or later and `--permission-prompts none`, checked during preflight. Daemon sessions are unattended: Pi extension dialogs and Codex/TraeX approval or input requests are explicitly cancelled or denied. Claude uses its official unattended settings and rejects unexpected control requests. To ask a person, the model should send a message or supported choice card, end its turn, and await a later answer. User extensions, providers, and other session configuration remain enabled.
 
-Pi 1.4.0 reads RPC responses only after extension startup finishes. An extension asking for input during `session_start` therefore causes immediate startup refusal with instructions to disable that interaction. Runtime dialogs receive a normal cancellation.
+Managed Pi 1.5.0 reads RPC responses only after extension startup finishes. An extension asking for input during `session_start` therefore causes immediate startup refusal with instructions to disable that interaction. Runtime dialogs receive a normal cancellation.
 
 Pi's exact version is pinned in `packages/daemon/package.json` and the lockfile and shipped in the release. `ov-superagent pi` opens that copy for `/login` and reuses existing Pi model credentials without upgrading global `pi`. An empty `PI_BIN` selects the bundled version; an explicit executable must match the version validated by this release or startup provides repair instructions.
 

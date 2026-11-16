@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import { linkConfig } from './platform/index.mjs';
@@ -97,7 +97,7 @@ export function claudeIsolationSettings({ env = process.env, workspace = null } 
   };
 }
 
-// Pi 1.4.0's built-ins. Keep the indirect MCP tools too: servers using
+// Managed Pi 1.5.0's built-ins. Keep the indirect MCP tools too: servers using
 // codemode/deferred exposure need codemode/tool-search even though the Core's
 // own tools have direct exposure.
 export const PI_BUILTIN_EXTENSIONS = Object.freeze(['builtin:mcp', 'builtin:llama.cpp', 'builtin:codemode', 'builtin:tool-search']);

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 // Durable runtime host. One process owns one pi-durable Harness over SQLite;
@@ -14,7 +14,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { createModels, Type } from '@earendil-works/pi-ai';
+import { createModels } from '@earendil-works/pi-ai';
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -186,7 +186,7 @@ class Host {
       tools.push(defineTool({
         name: definition.name,
         description: String(definition.description ?? ''),
-        parameters: Type.Unsafe(definition.inputSchema ?? { type: 'object', properties: {} }),
+        parameters: definition.inputSchema ?? { type: 'object', properties: {} },
         execute: async (args) => {
           const result = await callTool(endpoint, definition.name, args);
           const output = [{ type: 'text', text: String(result?.text ?? '') }];
@@ -225,9 +225,8 @@ class Host {
     this.lastEntryId = 0;
     this.watchHandle = await conversation.watch(context);
     this.processView(this.watchHandle.value);
-    // pi-durable 1.4.0 hands the listener (value, ops, context); the value is
-    // the immutable newer revision of the structural view.
-    this.watchHandle.start((value) => {
+    // pi-durable 1.5 supplies a change object, not the view as argument one.
+    this.watchHandle.start(({ value }) => {
       try { this.processView(value); } catch (error) { log({ type: 'watch_error', error: safeError(error) }); }
       return Promise.resolve();
     });

@@ -9,10 +9,10 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.4.0",
-    "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-coding-agent": "1.4.0",
-    "@earendil-works/pi-durable": "1.4.0",
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
     "@larksuite/cli": "1.0.99",
     "@tencent-connect/qqbot-nodejs": "1.0.5",
     "image-size": "2.0.4",

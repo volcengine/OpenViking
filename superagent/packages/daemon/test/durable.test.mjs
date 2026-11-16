@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
@@ -338,7 +338,7 @@ describe('DurableAgent host protocol', () => {
 
   it('refuses a host that reports the wrong pi-durable version', async () => {
     const { agent } = fakeHarness({ version: '9.9.9' });
-    await assert.rejects(agent.start(), /pi-durable 1\.4\.0 is required/);
+    await assert.rejects(agent.start(), error => error.message.includes(`pi-durable ${DURABLE_VERSION} is required`));
   });
 
   it('queues input while the host is disconnected and drains after reconnect', async () => {

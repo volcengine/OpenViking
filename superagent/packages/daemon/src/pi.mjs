@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import { spawnDetached } from './platform/index.mjs';
@@ -665,7 +665,7 @@ export class PiAgent {
           summary: `extension ${message.method}`, metadata: { runtime: 'pi', method: message.method },
         });
         if (this.onMcpStartup) {
-          // Pi 1.4.0 installs its stdin reader only after session_start handlers
+          // Managed Pi 1.5.0 installs its stdin reader only after session_start handlers
           // finish. A startup dialog cannot consume our cancellation response.
           this.onMcpStartup(false, new Error('Pi extension requested an interactive dialog during startup; disable its startup prompt for this unattended daemon'));
           return;
