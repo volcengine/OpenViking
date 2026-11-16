@@ -520,3 +520,48 @@ async def test_context_mode_without_dedup_does_not_materialize_a_missing_session
         f"viking://user/default/sessions/{session_id}",
         ctx=ctx,
     )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"rules": {"task_context": "release"}},
+        {"mode": "context", "rules": {"task_context": "   "}},
+        {"mode": "context", "rules": {"task_context": "x" * 64001}},
+        {"mode": "context", "rules": {"task_context": "release", "max_tokens": 1}},
+        {"mode": "context", "rules": {"task_context": "release", "unknown": True}},
+    ],
+)
+async def test_context_rules_validate_the_mode_and_request(client, body):
+    response = await client.post("/api/v1/search/search", json={"query": "release", **body})
+    assert response.status_code == 400
+    assert response.json()["status"] == "error"
+
+
+async def test_context_rules_use_the_authenticated_request_identity(client, service, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    lookup = AsyncMock(
+        return_value={
+            "rules": [{"uri": "viking://user/test_user/memories/rules/release/test.md"}],
+            "rendered": "Test before release; except for documentation-only changes.",
+            "delivery": {"complete": True},
+        }
+    )
+    monkeypatch.setattr(service.rules, "search_rules", lookup)
+    monkeypatch.setattr(service.search, "find", AsyncMock(return_value=_FakeFindResult()))
+    response = await client.post(
+        "/api/v1/search/search",
+        json={
+            "query": "release",
+            "mode": "context",
+            "max_tokens": 128,
+            "rules": {"task_context": "release", "rule_probability_threshold": 0},
+        },
+    )
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert "documentation-only" in result["rules"]["rendered"]
+    assert result["stats"]["used_tokens"] <= 128
+    assert lookup.await_args.args[0].rule_probability_threshold == 0
+    assert isinstance(lookup.await_args.kwargs["ctx"], RequestContext)

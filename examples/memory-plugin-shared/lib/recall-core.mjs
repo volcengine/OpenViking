@@ -184,13 +184,15 @@ const SERVER_REWRITE_REQUEST_TIMEOUT_MS = 45000;
  */
 export function contextRequestTimeoutMs(cfg = {}, body = {}) {
   const wantsRewrite = body.rewrite !== undefined;
+  const wantsRules = Boolean(body.rules);
   // `query_expansion` defaults to "auto" server-side, so only an explicit "off"
   // takes the expansion fuse back out of the budget.
   const wantsExpansion = Boolean(body.session_id) && body.query_expansion !== "off";
   const configured = Number(cfg.recallContextTimeoutMs);
   if (Number.isFinite(configured) && configured > 0) return Math.max(1000, Math.floor(configured));
-  if (!wantsRewrite && !wantsExpansion) return undefined;
-  const floor = wantsRewrite ? SERVER_REWRITE_REQUEST_TIMEOUT_MS : EXPANSION_REQUEST_TIMEOUT_MS;
+  if (!wantsRewrite && !wantsExpansion && !wantsRules) return undefined;
+  const floor = (wantsRewrite ? SERVER_REWRITE_REQUEST_TIMEOUT_MS : EXPANSION_REQUEST_TIMEOUT_MS)
+    + (wantsRules ? 10000 : 0);
   return Math.max(Number(cfg.timeoutMs) || 0, floor);
 }
 
@@ -503,7 +505,15 @@ export async function buildServerAssembledBlock(fetchJSON, cfg, query, options =
 
   const block = await recallViaContextFace(fetchJSON, cfg, query, { ...options, actorPeerId }, log);
   if (block !== null) return block;
-  return recallViaEndpoint(fetchJSON, cfg, query, { ...options, actorPeerId }, log);
+  const fallback = await recallViaEndpoint(fetchJSON, cfg, query, { ...options, actorPeerId }, log);
+  if (cfg.rulesAutoInject && options.includeRules !== false) {
+    log("rules_check_incomplete", { reason: "context_unavailable" });
+    const notice = wrapContext(RULES_INCOMPLETE_NOTICE);
+    const budget = Number(cfg.recallMaxTokens) || DEFAULT_CONTEXT_MAX_TOKENS;
+    const combined = [notice, fallback || ""].filter(Boolean).join("\n");
+    return contextTokens(combined) <= budget ? combined : notice;
+  }
+  return fallback;
 }
 
 /**
@@ -519,6 +529,9 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   const body = buildContextSearchBody(cfg, options);
   body.query = query;
+  if (cfg.rulesAutoInject && options.includeRules !== false) {
+    body.rules = { task_context: query, max_tokens: Number(cfg.rulesMaxTokens) || 1024 };
+  }
   const res = await fetchJSON("/api/v1/search/search", {
     method: "POST",
     body: JSON.stringify(body),
@@ -526,7 +539,7 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   if (!res.ok) {
     const status = res.status || 0;
-    if ((status === 400 || status === 422) && looksLikeUnknownField(res)) {
+    if (!body.rules && (status === 400 || status === 422) && looksLikeUnknownField(res)) {
       await markContextFaceLegacy(options.legacyCachePath);
       log("recall_context_face_unsupported", { status });
     } else {
@@ -547,6 +560,7 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
     rendered: String(result.rendered || "").trim(),
     entries: Array.isArray(result.entries) ? result.entries : [],
     digest: String(result.digest || "").trim(),
+    rules: body.rules ? result.rules || { delivery: { complete: false } } : undefined,
     stats,
   };
 }
@@ -606,10 +620,44 @@ async function finalizeRecall(result, cfg, query, options, log, shortContext) {
   return fallback;
 }
 
+// Same CJK-aware weights as the server's estimate_text_tokens; the legacy
+// chars/4 estimate would let a local CJK digest exceed the shared budget.
+function contextTokens(text) {
+  let units = 0;
+  for (const char of text) {
+    const cp = char.codePointAt(0);
+    const cjk = (cp >= 0x1100 && cp <= 0x11ff) || (cp >= 0x3000 && cp <= 0x30ff)
+      || (cp >= 0x3130 && cp <= 0x318f) || (cp >= 0x31f0 && cp <= 0x31ff)
+      || (cp >= 0x3400 && cp <= 0x4dbf) || (cp >= 0x4e00 && cp <= 0x9fff)
+      || (cp >= 0xac00 && cp <= 0xd7af) || (cp >= 0xf900 && cp <= 0xfaff)
+      || (cp >= 0xff00 && cp <= 0xffef) || (cp >= 0x20000 && cp <= 0x2ebef);
+    units += cjk ? 6 : cp > 0xffff ? 8 : 1;
+  }
+  return Math.ceil(units / 4);
+}
+
+const RULES_INCOMPLETE_NOTICE = "OpenViking Rules check is incomplete. Applicable constraints have not been fully checked; do not treat this as no applicable Rules.";
+
 async function recallViaContextFace(fetchJSON, cfg, query, options, log) {
   const assembled = await fetchAssembledContext(fetchJSON, cfg, query, { ...options, log });
   if (assembled === null) return null;
-  const text = await finalizeRecall(assembled, cfg, query, options, log);
+  let memory = await finalizeRecall(assembled, cfg, query, options, log);
+  const rules = assembled.rules;
+  let ruleText = "";
+  if (rules) {
+    const complete = rules.delivery?.complete === true;
+    ruleText = complete ? String(rules.rendered || "") : RULES_INCOMPLETE_NOTICE;
+    if (!complete) log("rules_check_incomplete", { reason: rules.delivery?.reason || "unsupported" });
+  }
+  const budget = Number(assembled.stats?.max_tokens)
+    || Number(cfg.recallMaxTokens) || DEFAULT_CONTEXT_MAX_TOKENS;
+  const cost = (text) => contextTokens([ruleText, text].filter(Boolean).join("\n\n"));
+  if (rules && Number.isFinite(budget) && cost(memory) > budget) {
+    memory = selectRecallContent(assembled);
+    if (cost(memory) > budget) memory = "";
+    log("rules_memory_budget_fallback", {});
+  }
+  const text = [ruleText, memory].filter(Boolean).join("\n\n");
   return text ? wrapContext(text) : "";
 }
 
@@ -688,8 +736,13 @@ export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = 
   if (cfg.recallPeerScope !== "actor" || !legacyPeerId || legacyPeerId === actorPeerId) return primary;
 
   const log = options.log || (() => {});
-  const legacy = await recallForPeer(fetchJSON, cfg, query, { ...options, actorPeerId: legacyPeerId });
+  const legacy = await recallForPeer(fetchJSON, cfg, query, { ...options, actorPeerId: legacyPeerId, includeRules: false });
   if (!legacy.block) return primary;
+  if (cfg.rulesAutoInject && contextTokens(`${primary.block}\n${legacy.block}`)
+      > (Number(cfg.recallMaxTokens) || DEFAULT_CONTEXT_MAX_TOKENS)) {
+    log("recall_legacy_peer_budget_exceeded", {});
+    return primary;
+  }
   log("recall_legacy_peer_hit", { legacyPeerId });
   return {
     block: primary.block ? `${primary.block}\n${legacy.block}` : legacy.block,

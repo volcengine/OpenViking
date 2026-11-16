@@ -94,6 +94,8 @@ export const KNOBS = [
   { name: "recallContextTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS", capability: "recall" },
   { name: "logRankingDetails", type: "bool", default: false, env: "OPENVIKING_LOG_RANKING_DETAILS", capability: "recall" },
   { name: "recallLedger", type: "bool", default: true, env: "OPENVIKING_RECALL_LEDGER", capability: "recall" },
+  { name: "rulesAutoInject", type: "bool", default: false, env: "OPENVIKING_RULES_AUTO_INJECT", capability: "recall" },
+  { name: "rulesMaxTokens", type: "int", default: 1024, min: 64, max: 32000, env: "OPENVIKING_RULES_MAX_TOKENS", capability: "recall" },
   { name: "recallQueryFilters", type: "list", default: [], env: "OPENVIKING_RECALL_QUERY_FILTERS", capability: "recall" },
   // Subtree URIs the recall search must never return. Without this there is no
   // way to keep generated directory files (viking://user/<space>/skills,

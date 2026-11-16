@@ -30,10 +30,12 @@ from openviking.retrieve.context_assembler.params import (
 )
 from openviking.retrieve.context_assembler.render import render_context
 from openviking.retrieve.context_assembler.rewrite import rewrite_context, server_rewrite_enabled
+from openviking.retrieve.context_assembler.rules import assemble_rules
 from openviking.retrieve.context_assembler.tiers import needs_content, prefetch_contents
 from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext
 from openviking.utils.time_decay import validate_event_time_decay_request
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.logger import get_logger
 
@@ -89,6 +91,13 @@ async def assemble_context(
 
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
         await service.search.ensure_keywords_search_supported(ctx)
+    rules = (
+        await assemble_rules(service, ctx, params.rules, params.max_tokens)
+        if params.rules is not None
+        else None
+    )
+    rule_tokens = rules["used_tokens"] if rules else 0
+    memory_budget = max(0, params.max_tokens - rule_tokens - bool(rule_tokens))
     quotas = normalize_quotas(params.quotas, params.purpose)
     penalties = normalize_penalties(params.other_peer_penalty)
 
@@ -166,20 +175,23 @@ async def assemble_context(
     # Read only the candidates whose planned tier actually needs a body: with
     # the default tiers that is the events bucket, not every hit.
     pins = normalize_detail(params.detail)
-    cap = per_entry_cap(params.max_tokens, len(candidates))
+    cap = per_entry_cap(memory_budget, len(candidates))
     readable = [
         c
         for c in candidates
-        if needs_content(c, pins.for_category(c.category)) or oversized_abstract_needs_body(c, cap)
+        if memory_budget > 0
+        and (
+            needs_content(c, pins.for_category(c.category)) or oversized_abstract_needs_body(c, cap)
+        )
     ]
     contents: Dict[str, str] = {}
     if readable:
         contents = await prefetch_contents(service=service, candidates=readable)
 
     plan = plan_entries(
-        candidates,
+        candidates if memory_budget else [],
         contents,
-        max_tokens=params.max_tokens,
+        max_tokens=max(1, memory_budget),
         detail=pins,
     )
 
@@ -198,9 +210,7 @@ async def assemble_context(
             rewrite_status = "failed"
     if plan.entries and rewrite_enabled:
         if resolver is None:
-            raise RuntimeError(
-                "Context assembly requires a VLM resolver for account-owned rewrite"
-            )
+            raise RuntimeError("Context assembly requires a VLM resolver for account-owned rewrite")
         try:
             planner = await resolver.get_query_planner(ctx.account_id)
         except Exception as exc:
@@ -214,6 +224,8 @@ async def assemble_context(
                 valid_uris=[entry.uri for entry in plan.entries],
                 planner=planner,
             )
+        if rules is not None and estimate_text_tokens(digest) > memory_budget:
+            digest, rewrite_status = "", "failed"
         if rewrite_status == "no_relevant":
             rendered = ""
 
@@ -245,7 +257,15 @@ async def assemble_context(
             "turn": ledger.turn if ledger else None,
         },
     }
+    if rules is not None:
+        memory_tokens = estimate_text_tokens(digest or rendered)
+        stats["memory_used_tokens"] = memory_tokens
+        stats["max_tokens"] = params.max_tokens
+        stats["used_tokens"] = (
+            memory_tokens + rule_tokens + int(bool(rule_tokens and memory_tokens))
+        )
     return AssembleResult(
+        rules=rules,
         entries=plan.entries,
         rendered=rendered,
         digest=digest,

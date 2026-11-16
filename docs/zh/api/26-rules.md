@@ -236,3 +236,53 @@ Jev 未配置或判断失败时，受影响候选放行。Rule 判断失败返�
 - [规则校验（Beta）](../workflows/02-rule-validation.md)
 - [后台任务](./17-tasks.md)
 - [服务端 Rules 配置](../configuration/01-server.md#rules)
+
+
+## 可选的自动上下文交付
+
+`POST /api/v1/search/search` 在 `mode="context"` 时接受可选 `rules`：
+
+```json
+{
+  "query": "准备发布",
+  "mode": "context",
+  "max_tokens": 4000,
+  "rules": {"task_context": "准备发布", "max_tokens": 1500}
+}
+```
+
+不传 `rules` 时保持现有响应，不新增规则检索。`task_context` 沿用规则搜索校验：
+不得为空白，最长 64,000 字符；可选 `rule_probability_threshold` 沿用规则搜索默认值。
+`rules.max_tokens` 默认 1024，范围为 64–32000；它是外层 `max_tokens` 内的上限，
+不是额外预算。完整匹配规则块（含条件、例外和引用）优先计费，放不下时不交付任何
+匹配规则，而是返回有界的不完整检查提示。普通上下文使用剩余预算。token 数是估算值，
+不是特定模型 tokenizer 的严格保证。
+
+响应新增独立的 `rules` 对象，包含 `rendered`、`used_tokens`、`status` 和 `delivery`
+（`complete`、`reason`、`rule_count`）。原有 `entries`、`rendered`、`digest` 仍然表示
+普通记忆、资源与技能上下文。调用方应将 `rules.rendered` 独立放在普通上下文之前，
+不得对规则块做摘要或截断。记忆为空或摘要判断 `no_relevant` 不会抑制规则。
+`delivery.complete` 只表示已选规则的交付完整性，不保证召回所有相关政策或模型遵守规则。
+
+规则搜索复用当前已认证请求身份，截止时间为 10 秒；失败、超预算或不完整交付会明确
+标记检查不完整，普通检索仍可继续。本功能不编译规则或新增策略存储。适用性判断可能
+调用模型，会增加延迟及提供商费用；请求取消会继续传播。
+
+### Claude Code 与 Codex hooks
+
+在现有 `ovcli.conf` 的 plugin 配置中开启：
+
+```json
+{"plugin": {"rulesAutoInject": true, "rulesMaxTokens": 1500}}
+```
+
+也可使用环境变量 `OPENVIKING_RULES_AUTO_INJECT=true` 和
+`OPENVIKING_RULES_MAX_TOKENS=1500`。须保持自动召回开启。用户提交 hook 使用经过现有
+输入过滤器的实际用户输入，非空短输入也会检查，不依赖模型主动调用工具；被过滤器
+丢弃的输入仍不会上传。规则不进入服务端记忆摘要或本地记忆压缩器。旧服务端或不完整
+响应会产生明确的检查未完成提示，而不是被解释为没有适用规则。
+共享召回块构建器的其他调用方也可继承此配置；自定义或底层集成须显式传递并消费规则。
+本改动不新增 Hermes prefetch 触发或
+`PreToolUse` 执行拦截。规则注入是上下文交付，不是安全强制执行机制。
+
+MCP 的 `search(mode="context")` 同样支持 `rules` 参数，返回文本中规则块位于普通记忆之前。

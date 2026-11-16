@@ -147,6 +147,7 @@ class AssembleParams:
     rewrite: Any = False
     rewrite_max_bullets: int = 6
 
+    rules: Optional[Dict[str, Any]] = None
     render: bool = True
 
 

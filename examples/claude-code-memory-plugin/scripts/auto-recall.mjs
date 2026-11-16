@@ -107,7 +107,7 @@ runHookStage({
     userPrompt = verdict.text;
   }
   if (queryFilters.errors.length) log("query_filter_errors", queryFilters.errors);
-  if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
+  if (!userPrompt || (!cfg.rulesAutoInject && userPrompt.length < cfg.minQueryLength)) {
     log("skip", { reason: "query too short or empty" });
     writeRecallState({ count: 0, reason: "short_query", cc_session_id: sessionId });
     return;

@@ -649,3 +649,153 @@ for (const textLength of [20, 500]) {
     assert.equal(recalled.hintCount, citedUris.length - visibleContent.length);
   });
 }
+
+
+for (const rewrite of ["no_relevant", "off"]) {
+  test(`automatic Rules survive ${rewrite} without entering the local compressor`, async () => {
+    const ruleText = "Never publish credentials; exception: synthetic fixtures only.";
+    const compressorInputs = [];
+    let request;
+    const result = await buildRecallBlockDetailed(async (path, init) => {
+      request = JSON.parse(init.body);
+      return { ok: true, result: {
+        entries: [{ uri: "viking://user/default/memories/a.md", text: "Memory only." }],
+        rendered: "Memory only.", stats: { rewrite },
+        rules: { rendered: ruleText, delivery: { complete: true } },
+      } };
+    }, { rulesAutoInject: true, rulesMaxTokens: 256, recallRewrite: "client", recallCompressMinInputChars: 0 }, "release", {
+      legacyCachePath: await tempPath("rules-context.json"),
+      digestCachePath: await tempPath("rules-digest.json"),
+      localCompressorAvailable: true,
+      runCompressor: async (prompt) => { compressorInputs.push(prompt); return "NO_RELEVANT_MEMORY"; },
+    });
+    assert.deepEqual(request.rules, { task_context: "release", max_tokens: 256 });
+    assert.ok(result.block.includes(ruleText));
+    for (const prompt of compressorInputs) assert.ok(!prompt.includes(ruleText));
+  });
+}
+
+test("Rules are off by default and incomplete delivery is never silently accepted", async () => {
+  for (const rules of [undefined, { rendered: "PARTIAL_RULE", delivery: { complete: false } }]) {
+    const result = await buildRecallBlockDetailed(async () => ({ ok: true, result: {
+      entries: [], rendered: "", stats: {}, rules,
+    } }), { rulesAutoInject: true }, "release", { legacyCachePath: await tempPath("rules.json") });
+    assert.match(result.block, /Rules check is incomplete/);
+    assert.doesNotMatch(result.block, /PARTIAL_RULE/);
+  }
+  let request;
+  await buildRecallBlockDetailed(async (_path, init) => {
+    request = JSON.parse(init.body);
+    return { ok: true, result: { entries: [], rendered: "", stats: {} } };
+  }, {}, "release", { legacyCachePath: await tempPath("rules-off.json") });
+  assert.equal(request.rules, undefined);
+});
+
+test("old servers show a Rules warning without poisoning the context compatibility cache", async () => {
+  const cache = await tempPath("rules-unsupported.json");
+  const result = await buildRecallBlockDetailed(async (path) => {
+    if (path === "/api/v1/search/search") return {
+      ok: false, status: 422, error: { detail: [{ type: "extra_forbidden", loc: ["body", "rules"] }] },
+    };
+    return { ok: true, result: { entries: [], rendered: "legacy memory", stats: {} } };
+  }, { rulesAutoInject: true }, "release", { legacyCachePath: cache });
+  assert.match(result.block, /Rules check is incomplete/);
+  assert.match(result.block, /legacy memory/);
+  assert.equal(await isContextFaceLegacy(cache), false);
+});
+
+test("legacy peer migration does not repeat the user Rules lookup", async () => {
+  const requests = [];
+  await buildRecallBlockDetailed(async (_path, init) => {
+    requests.push(JSON.parse(init.body));
+    return { ok: true, result: {
+      entries: [], rendered: "memory", stats: {},
+      rules: { rendered: "Rule", delivery: { complete: true } },
+    } };
+  }, { rulesAutoInject: true, recallPeerScope: "actor" }, "release", {
+    actorPeerId: "current", legacyPeerId: "previous", legacyCachePath: await tempPath("rules-peers.json"),
+  });
+  assert.equal(requests.length, 2);
+  assert.ok(requests[0].rules);
+  assert.equal(requests[1].rules, undefined);
+});
+
+
+test("local CJK compression cannot expand beyond the server's shared Rule budget", async () => {
+  const result = await buildRecallBlockDetailed(async () => ({ ok: true, result: {
+    entries: [{ uri: "viking://user/default/memories/a.md", text: "memory" }],
+    rendered: "memory", stats: { max_tokens: 64, rewrite: "off" },
+    rules: { rendered: "Keep this rule.", delivery: { complete: true } },
+  } }), { rulesAutoInject: true, recallRewrite: "client", recallCompressMinInputChars: 0 }, "release", {
+    legacyCachePath: await tempPath("rules-cjk.json"),
+    digestCachePath: await tempPath("rules-cjk-digest.json"),
+    localCompressorAvailable: true,
+    runCompressor: async () => "- " + "发布配置".repeat(30),
+  });
+  assert.match(result.block, /Keep this rule/);
+  assert.match(result.block, /memory/);
+  assert.doesNotMatch(result.block, /发布配置/);
+});
+
+for (const host of ["claude-code", "codex"]) {
+  test(`${host} prompt hook delivers Rules over HTTP even for a short prompt`, async (t) => {
+    const { createServer } = await import("node:http");
+    const { spawn } = await import("node:child_process");
+    const { writeFile, rm } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const home = await mkdtemp(join(tmpdir(), "ov-rules-hook-"));
+    const requests = [];
+    const rule = "Run tests before release. Exception: documentation-only changes.";
+    const server = createServer(async (req, res) => {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/health") return res.end(JSON.stringify({ status: "ok" }));
+      requests.push({ path: req.url, body: JSON.parse(body || "{}") });
+      res.end(JSON.stringify({ status: "ok", result: {
+        entries: [], rendered: "", stats: { rewrite: "no_relevant", max_tokens: 1600 },
+        rules: { rendered: rule, delivery: { complete: true } },
+      } }));
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(async () => {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+      await rm(home, { recursive: true, force: true });
+    });
+    const config = join(home, "ovcli.conf");
+    await writeFile(config, JSON.stringify({
+      url: `http://127.0.0.1:${server.address().port}`,
+      plugin: { rulesAutoInject: true, recallCompress: "off", minQueryLength: 100 },
+    }));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OPENVIKING_")));
+    Object.assign(env, { HOME: home, OPENVIKING_CLI_CONFIG_FILE: config,
+      OPENVIKING_CONFIG_FILE: join(home, "missing.conf"), OPENVIKING_HOME: join(home, "state") });
+    const hook = fileURLToPath(new URL(`../${host}-memory-plugin/scripts/auto-recall.mjs`, import.meta.url));
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [hook], { env, cwd: home, timeout: 15000 });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      child.on("error", reject);
+      child.on("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(`hook exit ${code}: ${stderr}`)));
+      child.stdin.end(JSON.stringify({ prompt: "Go", cwd: home, session_id: "rules-smoke" }));
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].path, "/api/v1/search/search");
+    assert.equal(requests[0].body.rules.task_context, "Go");
+    assert.ok(JSON.parse(output).hookSpecificOutput.additionalContext.includes(rule));
+  });
+}
+
+
+test("legacy memory cannot crowd the incomplete Rules notice out of the budget", async () => {
+  const result = await buildRecallBlockDetailed(async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 404 };
+    return { ok: true, result: { entries: [], rendered: "legacy memory ".repeat(200), stats: {} } };
+  }, { rulesAutoInject: true, recallMaxTokens: 128 }, "release", {
+    legacyCachePath: await tempPath("rules-legacy-budget.json"),
+  });
+  assert.match(result.block, /Rules check is incomplete/);
+  assert.doesNotMatch(result.block, /legacy memory/);
+});

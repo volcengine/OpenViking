@@ -131,7 +131,7 @@ runHookStage({
   }
   if (queryFilters.errors.length) log("query_filter_errors", { errors: queryFilters.errors });
 
-  if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
+  if (!userPrompt || (!cfg.rulesAutoInject && userPrompt.length < cfg.minQueryLength)) {
     log("skip", { stage: "query_check", reason: "query too short or empty" });
     return;
   }

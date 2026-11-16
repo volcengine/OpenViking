@@ -42,10 +42,15 @@ class AssembleResult:
     digest: str = ""
     stats: Dict[str, Any] = field(default_factory=dict)
 
+    rules: Dict[str, Any] | None = None
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "entries": [entry.to_dict() for entry in self.entries],
             "rendered": self.rendered,
             "digest": self.digest,
             "stats": self.stats,
         }
+        if self.rules is not None:
+            result["rules"] = self.rules
+        return result

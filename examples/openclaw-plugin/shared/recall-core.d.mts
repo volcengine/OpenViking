@@ -15,6 +15,7 @@ export type ContextSearchBody = {
   exclude_uris?: string[];
   rewrite?: boolean | "auto";
   rewrite_max_bullets?: number;
+  rules?: { task_context: string; max_tokens?: number; rule_probability_threshold?: number };
 };
 
 export type NormalizedContextEntry = {
@@ -50,6 +51,7 @@ export type RecallFetchJSON = (
 export type RecallOptions = {
   actorPeerId?: string;
   legacyPeerId?: string;
+  includeRules?: boolean;
   sessionId?: string;
   log?: (stage: string, data?: any) => void;
   localCompressorAvailable?: boolean;

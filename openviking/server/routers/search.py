@@ -36,6 +36,7 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
+from openviking.service.rule_service import RuleContextRequest
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
 from openviking.utils.search_filters import (
@@ -175,6 +176,7 @@ def _reject_unknown_quota_and_detail(quotas: Any, detail: Any) -> None:
 
 
 CONTEXT_ONLY_FIELDS = (
+    "rules",
     "query_expansion",
     "max_tokens",
     "quotas",
@@ -244,6 +246,7 @@ class SearchRequest(BaseModel):
     events_time_decay_protection: Optional[str] = None
 
     mode: Literal["list", "context"] = "list"
+    rules: Optional[RuleContextRequest] = None
 
     query_expansion: Literal["off", "auto"] = "auto"
     max_tokens: int = Field(default=DEFAULT_MAX_TOKENS, ge=64, le=32000)
@@ -441,6 +444,7 @@ async def _search_context(
 ):
     """Assemble an injection-ready context block for one request."""
     params = AssembleParams(
+        rules=request.rules.model_dump() if request.rules is not None else None,
         query=request.query,
         search_type=request.search_type,
         image_url=_resolve_image_url(request.image_url, ctx),
