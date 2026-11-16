@@ -12,10 +12,10 @@ export const inject = ["agents", "sessions", "tools"];
 export function apply(ctx, input = {}) {
   const config = resolveConfig(input);
   const client = new OpenVikingClient(config);
-  const runtime = new OpenVikingRuntime(client, config, ctx.logger, cwd => (
+  const runtime = new OpenVikingRuntime(client, config, ctx.logger, (cwd, sessionId) => (
     // Rebuild from the host input, not the config already merged for boot's cwd.
     // The shared loader preserves host/env precedence over workspace settings.
-    resolveConfig(input, process.env, cwd)
+    resolveConfig(input, process.env, cwd, sessionId)
   ));
   const skipMemory = session => (
     config.skipSubagentSessions && session?.header?.origin === "subagent"

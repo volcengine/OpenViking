@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { OpenVikingClient } from "./client.mjs";
 import { stateDir } from "./shared/workspace-identity.mjs";
 import { createRecallCompressor } from "./compressor.mjs";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
@@ -20,23 +21,29 @@ import { deriveDshSessionId } from "./session-id.mjs";
 
 export class OpenVikingRuntime {
   constructor(client, config, logger = console, resolveSessionConfig = null) {
-    this.client = client;
     this.config = config;
-    this.pending = createPendingQueue(config.connectionScope);
+    this.connection = { client, pending: createPendingQueue(config.connectionScope), drainHealth: null };
+    this.connections = new Map([[config.connectionScope || "", this.connection]]);
     this.logger = logger;
     this.resolveSessionConfig = resolveSessionConfig;
     this.states = new Map();
     this.drainTimer = null;
     this.drainRunning = false;
     this.drainPromise = Promise.resolve();
-    this.drainHealth = null;
   }
 
   stateFor(session) {
     let state = this.states.get(session.id);
     if (state) return state;
     const cwd = session.header?.cwd || process.cwd();
-    const resolved = this.resolveSessionConfig?.(cwd);
+    const resolved = this.resolveSessionConfig?.(cwd, String(session.id));
+    const config = { ...this.config, ...resolved };
+    const scope = config.connectionScope || "";
+    let connection = this.connections.get(scope);
+    if (!connection) {
+      connection = { client: new OpenVikingClient(config), pending: createPendingQueue(scope), drainHealth: null };
+      this.connections.set(scope, connection);
+    }
     const peer = resolved?.effectivePeer ?? resolveEffectivePeerId({
       cfg: {
         peerId: this.config.explicitPeerId,
@@ -49,7 +56,8 @@ export class OpenVikingRuntime {
     state = {
       dshSessionId: String(session.id),
       ovSessionId: deriveDshSessionId(session.id),
-      config: { ...this.config, ...resolved, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
+      config: { ...config, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
+      connection,
       ready: false,
       profileBlock: "",
       profileDelivered: false,
@@ -81,13 +89,13 @@ export class OpenVikingRuntime {
 
   async initializeState(state) {
     state.initializationRetryable = false;
-    const health = await this.client.healthResult();
+    const health = await state.connection.client.healthResult();
     this.reportWriteResult(state, "health", health, "/health");
     if (!health.ok) {
       state.initializationRetryable = isRetryableFailure(health);
       return state;
     }
-    const ensured = await this.client.ensureSessionResult(
+    const ensured = await state.connection.client.ensureSessionResult(
       state.ovSessionId,
       state.config.peerId,
     );
@@ -103,11 +111,11 @@ export class OpenVikingRuntime {
     // Replay is a write, so it stays behind the same toggle: a backlog queued
     // while capture was on waits for a session that still writes.
     if (isCaptureEnabled(state.config)) {
-      await this.replayPendingQueue();
+      await this.replayPendingQueue({}, state.connection);
     }
     await this.refreshPendingState(state);
     const profile = await buildProfileBlock(
-      (path, init, options) => this.client.fetchJSON(path, init, options),
+      (path, init, options) => state.connection.client.fetchJSON(path, init, options),
       state.config.profileTokenBudget,
       state.config.peerId,
       state.config,
@@ -149,7 +157,7 @@ export class OpenVikingRuntime {
       state.config.recallCompressThinking,
     ])).digest("hex");
     const block = await buildRecallBlock(
-      (path, init, options) => this.client.fetchJSON(path, init, options),
+      (path, init, options) => state.connection.client.fetchJSON(path, init, options),
       state.config,
       query,
       {
@@ -186,7 +194,7 @@ export class OpenVikingRuntime {
         await this.enqueuePendingMessage(state, payload);
         return;
       }
-      const response = await this.client.addMessage(
+      const response = await state.connection.client.addMessage(
         state.ovSessionId,
         payload,
         state.config.peerId,
@@ -209,13 +217,13 @@ export class OpenVikingRuntime {
       if (state.hasPendingWrites) return;
       if (!state.ready && !(await this.ensureState(state)).ready) return;
       if (!boundary) {
-        const metadata = await this.client.getSession(
+        const metadata = await state.connection.client.getSession(
           state.ovSessionId,
           state.config.peerId,
         );
         if (Number(metadata?.pending_tokens || 0) < state.config.commitTokenThreshold) return;
       }
-      const response = await this.client.commitSession(
+      const response = await state.connection.client.commitSession(
         state.ovSessionId,
         state.config.peerId,
       );
@@ -246,7 +254,7 @@ export class OpenVikingRuntime {
           return;
         }
         if (!state.ready && !(await this.ensureState(state)).ready) return;
-        const response = await this.client.commitSession(
+        const response = await state.connection.client.commitSession(
           state.ovSessionId,
           state.config.peerId,
           { timeoutMs: Math.min(3000, Number(state.config.requestTimeoutMs) || 3000) },
@@ -318,7 +326,7 @@ export class OpenVikingRuntime {
   async enqueuePending(state, type, payload) {
     const createdAt = Math.max(Date.now(), state.pendingCreatedAt + 1);
     state.pendingCreatedAt = createdAt;
-    const result = await this.pending.enqueue(type, state.ovSessionId, payload, { createdAt });
+    const result = await state.connection.pending.enqueue(type, state.ovSessionId, payload, { createdAt });
     if (result.ok) {
       // Log the latch transition only: every message that follows while the
       // latch holds takes the cheap enqueue path, so this fires once per
@@ -350,20 +358,20 @@ export class OpenVikingRuntime {
   }
 
   async removePendingCommits(state) {
-    const pending = await this.pending.listPending();
+    const pending = await state.connection.pending.listPending();
     for (const item of pending) {
       if (
         item.entry?.type === "commitSession"
         && item.entry.sessionId === state.ovSessionId
       ) {
-        await this.pending.dequeue(item.filename);
+        await state.connection.pending.dequeue(item.filename);
       }
     }
   }
 
   async refreshPendingState(state) {
     const wasPending = state.hasPendingWrites;
-    const pending = (await this.pending.listPending()).filter(
+    const pending = (await state.connection.pending.listPending()).filter(
       item => item.entry?.sessionId === state.ovSessionId,
     );
     state.hasPendingWrites = pending.length > 0;
@@ -379,13 +387,13 @@ export class OpenVikingRuntime {
   }
 
   /**
-   * Replay the pending queue through this runtime's client. The session-start
+   * Replay a connection's pending queue through its own client. The session-start
    * path calls it without options and keeps consuming retries; the drainer
    * passes consumeRetries:false so transient failures stay retryable.
    */
-  async replayPendingQueue(options = {}) {
-    await this.pending.replayPending(
-      (path, init) => this.client.fetchJSON(path, init),
+  async replayPendingQueue(options = {}, connection = this.connection) {
+    await connection.pending.replayPending(
+      (path, init) => connection.client.fetchJSON(path, init),
       (stage, data) => this.log(stage, data),
       options,
     );
@@ -403,21 +411,23 @@ export class OpenVikingRuntime {
     if (this.drainRunning) return;
     this.drainRunning = true;
     try {
-      const pending = await this.pending.listPending();
-      if (pending.length > 0) {
-        const health = await this.client.healthResult();
+      // Retain bindings after session disposal so their queued writes can drain.
+      for (const connection of this.connections.values()) {
+        const pending = await connection.pending.listPending();
+        if (pending.length === 0) continue;
+        const health = await connection.client.healthResult();
         if (!health.ok) {
           // Only the flip into the outage is logged, not every 60s probe.
-          if (this.drainHealth !== false) {
+          if (connection.drainHealth !== false) {
             this.log("drain_health_down", { status: health.status || 0 });
           }
-          this.drainHealth = false;
+          connection.drainHealth = false;
         } else {
-          if (this.drainHealth === false) {
+          if (connection.drainHealth === false) {
             this.log("drain_health_restored", {});
           }
-          this.drainHealth = true;
-          await this.replayPendingQueue({ consumeRetries: false });
+          connection.drainHealth = true;
+          await this.replayPendingQueue({ consumeRetries: false }, connection);
         }
       }
       for (const state of this.states.values()) {

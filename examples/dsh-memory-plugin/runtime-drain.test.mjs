@@ -22,10 +22,10 @@ test("a runtime replays only writes queued for its own connection", async () => 
       return { ok: true };
     },
   }, { ...config(), connectionScope: "work" }, { debug() {} });
-  const state = { ovSessionId: "same-id", pendingCreatedAt: 0 };
+  const state = runtime.stateFor({ id: "same-id" });
   await runtime.enqueuePending(state, "addMessage", { content: "work" });
   const other = createPendingQueue("personal");
-  await other.enqueue("addMessage", "same-id", { content: "personal" });
+  await other.enqueue("addMessage", state.ovSessionId, { content: "personal" });
   await runtime.replayPendingQueue();
   assert.deepEqual(sent, ["work"]);
   assert.equal((await other.listPending()).length, 1);

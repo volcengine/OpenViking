@@ -125,6 +125,10 @@ launch directory; launch it in the intended workspace. Workspace configuration
 files cannot supply these connection entries. This setting applies to the shared
 plugin loader; it does not change the standalone `ov` CLI's connection selection.
 
+DSH selects and retains a connection for each native session, including when a
+session is resumed. Its background uploader drains each connection with that
+connection's client, so multiple tenants can share one DSH process.
+
 When `connections` is enabled, pending uploads are stored separately for each
 resolved connection, including its credentials, to prevent cross-tenant replay.
 Drain existing pending uploads with the original configuration before enabling

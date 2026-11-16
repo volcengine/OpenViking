@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { apply } from "./index.mjs";
+import { createPendingQueue } from "./shared/pending-queue.mjs";
 
 function setup(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "dsh-session-workspace-")));
@@ -15,6 +16,7 @@ function setup(t) {
   Object.assign(process.env, {
     OPENVIKING_CONFIG_FILE: join(root, "absent-ov.conf"),
     OPENVIKING_CLI_CONFIG_FILE: join(root, "ovcli.conf"),
+    OPENVIKING_HOME: join(root, "home"),
     OPENVIKING_STATE_DIR: join(root, "state"),
     OPENVIKING_PENDING_DIR: join(root, "pending"),
   });
@@ -112,14 +114,23 @@ test("session peer resolution preserves host, environment and pinned credential 
   assert.equal(start().stateFor(session(b)).config.peerId, "");
 });
 
-test("capture, recall and commit send each session's peer on the wire", async t => {
-  const { a, b, writeConfig, start, session } = setup(t);
+test("capture, recall and commit send each session's connection and peer on the wire", async t => {
+  const { root, a, b, writeConfig, start, session } = setup(t);
   writeConfig(b, { peer: { id: "project-b" } });
+  writeFileSync(join(root, "ovcli.conf"), JSON.stringify({
+    url: "http://a.openviking.test", api_key: "key-a", account: "account-a",
+    connections: [{ path: b, url: "http://b.openviking.test", api_key: "key-b", account: "account-b" }],
+  }));
   const requests = [];
   t.mock.method(globalThis, "fetch", async (url, init = {}) => {
     const path = new URL(url).pathname;
     const body = init.body ? JSON.parse(init.body) : null;
-    requests.push({ path, body, peer: new Headers(init.headers).get("X-OpenViking-Actor-Peer") });
+    const headers = new Headers(init.headers);
+    requests.push({
+      path, body, host: new URL(url).hostname,
+      peer: headers.get("X-OpenViking-Actor-Peer"),
+      account: headers.get("X-OpenViking-Account"), authorization: headers.get("Authorization"),
+    });
     let result = {};
     if (path === "/api/v1/search/search") result = { rendered: "" };
     else if (path === "/api/v1/fs/ls") result = [];
@@ -128,7 +139,7 @@ test("capture, recall and commit send each session's peer on the wire", async t 
       headers: { "Content-Type": "application/json" },
     });
   });
-  const runtime = start();
+  const runtime = start({ endpoint: undefined });
   for (const [cwd, id, peer] of [[a, "a", "project-a"], [b, "b", "project-b"]]) {
     const current = session(cwd, id);
     const message = { role: "user", content: [{ type: "text", text: `Remember the deployment for project ${id}.` }], source: { kind: "user" } };
@@ -147,9 +158,69 @@ test("capture, recall and commit send each session's peer on the wire", async t 
     for (const req of [created, recall, capture, commit]) {
       assert.ok(req, `missing session request for ${id}`);
       assert.equal(req.peer, peer, req.path);
+      assert.equal(req.host, `${id}.openviking.test`);
+      assert.equal(req.account, `account-${id}`);
+      assert.equal(req.authorization, `Bearer key-${id}`);
     }
     assert.equal(capture.body.peer_id, peer);
   }
+});
+
+test("resumed sessions and offline retries retain their original tenant across cwd changes", async t => {
+  const { root, a, b, start, session } = setup(t);
+  writeFileSync(join(root, "ovcli.conf"), JSON.stringify({
+    url: "http://openviking.test", api_key: "key-a", account: "account-a",
+    connections: [{ path: b, api_key: "key-b", account: "account-b" }],
+  }));
+  const offline = new Set(["account-a", "account-b"]);
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    const headers = new Headers(init.headers);
+    const account = headers.get("X-OpenViking-Account");
+    if (offline.has(account)) return new Response("unavailable", { status: 503 });
+    if (path.endsWith("/messages")) {
+      sent.push({ account, authorization: headers.get("Authorization"), body: JSON.parse(init.body) });
+    }
+    return new Response(JSON.stringify({ status: "ok", result: {} }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+  const runtime = start();
+  const currentA = session(a, "tenant-a");
+  const currentB = session(b, "tenant-b");
+  for (const current of [currentA, currentB]) {
+    runtime.capture(current, {
+      type: "user/message", data: {
+        role: "user", content: [{ type: "text", text: `Private message for ${current.id}.` }], source: { kind: "user" },
+      },
+    });
+    await runtime.flush(current);
+  }
+  const queueA = createPendingQueue(runtime.stateFor(currentA).config.connectionScope);
+  const queueB = createPendingQueue(runtime.stateFor(currentB).config.connectionScope);
+  assert.equal((await queueA.listPending()).length, 1);
+  assert.equal((await queueB.listPending()).length, 1);
+
+  offline.delete("account-a");
+  await runtime.drainTick();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].account, "account-a");
+  assert.equal(sent[0].authorization, "Bearer key-a");
+  assert.match(JSON.stringify(sent[0].body), /Private message for tenant-a/);
+  assert.equal((await queueA.listPending()).length, 0);
+  assert.equal((await queueB.listPending()).length, 1);
+
+  runtime.stopDrainer();
+  offline.delete("account-b");
+  const resumed = start();
+  await resumed.initialize({ session: session(a, currentB.id) });
+  assert.equal(resumed.stateFor(session(a, currentB.id)).config.account, "account-b");
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].account, "account-b");
+  assert.equal(sent[1].authorization, "Bearer key-b");
+  assert.match(JSON.stringify(sent[1].body), /Private message for tenant-b/);
+  assert.equal((await queueB.listPending()).length, 0);
 });
 
 test("a session's workspace recall and capture switches apply to that session", async t => {
