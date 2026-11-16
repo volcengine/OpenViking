@@ -41,7 +41,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync --frozen
+        # Install dependencies without invoking the project's native builds.
+        uv sync --frozen --no-install-project
         uv pip install setuptools setuptools_scm cmake wheel
 
     - name: Initialize CodeQL
@@ -52,7 +53,12 @@ jobs:
 
     - name: Build extensions
       if: matrix.language == 'cpp'
-      run: uv run python setup.py build_ext --inplace
+      env:
+        OV_SKIP_OV_BUILD: '1'
+        OV_SKIP_RAGFS_BUILD: '1'
+        OV_SKIP_STUDIO_BUILD: '1'
+      # Compile C++ once after CodeQL initialization so its extractor observes it.
+      run: uv run --no-sync python setup.py build_ext --inplace
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
