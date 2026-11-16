@@ -799,11 +799,13 @@ shared 模式的响应示例：
 
 ---
 
+### 共享资源操作
+
+这些 HTTP 接口将对应的[文件系统操作](03-filesystem.md)限制在 `viking://resources/` 的子路径中。共享根目录本身、其他命名空间以及包含 `.` 或 `..` 路径段的 URI 均被拒绝。复制和移动会同时校验源路径与目标路径，并执行身份认证和文件系统 ACL 检查。
+
 ### 复制共享资源
 
-复制文件或目录及其向量记录。源 URI 和目标 URI 都必须位于
-`viking://resources/` 子树下；不接受共享资源根本身或私有资源命名空间。
-这些操作沿用对应文件系统操作的访问权限检查。
+复制文件或目录及其向量记录。覆盖、合并和回滚行为与文件系统的复制操作一致。
 
 **HTTP**
 
@@ -815,7 +817,7 @@ POST /api/v1/resources/cp
 |------------|------|------|--------|------|
 | `from_uri` | string | 是 | - | 源共享资源 URI |
 | `to_uri` | string | 是 | - | 目标共享资源 URI |
-| `recursive` | boolean | 否 | `false` | 递归复制目录 |
+| `recursive` | boolean | 否 | `false` | 复制目录时必须为 true |
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/resources/cp \

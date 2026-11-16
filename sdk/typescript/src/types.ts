@@ -168,6 +168,7 @@ export interface AddResourceOptions extends WaitOptions {
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
+  useSnapshot?: boolean;
   acl?: AclSpec;
   mode?: string;
   processingMode?: ProcessingMode;
@@ -187,16 +188,36 @@ export interface BatchWriteOperation {
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {
+  useSnapshot?: boolean;
   deferProcessing?: boolean;
   processingMode?: ProcessingMode;
   extra?: JsonObject;
 }
-/** Compile request options. */
-export interface CompileOptions {
+/** Full compilation inputs; creation accepts scheduling controls in args. */
+export interface CompileInput {
+  from: string[];
+  to: string;
+  skill: string;
   instruction?: string;
   args?: JsonObject;
-  extra?: JsonObject;
 }
+/** Select saved inputs or supply full inputs; in-place memory mode needs no sources. */
+export type CompileRequest =
+  | (CompileInput & { compile_name?: never })
+  | (Omit<CompileInput, "from" | "skill"> & {
+      skill: "memory";
+      from?: [];
+      compile_name?: never;
+    })
+  | {
+      compile_name: string;
+      from?: never;
+      to?: never;
+      skill?: never;
+      instruction?: never;
+      /** Only owner_user_id is used; other keys are ignored. */
+      args?: JsonObject & { owner_user_id?: string };
+    };
 /** Retrieval tag update options. */
 export interface SetTagsOptions {
   mode?: "replace" | "append" | "clear";

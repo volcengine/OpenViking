@@ -46,6 +46,7 @@ class WriteContentRequest(BaseModel):
     content: str
     mode: str = "replace"
     wait: bool = False
+    use_snapshot: bool = False
     timeout: float | None = Field(
         default=None,
         deprecated=True,
@@ -56,8 +57,6 @@ class WriteContentRequest(BaseModel):
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
-    # Who made the edit; versions of Compile outputs record it (console edit = manual).
-    edit_source: Literal["manual", "agent", "compile"] = "manual"
     # Mark this edit as conflict resolution.
     resolve_conflicts: bool = False
 
@@ -94,6 +93,7 @@ class BatchWriteRequest(BaseModel):
     root_uri: str
     operations: list[BatchWriteOperation]
     wait: bool = True
+    use_snapshot: bool = False
     timeout: float | None = Field(
         default=None,
         deprecated=True,
@@ -105,7 +105,6 @@ class BatchWriteRequest(BaseModel):
     # Save content without semantic or vector work; the caller schedules processing.
     defer_processing: bool = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
-    edit_source: Literal["manual", "agent", "compile"] = "manual"
 
 
 class SetTagsRequest(BaseModel):
@@ -318,8 +317,8 @@ async def write(
             tags=request.tags,
             tag_mode=request.tag_mode,
             acl=request.acl,
-            edit_source=request.edit_source,
             resolve_conflicts=request.resolve_conflicts,
+            use_snapshot=request.use_snapshot,
         ),
     )
     return Response(
@@ -352,8 +351,8 @@ async def batch_write(
             wait=request.wait,
             skip_conflicts=request.skip_conflicts,
             defer_processing=request.defer_processing,
+            use_snapshot=request.use_snapshot,
             processing_mode=request.processing_mode,
-            edit_source=request.edit_source,
         ),
     )
     return Response(
