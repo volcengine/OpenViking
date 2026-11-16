@@ -115,17 +115,34 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     }, env);
     assert.match(secondRecall.injectSteps?.[0]?.systemMessage?.systemMessage || "", /antigravity memory/);
 
-    appendFileSync(transcriptPath, step(7, { source: "MODEL", type: "PLANNER_RESPONSE", content: quoted })
-      + step(8, { source: "MODEL", type: "PLANNER_RESPONSE", content: template })
-      + step(9, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Thirty seconds.", status: "RUNNING" }));
+    // Backgrounded commands (`GENERIC` with `RUNNING`) and failed/invalid tool
+    // steps stay non-DONE permanently in Antigravity transcripts, and a
+    // canceled/errored reply will never become DONE; neither may freeze the
+    // capture cursor before later finished replies. An in-flight reply at the
+    // tail (`RUNNING` / `GENERATING`) still waits for the next Stop.
+    appendFileSync(transcriptPath, step(7, { source: "MODEL", type: "GENERIC", content: "Tool is running as a background task", status: "RUNNING" })
+      + step(8, { source: "MODEL", type: "GENERIC", content: "Encountered error", status: "ERROR" })
+      + step(9, { source: "MODEL", type: "GENERIC", content: "Invalid tool call", status: "INVALID" })
+      + step(10, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Aborted draft.", status: "CANCELED" })
+      + step(11, { source: "MODEL", type: "PLANNER_RESPONSE", content: quoted })
+      + step(12, { source: "MODEL", type: "PLANNER_RESPONSE", content: template })
+      + step(13, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Thirty seconds.", status: "RUNNING" }));
     assert.deepEqual(await runHook("pre-invocation", {
-      ...base, invocationNum: 0, initialNumSteps: 9, lastUserInput: "How is my prompt wrapped?",
+      ...base, invocationNum: 0, initialNumSteps: 13, lastUserInput: "How is my prompt wrapped?",
     }, env), {});
     await runHook("stop", base, env);
     assert.deepEqual(messages.slice(2).map((message) => message.parts?.[0]?.text ?? message.content), [
       "How is my prompt wrapped?",
       quoted,
       template,
+    ]);
+    writeFileSync(
+      transcriptPath,
+      readFileSync(transcriptPath, "utf8").replace('{"step_index":13,"status":"RUNNING"', '{"step_index":13,"status":"DONE"'),
+    );
+    await runHook("stop", base, env);
+    assert.deepEqual(messages.slice(5).map((message) => message.parts?.[0]?.text ?? message.content), [
+      "Thirty seconds.",
     ]);
 
     // A queued user turn that the model already answered without an initial

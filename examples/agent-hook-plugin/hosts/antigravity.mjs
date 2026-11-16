@@ -23,6 +23,7 @@ import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils
 // opens the record, so text that merely quotes the tags is kept verbatim.
 const USER_REQUEST = /^<USER_REQUEST>\s*([\s\S]*)\s*<\/USER_REQUEST>/;
 const INJECTED = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/g;
+const IN_PROGRESS_STATUSES = new Set(["PENDING", "QUEUED", "WAITING", "RUNNING", "GENERATING"]);
 
 export function cleanAntigravityText(text) {
   return String(text || "").replace(INJECTED, "").trim();
@@ -74,13 +75,24 @@ export function buildAntigravityTurns(jsonl, afterStep = -1) {
     try { step = JSON.parse(line); } catch { break; }
     const index = Number(step.step_index);
     if (!(index > afterStep)) continue;
-    // A step still being written is read again by the next Stop.
-    if (step.status && step.status !== "DONE") break;
+    const isUser = step.type === "USER_INPUT" && step.source === "USER_EXPLICIT";
+    const isAssistant = step.type === "PLANNER_RESPONSE";
+    // Backgrounded commands (`GENERIC` with `RUNNING`) and failed tool steps
+    // stay non-DONE permanently and are never captured, so they must not stall
+    // the cursor.
+    if (!isUser && !isAssistant) {
+      lastStep = index;
+      continue;
+    }
+    // An in-flight turn step is read again by the next Stop; terminal failures
+    // (CANCELED, ERROR, INVALID, …) will never become DONE and are skipped.
+    if (IN_PROGRESS_STATUSES.has(step.status)) break;
     lastStep = index;
-    const turn = step.type === "USER_INPUT" && step.source === "USER_EXPLICIT"
+    if (step.status && step.status !== "DONE") continue;
+    const turn = isUser
       ? { role: "user", content: userRequestText(step.content) }
-      : step.type === "PLANNER_RESPONSE" ? { role: "assistant", content: cleanAntigravityText(step.content) } : null;
-    if (turn?.content) turns.push(turn);
+      : { role: "assistant", content: cleanAntigravityText(step.content) };
+    if (turn.content) turns.push(turn);
   }
   return { turns, lastStep };
 }
