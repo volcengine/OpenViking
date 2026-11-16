@@ -6,7 +6,7 @@ Set up your machine (local or a cloud VM) with the software, projects, and tools
 
 OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ (an official bot, or a personal account through OneBot), and email. The CLI command is `ov-superagent`.
 
-[Quick start](install.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
+[Quick start](install.md) · [Native Termux](docs/termux.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
 
 ## Why OpenViking SuperAgent
 
@@ -33,7 +33,9 @@ This installs the latest release. To pin a version, use `curl -fsSL https://ovre
 irm https://ovrelease.tos-cn-beijing.volces.com/superagent/install.ps1 | iex
 ```
 
-The package includes Node, PM2, chat CLIs, Pi, and Durable. On first installation, `ov-superagent setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `ov-superagent dsh model`.
+**Native Termux (Android/Bionic; source install):** published Linux artifacts require glibc and do not run in Termux. Follow [Native Termux](docs/termux.md) and run `node scripts/install-termux.mjs` from a source checkout.
+
+The published desktop packages include Node, PM2, chat CLIs, Pi, and Durable. On first installation, `ov-superagent setup` connects OV, selects a runtime and workspace, and authorizes your chat channels. You do not need to install lark-cli globally. For Codex or Claude Code, install and sign in to that CLI first. DeepSeek Harness is not bundled either: install `dsh` **0.2.x** (0.2.2-rc.1 or later) on Node 24.9+, then manage its model routes with `ov-superagent dsh model`.
 
 Once configured, send the bot a task in a direct chat:
 
@@ -63,7 +65,7 @@ The release-process guide is currently in Chinese.
 
 | Topic | Guide |
 |---|---|
-| Installation, model sign-in, first connection | [Installation](install.md) |
+| Installation, model sign-in, first connection | [Installation](install.md) · [Native Termux](docs/termux.md) |
 | Chat channels, email, attachments, and cards | [Feature reference](docs/usage-reference.md#chat-channels-and-email) |
 | QQ groups through a personal account (OneBot) | [OneBot Connector](docs/onebot-connector.md) |
 | Permissions, sign-in, upgrades, rollback, and development | [Configuration and operations](docs/installation-reference.md) |

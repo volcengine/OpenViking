@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import * as defaultPlatform from '../../daemon/src/platform/index.mjs';
@@ -10,12 +10,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { t } from './i18n.mjs';
+import { serviceDirectory, termuxAutostart } from './termux-autostart.mjs';
 
 // `ov-superagent autostart enable|disable`: start OpenViking SuperAgent at login/boot without sudo.
-// Linux: a systemd user unit; macOS: a LaunchAgent; Windows: a script in the
-// user's own Startup folder. All three run `ov-superagent start`, the same path as by
-// hand, with the PATH of the shell that enabled it so the agent CLIs (codex,
-// claude) are found under a minimal service environment.
+// Linux uses systemd, macOS launchd, Windows the Startup folder, and native
+// Termux runit. The desktop mechanisms run `ov-superagent start`; runit supervises
+// foreground PM2 directly. The enabling shell PATH is preserved so agent CLIs
+// (codex, claude) remain available under a minimal service environment.
 
 const execFile = promisify(execFileCallback);
 const LABEL = 'com.superagent.agent';
@@ -104,6 +105,10 @@ export function startupEntry(homeDir, pathValue = null) {
 }
 
 export function autostartEnabled({ env = process.env, homeDir = defaultPlatform.homeDir(env) || os.homedir(), platform = defaultPlatform } = {}) {
+  if (platform.loginService === 'runit') {
+    const directory = serviceDirectory(env);
+    return fs.existsSync(path.join(directory, 'run')) && !fs.existsSync(path.join(directory, 'down'));
+  }
   return capabilitiesFor(platform).autostart && fs.existsSync(targets(homeDir, platform, env).file);
 }
 
@@ -123,6 +128,7 @@ export async function autostartCommand([action, ...extra], {
     output.write(t('这台系统没有可用的开机自启方式\n', 'Autostart is not available on this system\n'));
     return 1;
   }
+  if (platform.loginService === 'runit') return termuxAutostart(action, { homeDir, env, execFileImpl, output });
   const { file } = targets(homeDir, platform, env);
   if (platform.loginService === 'startupFolder') {
     return action === 'disable'

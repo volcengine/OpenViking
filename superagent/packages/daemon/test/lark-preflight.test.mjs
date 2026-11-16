@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
@@ -56,7 +56,7 @@ it('reports the bot itself from bot info, and runs on without it', async () => {
       return { code: 0, stdout: 'lark-cli 1.0.94', stderr: '' };
     },
   }, quietLogger).preflight();
-  // What lark-cli 1.0.94 (the pinned version) prints for this call.
+  // Representative lark-cli 1.0.94 output for this call.
   const real = { code: 0, stderr: '', stdout: JSON.stringify({
     ok: true,
     identity: 'bot',

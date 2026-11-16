@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 # SPDX-License-Identifier: AGPL-3.0
 
 # OpenViking SuperAgent installer.
@@ -74,6 +74,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ -n "${TERMUX_VERSION:-}" ] || { [ -n "${PREFIX:-}" ] && [ -x "${PREFIX:-}/bin/termux-info" ]; }; then
+  die 'On Termux use node scripts/install-termux.mjs from a source checkout; Linux releases require glibc.'
+fi
 case "$(uname -s)" in
   Linux) os=linux ;;
   Darwin) os=darwin ;;

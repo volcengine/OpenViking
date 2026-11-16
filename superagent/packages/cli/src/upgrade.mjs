@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import { capabilities } from '../../daemon/src/capabilities.mjs';
@@ -46,7 +46,7 @@ function requestUpgrade(socketPath, target) {
 
 export async function upgradeCommand(args, { stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
   if (!capabilities.updater) {
-    stderr.write('Windows source installations do not support automatic release upgrades. Stop OpenViking SuperAgent and install a new checkout manually.\n');
+    stderr.write('This source installation does not support automatic release upgrades. Stop OpenViking SuperAgent and install a new checkout manually.\n');
     return 1;
   }
   const [target, ...extra] = args;
