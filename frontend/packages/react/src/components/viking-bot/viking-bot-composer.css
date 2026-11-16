@@ -135,6 +135,9 @@
 .ov-viking-bot__submit {
   flex-shrink: 0;
 }
+.ov-viking-bot__submit.ov-button {
+  border-radius: 8px;
+}
 .ov-viking-bot__composer .ov-viking-bot__attach.ov-button {
   --ov-ui-button-height: 32px;
   border-radius: 6px;

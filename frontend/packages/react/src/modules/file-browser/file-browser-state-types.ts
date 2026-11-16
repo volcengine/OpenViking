@@ -128,4 +128,5 @@ export interface UseFileBrowserOptions {
   currentUri: string | null;
   requestOptions?: OvRequestOptions;
   onUriChange: (uri: string | null) => void;
+  onSelect?: (row: FileTreeEntryRow) => void;
 }

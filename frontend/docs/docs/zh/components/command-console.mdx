@@ -219,19 +219,20 @@ import '@openviking/react/components/command-console/style.css';
 
 ### CommandConsoleCommandDefinition
 
-| 参数        | 说明                                                                                             | 类型                                                                   | 默认值           |
-| ----------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ---------------- |
-| name        | 命令名，目录内唯一，可由多个词组成，如 `session get`；在候选列表和快捷入口里显示，也用于匹配命令 | `string`                                                               | 必填             |
-| inputText   | 接受补全后填入输入区的命令前缀，记录里也按它显示；例如 `name` 为 `find` 时可设为 `ov find`       | `string`                                                               | 同 `name`        |
-| aliases     | 别名，与 `name` 一样用于 `/` 输入的补全和命令匹配                                                | `readonly string[]`                                                    | -                |
-| group       | 所属分组的 `key`，对应 `commandGroups`                                                           | `string`                                                               | -                |
-| description | 命令说明，显示在参数帮助顶部                                                                     | `string`                                                               | 必填             |
-| usage       | 用法，显示在参数表上方                                                                           | `string`                                                               | 必填             |
-| summary     | 简短说明，候选列表和快捷入口优先显示它                                                           | `string`                                                               | 同 `description` |
-| params      | 参数说明，显示在参数表里                                                                         | `readonly CommandConsoleCommandParam[]`                                | -                |
-| options     | 选项说明，显示在参数表里                                                                         | `readonly CommandConsoleCommandOption[]`                               | -                |
-| examples    | 示例命令，显示在参数帮助里，点击后填入输入区，不提交                                             | `readonly (string \| CommandConsoleCommandExample)[]`                  | -                |
-| skeleton    | 命令执行中显示的加载骨架，分别对应检索、资源预览、资源树、状态、写入结果和通用形态               | `'search' \| 'resource' \| 'tree' \| 'status' \| 'write' \| 'generic'` | `'generic'`      |
+| 参数        | 说明                                                                                             | 类型                                                                                                               | 默认值           |
+| ----------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ---------------- |
+| name        | 命令名，目录内唯一，可由多个词组成，如 `session get`；在候选列表和快捷入口里显示，也用于匹配命令 | `string`                                                                                                           | 必填             |
+| inputText   | 接受补全后填入输入区的命令前缀，记录里也按它显示；例如 `name` 为 `find` 时可设为 `ov find`       | `string`                                                                                                           | 同 `name`        |
+| aliases     | 别名，与 `name` 一样用于 `/` 输入的补全和命令匹配                                                | `readonly string[]`                                                                                                | -                |
+| group       | 所属分组的 `key`，对应 `commandGroups`                                                           | `string`                                                                                                           | -                |
+| description | 命令说明，显示在参数帮助顶部                                                                     | `string`                                                                                                           | 必填             |
+| usage       | 用法，显示在参数表上方                                                                           | `string`                                                                                                           | 必填             |
+| summary     | 简短说明，候选列表和快捷入口优先显示它                                                           | `string`                                                                                                           | 同 `description` |
+| params      | 参数说明，显示在参数表里                                                                         | `readonly CommandConsoleCommandParam[]`                                                                            | -                |
+| options     | 选项说明，显示在参数表里                                                                         | `readonly CommandConsoleCommandOption[]`                                                                           | -                |
+| examples    | 示例命令，显示在参数帮助里，点击后填入输入区，不提交                                             | `readonly (string \| CommandConsoleCommandExample)[]`                                                              | -                |
+| quickStart  | 参数帮助中可代替示例的有序步骤，可附带文档链接。点击步骤里的命令会填入输入区                     | `{ documentation?: { label: string; href: string }; steps: readonly { description: string; command?: string }[] }` | -                |
+| skeleton    | 命令执行中显示的加载骨架，分别对应检索、资源预览、资源树、状态、写入结果和通用形态               | `'search' \| 'resource' \| 'tree' \| 'status' \| 'write' \| 'generic'`                                             | `'generic'`      |
 
 ### CommandConsoleCommandParam
 

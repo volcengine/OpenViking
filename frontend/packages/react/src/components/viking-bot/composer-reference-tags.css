@@ -65,8 +65,8 @@
   text-align: start;
   cursor: pointer;
 }
-.ov-viking-bot__reference-open:hover {
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+.ov-viking-bot__reference-open:is(:hover, :focus-visible) {
+  color: var(--ov-ui-color-primary, var(--ov-ui-conversation-link-default));
 }
 .ov-viking-bot__reference-remove {
   display: inline-flex;

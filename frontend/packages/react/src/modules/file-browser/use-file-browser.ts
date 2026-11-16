@@ -41,6 +41,7 @@ export function useFileBrowser({
   currentUri,
   requestOptions,
   onUriChange,
+  onSelect,
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
   const text = resolveLabels(accessLabels, locale);
@@ -120,6 +121,8 @@ export function useFileBrowser({
   const { open: openTree, toggleExpand, cancelReveal } = tree;
   const notifyUriChange = useRef(onUriChange);
   notifyUriChange.current = onUriChange;
+  const notifySelect = useRef(onSelect);
+  notifySelect.current = onSelect;
   const openParent = useMemo(
     () => async (uri: string) => {
       cancelReveal();
@@ -217,13 +220,15 @@ export function useFileBrowser({
       // and reporting only after it returns would let this late callback overwrite a
       // resource the user picked in the meantime. The selection belongs to the moment
       // of the click, not to a listing that arrives afterwards.
-      select: async (row: FileTreeEntryRow) => {
-        if (row.disabled || row.selectable === false) return;
+      select: (row: FileTreeEntryRow) => {
+        if (row.disabled || row.selectable === false) return Promise.resolve();
         cancelReveal();
         closeDashboard();
         setPendingUri(row.uri);
         notifyUriChange.current(row.uri);
-        if (row.type === 'directory') await openTree(row.uri);
+        notifySelect.current?.(row);
+        if (row.type === 'directory') void openTree(row.uri);
+        return Promise.resolve();
       },
       toggleExpand,
       ...treeActions,

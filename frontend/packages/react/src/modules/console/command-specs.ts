@@ -3,17 +3,18 @@ import { OV_PATH_BUILDERS, OV_PATHS } from '../../client/paths.js';
 import type { OvRequestSpec } from '../../client/types.js';
 import type { CommandConsoleSkeletonKind } from '../../components/command-console/index.js';
 import { CORE_COMMAND_SPECS } from './core-command-specs.js';
-import type { Argument } from './command-parser.js';
+import type { Argument, ArgumentValues } from './command-parser.js';
 
-type Values = Record<string, string | number | boolean>;
 export interface CommandSpec {
   name: keyof typeof enUS.commands;
   positional?: readonly Argument[];
   flags?: readonly Argument[];
+  /** Parameter help may prefer the current workflow over legacy signatures. */
+  preferredFlags?: readonly Argument[];
   skeleton?: CommandConsoleSkeletonKind;
-  request?: (values: Values) => OvRequestSpec;
+  request?: (values: ArgumentValues) => OvRequestSpec;
   execute?: (
-    values: Values,
+    values: ArgumentValues,
     request: (spec: OvRequestSpec) => Promise<Record<string, unknown>>,
   ) => Promise<unknown>;
 }

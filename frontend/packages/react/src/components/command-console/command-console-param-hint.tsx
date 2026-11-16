@@ -1,6 +1,7 @@
 import { getCommandConsoleCommandInputText } from './command-input.js';
 import type { CommandConsoleCommandDefinition } from './command-catalog.js';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
+import { getCommandConsoleSafeHref } from './command-console-text.js';
 
 export function CommandConsoleParamHint({
   command,
@@ -11,6 +12,8 @@ export function CommandConsoleParamHint({
   labels: ResolvedCommandConsoleLabels;
   onPick: (value: string) => void;
 }) {
+  const quickStart = command.quickStart;
+  const guideHref = getCommandConsoleSafeHref(quickStart?.documentation?.href);
   const examples = command.examples?.map((example) =>
     typeof example === 'string' ? { value: example, label: example } : example,
   );
@@ -38,7 +41,40 @@ export function CommandConsoleParamHint({
           {command.description}
         </span>
       </div>
-      {examples?.length ? (
+      {quickStart?.steps.length ? (
+        <div className="ov-command-console__hint-group">
+          <div className="ov-command-console__hint-label">
+            {labels.examples}
+          </div>
+          {guideHref && quickStart.documentation ? (
+            <a
+              className="ov-command-console__hint-guide-link"
+              href={guideHref}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {quickStart.documentation.label}
+            </a>
+          ) : null}
+          <ol className="ov-command-console__hint-steps">
+            {quickStart.steps.map(({ description, command: example }) => (
+              <li key={description} className="ov-command-console__hint-desc">
+                {description}
+                {example ? (
+                  <button
+                    type="button"
+                    className="ov-command-console__hint-example"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => onPick(example)}
+                  >
+                    {example}
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : examples?.length ? (
         <div className="ov-command-console__hint-group">
           <div className="ov-command-console__hint-label">
             {labels.examples}

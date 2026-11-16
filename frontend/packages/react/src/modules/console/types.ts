@@ -26,6 +26,7 @@ export type ConsoleMode = 'conversation' | 'command';
 export interface ConsoleCommandGuide {
   description: string;
   examples: readonly [string, ...string[]];
+  quickStart?: CommandConsoleCommandDefinition['quickStart'];
 }
 
 export interface ConsoleSlots {
