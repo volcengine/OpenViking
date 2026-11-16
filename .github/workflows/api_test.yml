@@ -42,6 +42,18 @@ jobs:
       api_changed: ${{ steps.plan.outputs.api_changed }}
       cuvs_changed: ${{ steps.plan.outputs.cuvs_changed }}
     steps:
+      - name: Restore self-hosted workspace ownership before checkout
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Container builds can leave root-owned files when interrupted.
+          # A local action cannot repair them until checkout has succeeded.
+          test -d "$GITHUB_WORKSPACE"
+          test ! -L "$GITHUB_WORKSPACE"
+          docker run --rm --network none \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
+            ubuntu:24.04 chown -hR "$(id -u):$(id -g)" /workspace
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
