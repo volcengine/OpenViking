@@ -93,8 +93,14 @@ async def run_publisher(config, stop: asyncio.Event, startup_status: Path) -> No
 
 def main(argv: list[str] | None = None) -> int:
     startup_status: Path | None = None
+    from openviking_cli.utils.logger import configure_server_logging
+
+    configure_server_logging(bootstrap=True)
     try:
         args = parse_args(argv)
+        from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
+
+        os.environ[OPENVIKING_CONFIG_ENV] = str(args.config)
         current_startup_status: Path = args.startup_status
         startup_status = current_startup_status
         try:
@@ -103,8 +109,11 @@ def main(argv: list[str] | None = None) -> int:
             # Validation errors are already safely formatted. Avoid emitting
             # chained validation tracebacks containing raw configuration input.
             write_startup_status(current_startup_status, "failed", str(exc))
-            logging.error("Expiry publisher configuration failed: %s", exc)
+            logging.critical(
+                "expiry publisher configuration failed error_type=%s", type(exc).__name__
+            )
             return 1
+        configure_server_logging()
         write_startup_status(current_startup_status, "starting")
 
         async def runner() -> None:
@@ -122,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
                 write_startup_status(startup_status, "failed", str(exc))
             except Exception:
                 pass
-        logging.exception("Expiry publisher failed")
+        logging.critical("expiry publisher failed error_type=%s", type(exc).__name__)
         return 1
 
 

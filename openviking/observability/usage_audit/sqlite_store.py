@@ -181,6 +181,33 @@ class SQLiteUsageAuditStore:
             self._write_retrieval_rows(conn, projection.retrieval_rows, updated_at)
             self._write_context_rows(conn, projection.context_rows, updated_at)
             self._write_audit_rows(conn, projection.audit_rows)
+            conn.executemany(
+                "INSERT INTO security_audit (event, account_id, actor_id, created_at, record_json) VALUES (?, ?, ?, ?, ?)",
+                projection.security_audit_rows,
+            )
+            for account_id in {row[1] for row in projection.security_audit_rows}:
+                if self._audit_retention_days > 0:
+                    latest = conn.execute(
+                        "SELECT MAX(created_at) FROM security_audit WHERE account_id IS ?",
+                        (account_id,),
+                    ).fetchone()[0]
+                    cutoff = (
+                        (
+                            datetime.fromisoformat(latest.replace("Z", "+00:00"))
+                            - timedelta(days=self._audit_retention_days)
+                        )
+                        .isoformat(timespec="milliseconds")
+                        .replace("+00:00", "Z")
+                    )
+                    conn.execute(
+                        "DELETE FROM security_audit WHERE account_id IS ? AND created_at < ?",
+                        (account_id, cutoff),
+                    )
+                if self._audit_retention_per_account > 0:
+                    conn.execute(
+                        "DELETE FROM security_audit WHERE account_id IS ? AND id NOT IN (SELECT id FROM security_audit WHERE account_id IS ? ORDER BY created_at DESC, id DESC LIMIT ?)",
+                        (account_id, account_id, self._audit_retention_per_account),
+                    )
             self._trim_usage_rows(conn, self._usage_max_dates(projection))
             self._trim_audit_rows(conn, projection.touched_audit_accounts)
             conn.execute("COMMIT")
@@ -387,9 +414,7 @@ class SQLiteUsageAuditStore:
         assert self._conn is not None
         day = date.fromisoformat(user_date)
         utc_start, utc_end = _user_day_window_utc(day, tz)
-        rows = self._fetch_hourly_token_rows(
-            account_id, utc_start, utc_end, user_id=user_id
-        )
+        rows = self._fetch_hourly_token_rows(account_id, utc_start, utc_end, user_id=user_id)
         result = {"vlm_input": 0, "vlm_output": 0, "embedding_input": 0}
         for source, token_type, _, _, total in rows:
             key = f"{source}_{token_type}"
@@ -803,6 +828,24 @@ class SQLiteUsageAuditStore:
         if not clauses:
             return "", []
         return "(" + " OR ".join(clauses) + ")", params
+
+    async def query_security_audit(
+        self, *, account_id: str | None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Read one explicit account scope, or the null-account ROOT scope."""
+        async with self._lock:
+
+            def read():
+                assert self._conn is not None
+                return [
+                    json.loads(row["record_json"])
+                    for row in self._conn.execute(
+                        "SELECT record_json FROM security_audit WHERE account_id IS ? ORDER BY created_at DESC, id DESC LIMIT ?",
+                        (account_id, max(1, min(limit, 1000))),
+                    )
+                ]
+
+            return await asyncio.to_thread(read)
 
 
 def _parse_ymd(date_str: str) -> tuple[int, int, int]:

@@ -88,3 +88,31 @@ def test_metric_datasource_publishes_to_shared_bus_without_metrics_init():
     )
     assert event["prompt_tokens"] == 3 and event["cost_bearer"] == "customer"
     assert "api_key" not in event and "prompt" not in event
+
+
+def test_invalid_audit_record_reports_failure_without_sensitive_text(caplog):
+    import logging
+
+    from openviking.observability.events import log_audit
+
+    audit_logger = logging.getLogger("openviking.audit")
+    audit_logger.addHandler(caplog.handler)
+    audit_logger.setLevel(logging.DEBUG)
+    try:
+        log_audit(
+            event="private-body /private/path",
+            result="failure",
+            actor_id=None,
+            actor_role=None,
+            actor_type=None,
+            account_id=None,
+            target_type="user",
+            target_id="user-1",
+            error_code=None,
+        )
+    finally:
+        audit_logger.removeHandler(caplog.handler)
+    records = [record for record in caplog.records if record.name == "openviking.audit"]
+    assert len(records) == 1 and records[0].levelno == logging.ERROR
+    assert records[0].error_code == "AUDIT_INVALID_RECORD"
+    assert "private-body" not in caplog.text and "/private/path" not in caplog.text

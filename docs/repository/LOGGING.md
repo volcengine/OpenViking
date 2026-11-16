@@ -153,10 +153,10 @@ Audit needs **two sinks**, not one:
 
 Collection of log copies must check both `logger=openviking.audit` and an explicit audit `event` field, and validate the required fields. Do not route every `WARNING` in the process into audit; see 8.10.6 for third-party warnings.
 
-All call sites use the proposed `log_audit()` helper. The examples below describe its target interface, **not an API currently available for import**. Its responsibilities are:
+Use `log_audit()` from `openviking.observability.events`. It validates one closed schema, emits a dedicated log copy, and publishes the same record to the Usage/Audit worker and SQLite `security_audit` table. Queue acceptance does not acknowledge durable storage; unavailable subscribers, queue drops, and persistence failures produce `ERROR`. Business call sites are being integrated in subsequent module batches. Its responsibilities are:
 
 - Callers explicitly supply `event`, `result`, actor, account, target, and `error_code`; do not infer identity or targets from arbitrary request parameters.
-- The helper captures event time `ts`, derives `action`, and obtains `request_id`, `trace_id`, `source_ip`, and `user_agent` from execution context. Without context, retain those fields with `null` values.
+- The helper captures event time `ts`, derives `action`, and obtains `request_id` and `trace_id` from execution context. Callers may supply a single `source_ip` from trusted transport metadata and an allowlisted product/version `user_agent`; the helper validates them again. Missing or unsafe values remain `null`.
 - Validate and transform fields under 4.2, then send **the same complete record** to both destinations. The log copy uses the fixed message `"audit event"` with all business fields in `extra`, rendered by the formatter in 8.10. Collectors must not parse message text to discover event names or identities.
 
 For example, after an ACL grant completes:
@@ -389,13 +389,13 @@ Exception strings often embed the offending value (`InvalidArgumentError("bad ur
 
 | Path | Existing protection | Requirement |
 | --- | --- | --- |
-| Log file/stdout | No central entry point | Follow this section; add `log_safety.py` |
+| Log file/stdout | Common formatter and `log_safety.py` field allowlist | Call sites still own safe message content; a formatter cannot sanitize arbitrary text |
 | OTel trace attributes | `to_log_fields()` already excludes `url_path` and `url_query` | New span attributes obey this section too; keep `url.path` only when needed |
 | Audit storage | Partial protection from `sanitize_public_http_error()`, `sanitize_error()`, `SENSITIVE_TASK_KEYS` | Still validate/transform fields under this section; do not assume existing helpers cover paths, peers, or content |
 
 ### 4.10 Suggested implementation and checks
 
-- Add `openviking/observability/log_safety.py`: `short_hash()`, `safe_uri_for_log()`, `safe_path_for_log()`, `safe_log_fields()`. Define scenario-specific extraction of allowed fields for exception summaries rather than promising to sanitize arbitrary exception text with a general regex.
+- Use `openviking/observability/log_safety.py`: `short_hash()`, `safe_uri_for_log()`, `safe_path_for_log()`, `safe_log_fields()`. Define scenario-specific extraction of allowed fields for exception summaries rather than promising to sanitize arbitrary exception text with a general regex.
 - `repr=False` is a fallback, not a line of defence.
 - CI: AST-scan logger calls for forbidden identifiers (`peer_id`, `api_key`, `token`, `prompt`, `content`, `messages`, absolute-path variables); warn first, then block.
 - Tests: unit-test the redaction helpers; add one failure case each for audit and `log_payloads`.
@@ -546,7 +546,9 @@ Representative anti-patterns:
 
 The problem is not merely "`WARNING` is used in the wrong places" — **the audit capability itself is missing**. That is the highest-priority item.
 
-### 7.4 Implementation inconsistencies
+### 7.4 Implementation baseline before module rollout
+
+The inventory below records the baseline before PR #7769 and the runtime foundation batch. The foundation now uses `INFO` by default, migrates tracer to stdlib logging, unifies Python/root and Rust/C++ output, and disables duplicate Uvicorn access logs in standalone servers. It also provides the audit helper and persistence path; business audit integration and remaining call-site cleanup continue in later batches.
 
 1. **The default level suppresses `INFO`**: `LogConfig.level` defaults to `WARNING` (`openviking_cli/utils/config/log_config.py:12`) while the fallback in `_load_log_config()` is `INFO` (`openviking_cli/utils/logger.py:684`). Once fallbacks and retries move to `INFO`, default deployments will not see them at all.
 2. **Non-lazy formatting**: enabling ruff's `G` rules reports 480 issues — 449 `G004` (f-string logging), 27 `G201` (`.error(..., exc_info=True)` instead of `.exception()`), and 4 `G001`. `pyproject.toml` currently selects only `E/W/F/I/C/B`, so CI does not catch them.
@@ -684,7 +686,7 @@ Text output has the fixed order `ts level logger pid request_id trace_id message
 - Nullable fields use `-` in text and `null` in structured events or future JSON output. This includes unavailable `request_id` and `trace_id`; do not invent request identifiers for startup or background events.
 - Quote and escape `message` and appended string values using JSON string rules; preserve numeric and boolean types. Newlines, carriage returns, and control characters must not break record boundaries. All values still require the security handling in section 4 before encoding.
 - Inject correlation fields once in the common adapter, without duplicating them inside the message. Explicitly register source files and line numbers as optional fields under 4.2 if needed; paths still obey 4.7.
-- Custom `log.format` values must retain these required fields and the time and level conventions. Report unsupported cross-runtime conversions explicitly rather than silently reverting to component defaults. A future JSON formatter must use the same field names and semantics, not a separate schema.
+- The current adapters accept only the common format and normalize the former built-in format on load. Other custom formats fail validation. Any future custom `log.format` support must retain these required fields and the time and level conventions. Report unsupported cross-runtime conversions explicitly rather than silently reverting to component defaults. A future JSON formatter must use the same field names and semantics, not a separate schema.
 
 #### 8.10.4 Initialization and output ownership
 
@@ -725,6 +727,21 @@ Assert fields, formats, and record counts rather than complete business messages
 ---
 
 ## 9. Rollout
+
+Land one module batch before starting the next. Refresh from upstream before each batch to limit conflicts.
+
+| Batch | Scope | Status |
+| --- | --- | --- |
+| 1 | Model logs and safe payload summaries | Merged in #7769 |
+| 2 | Logging initialization, observability, audit foundation, Python/Rust/C++ output | Implemented; business audit call sites remain for later batches |
+| 3 | Authentication, accounts, ACL, and ROOT invocation audit | After batch 2 merges |
+| 4 | Business service audit | After batch 3 merges |
+| 5 | Parsing, ingestion, and connectors | After batch 4 merges |
+| 6 | Storage and queues | After batch 5 merges |
+| 7 | Retrieval, core, and utilities | After batch 6 merges |
+| 8 | Sessions, memory, compilation, CLI, and Gateway | After batch 7 merges |
+
+The priority inventory below is the original rollout backlog. Apply it within the module batches above.
 
 | Priority | Item | Scope | Note |
 | --- | --- | --- | --- |

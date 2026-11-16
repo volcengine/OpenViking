@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,6 +43,7 @@ class UsageAuditProjection:
     context_rows: dict[tuple, int] = field(default_factory=dict)
     audit_rows: list[tuple] = field(default_factory=list)
     touched_audit_accounts: set[str] = field(default_factory=set)
+    security_audit_rows: list[tuple] = field(default_factory=list)
 
 
 def normalize_identity(value: Any, *, unknown: bool = False) -> str:
@@ -82,7 +84,22 @@ def project_events(
     audit_rows: list[tuple] = []
     touched_audit_accounts: set[str] = set()
 
+    security_audit_rows = []
     for event in events:
+        if event.event_name.startswith("audit."):
+            from openviking.observability.log_safety import validate_audit_record
+
+            payload = validate_audit_record(event.payload)
+            security_audit_rows.append(
+                (
+                    payload["event"],
+                    payload["account_id"],
+                    payload["actor_id"],
+                    payload["ts"],
+                    json.dumps(payload, ensure_ascii=False),
+                )
+            )
+            continue
         account_id = normalize_identity(event.account_id, unknown=True)
         user_id = normalize_identity(event.user_id)
         utc_dt = _utc_dt(event)
@@ -154,6 +171,7 @@ def project_events(
         context_rows=dict(context_rows),
         audit_rows=audit_rows,
         touched_audit_accounts=touched_audit_accounts,
+        security_audit_rows=security_audit_rows,
     )
 
 

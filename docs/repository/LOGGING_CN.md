@@ -153,10 +153,10 @@ DEBUG
 
 日志副本的采集条件必须同时检查 `logger=openviking.audit` 和明确的审计 `event` 字段，并校验必填字段。不能把整个进程的 `WARNING` 都送入审计管道；第三方告警的边界见 8.10.6。
 
-所有调用点统一使用待实现的 `log_audit()`。以下代码是目标接口示例，**不是当前可导入的 API**。helper 的职责固定为：
+统一使用 `openviking.observability.events` 中的 `log_audit()`。它校验封闭 schema，输出专用日志副本，并将同一记录发布到 Usage/Audit worker 和 SQLite `security_audit` 表。入队不代表持久化成功；订阅者不可用、队列丢弃和持久化失败都会输出 `ERROR`。业务调用点将在后续模块批次接入。helper 的职责固定为：
 
 - 调用方显式传入 `event`、`result`、操作者、账号、目标和 `error_code`；不从任意请求参数猜测身份或目标。
-- helper 捕获事件时间 `ts`、生成 `action`，从执行上下文提取 `request_id`、`trace_id`、`source_ip`、`user_agent`；没有上下文时保留上述字段并填 `null`。
+- helper 捕获事件时间 `ts`、生成 `action`，从执行上下文提取 `request_id`、`trace_id`；调用方可从可信传输信息传入单一 `source_ip` 及白名单产品/版本形式的 `user_agent`，helper 再次校验。缺失或不安全的值填 `null`。
 - 按 4.2 校验、转换字段后，将**同一份完整记录**送往两个出口。日志副本使用固定消息 `"audit event"`，业务字段全部放在 `extra`，由 8.10 的 formatter 输出；采集端不需要解析消息正文来寻找事件名或身份。
 
 例如 ACL 授权完成后：
@@ -391,13 +391,13 @@ logger.info("rebuild failed user=%s peer=%s", user_id, short_hash(peer_id))
 
 | 出口 | 现有防护 | 要求 |
 | --- | --- | --- |
-| 日志文件/stdout | 无统一入口 | 按本节执行；建议新增 `log_safety.py` |
+| 日志文件/stdout | 公共 formatter 与 `log_safety.py` 字段白名单 | 调用点仍负责消息内容安全；formatter 无法脱敏任意文本 |
 | OTel trace 属性 | `to_log_fields()` 已排除 `url_path`、`url_query` | 新增 span 属性同样受本节约束；`url.path` 只在确有需要时保留 |
 | 审计存储 | `sanitize_public_http_error()`、`sanitize_error()`、`SENSITIVE_TASK_KEYS` 的局部防护 | 仍须按本节校验/转换字段；不能假定现有函数覆盖路径、peer 与正文 |
 
 ### 4.10 建议的实现与检查
 
-- 新增 `openviking/observability/log_safety.py`：`short_hash()`、`safe_uri_for_log()`、`safe_path_for_log()`、`safe_log_fields()`；为异常摘要定义按场景提取允许字段的接口，不承诺用通用正则清洗任意异常文本。
+- 使用 `openviking/observability/log_safety.py`：`short_hash()`、`safe_uri_for_log()`、`safe_path_for_log()`、`safe_log_fields()`；为异常摘要定义按场景提取允许字段的接口，不承诺用通用正则清洗任意异常文本。
 - `repr=False` 只作兜底，不能当防线。
 - CI：用 AST 扫描 logger 调用，命中禁用标识符（`peer_id`、`api_key`、`token`、`prompt`、`content`、`messages`、绝对路径变量）先告警，稳定后阻断。
 - 测试：脱敏函数补单测；审计路径与 `log_payloads` 路径各补一条失败用例。
@@ -548,7 +548,9 @@ if logger.isEnabledFor(logging.DEBUG):
 
 结论：不是「`WARNING` 用错了地方」这么简单，而是**审计能力本身缺失**。这是优先级最高的一项。
 
-### 7.4 实现层面的不一致
+### 7.4 分模块改造前的实现基线
+
+以下清单保留 PR #7769 和日志基础批次之前的基线。基础批次已将默认级别改为 `INFO`，将 tracer 迁到 stdlib logging，统一 Python/root 与 Rust/C++ 输出，并关闭独立服务器重复的 Uvicorn 访问日志；同时提供审计辅助函数和持久化链路。业务审计接入和剩余调用点整改继续按后续批次推进。
 
 1. **默认级别压制了 `INFO`**：`LogConfig.level` 默认 `WARNING`（`openviking_cli/utils/config/log_config.py:12`），而 `_load_log_config()` 的兜底值是 `INFO`（`openviking_cli/utils/logger.py:684`）。按新规范把兜底/重试放进 `INFO` 后，默认部署将完全看不到这些信号。
 2. **惰性格式化违规**：启用 ruff 的 `G` 规则可扫出 480 处，其中 `G004`（f-string 日志）449 处、`G201`（`.error(..., exc_info=True)` 应为 `.exception()`）27 处、`G001` 4 处。当前 `pyproject.toml` 只启用了 `E/W/F/I/C/B`，这些问题不会被 CI 拦住。
@@ -686,7 +688,7 @@ logger.info(
 - 可空字段在文本中写 `-`，结构化事件和未来 JSON 输出使用 `null`；`request_id`、`trace_id` 不可用时也遵守这一规则。后台和启动日志不能编造请求标识。
 - `message` 及追加字段中的字符串值按 JSON 字符串规则引用和转义；数字、布尔值保持类型。换行、回车和控制字符不能破坏记录边界，所有值仍须先经过第 4 节的安全处理。
 - 关联字段只由统一适配层注入，不再向消息正文重复拼接。代码文件与行号如需输出，按 4.2 显式登记为可选字段，路径仍受 4.7 约束。
-- 自定义 `log.format` 也必须保留这些必填字段与时间、级别约定；不支持的跨运行时转换应明确报错，不能静默落回各组件默认格式。未来 JSON formatter 使用同样的字段名和语义，不另起一套 schema。
+- 当前适配器只接受公共格式，并在加载时归一旧内建格式；其他自定义格式校验失败。未来支持的自定义 `log.format` 必须保留必需字段及时间、级别约定；不支持的跨运行时转换应明确报错，不能静默退回组件默认值。未来 JSON formatter 使用相同字段和语义。
 
 #### 8.10.4 初始化与输出归属
 
@@ -727,6 +729,21 @@ logger.info(
 ---
 
 ## 9. 落地路线
+
+每批合入后再开始下一批，开始前同步上游，减少文件重叠和冲突。
+
+| 批次 | 范围 | 状态 |
+| --- | --- | --- |
+| 1 | 模型日志及安全 payload 摘要 | 已合入 #7769 |
+| 2 | 日志初始化、观测、审计基础、Python/Rust/C++ 输出 | 已实现；业务审计调用点留待后续批次 |
+| 3 | 认证、账号、ACL、ROOT 调用审计 | 第二批合入后 |
+| 4 | 业务服务审计 | 第三批合入后 |
+| 5 | 解析、导入、连接器 | 第四批合入后 |
+| 6 | 存储与队列 | 第五批合入后 |
+| 7 | 检索、核心与工具 | 第六批合入后 |
+| 8 | 会话、记忆、编译、CLI、Gateway | 第七批合入后 |
+
+以下优先级清单保留原始整改项，按上述模块批次逐项落实。
 
 | 优先级 | 事项 | 影响面 | 说明 |
 | --- | --- | --- | --- |

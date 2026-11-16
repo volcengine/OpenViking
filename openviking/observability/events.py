@@ -45,6 +45,7 @@ class ObservabilityEventBus:
     def __init__(self) -> None:
         self._subscribers: dict[str, ObservabilitySubscriber] = {}
         self._lock = threading.RLock()
+        self._delivery_failure_reported = False
 
     def register(self, name: str, subscriber: ObservabilitySubscriber) -> None:
         """Register or replace one named subscriber."""
@@ -58,22 +59,33 @@ class ObservabilityEventBus:
         with self._lock:
             self._subscribers.pop(key, None)
 
-    def publish(self, event: ObservabilityEvent) -> None:
+    def has_subscriber(self, name: str) -> bool:
+        with self._lock:
+            return name in self._subscribers
+
+    def publish(self, event: ObservabilityEvent) -> tuple[str, ...]:
         """Deliver an event to every subscriber without raising to callers."""
         with self._lock:
             subscribers = list(self._subscribers.items())
 
+        failed = []
         for name, subscriber in subscribers:
             try:
                 subscriber(event)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "observability subscriber %s failed for event %s: %s",
-                    name,
-                    event.event_name,
-                    exc,
-                    exc_info=logger.isEnabledFor(logging.DEBUG),
-                )
+            except Exception:  # noqa: BLE001
+                failed.append(name)
+        if failed and not event.event_name.startswith("audit."):
+            with self._lock:
+                level = logging.INFO if self._delivery_failure_reported else logging.ERROR
+                self._delivery_failure_reported = True
+            logger.log(
+                level,
+                "observability delivery incomplete total=%d failed=%d degraded=true",
+                len(subscribers),
+                len(failed),
+                extra={"total": len(subscribers), "failed": len(failed), "degraded": True},
+            )
+        return tuple(failed)
 
     def clear(self) -> None:
         """Remove all subscribers. Intended for tests and process shutdown."""
@@ -149,11 +161,10 @@ def try_publish_event(event_name: str, payload: dict[str, Any] | None = None) ->
     try:
         _GLOBAL_EVENT_BUS.publish(build_event(event_name, payload))
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "observability event publish failed for %s: %s",
-            event_name,
-            exc,
-            exc_info=logger.isEnabledFor(logging.DEBUG),
+        logger.info(
+            "observability publish unavailable error_type=%s degraded=true",
+            type(exc).__name__,
+            extra={"degraded": True},
         )
 
 
@@ -172,3 +183,81 @@ def make_payload_subscriber(
         handler(event.event_name, payload)
 
     return _subscriber
+
+
+def log_audit(
+    *,
+    event: str,
+    result: str,
+    actor_id: str | None,
+    actor_role: str | None,
+    actor_type: str | None,
+    account_id: str | None,
+    target_type: str,
+    target_id: str | None,
+    error_code: str | None,
+    **http_fields: Any,
+) -> None:
+    """Emit a common WARNING copy and an event whose persistence failures are reported.
+
+    This does not acknowledge durable storage: the usage/audit worker reports
+    asynchronous enqueue and storage failures at their actual boundary.
+    """
+    from openviking.observability.log_safety import validate_audit_record
+    from openviking_cli.utils.logger import _get_log_context, get_logger
+
+    audit_logger = get_logger("openviking.audit")
+    timestamp = datetime.now(timezone.utc)
+    context = _get_log_context()
+    try:
+        payload = validate_audit_record(
+            {
+                **http_fields,
+                "ts": timestamp.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                "event": event,
+                "action": event.rsplit(".", 1)[-1],
+                "result": result,
+                "actor_id": actor_id,
+                "actor_role": actor_role,
+                "actor_type": actor_type,
+                "account_id": account_id,
+                "target_type": target_type,
+                "target_id": target_id,
+                "request_id": context.get("request_id") or None,
+                "trace_id": context.get("trace_id") or None,
+                "source_ip": http_fields.get("source_ip"),
+                "user_agent": http_fields.get("user_agent"),
+                "error_code": error_code,
+            }
+        )
+    except (ValueError, TypeError) as exc:
+        audit_logger.error(
+            "audit record rejected error_type=%s error_code=AUDIT_INVALID_RECORD",
+            type(exc).__name__,
+            extra={"error_code": "AUDIT_INVALID_RECORD"},
+        )
+        return
+    record = audit_logger.makeRecord(
+        audit_logger.name, logging.WARNING, __file__, 0, "audit event", (), None, extra=payload
+    )
+    record.created = timestamp.timestamp()
+    audit_logger.handle(record)
+    envelope = ObservabilityEvent(
+        event_name=event,
+        payload=payload,
+        timestamp=timestamp,
+        request_id=payload["request_id"],
+        account_id=account_id,
+        user_id=actor_id,
+    )
+    if not _GLOBAL_EVENT_BUS.has_subscriber("usage_audit"):
+        audit_logger.error(
+            "audit persistence unavailable error_code=AUDIT_PERSISTENCE_UNAVAILABLE",
+            extra={"error_code": "AUDIT_PERSISTENCE_UNAVAILABLE"},
+        )
+        return
+    if _GLOBAL_EVENT_BUS.publish(envelope):
+        audit_logger.error(
+            "audit publish failed error_code=AUDIT_PUBLISH_FAILED",
+            extra={"error_code": "AUDIT_PUBLISH_FAILED"},
+        )

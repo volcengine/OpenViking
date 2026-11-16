@@ -226,8 +226,12 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         assert os.environ[app_module.WORKER_BOT_API_URL_ENV] == "http://127.0.0.1:19000"
 
 
-def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys):
+def test_main_logs_safe_config_diagnostics_on_validation_error(monkeypatch, caplog):
     """An unknown top-level config field must exit 1 with actionable diagnostics."""
+    import logging
+
+    monkeypatch.setattr(bootstrap, "logger", logging.getLogger("test.bootstrap.config"))
+    caplog.set_level(logging.INFO, logger="test.bootstrap.config")
     config = ServerConfig(host="127.0.0.1", port=1933)
 
     monkeypatch.setattr(bootstrap, "resolve_config_path", lambda *a, **k: Path("/tmp/ov.conf"))
@@ -261,11 +265,12 @@ def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys)
         bootstrap.main()
 
     assert exc.value.code == 1
-    err = capsys.readouterr().err
-    assert "/tmp/ov.conf" in err
-    assert "Unknown config field 'claude_code'" in err
-    assert "openviking-server doctor" in err
-    assert "examples/ov.conf.example" in err
+    assert "server configuration invalid" in caplog.text
+    assert "error_type=ValueError" in caplog.text
+    assert "openviking-server doctor" in caplog.text
+    assert "/tmp/ov.conf" not in caplog.text
+    assert "Unknown config field 'claude_code'" not in caplog.text
+    assert sum(record.levelno == logging.CRITICAL for record in caplog.records) == 1
 
 
 def test_worker_factory_replays_bot_overrides(monkeypatch):
@@ -288,13 +293,15 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "create_app",
-        lambda worker_config, config_path: captured.update(
-            {
-                "app_config": worker_config,
-                "app_config_path": config_path,
-            }
-        )
-        or worker_config,
+        lambda worker_config, config_path: (
+            captured.update(
+                {
+                    "app_config": worker_config,
+                    "app_config_path": config_path,
+                }
+            )
+            or worker_config
+        ),
     )
 
     worker_config = app_module.create_worker_app()

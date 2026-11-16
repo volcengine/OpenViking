@@ -13,7 +13,21 @@ serve any region. Token and retrieval rollups are hour-grained so cross-tz
 # continue to use the reset path.
 SCHEMA_VERSION = 5
 
+# security_audit is additive: every startup runs CREATE IF NOT EXISTS, so
+# existing version-5 databases acquire it without resetting their usage rows.
+
 SQLITE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS security_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event TEXT NOT NULL,
+    account_id TEXT,
+    actor_id TEXT,
+    created_at TEXT NOT NULL,
+    record_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_security_audit_account_created
+    ON security_audit(account_id, created_at DESC, id DESC);
+
 CREATE TABLE IF NOT EXISTS _schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

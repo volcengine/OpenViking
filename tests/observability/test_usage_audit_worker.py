@@ -68,3 +68,40 @@ async def test_usage_audit_worker_close_waits_for_inflight_batch_after_timeout()
 
     assert store.calls == 1
     assert [[event.event_name for event in batch] for batch in store.batches] == [["demo"]]
+
+
+async def test_security_audit_queue_and_storage_failures_are_visible(caplog):
+    import logging
+
+    from openviking_cli.utils.logger import get_logger
+
+    logger = get_logger("openviking.audit")
+    logger.addHandler(caplog.handler)
+    logger.setLevel(logging.DEBUG)
+    worker = UsageAuditWorker(FakeStore(), queue_size=1)
+    try:
+        await worker.start()
+        event = ObservabilityEvent(event_name="audit.account.create", payload={})
+        worker.enqueue(event)
+        worker.enqueue(event)
+        assert worker.dropped_count == 1
+        await worker.close()
+        assert any(
+            getattr(record, "error_code", None) == "AUDIT_QUEUE_FULL"
+            and record.levelno == logging.ERROR
+            for record in caplog.records
+        )
+
+        class FailedStore:
+            async def record_batch(self, events):
+                raise RuntimeError("private-key /private/path")
+
+        await UsageAuditWorker(FailedStore())._flush([event])
+        assert any(
+            getattr(record, "error_code", None) == "AUDIT_PERSISTENCE_FAILED"
+            and record.levelno == logging.ERROR
+            for record in caplog.records
+        )
+        assert "private-key" not in caplog.text and "/private/path" not in caplog.text
+    finally:
+        logger.removeHandler(caplog.handler)
