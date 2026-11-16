@@ -1,6 +1,7 @@
 import { markPreviewAction } from '../../shared/analytics/preview-actions.js';
 import { keepPreviewActionWhileEditing } from '../../components/file-preview/file-preview-action-visibility.js';
 import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
+import EditorCopyIcon from '../../../../icons/svg/viking-bot/copy.svg?react';
 import type {
   FilePreviewAction,
   FilePreviewActions,
@@ -32,7 +33,12 @@ export function previewActionContext(
           key: 'copyContent',
           pinned: context.editing,
           label: text.copyContent,
-          icon: <CopyIcon width={16} height={16} />,
+          icon: context.editing ? (
+            <EditorCopyIcon width={12} height={12} />
+          ) : (
+            <CopyIcon width={16} height={16} />
+          ),
+          className: 'ov-file-browser__preview-action--copy-content',
           onClick: () => navigator.clipboard.writeText(content),
         }),
         'copyContent',

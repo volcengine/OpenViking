@@ -47,6 +47,7 @@ export function createDashboardTab(
       height: 14,
     }),
     kind: 'content',
+    hideWhileEditing: true,
     content:
       renderDashboard?.(dashboard) ??
       (experience

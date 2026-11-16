@@ -1,100 +1,80 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  act,
-  button,
-  click,
-  fixture,
-  mount,
-  ok,
-  rootUri,
-  settle,
-  target,
-  tree,
-} from './helpers/preview-native-dom.mjs';
+import { act, button, click, settle } from './helpers/preview-native-dom.mjs';
 import { deferred } from './helpers/module-dom.mjs';
-import { waitForEditor } from './helpers/preview-editor-dom.mjs';
+import { setEditor, waitForEditor } from './helpers/preview-editor-dom.mjs';
+import {
+  body,
+  documentBody,
+  file,
+  fixedSentence,
+  fixed,
+  mountWikiFile,
+  otherBody,
+  otherFile,
+  pending,
+} from './helpers/wiki-conflict-editor-dom.mjs';
 
-const file = `${target}/approvals.md`;
-const otherFile = `${target}/other.md`;
-const otherBody = 'This file has no pending edits.';
-const body = 'The process requires two approvals.';
-const pending = {
-  match_text: 'two approvals',
-  problem_description: 'Approval policy differs',
-  reason: 'Two references disagree',
-  severity: 'high',
-  state: 'unfixed',
-  begin_time: 100,
-  fix_time: null,
-  fix_plan: '',
-  resolution_basis: '',
-};
-const fixed = {
-  ...pending,
-  problem_description: 'Earlier conflict is fixed',
-  state: 'fixed',
-  fix_time: 120,
-};
-const fileContent = `${body}\n<!-- CONFLICTS_CONTENT\n${JSON.stringify(pending)},\n${JSON.stringify(fixed)}\n-->`;
-
-async function mountWikiFile(props, pendingPreview) {
-  const fetch = fixture(
-    file,
-    false,
-    ({ path, uri, query }) => {
-      if (path.endsWith('/fs/ls')) {
-        if (uri === rootUri)
-          return ok([
-            { uri: target, isDir: true, tags: ['compile_target=true'] },
-          ]);
-        if (uri === target)
-          return ok([
-            { uri: file, isDir: false, tags: ['has_conflict=true'] },
-            { uri: otherFile, isDir: false },
-          ]);
-        return ok([]);
-      }
-      if (uri === otherFile) {
-        if (path.endsWith('/fs/stat')) return ok({ isDir: false });
-        if (path.endsWith('/content/read')) return ok(otherBody);
-      }
-      if (path.endsWith('/search/find'))
-        return ok({ resources: [{ uri: file, level: 2 }] });
-      if (path.endsWith('/content/read') && uri === file)
-        return pendingPreview && query.limit !== '-1'
-          ? pendingPreview.then(() => ok(fileContent))
-          : ok(fileContent);
-    },
-    [{ to: target }],
-  );
-  const render = (uri) =>
-    tree(fetch, uri, { defaultExpandedUri: target, ...props });
-  const view = await mount(render(file));
-  return {
-    view,
-    fetch,
-    navigate: (uri) => view.render(render(uri)),
-    openDashboard: () =>
-      click(
-        view.container.querySelector(
-          `[data-file-tree-row-id="${file}"] button[aria-label="View pending Wiki conflicts"]`,
-        ),
+test('the FileBrowser editor highlights pending Wiki anchors without including metadata in the draft', async () => {
+  const { view, fetch } = await mountWikiFile();
+  const dashboard = () =>
+    view.container.querySelector('[role="tab"][data-key^="dashboard:"]');
+  try {
+    assert.ok(dashboard());
+    await click(view.container.querySelector('button[aria-label="Edit"]'));
+    const editor = await waitForEditor(view.container);
+    assert.equal(dashboard(), null);
+    const markedLines = () => [
+      ...editor.querySelectorAll('.ov-file-preview__annotation-line'),
+    ];
+    const highlighted = () => markedLines().map((line) => line.textContent);
+    assert.deepEqual(highlighted(), [body]);
+    assert.equal(
+      [...editor.querySelectorAll('.cm-line')]
+        .map((line) => line.textContent)
+        .join('\n')
+        .trimEnd(),
+      documentBody,
+    );
+    await act(async () =>
+      markedLines()[0].dispatchEvent(
+        new window.MouseEvent('mousemove', { bubbles: true }),
       ),
-    pencil: () =>
-      view.container.querySelector(
-        'button[aria-label="Edit conflict: Approval policy differs"]',
-      ),
-    activeTab: () =>
-      view.container
-        .querySelector('[role="tab"][aria-selected="true"]')
-        .getAttribute('data-key'),
-  };
-}
+    );
+    const tooltip = view.container.querySelector(
+      '.ov-file-preview__annotation-tooltip',
+    );
+    assert.equal(
+      tooltip?.querySelector('strong')?.textContent,
+      pending.problem_description,
+    );
+    assert.equal(tooltip?.querySelector('p')?.textContent, pending.reason);
+    await setEditor(editor, `New introduction\n${documentBody}`);
+    assert.deepEqual(highlighted(), [body]);
+    assert.equal(view.container.contains(tooltip), false);
+    await setEditor(editor, `---\n${body}\n...\n${fixedSentence}`);
+    assert.deepEqual(highlighted(), [body]);
+    await setEditor(editor, `${body}\n${documentBody}`);
+    assert.deepEqual(highlighted(), []);
+    await setEditor(editor, 'The process requires three approvals.');
+    assert.deepEqual(highlighted(), []);
+    await click(button('Save', view.container));
+    const write = fetch.calls.find(({ path }) =>
+      path.endsWith('/content/write'),
+    );
+    assert.equal(write.body.content, 'The process requires three approvals.');
+    assert.equal(write.body.resolve_conflicts, true);
+    assert.ok(dashboard());
+  } finally {
+    await view.unmount();
+  }
+});
 
 test('the FileBrowser Wiki conflict pencil opens the matching file directly in the editor', async () => {
   const { view, fetch, openDashboard, pencil, activeTab } =
     await mountWikiFile();
+  const dashboard = () =>
+    view.container.querySelector('[role="tab"][data-key^="dashboard:"]');
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       await openDashboard();
@@ -107,10 +87,12 @@ test('the FileBrowser Wiki conflict pencil opens the matching file directly in t
       await click(pencil());
       const editor = await waitForEditor(view.container);
       assert.equal(activeTab(), file);
-      assert.equal(editor.textContent, body);
+      assert.equal(dashboard(), null);
+      assert.equal(editor.textContent, body + fixedSentence);
       await click(button('Cancel', view.container));
       assert.equal(view.container.querySelector('.cm-content'), null);
       assert.equal(activeTab(), file);
+      assert.ok(dashboard());
     }
     assert.equal(fetch.countOf('/api/v1/content/write'), 0);
   } finally {
@@ -130,7 +112,10 @@ test('the FileBrowser Wiki conflict pencil waits for the selected file preview',
     assert.equal(activeTab(), file);
     assert.equal(view.container.querySelector('.cm-content'), null);
     await act(async () => preview.resolve());
-    assert.equal((await waitForEditor(view.container)).textContent, body);
+    assert.equal(
+      (await waitForEditor(view.container)).textContent,
+      body + fixedSentence,
+    );
   } finally {
     await view.unmount();
   }
