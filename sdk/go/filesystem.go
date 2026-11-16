@@ -279,6 +279,9 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 		"mode":    mode,
 		"wait":    opts.Wait,
 	}
+	if opts.UseSnapshot {
+		payload["use_snapshot"] = true
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
 	if opts.ACL != nil {
@@ -321,6 +324,9 @@ func (c *Client) BatchWrite(
 	if opts != nil {
 		if opts.Wait != nil {
 			payload["wait"] = *opts.Wait
+		}
+		if opts.UseSnapshot {
+			payload["use_snapshot"] = true
 		}
 		setAny(payload, "defer_processing", opts.DeferProcessing)
 		setAny(payload, "telemetry", opts.Telemetry)

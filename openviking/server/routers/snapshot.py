@@ -110,7 +110,7 @@ async def log(
 
 
 class RestoreRequest(BaseModel):
-    """Restore a directory snapshot or one Compile output file; modes cannot be mixed."""
+    """Restore a directory snapshot or one file; modes cannot be mixed."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -121,7 +121,7 @@ class RestoreRequest(BaseModel):
         None, pattern=r"^[0-9a-f]{40}$", description="Full commit ID supplying content at path"
     )
     current_commit_id: Optional[str] = Field(
-        None, pattern=r"^[0-9a-f]{40}$", description="Expected last commit changing path"
+        None, pattern=r"^[0-9a-f]{40}$", description="Optional expected last commit changing path"
     )
     branch: str = "main"
     dry_run: bool = False
@@ -134,8 +134,8 @@ class RestoreRequest(BaseModel):
         if self.path is not None:
             if self.project_dir is not None or self.source_commit is not None:
                 raise ValueError("path cannot be combined with project_dir or source_commit")
-            if not self.restore_commit_id or not self.current_commit_id:
-                raise ValueError("path requires restore_commit_id and current_commit_id")
+            if not self.restore_commit_id:
+                raise ValueError("path requires restore_commit_id")
         elif not self.source_commit:
             raise ValueError("source_commit is required")
         return self
@@ -143,16 +143,22 @@ class RestoreRequest(BaseModel):
 
 @router.get("/versions")
 async def versions(
-    uri: str = Query(..., description="Compile output file URI"),
+    uri: str = Query(..., description="File URI"),
     limit: int = Query(20, ge=1, le=100),
-    before_version: Optional[str] = Query(None),
+    before_snapshot: Optional[str] = Query(None, pattern=r"^[0-9a-f]{40}$"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """List a Compile output file's versions, newest first."""
+    """List a file's native snapshot commits, newest first."""
     uri = validate_request_viking_uri(uri, _ctx, field_name="uri")
-    result = await get_service().compile.file_versions(
-        uri, _ctx, limit=limit, before=before_version
-    )
+    try:
+        result = await get_service().fs.file_versions(
+            uri, _ctx, limit=limit, before=before_snapshot
+        )
+    except (AGFSClientError, ValueError) as exc:
+        mapped = map_exception(exc)
+        if mapped is not None:
+            raise mapped from exc
+        raise
     return Response(status="ok", result=result)
 
 
@@ -163,21 +169,22 @@ async def restore(
 ):
     """Restore a directory or one file's historical content as a forward commit."""
     service = get_service()
-    if request.path is not None:
-        path = validate_request_viking_uri(request.path, _ctx, field_name="path")
-        result = await service.compile.restore_file_version(
-            uri=path,
-            restore_commit_id=request.restore_commit_id,
-            current_commit_id=request.current_commit_id,
-            ctx=_ctx,
-        )
-        return Response(status="ok", result=result)
     project_dir = (
         validate_request_viking_uri(request.project_dir, _ctx, field_name="project_dir")
         if request.project_dir
         else None
     )
     try:
+        if request.path is not None:
+            path = validate_request_viking_uri(request.path, _ctx, field_name="path")
+            result = await service.fs.restore_file_version(
+                uri=path,
+                restore_commit_id=request.restore_commit_id,
+                current_commit_id=request.current_commit_id,
+                ctx=_ctx,
+                dry_run=request.dry_run,
+            )
+            return Response(status="ok", result=result)
         result = await service.fs.restore(
             project_dir=project_dir,
             source_commit=request.source_commit,
@@ -222,7 +229,11 @@ async def show(
     raw: bool = Query(True, description="Return raw stored content with memory fields"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Without ``path``: commit metadata JSON. With ``path``: raw blob bytes + X-Snapshot-* headers."""
+    """Return commit JSON without ``path``, or file bytes with blob/commit IDs and commit time.
+
+    The file response's X-Snapshot-Time-Seconds is the resolved commit's committer
+    Unix timestamp, including when raw=false strips memory fields from the body.
+    """
     service = get_service()
     canonical_path = (
         validate_request_viking_uri(path, _ctx, field_name="path") if path is not None else None
@@ -261,6 +272,8 @@ async def show(
         headers={
             "X-Snapshot-Oid": str(blob["oid"]),
             "X-Snapshot-Size": str(len(content)),
+            "X-Snapshot-Commit-Oid": str(blob["commit_oid"]),
+            "X-Snapshot-Time-Seconds": str(blob["commit_time_seconds"]),
         },
     )
 

@@ -125,12 +125,20 @@ async function promptSubmit(ctx) {
 
 async function capture(ctx) {
   if (host.capturesOnlyWhenEnabled && !isCaptureEnabled(ctx.cfg)) return "";
-  await withAgentHookLock(clientId, ctx.nativeSessionId, async (stateFile) => {
-    const state = await readHookState(clientId, ctx.nativeSessionId);
-    ctx.stateFile = stateFile;
-    const next = await host.capture(ctx, state, event);
-    if (next) await writeHookState(clientId, ctx.nativeSessionId, next);
-  });
+  // A terminal event that loses the lock to a slow Stop would drop the final
+  // commit, so a detached one keeps waiting up to the stale-lock age.
+  const terminal = host.detachesCapture && (event === "session-end" || event === "pre-compact");
+  for (let attempt = 0; attempt < (terminal ? 12 : 1); attempt += 1) {
+    const done = await withAgentHookLock(clientId, ctx.nativeSessionId, async (stateFile) => {
+      const state = await readHookState(clientId, ctx.nativeSessionId);
+      ctx.stateFile = stateFile;
+      const next = await host.capture(ctx, state, event);
+      if (next) await writeHookState(clientId, ctx.nativeSessionId, next);
+      return true;
+    });
+    if (done) return "";
+  }
+  log("capture_lock_timeout");
   return "";
 }
 

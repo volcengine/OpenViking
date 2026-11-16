@@ -63,11 +63,23 @@ type AddSkillOptions struct {
 	TargetURI any
 }
 
-// CompileOptions controls Compile.
-type CompileOptions struct {
-	Instruction string
-	Args        map[string]any
-	Extra       map[string]any
+// CompileInput contains full compilation inputs. Args may contain scheduling
+// controls only when creating a persistent configuration.
+type CompileInput struct {
+	FromURIs    []string       `json:"from,omitempty"`
+	To          string         `json:"to,omitempty"`
+	Skill       string         `json:"skill"`
+	Instruction string         `json:"instruction,omitempty"`
+	Args        map[string]any `json:"args,omitempty"`
+}
+
+// CompileRequest selects one saved configuration or supplies independent full inputs.
+// CompileName and Input are mutually exclusive.
+type CompileRequest struct {
+	CompileName string
+	Input       *CompileInput
+	// Args uses only owner_user_id for named runs; full runs use Input.Args.
+	Args map[string]any
 }
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
@@ -286,6 +298,7 @@ type WriteOptions struct {
 	ProcessingMode string
 	Tags           []string
 	TagMode        string
+	UseSnapshot    bool
 	Extra          map[string]any
 }
 
@@ -302,6 +315,7 @@ type BatchWriteOperation struct {
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
+	UseSnapshot     bool
 	DeferProcessing bool
 	Wait            *bool
 	// Deprecated: Timeout is accepted for compatibility and ignored.
