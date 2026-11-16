@@ -11,8 +11,12 @@ export function PreviewHistorySnapshot({
   text,
   requestOptions,
   onSaved,
+  onCompleted,
+  onPendingChange,
 }: Pick<PreviewWorkflowProps, 'uri' | 'text' | 'requestOptions'> & {
   onSaved: () => void;
+  onCompleted?: (created: boolean) => void;
+  onPendingChange?: (pending: boolean) => void;
 }) {
   const [note, setNote] = useState('');
   const [created, setCreated] = useState(false);
@@ -25,24 +29,28 @@ export function PreviewHistorySnapshot({
         event.preventDefault();
         if (!message || mutation.pending) return;
         let snapshotCreated = false;
-        void mutation.run(
-          async (client, options) => {
-            const result = await savePreviewSnapshot(
-              client,
-              uri,
-              message,
-              options,
-            );
-            snapshotCreated = result.result === 'created';
-          },
-          () => {
-            setCreated(snapshotCreated);
-            if (snapshotCreated) {
-              setNote('');
-              onSaved();
-            }
-          },
-        );
+        onPendingChange?.(true);
+        void mutation
+          .run(
+            async (client, options) => {
+              const result = await savePreviewSnapshot(
+                client,
+                uri,
+                message,
+                options,
+              );
+              snapshotCreated = result.result === 'created';
+            },
+            () => {
+              setCreated(snapshotCreated);
+              if (snapshotCreated) {
+                setNote('');
+                onSaved();
+              }
+              onCompleted?.(snapshotCreated);
+            },
+          )
+          .finally(() => onPendingChange?.(false));
       }}
     >
       <div className="ov-file-history__snapshot-fields">

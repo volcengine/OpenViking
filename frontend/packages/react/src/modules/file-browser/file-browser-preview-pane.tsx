@@ -2,6 +2,8 @@ import { useRenderErrors } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
 import { useRef } from 'react';
+import { useOvClient } from '../../client/provider.js';
+import { scopeKeyOf } from './fs-scope.js';
 import { previewActionContext } from './file-browser-preview-action-source.js';
 import { isSystemUri } from './preview-policy.js';
 import type { Locale } from '../../shared/locale.js';
@@ -145,6 +147,7 @@ function FileBrowserPreviewPaneContent({
           actions={commandSource}
           previewSlots={slots}
           onActiveKeyChange={browser.actions.setPreviewKey}
+          onSave={controls.onFileSaved}
         />
       ) : browser.currentUri && browser.previewError ? (
         <div className="ov-file-browser__detail">
@@ -174,13 +177,19 @@ function FileBrowserPreviewPaneContent({
 export function FileBrowserPreviewPane(
   props: Parameters<typeof FileBrowserPreviewPaneContent>[0],
 ) {
+  const client = useOvClient();
+  const key = scopeKeyOf(
+    client,
+    props.requestOptions,
+    JSON.stringify([props.rootUri, props.browser.currentUri]),
+  );
   return (
     <ErrorBoundary
       message={useRenderErrors(props.locale).preview}
       locale={props.locale}
       resetKeys={[props.browser.currentUri]}
     >
-      <FileBrowserPreviewPaneContent {...props} />
+      <FileBrowserPreviewPaneContent key={key} {...props} />
     </ErrorBoundary>
   );
 }

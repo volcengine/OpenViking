@@ -46,6 +46,15 @@
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 2px;
 }
+.ov-file-saved-snapshot .ov-file-history__snapshot {
+  padding: 0;
+  border: 0;
+}
+@media (max-width: 480px) {
+  .ov-file-saved-snapshot .ov-file-history__snapshot-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .ov-file-browser-workflow__actions {
   display: flex;
   justify-content: flex-end;
