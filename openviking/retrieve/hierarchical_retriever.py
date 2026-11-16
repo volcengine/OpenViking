@@ -4,6 +4,7 @@
 Global vector retrieval with optional reranking of the recalled candidates.
 """
 
+import inspect
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -131,6 +132,7 @@ class HierarchicalRetriever:
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
         image_query = query.image_query
+        mode_was_explicit = mode is not None
         if mode is None:
             mode = RetrieverMode.THINKING if self._rerank_client else RetrieverMode.QUICK
         use_rerank = (
@@ -164,6 +166,41 @@ class HierarchicalRetriever:
                 query=query,
                 matched_contexts=[],
                 searched_directories=[],
+            )
+
+        sag2_capability = vector_proxy.account_supports_sag2()
+        if inspect.isawaitable(sag2_capability):
+            sag2_capability = await sag2_capability
+        supports_sag2 = sag2_capability if isinstance(sag2_capability, bool) else False
+        if supports_sag2:
+            if mode == RetrieverMode.THINKING and self._rerank_client is not None:
+                is_noul_jev = (
+                    getattr(self._rerank_client, "provider", None) == "jev"
+                    and getattr(self._rerank_client, "mode", None) == "noul"
+                )
+                if not is_noul_jev:
+                    if mode_was_explicit:
+                        raise InvalidArgumentError(
+                            "SAG2 THINKING requires rerank.provider='jev' and mode='noul'"
+                        )
+                    mode = RetrieverMode.QUICK
+            if image_query:
+                raise InvalidArgumentError("SAG2 does not support image queries")
+            if events_time_decay_protection is not None:
+                raise InvalidArgumentError("SAG2 does not support vector time decay")
+            return await self._retrieve_sag2(
+                query=query,
+                proxy=vector_proxy,
+                ctx=ctx,
+                limit=limit,
+                mode=mode,
+                score_threshold=score_threshold,
+                score_gte=score_gte,
+                scope_dsl=scope_dsl,
+                level=level,
+                search_type=search_type,
+                target_dirs=target_dirs,
+                started_at=t0,
             )
 
         # Generate query vectors once to avoid duplicate embedding calls
@@ -277,6 +314,101 @@ class HierarchicalRetriever:
             matched_contexts=final,
             searched_directories=root_uris,
         )
+
+    async def _retrieve_sag2(
+        self,
+        *,
+        query: TypedQuery,
+        proxy: VikingDBManagerProxy,
+        ctx: RequestContext,
+        limit: int,
+        mode: str,
+        score_threshold: Optional[float],
+        score_gte: bool,
+        scope_dsl: Optional[FilterExpr | Dict[str, Any]],
+        level: Optional[List[int]],
+        search_type: SearchType,
+        target_dirs: List[str],
+        started_at: float,
+    ) -> QueryResult:
+        from openviking.retrieve.sag2 import quick_sag2, retrieve_sag2
+        from openviking.retrieve.sag2_scorer import Sag2Scorer
+
+        telemetry = get_current_telemetry()
+        config = await proxy.account_sag2_config()
+        context_type = query.context_type.value if query.context_type else None
+        scope = await proxy.open_sag2_scope(
+            context_type=context_type,
+            target_directories=target_dirs,
+            extra_filter=scope_dsl,
+            level=level,
+        )
+        thinking = mode == RetrieverMode.THINKING and search_type == "semantic"
+        if thinking and self._rerank_client is None:
+            raise InvalidArgumentError("SAG2 THINKING requires a configured JEV reranker")
+        traces = []
+        with telemetry.measure("search.vector_retrieval"):
+            if thinking:
+                effective_hops = (
+                    config.max_hops
+                    if level is not None and level and set(level).issubset({0, 1})
+                    else 0
+                )
+                scorer = Sag2Scorer(
+                    self._rerank_client,
+                    max_context_tokens=config.max_context_tokens,
+                    max_concurrent=config.max_concurrent_scorers,
+                )
+                results, traces = await retrieve_sag2(
+                    scope, query.query, config, scorer, max_hops=effective_hops
+                )
+            else:
+                results = await quick_sag2(scope, query.query, config)
+
+        # L0/L1 records with the same URI remain separate through evidence scoring.
+        collected_by_uri: Dict[str, Dict[str, Any]] = {}
+        for result in results:
+            uri = result.get("uri", "")
+            if not uri:
+                continue
+            score = self._finite_score(result.get("_score", 0.0))
+            previous = collected_by_uri.get(uri)
+            if previous is None or score > previous["_score"]:
+                collected_by_uri[uri] = {**result, "_score": score}
+        candidates = sorted(
+            collected_by_uri.values(),
+            key=lambda candidate: (
+                -candidate["_score"],
+                -float(candidate.get("_first_rrf", 0.0)),
+                str(candidate["id"]),
+            ),
+        )
+        candidates = [
+            {**candidate, "_final_score": candidate["_score"]}
+            for candidate in candidates
+            if self._passes_threshold(
+                candidate["_score"],
+                self._resolve_threshold(score_threshold, thinking),
+                score_gte,
+            )
+        ]
+        telemetry.count("vector.searches", 1)
+        telemetry.count("vector.scored", len(results))
+        telemetry.count("vector.scanned", len(results))
+        telemetry.count("vector.passed", len(candidates))
+        for trace in traces:
+            telemetry.count("search.sag2.judgments", trace.judgments)
+        matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
+        final = matched[:limit]
+        get_stats_collector().record_query(
+            context_type=context_type or "unknown",
+            result_count=len(final),
+            scores=[item.score for item in final],
+            latency_ms=(time.monotonic() - started_at) * 1000,
+            rerank_used=thinking,
+        )
+        root_uris = target_dirs or default_target_directories(ctx, context_type=query.context_type)
+        return QueryResult(query=query, matched_contexts=final, searched_directories=root_uris)
 
     def _resolve_threshold(self, threshold: Optional[float], reranked: bool = False) -> float:
         """An explicit threshold applies to any score; the rerank one only to model scores."""

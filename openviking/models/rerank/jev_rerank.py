@@ -16,7 +16,6 @@ Same interface as the other rerank clients:
 rerank_batch(query, documents) -> List[float]
 """
 
-import time
 from typing import Dict, List, Optional, Protocol
 
 import httpx
@@ -25,6 +24,7 @@ from openviking.models.jev import (
     DEFAULT_SYSTEM_ONE_API_BASE,
     MODE_CHOICE,
     MODE_NOUL,
+    SystemOneTransport,
     resolve_jev_target,
     validate_jev_probability,
 )
@@ -158,14 +158,15 @@ class JevRerankClient(RerankBase):
         self.timeout = timeout
         self.log_payloads = log_payloads
         self.provider = "jev"
-        self._client = httpx.Client(
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                **dict(extra_headers or {}),
-            },
+        self._transport = SystemOneTransport(
+            api_key=api_key,
+            api_base=api_base,
+            model=model_name,
             timeout=timeout,
+            extra_headers=extra_headers,
         )
+        # Keep the client attribute for existing instrumentation and tests.
+        self._client = self._transport._client
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
         """Rerank documents against a query using the Jev System One API.
@@ -181,30 +182,24 @@ class JevRerankClient(RerankBase):
             # Only Noul uses the visibility option; Choice always compares all candidates.
             if self.mode == MODE_CHOICE or self.candidates_visible:
                 state["candidate_documents"] = documents
-            body = {
-                "model": self.model_name,
-                "state": state,
-                "questions": self._strategy.build_questions(documents),
-            }
+            questions = self._strategy.build_questions(documents)
             if self.log_payloads:
                 logger.debug(
                     "rerank request summary total=%d payload=true",
                     len(documents),
                     extra={"payload": True, "total": len(documents)},
                 )
-            started = time.monotonic()
-            resp = self._client.post(self.api_url, json=body)
-            duration_seconds = time.monotonic() - started
-            resp.raise_for_status()
-            data = resp.json()
+            data, duration_seconds, status_code = self._transport.request(
+                state=state, questions=questions
+            )
             if self.log_payloads:
                 logger.debug(
                     "rerank response summary http_status_code=%d duration_ms=%.1f payload=true",
-                    resp.status_code,
+                    status_code,
                     duration_seconds * 1000,
                     extra={
                         "payload": True,
-                        "http_status_code": resp.status_code,
+                        "http_status_code": status_code,
                         "duration_ms": duration_seconds * 1000,
                     },
                 )
@@ -253,7 +248,7 @@ class JevRerankClient(RerankBase):
             return None
 
     def close(self):
-        self._client.close()
+        self._transport.close()
 
     @classmethod
     def from_config(cls, config) -> Optional["JevRerankClient"]:

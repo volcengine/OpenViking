@@ -196,6 +196,37 @@ class VikingDBManagerProxy:
     def mode(self) -> str:
         return self._manager.mode
 
+    @property
+    def requires_embedding(self) -> bool:
+        return getattr(self._manager, "requires_embedding", True)
+
+    @property
+    def supports_keywords(self) -> bool:
+        return getattr(self._manager, "supports_keywords", False)
+
+    @property
+    def supports_sag2(self) -> bool:
+        return getattr(self._manager, "supports_sag2", False)
+
+    @property
+    def sag2_config(self):
+        return getattr(self._manager, "sag2_config", None)
+
+    async def account_requires_embedding(self) -> bool:
+        if hasattr(self._manager, "account_requires_embedding"):
+            return await self._manager.account_requires_embedding(self._ctx.account_id)
+        return self.requires_embedding
+
+    async def account_supports_sag2(self) -> bool:
+        if hasattr(self._manager, "account_supports_sag2"):
+            return await self._manager.account_supports_sag2(self._ctx.account_id)
+        return self.supports_sag2
+
+    async def account_sag2_config(self):
+        if hasattr(self._manager, "account_sag2_config"):
+            return await self._manager.account_sag2_config(self._ctx.account_id)
+        return self.sag2_config
+
     # =========================================================================
     # Queue Management Properties（透传）
     # =========================================================================
@@ -439,6 +470,22 @@ class VikingDBManagerProxy:
                 request_now=request_now,
             )
         return await self._manager.search_in_tenant(self._ctx, **kwargs)
+
+    async def open_sag2_scope(
+        self,
+        *,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+    ):
+        return await self._manager.open_sag2_scope(
+            self._ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            level=level,
+        )
 
     async def search_by_keywords_in_tenant(
         self,

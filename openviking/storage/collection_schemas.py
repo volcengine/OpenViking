@@ -72,7 +72,11 @@ class CollectionSchemas:
 
     @staticmethod
     def context_collection(
-        name: str, vector_dim: int, description: Optional[str] = None
+        name: str,
+        vector_dim: int,
+        description: Optional[str] = None,
+        *,
+        requires_embedding: bool = True,
     ) -> Dict[str, Any]:
         """
         Get the schema for the unified context collection.
@@ -103,6 +107,12 @@ class CollectionSchemas:
             {"FieldName": "updated_at", "FieldType": "date_time"},
             {"FieldName": "active_count", "FieldType": "int64"},
         ]
+        if not requires_embedding:
+            fields = [
+                field
+                for field in fields
+                if field.get("FieldType") not in {"vector", "sparse_vector"}
+            ]
         fields.extend(
             [
                 # level 字段：区分 L0/L1/L2 层级
@@ -301,8 +311,9 @@ async def init_context_collection(storage) -> bool:
     if not name:
         raise ValueError("Vector DB collection name is required")
     collection_name = name
-    embedding_meta = _build_embedding_metadata(config)
     vectordb_cfg = config.storage.vectordb
+    is_sag2 = vectordb_cfg.backend == "sag2"
+    embedding_meta = None if is_sag2 else _build_embedding_metadata(config)
     uses_volcengine_data_plane = bool(
         vectordb_cfg.backend == "volcengine"
         and getattr(getattr(vectordb_cfg, "volcengine", None), "api_key", None)
@@ -316,7 +327,12 @@ async def init_context_collection(storage) -> bool:
     schema = CollectionSchemas.context_collection(
         collection_name,
         vector_dim,
-        description=_encode_collection_description("Unified context collection", embedding_meta),
+        description=(
+            "Unified SAG2 lexical context collection"
+            if is_sag2
+            else _encode_collection_description("Unified context collection", embedding_meta)
+        ),
+        requires_embedding=not is_sag2,
     )
     created = await storage.create_collection(collection_name, schema)
     if created:
@@ -330,6 +346,8 @@ async def init_context_collection(storage) -> bool:
         raise EmbeddingConfigurationError(
             "Existing collection metadata is unavailable; cannot validate embedding compatibility"
         )
+    if is_sag2:
+        return False
 
     actual_dimension = next(
         (
@@ -751,14 +769,23 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                     return ProcessResult.success(data)
 
-                # Circuit breaker: if API is known-broken, re-enqueue and wait
-                provider = self._embedding_provider
-                if provider is None:
-                    raise RuntimeError("Account embedding provider is not initialized")
-                embedder = provider.bind(account_id)
+                # SAG2 persists the same materialized record without invoking an Embedder.
+                if hasattr(self._vikingdb, "account_requires_embedding"):
+                    requires_embedding = await self._vikingdb.account_requires_embedding(account_id)
+                else:
+                    requires_embedding = getattr(self._vikingdb, "requires_embedding", True)
+                if requires_embedding:
+                    provider = self._embedding_provider
+                    if provider is None:
+                        raise RuntimeError("Account embedding provider is not initialized")
+                    embedder = provider.bind(account_id)
+                else:
+                    embedder = None
 
-                # Generate embedding vector(s)
-                if embedder:
+                # Generate embedding vector(s) only for vector-backed collections.
+                if not requires_embedding:
+                    pass
+                elif embedder:
                     try:
                         import time as _time
 

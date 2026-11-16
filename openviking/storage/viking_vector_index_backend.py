@@ -308,7 +308,9 @@ def _backend_operation(method):
                 if owns_metric:
                     VikingDBEventDataSource.record_operation(
                         backend=self._mode,
-                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        access_mode=str(
+                            getattr(self._adapter, "config", {}).get("mode") or "default"
+                        ),
                         operation=method.__name__,
                         duration_seconds=time.perf_counter() - started_at,
                         error=error,
@@ -318,7 +320,9 @@ def _backend_operation(method):
                 if owns_metric:
                     VikingDBEventDataSource.record_operation(
                         backend=self._mode,
-                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        access_mode=str(
+                            getattr(self._adapter, "config", {}).get("mode") or "default"
+                        ),
                         operation=method.__name__,
                         duration_seconds=time.perf_counter() - started_at,
                         result=result,
@@ -1249,6 +1253,34 @@ class VikingVectorIndexBackend:
     def uses_content_field(self) -> bool:
         return self._shared_adapter.USE_CONTENT_FIELD
 
+    @property
+    def requires_embedding(self) -> bool:
+        return self.mode != "sag2"
+
+    @property
+    def supports_keywords(self) -> bool:
+        return self.mode in {"volcengine", "vikingdb", "opengauss", "sag2"}
+
+    @property
+    def supports_sag2(self) -> bool:
+        return self.mode == "sag2"
+
+    @property
+    def sag2_config(self):
+        if not self.supports_sag2:
+            return None
+        return self._config.sag2
+
+    async def account_requires_embedding(self, account_id: str) -> bool:
+        return (await self.get_account_backend(account_id))._mode != "sag2"
+
+    async def account_supports_sag2(self, account_id: str) -> bool:
+        return (await self.get_account_backend(account_id))._mode == "sag2"
+
+    async def account_sag2_config(self, account_id: str):
+        backend = await self.get_account_backend(account_id)
+        return getattr(backend._adapter, "_sag2_config", None) if backend._mode == "sag2" else None
+
     # =========================================================================
     # 内部辅助方法
     # =========================================================================
@@ -2058,6 +2090,36 @@ class VikingVectorIndexBackend:
             events_time_decay_protection=events_time_decay_protection,
             request_now=request_now,
         )
+
+    async def open_sag2_scope(
+        self,
+        ctx: RequestContext,
+        *,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+    ):
+        """Build the sole canonical scope used by all SAG2 hops."""
+        from openviking.storage.vectordb_adapters.sag2_lexical import Sag2TenantScope
+
+        backend = await self._get_backend_for_context(ctx)
+        if backend._mode != "sag2":
+            raise InvalidArgumentError("The account backend does not support SAG2")
+        acl_enabled = await self._acl_enabled(ctx)
+        scope_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            level=level,
+            acl_enabled=acl_enabled,
+        )
+        # Raw SAG2 queries do not pass through _SingleAccountBackend.query(), which
+        # normally appends this predicate (including for ROOT's unfiltered ACL scope).
+        scope_filter = self._merge_filters(Eq("account_id", ctx.account_id), scope_filter)
+        epoch = await backend._async_adapter.call("current_epoch", ctx.account_id)
+        return Sag2TenantScope(ctx.account_id, scope_filter, epoch, backend._async_adapter)
 
     async def search_by_keywords_in_tenant(
         self,

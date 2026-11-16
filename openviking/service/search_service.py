@@ -118,7 +118,7 @@ class SearchService:
         if not vector_store or not await viking_fs._collection_has_fulltext(
             vector_store,
             ctx,
-            supported_modes=("volcengine", "vikingdb", "opengauss"),
+            supported_modes=("volcengine", "vikingdb", "opengauss", "sag2"),
             raise_on_error=True,
         ):
             raise InvalidArgumentError(
