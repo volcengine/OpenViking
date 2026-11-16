@@ -2232,7 +2232,7 @@ ov add-resource ./docs --exclude "*.tmp"
 | `port` | int | 绑定端口 | `1933` |
 | `auth_mode` | str / null | 内置模式：`"dev"`、`"api_key"`、`"trusted"`、`"oidc"`、`"ldap"`。省略或设为 null 时，有非空 `root_api_key` 则推导为 `api_key`，否则为 `dev`。 | `null` |
 | `root_api_key` | str | `api_key` 模式必填的 Root API Key；`trusted` 模式在所有部署中均必填，包括 localhost，不负责解析普通用户身份 | `null` |
-| `account_store.provider` | str | 完整 Account Store Provider。内置 `"file"`、`"mysql"` 和 `"redis_mysql"`；统一持久化 Account、User、Group 和 API Key。`"file"` 兼容现有 AGFS JSON 注册表，并由 Provider 自身维护进程内查询索引。`"redis_mysql"` 保持 MySQL 为权威存储，并增加共享 Redis 认证和请求身份读取缓存。 | `"file"` |
+| `account_store.provider` | str | 完整 Account Store Provider。内置 `"file"`、`"mysql"`、`"postgres"` 和 `"redis_mysql"`；统一持久化 Account、User、Group 和 API Key。`"file"` 兼容现有 AGFS JSON 注册表，并由 Provider 自身维护进程内查询索引。`"postgres"` 直接使用 PostgreSQL。`"redis_mysql"` 保持 MySQL 为权威存储，并增加共享 Redis 认证和请求身份读取缓存。 | `"file"` |
 | `account_store.params` | object | Provider 启动参数。不能通过这里覆盖框架注入的 VikingFS 和 File Provider API Key Hash 配置。 | `{}` |
 | `account_store.params.read_only` | bool | 仅 File Provider。只读取 writer 已创建的注册表，启动时不写锁、不初始化、不迁移凭据，并拒绝身份变更。副本数据盘仍保持只读挂载，设置 `reconcile_system_assets_on_startup=false`；开启 `api_key_watch_enabled` 感知 writer 的变更。注册表缺失时拒绝启动。 | `false` |
 | `profile_enabled` | bool | 是否允许 HTTP 请求通过 `profile=1` 开启请求级 cProfile。关闭时服务端会忽略该请求参数；开启后，CLI 可以显示返回的 `profile`，而 Python HTTP client 默认只触发服务端 profile，不会把顶层 `profile` 字段自动附着到大多数 SDK 返回值上。 | `false` |
@@ -2285,6 +2285,48 @@ schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`�
   }
 }
 ```
+
+PostgreSQL Account Store 使用 `postgres` provider，安装 `pip install 'openviking[postgres]'`。
+它直接通过 psycopg 3 和 SQLAlchemy 连接 PostgreSQL，无需 Redis 或 pgvector。
+先由迁移账号执行
+`openviking/server/account_stores/sql/postgres/init.sql`，启动不会创建或迁移表。
+运行账号需要目标 schema 的 `USAGE`、五张 `ov_accounts*` 表的
+`SELECT, INSERT, UPDATE, DELETE` 和三个主键序列的 `USAGE, SELECT`，
+无需表所有权或 schema `CREATE` 权限。新部署首次启动会创建 `default` 账号。
+
+```json
+{
+  "service_name": "production",
+  "server": {
+    "account_store": {
+      "provider": "postgres",
+      "params": {
+        "host": "db.example.com",
+        "port": 5432,
+        "user": "openviking",
+        "password": "secret",
+        "database": "openviking",
+        "maxsize": 10,
+        "connect_timeout": 10,
+        "sslmode": "verify-full",
+        "sslrootcert": "/etc/ssl/certs/postgres-ca.pem",
+        "credential_storage": "hash"
+      }
+    }
+  }
+}
+```
+
+`service_name` 是必填的部署隔离边界，同库部署应使用不同值。
+PG 凭证存储支持与 MySQL 相同的 `hash` 和 `encrypted` 模式及
+`credential_encryption_key`，不保存明文。`maxsize` 是每个 Store 实例的连接池上限
+（默认 10）；`connect_timeout` 是建连超时秒数（默认 10）。`password` 可省略，
+使用 libpq 支持的认证方式；`host` 也可填写 Unix socket 目录。
+`sslmode` 默认 `prefer`，还支持 `disable`、`allow`、`require`、`verify-ca`、
+`verify-full`，客户端证书可通过 `sslcert` / `sslkey` 配置。
+跨实例认证直接读取 PG 最新已提交状态；用户分页及统计使用同一 MVCC 快照。
+已有 File/MySQL 账号数据不会自动迁移。此设置仅替换 Account Store；
+Task、Work 和 Watch 的存储配置分别独立。
 
 `redis_mysql` 需要安装 `redis-mysql` extra。`mysql` 部分使用与 MySQL provider
 相同的参数；`cache` 部分沿用顶层缓存的 `provider/params` 结构，支持

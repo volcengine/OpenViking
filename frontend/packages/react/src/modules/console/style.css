@@ -1,3 +1,5 @@
+@import '../../shared/feedback/style.css';
+@import '../../shared/error-boundary/error-boundary.css';
 @import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
 @import '../../components/command-console/style.css';

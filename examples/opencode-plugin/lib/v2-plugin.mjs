@@ -1,3 +1,5 @@
+import { readFile, readdir } from "node:fs/promises"
+import { join } from "node:path"
 import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
@@ -39,15 +41,19 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   if (config.mcp.enabled && ctx?.mcp?.transform) {
     let registered = false
     await ctx.mcp.transform((editor) => {
-      const current = editor.get?.("openviking")
-      if (current?.disabled === true) return
-      editor.set("openviking", createOpenVikingV2McpConfig(pluginRoot))
-      registered = true
+      registered = editor.get?.("openviking")?.disabled !== true
+      if (registered) editor.set("openviking", createOpenVikingV2McpConfig(pluginRoot))
     })
     log("INFO", "mcp", "Registered OpenViking MCP server for OpenCode v2")
-    if (registered && ctx?.skill?.transform) {
-      await ctx.skill.transform((draft) => {
-        draft.source({ type: "directory", path: openVikingSkillsDir(pluginRoot) })
+    if (ctx?.skill?.transform) {
+      const skills = await loadBundledSkills(openVikingSkillsDir(pluginRoot))
+      // Transforms run again after setup, so read the MCP decision on each run.
+      await ctx.skill.transform((editor) => {
+        if (!registered) return
+        // A user skill overrides a bundled one by ID or by name; the host keys
+        // skills by ID only, so a same-name skill would otherwise be listed twice.
+        const taken = new Set(editor.list().flatMap((skill) => [skill.id, skill.name]))
+        for (const skill of skills) if (!taken.has(skill.id) && !taken.has(skill.name)) editor.add(skill)
       })
     }
   } else if (!config.mcp.enabled) {
@@ -160,6 +166,29 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   }
 }
 
+async function loadBundledSkills(root) {
+  const entries = await readdir(root, { withFileTypes: true }).catch((error) => {
+    logHookError("skill.load", error)
+    return []
+  })
+  const skills = []
+  for (const entry of entries.filter((item) => item.isDirectory())) {
+    const path = join(root, entry.name, "SKILL.md")
+    try {
+      const text = await readFile(path, "utf8")
+      const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)
+      // Bundled descriptions are a plain scalar or a folded (`>`) block.
+      const [, head = "", folded = ""] = frontmatter?.[1].match(/^description:(.*)((?:\r?\n[ \t]+.*)*)/m) ?? []
+      const description = (/^\s*>-?\s*$/.test(head) ? folded : head).trim().replace(/\s+/g, " ")
+      if (!description) throw new Error(`no description in ${path}`)
+      skills.push({ id: entry.name, name: entry.name, description, path, content: text.slice(frontmatter[0].length) })
+    } catch (error) {
+      logHookError("skill.load", error)
+    }
+  }
+  return skills
+}
+
 async function consumeEvents(ctx, signal, handle) {
   try {
     for await (const event of ctx.event.subscribe({ signal })) {
@@ -187,21 +216,12 @@ export async function prepareV2Prompt(event, {
   const text = event?.prompt?.text
   const parts = typeof text === "string" && text.trim() ? [{ type: "text", text }] : []
   const input = { sessionID, messageID, directory }
-  const blocks = []
-  try {
-    const sessionBlock = await sessionInject.buildSessionContext(input)
-    if (sessionBlock) blocks.push(sessionBlock)
-  } catch (error) {
-    logHookError("session.prompt.profile", error)
-  }
-  if (recallEnabled) {
-    try {
-      const recallBlock = await recall.buildRelevantMemories(input, parts)
-      if (recallBlock) blocks.push(recallBlock)
-    } catch (error) {
-      logHookError("session.prompt.recall", error)
-    }
-  }
+  const blocks = (await Promise.all([
+    sessionInject.buildSessionContext(input).catch((error) => logHookError("session.prompt.profile", error)),
+    recallEnabled
+      ? recall.buildRelevantMemories(input, parts).catch((error) => logHookError("session.prompt.recall", error))
+      : undefined,
+  ])).filter(Boolean)
   if (blocks.length === 0) return
 
   event.metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : {}

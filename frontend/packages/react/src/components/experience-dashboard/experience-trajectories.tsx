@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { ArrowUpRightIcon, FileLinkIcon } from '../../icons/index.js';
 import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { ExperienceCopyAction } from './experience-copy-action.js';
+import { useLoadMoreOnScroll } from './use-load-more-on-scroll.js';
 import type {
   ExperienceDashboardLabels,
   ExperienceOutcome,
@@ -94,6 +95,7 @@ export function ExperienceTrajectories({
   locale = 'en-US',
   hasMore = false,
   loadingMore = false,
+  scrollLoadMore = false,
   onLoadMore,
   onOpenUri,
 }: {
@@ -102,9 +104,21 @@ export function ExperienceTrajectories({
   locale?: 'en-US' | 'zh-CN';
   hasMore?: boolean;
   loadingMore?: boolean;
+  /**
+   * 滚到底部时自动追加，与可点击的按钮并存。来源追溯只有一页，不需要它。
+   *
+   * Appends on reaching the bottom, alongside the clickable button. The source trace
+   * holds a single page and does not need it.
+   */
+  scrollLoadMore?: boolean;
   onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
 }) {
+  const sentinelRef = useLoadMoreOnScroll({
+    enabled: scrollLoadMore && hasMore,
+    loading: loadingMore,
+    onLoadMore,
+  });
   return (
     <>
       <ol className="ov-experience-dashboard__timeline">
@@ -123,14 +137,15 @@ export function ExperienceTrajectories({
                 </time>
               ) : null}
               <div className="ov-experience-dashboard__trajectory-title">
-                <button
-                  type="button"
-                  className="ov-experience-dashboard__trajectory-name"
-                  disabled={!onOpenUri}
-                  onClick={() => onOpenUri?.(item.uri)}
-                >
+                {/* 标题只是文字：打开动作由右侧的图标按钮负责，与控制台一致。
+                    两处都调 `onOpenUri` 会让同一行出现两个指向同一目标的入口。
+                 *
+                 * The title is plain text: the icon button on the right owns the open
+                 * action, as in the console. Two triggers for one destination would make
+                 * the same row offer the same trip twice. */}
+                <strong className="ov-experience-dashboard__trajectory-name">
                   {titleOf(item)}
-                </button>
+                </strong>
                 {item.outcome ? (
                   <span
                     className={[
@@ -173,7 +188,7 @@ export function ExperienceTrajectories({
         ))}
       </ol>
       {hasMore || loadingMore ? (
-        <div className="ov-experience-dashboard__load-more">
+        <div ref={sentinelRef} className="ov-experience-dashboard__load-more">
           {loadingMore ? (
             t.loadingMore
           ) : (

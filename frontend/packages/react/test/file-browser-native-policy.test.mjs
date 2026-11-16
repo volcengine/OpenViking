@@ -111,10 +111,12 @@ for (const [uri, isDir, targets, actions, editable] of cases) {
       );
       assert.equal(context.canEdit, editable);
       if (/\.(png|webm)$/.test(uri)) {
-        assert.equal(
-          view.container.querySelector('.ov-file-preview__footer'),
-          null,
+        const footer = view.container.querySelector('.ov-file-preview__footer');
+        assert.match(
+          footer?.textContent ?? '',
+          /Content parsing provided by the Content Understanding Model/,
         );
+        assert.doesNotMatch(footer.textContent, /characters?/);
         assert.ok(
           view.container.querySelector('img[data-ov-preview-image],video'),
         );

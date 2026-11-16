@@ -16,6 +16,8 @@ export default {
   allUsers: 'All users',
   administrator: 'Account administrators',
   administratorDescription: 'Administrators retain implicit management access.',
+  administratorBadge: 'Administrator',
+  currentUserBadge: 'Current user',
   direct: 'Direct grant',
   inherited: 'Inherited from parent',
   remove: 'Remove permission',

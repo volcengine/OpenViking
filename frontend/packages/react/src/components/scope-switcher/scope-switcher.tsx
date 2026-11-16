@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import type { ScopeSwitcherProps } from './types.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 export { ScopeSelector } from './scope-selector.js';
@@ -21,7 +22,7 @@ export type {
 } from './types.js';
 
 /** Layout and language scope only; selectors own data and interaction state. */
-export function ScopeSwitcher({
+function ScopeSwitcherView({
   locale: localeProp,
   children,
   className = '',
@@ -40,3 +41,5 @@ export function ScopeSwitcher({
     </LocaleProvider>
   );
 }
+
+export const ScopeSwitcher = withMonitoring(ScopeSwitcherView, 'ScopeSwitcher');

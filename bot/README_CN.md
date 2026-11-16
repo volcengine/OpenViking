@@ -323,6 +323,14 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.heartbeat.interval_seconds` | `600` | 心跳间隔 |
 | `bot.mode` | `normal` | 可选 `normal`、`readonly`、`debug` |
 
+### 编译执行模式
+
+Python VikingBot 的 `/runtime/v1/tasks` 默认使用 `bot.compile.mode = "simple"`。每个任务启动一个 AgentLoop，按 Skill 和 instruction 分页读取源，边读边向目标目录写入单个文本文件。增量任务还可以读取源快照之间的差异。simple 支持资源和 memory 目标。发布 Skill 包或使用原有编译流程，请在 `ov.conf` 中显式配置 complex：
+
+```json
+{ "bot": { "compile": { "mode": "complex" } } }
+```
+
 ### OpenViking 召回配置
 
 | 配置 | 默认值 | 说明 |

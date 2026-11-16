@@ -1,3 +1,5 @@
+import { useRenderErrors } from './command-console-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { TaskStatusList } from '../../shared/task-status/task-status.js';
 import {
   getCommandConsoleCommandInputText,
@@ -64,8 +66,13 @@ export function CommandConsoleRecordItem(props: CommandConsoleRecordProps) {
           label={statusLabel}
         />
         <div className="ov-command-console__result-body">
-          <TaskStatusList tasks={record.tasks} locale={props.locale} />
-          <CommandConsoleRecordBody {...props} />
+          <ErrorBoundary
+            message={useRenderErrors().result}
+            resetKeys={[record.id, record.status]}
+          >
+            <TaskStatusList tasks={record.tasks} locale={props.locale} />
+            <CommandConsoleRecordBody {...props} />
+          </ErrorBoundary>
         </div>
       </article>
     </div>

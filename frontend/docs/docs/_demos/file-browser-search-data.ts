@@ -21,6 +21,7 @@
 /** 一条目录项的形状，与 `fs/ls` 的返回一致。One directory entry, shaped like `fs/ls`. */
 interface Entry {
   uri: string;
+  abstract?: string;
 }
 
 /** 语义检索的分组结果。Grouped result of a semantic search. */
@@ -56,12 +57,16 @@ export function semanticSearch(
   query: string,
   entries: readonly Entry[],
   userRoot: string,
+  files: Readonly<Record<string, string>>,
 ): FindPayload {
   const needle = query.trim().toLowerCase();
   if (!needle) return {};
-  const hits = entries.filter((entry) =>
-    entry.uri.toLowerCase().includes(needle),
-  );
+  const hits = entries
+    .filter((entry) => entry.uri.toLowerCase().includes(needle))
+    .map((entry) => ({
+      ...entry,
+      abstract: files[entry.uri]?.split('\n\n')[1]?.trim(),
+    }));
   return {
     memories: hits.filter((entry) => entry.uri.startsWith(userRoot)),
     resources: hits.filter((entry) =>

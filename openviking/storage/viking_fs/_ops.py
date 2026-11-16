@@ -1155,6 +1155,8 @@ class _OpsMixin:
         example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'count': 42, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
 
         Extra fields:
+            access (str): The caller's effective read/write/manage level, or container
+                for a directory that can only be traversed.
             isLocked (bool): When ``include_lock_status`` is True, whether the
                 path is currently held by a path lock
                 (either the path itself or any ancestor directory). Returns
@@ -1184,7 +1186,7 @@ class _OpsMixin:
         uri = await self.resolve_uri(uri, real_ctx)
         ctx = self.authorize_read(real_ctx, [uri])
         real_ctx = ctx
-        await self._ensure_traversable(uri, ctx)
+        permission = await self._ensure_traversable(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
             result = await self._async_agfs.stat(path)
@@ -1202,6 +1204,7 @@ class _OpsMixin:
             )
         if isinstance(result, dict):
             result["uri"] = uri
+            result["access"] = permission.value if permission is not None else "container"
             if include_lock_status:
                 result["isLocked"] = await self._is_path_locked_async(path)
             # Add deterministic vector record id for files (level 2).
@@ -1802,8 +1805,7 @@ class _OpsMixin:
                 }
                 if recursive:
                     item["rel_path"] = entry.get("rel_path", "")
-            if entry.get("access") == "container":
-                item["access"] = "container"
+            item["access"] = entry["access"]
             if "tags" in entry and entry.get("access") != "container":
                 item["tags"] = entry["tags"]
             result.append(item)
@@ -1928,10 +1930,9 @@ class _OpsMixin:
                     "isDir": info["isDir"],
                     "rel_path": entry["rel_path"],
                     "uri": entry_uri,
+                    "access": entry["access"],
                 }
             )
-            if entry.get("access") == "container":
-                new_entry["access"] = "container"
             result.append(new_entry)
         return result
 
@@ -2465,13 +2466,18 @@ class _OpsMixin:
                 or not str(item[0].get("name", "")).startswith(".")
                 or show_all_hidden
             ]
-            decisions = await self._access_decision_many(
+            permissions = await self._permissions_many(
                 [entry_uri for _, entry_uri in entry_items], ctx
             )
             for entry, entry_uri in entry_items:
-                if decisions[entry_uri] is AccessDecision.ALLOWED:
-                    item = (entry, entry_uri)
-                elif entry.get("isDir") and decisions[entry_uri] is AccessDecision.CONTAINER:
+                permission = permissions[entry_uri]
+                if permission is not None:
+                    item = (dict(entry, access=permission.value), entry_uri)
+                elif (
+                    entry.get("isDir")
+                    and self._access_decision(entry_uri, self._ctx_or_default(ctx))
+                    is AccessDecision.CONTAINER
+                ):
                     item = (
                         {
                             k: v

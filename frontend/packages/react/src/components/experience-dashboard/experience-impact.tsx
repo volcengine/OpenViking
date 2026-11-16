@@ -1,11 +1,7 @@
-import {
-  ActivityIcon,
-  FileInputIcon,
-  ScanSearchIcon,
-} from '../../icons/index.js';
-import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
 import type { DashboardStatus } from '../../shared/dashboard/dashboard-state.js';
 import type { Locale } from '../../shared/locale.js';
+import { ExperienceMetrics } from './experience-metrics.js';
+import { ExperienceQueryState } from './experience-state.js';
 import { ExperienceTimeRange } from './experience-time-range.js';
 import { ExperienceTrajectories } from './experience-trajectories.js';
 import type {
@@ -24,19 +20,6 @@ const ORDER: readonly ExperienceOutcome[] = [
 ];
 
 /**
- * 注入率：服务端给 0 到 1 的比例，显示为一位小数的百分比。
- *
- * The injection rate: a 0–1 ratio from the server, shown as a percentage with one
- * decimal.
- */
-function formatRate(rate: number, locale: Locale) {
-  return new Intl.NumberFormat(locale, {
-    style: 'percent',
-    maximumFractionDigits: 1,
-  }).format(Math.min(rate, 1));
-}
-
-/**
  * 「应用效果」页签：标题与时间范围、三个指标、任务结果分布、注入轨迹。
  *
  * The "application impact" tab: the heading with its time range, three metrics, the
@@ -48,6 +31,7 @@ export function ExperienceImpact({
   locale,
   days,
   onDaysChange,
+  effectState = {},
   outcomesState,
   trajectoriesState,
   hasMore,
@@ -60,6 +44,7 @@ export function ExperienceImpact({
   locale: Locale;
   days: number;
   onDaysChange: (days: number) => void;
+  effectState?: DashboardStatus;
   outcomesState: DashboardStatus;
   trajectoriesState: DashboardStatus;
   hasMore: boolean;
@@ -68,31 +53,6 @@ export function ExperienceImpact({
   onOpenUri?: (uri: string) => void;
 }) {
   const total = data.outcomes?.reduce((sum, item) => sum + item.count, 0) ?? 0;
-  const metrics = [
-    {
-      key: 'injection',
-      label: t.injection,
-      hint: t.injectionHint,
-      value: data.effect?.injectionCount,
-      icon: <FileInputIcon width={14} height={14} />,
-    },
-    {
-      key: 'recall',
-      label: t.recall,
-      hint: t.recallHint,
-      value: data.effect?.recallCount,
-      icon: <ScanSearchIcon width={14} height={14} />,
-    },
-    {
-      key: 'rate',
-      label: t.rate,
-      hint: t.injectionHint,
-      value: data.effect
-        ? formatRate(data.effect.injectionRate, locale)
-        : undefined,
-      icon: <ActivityIcon width={14} height={14} />,
-    },
-  ];
   return (
     <div className="ov-experience-dashboard__impact">
       <div className="ov-experience-dashboard__heading">
@@ -102,15 +62,12 @@ export function ExperienceImpact({
         </div>
         <ExperienceTimeRange days={days} labels={t} onChange={onDaysChange} />
       </div>
-      <dl className="ov-experience-dashboard__metrics">
-        {metrics.map((metric) => (
-          <div key={metric.key} title={metric.hint}>
-            {metric.icon}
-            <dd>{metric.value ?? '—'}</dd>
-            <dt>{metric.label}</dt>
-          </div>
-        ))}
-      </dl>
+      <ExperienceMetrics
+        data={data}
+        labels={t}
+        locale={locale}
+        state={effectState}
+      />
       <section
         className="ov-experience-dashboard__distribution"
         aria-label={t.outcomes}
@@ -144,8 +101,9 @@ export function ExperienceImpact({
             );
           })
         ) : (
-          <DashboardState
+          <ExperienceQueryState
             state={outcomesState}
+            rows={3}
             empty={t.emptyOutcomes}
             loading={t.loading}
             failed={t.failed}
@@ -168,6 +126,7 @@ export function ExperienceImpact({
               locale={locale}
               hasMore={hasMore}
               loadingMore={loadingMore ?? trajectoriesState.loading}
+              scrollLoadMore
               onLoadMore={onLoadMore}
               onOpenUri={onOpenUri}
             />
@@ -177,8 +136,9 @@ export function ExperienceImpact({
              * When appending a page fails, the loaded trajectories stay and the error
              * with its retry sits below the list instead of replacing the timeline. */}
             {trajectoriesState.error ? (
-              <DashboardState
+              <ExperienceQueryState
                 state={trajectoriesState}
+                rows={3}
                 empty={t.emptyTimeline}
                 loading={t.loading}
                 failed={t.failed}
@@ -187,8 +147,9 @@ export function ExperienceImpact({
             ) : null}
           </>
         ) : (
-          <DashboardState
+          <ExperienceQueryState
             state={trajectoriesState}
+            rows={3}
             empty={t.emptyTimeline}
             loading={t.loading}
             failed={t.failed}

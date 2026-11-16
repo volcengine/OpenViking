@@ -5,6 +5,7 @@
 import asyncio
 import json
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 
@@ -31,6 +32,51 @@ def transport(monkeypatch):
 class Handler(DequeueHandlerBase):
     async def on_dequeue(self, data):
         return ProcessResult.success(data)
+
+
+@pytest.mark.parametrize("key", ["serial_key", "group_key"])
+async def test_keyed_enqueue_native_receipt_and_payload(key):
+    import ragfs_python
+
+    client = ragfs_python.RAGFSBindingClient()
+    client.mount("queuefs", "/queue", {"backend": "memory"})
+    queue = NamedQueue(client, "/queue", "Test")
+    try:
+        receipt = await queue.enqueue({"serial_key": "business payload"}, **{key: "用户:A"})
+        assert str(UUID(receipt)) == receipt
+        message = await queue.dequeue_raw()
+        assert message["id"] == receipt
+        assert json.loads(message["data"]) == {"serial_key": "business payload"}
+        second = await queue.enqueue("opaque", **{key: "用户:A"})
+        concurrent = await queue.dequeue_raw()
+        if key == "serial_key":
+            assert concurrent is None
+            await queue.ack(receipt, message)
+            concurrent = await queue.dequeue_raw()
+        assert concurrent["id"] == second
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        {"group_key": "a", "serial_key": "b"},
+        {"serial_key": ""},
+        {"serial_key": "界" * 1366},
+        {"group_key": 42},
+    ],
+)
+async def test_invalid_keys_rejected_before_middleware(transport, keys):
+    class Recorder(QueueMiddleware):
+        enqueue = AsyncMock()
+
+    middleware = Recorder()
+    queue = NamedQueue(object(), "/queue", "Test", middlewares=[middleware])
+    with pytest.raises(ValueError):
+        await queue.enqueue({}, **keys)
+    middleware.enqueue.assert_not_awaited()
+    transport.write.assert_not_awaited()
 
 
 @pytest.mark.parametrize("operation", ["enqueue", "process", "ack", "clear"])
