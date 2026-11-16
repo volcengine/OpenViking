@@ -1,3 +1,9 @@
+import type { MonitoringBinding } from '../../../shared/monitoring/binding.js';
+import { workflowForBinding } from '../../../shared/monitoring/workflow.js';
+import {
+  scopeService,
+  isNativeService,
+} from '../../../shared/monitoring/service.js';
 import type {
   VikingBotSessionService,
   VikingBotSessionsState,
@@ -7,6 +13,7 @@ export function createSessionsController(
   service: VikingBotSessionService,
   enabled = true,
   parent?: AbortSignal,
+  monitoring?: MonitoringBinding,
 ) {
   let state: VikingBotSessionsState = { sessions: [], isLoading: false };
   const listeners = new Set<() => void>();
@@ -28,12 +35,28 @@ export function createSessionsController(
     loading = controller;
     const version = ++revision;
     const requestSignal = AbortSignal.any([signal(), controller.signal]);
+    const operation = workflowForBinding(
+      monitoring,
+      'console_session_list_load',
+      requestSignal,
+    );
     update({ isLoading: true, error: undefined });
     try {
-      const sessions = await service.listSessions(requestSignal);
+      const sessions = await scopeService(
+        service,
+        operation?.span,
+      ).listSessions(requestSignal);
       requestSignal.throwIfAborted();
-      if (active && version === revision) update({ sessions });
+      if (active && version === revision) {
+        update({ sessions });
+        operation?.ready({ sessionCount: sessions.length });
+      }
     } catch (error) {
+      operation?.fail(
+        error,
+        isNativeService(service) ? 'protocol' : 'host-service',
+        requestSignal,
+      );
       if (active && version === revision && !requestSignal.aborted)
         update({
           error: error instanceof Error ? error : new Error(String(error)),
@@ -66,9 +89,17 @@ export function createSessionsController(
       if (!active || mutation) return;
       mutation = true;
       const requestSignal = signal();
+      const operation = workflowForBinding(
+        monitoring,
+        'console_session_create',
+        requestSignal,
+      );
       update({ error: undefined });
       try {
-        const session = await service.createSession(requestSignal);
+        const session = await scopeService(
+          service,
+          operation?.span,
+        ).createSession(requestSignal);
         if (!active || requestSignal.aborted) return;
         revision++;
         loading?.abort();
@@ -79,8 +110,14 @@ export function createSessionsController(
           ],
           isLoading: false,
         });
+        operation?.ready({});
         return session;
       } catch (error) {
+        operation?.fail(
+          error,
+          isNativeService(service) ? 'protocol' : 'host-service',
+          requestSignal,
+        );
         if (active && !requestSignal.aborted)
           update({
             error: error instanceof Error ? error : new Error(String(error)),
@@ -93,9 +130,17 @@ export function createSessionsController(
       if (!active || mutation) return false;
       mutation = true;
       const requestSignal = signal();
+      const operation = workflowForBinding(
+        monitoring,
+        'console_session_delete',
+        requestSignal,
+      );
       update({ error: undefined });
       try {
-        await service.removeSession(id, requestSignal);
+        await scopeService(service, operation?.span).removeSession(
+          id,
+          requestSignal,
+        );
         if (!active || requestSignal.aborted) return false;
         revision++;
         loading?.abort();
@@ -103,8 +148,14 @@ export function createSessionsController(
           sessions: state.sessions.filter((item) => item.id !== id),
           isLoading: false,
         });
+        operation?.ready({});
         return true;
       } catch (error) {
+        operation?.fail(
+          error,
+          isNativeService(service) ? 'protocol' : 'host-service',
+          requestSignal,
+        );
         if (active && !requestSignal.aborted)
           update({
             error: error instanceof Error ? error : new Error(String(error)),

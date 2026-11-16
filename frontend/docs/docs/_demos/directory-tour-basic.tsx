@@ -1,4 +1,4 @@
-import { Button } from '#demo-controls';
+import { Checkbox, Button } from '#demo-controls';
 import { useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLang } from '@rspress/core/runtime';
@@ -121,19 +121,17 @@ export default function DirectoryTourBasic() {
               ? '了解 OV 目录树'
               : 'Explore OV directories'}
         </Button>
-        <label>
-          <input
-            type="checkbox"
-            checked={missing}
-            onChange={(event) => {
-              close();
-              setMissing(event.target.checked);
-            }}
-          />
+        <Checkbox
+          checked={missing}
+          onChange={(next) => {
+            close();
+            setMissing(next);
+          }}
+        >
           <span>
             {zh ? '模拟 experiences 不存在' : 'Simulate missing experiences'}
           </span>
-        </label>
+        </Checkbox>
         <output aria-live="polite">
           {complete ? (zh ? '引导已完成' : 'Guide completed') : ''}
           {skipped ? ` (${skipped} ${zh ? '步已跳过' : 'skipped'})` : ''}

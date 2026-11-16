@@ -84,10 +84,11 @@ class UserPrivacyConfigService:
         target_key: str,
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
+        wait_for_lock: bool = True,
     ) -> bool:
         root_uri = self.get_config_root(ctx, category, target_key)
         async with self._config_lock(
-            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref, wait_for_lock=wait_for_lock
         ) as lease:
             # Acquiring a path lock may materialize the target directory. Treat
             # only a persisted current snapshot as an existing privacy target,
@@ -144,7 +145,9 @@ class UserPrivacyConfigService:
         target_key: str,
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
+        wait_for_lock: bool = True,
     ) -> AsyncIterator[Optional[dict[str, Any]]]:
+        """Keep internal mutations waiting while explicit API calls can fail on contention."""
         uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
         agfs = getattr(self._viking_fs, "_async_agfs", None)
         acquire = getattr(agfs, "pathlock_acquire_tree", None)
@@ -154,7 +157,7 @@ class UserPrivacyConfigService:
             return
         lease = await acquire(
             uri_to_path(self.get_config_root(ctx, category, target_key), ctx=ctx),
-            timeout_secs=30.0,
+            timeout_secs=30.0 if wait_for_lock else 0.0,
             **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
         )
         try:
@@ -254,9 +257,10 @@ class UserPrivacyConfigService:
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
         preserve_fields: Optional[set[str]] = None,
+        wait_for_lock: bool = True,
     ) -> UserPrivacyConfigVersion:
         async with self._config_lock(
-            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref, wait_for_lock=wait_for_lock
         ) as lease:
             current = await self.get_current(ctx, category, target_key)
             if preserve_fields:
@@ -289,9 +293,13 @@ class UserPrivacyConfigService:
         updated_by: str = "",
         change_reason: str = "",
         labels: Optional[dict[str, Any]] = None,
+        *,
+        wait_for_lock: bool = True,
     ) -> UserPrivacyConfigVersion:
         """Atomically update named fields, preserving independent fields with equal values."""
-        async with self._config_lock(ctx, category, target_key) as lease:
+        async with self._config_lock(
+            ctx, category, target_key, wait_for_lock=wait_for_lock
+        ) as lease:
             current = await self.get_current(ctx, category, target_key)
             values = dict(current.values) if current is not None else {}
             values.update(updates)
@@ -421,9 +429,10 @@ class UserPrivacyConfigService:
         updated_by: str = "",
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
+        wait_for_lock: bool = True,
     ) -> UserPrivacyConfigVersion:
         async with self._config_lock(
-            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref, wait_for_lock=wait_for_lock
         ) as lease:
             meta = await self.get_meta(ctx, category, target_key)
             snapshot = await self.get_version(ctx, category, target_key, version)
@@ -450,6 +459,8 @@ class UserPrivacyConfigService:
         target_key: str,
         field: str,
         updated_by: str = "",
+        *,
+        wait_for_lock: bool = True,
     ) -> Optional[UserPrivacyFieldDeleteResult]:
         """Remove one field from the active values by publishing a new snapshot.
 
@@ -457,7 +468,9 @@ class UserPrivacyConfigService:
         Deleting the final field removes the complete target and its history.
         """
         validate_privacy_field_name(field, location="field")
-        async with self._config_lock(ctx, category, target_key) as lease:
+        async with self._config_lock(
+            ctx, category, target_key, wait_for_lock=wait_for_lock
+        ) as lease:
             meta = await self.get_meta(ctx, category, target_key)
             current = await self.get_current(ctx, category, target_key)
             if meta is None or current is None or field not in current.values:

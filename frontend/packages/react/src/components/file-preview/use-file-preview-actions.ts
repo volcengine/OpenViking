@@ -1,3 +1,4 @@
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import { useRef } from 'react';
 
 import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
@@ -12,12 +13,15 @@ interface OperationPair<T> {
 async function copyText(
   value: string,
   notify?: (text: string) => void,
+  report?: (copied: boolean) => void,
 ): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(value);
   } catch {
+    report?.(false);
     return false;
   }
+  report?.(true);
   notify?.(value);
   return true;
 }
@@ -34,6 +38,7 @@ async function copyText(
  * still in flight.
  */
 export function useFilePreviewActions() {
+  const analytics = useAnalyticsRef();
   const pending = useRef(new Set<string>());
 
   async function run<T>(
@@ -71,7 +76,16 @@ export function useFilePreviewActions() {
         { execute: tab.operations?.openUri, notify: tab.onOpenUri },
         uri,
       ),
-    copyPath: (tab: FilePreviewTab, path: string) =>
-      copyText(path, tab.onCopyPath),
+    copyPath: async (tab: FilePreviewTab, path: string) => {
+      analytics.current?.emit('file_preview_copy_path_click', () => ({}));
+      return copyText(path, tab.onCopyPath, (copied) =>
+        analytics.current?.emit(
+          copied
+            ? 'file_preview_copy_path_success'
+            : 'file_preview_copy_path_fail',
+          () => ({}),
+        ),
+      );
+    },
   };
 }

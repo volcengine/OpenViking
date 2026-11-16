@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ResolvedCommandConsoleLabels } from '../command-console-labels.js';
 
 const messages = {
@@ -37,3 +38,8 @@ const messages = {
 } satisfies ResolvedCommandConsoleLabels;
 
 export default messages;
+
+export const renderErrors = {
+  console: '命令控制台显示失败',
+  result: '命令结果显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

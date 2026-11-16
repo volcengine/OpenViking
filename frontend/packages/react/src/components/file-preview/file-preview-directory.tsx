@@ -1,5 +1,6 @@
+import { levelToFileTab } from './file-preview-source.js';
 import type { Locale } from '../../shared/locale.js';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
 import type {
   ViewerHandle,
@@ -9,11 +10,16 @@ import type {
 import type { FilePreviewActions } from './types.js';
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewHeader } from './file-preview-header.js';
+import {
+  FilePreviewTransition,
+  needsAsyncLoad,
+  probeStatusOf,
+} from './file-preview-transition.js';
 import { LoadingState } from './file-preview-state.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import { useLevelIndicator } from './use-level-indicator.js';
 import type {
   FilePreviewDirectoryTab,
-  FilePreviewFileTab,
   FilePreviewLabels,
   FilePreviewViewMode,
   FilePreviewToolbarOptions,
@@ -51,22 +57,6 @@ export interface FilePreviewDirectoryBodyProps {
  * 把某一级摘要包装成文件页签的形状，正文渲染因此只有一条路径。
  * Wraps one level as a file tab so the body has exactly one rendering path.
  */
-function levelToFileTab(
-  tab: FilePreviewDirectoryTab,
-  key: string,
-): FilePreviewFileTab | undefined {
-  const level = tab.levels.find((candidate) => candidate.key === key);
-  if (!level) return undefined;
-  return {
-    kind: 'file',
-    key: `${tab.key}::${level.key}`,
-    source: level.source,
-    resources: level.resources ?? tab.resources,
-    resolveImage: tab.resolveImage,
-    operations: tab.operations,
-    slots: tab.slots,
-  };
-}
 
 export function FilePreviewDirectoryBody({
   toolbar,
@@ -90,33 +80,11 @@ export function FilePreviewDirectoryBody({
   const activeKey = tab.activeLevelKey ?? internalKey;
   const fileTab =
     levelToFileTab(tab, activeKey) ?? levelToFileTab(tab, tab.levels[0].key);
-  const tabsRef = useRef<HTMLDivElement>(null);
-  const [indicator, setIndicator] = useState({ left: 0, width: 0 });
-
-  // useLayoutEffect 必要性：指示条的位置来自页签按钮的实际布局盒，只有提交后
-  // 才可测量；字体加载、容器缩放与层级变化都会改变它，无法在渲染时算出。用
-  // 位移动画让它在两级之间滑动，而不是各画一条静止的下划线。
-  //
-  // A layout effect is required: the indicator's position comes from the tab
-  // buttons' layout boxes, measurable only after commit, and font loading,
-  // container resizing or a level change all move them. The offset animation makes
-  // it slide between levels instead of drawing a static underline on each.
-  useLayoutEffect(() => {
-    const root = tabsRef.current;
-    if (!root) return;
-    const measure = () => {
-      const active = root.querySelector<HTMLElement>('[aria-selected="true"]');
-      if (!active) return;
-      setIndicator({
-        left: active.offsetLeft + (active.offsetWidth - 14) / 2,
-        width: 14,
-      });
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, [activeKey, tab.levels]);
+  const { ref: tabsRef, indicator } = useLevelIndicator(
+    '[aria-selected="true"]',
+    activeKey,
+    tab.levels.length,
+  );
 
   const changeLevel = (key: string) => {
     if (tab.activeLevelKey === undefined) setInternalKey(key);
@@ -229,18 +197,33 @@ export function FilePreviewDirectoryBody({
         </div>
       ) : null}
       <div className="ov-file-preview__body">
-        <FilePreviewBody
-          key={fileTab.key}
-          fileTab={fileTab}
+        <FilePreviewTransition
+          identity={fileTab.key}
+          tab={fileTab}
+          targetKey={tab.key}
+          needsLoad={needsAsyncLoad(fileTab.source)}
           text={text}
-          locale={locale}
-          viewMode={viewMode}
-          editing={editing}
-          onViewModeChange={onViewModeChange}
-          onHandleChange={onHandleChange}
-          onViewModesChange={onViewModesChange}
-          onCancelEditing={onCancelEditing}
-        />
+        >
+          {(layer) => (
+            <FilePreviewBody
+              fileTab={layer.tab}
+              monitoringTargetKey={layer.targetKey}
+              onLoadingChange={layer.onLoadingChange}
+              text={text}
+              locale={locale}
+              viewMode={viewMode}
+              editing={editing}
+              onViewModeChange={onViewModeChange}
+              onHandleChange={onHandleChange}
+              onViewModesChange={onViewModesChange}
+              onCancelEditing={onCancelEditing}
+              onStateChange={(state) =>
+                layer.onProbeStatus(probeStatusOf(state))
+              }
+              reports={layer.reports}
+            />
+          )}
+        </FilePreviewTransition>
       </div>
       {tab.slots?.footer ? (
         <div className="ov-file-preview__footer">{tab.slots.footer}</div>

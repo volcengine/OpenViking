@@ -1,6 +1,7 @@
 import { useLocale } from '../../shared/locale-context.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
+import { useDirectoryPreviewLevels } from './use-directory-preview-levels.js';
 
 import type {
   FileTreeEntryRow,
@@ -31,6 +32,7 @@ export function useFileBrowser({
   rootUri,
   locale: localeProp,
   dashboardKinds,
+  experienceDataSource,
   renderDashboard,
   dashboardLabels,
   controlled = false,
@@ -44,7 +46,7 @@ export function useFileBrowser({
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
   const text = resolveLabels(accessLabels, locale);
-  const client = useOvClient();
+  const client = useOvClient('local');
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
   const [refreshing, setRefreshing] = useState(false);
   // External edits must refresh the directory and preview even if URI and client
@@ -88,6 +90,7 @@ export function useFileBrowser({
   // preview stuck on the initial resource. `pendingUri` is seeded from `currentUri`
   // anyway, so using it alone is correct.
   const activeUri = controlled ? currentUri : pendingUri;
+  const { requestUri, previewLevel } = useDirectoryPreviewLevels(activeUri);
   const { identifyUri } = tree;
   const blocked = tree.accessOf(activeUri);
   // 三态而不是布尔：不在已知目录集合里既可能是文件，也可能是还没加载过的目录，
@@ -96,7 +99,6 @@ export function useFileBrowser({
   // Three states rather than a boolean: absent from the known directory set may mean a
   // file or a directory that has not been loaded yet, and the two read different
   // endpoints, so they cannot collapse into "not a directory".
-  const resourceType = tree.resourceTypeOf(activeUri);
 
   // 面包屑上点某一级祖先，就选中它——和点树上的那一行是同一个动作，因此共用
   // 同一条选中路径，而不是另开一个只改预览的入口。
@@ -116,7 +118,7 @@ export function useFileBrowser({
   // commit would re-run the effect and cancel the previous request, turning one
   // selection into an endless reload. A ref carries the latest notification and
   // only `openTree` remains as a dependency.
-  const openTree = tree.open;
+  const { open: openTree, toggleExpand, loadMore, retry, refresh } = tree;
   const notifyUriChange = useRef(onUriChange);
   notifyUriChange.current = onUriChange;
   const openParent = useMemo(
@@ -130,7 +132,8 @@ export function useFileBrowser({
 
   const { rows, openPath, reveal, cancelReveal } = tree;
   const openResource = useMemo(
-    () => async (uri: string) => {
+    () => async (resource: string) => {
+      const uri = requestUri(resource);
       setPendingUri(uri);
       notifyUriChange.current(uri);
       const directory = tree.directoryUris.has(identifyUri(uri))
@@ -138,7 +141,7 @@ export function useFileBrowser({
         : uri.slice(0, uri.lastIndexOf('/'));
       await openPath(directory);
     },
-    [openPath, tree.directoryUris, identifyUri],
+    [openPath, tree.directoryUris, identifyUri, requestUri],
   );
 
   const boards = useBrowserDashboards({
@@ -151,12 +154,13 @@ export function useFileBrowser({
     requestOptions,
     onOpenUri: openResource,
     dashboardKinds,
+    experienceDataSource,
     renderDashboard,
     dashboardLabels,
   });
 
-  const preview = useFsPreview({
-    client,
+  const { setActiveKey, ...preview } = useFsPreview({
+    client: tree.isReady ? client : null,
     // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
     // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
     //
@@ -164,7 +168,8 @@ export function useFileBrowser({
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
     uri: blocked ? null : activeUri,
-    resourceType,
+    resourceType: tree.resourceTypeOf(activeUri),
+    ...previewLevel,
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
     openParent,
@@ -182,21 +187,17 @@ export function useFileBrowser({
     [rows, activeUri, identifyUri],
   );
 
-  // 解构出具体操作，`select` 里因此不再碰整个 `tree` 对象。
-  // Destructure the operations so `select` never touches the whole `tree` object.
-  const { open, toggleExpand, loadMore, retry, refresh } = tree;
-
   const { open: openDashboard, close: closeDashboard } = boards;
-  const setActiveKey = preview.setActiveKey;
   const navigateResource = useMemo<FileBrowserActions['openResource']>(
-    () => async (uri, options) => {
+    () => async (resource, options) => {
+      const uri = requestUri(resource);
       cancelReveal();
       closeDashboard();
       setPendingUri(uri);
       notifyUriChange.current(uri);
       return options?.reveal === false ? true : reveal(uri);
     },
-    [cancelReveal, closeDashboard, reveal],
+    [cancelReveal, closeDashboard, reveal, requestUri],
   );
   const actions = useMemo<FileBrowserActions>(
     () => ({
@@ -221,16 +222,14 @@ export function useFileBrowser({
         closeDashboard();
         setPendingUri(row.uri);
         notifyUriChange.current(row.uri);
-        if (row.type === 'directory') await open(row.uri);
+        if (row.type === 'directory') await openTree(row.uri);
       },
       toggleExpand,
       loadMore: async (row: FileTreeRow) => {
-        const parentId = 'parentId' in row ? row.parentId : undefined;
-        if (parentId) await loadMore(parentId);
+        if ('parentId' in row && row.parentId) await loadMore(row.parentId);
       },
       retry: async (row: FileTreeRow) => {
-        const parentId = 'parentId' in row ? row.parentId : undefined;
-        if (parentId) await retry(parentId);
+        if ('parentId' in row && row.parentId) await retry(row.parentId);
       },
       // Refresh the directory and preview together after external changes.
       refresh: async () => {
@@ -244,7 +243,7 @@ export function useFileBrowser({
       },
       openUri: openResource,
       openResource: navigateResource,
-      openDashboard: openDashboard,
+      openDashboard,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
           openDashboard(activeUri);
@@ -264,7 +263,7 @@ export function useFileBrowser({
       setActiveKey,
       navigateResource,
       cancelReveal,
-      open,
+      openTree,
       toggleExpand,
       loadMore,
       retry,
@@ -292,6 +291,8 @@ export function useFileBrowser({
     // selection, so a custom view or action reading `currentUri` would target a
     // different resource than the preview shows.
     currentUri: activeUri,
+    treeMonitoring: tree.monitoring,
+    previewMonitoring: preview.monitoring,
     isReady: tree.isReady,
     error: tree.error ?? previewError,
     treeError: tree.error,
@@ -303,6 +304,7 @@ export function useFileBrowser({
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,
+    previewUpdatedAt: preview.updatedAt,
     refreshing,
     actions,
   };

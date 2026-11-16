@@ -68,13 +68,14 @@ export function useCommandConsoleAssistPosition(
         Math.min(rect.left, window.innerWidth - width - 12),
       );
       panel.style.width = `${width}px`;
+      const right = window.innerWidth - left - width;
+      const side = left >= 334 ? 'left' : right >= 334 ? 'right' : 'stack';
+      panel.dataset.side = side;
+      // 详情与列表上下堆叠时共用一份高度，上限放宽到 640，列表才不会只剩几行。
       panel.style.setProperty(
         '--ov-ui-command-console-assist-height',
-        `${Math.min(420, available)}px`,
+        `${Math.min(side === 'stack' ? 640 : 420, available)}px`,
       );
-      const right = window.innerWidth - left - width;
-      panel.dataset.side =
-        left >= 334 ? 'left' : right >= 334 ? 'right' : 'stack';
       panel.style.setProperty(
         '--ov-ui-command-console-assist-detail-width',
         `${Math.min(400, (left >= 334 ? left : right) - 14)}px`,

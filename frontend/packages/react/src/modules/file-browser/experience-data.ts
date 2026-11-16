@@ -1,4 +1,6 @@
 import { normalizeResourceUri } from './fs-uri.js';
+import { toApiDate } from '../../shared/primitives/date-picker/api-date.js';
+import { experienceDateBounds } from './experience-date-range.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { resolveDashboardUri } from './dashboard-resource.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
@@ -7,6 +9,16 @@ import type {
   ExperienceOutcome,
   ExperienceItem,
 } from '../../components/experience-dashboard/types.js';
+
+/** Keep the same UTC date window across native requests and custom loaders. */
+export function experienceDateQuery(days: number) {
+  const bounds = experienceDateBounds(days);
+  if (!bounds) return {};
+  return {
+    startDate: toApiDate(bounds.start, 'utc'),
+    endDate: toApiDate(bounds.end, 'utc'),
+  };
+}
 
 export const EXPERIENCE_PAGE_SIZE = 20;
 export const isExperienceDirectory = (uri: string) =>
@@ -99,7 +111,7 @@ export async function readExperienceSources(
 }
 
 export interface ExperienceTrajectoryPage {
-  items: ExperienceTrajectory[];
+  items: readonly ExperienceTrajectory[];
   total: number;
   has_more: boolean;
 }

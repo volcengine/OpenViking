@@ -1,3 +1,5 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { PreviewQueryState } from './preview-query-state.js';
 import type {
   FileBrowserWorkflowLabels,
@@ -25,6 +27,7 @@ export function PreviewHistoryList({
   onCompare: () => void;
   onSelect: (id: string) => void;
 }) {
+  const track = useTrack();
   const entries = query.data;
   const dates = new Intl.DateTimeFormat(locale, {
     dateStyle: 'medium',
@@ -48,7 +51,9 @@ export function PreviewHistoryList({
       ) : null}
       <div className="ov-file-history__entries">
         <PreviewQueryState query={query} text={statusText} />
-        {entries?.length === 0 ? <p>{text.historyEmpty}</p> : null}
+        {entries?.length === 0 ? (
+          <Empty size="compact" illustration="tray" title={text.historyEmpty} />
+        ) : null}
         <ol>
           {entries?.map((entry) => {
             const title = entry.numbered
@@ -79,7 +84,10 @@ export function PreviewHistoryList({
                     type="button"
                     aria-label={entry.numbered ? title : undefined}
                     aria-pressed={selectedId === entry.id}
-                    onClick={() => onSelect(entry.id)}
+                    onClick={() => {
+                      track('file_browser_history_revision_select');
+                      onSelect(entry.id);
+                    }}
                   >
                     {label}
                   </button>

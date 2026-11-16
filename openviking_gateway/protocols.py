@@ -261,22 +261,23 @@ def plugin_present(body: dict, headers: dict) -> bool:
     if headers.get("x-openviking-plugin"):
         return True
 
-    def marked(text):
-        # An echoed or summarized gateway envelope is not a plugin installation.
-        text = re.sub(
-            r"<openviking-context\b[^>]*>",
-            lambda match: (
-                ""
-                if any(
-                    name.lower() == "source" and value.lower().startswith("gateway-")
-                    for name, _, value in re.findall(r"([\w-]+)\s*=\s*(['\"])(.*?)\2", match[0])
-                )
-                else match[0]
-            ),
-            text,
-            flags=re.I,
+    def from_gateway(attrs):
+        return any(
+            name.lower() == "source" and value.lower().startswith("gateway-")
+            for name, _, value in re.findall(r"([\w-]+)\s*=\s*(['\"])(.*?)\2", attrs)
         )
-        return any(re.search(rf"<{re.escape(tag)}(?:\s|>)", text, re.I) for tag in PLUGIN_TAGS)
+
+    def marked(text):
+        # Plugins inject whole blocks. A tag quoted as code is not one (a compaction
+        # summary may quote the gateway's own envelope), nor is a gateway envelope.
+        text = re.sub(r"^```.*?^```|`[^`\n]*`", "", text, flags=re.M | re.S)
+        return any(
+            not from_gateway(attrs)
+            for tag in map(re.escape, PLUGIN_TAGS)
+            for attrs in re.findall(
+                rf"<{tag}(\s[^<>]*)?>(?:(?!<{tag}[\s>]).)*?</{tag}\s*>", text, re.I | re.S
+            )
+        )
 
     # Plugins mark the context they inject. OpenViking tools alone, as from an MCP
     # connection, only keep the gateway's tools out (see client_openviking_tools).

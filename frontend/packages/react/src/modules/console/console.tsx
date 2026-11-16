@@ -1,3 +1,7 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { NotificationScope } from '../../shared/feedback/notification-scope.js';
+import { useRenderErrors } from './labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { TaskTrackingProvider } from '../../shared/task-tracking/context.js';
 import { ConsoleTaskNotifications } from './task-notifications.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
@@ -34,6 +38,7 @@ function ConsoleView({
   ...rest
 }: ConsoleProps) {
   const locale = useLocale(localeProp);
+  const renderErrors = useRenderErrors(locale);
   const state = useConsole({
     mode,
     modes,
@@ -49,7 +54,8 @@ function ConsoleView({
     { conversation, chatOptions, scopeKey, requestOptions, locale, modes },
     state.setConversationDraft,
   );
-  const { sessions, headerActions, ...conversationProps } = managedConversation;
+  const { sessions, headerActions, feedback, ...conversationProps } =
+    managedConversation;
   const botLocale = conversationProps.locale ?? locale;
   const botLabels = {
     ...consoleLabels(botLocale, overrides).vikingBot,
@@ -69,40 +75,43 @@ function ConsoleView({
         {...rest}
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
+        {feedback}
         <ConsoleTaskNotifications locale={locale} />
         {state.mode ? (
-          <ConsoleToolbar
-            mode={state.mode}
-            modes={modes ?? ['conversation', 'command']}
-            panelId={id}
-            locale={locale}
-            labels={labels}
-            records={state.records}
-            isExecuting={state.isExecuting}
-            onModeChange={(next) => state.setMode(next)}
-            onClear={() => {
-              state.clear();
-              fillCommand('');
-            }}
-            onRecall={fillCommand}
-            conversationActions={
-              <VikingBotSessionActions
-                sessions={sessions}
-                extra={headerActions}
-                onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
-                onCopy={conversationProps.onCopy}
-                labels={botLabels}
-                locale={botLocale}
-              />
-            }
-          >
-            {slots?.toolbar}
-          </ConsoleToolbar>
+          <ErrorBoundary message={renderErrors.toolbar} resetKeys={[scopeKey]}>
+            <ConsoleToolbar
+              mode={state.mode}
+              modes={modes ?? ['conversation', 'command']}
+              panelId={id}
+              locale={locale}
+              labels={labels}
+              records={state.records}
+              isExecuting={state.isExecuting}
+              onModeChange={(next) => state.setMode(next)}
+              onClear={() => {
+                state.clear();
+                fillCommand('');
+              }}
+              onRecall={fillCommand}
+              conversationActions={
+                <VikingBotSessionActions
+                  sessions={sessions}
+                  extra={headerActions}
+                  onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
+                  onCopy={conversationProps.onCopy}
+                  labels={botLabels}
+                  locale={botLocale}
+                />
+              }
+            >
+              {slots?.toolbar}
+            </ConsoleToolbar>
+          </ErrorBoundary>
         ) : null}
         {modes === undefined || modes.includes('conversation') ? (
           <div
             id={`${id}-conversation`}
-            className="ov-console__panel"
+            className="ov-console__panel ov-console__panel--conversation"
             hidden={state.mode !== 'conversation'}
           >
             {state.mode === 'conversation' ? (
@@ -133,20 +142,26 @@ function ConsoleView({
             className="ov-console__panel"
             hidden={state.mode !== 'command'}
           >
-            {slots?.commandHelp}
-            <CommandConsole
-              records={state.records}
-              value={state.command}
-              commands={state.commands}
-              commandGroups={consoleCommandGroups(locale)}
-              locale={locale}
-              disabled={state.isExecuting}
-              quickCommands={quickCommands ?? consoleQuickCommands(locale)}
-              onValueChange={state.setCommand}
-              onSubmit={(next) => void state.execute(next)}
-              onOpenUri={command?.onOpenUri ?? onOpenUri}
-              labels={labels.commandConsole}
-            />
+            <ErrorBoundary
+              monitoringRegion="commands"
+              message={renderErrors.command}
+              resetKeys={[scopeKey]}
+            >
+              {slots?.commandHelp}
+              <CommandConsole
+                records={state.records}
+                value={state.command}
+                commands={state.commands}
+                commandGroups={consoleCommandGroups(locale)}
+                locale={locale}
+                disabled={state.isExecuting}
+                quickCommands={quickCommands ?? consoleQuickCommands(locale)}
+                onValueChange={state.setCommand}
+                onSubmit={(next) => void state.execute(next)}
+                onOpenUri={command?.onOpenUri ?? onOpenUri}
+                labels={labels.commandConsole}
+              />
+            </ErrorBoundary>
           </div>
         ) : null}
       </div>
@@ -154,10 +169,21 @@ function ConsoleView({
   );
 }
 
-export function Console(props: ConsoleProps) {
+function ConsoleMonitoredView(props: ConsoleProps) {
   return (
-    <TaskTrackingProvider service={props.taskService}>
-      <ConsoleView {...props} />
-    </TaskTrackingProvider>
+    <ErrorBoundary
+      fallback={props.slots?.errorFallback}
+      message={useRenderErrors(props.locale).console}
+      locale={props.locale}
+      resetKeys={[props.scopeKey]}
+    >
+      <TaskTrackingProvider service={props.taskService}>
+        <NotificationScope locale={props.locale} isolateRequests>
+          <ConsoleView {...props} />
+        </NotificationScope>
+      </TaskTrackingProvider>
+    </ErrorBoundary>
   );
 }
+
+export const Console = withMonitoring(ConsoleMonitoredView, 'Console');

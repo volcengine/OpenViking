@@ -809,6 +809,70 @@ Possible shared response:
 
 ---
 
+### Copy or Move a Shared Resource
+
+These endpoints operate only on children of `viking://resources/`. Both source
+and destination must be in that shared subtree; the root itself and private
+resource namespaces are not accepted. Access checks and response fields follow
+the corresponding [filesystem operations](03-filesystem.md).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/resources/cp` | Copy a file or directory together with its vector records |
+| POST | `/api/v1/resources/mv` | Move or rename a shared resource |
+
+| Body parameter | Type | Required | Default | Description |
+|----------------|------|----------|---------|-------------|
+| `from_uri` | string | Yes | - | Source shared resource URI |
+| `to_uri` | string | Yes | - | Destination shared resource URI |
+| `recursive` | boolean | No | `false` | Copy directories recursively; supported by `cp` only |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/cp \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  --data '{"from_uri":"viking://resources/guide.md","to_uri":"viking://resources/guide-copy.md","recursive":false}'
+
+curl -X POST http://localhost:1933/api/v1/resources/mv \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  --data '{"from_uri":"viking://resources/guide-copy.md","to_uri":"viking://resources/guide-renamed.md"}'
+```
+
+Successful responses use `status: "ok"` and include `from` and `to` in
+`result`. Copy responses also include `recursive`.
+
+### Delete a Shared Resource
+
+Delete a child of `viking://resources/`. This operation requires MANAGE access,
+removes associated vector records, refreshes parent semantic metadata, and
+synchronizes affected watches.
+
+```http
+DELETE /api/v1/resources?uri={uri}
+```
+
+| Query parameter | Type | Required | Default | Description |
+|-----------------|------|----------|---------|-------------|
+| `uri` | string | Yes | - | Shared resource URI to delete; the shared root is not allowed |
+| `recursive` | boolean | No | `false` | Delete a directory recursively |
+| `wait` | boolean | No | `true` | Wait for semantic cleanup and refresh |
+
+```bash
+curl -X DELETE "http://localhost:1933/api/v1/resources" \
+  -H "X-API-Key: your-key" \
+  --get \
+  --data-urlencode "uri=viking://resources/guide-renamed.md" \
+  --data-urlencode "recursive=false" \
+  --data-urlencode "wait=true"
+```
+
+The success response includes the deleted `uri` in `result`. With `wait=false`,
+semantic work runs asynchronously; use the returned `task_id`, when present, to
+track completion through the [Task API](17-tasks.md).
+
+---
+
 ## Related Documentation
 
 - [File System](03-filesystem.md) - File and directory operations

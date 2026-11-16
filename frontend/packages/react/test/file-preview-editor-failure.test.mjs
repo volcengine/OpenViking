@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -46,7 +47,7 @@ test('opening the editor does not rewrite untouched CRLF content', async () => {
   }
 });
 
-test('highlight failures preserve the draft and allow retry', async () => {
+test('highlight failures retain draft recovery after the notification expires', async () => {
   const original = Prism.tokenize;
   const view = await mount(
     h(FilePreview, {
@@ -70,10 +71,12 @@ test('highlight failures preserve the draft and allow retry', async () => {
     const editor = await edit(view.container);
     await wait();
     assert.match(
-      view.container.textContent,
+      notificationError().textContent,
       /Failed to load syntax highlighting/,
     );
     assert.equal(editor.state.doc.toString(), 'const draft = 1;');
+    await act(() => new Promise((resolve) => setTimeout(resolve, 3300)));
+    assert.equal(Boolean(notificationError()), false);
     Prism.tokenize = original;
     await act(async () =>
       [...view.container.querySelectorAll('button')]
@@ -81,7 +84,11 @@ test('highlight failures preserve the draft and allow retry', async () => {
         .click(),
     );
     await wait();
-    assert.equal(view.container.querySelector('[role="alert"]'), null);
+    assert.equal(Boolean(notificationError()), false);
+    assert.equal(
+      Boolean(view.container.querySelector('[role="alert"]')),
+      false,
+    );
     assert.ok(
       editor.contentDOM.querySelector('.ov-file-preview__token--keyword'),
     );

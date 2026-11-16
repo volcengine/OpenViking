@@ -151,3 +151,28 @@ test("capture, recall and commit send each session's peer on the wire", async t 
     assert.equal(capture.body.peer_id, peer);
   }
 });
+
+test("a session's workspace recall and capture switches apply to that session", async t => {
+  const { b, writeConfig, start, session } = setup(t);
+  writeConfig(b, { recall: { enabled: false }, capture: { enabled: false } });
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    requests.push(path);
+    const result = path.startsWith("/api/v1/sessions/") && !init.method ? { pending_tokens: 20000 } : {};
+    return new Response(JSON.stringify({ status: "ok", result }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+  const runtime = start();
+  const current = session(b, "quiet");
+  const message = { role: "user", content: [{ type: "text", text: "Keep this repository off the server." }], source: { kind: "user" } };
+  assert.equal(await runtime.recallMessage({ session: current }, [message]), null);
+  runtime.capture(current, { type: "user/message", data: message });
+  runtime.maybeCommit(current, { type: "turn/end" });
+  await runtime.flush(current);
+
+  assert.ok(!requests.includes("/api/v1/search/search"));
+  assert.ok(!requests.includes("/api/v1/sessions/dsh-quiet/messages"));
+  assert.ok(!requests.includes("/api/v1/sessions/dsh-quiet/commit"));
+});

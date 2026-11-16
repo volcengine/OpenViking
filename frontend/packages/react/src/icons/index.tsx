@@ -1,8 +1,5 @@
 import WikiDiscussSvg from '../../../icons/svg/dashboards/discuss.svg?react';
 import FileLinkSvg from '../../../icons/svg/dashboards/file-link.svg?react';
-import TabImpactSvg from '../../../icons/svg/dashboards/tab-impact.svg?react';
-import TabSourceSvg from '../../../icons/svg/dashboards/tab-source.svg?react';
-import TabTestSvg from '../../../icons/svg/dashboards/tab-test.svg?react';
 import WikiHistorySvg from '../../../icons/svg/dashboards/history.svg?react';
 import WikiSuccessSvg from '../../../icons/svg/dashboards/success.svg?react';
 import WikiEditSvg from '../../../icons/svg/dashboards/edit.svg?react';
@@ -210,9 +207,3 @@ export const WikiHistoryIcon = createIcon(WikiHistorySvg, 'WikiHistoryIcon');
 export const WikiDiscussIcon = createIcon(WikiDiscussSvg, 'WikiDiscussIcon');
 
 export const FileLinkIcon = createIcon(FileLinkSvg, 'FileLinkIcon');
-
-export const TabImpactIcon = createIcon(TabImpactSvg, 'TabImpactIcon');
-
-export const TabSourceIcon = createIcon(TabSourceSvg, 'TabSourceIcon');
-
-export const TabTestIcon = createIcon(TabTestSvg, 'TabTestIcon');

@@ -101,7 +101,7 @@ export function VikingBotMessageRow({
   );
   return (
     <article
-      className={`ov-viking-bot__message ov-viking-bot__message--${message.role}`}
+      className={`ov-viking-bot__message ov-viking-bot__message--${message.role}${message.answerSummary ? ' ov-viking-bot__message--answers' : ''}`}
     >
       {message.role === 'user' ? (
         <UserMessageGroup

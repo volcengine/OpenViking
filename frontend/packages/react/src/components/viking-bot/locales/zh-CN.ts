@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { VikingBotLabels } from '../model.js';
 
 const messages = {
@@ -23,11 +24,13 @@ const messages = {
   welcomeTitle: '欢迎使用 VikingBot',
   welcomeDescription:
     '连接你的资料、记忆与上下文，让每一份数据都成为可用的知识。',
-  placeholder: '向 VikingBot 提问',
+  placeholder: '可以基于目录进行问答',
   send: '发送',
   stop: '停止',
   attach: '添加资源',
   removeAttachment: '移除附件',
+  uploadingAttachment: '上传中…',
+  attachmentUploadFailed: '附件上传失败',
   copy: '复制',
   copied: '已复制',
   reasoning: '推理',
@@ -45,3 +48,13 @@ const messages = {
 } satisfies Required<VikingBotLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  bot: '对话区域显示失败',
+  list: '消息列表显示失败',
+  message: '消息显示失败',
+  composer: '输入区域显示失败',
+  interaction: '交互表单显示失败',
+  header: '会话工具栏显示失败',
+  footer: '对话附加内容显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

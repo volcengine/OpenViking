@@ -33,6 +33,13 @@ export interface VikingBotChatInput extends VikingBotDraft {
   text: string;
 }
 
+export interface VikingBotAttachmentUpload {
+  /** File picker accept filter; the adapter still validates files, including drops. */
+  accept?: string;
+  /** Uploads a file and returns the identifier to pass to the chat service. */
+  upload: (file: File, signal: AbortSignal) => Promise<string>;
+}
+
 /** All methods receive the operation's signal; adapters must stop when it aborts. */
 export interface VikingBotChatService {
   stream: (
@@ -44,6 +51,8 @@ export interface VikingBotChatService {
     id: string,
     signal: AbortSignal,
   ) => Promise<readonly VikingBotMessage[]>;
+  /** Enables the built-in attachment picker when Console owns the draft. */
+  attachmentUpload?: VikingBotAttachmentUpload;
   /** Omit when the backend already persists chat, as in the commercial service. */
   saveMessage?: (
     id: string,
@@ -87,6 +96,10 @@ export interface UseVikingBotChatOptions extends VikingBotHookOptions {
 }
 
 export interface VikingBotChatState {
+  /** Draft ownership changes on every history load, even for the same session ID. */
+  historyKey?: object;
+  /** A normal terminal event in the current stream permits HITL. */
+  responseComplete?: boolean;
   sessionId?: string;
   messages: readonly VikingBotMessage[];
   streaming?: VikingBotStreamingState;
@@ -99,6 +112,8 @@ export interface VikingBotChatState {
 }
 
 export interface VikingBotChatResult extends VikingBotChatState {
+  /** Resolved request lifetime shared with managed attachment uploads. */
+  signal?: AbortSignal;
   /** True only when this service supplies an actual interrupt operation. */
   canInterrupt: boolean;
   canSteer: boolean;

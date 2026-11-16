@@ -35,19 +35,6 @@ async def _privacy_snapshot(client, endpoint):
     return current.status_code, current.json().get("result"), history
 
 
-def _observe_save_start(privacy, monkeypatch):
-    started = asyncio.Event()
-    original_upsert = privacy.upsert
-
-    async def observe_save(*args, **kwargs):
-        if kwargs.get("values") == {"api_key": "concurrent-value"}:
-            started.set()
-        return await original_upsert(*args, **kwargs)
-
-    monkeypatch.setattr(privacy, "upsert", observe_save)
-    return started
-
-
 async def _assert_unlocked(fs, root, ctx):
     lease = await fs._async_agfs.pathlock_acquire_tree(
         fs._uri_to_path(root, ctx=ctx), timeout_secs=0.01
@@ -56,7 +43,7 @@ async def _assert_unlocked(fs, root, ctx):
 
 
 @pytest.mark.parametrize("had_privacy", [False, True])
-async def test_failed_update_preserves_waiting_privacy_save(
+async def test_failed_update_rejects_competing_privacy_save(
     client, service, monkeypatch, had_privacy
 ):
     name = "privacy-update-failure"
@@ -71,7 +58,6 @@ async def test_failed_update_preserves_waiting_privacy_save(
     root = privacy.get_config_root(ctx, "skill", name)
     paused = asyncio.Event()
     resume = asyncio.Event()
-    save_started = _observe_save_start(privacy, monkeypatch)
 
     async def prepare_privacy(self, skill_dict, ctx):
         return skill_dict, {"api_key": "replacement-value"}
@@ -91,19 +77,18 @@ async def test_failed_update_preserves_waiting_privacy_save(
             json={"data": _skill_md(name, "Failed replacement"), "wait": True},
         )
     )
-    saving = None
     try:
         await asyncio.wait_for(paused.wait(), 5)
         await _assert_locked(service.viking_fs, root)
-        saving = asyncio.create_task(
-            client.post(endpoint, json={"values": {"api_key": "concurrent-value"}})
+        rejected = await asyncio.wait_for(
+            client.post(endpoint, json={"values": {"api_key": "concurrent-value"}}), 2
         )
-        await asyncio.wait_for(save_started.wait(), 5)
-        assert not saving.done(), "Configuration writes must wait until the update finishes"
+        assert rejected.status_code == 409, rejected.text
+        assert rejected.json()["error"]["code"] == "CONFLICT"
         resume.set()
         failed = await asyncio.wait_for(updating, 10)
         assert failed.status_code == 500, failed.text
-        saved = await asyncio.wait_for(saving, 10)
+        saved = await client.post(endpoint, json={"values": {"api_key": "concurrent-value"}})
         assert saved.status_code == 200, saved.text
         status, current, history = await _privacy_snapshot(client, endpoint)
         assert status == 200
@@ -115,9 +100,8 @@ async def test_failed_update_preserves_waiting_privacy_save(
         assert shown.json()["result"]["description"] == "Failed replacement"
     finally:
         resume.set()
-        pending = [task for task in (updating, saving) if task is not None and not task.done()]
-        if pending:
-            await asyncio.wait_for(asyncio.gather(*pending), 10)
+        if not updating.done():
+            await asyncio.wait_for(updating, 10)
 
 
 async def test_update_cancellation_keeps_privacy_and_releases_both_locks(

@@ -1,5 +1,7 @@
+import { withMonitoring } from '../../../shared/monitoring/with-monitoring.js';
+import { useTrack } from '../../../shared/analytics/use-track.js';
 import type { LoginMethodSelectorProps } from './types.js';
-export function LoginMethodSelector({
+function LoginMethodSelectorView({
   methods,
   disabled,
   className,
@@ -7,6 +9,7 @@ export function LoginMethodSelector({
   title,
   description,
 }: LoginMethodSelectorProps) {
+  const track = useTrack();
   return (
     <div className={`ov-auth ${className ?? ''}`}>
       {title && <h2>{title}</h2>}
@@ -17,7 +20,10 @@ export function LoginMethodSelector({
             key={method.id}
             type="button"
             disabled={disabled || method.disabled}
-            onClick={() => onSelect?.(method.id)}
+            onClick={() => {
+              track('login_method_selector_select');
+              onSelect?.(method.id);
+            }}
           >
             {method.icon}
             {method.label}
@@ -27,3 +33,8 @@ export function LoginMethodSelector({
     </div>
   );
 }
+
+export const LoginMethodSelector = withMonitoring(
+  LoginMethodSelectorView,
+  'LoginMethodSelector',
+);

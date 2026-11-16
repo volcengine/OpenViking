@@ -160,7 +160,7 @@ export function offlineFetch(
   if (url.searchParams.has('uri')) url.searchParams.set('uri', uri);
   const body = typeof init?.body === 'string' ? init.body : '';
 
-  const native = nativePreviewDemoResponse(url, init);
+  const native = nativePreviewDemoResponse(url, FILES, init);
   if (native) return Promise.resolve(native);
   const board = dashboardDemoResponse(url);
   if (board) return Promise.resolve(board);
@@ -209,7 +209,9 @@ export function offlineFetch(
       if (query?.trim().toLowerCase() === 'error')
         return Promise.resolve(searchFailure());
       return Promise.resolve(
-        ok(semanticSearch(query ?? '', Object.values(DIRS).flat(), USER)),
+        ok(
+          semanticSearch(query ?? '', Object.values(DIRS).flat(), USER, FILES),
+        ),
       );
     }
     case '/api/v1/search/grep': {
