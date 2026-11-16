@@ -1,43 +1,59 @@
-# Components
+# Business components
 
-Reusable views and file-type icons for OpenViking AI applications. Components receive prepared data and state through props and report user intent through callbacks. Applications own data fetching, authentication, and business workflows.
-
-## Available modules
-
-### [FileBrowserEntries](./file-browser-entries)
-
-The entry row at the top of the file browsing area: connect an agent, import resources. Fixed to two entries; the host decides which appear and what a click does, while the icons, copy and divider belong to the component.
-
-### [FileTree](./file-tree)
-
-A flattened file tree with row rendering, selection, expansion, keyboard interaction, and pagination intent. The host supplies ordered rows and handles data loading. The current view is a placeholder; see the component page for its scope and limitations.
-
-### [DirectoryTour](./directory-tour)
-
-A six-step anchor walkthrough with async location, independent highlights, viewport collision handling, retry and skip. The host owns directory loading and completion state.
-
-### [FilePreview](./file-preview)
-
-A tabbed file-preview view with header actions, tab switching, and plain-text preview and editing foundations. The current view is a placeholder: the file body is not wired to FileViewer yet and falls back to plain text. Applications provide content and save behavior.
-
-### [Tui](./tui)
-
-Command records, results and input with completion, parameter hints and grouped command help, driven by bundled CLI metadata.
-
-### [ScopeSwitcher](./scope-switcher)
-
-A stateless header breadcrumb containing independent ScopeSelector views. Each host level owns its data, search and requests; only selected identities participate in cascading updates.
-
-### [AgentConnect](./agent-connect)
-
-A Figma connection view with mainstream agents and MCP, CLI, API and SDK developer methods, bilingual details and original icons. Hosts provide credentials and locale; selection can be local or controlled, with clipboard feedback.
-
-### [VikingBot](./viking-bot)
-
-The conversation view: message list, composer and pending-interaction area. Renders a working view against the normalized message model; the view is a placeholder pending design review.
+The business components here are plain views: you pass in the data, and they send no requests and do not need `OpenVikingProvider`. For features that load their own data, see [Blocks](../modules/).
 
 ### [Icons](./icons)
 
-Five file-type icons with configurable image dimensions and accessible labels: audio, PDF, presentation, video, and word-processing files.
+The icons built into the library: arrow, file-type, scope-level and dashboard icons as React components that render inline SVG, plus functions that pick a file-type icon from a file name.
 
-See [Getting started](../guide/getting-started) for public package entries, stylesheet choices, and application integration boundaries.
+## Files and directories
+
+### [FileTree](./file-tree)
+
+FileTree renders the rows your app provides as an expandable, keyboard-operable file tree.
+
+### [FilePreview](./file-preview)
+
+A tabbed file preview that renders each file by its format, with a path breadcrumb, preview/source switching, text editing and actions you define.
+
+### [FileBrowserActionBar](./file-browser-action-bar)
+
+The action bar at the top of the file browsing area, with two fixed actions (connect an agent and import resources) whose visibility and behavior your app controls.
+
+### [DirectoryTour](./directory-tour)
+
+A non-modal, step-by-step tour of the directories in your app: it highlights each directory row you locate and shows an explanation card beside it, without changing the selected file.
+
+## Conversation and commands
+
+### [VikingBot](./viking-bot)
+
+Shows the conversation messages your app provides, with a composer and a pending-interaction area: sending, stopping and opening resources are reported through callbacks, and the component sends no requests.
+
+### [CommandConsole](./command-console)
+
+A terminal-style view of command records and their results, with an input area that provides command suggestions and parameter help.
+
+## Accounts and connections
+
+### [ScopeSwitcher](./scope-switcher)
+
+A scope breadcrumb made of independent selectors: `ScopeSwitcher` lays them out, and each level, such as library, data space or user, is a `ScopeSelector` that shows the current value and switches it.
+
+### [AgentConnect](./agent-connect)
+
+A connection panel that lists mainstream agents and four developer options (MCP, CLI, API and SDK), with setup instructions and copyable code blocks in which the API key is masked by default.
+
+### [Auth forms](./auth-forms)
+
+Six components that cover choosing a login method, logging in with an email or an API Key, requesting a password reset email, setting a password and confirming an invitation.
+
+## Dashboards
+
+### [WikiDashboard](./wiki-dashboard)
+
+Shows the conflicts in a Wiki directory or file: the directory view lists the files that have conflicts, and the file view lists each conflict with its details and resolution history.
+
+### [ExperienceDashboard](./experience-dashboard)
+
+Shows how Agent experiences are used: the directory view lists experience files, and the file view shows one experience's impact, source trajectories and test materials.

@@ -417,7 +417,7 @@ class CaptureWorker:
         policy = Policy.model_validate(state["policy"])
         if state.get("error"):
             await self.viking.health(token)
-        await self.viking.create_session(token, session)
+        await self.viking.create_session(token, session, policy.capture_memory_types)
         # A write or commit whose response is lost is sent again; the rare
         # duplicate in OpenViking is accepted.
         while state["pending"] and state["pending"][0]["ready"] <= time.time():

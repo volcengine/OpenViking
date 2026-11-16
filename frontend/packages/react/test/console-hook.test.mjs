@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useConsole } from '@openviking/react/modules/console';
-import { OpenVikingProvider } from '@openviking/react/client';
-import { act } from './helpers/tui-dom.mjs';
+import { useConsole } from './helpers/internal-hooks.mjs';
+import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
+import { act } from './helpers/command-console-dom.mjs';
 
-test('standalone useConsole sends quoted and end-of-options data through the native client', async () => {
+test('internal Console state sends quoted and end-of-options data through the native client', async () => {
   const calls = [];
   let state;
   const container = document.createElement('div');

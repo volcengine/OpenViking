@@ -11,8 +11,9 @@ from packaging.version import InvalidVersion, Version
 
 from .cache import TTLCache
 
-# Sent on recall only, as the memory plugins do by default: recall adds this peer's memories,
-# and without a peer_scope other peers' memories still come back with a small score penalty.
+# Recall adds this peer's memories; other peers' still come back with a small score penalty
+# unless the body sets peer_scope "actor". Tool calls carry it only under "actor". Without a
+# peer there is nothing to narrow to, so "actor" sends what "all" does.
 PEER_HEADER = "X-OpenViking-Actor-Peer"
 
 
@@ -116,6 +117,7 @@ class VikingClient:
                 "score_threshold": policy.score_threshold,
                 "exclude_uris": exclude[-200:],
                 "rewrite": False,
+                **({"peer_scope": "actor"} if peer and policy.recall_peer_scope == "actor" else {}),
             },
             timeout=policy.recall_timeout,
             peer=peer,
@@ -126,7 +128,12 @@ class VikingClient:
             "POST", f"/api/v1/sessions/{session}/messages/batch", key, {"messages": messages}
         )
 
-    async def create_session(self, key, session):
+    async def create_session(self, key, session, memory_types=None):
+        memory_policy = {}
+        if not await self._supports_commit_wm_override(key):
+            memory_policy["working_memory"] = {"enabled": False}
+        if memory_types is not None:
+            memory_policy["memory_types"] = memory_types
         try:
             return await self.request(
                 "POST",
@@ -139,8 +146,7 @@ class VikingClient:
                         "message_count_threshold": 0,
                         "idle_timeout_seconds": 0,
                     },
-                    # Commits only feed memory extraction; the gateway writes its own summaries.
-                    "memory_policy": {"working_memory": {"enabled": False}},
+                    **({"memory_policy": memory_policy} if memory_policy else {}),
                 },
             )
         except VikingError as error:
@@ -148,13 +154,20 @@ class VikingClient:
                 raise
 
     async def commit(self, key, session, keep=0):
+        body = {"keep_recent_count": keep}
+        # The gateway owns summaries; leave the resolved extraction policy intact.
+        if await self._supports_commit_wm_override(key):
+            body["enable_working_memory"] = False
         return await self.request(
             "POST",
             f"/api/v1/sessions/{session}/commit",
             key,
-            {"keep_recent_count": keep},
+            body,
             timeout=45,
         )
+
+    async def _supports_commit_wm_override(self, key):
+        return Version((await self.health(key))["version"]) >= Version("0.5.0")
 
     async def read_content(self, key, uri):
         try:
@@ -196,7 +209,7 @@ class VikingClient:
 
         return await self.tools_cache.get("tools/list", load)
 
-    async def mcp(self, method, key, params=None, timeout=120):
+    async def mcp(self, method, key, params=None, timeout=120, peer=None):
         """Stateless Streamable HTTP MCP; accept both JSON and SSE responses."""
         from .protocols import SSEDecoder
 
@@ -208,6 +221,7 @@ class VikingClient:
                     "Accept": "application/json, text/event-stream",
                     "MCP-Protocol-Version": "2025-06-18",
                     "Accept-Encoding": "identity",
+                    **peer_header(peer),
                 },
                 json={
                     "jsonrpc": "2.0",

@@ -115,7 +115,7 @@ async def test_discover_root_types_uses_schema_paths_and_existing_files(peer_id)
     root = f"viking://user/u1/{'peers/' + peer_id + '/' if peer_id else ''}memories"
     registry = MemoryTypeRegistry(load_schemas=False)
     defaults = get_default_registry()
-    for name in ("entities", "events", "preferences", "profile", "identity", "soul", "cases"):
+    for name in ("entities", "events", "preferences", "profile", "cases"):
         registry.register(defaults.get(name).model_copy(deep=True))
     disabled = defaults.get("entities").model_copy(
         update={"memory_type": "disabled", "enabled": False}
@@ -144,9 +144,7 @@ async def test_discover_root_types_uses_schema_paths_and_existing_files(peer_id)
     fs = SimpleNamespace(stat=AsyncMock(side_effect=stat))
     types = await _discover_memory_types(root, registry, fs, _ctx())
 
-    assert types == sorted(
-        ["entities", "events", "profile", "identity", "soul"] + ([] if peer_id else ["cases"])
-    )
+    assert types == sorted(["entities", "events", "profile"] + ([] if peer_id else ["cases"]))
     assert all(call.args[0].startswith(root + "/") for call in fs.stat.await_args_list)
     assert f"{root}/unknown" not in [call.args[0] for call in fs.stat.await_args_list]
     if peer_id:
@@ -588,7 +586,7 @@ async def test_compile_prefers_account_registry(monkeypatch, language_config):
     account_registry = MemoryTypeRegistry(load_schemas=False)
     for schema in deployment.list_all(include_disabled=True):
         account_registry.register(schema.model_copy(deep=True))
-    account_registry.get("soul").content_template = "# Company Assistant\n{{ content }}"
+    account_registry.get("events").content_template = "# Company Events\n{{ summary }}"
 
     captured = {}
 
@@ -637,8 +635,8 @@ async def test_compile_prefers_account_registry(monkeypatch, language_config):
     assert base_registry is language_config.registry
     assert captured["provider_registry"] is account_registry
     assert (
-        captured["provider_registry"].get("soul").content_template
-        == "# Company Assistant\n{{ content }}"
+        captured["provider_registry"].get("events").content_template
+        == "# Company Events\n{{ summary }}"
     )
 
 

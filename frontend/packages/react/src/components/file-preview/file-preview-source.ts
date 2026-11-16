@@ -1,8 +1,9 @@
+import type { FilePreviewDirectoryTab, FilePreviewFileTab } from './types.js';
 import type { FileSource } from '@ark-design/ui/file-viewer';
 
 import type { FilePreviewSource } from './types.js';
 
-/** 把字符串编码成字节，避免依赖 `File` 构造器（服务端渲染阶段没有它）。 */
+/** 把正文编码成底座支持的字节来源。 */
 function encodeText(content: string): Uint8Array {
   return new TextEncoder().encode(content);
 }
@@ -33,8 +34,8 @@ export function toFileSource(
     return {
       kind: 'file',
       file:
-        typeof File === 'undefined' || file instanceof File
-          ? (file as File)
+        file instanceof File
+          ? file
           : new File([file], fileName, { type: file.type }),
       name: fileName,
       ...(fileType ? { fileType } : {}),
@@ -53,16 +54,6 @@ export function toFileSource(
   return undefined;
 }
 
-/** 取页签上可用于复制的正文；拿不到时返回 `undefined`。 */
-export function readCopyableText(
-  source: FilePreviewSource,
-): string | undefined {
-  const { content } = source;
-  return typeof content === 'string' && content.length > 0
-    ? content
-    : undefined;
-}
-
 /**
  * 判断文件是否为严格空文件。
  *
@@ -75,4 +66,21 @@ export function readCopyableText(
  */
 export function isEmptyFile(source: FilePreviewSource): boolean {
   return source.content === '';
+}
+
+export function levelToFileTab(
+  tab: FilePreviewDirectoryTab,
+  key: string,
+): FilePreviewFileTab | undefined {
+  const level = tab.levels.find((candidate) => candidate.key === key);
+  if (!level) return undefined;
+  return {
+    kind: 'file',
+    key: `${tab.key}::${level.key}`,
+    source: level.source,
+    resources: level.resources ?? tab.resources,
+    resolveImage: tab.resolveImage,
+    operations: tab.operations,
+    slots: tab.slots,
+  };
 }

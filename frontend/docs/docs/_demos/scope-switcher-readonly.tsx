@@ -1,6 +1,6 @@
 import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
-import { LibraryIcon, SpaceIcon, UserIcon } from '#scope-switcher-icons';
+import { LibraryIcon, SpaceIcon, UserIcon } from '@openviking/react/icons';
 import {
   ScopeSwitcher,
   ScopeSelector,

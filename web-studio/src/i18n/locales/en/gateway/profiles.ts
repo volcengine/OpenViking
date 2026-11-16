@@ -19,7 +19,7 @@ const profiles = {
   empty: {
     title: 'No context profiles yet',
     description:
-      'Every gateway key needs a context profile. The recommended settings recall memory for each new message, save conversations, summarize long ones and let the model use the read-only OpenViking tools. You can change them at any time.',
+      'Every gateway key needs a context profile. The recommended settings recall memory for each new message, save conversations, summarize long ones and let the model use every OpenViking tool. You can change them at any time.',
     readOnly: 'Waiting for your gateway admin to add a profile.',
   },
   summary: {
@@ -69,7 +69,7 @@ const profiles = {
   clientOverrides: {
     label: 'Let clients override settings',
     description:
-      'Clients can change any setting below for a new conversation with the X-OpenViking-Context header, including budgets and tools that change data. Turn this off for a profile that must stay as saved.',
+      'Clients can change any setting below for a new conversation with the X-OpenViking-Context header, including budgets; for tools, it can only withhold more. Turn this off for a profile that must stay as saved.',
   },
   recall: {
     title: 'Recall memory',
@@ -121,6 +121,13 @@ const profiles = {
       label: 'Query length',
       description:
         'Recall searches with the latest user message, cut to this length.',
+    },
+    peerScope: {
+      label: 'Peer scope',
+      description:
+        "Which peers' memories recall and OpenViking tools can see besides the user's own.",
+      all: 'All peers, current peer first',
+      actor: 'Current peer only',
     },
     quotas: {
       label: 'Limit by category',
@@ -204,7 +211,7 @@ const profiles = {
     available: {
       label: 'Tools',
       description:
-        'The recommended settings select the read-only tools and leave the ones that change data unchecked. Tools added in the future are selected automatically. The upstream must allow OpenViking tools as well.',
+        'The recommended settings select every tool, including the ones that change data. Tools added in the future are selected automatically. The upstream must allow OpenViking tools as well.',
     },
     empty: 'Issue a gateway key to load the tool list.',
     loadFailed: "Couldn't load OpenViking tools",

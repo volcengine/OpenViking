@@ -707,7 +707,7 @@ class SemanticConfig:
     """Maximum number of file summaries per batch when splitting oversized prompts."""
 
     overview_sample_limit: int = 32
-    """Small-directory threshold for freshness scheduling; not a summary count cap."""
+    """Maximum direct-child sample per directory summary and freshness small-directory threshold."""
 
     freshness_refresh_ratio: float = 0.10
     """Pending direct-child change ratio that refreshes a wide directory."""

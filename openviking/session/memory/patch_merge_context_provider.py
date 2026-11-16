@@ -26,7 +26,7 @@ _SYSTEM_HIDDEN_FIELDS = {
     "last_update_trace_id",
 }
 _MAX_EXTRA_CANDIDATE_FILES = 10
-_PATCH_METADATA_KEYS = ("confidence",)
+_PATCH_METADATA_KEYS = ("confidence", "delete_uri", "proposed_replacements")
 
 
 @dataclass(slots=True)

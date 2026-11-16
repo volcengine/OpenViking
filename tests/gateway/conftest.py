@@ -113,7 +113,7 @@ class FakeViking:
     async def health(self, key="", require_identity=True):
         return {"version": "0.4.16", "role": "user", "account_id": "tenant", "user_id": "alice"}
 
-    async def create_session(self, key, session):
+    async def create_session(self, key, session, memory_types=None):
         return {}
 
     async def write(self, key, session, messages):

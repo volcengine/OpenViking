@@ -1,3 +1,4 @@
+import type { Workflow } from '../../shared/monitoring/workflow.js';
 import type {
   FilePreviewDirectoryTab,
   FilePreviewFileTab,
@@ -20,52 +21,18 @@ export interface FsEntry {
   size?: number;
   modTime?: string;
   abstract?: string;
+  tags?: readonly string[];
+  access?: 'denied' | 'container' | 'read' | 'write' | 'manage';
 }
 
 /** 一个目录已加载的子节点与分页状态。 */
 export interface DirState {
+  monitoring?: readonly Workflow<'file_browser_directory_load'>[];
+  ready: boolean;
   entries: FsEntry[];
   hasMore: boolean;
   loading: boolean;
   error: Error | null;
-}
-
-/** 语义搜索返回的分组结果。Grouped results of a semantic search. */
-
-/** 空目录状态。An empty directory state. */
-export const emptyDir = (): DirState => ({
-  entries: [],
-  hasMore: false,
-  loading: false,
-  error: null,
-});
-
-/**
- * 把新到的一页并入目录状态：`offset` 为 0 是首屏、直接替换，否则追加到已有
- * 子节点之后。
- *
- * 追加而不是替换，是因为分页要保留前几页；替换会让「加载更多」把列表截成最后
- * 一页。
- *
- * Merges an arriving page into a directory's state: `offset` 0 is the first page and
- * replaces, anything else appends to the children already loaded.
- *
- * It appends rather than replaces because paging has to keep the earlier pages;
- * replacing would truncate the list to its last page on "load more".
- */
-export function mergePage(
-  current: DirState | undefined,
-  page: { entries: FsEntry[]; hasMore: boolean },
-  offset: number,
-): DirState {
-  const previous = current ?? emptyDir();
-  return {
-    entries:
-      offset === 0 ? page.entries : [...previous.entries, ...page.entries],
-    hasMore: page.hasMore,
-    loading: false,
-    error: null,
-  };
 }
 
 /** 从 URI 取末段名称。最后一段为空时回退到整个 URI。 */
@@ -94,9 +61,11 @@ export function toEntryRow(
   expanded: boolean,
   index?: number,
   busy?: boolean,
-): FileTreeEntryRow {
+): FileTreeEntryRow & { tags?: readonly string[] } {
   const isDir = entry.isDir === true;
+  const access = entry.access === 'read' ? 'read-only' : entry.access;
   return {
+    tags: entry.tags,
     kind: 'entry',
     id: index === undefined ? entry.uri : `${entry.uri}#${index}`,
     depth,
@@ -104,6 +73,9 @@ export function toEntryRow(
     name: nameFromUri(entry.uri),
     type: isDir ? 'directory' : 'file',
     expanded: isDir ? expanded : undefined,
+    disabled: entry.access === 'denied' || undefined,
+    selectable: entry.access === 'container' ? false : undefined,
+    access: access === 'write' || access === 'manage' ? undefined : access,
     // 正在取子节点时标记写入中，组件据此把展开箭头换成转圈。
     // While children load the row is marked busy, so the component swaps the
     // chevron for a spinner.
@@ -124,9 +96,16 @@ export function toEntryRow(
  * 一个文件的预览页签。行数达到上限时按截断处理——接口不返回总行数，只能由
  * 「读满了」推断出「可能还有」。
  *
+ * 调用方自己切过行时用 `truncated` 说明结果，因为「正文行数等于上限」既可能是
+ * 正好读完，也可能是切掉了一部分，只有切的人知道是哪一种。
+ *
  * A preview tab for one file. Reaching the line cap is reported as truncation:
  * the API returns no total, so "the cap was filled" is the only signal that more
  * content may exist.
+ *
+ * A caller that sliced the lines itself states the outcome through `truncated`:
+ * "the body has exactly the cap" can mean the file ended there or that the rest was
+ * cut, and only the caller knows which.
  */
 export function toFileTab(
   entry: FsEntry,
@@ -134,6 +113,7 @@ export function toFileTab(
   maxLines: number,
   icon?: ReactNode,
   openParent?: (uri: string) => Promise<void>,
+  truncated = content.split('\n').length >= maxLines,
 ): FilePreviewFileTab {
   const name = nameFromUri(entry.uri);
   return {
@@ -152,7 +132,7 @@ export function toFileTab(
       content,
       fileName: name,
       path: entry.uri,
-      truncated: content.split('\n').length >= maxLines,
+      truncated,
     },
   };
 }
@@ -313,18 +293,4 @@ export function flattenTree(
     });
   }
   return rows;
-}
-
-/** 请求被取消时不需要写回状态。A cancelled request has no state to write. */
-export function isAbort(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { name?: unknown }).name === 'AbortError'
-  );
-}
-
-/** 把任意抛出物归一成 Error。Normalises a thrown value into an Error. */
-export function toError(cause: unknown): Error {
-  return cause instanceof Error ? cause : new Error(String(cause));
 }

@@ -26,8 +26,31 @@ export function consoleTransport(): typeof fetch {
       name: 'notes.md',
       isDir: false,
     };
+    const configOnly =
+      path === '/api/v1/compile' &&
+      typeof init?.body === 'string' &&
+      (JSON.parse(init.body) as { args?: { auto_update?: boolean } }).args
+        ?.auto_update === false;
+    const writes: Record<string, unknown> = {
+      '/api/v1/resources': { task_id: 'demo-resource', root_uri: resource.uri },
+      '/api/v1/skills': { root_uri: 'viking://agent/skills/llm-wiki' },
+      '/api/v1/compile': configOnly
+        ? { to: 'viking://resources/demo-wiki', auto_update: false }
+        : {
+            task_id: 'demo-compile',
+            status: 'pending',
+            resource_id: resource.uri,
+          },
+    };
+    const writeResult =
+      writes[path] ??
+      (path.endsWith('/messages') ? { message_count: 1 } : undefined) ??
+      (path.endsWith('/commit')
+        ? { task_id: 'demo-memory', status: 'pending' }
+        : undefined);
     const result =
-      path.endsWith('/ls') || path.endsWith('/tree')
+      writeResult ??
+      (path.endsWith('/ls') || path.endsWith('/tree')
         ? [resource]
         : ['/read', '/abstract', '/overview'].some((suffix) =>
               path.endsWith(suffix),
@@ -47,7 +70,7 @@ export function consoleTransport(): typeof fetch {
                   },
                 ],
               }
-            : { state: 'ready', demonstration: true };
+            : { state: 'ready', demonstration: true });
     return Response.json({ status: 'ok', result });
   };
 }

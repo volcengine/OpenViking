@@ -16,12 +16,11 @@ export const TREE_DEFAULT_WIDTH = 352;
 export const TREE_MIN_WIDTH = 200;
 /** 详情区至少保留的宽度。 Width the detail pane keeps at minimum. */
 const DETAIL_MIN_WIDTH = 320;
-/**
- * 分隔条实际占的横向空间：16px 命中区，加两侧各 4px 外边距。
- * The divider's real horizontal footprint: a 16px hit area plus 4px of margin on
- * each side.
- */
-const RESIZE_FOOTPRINT = 24;
+/** The separator occupies only its 1px line; the wider hit area overlays the panes. */
+const RESIZE_FOOTPRINT = 1;
+/** Minimum width that can fit both panes and the divider side by side. */
+export const SIDE_BY_SIDE_MIN_WIDTH =
+  TREE_MIN_WIDTH + DETAIL_MIN_WIDTH + RESIZE_FOOTPRINT;
 /** 树的绝对宽度上限。 The tree's absolute width cap. */
 const TREE_MAX_WIDTH = 520;
 

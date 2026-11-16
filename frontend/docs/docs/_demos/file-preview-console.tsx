@@ -1,10 +1,8 @@
+import { Button } from '#demo-controls';
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { FilePreview } from '@openviking/react/components/file-preview';
-import type {
-  FilePreviewActions,
-  FilePreviewFileTab,
-} from '@openviking/react/components/file-preview';
+import type { FilePreviewFileTab } from '@openviking/react/components/file-preview';
 import { getFileTypeIcon } from '@openviking/react/icons';
 import '@openviking/react/components/file-preview/style.css';
 
@@ -14,54 +12,7 @@ export default function FilePreviewConsole() {
   const zh = useLang() === 'zh';
   const [current, setCurrent] = useState('document');
   const [notice, setNotice] = useState('');
-  const renderActions = (actions: FilePreviewActions) => (
-    <>
-      {actions.canSwitchView ? (
-        <div
-          className="ov-file-preview__switch"
-          role="group"
-          aria-label={zh ? '显示模式' : 'View mode'}
-        >
-          {(['preview', 'source'] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className="ov-file-preview__switch-item"
-              aria-pressed={actions.viewMode === mode}
-              data-active={actions.viewMode === mode || undefined}
-              onClick={() => actions.setViewMode(mode)}
-            >
-              {mode === 'preview'
-                ? zh
-                  ? '预览'
-                  : 'Preview'
-                : zh
-                  ? '源码'
-                  : 'Source'}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <button
-        type="button"
-        className="ov-file-preview__action"
-        aria-label={zh ? '复制正文' : 'Copy content'}
-        disabled={!actions.canCopyContent}
-        onClick={() => void actions.copyContent()}
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-        >
-          <rect x="6" y="2" width="8" height="9" rx="1" />
-          <path d="M10 11v3H2V5h4" />
-        </svg>
-      </button>
-    </>
-  );
+  const [draftContent, setDraftContent] = useState<string>();
   const Icon = getFileTypeIcon(current === 'image' ? 'cli.svg' : 'guide.md');
   const tab: FilePreviewFileTab = {
     key: current,
@@ -99,9 +50,17 @@ export default function FilePreviewConsole() {
             },
             {
               key: 'L2',
+              editing: {
+                save: (value) => {
+                  setDraftContent(value);
+                  return Promise.resolve();
+                },
+              },
               label: zh ? 'L2 正文' : 'L2 Content',
               source: {
-                content: `${zh ? '# 完整正文' : '# Full content'}\n\n![CLI](viking://resources/manual/cli.svg)\n\n${zh ? '正文中的 Viking URI 图片。' : 'A Viking URI image in the full content.'}`,
+                content:
+                  draftContent ??
+                  `---\ntitle: Guide\nversion: 1\n---\n\n${zh ? '# 完整正文' : '# Full content'}\n\n![CLI](viking://resources/manual/cli.svg)\n\n${zh ? '正文中的 Viking URI 图片。' : 'A Viking URI image in the full content.'}\n\n| Item | Status |\n| --- | --- |\n| Table | Ready |`,
                 fileName: 'guide.md',
                 path: `${root}/guide.md`,
               },
@@ -113,7 +72,6 @@ export default function FilePreviewConsole() {
     onOpenParent: (uri) =>
       setNotice(`${zh ? '模拟导航' : 'Simulated navigation'}: ${uri}`),
     slots: {
-      actions: renderActions,
       titleExtra: (
         <span className="ov-demo-tag">{zh ? '可管理' : 'Can manage'}</span>
       ),
@@ -133,9 +91,11 @@ export default function FilePreviewConsole() {
         style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}
       >
         {['document', 'image', 'empty', 'error'].map((item) => (
-          <button
+          <Button
+            size="small"
+            type={current === item ? 'primary' : 'secondary'}
             key={item}
-            type="button"
+            htmlType="button"
             className="ov-file-preview__button"
             aria-pressed={current === item}
             onClick={() => setCurrent(item)}
@@ -148,7 +108,7 @@ export default function FilePreviewConsole() {
                 error: zh ? '图片失败' : 'Image error',
               }[item]
             }
-          </button>
+          </Button>
         ))}
       </div>
       <div className="ov-demo-surface" style={{ height: 680 }}>

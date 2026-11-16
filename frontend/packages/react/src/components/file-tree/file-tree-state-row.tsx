@@ -1,3 +1,4 @@
+import { Button } from '../../shared/primitives/button/button.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { Guides, rowStyle } from './file-tree-row-shared.js';
 import type { FileTreeRow } from './types.js';
@@ -56,14 +57,16 @@ export function FileTreeStateRow({
         <>
           <span className="ov-file-tree__toggle-spacer" />
           {row.loading ? spinner : null}
-          <button
-            type="button"
+          <Button
+            size="mini"
+            type="text"
+            htmlType="button"
             className="ov-file-tree__action"
             disabled={row.loading || !onLoadMore}
             onClick={() => onLoadMore?.(row)}
           >
             {row.loading ? text.loading : text.loadMore}
-          </button>
+          </Button>
         </>,
         Boolean(row.loading),
       );
@@ -74,14 +77,16 @@ export function FileTreeStateRow({
           <span className="ov-file-tree__muted">
             {row.message ?? text.error}
           </span>
-          <button
-            type="button"
+          <Button
+            size="mini"
+            type="text"
+            htmlType="button"
             className="ov-file-tree__action"
             disabled={!onRetry}
             onClick={() => onRetry?.(row)}
           >
             {text.retry}
-          </button>
+          </Button>
         </>,
       );
     case 'empty':

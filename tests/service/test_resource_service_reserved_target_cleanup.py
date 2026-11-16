@@ -51,6 +51,7 @@ async def test_cleanup_reserved_target_removes_only_empty_directory():
     viking_fs.rm.assert_awaited_once_with(
         "viking://resources/empty",
         recursive=True,
+        no_vector=True,
         ctx=cleanup_ctx,
         lease_ref=lock,
     )
@@ -318,6 +319,7 @@ async def test_prepared_file_failure_preserves_cleanup_policy(cleanup_on_failure
     assert kwargs["understanding_file_id"] == "file-1"
     assert kwargs["parser_backend"] == "understanding"
     assert kwargs["internal_task"] is True
+    assert kwargs["target_was_reserved"] is cleanup_on_failure
     if cleanup_on_failure:
         service._cleanup_reserved_target_if_empty.assert_awaited_once_with(
             root_uri=msg.root_uri,

@@ -1,7 +1,7 @@
 import type { ResolvedLabels } from '../file-tree-row-context.js';
 
 const messages = {
-  search: 'Search files…',
+  search: 'Search files ⌘+K...',
   refresh: 'Refresh file tree',
   empty: 'No files yet',
   error: 'Failed to load',

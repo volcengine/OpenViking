@@ -31,7 +31,7 @@ from openviking.server.app import (
 )
 from openviking.server.config import get_server_url_from_server_data, load_server_config
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
-from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.config_loader import expand_config_environment, resolve_config_path
 from openviking_cli.utils.config.consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -129,7 +129,7 @@ def _resolve_default_bot_log_dir(config_path: Optional[str]) -> str:
 
     try:
         with open(resolved_path, "r", encoding="utf-8-sig") as f:
-            raw = os.path.expandvars(f.read())
+            raw = expand_config_environment(f.read())
         data = json.loads(raw)
         storage = data.get("storage", {})
         workspace = storage.get("workspace") if isinstance(storage, dict) else None

@@ -91,6 +91,66 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* Non-auto standard properties override Chromium's scrollbar pseudo-elements. */
+  color-scheme: light;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+html.dark .ov-file-tree__body {
+  color-scheme: dark;
+}
+
+.ov-file-tree__body::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+  background: transparent;
+}
+
+.ov-file-tree__body::-webkit-scrollbar:hover {
+  background: var(
+    --ov-ui-color-scrollbar-track-hover,
+    var(--ov-ui-scrollbar-track-hover-default)
+  );
+}
+
+.ov-file-tree__body::-webkit-scrollbar:vertical:hover {
+  box-shadow: inset 1px 0 0
+    var(--ov-ui-color-scrollbar-border, var(--ov-ui-scrollbar-border-default));
+}
+
+.ov-file-tree__body::-webkit-scrollbar:horizontal:hover {
+  background: var(
+    --ov-ui-color-scrollbar-track-hover,
+    var(--ov-ui-scrollbar-track-hover-horizontal-default)
+  );
+  box-shadow: inset 0 1px 0
+    var(--ov-ui-color-scrollbar-border, var(--ov-ui-scrollbar-border-default));
+}
+
+.ov-file-tree__body::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(
+    --ov-ui-color-scrollbar-thumb,
+    var(--ov-ui-scrollbar-thumb-default)
+  );
+  background-clip: padding-box;
+}
+
+.ov-file-tree__body::-webkit-scrollbar-thumb:hover {
+  background-color: var(
+    --ov-ui-color-scrollbar-thumb-hover,
+    var(--ov-ui-scrollbar-thumb-hover-default)
+  );
+}
+
+.ov-file-tree__body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.ov-file-tree__body::-webkit-scrollbar-button {
+  display: none;
 }
 
 .ov-file-tree__rows {
@@ -136,6 +196,23 @@
 
 .ov-file-tree__row {
   transition: background-color 120ms;
+}
+
+/* Keep the anchor out of row layout so it cannot share metadata's auto margins. */
+.ov-file-tree__popover-anchor-container {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+/* Keep the card's anchor at the visible row edge while the content scrolls. */
+.ov-file-tree__popover-anchor {
+  position: sticky;
+  right: 0;
+  flex: none;
+  width: 0;
 }
 
 .ov-file-tree__row:hover {
@@ -308,10 +385,45 @@
   cursor: pointer;
 }
 
-.ov-file-tree__dashboard {
+/* Row-end markers follow metadata; viewport-end markers stay inside the scrollport. */
+.ov-file-tree__row[data-trailing-position='viewport-end']
+  > :is(.ov-file-tree__toggle, .ov-file-tree__toggle-spacer) {
+  margin-left: var(--ov-ui-file-tree-row-indent);
+}
+
+.ov-file-tree__trailing {
   display: inline-flex;
   flex: none;
   align-items: center;
+  margin-left: auto;
+}
+
+.ov-file-tree__level ~ .ov-file-tree__trailing {
+  margin-left: 0;
+}
+
+.ov-file-tree__row[data-trailing-position='viewport-end']
+  > .ov-file-tree__trailing {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  align-self: stretch;
+  margin-right: -8px;
+  padding: 0 8px 0 6px;
+  border-radius: 0 var(--ov-ui-file-tree-row-radius)
+    var(--ov-ui-file-tree-row-radius) 0;
+  background-color: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  transition: background-color 120ms;
+}
+
+.ov-file-tree__row[data-trailing-position='viewport-end']:hover
+  > .ov-file-tree__trailing {
+  background-color: var(--ov-ui-file-tree-row-hover);
+}
+
+.ov-file-tree__row[data-trailing-position='viewport-end'][data-selected]
+  > .ov-file-tree__trailing {
+  background-color: var(--ov-ui-file-tree-row-selected);
 }
 
 /*
@@ -420,23 +532,6 @@
  * text that turns into the primary colour on hover, with no underline — the same
  * treatment the host's tree uses.
  */
-.ov-file-tree__action {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  transition: color 120ms;
-}
-
-.ov-file-tree__action:hover:not(:disabled) {
-  color: var(--ov-ui-file-tree-action);
-}
-
-.ov-file-tree__action:disabled {
-  cursor: default;
-}
 
 @media (prefers-reduced-motion: reduce) {
   .ov-file-tree__chevron,
@@ -464,4 +559,15 @@
 
 .dark .ov-file-tree__file-type-icon {
   color: var(--ov-file-tree-icon-dark, var(--ov-ui-file-tree-icon));
+}
+.ov-file-tree .ov-button.ov-file-tree__action,
+.ov-file-tree .ov-button.ov-file-tree__action:disabled,
+.ov-file-tree .ov-button.ov-file-tree__action[aria-disabled='true'] {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-file-tree
+  .ov-button.ov-file-tree__action:not(:disabled):not(
+    [aria-disabled='true']
+  ):hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }

@@ -109,6 +109,65 @@ class TestLoadJsonConfig:
 
         assert data == {"api_key": "sk-test-123"}
 
+    def test_only_inline_reporting_uses_literal_values(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TEST_API_KEY", "expanded-key")
+        reporting = {"kafka": {"password": "${TEST_API_KEY}", "$TEST_API_KEY": "$TEST_API_KEY"}}
+        conf = tmp_path / "ov.conf"
+        conf.write_text(
+            json.dumps(
+                {
+                    "server": {
+                        "observability": {
+                            "reporting": reporting,
+                            "traces": {"headers": {"api-key": "${TEST_API_KEY}"}},
+                        }
+                    },
+                    "reporting": reporting,
+                    "items": [{"server": {"observability": {"reporting": reporting}}}],
+                }
+            )
+        )
+        data = load_json_config(conf)
+        assert data["server"]["observability"]["reporting"] == reporting
+        assert data["server"]["observability"]["traces"]["headers"]["api-key"] == "expanded-key"
+        assert data["reporting"]["kafka"]["password"] == "expanded-key"
+        assert (
+            data["items"][0]["server"]["observability"]["reporting"]["kafka"]["password"]
+            == "expanded-key"
+        )
+
+    def test_business_json_escapes_keep_original_expansion_semantics(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TEST_API_KEY", "expanded-key")
+        conf = tmp_path / "ov.conf"
+        conf.write_text(
+            '{"server":{"observability":{"reporting":{"kafka":{"password":"$TEST_API_KEY"}}}},'
+            '"literal":"\\u0024TEST_API_KEY","expanded":"${TEST_API_KEY}"}'
+        )
+        data = load_json_config(conf)
+        assert data["literal"] == "$TEST_API_KEY"
+        assert data["expanded"] == "expanded-key"
+        assert data["server"]["observability"]["reporting"]["kafka"]["password"] == "$TEST_API_KEY"
+
+    def test_reporting_literals_survive_windows_expansion(self, tmp_path, monkeypatch):
+        import ntpath
+        import os
+
+        monkeypatch.setenv("TEST_API_KEY", "expanded-key")
+        reporting = {"kafka": {"password": "$TEST_API_KEY-${TEST_API_KEY}-%TEST_API_KEY%"}}
+        conf = tmp_path / "ov.conf"
+        conf.write_text(
+            json.dumps(
+                {
+                    "server": {"observability": {"reporting": reporting}},
+                    "api_key": "%TEST_API_KEY%",
+                }
+            )
+        )
+        monkeypatch.setattr(os.path, "expandvars", ntpath.expandvars)
+        data = load_json_config(conf)
+        assert data["server"]["observability"]["reporting"] == reporting
+        assert data["api_key"] == "expanded-key"
+
 
 class TestRequireConfig:
     """Tests for require_config."""

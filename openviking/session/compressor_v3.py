@@ -25,6 +25,7 @@ from openviking.message import Message
 from openviking.observability.reporting.facts import event_context
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
+from openviking.session.memory.agent_file import ensure_agent_file
 from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
     CASE_MEMORY_TYPE,
@@ -701,6 +702,7 @@ class SessionCompressorV3:
             viking_fs, ctx.account_id, get_default_registry()
         )
         if allow_self_memory:
+            await ensure_agent_file(viking_fs, ctx)
             await registry.initialize_memory_files(
                 ctx,
                 allowed_memory_types=allowed_memory_types,

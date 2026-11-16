@@ -172,7 +172,7 @@ class PatchMergePolicyOptimizer:
         isolation_handler.prepare_messages()
         provider._isolation_handler = isolation_handler
 
-        _seed_read_file_contents(provider, gradients, policy_set)
+        _seed_read_file_contents(provider, policy_set)
         prefetch_messages = await provider.prefetch()
         provider.prefetch = _constant_prefetch(prefetch_messages)
         _log_merge_input(
@@ -390,21 +390,14 @@ def _required_file_uris(
 
 def _seed_read_file_contents(
     provider: PatchMergeContextProvider,
-    gradients: list[SemanticGradient],
     policy_set: PolicySet,
 ) -> None:
+    # Only seed the snapshot reloaded under the policy lock; older gradients may be stale.
     for policy in policy_set.policies:
         if policy.uri in provider.required_file_uris:
             provider.read_file_contents[policy.uri] = _policy_to_memory_file(
                 policy, memory_type=provider.memory_type
             )
-    for gradient in gradients:
-        before_file = gradient.before_file
-        target_uri = gradient.target_uri
-        if before_file is None or target_uri in provider.read_file_contents:
-            continue
-        if target_uri:
-            provider.read_file_contents[target_uri] = before_file
 
 
 def _policy_to_memory_file(policy: Policy, *, memory_type: str = "experiences") -> MemoryFile:
@@ -532,6 +525,7 @@ def _operations_to_plan_items(
                 replacement_uri=(getattr(operations, "delete_replacements", {}) or {}).get(
                     target_uri
                 ),
+                before_file=old_file,
             )
         )
     case_uris_by_source: dict[tuple[str, str], set[str]] = defaultdict(set)

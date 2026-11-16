@@ -23,6 +23,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from pdfminer.pdftypes import resolve1
+from pdfminer.psparser import LIT
+
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -452,13 +455,19 @@ class PDFParser(BaseParser):
             page_ref_to_num = self._build_page_number_map(pdf)
 
             bookmarks = []
-            for level, title, dest, _action, _se in outlines:
+            for level, title, dest, action, _se in outlines:
                 if not title or not title.strip():
                     continue
 
                 page_num = None
                 try:
-                    if dest and len(dest) > 0:
+                    if not dest and action:
+                        resolved_action = resolve1(action)
+                        if isinstance(resolved_action, dict) and resolved_action.get("S") == LIT(
+                            "GoTo"
+                        ):
+                            dest = resolve1(resolved_action.get("D"))
+                    if isinstance(dest, (list, tuple)) and dest:
                         page_num = self._resolve_bookmark_page(
                             dest[0], page_ref_to_num, len(pdf.pages)
                         )

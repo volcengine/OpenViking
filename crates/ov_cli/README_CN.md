@@ -40,13 +40,17 @@ ov config
 
 `ov config` 可以新增、编辑、删除、校验和切换配置。CLI 会把当前 active 客户端配置写到 `~/.openviking/ovcli.conf`。命名配置会保存为 `~/.openviking/ovcli.conf.<name>`，`ov config switch <name>` 会把选中的命名配置复制为 active 配置。
 
-较新的 CLI 版本在非交互式 shell 中运行大多数命令前，需要先保存显示语言：
+在非交互式 shell 中运行大多数命令前，可以先保存显示语言：
 
 ```bash
 ov language en
 # 或
 ov language zh-CN
 ```
+
+也可以在命令环境中设置 `OPENVIKING_LANG=en` 或 `OPENVIKING_LANG=zh-CN`。
+可识别的值满足首次语言初始化检查，无须写入设置文件。
+已有的语言设置仍优先于环境变量。
 
 脚本和 Agent 场景建议使用确定性的配置命令，并通过 stdin 或已有环境变量传递密钥：
 

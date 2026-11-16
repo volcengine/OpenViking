@@ -1,7 +1,12 @@
+import { Button } from '../../shared/primitives/button/button.js';
 import { useRef } from 'react';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import type { VikingBotAttachment, VikingBotLabels } from './model.js';
 import { VikingBotAttach } from './composer-controls.js';
+
+export function attachmentsAreReady(items: readonly VikingBotAttachment[]) {
+  return items.every(({ status = 'ready' }) => status === 'ready');
+}
 
 export function ComposerFileButton({
   accept,
@@ -55,19 +60,24 @@ export function ComposerAttachments({
         <li key={item.key}>
           <span>{item.name}</span>
           {item.status === 'error' ? (
-            <span className="ov-viking-bot__attachment-status">
-              {item.errorMessage ?? labels.toolError}
+            <span className="ov-viking-bot__attachment-status" role="alert">
+              {item.errorMessage ?? labels.attachmentUploadFailed}
             </span>
+          ) : item.status === 'pending' || item.status === 'uploading' ? (
+            <span role="status">{labels.uploadingAttachment}</span>
           ) : null}
           {onRemove ? (
-            <button
-              type="button"
+            <Button
+              size="mini"
+              type="text"
+              iconOnly
+              htmlType="button"
               aria-label={`${labels.removeAttachment}: ${item.name}`}
               disabled={disabled}
               onClick={() => onRemove(item)}
             >
               <VikingBotIcon name="remove" width={12} height={12} />
-            </button>
+            </Button>
           ) : null}
         </li>
       ))}
