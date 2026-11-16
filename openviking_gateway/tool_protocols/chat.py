@@ -242,5 +242,5 @@ class ChatProtocol(ToolProtocol):
             events.append({**self.chunk({}), "choices": [], "usage": final["usage"]})
         return [*events, None]
 
-    def error(self, message):
-        return [{"error": {"type": "gateway_tool_error", "message": message}}, None]
+    def error(self, message, kind="gateway_tool_error"):
+        return [{"error": {"type": kind, "message": message}}, None]

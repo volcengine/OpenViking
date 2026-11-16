@@ -167,6 +167,8 @@ SDKs for the other two APIs work the same way, as long as the upstream uses the 
 - Point the Anthropic SDK at `https://ov.example.com/gateway`.
 - For the Responses API, use `https://ov.example.com/gateway/v1`, send the full history in every request and set `store: false`. Other Responses requests are forwarded without memory.
 
+If the provider stops sending in the middle of a streamed reply (nothing for `upstream_timeout_seconds`, or a dropped connection), the stream still ends in a way the SDK understands: the gateway adds one error event of the API in use and closes the stream normally. The OpenAI Chat Completions and Anthropic SDKs raise their API error, with the reason (such as `upstream_timeout`) at the start of the message; the Responses API receives `response.failed`. The HTTP status is already 200 by then. Only when the provider stops in the middle of an event, or after the reply's last event, is the connection cut as before.
+
 Next, [check the connection](#check-the-connection).
 
 ## Open WebUI {#open-webui}

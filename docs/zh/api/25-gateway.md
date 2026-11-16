@@ -73,8 +73,8 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `status` | 客户端收到的 HTTP 状态码：网关转发的是服务商的状态码，网关自身的错误是网关的状态码，客户端在收到任何响应前离开时为 `499` |
 | `upstream_attempted`、`upstream_status` | 网关是否向服务商发出了请求（包括压缩摘要请求），以及服务商应答时的 HTTP 状态码 |
 | `error_reason`、`error_origin`、`error_class` | 任何失败（包括已返回 `200` 后中断的流）的[原因](#model-route-errors)、来源（`gateway`、`openviking`、`upstream` 或 `client`）和大类（`api_key_invalid`、`quota_or_order`、`openviking_unavailable`、`config_error`、`gateway_internal`、`timeout`、`model_error` 或 `client_cancelled`）。网关原样转发的服务商错误为 `upstream_error` |
-| `upstream_error_code` | 服务商错误响应体中的 `code`（没有时取 `type`），仅当它是简短标识符时记录；从不记录错误信息 |
-| `stream_error`、`client_disconnected` | 已开始的响应体没有正常结束的原因；客户端离开时后者为 `true` |
+| `upstream_error_code` | 服务商错误响应体或其流中错误事件的 `code`（没有时取 `type`），仅当它是简短标识符时记录；从不记录错误信息 |
+| `stream_error`、`client_disconnected` | 已开始的响应体没有正常结束的原因（`upstream_timeout`、`upstream_disconnected`、服务商发送了错误事件时为 `upstream_event`、`client_disconnected`、某个 `tool_*` 原因或 `internal_error`）；客户端离开时后者为 `true` |
 | `upstream_id`、`credential_id`、`openviking_account` | 处理请求的上游、发出请求的网关密钥，以及密钥背后的 OpenViking 账户 |
 | `session`、`protocol` | 对话及其协议，[重置保存](#gateway-keys)时要用 |
 | `peer` | 请求的 [Peer](../gateway/03-connect-clients.md#peer)，来自 `X-OpenViking-Actor-Peer` 或密钥的默认 Peer |
@@ -306,7 +306,9 @@ OpenViking 返回的其他 HTTP 错误记为 `openviking_http_<status>`；网关
 | 401 | `upstream_key_missing` | gateway | 上游没有保存 API Key，请求也没有在 `X-OpenViking-Upstream-Key` 中携带。 |
 | 403 | `coding_plan_disabled` | gateway | 上游是不允许通过网关使用的 Coding Plan 密钥。 |
 | 500 | `internal_error` | gateway | 网关意外出错。错误详情是通用文本，调用栈在网关日志里。 |
-| 502 | `upstream_unreachable` | upstream | 网关没有得到服务商的回复。 |
+| 504 | `upstream_timeout` | upstream | 服务商没有在 `upstream_timeout_seconds` 内开始回复，或者非流式回复中途这么久没有数据。 |
+| 502 | `upstream_unreachable` | upstream | 网关连不上服务商（DNS、连接被拒绝、TLS）。 |
+| 502 | `upstream_disconnected` | upstream | 服务商在回复完成前关闭了连接。 |
 | 502 | `tool_upstream_invalid`、`tool_upstream_incomplete`、`tool_upstream_stream_error`、`tool_call_invalid` | upstream | OpenViking 工具轮次中，服务商的回复无法使用、不完整或是错误，或者模型调用了不允许的工具。 |
 | 502 | `tool_loop_limit` | gateway | OpenViking 工具轮次达到上限。 |
 | 504 | `tool_loop_timeout` | gateway | OpenViking 工具轮次超时。 |

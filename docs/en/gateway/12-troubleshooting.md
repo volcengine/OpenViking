@@ -97,11 +97,13 @@ The gateway checks each client request before forwarding it: the gateway key, th
 | 413 `body_too_large` | The request body is larger than `max_body_bytes` (see [the request size limit](05-long-conversations.md#side-effects)), or than your proxy's own limit. |
 | 426 | A WebSocket connection to the Responses API. Expected: Codex falls back to HTTP. |
 | 500 `internal_error` | The gateway failed unexpectedly. The gateway's log has the traceback; the request record carries the response's `request_id`. |
-| 502 `upstream_unreachable` | The gateway could not reach the provider, or the provider did not start its reply within `upstream_timeout_seconds`. Choose **Test** on the upstream ([Test and delete](07-upstreams.md#test-and-delete)). |
+| 504 `upstream_timeout` | The provider did not start its reply within `upstream_timeout_seconds`, or a non-streamed reply stopped arriving for that long. Check the provider's status, or raise `upstream_timeout_seconds` for models that think long before they answer. |
+| 502 `upstream_unreachable` | The gateway could not connect to the provider: its address does not resolve, nothing accepts the connection, or TLS fails. Check the upstream's Base URL and choose **Test** on the upstream ([Test and delete](07-upstreams.md#test-and-delete)). |
+| 502 `upstream_disconnected` | The provider, or a proxy on the way to it, closed the connection before its reply was complete. Retry; if it persists, check the provider and any proxy in between. |
 
 "Hidden tool request timed out" (504 `tool_loop_timeout`) and the other `tool_*` reasons happen after the provider call; see [Failure handling](04-openviking-tools.md#failure-handling).
 
-A streamed reply that has started is not cut off for its length, only when the provider sends nothing for longer than `upstream_timeout_seconds` or, for a request that uses OpenViking tools, when the tool **Total time** runs out; the stream then ends early, with "Hidden tool request timed out" if the request uses OpenViking tools.
+A streamed reply that has started is not cut off for its length, only when the provider sends nothing for longer than `upstream_timeout_seconds`, drops the connection, or, for a request that uses OpenViking tools, when the tool **Total time** runs out. The HTTP status is already 200 then, so the gateway ends the stream with one error event of the API in use: an `error` whose type is the reason (such as `upstream_timeout`) in Chat Completions and Anthropic Messages, and `response.failed` in Responses; its message starts with the reason. A request that uses OpenViking tools gets the tool loop's error event instead, with "Hidden tool request timed out" when **Total time** ran out. When the provider stops in the middle of an event, or after the reply's last event, no event can be added and the connection is cut. The request record keeps the reason in `stream_error`. An error event that the provider itself sends inside a stream is relayed unchanged, and the record notes it as `stream_error: upstream_event` with the provider's error code.
 
 ## The upstream returned an error {#the-upstream-returned-an-error}
 

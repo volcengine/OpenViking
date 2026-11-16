@@ -97,11 +97,13 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 413 `body_too_large` | 请求体超过了 `max_body_bytes`（见[请求大小上限](05-long-conversations.md#side-effects)），或者超过了代理自己的上限。 |
 | 426 | 对 Responses API 发起了 WebSocket 连接。这是预期行为，Codex 会改用 HTTP。 |
 | 500 `internal_error` | 网关意外出错。调用栈在网关日志里；请求记录带有与响应相同的 `request_id`。 |
-| 502 `upstream_unreachable` | 网关连不上服务商，或者服务商没有在 `upstream_timeout_seconds` 内开始回复。在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
+| 504 `upstream_timeout` | 服务商没有在 `upstream_timeout_seconds` 内开始回复，或者非流式回复中途这么久没有数据。检查服务商状态；对回答前思考很久的模型，可以调大 `upstream_timeout_seconds`。 |
+| 502 `upstream_unreachable` | 网关连不上服务商：地址无法解析、没有服务接受连接，或者 TLS 失败。检查上游的 Base URL，并在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
+| 502 `upstream_disconnected` | 服务商或通往它的代理在回复完成前关闭了连接。重试；如果一直出现，检查服务商和中间的代理。 |
 
 "Hidden tool request timed out"（504 `tool_loop_timeout`）和其他 `tool_*` 原因发生在调用服务商之后，见[失败处理](04-openviking-tools.md#failure-handling)。
 
-已经开始的流式回复不会因为时间长被切断，只有服务商超过 `upstream_timeout_seconds` 没有发送任何数据，或者使用 OpenViking 工具的请求用完了工具**总时长**时才会中断；这时流提前结束，使用 OpenViking 工具的请求会报 "Hidden tool request timed out"。
+已经开始的流式回复不会因为时间长被切断，只有服务商超过 `upstream_timeout_seconds` 没有发送任何数据、断开连接，或者使用 OpenViking 工具的请求用完了工具**总时长**时才会中断。这时 HTTP 状态码已经是 200，所以网关用一条当前 API 的错误事件结束流：Chat Completions 和 Anthropic Messages 是类型为原因（例如 `upstream_timeout`）的 `error`，Responses 是 `response.failed`；消息开头是原因。使用 OpenViking 工具的请求收到的是工具循环的错误事件，用完**总时长**时为 "Hidden tool request timed out"。服务商停在一个事件的中间，或者停在回复的最后一个事件之后时，无法再追加事件，连接会直接断开。请求记录在 `stream_error` 中保留原因。服务商自己在流中发送的错误事件会原样转发，记录中标为 `stream_error: upstream_event`，并带上服务商的错误码。
 
 ## 上游返回错误 {#the-upstream-returned-an-error}
 

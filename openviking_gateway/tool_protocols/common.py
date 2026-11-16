@@ -457,8 +457,8 @@ class ToolProtocol(ABC):
     def terminal(self, final: dict) -> list[StreamEvent]:
         """Return the protocol's success terminal events."""
 
-    def error(self, message: str) -> list[StreamEvent]:
-        return [{"type": "error", "error": {"type": "gateway_tool_error", "message": message}}]
+    def error(self, message: str, kind: str = "gateway_tool_error") -> list[StreamEvent]:
+        return [{"type": "error", "error": {"type": kind, "message": message}}]
 
     def upstream_error(self, event: dict) -> list[StreamEvent]:
         """Return a normalized upstream error with this protocol's terminator."""

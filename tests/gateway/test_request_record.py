@@ -4,6 +4,7 @@ import ast
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import aiohttp
 import pytest
@@ -127,13 +128,15 @@ async def test_unreachable_upstream_is_recorded(running_gateway, capsys, monkeyp
     _, client, _, issued, _, _ = running_gateway
 
     async def refuse(*args, **kwargs):
-        raise aiohttp.ClientConnectionError("connection refused")
+        raise aiohttp.ClientConnectorError(
+            SimpleNamespace(host="upstream", port=443, ssl=True), ConnectionRefusedError()
+        )
 
     monkeypatch.setattr(proxy, "open_upstream", refuse)
     capsys.readouterr()
     response = await client.post("/v1/chat/completions", headers=bearer(issued), json=CHAT)
     assert response.status_code == 502
-    assert response.json()["detail"] == "Model upstream is unavailable"
+    assert response.json()["detail"] == "Model upstream is unreachable"
     record = only_record(capsys)
     assert_failure(record, 502, "upstream_unreachable", "upstream", "model_error", True)
     assert "upstream_status" not in record and record["duration_ms"] >= 0

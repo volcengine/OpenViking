@@ -21,6 +21,8 @@ from .windows import ALONE, NEW_CONTEXT, window_number
 
 REFUSED = "OpenViking tools are unavailable for the rest of this request; continue without them."
 STREAM_ERROR_MESSAGE = "Model stream failed"
+# Transport failures of the model provider; a stream error event carries them as its type.
+TRANSPORT_REASONS = {"upstream_timeout", "upstream_disconnected", "upstream_unreachable"}
 
 
 def added_tokens(value):
@@ -269,17 +271,21 @@ class HiddenToolLoop:
         self.prepared.metrics["hidden_rounds"] = self.rounds
 
     def error(self, error: Exception) -> bytes:
-        events = (
-            self.adapter.upstream_error(error.event)
-            if isinstance(error, ToolLoopError) and error.event is not None
-            else self.adapter.error(str(error))
-        )
+        code = getattr(error, "code", None)
+        if isinstance(error, ToolLoopError) and error.event is not None:
+            events = self.adapter.upstream_error(error.event)
+        elif code in TRANSPORT_REASONS:
+            # A provider failure is named by its reason, as on a stream without tools.
+            events = self.adapter.error(str(error), kind=code)
+        else:
+            events = self.adapter.error(str(error))
         return b"".join(self.adapter.encode(event) for event in events)
 
     async def run(self, response, send):
         """Publish the terminal event only after the exact transcript is durable."""
+        limit = async_timeout.timeout_at(self.deadline)
         try:
-            async with async_timeout.timeout_at(self.deadline):
+            async with limit:
                 while True:
                     async for event in self.read(response):
                         yield event
@@ -318,6 +324,14 @@ class HiddenToolLoop:
         except (ValueError, TypeError, KeyError, IndexError) as error:
             raise ToolLoopError("Invalid model tool response") from error
         except asyncio.TimeoutError as error:
+            # The upstream's own wait can run out before the loop's deadline. The clock
+            # decides, not only the flag: on Python 3.10 an inner timer that fired at the
+            # same time turns the cancellation into a TimeoutError and the flag stays unset.
+            reached = self.deadline is not None and time.monotonic() >= self.deadline
+            if not (limit.expired or reached):
+                raise ToolLoopError(
+                    "Model upstream did not answer in time", 504, code="upstream_timeout"
+                ) from error
             raise ToolLoopError(
                 "Hidden tool request timed out", 504, code="tool_loop_timeout"
             ) from error

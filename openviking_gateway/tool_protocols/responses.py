@@ -369,7 +369,8 @@ class ResponsesProtocol(ToolProtocol):
     def terminal(self, final):
         return [{"type": "response." + self.finish, "response": final}]
 
-    def error(self, message) -> list[StreamEvent]:
+    def error(self, message, kind="gateway_tool_error") -> list[StreamEvent]:
+        # Responses clients read error codes from a fixed set; the reason stays in the message.
         return self.failed("server_error", message)
 
     def upstream_error(self, event) -> list[StreamEvent]:

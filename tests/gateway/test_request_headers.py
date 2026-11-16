@@ -1,6 +1,7 @@
 """Model-route responses carry the request ID and say which errors the gateway produced."""
 
 import json
+from types import SimpleNamespace
 
 import aiohttp
 import pytest
@@ -101,7 +102,9 @@ async def test_gateway_errors_carry_reason_origin_and_attempted(
     else:
 
         async def refuse(*args, **kwargs):
-            raise aiohttp.ClientConnectionError("connection refused")
+            raise aiohttp.ClientConnectorError(
+                SimpleNamespace(host="upstream", port=443, ssl=True), ConnectionRefusedError()
+            )
 
         monkeypatch.setattr(proxy, "open_upstream", refuse)
         expected = (502, "upstream_unreachable", "1")

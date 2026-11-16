@@ -19,7 +19,7 @@ from .harness import (
     wait_for,
     written_messages,
 )
-from .sdk_probe import probe
+from .sdk_probe import probe, stall_probe
 
 
 def stream_body(model="mock-long", messages=None):
@@ -435,3 +435,20 @@ def test_11_sse_heartbeats_preserve_actual_client_parsers(harness):
     assert encoded["encoding"] == "gzip"
     assert not any(line.startswith(":") for line in encoded["lines"])
     assert "data: [DONE]" in encoded["lines"]
+    # A provider that stops mid-stream: every SDK gets an error instead of a hang or a
+    # truncated reply, and one that never answers gets a JSON 504.
+    harness.redeploy({"upstream_timeout_seconds": 5})
+    try:
+        pod = harness.pods()[0]
+        stalled = asyncio.run(stall_probe(harness.url(pod) + "/gateway", "key-a"))
+        (harness.directory / "sdk-stall-probe.json").write_text(json.dumps(stalled, indent=2))
+        assert stalled["passed"], stalled
+        hung = harness.request(
+            pod,
+            "POST",
+            CHAT,
+            json={"model": "mock-hang", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+        assert hung.status_code == 504 and hung.json()["reason"] == "upstream_timeout"
+    finally:
+        harness.redeploy({"upstream_timeout_seconds": 600})

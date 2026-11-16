@@ -187,16 +187,17 @@ Token 预算只计算模型使用 OpenViking 工具时新增的调用、结果�
 
 - 服务商拒绝了后续的模型请求。
 - 模型调用了这段对话里没有提供的 OpenViking 工具，或者 OpenViking 调用被拒绝后仍坚持调用。
-- **Hidden tool request timed out**：OpenViking 工具的往返超过了上下文配置中工具的**总时长**；或者在往返中，服务商超过 `upstream_timeout_seconds` 还没开始回复，或在回复中途这么久没有发送任何数据。持续有数据的模型回复只受**总时长**限制。
+- **Hidden tool request timed out**：OpenViking 工具的往返超过了上下文配置中工具的**总时长**。持续有数据的模型回复只受**总时长**限制。
+- **Model upstream did not answer in time**：在往返中，服务商超过 `upstream_timeout_seconds` 还没开始回复，或在回复中途这么久没有发送任何数据。
 
 这时客户端收到错误，请求日志显示 **OpenViking 工具调用失败**（`hidden_tool_loop_failed`）。错误的形式取决于请求类型：
 
 | 请求 | 客户端收到什么 |
 | --- | --- |
-| 流式 | 流以错误事件结束：Responses 是 `response.failed`，Chat Completions 和 Anthropic Messages 是类型为 `gateway_tool_error` 的 `error`。此时 HTTP 状态码已经是 200。 |
+| 流式 | 流以错误事件结束：Responses 是 `response.failed`，Chat Completions 和 Anthropic Messages 是 `error`：模型服务没有及时应答或断开连接时，其类型为 `upstream_timeout`、`upstream_disconnected` 或 `upstream_unreachable`，其余情况为 `gateway_tool_error`。此时 HTTP 状态码已经是 200。 |
 | 非流式，服务商拒绝了后续请求 | 原样返回服务商的错误内容和状态码。 |
-| 非流式，超时 | 504 `tool_loop_timeout`。 |
-| 非流式，其他失败 | 502，响应体为 `{"reason": "...", "detail": "...", "request_id": "..."}`；原因为 `tool_upstream_invalid`、`tool_upstream_incomplete`、`tool_upstream_stream_error`、`tool_call_invalid`、`tool_loop_limit` 或 `upstream_unreachable`（见[模型路由的错误](../api/25-gateway.md#model-route-errors)）。 |
+| 非流式，超时 | 用完**总时长**时为 504 `tool_loop_timeout`，服务商没有及时回复时为 504 `upstream_timeout`。 |
+| 非流式，其他失败 | 502，响应体为 `{"reason": "...", "detail": "...", "request_id": "..."}`；原因为 `tool_upstream_invalid`、`tool_upstream_incomplete`、`tool_upstream_stream_error`、`tool_call_invalid`、`tool_loop_limit`、`upstream_unreachable` 或 `upstream_disconnected`（见[模型路由的错误](../api/25-gateway.md#model-route-errors)）。 |
 
 另外两种情况：
 

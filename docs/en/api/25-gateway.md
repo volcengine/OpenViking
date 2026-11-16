@@ -73,8 +73,8 @@ The log holds metadata only, never message content, keys or error messages. Ever
 | `status` | The HTTP status the client received: the provider's when the gateway relayed it, the gateway's own for a gateway error, `499` when the client left before any response |
 | `upstream_attempted`, `upstream_status` | Whether the gateway sent a request to the provider (a compaction summary call included), and the provider's HTTP status when it answered |
 | `error_reason`, `error_origin`, `error_class` | For any failure, a stream that failed after `200` included: the [reason](#model-route-errors), where it came from (`gateway`, `openviking`, `upstream` or `client`), and a coarse class (`api_key_invalid`, `quota_or_order`, `openviking_unavailable`, `config_error`, `gateway_internal`, `timeout`, `model_error` or `client_cancelled`). A provider error the gateway relayed is `upstream_error` |
-| `upstream_error_code` | The `code` (else `type`) of the provider's error body, when it is a short identifier; never its message |
-| `stream_error`, `client_disconnected` | Why a response body that had started did not end normally, and `true` when the client went away |
+| `upstream_error_code` | The `code` (else `type`) of the provider's error body, or of an error event inside its stream, when it is a short identifier; never its message |
+| `stream_error`, `client_disconnected` | Why a response body that had started did not end normally (`upstream_timeout`, `upstream_disconnected`, `upstream_event` for an error event the provider sent, `client_disconnected`, a `tool_*` reason or `internal_error`), and `true` when the client went away |
 | `upstream_id`, `credential_id`, `openviking_account` | The upstream that served the request, the gateway key that sent it, and the OpenViking account behind that key |
 | `session`, `protocol` | The conversation and its protocol; use them to [reset saving](#gateway-keys) |
 | `peer` | The request's [peer](../gateway/03-connect-clients.md#peer), from `X-OpenViking-Actor-Peer` or the key's default |
@@ -306,7 +306,9 @@ An error the gateway produces on a model route (`/gateway/v1/*`, `/gateway/api/v
 | 401 | `upstream_key_missing` | gateway | No upstream API key is stored or sent in `X-OpenViking-Upstream-Key`. |
 | 403 | `coding_plan_disabled` | gateway | The upstream is a Coding Plan key that is not allowed through the gateway. |
 | 500 | `internal_error` | gateway | The gateway failed unexpectedly. The detail is generic; the gateway's log has the traceback. |
-| 502 | `upstream_unreachable` | upstream | The gateway could not get a reply from the provider. |
+| 504 | `upstream_timeout` | upstream | The provider did not start its reply, or a non-streamed reply stopped arriving, within `upstream_timeout_seconds`. |
+| 502 | `upstream_unreachable` | upstream | The gateway could not connect to the provider (DNS, refused connection, TLS). |
+| 502 | `upstream_disconnected` | upstream | The provider closed the connection before its reply was complete. |
 | 502 | `tool_upstream_invalid`, `tool_upstream_incomplete`, `tool_upstream_stream_error`, `tool_call_invalid` | upstream | During OpenViking tool rounds, the provider's reply was unusable, incomplete or an error, or the model called a tool it may not use. |
 | 502 | `tool_loop_limit` | gateway | The OpenViking tool rounds reached a limit. |
 | 504 | `tool_loop_timeout` | gateway | The OpenViking tool rounds ran out of time. |

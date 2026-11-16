@@ -27,7 +27,7 @@ from .protocols import HEARTBEAT_SECONDS, SSEDecoder, heartbeat, parse_body
 from .storage import digest
 from .tool_executor import ToolExecutor
 from .tool_loop import HiddenToolLoop, ToolLoopError
-from .tool_protocols import ResponseCapture, tool_protocol
+from .tool_protocols import ResponseCapture, stream_failure, tool_protocol
 from .tool_protocols.common import SummaryError
 from .vendors import ARK_VENDORS, apply_vendor
 
@@ -67,6 +67,42 @@ async def open_upstream(http, method, url, wait, total=None, **kwargs):
     timeout = aiohttp.ClientTimeout(total=total, sock_read=wait)
     async with async_timeout.timeout(wait):
         return await http.request(method, url, timeout=timeout, **kwargs)
+
+
+def upstream_failure(error):
+    """The model-route error for a failed upstream call; never the exception's own text."""
+    # aiohttp's ServerTimeoutError is a ClientError too: the timeout check comes first.
+    if isinstance(error, asyncio.TimeoutError):
+        return GatewayError("upstream_timeout", "Model upstream did not answer in time")
+    if isinstance(error, aiohttp.ClientConnectorError):
+        return GatewayError("upstream_unreachable", "Model upstream is unreachable")
+    return GatewayError("upstream_disconnected", "Model upstream closed the connection")
+
+
+def tool_failure(error):
+    """A tool-loop failure as the loop reports it; a transport error gets its fixed detail."""
+    if isinstance(error, ToolLoopError):
+        return error
+    failure = upstream_failure(error)
+    return ToolLoopError(
+        failure.detail["detail"], failure.status_code, code=failure.detail["reason"]
+    )
+
+
+def announced_id(events):
+    """The reply ID a Responses stream announces first; its capture reads one only at the end."""
+    return next(
+        (e["response"].get("id") or "" for e in events if isinstance(e.get("response"), dict)), ""
+    )
+
+
+def provider_error(event):
+    """The part of a stream event that reports the provider's own error, or None."""
+    if event.get("type") == "response.failed":
+        return event.get("response") or event
+    if event.get("type") == "error" or isinstance(event.get("error"), dict):
+        return event
+    return None
 
 
 class _ClosingStreamingResponse(StreamingResponse):
@@ -357,9 +393,9 @@ class ProxyRequest:
                 headers=self.headers,
                 allow_redirects=False,
             )
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             self.metrics["duration_ms"] = elapsed_ms(self.started)
-            raise GatewayError("upstream_unreachable", "Model upstream is unavailable") from None
+            raise upstream_failure(error) from None
         self.metrics.update(
             status=self.response.status,
             upstream_status=self.response.status,
@@ -640,10 +676,9 @@ class ProxyRequest:
                 finished = True
                 completed = True
             except (ToolLoopError, aiohttp.ClientError) as error:
+                error = tool_failure(error)
                 degrade(self.metrics, "hidden_tool_loop_failed")
-                self.record.stream_failed(
-                    response.status, getattr(error, "code", "upstream_unreachable"), error
-                )
+                self.record.stream_failed(response.status, error.code, error)
                 yield loop.error(error)
             except Exception:
                 self.record.stream_failed(response.status, "internal_error")
@@ -670,9 +705,10 @@ class ProxyRequest:
             async for _ in loop.run(response, send):
                 pass
         except (ToolLoopError, aiohttp.ClientError) as error:
+            error = tool_failure(error)
             capture.complete = False
             degrade(self.metrics, "hidden_tool_loop_failed")
-            if isinstance(error, ToolLoopError) and error.content is not None:
+            if error.content is not None:
                 self.metrics["upstream_status"] = error.status
                 if code := error_code(error.content):
                     self.metrics["upstream_error_code"] = code
@@ -681,8 +717,6 @@ class ProxyRequest:
                     error.content, status_code=error.status, headers=filtered_headers(error.headers)
                 )
             else:
-                if isinstance(error, aiohttp.ClientError):
-                    error = GatewayError("upstream_unreachable", "Model upstream is unavailable")
                 failed = self.record.error_response(error)
             await self.finish()
             return failed
@@ -705,7 +739,7 @@ class ProxyRequest:
             async def stream():
                 decoder = SSEDecoder()
                 observe = not response.headers.get("content-encoding")
-                finished = False
+                finished, opened = False, ""
                 chunks = heartbeat(response.content.iter_any(), HEARTBEAT_SECONDS)
                 try:
                     async for chunk in chunks:
@@ -717,7 +751,16 @@ class ProxyRequest:
                             try:
                                 # A chunk inside one event completes none: no reply to reread.
                                 if frames := decoder.feed(chunk):
-                                    capture.events(d for d in map(decoder.data, frames) if d)
+                                    events = [d for d in map(decoder.data, frames) if d]
+                                    capture.events(events)
+                                    opened = opened or announced_id(events)
+                                    failed = next(filter(None, map(provider_error, events)), None)
+                                    # Relayed as it is; the record notes it.
+                                    if failed and "stream_error" not in self.metrics:
+                                        self.metrics["stream_error"] = "upstream_event"
+                                        if code := error_code(failed):
+                                            self.metrics["upstream_error_code"] = code
+                                        self.record.fail(response.status, "upstream_error")
                             except Exception:
                                 observe = False
                                 capture.complete = False
@@ -726,6 +769,20 @@ class ProxyRequest:
                         self.metrics.setdefault("first_chunk_ms", elapsed_ms(self.record.started))
                         yield chunk
                     finished = True
+                except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                    # A provider error event ends the reply as much as its terminal event.
+                    ended = capture.finished or "stream_error" in self.metrics
+                    capture.complete = False
+                    reason = upstream_failure(error).detail["reason"]
+                    self.record.stream_failed(response.status, reason)
+                    # Only between events and before the reply ended can an event be added
+                    # that the client parses; otherwise the connection is cut.
+                    if observe and not decoder.buffer and not ended and self.protocol:
+                        yield stream_failure(
+                            self.protocol, self.body, reason, capture.response_id or opened
+                        )
+                        return
+                    raise
                 except Exception:
                     self.record.stream_failed(response.status, "internal_error")
                     raise
@@ -741,7 +798,12 @@ class ProxyRequest:
                 stream(), status_code=response.status, headers=headers, cleanup=self.finish
             )
         try:
-            content = await response.read()
+            try:
+                content = await response.read()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                capture.complete = False
+                self.metrics["duration_ms"] = elapsed_ms(self.started)
+                raise upstream_failure(error) from None
             if response.status < 300 and not response.headers.get("content-encoding"):
                 try:
                     capture.nonstream(orjson.loads(content))

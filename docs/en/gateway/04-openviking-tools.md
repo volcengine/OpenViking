@@ -187,16 +187,17 @@ When a single OpenViking call fails, the model receives an error result and can 
 
 - The provider rejects a follow-up model request.
 - The model calls an OpenViking tool that is not available in this conversation, or keeps calling OpenViking tools after they were refused.
-- **Hidden tool request timed out**: the OpenViking tool rounds took longer than the profile's tool **Total time**; or, during the rounds, the provider took longer than `upstream_timeout_seconds` to start a reply or sent nothing for that long in the middle of one. A model reply that keeps arriving is limited only by **Total time**.
+- **Hidden tool request timed out**: the OpenViking tool rounds took longer than the profile's tool **Total time**. A model reply that keeps arriving is limited only by **Total time**.
+- **Model upstream did not answer in time**: during the rounds, the provider took longer than `upstream_timeout_seconds` to start a reply or sent nothing for that long in the middle of one.
 
 The client then receives an error, and the request log shows **OpenViking tools failed** (`hidden_tool_loop_failed`). What the error looks like depends on the request:
 
 | Request | What the client receives |
 | --- | --- |
-| Streaming | An error event at the end of the stream: `response.failed` in Responses, and an `error` of type `gateway_tool_error` in Chat Completions and Anthropic Messages. The HTTP status is already 200 by then. |
+| Streaming | An error event at the end of the stream: `response.failed` in Responses, and an `error` in Chat Completions and Anthropic Messages. Its type is `upstream_timeout`, `upstream_disconnected` or `upstream_unreachable` when the provider did not answer or dropped the connection, and `gateway_tool_error` otherwise. The HTTP status is already 200 by then. |
 | Non-streaming, the provider rejected a follow-up request | The provider's own error body and status. |
-| Non-streaming, timed out | 504 `tool_loop_timeout`. |
-| Non-streaming, any other failure | 502 with body `{"reason": "...", "detail": "...", "request_id": "..."}`; the reason is `tool_upstream_invalid`, `tool_upstream_incomplete`, `tool_upstream_stream_error`, `tool_call_invalid`, `tool_loop_limit` or `upstream_unreachable` (see [Model route errors](../api/25-gateway.md#model-route-errors)). |
+| Non-streaming, timed out | 504 `tool_loop_timeout` when **Total time** ran out, 504 `upstream_timeout` when the provider did not answer in time. |
+| Non-streaming, any other failure | 502 with body `{"reason": "...", "detail": "...", "request_id": "..."}`; the reason is `tool_upstream_invalid`, `tool_upstream_incomplete`, `tool_upstream_stream_error`, `tool_call_invalid`, `tool_loop_limit`, `upstream_unreachable` or `upstream_disconnected` (see [Model route errors](../api/25-gateway.md#model-route-errors)). |
 
 Two more cases:
 

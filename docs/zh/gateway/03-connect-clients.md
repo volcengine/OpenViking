@@ -167,6 +167,8 @@ print(reply.choices[0].message.content)
 - Anthropic SDK 指向 `https://ov.example.com/gateway`。
 - Responses API 使用 `https://ov.example.com/gateway/v1`，每个请求都要带完整历史并设置 `store: false`；其他 Responses 请求直接转发，不补充记忆。
 
+如果服务商在流式回复中途停止发送（超过 `upstream_timeout_seconds` 没有数据，或连接断开），流仍然以 SDK 能识别的方式结束：网关追加一条当前 API 的错误事件，然后正常关闭流。OpenAI Chat Completions 和 Anthropic SDK 会抛出它们的 API 错误，消息开头是原因（例如 `upstream_timeout`）；Responses API 收到 `response.failed`。此时 HTTP 状态码已经是 200。只有服务商停在一个事件的中间，或者停在回复的最后一个事件之后，连接才会像以前一样直接断开。
+
 配好后，[检查接入是否生效](#check-the-connection)。
 
 ## Open WebUI {#open-webui}

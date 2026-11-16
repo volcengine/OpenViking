@@ -203,7 +203,7 @@ the supplied release tag. It does not rebuild native extensions or Studio.
 | 8. Isolation of libraries with the same OV identity | Yes | Yes |
 | 9. Revocation, paused capture, and replacement key | Yes | — |
 | 10. Startup recovery from 503; refusal of dev mode and 404 | Yes | — |
-| 11. Forty-second silence with Python SDKs and Codex; compressed SSE | Yes | — |
+| 11. Forty-second silence with Python SDKs and Codex; compressed SSE; a stream that stalls ends with an SDK error; a provider that never answers gets a JSON 504 | Yes | — |
 | 12. One hundred captures with eight workers | Yes | Yes |
 | 13. Existing unordered key returns 402 before upstream dispatch | Yes | — |
 | 14. Hidden tool deduplication, missing receipts, and Responses chains | Yes | Yes |
