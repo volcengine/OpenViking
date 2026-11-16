@@ -652,6 +652,9 @@ pub(crate) enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
+        /// Save content without semantic or vector processing
+        #[arg(long = "defer-processing", help_heading = "Advanced options")]
+        defer_processing: bool,
         /// Comma-separated k=v retrieval tags to write with the content
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,

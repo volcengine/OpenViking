@@ -890,7 +890,7 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" {
+		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" || body["use_snapshot"] != true || body["resolve_conflicts"] != true {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
@@ -898,11 +898,13 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
-		ProcessingMode: "vectors_only",
-		Tags:           []string{},
-		TagMode:        "replace",
-		Wait:           true,
-		Extra:          map[string]any{"future_flag": 0},
+		ProcessingMode:   "vectors_only",
+		Tags:             []string{},
+		TagMode:          "replace",
+		Wait:             true,
+		UseSnapshot:      true,
+		ResolveConflicts: true,
+		Extra:            map[string]any{"future_flag": 0},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -995,7 +997,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			} else if body["wait"] != *wait {
 				t.Errorf("wait = %#v, want %v", body["wait"], *wait)
 			}
-			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != true {
+			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != false || body["skip_conflicts"] != true {
 				t.Fatalf("body = %#v", body)
 			}
 			operations, ok := body["operations"].([]any)
@@ -1004,11 +1006,12 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			}
 			operation, ok := operations[0].(map[string]any)
 			if !ok || !reflect.DeepEqual(operation, map[string]any{
-				"uri":      "viking://resources/project/a.txt",
-				"content":  "hello",
-				"mode":     "upsert",
-				"tags":     []any{"team=search"},
-				"tag_mode": "append",
+				"uri":             "viking://resources/project/a.txt",
+				"content":         "hello",
+				"mode":            "upsert",
+				"expected_sha256": strings.Repeat("a", 64),
+				"tags":            []any{"team=search"},
+				"tag_mode":        "append",
 				"acl": map[string]any{
 					"acl_mode": "restricted",
 					"entries":  []any{map[string]any{"principal": "group:engineering", "level": "write"}},
@@ -1030,16 +1033,17 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 
 	operations := []BatchWriteOperation{
 		{
-			URI:     "resources/project/a.txt",
-			Content: String("hello"),
-			Mode:    "upsert",
-			Tags:    []string{"team=search"},
-			TagMode: "append",
-			ACL:     &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
+			URI:            "resources/project/a.txt",
+			Content:        String("hello"),
+			Mode:           "upsert",
+			ExpectedSHA256: String(strings.Repeat("a", 64)),
+			Tags:           []string{"team=search"},
+			TagMode:        "append",
+			ACL:            &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
 		},
 	}
 	for _, wait = range []*bool{nil, Bool(false), Bool(true)} {
-		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", DeferProcessing: true, Extra: map[string]any{"future_flag": 0}}
+		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", SkipConflicts: true, Extra: map[string]any{"future_flag": 0}}
 		if _, err := client.BatchWrite(context.Background(), "resources/project", operations, opts); err != nil {
 			t.Fatal(err)
 		}

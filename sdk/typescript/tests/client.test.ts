@@ -449,6 +449,8 @@ describe("OpenVikingClient", () => {
     await client.write("resources/demo.md", "updated", {
       processingMode: "vectors_only",
       wait: true,
+      deferProcessing: true,
+      useSnapshot: true,
     });
 
     const [url, init] = fetcher.mock.calls[0]!;
@@ -458,6 +460,8 @@ describe("OpenVikingClient", () => {
       content: "updated",
       processing_mode: "vectors_only",
       wait: true,
+      defer_processing: true,
+      use_snapshot: true,
     });
   });
 
@@ -473,6 +477,7 @@ describe("OpenVikingClient", () => {
     await client.write("resources/demo.md", "updated", {
       tags: [],
       tagMode: "replace",
+      resolveConflicts: true,
     });
     await client.list("resources", { tags: ["env=prod"], includeTags: true });
     await client.tree("resources", { tags: ["env=prod"], includeTags: true });
@@ -484,6 +489,7 @@ describe("OpenVikingClient", () => {
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
       tags: [],
       tag_mode: "replace",
+      resolve_conflicts: true,
     });
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("tags"),
@@ -553,6 +559,7 @@ describe("OpenVikingClient", () => {
           uri: "resources/project/a.txt",
           content: "hello",
           mode: "upsert",
+          expectedSha256: "a".repeat(64),
           tags: ["team=search"],
           tagMode: "append",
           acl: {
@@ -563,7 +570,7 @@ describe("OpenVikingClient", () => {
       ],
       {
         processingMode: "vectors_only",
-        deferProcessing: true,
+        skipConflicts: true,
         extra: { future_flag: 0 },
       },
     );
@@ -579,12 +586,14 @@ describe("OpenVikingClient", () => {
     expect(batchWriteBody).toMatchObject({
       root_uri: "viking://resources/project",
       future_flag: 0,
+      skip_conflicts: true,
     });
     expect(batchWriteBody.operations).toEqual([
       {
         uri: "viking://resources/project/a.txt",
         content: "hello",
         mode: "upsert",
+        expected_sha256: "a".repeat(64),
         tags: ["team=search"],
         tag_mode: "append",
         acl: {
@@ -594,7 +603,7 @@ describe("OpenVikingClient", () => {
       },
     ]);
     expect(batchWriteBody.processing_mode).toBe("vectors_only");
-    expect(batchWriteBody.defer_processing).toBe(true);
+    expect(batchWriteBody.defer_processing).toBeUndefined();
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("uri"),
     ).toBe("viking://resources/project/a.txt");
