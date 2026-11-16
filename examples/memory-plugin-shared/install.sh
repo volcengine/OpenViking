@@ -2988,12 +2988,16 @@ const hooks = Object.fromEntries(Object.entries(template).map(([name, events]) =
   Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event,
     handlers.map((handler) => ({ ...handler, command: render(handler.command) }))])),
 ]));
-const tmp = `${pluginDir}.${process.pid}.tmp`;
+// Stage beside plugins/, not in it, so an interrupted run leaves no second
+// plugin for Antigravity to load; the config directory keeps the rename on
+// one filesystem.
+const tmp = path.join(path.dirname(path.dirname(pluginDir)), `.openviking-memory.${process.pid}.tmp`);
 fs.rmSync(tmp, { recursive: true, force: true });
 fs.mkdirSync(tmp, { recursive: true });
 fs.copyFileSync(path.join(hostDir, "plugin.json"), path.join(tmp, "plugin.json"));
 fs.writeFileSync(path.join(tmp, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
 fs.rmSync(pluginDir, { recursive: true, force: true });
+fs.mkdirSync(path.dirname(pluginDir), { recursive: true });
 fs.renameSync(tmp, pluginDir);
 const manifestPath = path.join(root, "integration.json");
 const previous = fs.existsSync(manifestPath) ? readJson(manifestPath) : {};
