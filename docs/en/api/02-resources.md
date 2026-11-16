@@ -809,12 +809,13 @@ Possible shared response:
 
 ---
 
+### Shared resource operations
+
+These HTTP endpoints apply the corresponding [filesystem operations](03-filesystem.md) to children of `viking://resources/`. The shared root itself, other namespaces and paths containing `.` or `..` segments are rejected. Copy and move validate both source and destination. Authentication and filesystem ACL checks apply.
+
 ### Copy a Shared Resource
 
-Copy a file or directory together with its vector records. Both URIs must be
-children of `viking://resources/`; the root itself and private resource namespaces
-are not accepted. These operations use the same access checks as the corresponding
-filesystem operations.
+Copy a file or directory together with its vector records. Overwrite, merge, and rollback follow the filesystem copy operation.
 
 **HTTP**
 
@@ -826,7 +827,7 @@ POST /api/v1/resources/cp
 |----------------|------|----------|---------|-------------|
 | `from_uri` | string | Yes | - | Source shared resource URI |
 | `to_uri` | string | Yes | - | Destination shared resource URI |
-| `recursive` | boolean | No | `false` | Copy a directory recursively |
+| `recursive` | boolean | No | `false` | Must be true when copying a directory |
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/resources/cp \

@@ -17,7 +17,8 @@ import type {
   BatchWriteOptions,
   ClientConfig,
   CommitSessionOptions,
-  CompileOptions,
+  CompileInput,
+  CompileRequest,
   CreateSessionOptions,
   ExperienceOutcomeOptions,
   ExperienceTrajectoryOptions,
@@ -841,6 +842,7 @@ export class OpenVikingClient {
       content,
       mode: options.mode,
       processing_mode: options.processingMode,
+      use_snapshot: options.useSnapshot,
       tags: options.tags,
       acl: options.acl,
       tag_mode:
@@ -876,6 +878,7 @@ export class OpenVikingClient {
       wait: options.wait,
       telemetry: options.telemetry,
       processing_mode: options.processingMode,
+      use_snapshot: options.useSnapshot,
       defer_processing: options.deferProcessing,
     });
     return this.request("POST", "/api/v1/content/batch-write", {
@@ -1231,26 +1234,17 @@ export class OpenVikingClient {
     );
     return result.uri;
   }
-  /** Start an asynchronous Compile task. */
-  compile(
-    fromUris: string[],
-    to: string,
-    skill: string,
-    options: CompileOptions = {},
-  ): Promise<JsonObject> {
-    const body = compact({
-      from: fromUris,
-      to,
-      skill,
-      instruction: options.instruction,
-      args:
-        options.args && Object.keys(options.args).length
-          ? options.args
-          : undefined,
-    });
-    return this.request("POST", "/api/v1/compile", {
-      body: mergeExtra(body, options.extra, ["instruction", "args"]),
-    });
+  /** Save named inputs without execution; compile_name is required and returned unchanged. */
+  createCompileTask(
+    input: CompileInput & { compile_name: string },
+  ): Promise<{ compile_name: string }> {
+    if (!input.compile_name) throw new TypeError("compile_name is required");
+    return this.request("POST", "/api/v1/compile/create", { body: input });
+  }
+
+  /** Queue a named persistent run or an independent full compilation. */
+  compile(input: CompileRequest): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/compile", { body: input });
   }
 
   /** Get a background task. */

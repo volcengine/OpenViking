@@ -218,6 +218,7 @@ Write a file and automatically refresh related semantics and vectors.
 | content | str | Yes | - | New content to write |
 | mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` is a compatibility alias for `replace` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
+| use_snapshot | bool | No | `false` | Save the written file as a snapshot under the content lock|
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
 | tag_mode | string | No | `replace` | Tag update mode: `replace` overwrites tags, `append` merges by key, and `clear` removes existing tags without requiring `tags` |
@@ -348,6 +349,7 @@ Write multiple files below one Resource or Memory directory, then refresh the af
 | `root_uri` | string | Yes | - | Existing Resource or Memory directory containing every target |
 | `operations` | array | Yes | - | File writes to validate and apply |
 | `wait` | boolean | No | `true` | Wait for semantic/vector refresh |
+| `use_snapshot` | boolean | No | `false` | Save successful writes in one snapshot before releasing content locks |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | `telemetry` | boolean/object | No | `false` | Include operation telemetry |
 | `processing_mode` | string | No | `semantic_and_vectors` | One processing mode for the whole batch: `semantic_and_vectors` or `vectors_only` |
