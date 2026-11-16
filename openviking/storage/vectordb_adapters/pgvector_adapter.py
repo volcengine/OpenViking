@@ -38,9 +38,70 @@ from .opengauss_adapter import OpenGaussCollectionAdapter, _save_collection_meta
 
 logger = get_logger(__name__)
 
+_SPARSE_FREQUENCY_PROBE_ROWS = 4096
+_SPARSE_FREQUENCY_PROBE_MAX_ROWS = 65536
+_SPARSE_SCOPE_MAX_ROWS = 100000
+
 
 class PgvectorCollection(OpenGaussCollection):
     """SQL collection with flat or native pgvector HNSW dense search."""
+
+    def _sparse_candidate_ctes(
+        self, table, postings, condition, filter_params, sparse, has_dense, index_name, budget
+    ):
+        # Exact flat dense search disables indexscan for the entire statement.
+        # The scoped lookup relies on an index covering both id and term.
+        if condition == "TRUE" or (
+            has_dense and self._indexes[index_name]["_pg_index_type"] == "flat"
+        ):
+            return super()._sparse_candidate_ctes(
+                table, postings, condition, filter_params, sparse, has_dense, index_name, budget
+            )
+        # Keep routing in the ranking statement's MVCC snapshot. These probes
+        # choose an execution strategy, never truncate the actual candidate set.
+        # Raise the frequency gate with table size: a moderately frequent term
+        # should not pay for a full main-table scope scan. Stale ANALYZE stats
+        # affect strategy only; every chosen route applies the complete filter.
+        terms = list(sparse)
+        probe_rows = _SPARSE_FREQUENCY_PROBE_ROWS
+        scope_max = _SPARSE_SCOPE_MAX_ROWS
+        vector_guard = ' AND "vector" IS NOT NULL' if has_dense else ""
+        ctes = [
+            "sparse_probe_size AS MATERIALIZED (SELECT "
+            f"GREATEST({probe_rows}, LEAST({_SPARSE_FREQUENCY_PROBE_MAX_ROWS}, "
+            "CEIL(COALESCE((SELECT reltuples FROM pg_catalog.pg_class "
+            "WHERE oid = %s::regclass), 0) * 0.05)))::integer AS n)",
+            f"sparse_frequency AS MATERIALIZED (SELECT 1 FROM {postings} "
+            "WHERE term = ANY(%s::text[]) LIMIT (SELECT n FROM sparse_probe_size))",
+            f"sparse_scope AS MATERIALIZED (SELECT id FROM {table} "
+            f"WHERE {condition}{vector_guard} LIMIT "
+            "(SELECT CASE WHEN count(*) = (SELECT n FROM sparse_probe_size) "
+            f"THEN {scope_max + 1} ELSE 0 END "
+            "FROM sparse_frequency))",
+            "sparse_scope_size AS MATERIALIZED (SELECT count(*) AS n FROM sparse_scope)",
+            "sparse_route AS MATERIALIZED (SELECT CASE "
+            "WHEN (SELECT count(*) FROM sparse_frequency) < "
+            "(SELECT n FROM sparse_probe_size) THEN FALSE "
+            f"WHEN n > {scope_max} THEN FALSE "
+            "WHEN n <= (SELECT n/2 FROM sparse_probe_size) THEN TRUE "
+            f"ELSE (SELECT count(*) FROM (SELECT 1 FROM {postings} "
+            "WHERE term = ANY(%s::text[]) LIMIT (SELECT 2*n FROM sparse_scope_size)"
+            ") frequency) >= 2*n END AS scoped FROM sparse_scope_size)",
+            "sparse_matches AS ("
+            f"SELECT p.id, p.weight * q.weight AS score FROM sparse_scope s "
+            f"CROSS JOIN LATERAL (SELECT id, term, weight FROM {postings} "
+            "WHERE id = s.id AND term = ANY(%s::text[]) OFFSET 0) p "
+            "JOIN query_sparse q ON p.term = q.term "
+            "WHERE (SELECT scoped FROM sparse_route) UNION ALL "
+            f"SELECT p.id, p.weight * q.weight AS score FROM {postings} p "
+            "JOIN query_sparse q ON p.term = q.term "
+            "WHERE NOT (SELECT scoped FROM sparse_route) "
+            f'AND EXISTS (SELECT 1 FROM {table} WHERE "id" = p.id '
+            f"AND {condition}{vector_guard}))",
+            "sparse_candidates AS (SELECT id AS _ov_candidate_id FROM sparse_matches "
+            "GROUP BY id HAVING SUM(score) > 0 ORDER BY SUM(score) DESC, id LIMIT %s)",
+        ]
+        return ctes, [table, terms, *filter_params, terms, terms, *filter_params, budget]
 
     def _normalized_index_meta(self, index_name, meta_data):
         meta = dict(meta_data)

@@ -111,6 +111,42 @@ and computes complete scores within that union. It does not guarantee global
 fused TopK. `sparse_weight` and embedding configuration retain their usual
 meaning.
 
+### Adaptive filtered sparse retrieval
+
+Filtered sparse recall probes the number of matching postings before choosing
+an access order. The initial probe limit is 5% of the estimated collection row
+count, clamped to 4096–65536. Queries below that limit use posting-first
+retrieval without scanning the document scope.
+
+For frequent terms, the query reads up to 100001 document IDs satisfying the
+complete filter. Scopes above 100000 documents fall back to the original full
+filtered query; the probe never truncates the ranked scope. Smaller scopes use
+ID-based posting lookups when matching postings are at least twice the scope
+size, with a second bounded posting probe when needed. Routing and recall share
+one SQL statement and MVCC snapshot. Weights, candidate budgets, sorting and
+pagination retain their existing semantics.
+
+Unfiltered queries and flat dense/sparse hybrid queries keep the original path.
+HNSW hybrid queries can use the scoped path and exclude documents without dense
+vectors. No additional index or schema migration is required.
+
+This is a performance heuristic, not a latency bound: a scope probe can scan
+the full document table when its filter has no useful index, and large scopes
+or rare terms can pay extra probe overhead. Evaluate representative term
+frequencies, scopes and concurrency. To compare both paths on a dedicated test
+corpus with full output checks and execution plans:
+
+```bash
+python scripts/benchmark_pgvector_sparse_scope.py --rows 1000000 --stage load --output /tmp/sparse-scope.json
+python scripts/benchmark_pgvector_sparse_scope.py --rows 1000000 --stage compare --output /tmp/sparse-scope.json
+python scripts/benchmark_pgvector_sparse_scope.py --rows 1000000 --stage cleanup --output /tmp/sparse-scope.json
+```
+
+Set `OV_PGVECTOR_TEST_DSN` first. The loader creates a unique collection and
+refuses to overwrite an existing report. Cleanup removes the collection and
+checks its tables and metadata are absent. Loading uses `COPY`, so load timing
+does not measure adapter upsert throughput.
+
 ## Directory filter tuning
 
 For normalized URI scopes on large collections, evaluate a composite B-tree

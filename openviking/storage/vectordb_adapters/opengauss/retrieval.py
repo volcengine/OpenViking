@@ -432,6 +432,20 @@ class OpenGaussRetrievalMixin:
     def _validate_ranked_filters(self, filters) -> None:
         _validate_filters(filters, self._field_names)
 
+    def _sparse_candidate_ctes(
+        self, table, postings, condition, filter_params, sparse, has_dense, index_name, budget
+    ):
+        """Backend hook: preserve the wire-compatible posting-first plan by default."""
+        vector_guard = ' AND "vector" IS NOT NULL' if has_dense else ""
+        return [
+            f"sparse_candidates AS (SELECT p.id AS _ov_candidate_id FROM {postings} p "
+            "JOIN query_sparse q ON p.term = q.term "
+            f'WHERE EXISTS (SELECT 1 FROM {table} WHERE "id" = p.id '
+            f"AND {condition}{vector_guard}) GROUP BY p.id "
+            "HAVING SUM(p.weight * q.weight) > 0 "
+            "ORDER BY SUM(p.weight * q.weight) DESC, p.id LIMIT %s)"
+        ], [*filter_params, budget]
+
     def search_ranked(
         self,
         index_name: str,
@@ -513,16 +527,11 @@ class OpenGaussRetrievalMixin:
             params.extend([*filter_params, vector_text, budget])
             candidate_selects.append("SELECT _ov_candidate_id FROM dense_candidates")
         if has_sparse:
-            vector_guard = ' AND "vector" IS NOT NULL' if has_dense else ""
-            ctes.append(
-                f"sparse_candidates AS (SELECT p.id AS _ov_candidate_id FROM {postings} p "
-                "JOIN query_sparse q ON p.term = q.term "
-                f'WHERE EXISTS (SELECT 1 FROM {table} WHERE "id" = p.id '
-                f"AND {condition}{vector_guard}) GROUP BY p.id "
-                "HAVING SUM(p.weight * q.weight) > 0 "
-                "ORDER BY SUM(p.weight * q.weight) DESC, p.id LIMIT %s)"
+            sparse_ctes, sparse_params = self._sparse_candidate_ctes(
+                table, postings, condition, filter_params, sparse, has_dense, index_name, budget
             )
-            params.extend([*filter_params, budget])
+            ctes.extend(sparse_ctes)
+            params.extend(sparse_params)
             candidate_selects.append("SELECT _ov_candidate_id FROM sparse_candidates")
         ctes.append("candidates AS (" + " UNION ".join(candidate_selects) + ")")
         distance_sql = (

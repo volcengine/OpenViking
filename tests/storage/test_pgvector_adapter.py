@@ -5,6 +5,7 @@
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from types import MethodType
 from unittest.mock import Mock
 
 import pytest
@@ -12,6 +13,11 @@ import pytest
 from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.vectordb_adapters import pgvector_adapter
 from openviking.storage.vectordb_adapters.factory import create_collection_adapter
+from openviking.storage.vectordb_adapters.opengauss.retrieval import OpenGaussRetrievalMixin
+from openviking.storage.vectordb_adapters.opengauss.sql import (
+    _build_where_clause,
+    _quote_identifier,
+)
 from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.utils.config.vectordb_config import PgvectorConfig, VectorDBBackendConfig
 
@@ -23,7 +29,7 @@ def adapter(request):
     a = create_collection_adapter(
         VectorDBBackendConfig(
             backend="pgvector",
-            name="test_pg_" + uuid.uuid4().hex[:12],
+            name="Test_pg_" + uuid.uuid4().hex[:12],
             dimension=3,
             sparse_weight=0.5,
             pgvector={"dsn_env": "OV_PGVECTOR_TEST_DSN", "index_type": request.param},
@@ -544,3 +550,129 @@ async def test_service_facade_context_schema_and_tenant_isolation():
         backend._adapter.drop_collection()
         await root.close()
         await backend.close()
+
+
+def test_adaptive_sparse_scope_routing_and_equivalence(adapter, monkeypatch):
+    """Exercise both routes with real postings, filters, mutations and fusion."""
+    records = [
+        {
+            "id": f"r{i:05d}",
+            "vector": [1, 0, 0] if i % 11 else None,
+            "sparse_vector": {"hot": 1 + i % 7, **({"rare": 3} if i == 17 else {})},
+            "account_id": "one" if i < 160 else "two",
+            "uri": f"viking://resources/{'sub/' if i % 2 else ''}f{i}.md",
+        }
+        for i in range(4200)
+    ]
+    for begin in range(0, len(records), 200):
+        adapter.upsert(records[begin : begin + 200])
+    raw = adapter.get_collection()._Collection__collection
+    raw._execute(f"ANALYZE {_quote_identifier(raw._name)}")
+    raw._execute(f"ANALYZE {_quote_identifier(raw._sparse_posting_table_name())}")
+    adaptive = raw._sparse_candidate_ctes
+    baseline = MethodType(OpenGaussRetrievalMixin._sparse_candidate_ctes, raw)
+
+    def route(terms, scope):
+        where, params = _build_where_clause(adapter._compile_filter(scope), raw._array_fields)
+        ctes, candidate_params = adaptive(
+            _quote_identifier(raw._name),
+            _quote_identifier(raw._sparse_posting_table_name()),
+            f"({where})",
+            params,
+            terms,
+            False,
+            "default",
+            1000,
+        )
+        values = ", ".join(["(%s::text, %s::float8)"] * len(terms))
+        return raw._execute(
+            f"WITH query_sparse(term, weight) AS (VALUES {values}), "
+            + ", ".join(ctes)
+            + " SELECT scoped FROM sparse_route",
+            [v for pair in terms.items() for v in pair] + candidate_params,
+            fetch=True,
+        )[0][0]
+
+    assert route({"hot": 1}, Eq("account_id", "one")) is True
+    assert route({"rare": 1}, Eq("account_id", "one")) is False
+    assert route({"hot": 1}, Eq("account_id", "two")) is False
+    assert route({"hot": 1}, Eq("account_id", "absent")) is True
+    cases = [
+        ({"hot": 1}, Eq("account_id", "one")),
+        ({"hot": 1}, Eq("account_id", "two")),
+        ({"rare": 1}, Eq("account_id", "one")),
+        (
+            {"hot": 0.5, "rare": 2},
+            And([Eq("account_id", "one"), PathScope("uri", "viking://resources/sub", -1)]),
+        ),
+        ({"hot": 1}, PathScope("uri", "viking://resources", 0)),
+        ({"hot": 1}, PathScope("uri", "viking://resources", 1)),
+        ({"hot": 1}, Or([Eq("account_id", "one"), Eq("id", "r04199")])),
+        ({"hot": 1}, Or([])),
+        ({"hot": 1}, Eq("account_id", "absent")),
+    ]
+    for terms, scope in cases:
+        for dense in (None, [1, 0, 0]):
+            kwargs = {
+                "sparse_query_vector": terms,
+                "filter": scope,
+                "query_vector": dense,
+                "limit": 7,
+                "offset": 3,
+                "output_fields": ["account_id", "uri"],
+            }
+            raw._sparse_candidate_ctes = baseline
+            try:
+                expected = adapter.query(**kwargs)
+            finally:
+                raw._sparse_candidate_ctes = adaptive
+            assert adapter.query(**kwargs) == expected
+    # Independent exact dot-product oracle within the small tenant.
+    expected = sorted(
+        (
+            (r["id"], r["sparse_vector"]["hot"] * 0.5 + r["sparse_vector"].get("rare", 0) * 2)
+            for r in records[:160]
+        ),
+        key=lambda item: (-item[1], item[0]),
+    )[3:10]
+    got = adapter.query(
+        sparse_query_vector={"hot": 0.5, "rare": 2},
+        filter=Eq("account_id", "one"),
+        limit=7,
+        offset=3,
+    )
+    assert [(r["id"], r["_score"]) for r in got] == expected
+    # A scope that exceeds the probe cap must use ALL matching documents.
+    with monkeypatch.context() as patch:
+        patch.setattr(pgvector_adapter, "_SPARSE_SCOPE_MAX_ROWS", 64)
+        assert route({"hot": 1}, Eq("account_id", "one")) is False
+        assert (
+            adapter.query(
+                sparse_query_vector={"hot": 0.5, "rare": 2},
+                filter=Eq("account_id", "one"),
+                limit=7,
+                offset=3,
+            )
+            == got
+        )
+    with monkeypatch.context() as patch:
+        patch.setattr(pgvector_adapter, "_SPARSE_FREQUENCY_PROBE_ROWS", 8192)
+        assert route({"hot": 1}, Eq("account_id", "one")) is False
+        assert (
+            adapter.query(
+                sparse_query_vector={"hot": 0.5, "rare": 2},
+                filter=Eq("account_id", "one"),
+                limit=7,
+                offset=3,
+            )
+            == got
+        )
+    adapter.update_data([{"id": "r00017", "account_id": "two", "uri": "viking://elsewhere/f.md"}])
+    assert adapter.query(sparse_query_vector={"rare": 1}, filter=Eq("account_id", "one")) == []
+    adapter.upsert({"id": "r00018", "sparse_vector": {"rare": 8}})
+    assert (
+        adapter.query(sparse_query_vector={"rare": 1}, filter=Eq("account_id", "one"))[0]["id"]
+        == "r00018"
+    )
+    adapter.delete(ids=["r00018"])
+    assert adapter.query(sparse_query_vector={"rare": 1}, filter=Eq("account_id", "one")) == []

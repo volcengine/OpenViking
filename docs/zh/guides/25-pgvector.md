@@ -101,6 +101,38 @@ Sparse term 以 JSONB 和倒排表存储。Sparse-only 只召回有正向 term o
 的记录；hybrid 合并有限 dense/sparse 候选，在候选并集中补齐分数后排序，
 不保证全局融合 TopK。`sparse_weight` 与 embedding 配置仍沿用既有语义。
 
+### 带过滤的稀疏检索自适应路径
+
+带过滤条件的 sparse 召回先探测匹配 postings 的数量，再选择访问顺序。
+首次探测上限为估算 collection 行数的 5%，限制在 4096–65536。
+未达到该上限时使用 postings-first，不扫描文档过滤范围。
+
+高频查询最多读取 100001 个满足完整过滤条件的文档 ID。过滤范围超过
+100000 文档时回退到原始的完整过滤查询，不会对截断后的范围排名。
+更小的范围在匹配 postings 至少达到范围文档数的两倍时采用按 ID
+查 postings 的路径，必要时再进行一次有界 postings 探测。
+路由与召回在同一 SQL statement、同一 MVCC snapshot 中完成。
+权重、候选预算、排序和分页仍沿用既有语义。
+
+无过滤查询和 flat dense/sparse 混合查询保持原路径。
+HNSW 混合查询可以采用新路径，并排除缺失 dense vector 的文档。
+无需额外索引或 schema 迁移。
+
+这是性能启发式，不保证延迟上限：过滤条件没有有效索引时，scope 探测
+仍可能扫描完整主表；宽范围或稀有词可能增加探测开销。
+需用代表性词频、过滤范围和并发验证。可在专用测试语料上比较两条路径，
+脚本逐次检查完整输出并保留执行计划：
+
+```bash
+python scripts/benchmark_pgvector_sparse_scope.py --rows 1000000 --stage load --output /tmp/sparse-scope.json
+python scripts/benchmark_pgvector_sparse_scope.py --rows 1000000 --stage compare --output /tmp/sparse-scope.json
+python scripts/benchmark_pgvector_sparse_scope.py --rows 1000000 --stage cleanup --output /tmp/sparse-scope.json
+```
+
+运行前设置 `OV_PGVECTOR_TEST_DSN`。加载创建唯一 collection，并拒绝覆盖已有报告；
+清理删除 collection 后检查其表和元数据已消失。加载使用 `COPY`，
+加载耗时不代表 adapter upsert 吞吐。
+
 ## 目录过滤调优
 
 大规模 collection 的归一化 URI 范围过滤可评估租户与路径的 B-tree
