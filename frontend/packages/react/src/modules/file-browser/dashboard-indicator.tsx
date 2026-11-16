@@ -6,7 +6,7 @@ import {
   WikiConflictBoardIcon,
 } from '../../icons/index.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
-import { Tooltip } from '../../shared/primitives/tooltip/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 
 export function DashboardIndicator({
   dashboard,
@@ -33,7 +33,7 @@ export function DashboardIndicator({
         ? WikiConflictBoardIcon
         : WikiBoardIcon;
   return (
-    <Tooltip content={label}>
+    <Tooltip content={label} placement="right">
       <button
         type="button"
         className={`ov-file-browser__dashboard${dashboard.pendingConflicts ? ' ov-file-browser__dashboard--pending' : ''}`}

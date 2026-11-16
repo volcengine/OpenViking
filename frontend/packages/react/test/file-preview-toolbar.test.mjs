@@ -76,7 +76,8 @@ test('standalone preview offers editing only on the active editable level', asyn
 });
 
 test('FileBrowser saves edits before offering an optional snapshot without waiting for background work', async () => {
-  const uri = 'viking://resources/guide.md';
+  const rootUri = 'viking://user/alice/memories';
+  const uri = `${rootUri}/guide.md`;
   let fullReads = 0;
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
@@ -108,7 +109,7 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
     createElement(
       OpenVikingProvider,
       { fetch },
-      createElement(FileBrowser, { uri, readOnly }),
+      createElement(FileBrowser, { rootUri, uri, readOnly }),
     );
   const view = await mount(render(false));
   try {

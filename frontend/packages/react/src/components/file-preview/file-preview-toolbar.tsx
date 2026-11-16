@@ -33,7 +33,8 @@ export function FilePreviewToolbar({
   );
   const pinned = groups.flat().filter((action) => action.pinned);
   const items = groups.map((group) => group.filter((action) => !action.pinned));
-  const switchVisible = actions.canSwitchView && options?.viewSwitch !== false;
+  const switchVisible =
+    !actions.editing && actions.canSwitchView && options?.viewSwitch !== false;
   const editVisible = actions.canEdit && options?.edit !== false;
   const hasItems = items.some(
     (item) => !Array.isArray(item) || item.length > 0,
@@ -98,7 +99,7 @@ export function FilePreviewToolbar({
               type="button"
               className="ov-file-preview__switch-item"
               aria-pressed={actions.viewMode === mode}
-              disabled={actions.busy || actions.editing}
+              disabled={actions.busy}
               onClick={() => actions.setViewMode(mode)}
             >
               {mode === 'preview' ? text.previewMode : text.sourceMode}
@@ -120,16 +121,17 @@ export function FilePreviewToolbar({
           <EditIcon width={14} height={14} aria-hidden="true" />
         </Button>
       ) : null}
-      {pinned.map((action) => (
-        <FilePreviewActionList
-          key={action.key}
-          items={[action]}
-          pending={commands.pending}
-          execute={(item) => commands.execute(item, actions.busy)}
-          disabled={actions.busy}
-          text={text}
-        />
-      ))}
+      {!actions.editing &&
+        pinned.map((action) => (
+          <FilePreviewActionList
+            key={action.key}
+            items={[action]}
+            pending={commands.pending}
+            execute={(item) => commands.execute(item, actions.busy)}
+            disabled={actions.busy}
+            text={text}
+          />
+        ))}
       {!actions.editing ? (
         <>
           <FilePreviewActionList

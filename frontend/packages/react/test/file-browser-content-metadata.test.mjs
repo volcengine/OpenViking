@@ -50,8 +50,8 @@ for (const kinds of [undefined, []]) {
           uri: 'viking://~/resources/handbook/policy.md',
           content: `${body}Updated.\n`,
           mode: 'replace',
-          edit_source: 'manual',
           resolve_conflicts: true,
+          use_snapshot: true,
         },
       );
       if (!kinds) {

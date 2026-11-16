@@ -178,7 +178,10 @@ export function useFileBrowserPreviewActions({
             uri={opened?.uri ?? uri}
             canWrite={canWrite}
             canSaveSnapshot={canSaveSnapshot}
-            versioned={policy.versionedFile}
+            versioned={
+              policy.versionedFile || (!isFile && dashboard?.kind === 'wiki')
+            }
+            directory={!isFile && dashboard?.kind === 'wiki'}
             showContent={isFile && !isBinaryFile(uri)}
             text={text}
             locale={locale}

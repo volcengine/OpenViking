@@ -4,11 +4,14 @@ import type { FileBrowserDashboardLabels } from './types.js';
 import { readCompileTargets } from './dashboard-data.js';
 import { type ReactNode, createElement, useCallback, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { readDashboardHint } from './dashboard-resource.js';
 import { isOvClientError } from '../../client/errors.js';
 import type { FileTreeRow } from '../../components/file-tree/index.js';
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
+import {
+  useWikiConflictIndex,
+  useDashboardHint,
+} from './use-dashboard-metadata.js';
 import { ExperienceDashboardPane } from './experience-dashboard-pane.js';
 import { WikiDashboardPane } from './wiki-dashboard-pane.js';
 import { ExperienceBoardIcon, WikiBoardIcon } from '../../icons/index.js';
@@ -23,6 +26,7 @@ export function useBrowserDashboards({
   metadataRows,
   uri,
   rootUri,
+  identifyUri,
   generation,
   locale,
   requestOptions,
@@ -36,6 +40,7 @@ export function useBrowserDashboards({
   metadataRows: readonly FileTreeRow[];
   uri: string | null;
   rootUri: string;
+  identifyUri: (uri: string) => string;
   generation: number;
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
@@ -58,33 +63,13 @@ export function useBrowserDashboards({
   );
   const wikiEnabled =
     dashboardKinds === undefined || dashboardKinds.includes('wiki');
-  const loadHint = useCallback(
-    async (client: OvClient, options: OvRequestOptions) =>
-      uri ? readDashboardHint(client, uri, options) : undefined,
-    [uri],
-  );
-  const hint = useDashboardQuery(
-    loadHint,
-    requestOptions,
-    wikiEnabled && Boolean(uri),
+  const { hint, canonicalUri, knownRows, isFile } = useDashboardHint({
+    uri,
+    rows: metadataRows,
+    enabled: wikiEnabled,
     generation,
-  );
-  const canonicalUri = hint.data?.uri ?? uri;
-  const knownRows: readonly FileTreeRow[] =
-    canonicalUri && hint.data?.tags.includes('compile_target=true')
-      ? [
-          ...metadataRows,
-          {
-            kind: 'entry',
-            uri: canonicalUri,
-            id: canonicalUri,
-            name: canonicalUri,
-            depth: 0,
-            type: 'directory',
-            tags: hint.data.tags,
-          } as FileTreeRow,
-        ]
-      : metadataRows;
+    requestOptions,
+  });
   // Tree tags and scoped attrs advertise boards without querying Compile.
   // The registry only enriches an explicitly opened Wiki board.
   const wantsWiki =
@@ -102,11 +87,21 @@ export function useBrowserDashboards({
   const unsupported =
     isOvClientError(catalog.error) && catalog.error.statusCode === 404;
   const targets = catalog.data ?? [];
+  const conflicts = useWikiConflictIndex({
+    rows: knownRows,
+    targets,
+    rootUri,
+    identifyUri,
+    enabled: wikiEnabled,
+    generation,
+    requestOptions,
+  });
   const resolve = (target: string) => {
     const match = resolveDashboard(
       target === uri ? (canonicalUri ?? target) : target,
       knownRows,
       targets,
+      conflicts.presence(identifyUri(target)),
     );
     return match ? { ...match, uri: target } : undefined;
   };
@@ -166,14 +161,7 @@ export function useBrowserDashboards({
                 })
               : createElement(WikiDashboardPane, {
                   uri,
-                  kind: knownRows.some(
-                    (row) =>
-                      row.kind === 'entry' &&
-                      row.uri === canonicalUri &&
-                      row.type === 'file',
-                  )
-                    ? 'file'
-                    : 'directory',
+                  kind: isFile ? 'file' : 'directory',
                   locale,
                   requestOptions,
                   refreshGeneration: generation,
@@ -196,7 +184,10 @@ export function useBrowserDashboards({
     isOpen: uri !== null && opened === uri && Boolean(current),
     open,
     close,
-    error: unsupported ? null : catalog.error,
-    retry: catalog.retry,
+    error: (unsupported ? null : catalog.error) ?? conflicts.error,
+    retry: () => {
+      catalog.retry();
+      conflicts.retry();
+    },
   };
 }

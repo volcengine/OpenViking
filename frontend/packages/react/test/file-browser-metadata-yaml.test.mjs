@@ -35,7 +35,8 @@ for (const extension of ['yaml', 'yml']) {
           await f.tab.editing.save(expected);
           const write = f.fetch.calls.find((call) => call.body).body;
           assert.equal(write.content, expected);
-          assert.equal(write.edit_source, 'manual');
+          assert.equal('edit_source' in write, false);
+          assert.equal('use_snapshot' in write, false);
           assert.equal('resolve_conflicts' in write, false);
         } finally {
           await f.view.unmount();

@@ -1,3 +1,4 @@
+import './helpers/history-viewer-dom.mjs';
 import { notificationContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -5,7 +6,6 @@ import {
   fixture,
   tree,
   mount,
-  rootUri,
   openAction,
   workflow,
   click,
@@ -14,8 +14,8 @@ import {
   ok,
 } from './helpers/preview-native-dom.mjs';
 
-test('ordinary file history saves a snapshot only on explicit request and retains notes on conflict', async () => {
-  const uri = `${rootUri}/guide.md`;
+test('non-resource text history saves a snapshot only on explicit request and retains notes on conflict', async () => {
+  const uri = 'viking://user/alice/skills/guide/SKILL.md';
   let entries = [];
   let fileLocked = true;
   const fetch = fixture(uri, false, (call) => {
@@ -46,7 +46,7 @@ test('ordinary file history saves a snapshot only on explicit request and retain
     ];
     return ok({ result: 'created', commit_oid: 'snapshot-1' });
   });
-  const view = await mount(tree(fetch, uri));
+  const view = await mount(tree(fetch, uri, { rootUri: 'viking://' }));
   try {
     await openAction('Version history');
     const note = workflow().querySelector(
@@ -85,16 +85,18 @@ test('ordinary file history saves a snapshot only on explicit request and retain
     assert.equal(fetch.countOf('/api/v1/snapshot/log'), 2);
     assert.equal(note.value, '');
     assert.equal(notificationContent()?.textContent, undefined);
-    assert.match(workflow().textContent, /Update guide/);
+    assert.match(workflow().textContent, /Snapshot saved/);
   } finally {
     await view.unmount();
   }
 });
 
-test('read-only ordinary files can open history without a snapshot form', async () => {
-  const uri = `${rootUri}/guide.md`;
+test('read-only non-resource text files can open history without a snapshot form', async () => {
+  const uri = 'viking://user/alice/skills/guide/SKILL.md';
   const fetch = fixture(uri, false);
-  const view = await mount(tree(fetch, uri, { readOnly: true }));
+  const view = await mount(
+    tree(fetch, uri, { rootUri: 'viking://', readOnly: true }),
+  );
   try {
     await openAction('Version history');
     assert.ok(workflow());

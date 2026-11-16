@@ -41,14 +41,10 @@ export function dashboardDemoResponse(url: URL): Response | undefined {
   switch (url.pathname) {
     case '/api/v1/compile/configs':
       return ok({
-        targets: [
-          {
-            to: DEMO_WIKI,
-            compile_type: 'compile',
-            initialized: true,
-            conflicts_num: 1,
-          },
-        ],
+        configs: ['handbook', 'handbook-review'].map((compile_name) => ({
+          to: DEMO_WIKI,
+          compile_name,
+        })),
       });
     case '/api/v1/fs/attrs':
       return ok({

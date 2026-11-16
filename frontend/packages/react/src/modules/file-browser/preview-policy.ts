@@ -45,7 +45,9 @@ export function previewPolicy({
   const summary = isSummaryUri(uri);
   const experience = isFile && isExperienceFile(uri);
   const wiki = dashboard?.kind === 'wiki';
-  const fileHistory = isFile && supportsFileHistory(uri);
+  const resource =
+    /^viking:\/\/(?:resources|(?:user\/[^/]+|~)\/resources)(?:\/|$)/.test(uri);
+  const fileHistory = isFile && supportsFileHistory(uri) && (!resource || wiki);
   return {
     system,
     edit: isFile && !system && !summary && !experience && canWrite,
