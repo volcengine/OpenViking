@@ -412,16 +412,19 @@ export class ActionService {
     return row;
   }
 
-  // The other inputs a decision settles (covers): each one accepted input on
-  // the decision's instance, in its scope and no newer than it. Any bad entry
-  // refuses the whole call, before anything is sent or recorded. The decision
-  // input itself and repeats are dropped.
+  // The inputs an action settles (covers). decision_id is only the freshness
+  // fence; covers lists what the action handled, and left out it means
+  // decision_id alone. Each entry is one accepted input on the decision's
+  // instance, in its scope and no newer than it. Any bad entry, or an empty
+  // list, refuses the whole call before anything is sent or recorded.
   resolveCovers(input, decision, verb = 'Delivery blocked') {
-    const refs = input.covers ?? [];
-    if (refs.length === 0) return [];
+    if (input.covers === undefined) return decision ? [decision] : [];
     if (!decision) throw blocked('invalid_input', `${verb}: covers needs decision_id. ${NO_ACTION}`);
+    if (input.covers.length === 0) {
+      throw blocked('covers_rejected', `${verb}: covers is empty, so this would settle no input. List the inputs it handles, or leave covers out when it handles decision_id alone. ${NO_ACTION}`);
+    }
     const rows = new Map();
-    refs.forEach((ref, index) => {
+    input.covers.forEach((ref, index) => {
       const found = this.inputEvents(ref, decision.connector_instance);
       if (found.length !== 1) {
         throw blocked('covers_rejected', `${verb}: covers[${index}] is not the event= of one accepted input on the decision_id's instance. ${NO_ACTION}`);
@@ -431,74 +434,81 @@ export class ActionService {
         throw blocked('covers_rejected', `${verb}: covers[${index}] is from another chat/thread or subject than decision_id; decide on it there. ${NO_ACTION}`);
       }
       if (row.seq > decision.seq) {
-        throw blocked('covers_rejected', `${verb}: covers[${index}] is newer than decision_id. Use the newest input as decision_id and cover the older ones. ${NO_ACTION}`);
+        throw blocked('covers_rejected', `${verb}: covers[${index}] is newer than decision_id. Use the newest input as decision_id and list what you handle in covers. ${NO_ACTION}`);
       }
-      if (row.seq !== decision.seq) rows.set(row.seq, row);
+      rows.set(row.seq, row);
     });
-    return [...rows.values()];
+    return [...rows.values()].sort((one, two) => one.seq - two.seq);
   }
 
-  // A delivery made on a decision settles it in the ledger, even when the send
-  // then fails or turns uncertain: the model did decide, and a nudge must not
-  // invite a resend. Keyed on the fence, never on the attributed input. Kept
+  // covered_by: the decision_id that fenced the action settling an input,
+  // null when that is the input itself.
+  coveredBy(row, fence) {
+    return row.seq === fence.seq ? null : fence.event_id;
+  }
+
+  // A delivery settles the inputs it covers (decision_id alone by default) in
+  // the ledger, even when the send then fails or turns uncertain: the model
+  // did decide, and a nudge must not invite a resend. Never the attributed
+  // input (response_to_id) unless it is covered. Kept
   // with explicitSilence off too: after a loop stop the ledger is what tells
   // the inputs that were answered from those the stopped turn left behind.
   settleDecision(caller, fence, final) {
     if (!caller.authority || !fence || !final) return;
     try {
-      const { created, previous } = this.store.recordDecision({ row: fence, outcome: 'delivered' });
-      if (created && previous === 'silent') caller.trace.overrode = 'silent';
-      for (const row of caller.covers ?? []) {
-        this.store.recordDecision({ row, outcome: 'delivered', coveredBy: fence.event_id });
+      const covers = caller.covers ?? [fence];
+      for (const row of covers) {
+        const { created, previous } = this.store.recordDecision({ row, outcome: 'delivered', coveredBy: this.coveredBy(row, fence) });
+        if (created && previous === 'silent') caller.trace.overrode = 'silent';
       }
-      if (caller.covers?.length) caller.trace.covers = caller.covers.length;
+      if (covers.length !== 1 || covers[0].seq !== fence.seq) caller.trace.covers = covers.length;
     } catch (error) {
       // Bookkeeping only: it must never stop the delivery itself.
       this.logger.warn('decision_record_failed', { error: safeError(error) });
     }
   }
 
-  // stay_silent: the model read the input and chose to deliver nothing. Only a
-  // ledger row and an activity: no outbox, journal, connector call or liveness.
-  // Nothing about it is ever refused for being repeated or stale. Covered
-  // inputs get the same silence, each recorded on its own.
+  // stay_silent: the model read the inputs it covers (decision_id alone by
+  // default) and chose to deliver nothing for them. Only ledger rows and an
+  // activity: no outbox, journal, connector call or liveness. Nothing about it
+  // is ever refused for being repeated or stale; an input that already has a
+  // delivery keeps it.
   async staySilent(input, caller) {
     const row = this.resolveDecision(input, caller, 'Silence not recorded');
     const covers = this.resolveCovers(input, row, 'Silence not recorded');
-    const covered = covers.filter((other) => this.store.recordDecision({ row: other, outcome: 'silent', coveredBy: row.event_id }).created);
-    if (covers.length) caller.trace.covers = covered.length;
-    if (this.store.decisionFor(row.connector_instance, row.event_id)?.outcome === 'delivered') {
-      if (covered.length) {
-        return { text: `Recorded: nothing is sent for ${covered.length} covered input(s). decision_id already has a delivery.`, data: { silent: true, covered: covered.length } };
-      }
-      return { text: 'A delivery is already recorded for this input; nothing to change. Do not call stay_silent for it.', data: { duplicate: true, delivered: true } };
+    const single = covers.length === 1 && covers[0].seq === row.seq;
+    if (!single) caller.trace.covers = covers.length;
+    const delivered = (other) => this.store.decisionFor(other.connector_instance, other.event_id)?.outcome === 'delivered';
+    const open = covers.filter((other) => !delivered(other));
+    if (open.length === 0) {
+      return { text: `A delivery is already recorded for ${single ? 'this input' : 'every input it covers'}; nothing to change. Do not call stay_silent for it.`, data: { duplicate: true, delivered: true } };
     }
     const newerSeq = this.store.newerAcceptedSeq(row.scope_key, row.seq);
     const superseded = newerSeq !== null;
     if (superseded) caller.trace.newerSeq = newerSeq;
     caller.trace.superseded = superseded;
     const reason = input.reason ? redactSensitive(input.reason).trim() || null : null;
-    const { created } = this.store.recordDecision({ row, outcome: 'silent' });
-    if (!created && covered.length === 0) {
-      return { text: 'Already recorded: nothing is sent for this input. Do not call stay_silent again for it.', data: { duplicate: true } };
+    const recorded = open.filter((other) => this.store.recordDecision({ row: other, outcome: 'silent', coveredBy: this.coveredBy(other, row) }).created);
+    if (recorded.length === 0) {
+      return { text: `Already recorded: nothing is sent for ${single ? 'this input' : 'the inputs it covers'}. Do not call stay_silent again for ${single ? 'it' : 'them'}.`, data: { duplicate: true } };
     }
     // A superseded input's OnIt may belong to work on the newer one.
     if (!superseded && row.conv_key) await this.clearTemporaryReaction(row.conv_key, 'silent');
     try {
       this.store.recordActivity({
-        eventKey: `decision:silent:${row.connector_instance}:${row.event_id}`, kind: 'delivery.silent',
+        eventKey: `decision:silent:${row.connector_instance}:${recorded.at(-1).event_id}`, kind: 'delivery.silent',
         conversationKey: row.conv_key ?? null, inboundSeq: row.seq, status: superseded ? 'SUPERSEDED' : 'SILENT',
         summary: reason ?? '',
         metadata: { tool: 'stay_silent', decisionSeq: row.seq, newerSeq: newerSeq ?? undefined,
-          coveredSeqs: covered.length ? covered.map((other) => other.seq) : undefined,
+          coveredSeqs: single ? undefined : recorded.map((other) => other.seq),
           runtime: caller.trace.runtime, via: caller.trace.via },
       });
     } catch (error) {
       this.logger.warn('activity_persist_failed', { kind: 'delivery.silent', error: safeError(error) });
     }
     return {
-      text: `Recorded: nothing is sent for this input.${superseded ? ' A newer input has arrived there; decide on that one from its own line.' : ''}`,
-      data: { silent: true, superseded },
+      text: `Recorded: nothing is sent for ${single ? 'this input' : `${recorded.length} covered input(s)`}.${superseded ? ' A newer input has arrived there; decide on that one from its own line.' : ''}`,
+      data: { silent: true, superseded, ...(single ? {} : { covered: recorded.length }) },
     };
   }
 

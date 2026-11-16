@@ -147,6 +147,17 @@ describe('turn-end decision settlement', () => {
     assert.deepEqual(activities.at(-1).status, 'MISSING');
   });
 
+  it('keeps reminding about a newest input that only fenced a decision covering an older one', async (t) => {
+    const { store, activities, ingest, settlement, turn } = setup(t);
+    const older = ingest({ messageId: 'om_fencedA123456', chatId: 'oc_fenced1234567', chatType: 'group' });
+    const newest = ingest({ messageId: 'om_fencedB123456', chatId: 'oc_fenced1234567', chatType: 'group' });
+    const raw = (row) => store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(row.seq);
+    store.recordDecision({ row: raw(older), outcome: 'delivered', coveredBy: raw(newest).event_id });
+    await turn([older.seq, newest.seq]);
+    assert.deepEqual([settlement().delivered, settlement().nudged], [1, 1]);
+    assert.deepEqual(activities.map(({ status, inboundSeq }) => [status, inboundSeq]), [['NUDGED', newest.seq]]);
+  });
+
   it('reminds about an older input with no decision of its own even when a newer one arrived', async (t) => {
     const { activities, ingest, turn } = setup(t);
     const first = ingest({ messageId: 'om_firstA1234567' });

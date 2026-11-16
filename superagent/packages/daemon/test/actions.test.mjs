@@ -1666,35 +1666,55 @@ describe('stay_silent decisions', () => {
     assert.equal(outcome('message:om_dryrun1234567'), 'delivered');
   });
 
-  it('settles the inputs a delivery or silence covers, each attributed to the decision', async (t) => {
+  it('settles exactly the inputs covers lists, decision_id alone when it is left out', async (t) => {
     const { store, call, inbound, logs } = setupOn(t);
-    const covered = (store) => store.db.prepare('SELECT event_id, outcome, covered_by FROM decisions ORDER BY seq')
-      .all().map((row) => [row.event_id, row.outcome, row.covered_by]);
-    const burst = ['om_coverA1234567', 'om_coverB1234567', 'om_coverC1234567']
-      .map((messageId) => inbound({ messageId, chatId: 'oc_cover12345678' }));
-    await call('send_message', { chat_id: 'oc_cover12345678', markdown: 'all three', decision_id: 'message:om_coverC1234567',
-      covers: ['message:om_coverA1234567', 'message:om_coverB1234567', 'message:om_coverA1234567', 'message:om_coverC1234567'] });
-    assert.deepEqual(covered(store), [
-      ['message:om_coverA1234567', 'delivered', 'message:om_coverC1234567'],
-      ['message:om_coverB1234567', 'delivered', 'message:om_coverC1234567'],
-      ['message:om_coverC1234567', 'delivered', null],
-    ]);
-    assert.deepEqual(burst.map((row) => store.decisionOutcome(row.seq)), ['delivered', 'delivered', 'delivered']);
-    assert.equal(toolLines(logs).at(-1).covers, 2);
+    const ledger = (chat) => store.db.prepare(`SELECT d.event_id, d.outcome, d.covered_by FROM decisions d
+      JOIN connector_events e ON e.seq = d.seq WHERE e.chat_id = ? ORDER BY d.seq`).all(chat)
+      .map((row) => [row.event_id, row.outcome, row.covered_by]);
+    const send = (chat, decision, covers) => call('send_message', { chat_id: chat, markdown: 'x', decision_id: decision,
+      ...(covers ? { covers } : {}) });
 
-    // Silence covers too, each input on its own row.
-    const quiet = ['om_quietA1234567', 'om_quietB1234567'].map((messageId) => inbound({ messageId, chatId: 'oc_quietC1234567' }));
+    // Left out: decision_id alone, as before.
+    inbound({ messageId: 'om_aloneA1234567', chatId: 'oc_alone12345678' });
+    inbound({ messageId: 'om_aloneB1234567', chatId: 'oc_alone12345678' });
+    await send('oc_alone12345678', 'message:om_aloneB1234567');
+    assert.deepEqual(ledger('oc_alone12345678'), [['message:om_aloneB1234567', 'delivered', null]]);
+
+    // Only the older one listed: the newest is the fence only and stays open.
+    const older = inbound({ messageId: 'om_onlyA12345678', chatId: 'oc_only123456789' });
+    const newest = inbound({ messageId: 'om_onlyB12345678', chatId: 'oc_only123456789' });
+    await send('oc_only123456789', 'message:om_onlyB12345678', ['message:om_onlyA12345678']);
+    assert.deepEqual(ledger('oc_only123456789'), [['message:om_onlyA12345678', 'delivered', 'message:om_onlyB12345678']]);
+    assert.deepEqual([store.decisionOutcome(older.seq), store.decisionOutcome(newest.seq)], ['delivered', null]);
+    assert.equal(toolLines(logs).at(-1).covers, 1);
+
+    // decision_id listed too: all of them, repeats dropped.
+    inbound({ messageId: 'om_bothA12345678', chatId: 'oc_both123456789' });
+    inbound({ messageId: 'om_bothB12345678', chatId: 'oc_both123456789' });
+    inbound({ messageId: 'om_bothC12345678', chatId: 'oc_both123456789' });
+    await send('oc_both123456789', 'message:om_bothC12345678',
+      ['message:om_bothC12345678', 'message:om_bothA12345678', 'message:om_bothB12345678', 'message:om_bothA12345678']);
+    assert.deepEqual(ledger('oc_both123456789'), [
+      ['message:om_bothA12345678', 'delivered', 'message:om_bothC12345678'],
+      ['message:om_bothB12345678', 'delivered', 'message:om_bothC12345678'],
+      ['message:om_bothC12345678', 'delivered', null],
+    ]);
+
+    // Silence the same way: only what it lists.
+    inbound({ messageId: 'om_quietA1234567', chatId: 'oc_quietC1234567' });
+    inbound({ messageId: 'om_quietB1234567', chatId: 'oc_quietC1234567' });
     const silent = await call('stay_silent', { decision_id: 'message:om_quietB1234567', covers: ['message:om_quietA1234567'] });
-    assert.equal(silent.data.silent, true);
-    assert.deepEqual(quiet.map((row) => store.decisionOutcome(row.seq)), ['silent', 'silent']);
-    assert.equal(store.decisionFor('lark', 'message:om_quietA1234567').covered_by, 'message:om_quietB1234567');
-    // A silence that only adds a cover to an already delivered decision records it.
-    const late = inbound({ messageId: 'om_lateA12345678', chatId: 'oc_late123456789' });
-    inbound({ messageId: 'om_lateB12345678', chatId: 'oc_late123456789' });
-    await call('send_message', { chat_id: 'oc_late123456789', markdown: 'b', decision_id: 'message:om_lateB12345678' });
-    const extra = await call('stay_silent', { decision_id: 'message:om_lateB12345678', covers: ['message:om_lateA12345678'] });
-    assert.equal(extra.data.covered, 1);
-    assert.equal(store.decisionOutcome(late.seq), 'silent');
+    assert.deepEqual([silent.text, silent.data.covered], ['Recorded: nothing is sent for 1 covered input(s).', 1]);
+    assert.deepEqual(ledger('oc_quietC1234567'), [['message:om_quietA1234567', 'silent', 'message:om_quietB1234567']]);
+    const both = await call('stay_silent', { decision_id: 'message:om_quietB1234567',
+      covers: ['message:om_quietA1234567', 'message:om_quietB1234567'] });
+    assert.equal(both.data.covered, 1);
+    assert.deepEqual(ledger('oc_quietC1234567').map(([, outcome]) => outcome), ['silent', 'silent']);
+    assert.match((await call('stay_silent', { decision_id: 'message:om_quietB1234567', covers: ['message:om_quietA1234567'] })).text,
+      /^STOP: .*Already recorded: nothing is sent for the inputs it covers/);
+    // Silence never replaces a delivery.
+    assert.match((await call('stay_silent', { decision_id: 'message:om_onlyB12345678', covers: ['message:om_onlyA12345678'] })).text,
+      /A delivery is already recorded for every input it covers/);
   });
 
   it('refuses a whole call whose covers name another scope, a newer input or an unknown one', async (t) => {
@@ -1719,6 +1739,12 @@ describe('stay_silent decisions', () => {
     // Nothing applied: no send, no decision on any of them.
     assert.equal(sends(), 0);
     assert.deepEqual([other.seq, older.seq].map((seq) => store.decisionOutcome(seq)), [null, null]);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM decisions').get().n, 0);
+    // An empty list would settle nothing.
+    for (const tool of ['send_message', 'stay_silent']) {
+      await assert.rejects(attempt(tool, 'message:om_newerC1234567', []),
+        (error) => error.code === 'covers_rejected' && /covers is empty/.test(error.message));
+    }
     assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM decisions').get().n, 0);
     // A retraction without decision_id cannot cover anything.
     await assert.rejects(call('retract_message', { message_id: 'om_x123456789012', covers: ['message:om_olderC1234567'] }),

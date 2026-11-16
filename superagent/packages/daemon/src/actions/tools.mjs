@@ -37,13 +37,17 @@ const REF_MAX_LENGTH = 4096;
 const VIKING_URI = { pattern: '^viking://[^\\s%\\\\]+$', maxLength: 2009 };
 const DECISION = {
   type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH,
-  description: 'The input this action decides on: event= (never msg=) of the newest daemon-authenticated input you have seen in that chat/thread, or about that subject for a non-chat event. Copy the value exactly. Freshness fence: the action is blocked if anything newer has arrived there. It settles only this input; list others it answers in covers.',
+  description: 'The input this action decides on: event= (never msg=) of the newest daemon-authenticated input you have seen in that chat/thread, or about that subject for a non-chat event. Copy the value exactly. Freshness fence: the action is blocked if anything newer has arrived there.',
 };
-// Further inputs one decision settles. Every input needs its own decision; a
-// newer one no longer settles the earlier ones by itself.
+// On a delivery or silence decision_id is only the freshness fence; covers
+// is exactly what the action settles, decision_id alone when left out.
+const FENCE = {
+  ...DECISION,
+  description: 'Freshness fence: event= (never msg=) of the newest daemon-authenticated input you have seen in that chat/thread, or about that subject for a non-chat event, copied exactly. The action is blocked if anything newer has arrived there. It proves you saw the newest input; which inputs the action settles is covers.',
+};
 const COVERS = {
   type: 'array', maxItems: 50, items: { type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH },
-  description: 'Optional event= values of the other inputs this same decision settles: earlier inputs from the same chat/thread or subject, no newer than decision_id, that it answers too. Any input not listed here or decided on its own still needs its own decision. An input from another chat/thread, a newer one, or an unknown one refuses the whole call.',
+  description: 'The event= values of the inputs this action handles and settles, decision_id included only if it handles that one too. Leave it out when you handle decision_id alone. Each must be from the same chat/thread or subject as decision_id and no newer; any other, an unknown one, or an empty list refuses the whole call. An input not settled here still needs its own decision.',
 };
 const DECISION_INSTANCE = {
   type: 'string', pattern: '^[a-z][a-z0-9-]{0,63}$',
@@ -54,7 +58,7 @@ const RESPONSE_TO = {
   description: 'Optional event= of the earlier input this delivery fulfills. Defaults to decision_id. Attribution only; it must be from the same chat/thread or subject and no newer than decision_id.',
 };
 const DECISION_FIELDS = { decision_id: DECISION, decision_instance: DECISION_INSTANCE, response_to_id: RESPONSE_TO };
-const DELIVERY_FIELDS = { ...DECISION_FIELDS, covers: COVERS };
+const DELIVERY_FIELDS = { ...DECISION_FIELDS, decision_id: FENCE, covers: COVERS };
 const INTERIM = {
   interim: {
     type: 'boolean', default: false,
@@ -163,7 +167,7 @@ export const TOOLS = [
       message_id: { type: 'string', pattern: ID, description: 'Full id of the bot message to retract.' },
     }, ['message_id']),
     silenceInput: {
-      decision_id: { ...DECISION, description: 'event= (never msg=) of the input that asked for this retraction, copied exactly. Records the retraction as your decision on it, so no stay_silent or reply is needed for that input. Freshness fence: blocked if anything newer has arrived there.' },
+      decision_id: { ...DECISION, description: 'event= (never msg=) of the input that asked for this retraction, copied exactly. Records the retraction as your decision on it (or on the inputs in covers), so no stay_silent or reply is needed for that input. Freshness fence: blocked if anything newer has arrived there.' },
       decision_instance: DECISION_INSTANCE,
       covers: COVERS,
     },
@@ -175,11 +179,11 @@ export const TOOLS = [
     name: 'stay_silent',
     explicitSilence: true,
     title: 'Decide not to respond',
-    description: 'Record that you read an input and deliberately deliver nothing for it: no message, reply, reaction or owner notice. Call it instead of a delivery tool whenever the policy says to stay silent, with the event= of the newest input you have seen in that chat/thread (or non-chat subject), and list in covers the earlier ones there it settles too: each input needs its own decision. It sends nothing, notifies no one, and removes your temporary OnIt in that chat/thread. Repeating it changes nothing: never call it twice for the same input.',
+    description: 'Record that you read an input and deliberately deliver nothing for it: no message, reply, reaction or owner notice. Call it instead of a delivery tool whenever the policy says to stay silent. decision_id is the newest input you have seen in that chat/thread (or non-chat subject); covers lists the inputs you stay silent on, and left out means decision_id alone. Each input needs its own decision. It sends nothing, notifies no one, and removes your temporary OnIt in that chat/thread. Repeating it changes nothing: never call it twice for the same input.',
     inputSchema: schema({
       decision_id: { type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH, description: 'event= (never msg=) of the newest daemon-authenticated input you have seen in that chat/thread, or about that subject. Copy it exactly. If newer input has arrived, silence is still recorded for this one.' },
       decision_instance: DECISION_INSTANCE,
-      covers: { ...COVERS, description: 'Optional event= values of the earlier inputs from the same chat/thread or subject, no newer than decision_id, that this silence settles too. An input from another chat/thread, a newer one, or an unknown one refuses the whole call.' },
+      covers: { ...COVERS, description: 'The event= values of the inputs you stay silent on, decision_id included only if it is one of them. Leave it out to settle decision_id alone. Each must be from the same chat/thread or subject as decision_id and no newer; any other, an unknown one, or an empty list refuses the whole call.' },
       reason: { type: 'string', maxLength: 120, description: 'Optional short private reason, e.g. "chatter between others", "waiting for another bot", "newsletter". Kept only in the local Activity log; never sent.' },
     }, ['decision_id']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
