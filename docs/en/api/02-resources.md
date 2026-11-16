@@ -809,6 +809,94 @@ Possible shared response:
 
 ---
 
+### Copy a Shared Resource
+
+Copy a file or directory together with its vector records. Both URIs must be
+children of `viking://resources/`; the root itself and private resource namespaces
+are not accepted. These operations use the same access checks as the corresponding
+filesystem operations.
+
+**HTTP**
+
+```http
+POST /api/v1/resources/cp
+```
+
+| Body parameter | Type | Required | Default | Description |
+|----------------|------|----------|---------|-------------|
+| `from_uri` | string | Yes | - | Source shared resource URI |
+| `to_uri` | string | Yes | - | Destination shared resource URI |
+| `recursive` | boolean | No | `false` | Copy a directory recursively |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/cp \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  --data '{"from_uri":"viking://resources/guide.md","to_uri":"viking://resources/guide-copy.md","recursive":false}'
+```
+
+The success response uses `status: "ok"` and includes `from`, `to`, and
+`recursive` in `result`.
+
+### Move or Rename a Shared Resource
+
+Move a resource within the shared subtree. Both URIs must be children of
+`viking://resources/`, with the same namespace restrictions as copying.
+
+**HTTP**
+
+```http
+POST /api/v1/resources/mv
+```
+
+| Body parameter | Type | Required | Description |
+|----------------|------|----------|-------------|
+| `from_uri` | string | Yes | Source shared resource URI |
+| `to_uri` | string | Yes | Destination shared resource URI |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/mv \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  --data '{"from_uri":"viking://resources/guide-copy.md","to_uri":"viking://resources/guide-renamed.md"}'
+```
+
+The success response uses `status: "ok"` and includes `from` and `to` in
+`result`.
+
+### Delete a Shared Resource
+
+Delete a child of `viking://resources/`. This operation requires MANAGE access,
+removes associated vector records, refreshes parent semantic metadata, and
+synchronizes affected watches.
+
+**HTTP**
+
+```http
+DELETE /api/v1/resources?uri={uri}
+```
+
+| Query parameter | Type | Required | Default | Description |
+|-----------------|------|----------|---------|-------------|
+| `uri` | string | Yes | - | Shared resource URI to delete; the shared root is not allowed |
+| `recursive` | boolean | No | `false` | Delete a directory recursively |
+| `wait` | boolean | No | `true` | Wait for semantic cleanup and refresh |
+
+```bash
+curl -X DELETE "http://localhost:1933/api/v1/resources" \
+  -H "X-API-Key: your-key" \
+  --get \
+  --data-urlencode "uri=viking://resources/guide-renamed.md" \
+  --data-urlencode "recursive=false" \
+  --data-urlencode "wait=true"
+```
+
+The success response includes the deleted `uri` in `result`. With `wait=false`,
+semantic work runs asynchronously; use the returned `task_id`, when present, to
+track completion through the [Task API](17-tasks.md).
+
+---
+
 ## Related Documentation
 
 - [File System](03-filesystem.md) - File and directory operations
