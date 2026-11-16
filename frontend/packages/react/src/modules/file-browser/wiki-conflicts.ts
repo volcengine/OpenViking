@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Native CONFLICTS_CONTENT protocol. These IDs exist only in the view model. */
 import type { WikiConflict as WikiFileConflictRecord } from '../../components/wiki-dashboard/types.js';
+import { locateMarkdownAnchor as locateWikiConflict } from '../../shared/markdown/locate-markdown-anchor.js';
 import { splitWikiMetadata } from './wiki-metadata.js';
+export { locateWikiConflict };
 export type WikiFileConflicts =
   | { status: 'available'; document: string; records: WikiFileConflictRecord[] }
   | { status: 'missing' | 'invalid' };
@@ -13,30 +15,6 @@ const timestamp = (value: unknown): value is number =>
   Number.isSafeInteger(value) &&
   value >= 0 &&
   Number.isFinite(new Date(value * 1000).getTime());
-
-/** Keep source offsets while excluding metadata and comments from conflict anchors. */
-export const locateWikiConflict = (
-  document: string,
-  matchText: string,
-): WikiFileConflictRecord['location'] => {
-  const mask = (value: string) => value.replace(/[^\r\n]/g, ' ');
-  const body = document
-    .replace(/^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, mask)
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, mask);
-  const start = matchText ? body.indexOf(matchText) : -1;
-  if (start < 0) {
-    return { status: 'missing' };
-  }
-  if (body.indexOf(matchText, start + 1) >= 0) {
-    return { status: 'ambiguous' };
-  }
-  return {
-    status: 'unique',
-    start,
-    end: start + matchText.length,
-    line: document.slice(0, start).split('\n').length,
-  };
-};
 
 export const parseWikiFileConflicts = (content: string): WikiFileConflicts => {
   const { document, payloads, complete } = splitWikiMetadata(content);

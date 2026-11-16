@@ -212,13 +212,16 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### FilePreviewEditing
 
-| 参数                 | 说明                                                                                                                  | 类型                                                                                           | 默认值  |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------- |
-| save                 | 保存草稿及可选备注。拒绝时保留草稿；返回 `{ warning: 'version-not-created' }` 时显示提示并照常触发 `onSave`。         | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | 必填    |
-| promptForVersionNote | 调用 `save` 前弹出版本备注；取消时保留草稿。                                                                          | `boolean`                                                                                      | `false` |
-| loadContent          | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -       |
-| onSave               | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                                                      | -       |
-| onCancel             | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                                                      | -       |
+| 参数                 | 说明                                                                                                                                    | 类型                                                                                           | 默认值  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------- |
+| save                 | 保存草稿及可选备注。拒绝时保留草稿；返回 `{ warning: 'version-not-created' }` 时显示提示并照常触发 `onSave`。                           | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | 必填    |
+| promptForVersionNote | 调用 `save` 前弹出版本备注；取消时保留草稿。                                                                                            | `boolean`                                                                                      | `false` |
+| loadContent          | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑。不提供任何读取函数时使用 `content` 或 `file` 的文本；只提供 `url` 时需要读取函数 | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -       |
+| loadDocument         | 优先于 `loadContent`，同时提供完整文本和可选的编辑器标注；返回 `undefined` 放弃本次编辑                                                 | `(source: FilePreviewSource) => Promise<FilePreviewEditorDocument \| undefined>`               | -       |
+| onSave               | 保存成功后触发，参数为已保存的文本                                                                                                      | `(value: string) => void`                                                                      | -       |
+| onCancel             | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                                          | `(value: string) => void`                                                                      | -       |
+
+`FilePreviewEditorDocument` 包含 `content` 和可选的 `annotations`。每条标注包含 `matchText`、`description` 和可选的 `reason`。Markdown 编辑器会高亮正文中有唯一匹配的行，并显示说明；说明不写入保存的正文。
 
 ### FilePreviewAction
 
