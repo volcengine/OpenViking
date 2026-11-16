@@ -27,6 +27,7 @@ export const OV_PATHS = {
   fsLs: '/api/v1/fs/ls',
   fsAttrs: '/api/v1/fs/attrs',
   compile: '/api/v1/compile',
+  compileCreate: '/api/v1/compile/create',
   compileConfigs: '/api/v1/compile/configs',
   compileConfig: '/api/v1/compile/config',
   compileConfigUpdate: '/api/v1/compile/config/update',

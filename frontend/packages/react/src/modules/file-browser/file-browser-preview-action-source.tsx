@@ -1,4 +1,5 @@
 import { markPreviewAction } from '../../shared/analytics/preview-actions.js';
+import { keepPreviewActionWhileEditing } from '../../components/file-preview/file-preview-action-visibility.js';
 import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
 import type {
   FilePreviewAction,
@@ -10,7 +11,7 @@ import type {
 } from './preview-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
-/** Content copying is a module command; the component only exposes the active source. */
+/** Content copying uses the editor draft when editing and the preview source otherwise. */
 export function previewActionContext(
   context: FilePreviewActions,
   controls: Pick<FileBrowserPreviewActionContext, 'canDelete' | 'deleteFile'>,
@@ -18,21 +19,22 @@ export function previewActionContext(
   options: FileBrowserPreviewActions | undefined,
   text: ResolvedLabels,
 ): FileBrowserPreviewActionContext {
-  const content = context.source?.content;
+  const content = context.editing ? context.draft : context.source?.content;
   const commands: FilePreviewAction[] = [];
   if (
     typeof content === 'string' &&
-    content.length > 0 &&
+    (context.editing || content.length > 0) &&
     options?.copyContent !== false
   ) {
     commands.push(
       markPreviewAction(
-        {
+        keepPreviewActionWhileEditing({
           key: 'copyContent',
+          pinned: context.editing,
           label: text.copyContent,
           icon: <CopyIcon width={16} height={16} />,
           onClick: () => navigator.clipboard.writeText(content),
-        },
+        }),
         'copyContent',
       ),
     );
@@ -40,6 +42,9 @@ export function previewActionContext(
   return {
     ...context,
     ...controls,
-    defaultActions: [[...commands, ...(items[0] ?? [])], ...items.slice(1)],
+    defaultActions:
+      context.editing && commands.length
+        ? [...items, commands]
+        : [[...commands, ...(items[0] ?? [])], ...items.slice(1)],
   };
 }

@@ -4,6 +4,7 @@ import { Button } from '../../shared/primitives/button/button.js';
 import EditIcon from '../../../../icons/svg/file-preview/edit.svg?react';
 import { useFilePreviewCommands } from './file-preview-command-state.js';
 import { FilePreviewActionList } from './file-preview-action-list.js';
+import { isPreviewActionAvailableDuringEdit } from './file-preview-action-visibility.js';
 import { normalizeFilePreviewActions } from './normalize-file-preview-actions.js';
 import type { FilePreviewActionSource } from './action-types.js';
 import type {
@@ -31,7 +32,13 @@ export function FilePreviewToolbar({
       ? actionItems(actions)
       : (actionItems ?? []),
   );
-  const pinned = groups.flat().filter((action) => action.pinned);
+  const pinned = groups
+    .flat()
+    .filter(
+      (action) =>
+        action.pinned &&
+        (!actions.editing || isPreviewActionAvailableDuringEdit(action)),
+    );
   const items = groups.map((group) => group.filter((action) => !action.pinned));
   const switchVisible =
     !actions.editing && actions.canSwitchView && options?.viewSwitch !== false;
@@ -121,17 +128,16 @@ export function FilePreviewToolbar({
           <EditIcon width={14} height={14} aria-hidden="true" />
         </Button>
       ) : null}
-      {!actions.editing &&
-        pinned.map((action) => (
-          <FilePreviewActionList
-            key={action.key}
-            items={[action]}
-            pending={commands.pending}
-            execute={(item) => commands.execute(item, actions.busy)}
-            disabled={actions.busy}
-            text={text}
-          />
-        ))}
+      {pinned.map((action) => (
+        <FilePreviewActionList
+          key={action.key}
+          items={[action]}
+          pending={commands.pending}
+          execute={(item) => commands.execute(item, actions.busy)}
+          disabled={actions.busy}
+          text={text}
+        />
+      ))}
       {!actions.editing ? (
         <>
           <FilePreviewActionList

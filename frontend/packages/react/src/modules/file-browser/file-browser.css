@@ -492,6 +492,9 @@ html.dark .ov-file-browser__empty-art {
     var(--ov-ui-dashboard-warning-default)
   );
 }
+.ov-file-browser__dashboard--unknown {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
 .ov-file-browser__dashboard:focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 1px;

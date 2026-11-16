@@ -24,9 +24,31 @@ const pending = (name) =>
 const toggle = (name) =>
   click(row(name)?.querySelector('[data-role="toggle"]'));
 
-for (const deniedFirst of [true, false]) {
-  test(`denied placeholders do not block readable siblings; denied-first=${deniedFirst}`, async () => {
-    const fetch = fixture(target, true, ({ path, uri }) => {
+const scenarios = [
+  { deniedFirst: true, capped: false },
+  { deniedFirst: false, capped: false },
+  { deniedFirst: true, capped: true },
+];
+
+for (const { deniedFirst, capped } of scenarios) {
+  test(`denied placeholders do not block readable siblings; denied-first=${deniedFirst}, capped-search=${capped}`, async () => {
+    const fetch = fixture(target, true, ({ path, uri, body }) => {
+      if (capped && path.endsWith('/search/find')) {
+        assert.deepEqual(body, {
+          query: '',
+          target_uri: target,
+          tags: ['has_conflict=true'],
+          level: 2,
+          limit: 100,
+        });
+        // The readable conflict is beyond the search result limit.
+        return ok({
+          resources: Array.from({ length: 100 }, (_, index) => ({
+            uri: `${target}/indexed-${index}.md`,
+            level: 2,
+          })),
+        });
+      }
       if (!path.endsWith('/fs/ls')) return;
       if (uri === rootUri)
         return ok([
@@ -39,8 +61,8 @@ for (const deniedFirst of [true, false]) {
       if (uri === target) {
         // A container cannot be previewed itself but permits listing readable children.
         const entries = [
-          { uri: publicUri, isDir: true, access: 'container' },
           { uri: privateUri, isDir: true, access: 'denied' },
+          { uri: publicUri, isDir: true, access: 'container' },
         ];
         return ok(deniedFirst ? entries : entries.toReversed());
       }
@@ -52,6 +74,7 @@ for (const deniedFirst of [true, false]) {
     });
     const view = await mount(tree(fetch, null));
     try {
+      if (capped) assert.equal(fetch.countOf('/api/v1/search/find'), 1);
       assert.equal(pending('wiki'), true);
       assert.equal(
         fetch.calls.some((call) => call.uri === privateUri),

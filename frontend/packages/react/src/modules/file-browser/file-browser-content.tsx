@@ -58,6 +58,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     readOnly,
     previewActions,
     onUriChange,
+    onSelect,
     onImportResources,
     renderImportResources,
     previewSlots,
@@ -122,6 +123,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     currentUri,
     requestOptions,
     onUriChange: changeUri,
+    onSelect,
   });
   const permissions = useFileBrowserAcl({
     uri: browser.currentUri,

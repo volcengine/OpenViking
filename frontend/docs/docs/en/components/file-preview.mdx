@@ -235,11 +235,11 @@ The component calls these methods to carry out an operation, and fires the match
 
 A control set to `false` stays hidden even when a tab supplies the capability; a tab's `toolbar` can only hide controls the top level allows.
 
-| Property   | Description                                                              | Type      | Default |
-| ---------- | ------------------------------------------------------------------------ | --------- | ------- |
-| copyPath   | Copy-path button beside the path; shown when a path exists               | `boolean` | `true`  |
-| viewSwitch | Preview/source switch; shown when the current format supports both views | `boolean` | `true`  |
-| edit       | Edit button; shown when the current file or level supplies `editing`     | `boolean` | `true`  |
+| Property   | Description                                                                      | Type      | Default |
+| ---------- | -------------------------------------------------------------------------------- | --------- | ------- |
+| copyPath   | Copy-path button beside the path; shown when a path exists                       | `boolean` | `true`  |
+| viewSwitch | Preview/source switch, shown outside editing when the format supports both views | `boolean` | `true`  |
+| edit       | Edit button; shown when the current file or level supplies `editing`             | `boolean` | `true`  |
 
 ### FilePreviewHeaderSlots
 
@@ -276,6 +276,7 @@ The context the component passes to an `actions` function and a `slots.actions` 
 | setViewMode   | Switches the view mode                                                                                                       | `(mode: FilePreviewViewMode) => void` | -       |
 | canSwitchView | Whether the format supports both preview and source; render no switch when `false`                                           | `boolean`                             | -       |
 | editing       | Whether the tab is being edited                                                                                              | `boolean`                             | -       |
+| draft         | Current draft while editing, including an empty string                                                                       | `string`                              | -       |
 | busy          | Whether a save or a read is in progress                                                                                      | `boolean`                             | -       |
 | canEdit       | Whether editing can start: `editing` is supplied, the file is not an image or video, and the tab is not already being edited | `boolean`                             | -       |
 | startEditing  | Enters editing, reading the full text first                                                                                  | `() => void`                          | -       |

@@ -282,26 +282,26 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 - Wrap arguments that contain spaces in single or double quotes; a backslash also escapes a character.
 - Quote values that start with `--`, for example `ov write viking://resources/a.md "--heading"`, or end option parsing with `--`, for example `ov write viking://resources/a.md -- --heading`. Option values work the same way, for example `--description "--example"`.
 - Arguments are parsed as data and no shell runs. Unquoted `| ; & < > $` and backticks are rejected, so quote URLs that contain `&`.
-- Unknown or duplicate options, missing arguments, URIs that do not start with `viking://` and unclosed quotes produce a failed record without sending a request.
+- Unknown options, repeated single-value options, missing arguments, URIs that do not start with `viking://` and unclosed quotes produce a failed record without sending a request.
 
 ### Supported commands
 
-| Capability      | Commands                                                                                                                                                                 |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Add and compile | `add-resource <path>`, `add-skill <path>`, `add-memory <content> --session-id <session-id>`, `compile --from <from> --to <to>`, `compile create --from <from> --to <to>` |
-| Local           | `help`, `clear`                                                                                                                                                          |
-| Service         | `health`, `status`                                                                                                                                                       |
-| Browse          | `ls [uri]`, `tree [uri]`, `stat <uri>`                                                                                                                                   |
-| Content         | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                                                                                         |
-| Search          | `find <query>`, `search <query>`, `grep <pattern>`, `glob <pattern>`                                                                                                     |
-| Write           | `mkdir <uri>`, `write <uri> <content>`, `cp <from_uri> <to_uri>`, `mv <from_uri> <to_uri>`, `rm <uri>`                                                                   |
-| Tasks           | `task list`, `task status <id>`, `task cancel <id>`                                                                                                                      |
+| Capability      | Commands                                                                                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Add and compile | `add-resource <path>`, `add-skill <path>`, `add-memory <content> --session-id <session-id>`, `compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>`, `compile --compile-name <name>` |
+| Local           | `help`, `clear`                                                                                                                                                                                                                |
+| Service         | `health`, `status`                                                                                                                                                                                                             |
+| Browse          | `ls [uri]`, `tree [uri]`, `stat <uri>`                                                                                                                                                                                         |
+| Content         | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                                                                                                                                               |
+| Search          | `find <query>`, `search <query>`, `grep <pattern>`, `glob <pattern>`                                                                                                                                                           |
+| Write           | `mkdir <uri>`, `write <uri> <content>`, `cp <from_uri> <to_uri>`, `mv <from_uri> <to_uri>`, `rm <uri>`                                                                                                                         |
+| Tasks           | `task list`, `task status <id>`, `task cancel <id>`                                                                                                                                                                            |
 
 - `ls` and `tree` start from `viking://` by default and return at most 100 entries; page with `--limit` and `--offset`, and `tree` also accepts `--level_limit`.
 - `write` replaces existing content by default; `--mode create` creates a file and `--mode append` appends.
 - `add-resource` and `add-skill` accept remote addresses, not local file paths.
 - `add-memory` appends the content to the session given by `--session-id` as a user message, then commits that session.
-- `compile` uses the built-in llm-wiki Skill by default, and `--skill` selects another one; `compile create` only saves the compile configuration without starting a compile.
+- Save a named configuration with `compile create`, then run it with `compile --compile-name <name>`. Repeat `--from` or separate source directory URIs with commas. Use `--instruction` for extra instructions and `--args` for model and scheduling options as a JSON object. `task status <id>` checks the returned task ID.
 - `task cancel` asks the server for cooperative cancellation, so a task may not stop immediately.
 - Option spelling differs by command: `add-skill` uses `--target-uri` while `find` uses `--target_uri`. Check `ov help` for the exact names.
 - Imports, compiles and memory commits returning task IDs are tracked automatically. Task state is separate from submission results, and the terminal unlocks when submission returns.

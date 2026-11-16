@@ -1418,6 +1418,29 @@
   gap: 6px;
 }
 
+.ov-command-console__hint-guide-link {
+  align-self: flex-start;
+  color: var(--ov-ui-command-console-link);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.ov-command-console__hint-steps {
+  margin: 0;
+  padding: 0;
+  list-style: decimal inside;
+}
+
+.ov-command-console__hint-steps > li + li,
+.ov-command-console__hint-steps .ov-command-console__hint-example {
+  margin-block-start: 6px;
+}
+
+.ov-command-console__hint-steps .ov-command-console__hint-example {
+  width: 100%;
+  color: var(--ov-ui-command-console-text);
+}
+
 .ov-command-console__hint-example {
   display: flex;
   align-items: flex-start;
