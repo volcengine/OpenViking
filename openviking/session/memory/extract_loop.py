@@ -7,8 +7,10 @@ Reference: bot/vikingbot/agent/loop.py AgentLoop structure
 """
 
 import asyncio
+import hashlib
 import json
 import re
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,6 +59,24 @@ logger = get_logger(__name__)
 # Models whose max output tokens is BELOW this value (e.g. gpt-4o-mini at 16384)
 # must set `vlm.max_tokens` in ov.conf to their own limit to override this default.
 _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS = 32768
+
+# Compiled prompt-schema artifacts depend only on static inputs (schema content,
+# output language, output format, link switch, peer scope), none of which change
+# between commits of the same session. Keeping a small per-process LRU avoids
+# recompiling the same Pydantic models on every commit.
+_PROMPT_SCHEMA_CACHE_MAX = 8
+_PROMPT_SCHEMA_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
+
+
+def _schemas_fingerprint(schemas: List[Any]) -> str:
+    """Deterministic fingerprint of the schema definitions used to build models."""
+    payload = json.dumps(
+        [schema.model_dump() for schema in schemas],
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass
@@ -217,16 +237,7 @@ class ExtractLoop:
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
 
-        # 初始化 schema 生成器（使用 schemas 而非 registry）
         output_language = self.context_provider.get_output_language()
-        self.schema_model_generator = SchemaModelGenerator(
-            schemas,
-            template_context={"language": output_language},
-            # include_decision_reasoning=(
-            #     type(self.context_provider).__name__ != "PatchMergeContextProvider"
-            # ),
-        )
-        self.schema_model_generator.generate_all_models()
 
         # 预计算工具 schemas
         allowed_tools = self.context_provider.get_tools()
@@ -247,15 +258,41 @@ class ExtractLoop:
         if self._extract_context is None:
             raise ValueError("Failed to get ExtractContext from provider")
 
-        # 预计算 operations_model
         role_scope = self._isolation_handler.get_read_scope() if self._isolation_handler else None
-
-        self._operations_model = self.schema_model_generator.create_structured_operations_model(
-            role_scope
-        )
-
         output_format = getattr(config.memory, "extraction_output_format", "python")
-        self._output_protocol = create_extraction_output_protocol(output_format)
+
+        # 初始化 schema 生成器（使用 schemas 而非 registry）。
+        # 编译产物只依赖 schema 内容、语言、输出格式、link 开关与 peer scope，
+        # 同一会话的多次 commit 之间这些输入不变，因此可跨 commit 复用。
+        cache_key = (
+            _schemas_fingerprint(schemas),
+            output_language,
+            output_format,
+            self._link_enabled,
+            tuple(role_scope.peer_ids) if role_scope and role_scope.peer_ids else (),
+        )
+        cached = _PROMPT_SCHEMA_CACHE.get(cache_key)
+        if cached is None:
+            generator = SchemaModelGenerator(
+                schemas,
+                template_context={"language": output_language},
+                # include_decision_reasoning=(
+                #     type(self.context_provider).__name__ != "PatchMergeContextProvider"
+                # ),
+            )
+            generator.generate_all_models()
+            cached = (
+                generator,
+                generator.create_structured_operations_model(role_scope),
+                create_extraction_output_protocol(output_format),
+            )
+            while len(_PROMPT_SCHEMA_CACHE) >= _PROMPT_SCHEMA_CACHE_MAX:
+                _PROMPT_SCHEMA_CACHE.popitem(last=False)
+            _PROMPT_SCHEMA_CACHE[cache_key] = cached
+        else:
+            _PROMPT_SCHEMA_CACHE.move_to_end(cache_key)
+        self.schema_model_generator, self._operations_model, self._output_protocol = cached
+
         self._output_context = ExtractionOutputContext(
             operations_model=self._operations_model,
             schemas=tuple(schemas),
