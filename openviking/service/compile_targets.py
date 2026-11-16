@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import heapq
 import json
 import math
 import random
@@ -432,7 +433,7 @@ class CompileStateStore:
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
     ) -> list[dict]:
-        """Read newest runs by (created_at, task_id); cursor identifies the last returned run."""
+        """Return up to limit runs below the cursor in descending (created_at, task_id) order."""
         if owner_user_id is None:
             raise InvalidArgumentError("user_id must be a string.")
         directory = (
@@ -442,22 +443,38 @@ class CompileStateStore:
             entries = await self._agfs.ls(directory)
         except (AGFSNotFoundError, FileNotFoundError):
             return []
-        runs = []
+        before = None
+        cursor_name = None
+        if cursor:
+            run = await self.get_run(account_id, owner_user_id, compile_name, cursor)
+            if run is None:
+                raise InvalidArgumentError("Run cursor does not exist")
+            before = run["created_at"], run["task_id"]
+            cursor_name = f"{cursor}.json"
+            del run
+        if limit is not None and limit <= 0:
+            return []
+
+        candidates: list[tuple[float, str, dict]] = []
         for entry in entries:
             name = str(entry.get("name") or "")
-            if name.endswith(".json"):
-                run = await self.read_json(f"{directory}/{name}")
-                if run is not None:
-                    runs.append(run)
-        runs.sort(key=lambda run: (run["created_at"], run["task_id"]), reverse=True)
-        if cursor:
-            validate_task_id(cursor)
-            boundary = next((r for r in runs if r["task_id"] == cursor), None)
-            if boundary is None:
-                raise InvalidArgumentError("Run cursor does not exist")
-            key = boundary["created_at"], boundary["task_id"]
-            runs = [r for r in runs if (r["created_at"], r["task_id"]) < key]
-        return runs if limit is None else runs[: max(limit, 0)]
+            if name == cursor_name or not name.endswith(".json"):
+                continue
+            run = await self.read_json(f"{directory}/{name}")
+            if run is None:
+                continue
+            key = run["created_at"], run["task_id"]
+            if before is not None and key >= before:
+                continue
+            candidate = (*key, run)
+            if limit is None:
+                candidates.append(candidate)
+            elif len(candidates) < limit:
+                heapq.heappush(candidates, candidate)
+            else:
+                heapq.heappushpop(candidates, candidate)
+        candidates.sort(reverse=True)
+        return [run for _, _, run in candidates]
 
     async def _history_candidates(self) -> AsyncIterator[tuple[str, str, str, str]]:
         """Yield run IDs from filenames so cleanup reads each candidate under its lock."""

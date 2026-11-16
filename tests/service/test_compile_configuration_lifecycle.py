@@ -418,13 +418,10 @@ async def test_acceptance_times_are_idempotent_and_never_move_backwards(setup, r
     current = await setup.store.get("acme", "alice", compile_name)
     assert current["task_first_create_time"] == 100
     assert current["last_run_time"] == 300
-    runs = await setup.store.list_runs("acme", "alice", compile_name, limit=2)
-    assert [run["created_at"] for run in runs] == [300, 200]
-    assert (await setup.store.list_runs("acme", "alice", compile_name, cursor=runs[-1]["task_id"]))[
-        0
-    ]["created_at"] == 100
     runs = await setup.store.list_runs("acme", "alice", compile_name)
     assert [run["meta"]["trigger"] for run in runs] == ["scheduled", "manual", "initial"]
+    older = await setup.store.list_runs("acme", "alice", compile_name, cursor=delayed.task_id)
+    assert older == [runs[-1]]
 
 
 @pytest.mark.parametrize(

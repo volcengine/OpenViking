@@ -372,6 +372,32 @@ async def test_case_distinct_names_paginate(service, app, client, monkeypatch):
     assert second["next_cursor"] is None
 
 
+async def test_run_pages_split_tied_creation_times(service, app, client, monkeypatch):
+    """A task ID cursor splits runs with equal creation times without skipping the lookahead."""
+    ctx, _ = await prepare(service, app, monkeypatch)
+    store = service.compile.lifecycle.store
+    owner = ctx.account_id, ctx.user.user_id
+    name = await store.create(*owner, new_record(INPUTS), compile_name="wiki")
+    ids = [f"cmp_{i:032x}" for i in range(5)]
+    for i, created_at in ((2, 100), (0, 200), (4, 50), (1, 100), (3, 100)):
+        status = "failed" if i == 0 else "completed"
+        run = {"task_id": ids[i], "created_at": created_at, "status": status}
+        await store.put_run(*owner, name, run)
+
+    params = {"compile_name": name, "limit": 2}
+    for expected, next_cursor in (([0, 3], ids[3]), ([2, 1], ids[1]), ([4], None)):
+        response = await client.get("/api/v1/compile/runs", params=params)
+        assert response.status_code == 200, response.text
+        page = response.json()["result"]
+        assert [run["task_id"] for run in page["runs"]] == [ids[i] for i in expected]
+        assert page["next_cursor"] == next_cursor
+        params["cursor"] = page["next_cursor"]
+
+    params["cursor"] = f"cmp_{5:032x}"
+    response = await client.get("/api/v1/compile/runs", params=params)
+    assert response.status_code == 400 and "Run cursor does not exist" in response.text
+
+
 async def test_configuration_list_page_order(service, app, monkeypatch):
     ctx, _ = await prepare(service, app, monkeypatch)
     store = service.compile.lifecycle.store
@@ -603,12 +629,6 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     failed_run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, failed.task_id)
     assert failed_run["meta"]["finish_snapshot"] is not None
 
-    history = await client.get(
-        "/api/v1/compile/runs", params={"compile_name": compile_name, "limit": 2}
-    )
-    assert history.status_code == 200, history.text
-    assert history.json()["result"]["runs"][0]["task_id"] == failed.task_id
-    assert history.json()["result"]["next_cursor"] is not None
     if cancel_424:
         assert failed_run["status"] == "failed"
         assert "Ark unavailable" in failed.error and "Ark unavailable" in failed_run["error"]
