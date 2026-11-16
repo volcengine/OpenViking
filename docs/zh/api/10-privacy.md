@@ -625,6 +625,36 @@ ov privacy scan --uri viking://~/resources/project-a
 ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 ```
 
+### 使用 Privacy 引用运行命令
+
+`ov privacy run` 会先解析引用，再运行命令，并将 stdout、stderr 中匹配的敏感值遮罩为引用。引用可以直接写在命令的单个参数中；`--env` 和 `--env-file` 则会把解析出的值设置为子进程的环境变量，后者从文件读取。
+
+```bash
+ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- gh api user
+```
+
+`privacy.env` 的内容：
+
+```dotenv
+GITHUB_TOKEN={{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}
+```
+
+从文件运行相同命令，或在 `curl` 的一个参数中直接使用引用：
+
+```bash
+ov privacy run --env-file ./privacy.env -- gh api user
+ov privacy run -- curl -H 'Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' https://api.example.com
+```
+
+管道、重定向等 Shell 语法需要显式运行 Shell。将引用通过环境变量传给脚本，例如：
+
+```bash
+ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- \
+  sh -c 'curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.example.com | jq .login'
+```
+
+`--env-file` 中每个非空、非注释行必须是 `NAME=引用`；引用可以用成对的单引号或双引号包裹。可重复传入 `--env-file`，后面的文件覆盖前面的文件，`--env` 则覆盖文件中的同名变量。命令参数中的引用会替换为真值后传给目标程序；目标程序的参数可能被本机其他进程看到。CLI 只遮罩子进程的 stdout、stderr，不处理目标程序写入文件或发送到网络的内容。
+
 ---
 
 ## 相关文档
