@@ -10,7 +10,9 @@ import requests
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 _MINIMAX_CODE_KINDS = {
     "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
@@ -98,7 +100,11 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             try:
                 self._dimension = self._detect_dimension()
             except Exception as e:
-                logger.warning(f"Failed to detect MiniMax dimension: {e}. Defaulting to 1536.")
+                logger.info(
+                    "embedding dimension detection failed; using default dimension=1536 error_type=%s degraded=true",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__, "degraded": True},
+                )
                 self._dimension = 1536
 
     def _detect_dimension(self) -> int:

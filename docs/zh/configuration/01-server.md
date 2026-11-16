@@ -194,7 +194,7 @@ Rule 编译始终以 `thinking=true` 调用专用 Compiler 或回退的账户默
 | `model` | string / `null` | provider 默认值 | 模型名或 Endpoint ID；`custom` 必填 |
 | `timeout` | number | `30` | HTTP 请求超时秒数 |
 | `extra_headers` | object / `null` | `null` | 附加 HTTP 请求头 |
-| `log_payloads` | boolean | `false` | 是否记录完整请求和响应；日志可能包含任务与 Rule 内容 |
+| `log_payloads` | boolean | `false` | 在 `log.level=DEBUG` 时记录安全的请求和响应摘要；不记录任务、Rule 和响应正文 |
 
 | Provider | 默认请求 URL | 默认 model | 说明 |
 |---|---|---|---|
@@ -240,7 +240,7 @@ Compiler 会优先忠实提炼原文中的对象、操作、前提和场景，�
 | `mode` | `noul`、`choice` 或 `null` | `noul` | Jev Rerank 模式；`null` 同样使用 `noul` |
 | `threshold` | number | `0.1` | 判定结果相关的最低 Rerank 分数；只过滤模型产出的 Rerank 分数，不过滤向量分数；请求中的 `score_threshold` 优先 |
 | `max_input_tokens` | integer；`0` 或 `>= 128` | `0` | 每个 query-document pair 的最大估算 token；`0` 表示不截断 |
-| `log_payloads` | boolean | `false` | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容 |
+| `log_payloads` | boolean | `false` | 仅用于 Jev：在 `log.level=DEBUG` 时记录安全的请求和响应摘要；不记录 query、文档和响应正文 |
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 

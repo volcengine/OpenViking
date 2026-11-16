@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 import asyncio
 import contextvars
-import logging
 import random
 import time
 import weakref
@@ -430,13 +429,12 @@ class EmbedderBase(ABC):
             elapsed = time.monotonic() - started
             telemetry.set("embedding.async.duration_ms", round(elapsed * 1000, 3))
             if logger and elapsed >= 3.0:
-                logger.warning(
-                    "%s slow call provider=%s model=%s wait_ms=%.2f duration_ms=%.2f",
+                logger.info(
+                    "slow model call operation=%s wait_ms=%.2f duration_ms=%.2f",
                     operation_name,
-                    self.provider,
-                    self.model_name,
                     wait_elapsed * 1000,
                     elapsed * 1000,
+                    extra={"operation": operation_name, "duration_ms": elapsed * 1000},
                 )
             self._active_call_started_at = previous_started_at
             if semaphore is not None:
@@ -512,14 +510,11 @@ class EmbedderBase(ABC):
             )
         except Exception as e:
             # Metrics must never break embedding execution.
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "embedding.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
-                    provider,
-                    model_name,
-                    type(e).__name__,
-                    e,
-                )
+            logger.info(
+                "embedder metrics unavailable; continuing without observation error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage
@@ -768,15 +763,10 @@ def exponential_backoff_retry(
             elapsed = time.time() - start_time
 
             if elapsed >= max_wait:
-                if logger:
-                    logger.error(
-                        f"Exceeded max wait time ({max_wait}s) after {attempt} attempts, giving up"
-                    )
+                # The caller decides whether this exhausted retry is a final failure.
                 raise
 
             if is_retryable and not is_retryable(e):
-                if logger:
-                    logger.error(f"Non-retryable error after {attempt} attempts: {e}")
                 raise
 
             delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
@@ -789,7 +779,12 @@ def exponential_backoff_retry(
 
             if logger:
                 logger.info(
-                    f"Retry attempt {attempt}, waiting {delay:.2f}s before next try (elapsed: {elapsed:.2f}s)"
+                    "retry operation=embed attempt=%d delay=%.2fs elapsed_seconds=%.2f error_type=%s",
+                    attempt,
+                    delay,
+                    elapsed,
+                    type(e).__name__,
+                    extra={"operation": "embed", "error_type": type(e).__name__},
                 )
 
             time.sleep(delay)
@@ -893,10 +888,13 @@ class FailoverEmbedder(EmbedderBase):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
 
-                logger.warning(
-                    "Credential %s failed with %s, trying next credential",
-                    credential_id,
+                logger.info(
+                    "embedding credential attempt failed credential_index=%d attempt=%d/%d error_code=%s",
+                    idx,
+                    offset + 1,
+                    n,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -940,10 +938,13 @@ class FailoverEmbedder(EmbedderBase):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
 
-                logger.warning(
-                    "Credential %s failed with %s, trying next credential",
-                    credential_id,
+                logger.info(
+                    "embedding credential attempt failed credential_index=%d attempt=%d/%d error_code=%s",
+                    idx,
+                    offset + 1,
+                    n,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
