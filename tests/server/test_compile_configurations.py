@@ -167,6 +167,36 @@ async def prepare(service, app, monkeypatch):
     return ctx, runtime
 
 
+@pytest.mark.parametrize("failure", ["expired", "create", "enqueue", "disk"])
+async def test_compile_submission_with_lost_state_lease(service, app, client, monkeypatch, failure):
+    """Only an accepted task can survive loss of its configuration lease."""
+    await prepare(service, app, monkeypatch)
+    name = SAVED_INPUTS["compile_name"]
+    assert (await client.post("/api/v1/compile/create", json=SAVED_INPUTS)).status_code == 200
+    store = service.compile.lifecycle.store
+    write_json = store.write_json
+    error = ValueError("invalid lock request: owned lease capability does not match ref 'task'")
+    queue = SimpleNamespace(enqueue=AsyncMock(side_effect=error if failure == "enqueue" else None))
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue)
+    if failure == "create":
+        monkeypatch.setattr(get_task_tracker(), "create", AsyncMock(side_effect=error))
+
+    async def write(path, value, lease):
+        if path.endswith("/state.json"):
+            await store._agfs.pathlock_release(lease)
+            if failure == "disk":
+                raise ValueError("disk write failed")
+        await write_json(path, value, lease)
+
+    monkeypatch.setattr(store, "write_json", write)
+    client.headers["Idempotency-Key"] = "test-lost-state-lease"
+    for _ in range(2 if failure == "enqueue" else 1):
+        response = await client.post("/api/v1/compile", json={"compile_name": name})
+        assert response.status_code == (202 if failure == "expired" else 400), response.text
+    if failure == "expired":
+        assert response.json()["result"]["task_id"] == queue.enqueue.await_args.args[1]["task_id"]
+
+
 async def test_creation_requires_name_before_side_effects(service, app, client, monkeypatch):
     ctx, runtime = await prepare(service, app, monkeypatch)
     for body in (

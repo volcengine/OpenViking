@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -17,6 +18,7 @@ from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.pyagfs.exceptions import AGFSInternalError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import (
     COMPILE_NAME_PATTERN,
@@ -30,6 +32,7 @@ from openviking.service.compile_targets import (
     validate_compile_name,
 )
 from openviking.service.external_task_service import (
+    ENQUEUE_FAILURE,
     CompileDependencyFailure,
     ExternalTaskCancellation,
     ExternalTaskError,
@@ -62,6 +65,29 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 # Sentinel --skill value that routes a Compile request to in-process memory
 # consolidation instead of the VikingBot agent path. It is not a real Skill URI.
 MEMORY_COMPILE_SKILL = "memory"
+
+
+def _lost_state_lease(error: AGFSInternalError | ValueError) -> bool:
+    """Match lease loss, requiring chained write and release errors to name the same lease."""
+    release = None
+    write: BaseException = error
+    if isinstance(error, ValueError):
+        release = re.fullmatch(
+            r"invalid lock request: owned lease capability does not match ref '([^']+)'", str(error)
+        )
+        if release is None:
+            return False
+        if error.__context__ is None:
+            return True
+        write = error.__context__
+    if not isinstance(write, AGFSInternalError):
+        return False
+    lost = re.fullmatch(
+        r"internal error: (?:encrypted write lock context error|lock lease error): "
+        r"invalid lock request: unknown pathlock lease ref '([^']+)'",
+        str(write),
+    )
+    return lost is not None and (release is None or release[1] == lost[1])
 
 
 class CompileInputs(BaseModel):
@@ -640,18 +666,32 @@ class CompileService:
             configuration = await self._configuration(
                 compile_name, ctx, action=AclAction.WRITE, owner_user_id=owner_user_id
             )
-            async with self._require_lifecycle().store.edit(
-                ctx.account_id, configuration["execution_context"]["owner_user_id"], compile_name
-            ) as record:
-                return await self.create(
-                    request,
-                    connection=connection,
-                    ctx=ctx,
-                    idempotency_key=idempotency_key,
-                    trigger=trigger,
-                    locked_record=record,
-                    scheduled_slot=scheduled_slot,
+            task = None
+            try:
+                async with self._require_lifecycle().store.edit(
+                    ctx.account_id,
+                    configuration["execution_context"]["owner_user_id"],
+                    compile_name,
+                ) as record:
+                    task = await self.create(
+                        request,
+                        connection=connection,
+                        ctx=ctx,
+                        idempotency_key=idempotency_key,
+                        trigger=trigger,
+                        locked_record=record,
+                        scheduled_slot=scheduled_slot,
+                    )
+            except (AGFSInternalError, ValueError) as exc:
+                if task is None or task.error == ENQUEUE_FAILURE or not _lost_state_lease(exc):
+                    raise
+                logger.warning(
+                    "Queued Compile task %s lost the state.json lease for %s",
+                    task.task_id,
+                    compile_name,
+                    exc_info=True,
                 )
+            return task
         if compile_name:
             record = locked_record
             inputs = CompileInputs.model_validate(

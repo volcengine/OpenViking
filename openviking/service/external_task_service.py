@@ -31,6 +31,8 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
+# Persisted on a task when submission fails before the queue accepts it.
+ENQUEUE_FAILURE = "Failed to enqueue external task"
 _CREDENTIAL_PROVIDER = "encrypted_external_task"
 _PRIVATE_AUTH_FIELDS = ("openviking_connection", "external_request_private")
 _instance: ExternalTaskService | None = None
@@ -392,7 +394,7 @@ class ExternalTaskService:
                 if current is not None and not current.is_terminal() and not current.error:
                     await tracker.fail(
                         task.task_id,
-                        "Failed to enqueue external task",
+                        ENQUEUE_FAILURE,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
                     )
