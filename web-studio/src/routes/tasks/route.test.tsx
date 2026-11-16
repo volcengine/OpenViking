@@ -101,6 +101,7 @@ const connectionState = vi.hoisted(() => ({
   },
   connectionRole: 'root' as 'root' | 'admin' | 'user' | 'unknown',
   serverMode: 'api_key' as 'api_key' | 'trusted',
+  serverHealth: { auth_mode: 'api_key' },
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => connectionState,
@@ -182,6 +183,7 @@ beforeEach(() => {
   connectionState.connection.accountId = 'default'
   connectionState.connection.adminApiKey = 'management-key'
   connectionState.connection.apiKey = 'user-key'
+  connectionState.connection.baseUrl = 'http://localhost:1933'
   connectionState.connectionRole = 'root'
   connectionState.serverMode = 'api_key'
   credentialMocks.users.mockImplementation(async (_connection, accountId) => [
@@ -324,6 +326,35 @@ describe('task status presentation', () => {
       to: '/compile/tasks/$taskId',
       params: { taskId: 'cmp_one' },
     })
+  })
+  it('opens hosted task details in the basic drawer and hides re-trigger', async () => {
+    connectionState.connection.baseUrl =
+      'https://api.vikingdb.cn-beijing.volces.com'
+    connectionState.connectionRole = 'user'
+    connectionState.connection.adminApiKey = ''
+    records = [
+      {
+        task_id: 'hosted-compile',
+        task_type: 'compile',
+        resource_id: 'viking://resources/source',
+        status: 'failed',
+        created_at: 200,
+      },
+    ]
+    const user = await renderPage()
+    const row = await screen.findByRole('row', {
+      name: 'View details for task hosted-compile',
+    })
+    expect(within(row).queryByRole('button')).toBeNull()
+    await user.click(row)
+    expect(navigationMocks.navigate).not.toHaveBeenCalled()
+    expect(detailMocks.render).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        includeExecutionEvents: false,
+        open: true,
+        taskId: 'hosted-compile',
+      }),
+    )
   })
 })
 

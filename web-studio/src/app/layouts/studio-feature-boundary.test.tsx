@@ -59,6 +59,21 @@ afterEach(() => {
   state.role = 'admin'
   state.controlKey = 'mock-admin'
 })
+
+it.each(['/usage', '/agent-experience/sample'])(
+  'blocks the hosted route %s before mounting its content',
+  (pathname) => {
+    state.pathname = pathname
+    render(
+      <StudioFeatureBoundary>
+        <div>Feature content</div>
+      </StudioFeatureBoundary>,
+    )
+    expect(screen.queryByText('Feature content')).toBeNull()
+    expect(screen.getByText('states.unavailable.title')).toBeTruthy()
+  },
+)
+
 it.each(['user', 'admin'])(
   'blocks Root-only bot management before child effects for %s',
   (role) => {

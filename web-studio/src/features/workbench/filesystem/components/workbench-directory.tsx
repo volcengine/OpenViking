@@ -1,4 +1,5 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -28,6 +29,7 @@ export function WorkbenchDirectory({
   onNavigate: (uri: string) => void
 }) {
   const { t } = useTranslation('filesystem')
+  const { provider } = useStudioService()
   const { connection, identityScopeKey } = useAppConnection()
   const { getTitle } = useSessionTitles(identityScopeKey)
   const ownSessionsRoot = `viking://user/${encodeURIComponent(connection.userId)}/sessions`
@@ -45,6 +47,7 @@ export function WorkbenchDirectory({
     visibleContextEntries(query.data?.entries ?? []),
   )
   if (
+    provider === 'opensource' &&
     isExperienceDirectory(uri) &&
     query.isSuccess &&
     !entries.some((entry) => entry.isDir)

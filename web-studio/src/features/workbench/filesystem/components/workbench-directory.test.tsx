@@ -4,7 +4,13 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkbenchDirectory } from './workbench-directory'
 
-const { list } = vi.hoisted(() => ({ list: vi.fn() }))
+const { list, service } = vi.hoisted(() => ({
+  list: vi.fn(),
+  service: { provider: 'opensource' },
+}))
+vi.mock('#/features/connection/hooks/use-studio-service', () => ({
+  useStudioService: () => service,
+}))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: { userId: 'alice' },
@@ -42,9 +48,10 @@ function entry(uri: string, name: string, isDir: boolean) {
     modTimestamp: 0,
   }
 }
-beforeEach(() =>
-  list.mockReturnValue({ data: { entries: [] }, isSuccess: true }),
-)
+beforeEach(() => {
+  service.provider = 'opensource'
+  list.mockReturnValue({ data: { entries: [] }, isSuccess: true })
+})
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -105,6 +112,19 @@ describe('workbench directory previews', () => {
     })
     render(<WorkbenchDirectory uri={uri} onNavigate={vi.fn()} />)
     expect(screen.getByTestId('experiences')).toBeTruthy()
+  })
+  it('opens experience files from a hosted directory without mounting analysis', async () => {
+    service.provider = 'volcengine'
+    const uri = 'viking://user/alice/memories/experiences/'
+    list.mockReturnValue({
+      data: { entries: [entry(`${uri}review.md`, 'review.md', false)] },
+      isSuccess: true,
+    })
+    const onNavigate = vi.fn()
+    render(<WorkbenchDirectory uri={uri} onNavigate={onNavigate} />)
+    expect(screen.queryByTestId('experiences')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'review.md' }))
+    expect(onNavigate).toHaveBeenCalledWith(`${uri}review.md`)
   })
   it('does not show an empty experience list before the directory loads', () => {
     list.mockReturnValue({ isLoading: true, isSuccess: false })

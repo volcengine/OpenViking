@@ -36,6 +36,7 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
     activeProfileId: 'active',
     activateProfile: state.activateProfile,
     serverMode: 'api_key',
+    serverHealth: { auth_mode: 'api_key' },
     connectionRole: state.role,
   }),
 }))
@@ -66,6 +67,7 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 beforeEach(() => {
   localStorage.clear()
+  state.connection.baseUrl = 'http://service.test'
   state.connection.apiKey = 'user-key'
   state.connection.userId = 'alice'
   state.role = 'root'
@@ -85,6 +87,7 @@ function openMenu(managementMode = false) {
 }
 it('shows saved local connections and preferences without exposing credentials', () => {
   openMenu()
+  expect(screen.getByRole('link', { name: 'home:myUsage' })).toBeTruthy()
   const profiles = within(
     screen.getByRole('group', { name: 'studioSettings.connections' }),
   )
@@ -107,6 +110,11 @@ it('shows saved local connections and preferences without exposing credentials',
   expect(document.body.textContent).not.toContain('user-key')
   expect(document.body.textContent).not.toContain('root-key')
   expect(state.activateProfile).not.toHaveBeenCalled()
+})
+it('hides personal usage for a hosted API key connection', () => {
+  state.connection.baseUrl = 'https://api.vikingdb.cn-beijing.volces.com'
+  openMenu()
+  expect(screen.queryByRole('link', { name: 'home:myUsage' })).toBeNull()
 })
 it('activates a saved connection and closes the preferences menu', () => {
   openMenu()

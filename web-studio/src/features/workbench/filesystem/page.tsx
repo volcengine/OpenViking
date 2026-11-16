@@ -442,7 +442,8 @@ function FilesystemWorkbench() {
       directoryAccess === undefined)
   const specialDirectory =
     selectedIsDirectory && usesWorkbenchDirectoryView(selectedUri)
-  const specialExperience = needsExperienceDetailTab(selectedUri)
+  const specialExperience =
+    canUseLocalTools && needsExperienceDetailTab(selectedUri)
   const structuredFile = !selectedIsDirectory && /\.jsonl$/i.test(selectedUri)
   const canEditFile =
     !selectedIsDirectory &&
@@ -645,6 +646,7 @@ function FilesystemWorkbench() {
           key={`${identityScopeKey}:${refreshKey}`}
           ref={browserRef}
           readOnly
+          dashboardKinds={canUseLocalTools ? undefined : []}
           previewActions={{
             history: false,
             importPack: false,

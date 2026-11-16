@@ -1,4 +1,5 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { validateFilesystemSearch } from '#/features/workbench/filesystem/lib/types'
 import { cn } from '#/shared/lib/utils'
 import { Link } from '@tanstack/react-router'
@@ -69,6 +70,7 @@ export function StudioSettingsMenu({
 }) {
   const { t, i18n } = useTranslation('appShell')
   const { setTheme, resolvedTheme } = useTheme()
+  const { provider } = useStudioService()
   const {
     connection,
     serverMode,
@@ -174,7 +176,7 @@ export function StudioSettingsMenu({
             ) : null}
           </div>
         </div>
-        {!managementMode ? (
+        {!managementMode && provider === 'opensource' ? (
           <div className="border-b border-border/70 pb-1">
             <Link
               to="/usage"

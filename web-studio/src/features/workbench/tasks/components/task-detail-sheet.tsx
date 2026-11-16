@@ -44,6 +44,7 @@ import {
 type TaskDetailSheetProps = {
   headers?: Record<string, string>
   identityScopeKey: string
+  includeExecutionEvents?: boolean
   onOpenChange: (open: boolean) => void
   open: boolean
   taskId: string | null
@@ -51,13 +52,14 @@ type TaskDetailSheetProps = {
 
 async function fetchTask(
   taskId: string,
+  includeExecutionEvents: boolean,
   headers?: Record<string, string>,
 ): Promise<TaskRecord> {
   const result = await getOvResult<unknown>(
     getTaskByTaskId({
       ...(headers ? { headers } : {}),
       path: { task_id: taskId },
-      query: { include_events: true },
+      ...(includeExecutionEvents ? { query: { include_events: true } } : {}),
     }),
   )
   const task = normalizeTaskRecord(result)
@@ -68,6 +70,7 @@ async function fetchTask(
 export function TaskDetailSheet({
   headers,
   identityScopeKey,
+  includeExecutionEvents = true,
   onOpenChange,
   open,
   taskId,
@@ -75,8 +78,8 @@ export function TaskDetailSheet({
   const { i18n, t } = useTranslation('tasksPage')
   const detailQuery = useQuery({
     enabled: open && Boolean(taskId),
-    queryFn: () => fetchTask(taskId || '', headers),
-    queryKey: ['task-detail', identityScopeKey, taskId],
+    queryFn: () => fetchTask(taskId || '', includeExecutionEvents, headers),
+    queryKey: ['task-detail', identityScopeKey, taskId, includeExecutionEvents],
     refetchInterval: (query) => {
       const status = normalizeTaskStatus(query.state.data?.status)
       return status === 'pending' ||
@@ -242,6 +245,7 @@ export function TaskDetailSheet({
 
                   {/* Worker Sub-Queue Pipeline Diagram (Type-Aware) */}
                   {(() => {
+                    if (!includeExecutionEvents) return null
                     const steps = getTaskPipelineSteps(task, t)
 
                     return (
@@ -295,7 +299,9 @@ export function TaskDetailSheet({
                     )
                   })()}
 
-                  <TaskExecutionEvents task={task} />
+                  {includeExecutionEvents && (
+                    <TaskExecutionEvents task={task} />
+                  )}
 
                   {task.error ? (
                     <DetailSection title={t('detail.error')}>

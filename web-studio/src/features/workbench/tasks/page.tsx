@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { QueueStatusCard } from '#/features/workbench/monitoring/components/queue-status-card'
 import { commitSession } from '#/features/workbench/sessions/lib/api'
 import { TaskDetailSheet } from '#/features/workbench/tasks/components/task-detail-sheet'
@@ -95,6 +96,8 @@ export function TasksRoute({
   const navigate = useNavigate()
   const { t } = useTranslation(['tasksPage', 'appShell'])
   const { identityScopeKey, connection } = useAppConnection()
+  const { provider } = useStudioService()
+  const showTaskInternals = provider !== 'volcengine'
   const {
     headers: taskHeaders,
     scopeKey,
@@ -148,7 +151,7 @@ export function TasksRoute({
   const hasNext = page < totalPages
   const hasActiveFilters = taskType !== 'all' || statusFilter !== 'all'
 
-  const canRetry = !taskScopeUnavailable
+  const canRetry = showTaskInternals && !taskScopeUnavailable
   const retryMutation = useMutation({
     mutationFn: async (task: TaskRecord) => {
       if (task.task_id?.startsWith('mock_task_')) {
@@ -325,7 +328,7 @@ export function TasksRoute({
           }
         />
         <span>{t(`status.${status}`)}</span>
-        {status === 'running' && (
+        {showTaskInternals && status === 'running' && (
           <span className="font-mono font-semibold ml-0.5">{pct}%</span>
         )}
         {status === 'failed' &&
@@ -726,7 +729,12 @@ export function TasksRoute({
       </div>
 
       {/* 任务队列 (上层) 与 工序队列 (下层) 50/50 并排观测行 */}
-      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-2">
+      <div
+        className={cn(
+          'grid grid-cols-1 gap-3.5',
+          showTaskInternals && 'lg:grid-cols-2',
+        )}
+      >
         {/* 左侧 (50% 宽度 - 优先看上层任务): 任务队列状态 (Task Queues) */}
         <div>
           <QueueStatusCard
@@ -737,13 +745,15 @@ export function TasksRoute({
         </div>
 
         {/* 右侧 (50% 宽度 - 拆分出的下层工序): 工序队列状态 (Process Queues) */}
-        <div>
-          <QueueStatusCard
-            title={t('labels.processQueueStatus')}
-            customRows={queueRows}
-            isHealthy={kpiData.failed === 0}
-          />
-        </div>
+        {showTaskInternals && (
+          <div>
+            <QueueStatusCard
+              title={t('labels.processQueueStatus')}
+              customRows={queueRows}
+              isHealthy={kpiData.failed === 0}
+            />
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card/60 p-2 shadow-xs">
@@ -889,7 +899,9 @@ export function TasksRoute({
                   <TableHead>{t('table.task')}</TableHead>
                   <TableHead>{t('table.type')}</TableHead>
                   <TableHead>{t('table.resource')}</TableHead>
-                  <TableHead>{t('labels.queuePipeline')}</TableHead>
+                  {showTaskInternals && (
+                    <TableHead>{t('labels.queuePipeline')}</TableHead>
+                  )}
                   <TableHead>{t('table.status')}</TableHead>
                   <TableHead title={t('labels.processingDurationHelp')}>
                     {t('labels.timing')}
@@ -915,7 +927,11 @@ export function TasksRoute({
                       )}
                       onClick={() => {
                         if (taskId) {
-                          if (!management && task.task_type === 'compile') {
+                          if (
+                            showTaskInternals &&
+                            !management &&
+                            task.task_type === 'compile'
+                          ) {
                             void navigate({
                               to: '/compile/tasks/$taskId',
                               params: { taskId },
@@ -929,7 +945,11 @@ export function TasksRoute({
                           (event.key === 'Enter' || event.key === ' ')
                         ) {
                           event.preventDefault()
-                          if (!management && task.task_type === 'compile') {
+                          if (
+                            showTaskInternals &&
+                            !management &&
+                            task.task_type === 'compile'
+                          ) {
                             void navigate({
                               to: '/compile/tasks/$taskId',
                               params: { taskId },
@@ -958,7 +978,9 @@ export function TasksRoute({
                       <TableCell className="max-w-72 truncate text-muted-foreground">
                         {task.resource_id || '-'}
                       </TableCell>
-                      <TableCell>{renderQueuePipeline(task)}</TableCell>
+                      {showTaskInternals && (
+                        <TableCell>{renderQueuePipeline(task)}</TableCell>
+                      )}
                       <TableCell>{renderStatus(task)}</TableCell>
                       <TableCell className="whitespace-nowrap text-xs tabular-nums">
                         <div>
@@ -1060,6 +1082,7 @@ export function TasksRoute({
       <TaskDetailSheet
         headers={taskHeaders ?? undefined}
         identityScopeKey={taskIdentityScopeKey}
+        includeExecutionEvents={showTaskInternals}
         open={Boolean(selectedTaskId)}
         taskId={selectedTaskId}
         onOpenChange={(open) => {

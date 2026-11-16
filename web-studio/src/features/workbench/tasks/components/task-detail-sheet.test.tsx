@@ -57,6 +57,7 @@ async function showDetail(
   identity = 'acme/alice',
   existingClient?: QueryClient,
   headers?: Record<string, string>,
+  includeExecutionEvents = true,
 ) {
   const i18n = createInstance()
   await i18n.init({
@@ -81,6 +82,7 @@ async function showDetail(
           open
           taskId="task-1"
           identityScopeKey={identity}
+          includeExecutionEvents={includeExecutionEvents}
           onOpenChange={vi.fn()}
         />
       </QueryClientProvider>
@@ -104,6 +106,16 @@ afterEach(() => {
 })
 
 describe('recorded task execution events', () => {
+  it('loads the basic hosted detail without requesting or showing execution events', async () => {
+    await showDetail('en', 'acme/alice', undefined, undefined, false)
+    expect(await screen.findByText('Task status')).toBeTruthy()
+    expect(api.getTask).toHaveBeenCalledWith({
+      path: { task_id: 'task-1' },
+    })
+    expect(
+      screen.queryByRole('region', { name: 'Task execution log' }),
+    ).toBeNull()
+  })
   it.each(['en', 'zh'])(
     'shows and copies backend events in %s without synthetic lines',
     async (language) => {
