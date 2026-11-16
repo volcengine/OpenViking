@@ -751,30 +751,30 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(
     assert compile_metric_events == []
 
 
-async def test_first_acceptance_discovers_a_task_whose_state_publication_was_interrupted(setup):
-    record = new_record(PARAMS)
-    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
-    name = await setup.store.create("acme", "bob", record, compile_name=compile_name)
-    other = make_task(
-        setup, compile_name=name, record=record, owner_user_id="bob", user_id="bob", created_at=50
+async def test_initial_run_uses_config_state_without_listing_tasks(setup, registered, monkeypatch):
+    """Distinct tasks with the same creation time share one initial run per configuration."""
+    record, compile_name, first = registered
+    second = make_task(
+        setup,
+        compile_name=compile_name,
+        record=record,
+        created_at=first.created_at,
+        trigger="scheduled",
     )
-    await setup.lifecycle.record_queued(other)
-    scheduled = make_task(
-        setup, compile_name=compile_name, record=record, trigger="scheduled", user_id="bob"
-    )
-    # The Task and run survive, but the configuration mutation does not publish.
-    unpublished = deepcopy(record)
-    await setup.lifecycle.record_queued(scheduled, locked_record=unpublished)
-    assert (await setup.store.get("acme", "alice", compile_name))["task_first_create_time"] is None
-    manual = make_task(setup, compile_name=compile_name, record=record, created_at=200)
-    await setup.lifecycle.record_queued(manual)
+    list_tasks = AsyncMock(side_effect=AssertionError("Unexpected account-wide task scan"))
+    monkeypatch.setattr(setup.tracker, "list_durable", list_tasks)
+
+    await setup.lifecycle.record_queued(first)
+    await setup.lifecycle.record_queued(second)
+    await setup.lifecycle.record_queued(first)
+
+    initial = await setup.store.get_run("acme", "alice", compile_name, first.task_id)
+    scheduled = await setup.store.get_run("acme", "alice", compile_name, second.task_id)
+    assert initial["meta"]["trigger"] == "initial"
+    assert scheduled["meta"]["trigger"] == "scheduled"
     state = await setup.store.get("acme", "alice", compile_name)
-    assert state["task_first_create_time"] == 100
-    assert state["last_run_time"] == 200
-    await setup.lifecycle.record_queued(scheduled)
-    assert (await setup.store.get("acme", "alice", compile_name))["task_first_create_time"] == 100
-    runs = await setup.store.list_runs("acme", "alice", compile_name)
-    assert [run["meta"]["trigger"] for run in runs] == ["manual", "initial"]
+    assert state["task_first_create_time"] == first.created_at
+    list_tasks.assert_not_awaited()
 
 
 async def test_creator_and_account_isolation_with_paging(setup):
