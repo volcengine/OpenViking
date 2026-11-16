@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Rule-specific Jev System One judgments."""
 
-import logging
 import time
 from dataclasses import dataclass
 from typing import Dict, List, TypeVar
@@ -72,7 +71,7 @@ class _JevJudgeClient:
 
     def _request_answers(self, body: dict, *, item_count: int) -> dict | None:
         try:
-            if self.log_payloads and logger.isEnabledFor(logging.DEBUG):
+            if self.log_payloads:
                 logger.debug(
                     "judgment request summary operation=%s total=%d payload=true",
                     self.log_name,
@@ -84,7 +83,7 @@ class _JevJudgeClient:
             duration_seconds = time.monotonic() - started
             response.raise_for_status()
             data = response.json()
-            if self.log_payloads and logger.isEnabledFor(logging.DEBUG):
+            if self.log_payloads:
                 logger.debug(
                     "judgment response summary operation=%s http_status_code=%d duration_ms=%.1f payload=true",
                     self.log_name,

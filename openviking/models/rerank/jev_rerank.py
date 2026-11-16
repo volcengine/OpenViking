@@ -16,7 +16,6 @@ Same interface as the other rerank clients:
 rerank_batch(query, documents) -> List[float]
 """
 
-import logging
 import time
 from typing import Dict, List, Optional, Protocol
 
@@ -187,7 +186,7 @@ class JevRerankClient(RerankBase):
                 "state": state,
                 "questions": self._strategy.build_questions(documents),
             }
-            if self.log_payloads and logger.isEnabledFor(logging.DEBUG):
+            if self.log_payloads:
                 logger.debug(
                     "rerank request summary total=%d payload=true",
                     len(documents),
@@ -198,7 +197,7 @@ class JevRerankClient(RerankBase):
             duration_seconds = time.monotonic() - started
             resp.raise_for_status()
             data = resp.json()
-            if self.log_payloads and logger.isEnabledFor(logging.DEBUG):
+            if self.log_payloads:
                 logger.debug(
                     "rerank response summary http_status_code=%d duration_ms=%.1f payload=true",
                     resp.status_code,
