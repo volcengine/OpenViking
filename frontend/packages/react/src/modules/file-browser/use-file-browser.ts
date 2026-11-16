@@ -3,21 +3,19 @@ import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
 import { useDirectoryPreviewLevels } from './use-directory-preview-levels.js';
 
-import type {
-  FileTreeEntryRow,
-  FileTreeRow,
-} from '../../components/file-tree/index.js';
+import type { FileTreeEntryRow } from '../../components/file-tree/index.js';
 import { useOvClient } from '../../client/provider.js';
 import { useFsPreview } from './use-fs-preview.js';
 import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
 import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
+import { useFileBrowserTreeActions } from './use-file-browser-tree-actions.js';
 import { findSelectedRowId } from './fs-uri.js';
 import type {
   FileBrowserActions,
   FileBrowserApi,
   UseFileBrowserOptions,
-} from './types.js';
+} from './file-browser-state-types.js';
 
 /**
  * 文件浏览模块的目录与预览联动：目录行展开树，文件行打开预览。
@@ -48,16 +46,17 @@ export function useFileBrowser({
   const text = resolveLabels(accessLabels, locale);
   const client = useOvClient('local');
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
-  const [refreshing, setRefreshing] = useState(false);
-  // External edits must refresh the directory and preview even if URI and client
-  // are unchanged; the shared generation invalidates both requests.
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const tree = useFsTree({
     client,
     rootUri,
     defaultExpandedUri,
     requestOptions,
   });
+  const {
+    actions: treeActions,
+    refreshing,
+    refreshGeneration,
+  } = useFileBrowserTreeActions(tree);
   // 当前资源是目录还是文件，决定预览读摘要还是正文。
   //
   // 判定不能用「可见行里有没有这一行」：根目录本身从不出现在 `tree.rows` 里，
@@ -118,14 +117,7 @@ export function useFileBrowser({
   // commit would re-run the effect and cancel the previous request, turning one
   // selection into an endless reload. A ref carries the latest notification and
   // only the tree operations remain as dependencies.
-  const {
-    open: openTree,
-    toggleExpand,
-    loadMore,
-    retry,
-    refresh,
-    cancelReveal,
-  } = tree;
+  const { open: openTree, toggleExpand, cancelReveal } = tree;
   const notifyUriChange = useRef(onUriChange);
   notifyUriChange.current = onUriChange;
   const openParent = useMemo(
@@ -234,22 +226,7 @@ export function useFileBrowser({
         if (row.type === 'directory') await openTree(row.uri);
       },
       toggleExpand,
-      loadMore: async (row: FileTreeRow) => {
-        if ('parentId' in row && row.parentId) await loadMore(row.parentId);
-      },
-      retry: async (row: FileTreeRow) => {
-        if ('parentId' in row && row.parentId) await retry(row.parentId);
-      },
-      // Refresh the directory and preview together after external changes.
-      refresh: async () => {
-        setRefreshing(true);
-        try {
-          setRefreshGeneration((generation) => generation + 1);
-          await refresh();
-        } finally {
-          setRefreshing(false);
-        }
-      },
+      ...treeActions,
       openUri: openResource,
       openResource: navigateResource,
       reveal,
@@ -276,9 +253,7 @@ export function useFileBrowser({
       cancelReveal,
       openTree,
       toggleExpand,
-      loadMore,
-      retry,
-      refresh,
+      treeActions,
       openDashboard,
       closeDashboard,
       openResource,

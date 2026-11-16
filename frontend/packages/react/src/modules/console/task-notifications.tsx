@@ -1,32 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { useTaskTrackerContext } from '../../shared/task-tracking/context.js';
 import { isTaskTerminal } from '../../shared/task-tracking/types.js';
-import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 import { useNotification } from '../../shared/primitives/notification/index.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { TaskStatusList } from '../../shared/task-status/task-status.js';
 import { taskLabels } from '../../shared/task-status/labels.js';
 import type { Locale } from '../../shared/locale.js';
 import { resolveConsoleLocale } from './labels.js';
-
-function taskResultUri({ result, uri }: TaskSnapshot) {
-  const output =
-    result && typeof result === 'object'
-      ? (result as Record<string, unknown>)
-      : undefined;
-  // The submission may omit or reserve a URI. The completed result takes precedence.
-  for (const value of [
-    output?.root_uri,
-    output?.uri,
-    output?.archive_uri,
-    output?.to,
-    uri,
-  ]) {
-    if (typeof value !== 'string') continue;
-    const target = value.trim();
-    if (/^viking:\/\/[^\s<>"'`]+$/i.test(target)) return target;
-  }
-}
 
 type OpenUri = (uri: string) => void;
 
@@ -63,7 +43,7 @@ export function ConsoleTaskNotifications({
         if (hidden.current.has(task.key)) continue;
         const commandCompleted =
           task.status === 'completed' && task.origin === 'command';
-        const target = commandCompleted ? taskResultUri(task) : undefined;
+        const target = commandCompleted ? task.uri : undefined;
         const open = target ? onOpenUri : undefined;
         const version = JSON.stringify([
           locale,
@@ -73,7 +53,6 @@ export function ConsoleTaskNotifications({
           task.queryError,
           task.uri,
           commandCompleted,
-          target,
         ]);
         const previous = versions.current.get(task.key);
         if (previous?.version === version && previous.open === open) continue;

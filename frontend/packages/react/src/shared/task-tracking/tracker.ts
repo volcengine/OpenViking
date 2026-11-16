@@ -1,4 +1,5 @@
-import { assertTask, InvalidTaskResponse } from './response.js';
+import { mergeTaskResponse, taskQueryError } from './response.js';
+import { normalizeTaskUri } from './resource-uri.js';
 import { observePoll, retainTaskMonitoring } from './monitoring.js';
 import type { MonitoringBinding } from '../monitoring/binding.js';
 import type { MonitoringSpan } from '../monitoring/trace/span.js';
@@ -64,29 +65,15 @@ export function createTaskTracker({ interval = 3000, concurrency = 4 } = {}) {
         monitoring?.service ?? entry.source.service
       ).getTask(entry.snapshot.id, request.signal);
       if (!current()) return;
-      assertTask(result, entry.snapshot.id);
-      entry.snapshot = { ...entry.snapshot, ...result, queryError: undefined };
+      entry.snapshot = mergeTaskResponse(entry.snapshot, result);
       entry.failures = 0;
       monitoring?.success();
     } catch (error) {
       if (!current()) return;
-      monitoring?.fail(error, error instanceof InvalidTaskResponse);
+      const queryError = taskQueryError(error);
+      monitoring?.fail(error, queryError.code === 'invalid-response');
       entry.failures++;
-      entry.snapshot = {
-        ...entry.snapshot,
-        queryError: {
-          code:
-            error instanceof InvalidTaskResponse
-              ? 'invalid-response'
-              : 'request',
-          message:
-            error instanceof InvalidTaskResponse
-              ? undefined
-              : error instanceof Error
-                ? error.message
-                : String(error),
-        },
-      };
+      entry.snapshot = { ...entry.snapshot, queryError };
     } finally {
       monitoring?.cancel();
       running.delete(request);
@@ -169,14 +156,17 @@ export function createTaskTracker({ interval = 3000, concurrency = 4 } = {}) {
       if (!reference.id.trim()) return key;
       const existing = entries.get(key);
       if (!existing) {
+        const { uri: submittedUri, ...task } = reference;
+        const uri = normalizeTaskUri(submittedUri);
         const entry: TaskTrackerEntry = {
           source,
           observedAtStart:
             !!source.monitoring?.active() &&
             !!source.monitoring.controller.options,
           snapshot: {
-            ...reference,
+            ...task,
             key,
+            ...(uri && { uri }),
             ...(taskOrigin && { origin: taskOrigin }),
           },
           due: Date.now(),
