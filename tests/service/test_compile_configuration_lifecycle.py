@@ -15,6 +15,7 @@ from openviking.service.compile_targets import (
     CompileStateStore,
     execution_signature,
     new_record,
+    new_run,
     split_control_args,
 )
 from openviking.service.external_task_service import ExternalTaskError, ExternalTaskSnapshot
@@ -637,6 +638,24 @@ async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(s
     assert (await restarted.on_finish(resumed, terminal)).status == "completed"
     assert setup.tracker.tasks[task.task_id].auth["compile_execution"]["plan"] == original_plan
     assert len(setup.fs.commits) == 2
+
+
+async def test_cleanup_reads_only_the_executors_task(setup, registered):
+    """Alice's expired run remains recoverable while Bob's persisted task is active."""
+    record, name, _ = registered
+    task = make_task(setup, compile_name=name, record=record, user_id="bob")
+    tasks = setup.tracker._store = PersistentTaskStore(_FakeAgfs())
+    task.status = TaskStatus.RUNNING
+    await tasks.create(task)
+    run = dict(new_run(task), status="completed", finished_at=100)
+    await setup.store.put_run("acme", "alice", name, run)
+
+    reads = tasks._agfs.read = AsyncMock(wraps=tasks._agfs.read)
+    listings = tasks._agfs.ls = AsyncMock(wraps=tasks._agfs.ls)
+    assert await setup.store.delete_expired(now=8 * 24 * 3600, limit=10) == 0
+    assert await setup.store.get_run("acme", "alice", name, task.task_id) == run
+    reads.assert_awaited_once_with(f"/local/acme/_system/tasks/bob/{task.task_id}.json")
+    listings.assert_not_awaited()
 
 
 async def test_cleanup_resumes_past_new_runs_and_retains_pending_recovery(setup):

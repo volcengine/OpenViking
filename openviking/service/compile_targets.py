@@ -512,11 +512,10 @@ class CompileStateStore:
                         or finished >= now - HISTORY_RETENTION_SECONDS
                     ):
                         continue
-                    tasks = await get_task_tracker()._store.list_durable(
-                        account_id, task_type="compile"
+                    task = await get_task_tracker()._store.get_durable_task(
+                        task_id, account_id=account_id, user_id=run["actor"]
                     )
-                    task = next((item for item in tasks if item.task_id == task_id), None)
-                    if task is not None and not task.is_terminal():
+                    if task is not None and task.task_type == "compile" and not task.is_terminal():
                         continue
                     path = self._run_path(account_id, owner_user_id, compile_name, task_id)
                     async with self.locked(path) as lease:
