@@ -821,6 +821,7 @@ class MarkdownParser(BaseParser):
 
         # mapping: rel_md_path -> {original_path_str -> unique_filename}
         mappings: Dict[str, Dict[str, str]] = {}
+        names_by_directory: Dict[str, set[str]] = {}
 
         for md_uri, content in markdown_files:
             # Collect all image references in this markdown file: markdown
@@ -861,7 +862,7 @@ class MarkdownParser(BaseParser):
             md_dir = md_uri.rsplit("/", 1)[0]
 
             # Copy each local image next to the markdown file, deduplicating names
-            used_names: set[str] = set()
+            used_names = names_by_directory.setdefault(md_dir, set())
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
             for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
                 try:
