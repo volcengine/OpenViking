@@ -146,6 +146,31 @@ fn build_snapshot_log_store(
                 Err(err) => snapshot_log_init_fallback("mysql", err),
             }
         }
+        "postgres" => {
+            let postgres = cfg
+                .snapshot
+                .log
+                .postgres
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("[git.snapshot.log.postgres] missing"))?;
+            let dsn = std::env::var(&postgres.dsn_env).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "environment variable {} is required for snapshot log postgres provider",
+                    postgres.dsn_env
+                ))
+            })?;
+            let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
+            })?;
+            match handle.block_on(ragfs::git::PostgresSnapshotLogStore::connect(
+                &dsn,
+                postgres.max_connections,
+                postgres.connect_timeout_ms,
+            )) {
+                Ok(store) => Ok(Some(Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>)),
+                Err(err) => snapshot_log_init_fallback("postgres", err),
+            }
+        }
         other => Err(PyValueError::new_err(format!(
             "unsupported snapshot log provider: {}",
             other
@@ -769,6 +794,72 @@ mod tests {
                 },
             },
         }
+    }
+
+    #[test]
+    fn postgres_snapshot_log_missing_configuration_errors() {
+        Python::initialize();
+        let mut cfg = local_cfg("/tmp/snapshot-pg-config");
+        cfg.snapshot.log.provider = "postgres".into();
+        let err = match build_snapshot_log_store(&cfg) {
+            Err(err) => err,
+            Ok(_) => panic!("missing PostgreSQL section must fail"),
+        };
+        assert!(err.to_string().contains("[git.snapshot.log.postgres] missing"));
+        cfg.snapshot.log.postgres = Some(ragfs::git::GitSnapshotLogPostgresConfig {
+            dsn_env: format!("SNAPSHOT_MISSING_{}", uuid::Uuid::new_v4().simple()),
+            max_connections: 1,
+            connect_timeout_ms: 1000,
+        });
+        let err = match build_snapshot_log_store(&cfg) {
+            Err(err) => err,
+            Ok(_) => panic!("missing PostgreSQL DSN environment must fail"),
+        };
+        assert!(err
+            .to_string()
+            .contains("required for snapshot log postgres provider"));
+    }
+
+    #[test]
+    #[ignore = "requires SNAPSHOT_LOG_TEST_PG_DSN and a provisioned PostgreSQL database"]
+    fn postgres_snapshot_log_factory_connects_to_real_store() {
+        let mut cfg = local_cfg("/tmp/snapshot-pg-binding");
+        cfg.snapshot.log.provider = "postgres".into();
+        cfg.snapshot.log.postgres = Some(ragfs::git::GitSnapshotLogPostgresConfig {
+            dsn_env: "SNAPSHOT_LOG_TEST_PG_DSN".into(),
+            max_connections: 2,
+            connect_timeout_ms: 5000,
+        });
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _enter = runtime.enter();
+        let store = build_snapshot_log_store(&cfg)
+            .unwrap()
+            .expect("PG index enabled");
+        runtime.block_on(async {
+            let account = uuid::Uuid::new_v4().simple().to_string();
+            let oid = "1234567890123456789012345678901234567890";
+            store
+                .append_rows_if_latest(
+                    &account,
+                    "main",
+                    None,
+                    &[ragfs::git::SnapshotLogRow {
+                        path: "/".into(),
+                        commit_oid: oid.into(),
+                    }],
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .load_latest_indexed_commit(&account, "main")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .1,
+                oid
+            );
+        });
     }
 
     #[tokio::test]

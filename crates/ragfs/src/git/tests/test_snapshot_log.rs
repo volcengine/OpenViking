@@ -1,6 +1,16 @@
 use crate::git::snapshot_log::{SnapshotLogRow, SnapshotLogStore, SqliteSnapshotLogStore};
 
-async fn make_snapshot_log_store() -> Arc<SqliteSnapshotLogStore> {
+async fn make_snapshot_log_store() -> Arc<dyn SnapshotLogStore> {
+    // The same commit/restore/tail-backfill regressions run against PostgreSQL
+    // in the database CI job; absent an explicit DSN, retain SQLite coverage.
+    #[cfg(feature = "postgres")]
+    if let Ok(dsn) = std::env::var("SNAPSHOT_LOG_TEST_PG_DSN") {
+        return Arc::new(
+            crate::git::PostgresSnapshotLogStore::connect(&dsn, 4, 5_000)
+                .await
+                .expect("PostgreSQL SnapshotLog schema must be provisioned"),
+        );
+    }
     let dir = tempfile::tempdir().unwrap().keep();
     let db_path = dir.join("snapshot-log.db");
     Arc::new(

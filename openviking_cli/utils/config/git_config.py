@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """Git version control configuration for OpenViking."""
+
 import os
 from typing import Literal, Optional
 
@@ -84,12 +85,21 @@ class GitSnapshotLogMySqlConfig(BaseModel):
     connect_timeout_ms: int = Field(default=3000, ge=1)
 
 
+class GitSnapshotLogPostgresConfig(BaseModel):
+    """PostgreSQL SnapshotLog provider config."""
+
+    dsn_env: str = Field(default="OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN", min_length=1)
+    max_connections: int = Field(default=16, ge=1)
+    connect_timeout_ms: int = Field(default=3000, ge=1)
+
+
 class GitSnapshotLogConfig(BaseModel):
     """Snapshot path history index config."""
 
-    provider: Literal["none", "sqlite", "mysql"] = "sqlite"
+    provider: Literal["none", "sqlite", "mysql", "postgres"] = "sqlite"
     sqlite: GitSnapshotLogSqliteConfig = Field(default_factory=GitSnapshotLogSqliteConfig)
     mysql: GitSnapshotLogMySqlConfig = Field(default_factory=GitSnapshotLogMySqlConfig)
+    postgres: GitSnapshotLogPostgresConfig = Field(default_factory=GitSnapshotLogPostgresConfig)
 
 
 class GitSnapshotConfig(BaseModel):

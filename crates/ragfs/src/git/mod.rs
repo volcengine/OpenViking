@@ -43,7 +43,8 @@ pub mod util;
 
 pub use config::{
     GitConfig, GitLocalConfig, GitS3ConfigPy, GitSnapshotConfig, GitSnapshotLogConfig,
-    GitSnapshotLogMySqlConfig, GitSnapshotLogSqliteConfig, GitTuningConfig,
+    GitSnapshotLogMySqlConfig, GitSnapshotLogPostgresConfig, GitSnapshotLogSqliteConfig,
+    GitTuningConfig,
 };
 pub use error::{GitError, ObjectStoreError, RefStoreError};
 pub use ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_MAX_BYTES, OVGITIGNORE_PATH};
@@ -55,6 +56,8 @@ pub use snapshot_log::{
     MySqlSnapshotLogStore, SnapshotLogError, SnapshotLogHit, SnapshotLogRow, SnapshotLogStore,
     SqliteSnapshotLogStore,
 };
+#[cfg(feature = "postgres")]
+pub use snapshot_log::PostgresSnapshotLogStore;
 pub use tree_builder::{flatten, lookup, TreeEditor};
 pub use types::{
     Actor, CommitRequest, CommitResponse, IndexEntry, LogEntry, LogRequest, RestoreDiff,

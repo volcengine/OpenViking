@@ -1,10 +1,12 @@
 """Unit tests for GitConfig pydantic model."""
+
 import json
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from openviking.utils.agfs_utils import _build_git_config_dict
 from openviking_cli.utils.config import (
     GitConfig,
     GitLocalConfig,
@@ -15,9 +17,9 @@ from openviking_cli.utils.config.git_config import (
     GitSnapshotConfig,
     GitSnapshotLogConfig,
     GitSnapshotLogMySqlConfig,
+    GitSnapshotLogPostgresConfig,
     GitSnapshotLogSqliteConfig,
 )
-from openviking.utils.agfs_utils import _build_git_config_dict
 
 
 class TestGitConfigDefaults:
@@ -36,6 +38,42 @@ class TestGitConfigDefaults:
 
 
 class TestGitConfigValidation:
+    @pytest.mark.parametrize("backend", ["local", "s3"])
+    def test_postgres_snapshot_log_binding_config(self, backend):
+        cfg = GitConfig(
+            backend=backend,
+            s3=GitS3Config(bucket="bucket", region="region"),
+            snapshot={
+                "log": {
+                    "provider": "postgres",
+                    "postgres": {
+                        "dsn_env": "OV_SNAPSHOT_PG",
+                        "max_connections": 7,
+                        "connect_timeout_ms": 1234,
+                    },
+                }
+            },
+        )
+        out = _build_git_config_dict(cfg, Path("/tmp/storage"))
+        assert out["snapshot"]["log"]["provider"] == "postgres"
+        assert out["snapshot"]["log"]["postgres"] == {
+            "dsn_env": "OV_SNAPSHOT_PG",
+            "max_connections": 7,
+            "connect_timeout_ms": 1234,
+        }
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"dsn_env": ""},
+            {"max_connections": 0},
+            {"connect_timeout_ms": 0},
+        ],
+    )
+    def test_invalid_postgres_snapshot_log_config(self, override):
+        with pytest.raises(ValidationError):
+            GitSnapshotLogPostgresConfig(**override)
+
     def test_invalid_backend_rejected(self):
         with pytest.raises(ValidationError):
             GitConfig(backend="ftp")
@@ -148,9 +186,7 @@ class TestGitInheritsFromAgfs:
         assert cfg.git.s3.secret_key == "SK"
 
     def test_memory_agfs_maps_to_local(self):
-        cfg = OpenVikingConfig(
-            storage={"workspace": "/tmp/x", "agfs": {"backend": "memory"}}
-        )
+        cfg = OpenVikingConfig(storage={"workspace": "/tmp/x", "agfs": {"backend": "memory"}})
         assert cfg.git.backend == "local"
 
     def test_explicit_git_backend_overrides_inheritance(self):
