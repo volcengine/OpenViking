@@ -46,7 +46,7 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `request_log_sink` | Both | `store` | `store`, `stdout` | Write request and background saving logs to storage or one flushed JSON line per record on stdout; see [Monitoring](../guides/22-gateway-operations.md#monitoring) |
 | `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs in storage; stdout retention is managed by the log collector |
 | `max_body_bytes` | Both | `33554432` (32 MiB) | 1,024 or more | Size limit for requests and uploads, in bytes |
-| `upstream_timeout_seconds` | Both | `600` | More than 0 | Timeout for provider requests |
+| `upstream_timeout_seconds` | Both | `600` | More than 0 | Seconds the gateway waits on the provider: for a reply to start (connecting, sending the request, receiving the headers), and then for each further part of the reply. A reply that keeps arriving is not cut off, however long it runs |
 | `health_interval_seconds` | Both | `60` | 1 or more | Seconds between OpenViking status checks |
 | `capture_concurrency` | Both | `1` | 1 or more | Concurrent conversation deliveries per process; shutdown stops new claims and gives in-flight deliveries up to 100 seconds to finish |
 | `client_rules` | Both | `{}` (packaged rules only) | See [Client rules](#client-rules) | Text added to or removed from what the gateway recognizes as housekeeping requests and client-inserted messages |

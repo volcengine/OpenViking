@@ -31,6 +31,8 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
+# Persisted on a task when submission fails before the queue accepts it.
+ENQUEUE_FAILURE = "Failed to enqueue external task"
 _CREDENTIAL_PROVIDER = "encrypted_external_task"
 _PRIVATE_AUTH_FIELDS = ("openviking_connection", "external_request_private")
 _instance: ExternalTaskService | None = None
@@ -74,6 +76,10 @@ class ExternalTaskSnapshot:
     meta: dict[str, Any] | None = None
     error_code: str | None = None
     error_message: str | None = None
+
+
+class CompileDependencyFailure(ExternalTaskError):
+    """A Compile Runtime HTTP 424 ends remote polling and requires local rollback."""
 
 
 @dataclass(frozen=True)
@@ -207,8 +213,16 @@ class ExternalTaskService:
         scope = [account_id, task_type, "target", target]
         return json.dumps(scope, ensure_ascii=False, separators=(",", ":"))
 
+    @staticmethod
+    def _has_target_claim(task: TaskRecord, auth: Mapping[str, Any]) -> bool:
+        """Return whether Runtime submission or unfinished Compile preparation reserves the target."""
+        if auth.get("external_task_id"):
+            return True
+        checkpoint = auth.get("compile_execution") or {}
+        return task.task_type == "compile" and checkpoint.get("phase") not in (None, "finished")
+
     async def restore_tasks(self, tasks: Iterable[TaskRecord]) -> None:
-        """Reserve submitted work before any recovered queue delivery can run."""
+        """Restore target owners from unacknowledged deliveries before queue consumers start."""
         for task in tasks:
             if task.task_type not in self._providers or (
                 task.status != TaskStatus.CANCELLED
@@ -221,9 +235,10 @@ class ExternalTaskService:
                 TaskStatus.CANCELLED,
             }:
                 continue
-            if task.status == TaskStatus.CANCELLING and task.stage in {None, "queued"}:
+            # Queue admission can mark waiting work running before Runtime submission.
+            if task.stage in {None, "queued"}:
                 auth = await self._task_auth(task.task_id, task.account_id, task.user_id)
-                if not auth.get("external_task_id"):
+                if not self._has_target_claim(task, auth):
                     continue
             key = self._serialization_key(task)
             if key is not None:
@@ -247,10 +262,15 @@ class ExternalTaskService:
         ctx: RequestContext,
         idempotency_key: str | None = None,
         submission_payload: Mapping[str, Any] | None = None,
+        submission_private_payload: Mapping[str, Any] | None = None,
         task_id: str | None = None,
         on_task_created: Callable[[TaskRecord], Awaitable[None]] | None = None,
     ) -> TaskRecord:
-        """``submission_payload`` (default ``payload``) is what idempotent retries must match."""
+        """Match retries against submitted inputs, independently of resolved execution inputs.
+
+        An explicit empty ``submission_private_payload`` excludes configuration-owned secrets
+        from the submission identity while still encrypting them for execution.
+        """
 
         async def create_task():
             return await self._create(
@@ -262,6 +282,7 @@ class ExternalTaskService:
                 ctx=ctx,
                 idempotency_key=idempotency_key,
                 submission_payload=submission_payload,
+                submission_private_payload=submission_private_payload,
                 task_id=task_id,
                 on_task_created=on_task_created,
             )
@@ -287,6 +308,7 @@ class ExternalTaskService:
         ctx: RequestContext,
         idempotency_key: str | None = None,
         submission_payload: Mapping[str, Any] | None = None,
+        submission_private_payload: Mapping[str, Any] | None = None,
         task_id: str | None = None,
         on_task_created: Callable[[TaskRecord], Awaitable[None]] | None = None,
     ) -> TaskRecord:
@@ -296,7 +318,8 @@ class ExternalTaskService:
         provider = self._provider(task_type)
         tracker = get_task_tracker()
         request_hash = submission_request_hash(
-            payload if submission_payload is None else submission_payload, private_payload
+            payload if submission_payload is None else submission_payload,
+            private_payload if submission_private_payload is None else submission_private_payload,
         )
         token = uuid4().hex
         task_id = task_id or (
@@ -371,7 +394,7 @@ class ExternalTaskService:
                 if current is not None and not current.is_terminal() and not current.error:
                     await tracker.fail(
                         task.task_id,
-                        "Failed to enqueue external task",
+                        ENQUEUE_FAILURE,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
                     )
@@ -495,7 +518,9 @@ class ExternalTaskService:
             auth = await self._task_auth(task_id, account_id, user_id)
             task.auth = auth
             terminal = auth.get("external_terminal_snapshot")
-            if auth.get("external_cleanup_failure") and terminal is None:
+            if task.has_compile_dependency_failure() or (
+                auth.get("external_cleanup_failure") and terminal is None
+            ):
                 await self.cancel_recovered(task_id, account_id, user_id)
                 return True
             if terminal is not None:
@@ -515,7 +540,8 @@ class ExternalTaskService:
                     raise
                 started = "busy"
             if started == "busy":
-                self._release(task)
+                if not self._has_target_claim(task, task.auth):
+                    self._release(task)
                 return False
             if isinstance(started, ExternalTaskSnapshot):
                 finished = await self._apply_snapshot(
@@ -575,6 +601,7 @@ class ExternalTaskService:
                 account_id=account_id,
                 user_id=user_id,
             )
+            auth["external_task_id"] = external_task_id
         snapshot = None
         while True:
             if snapshot is None or snapshot.status in _ACTIVE_STATUSES:
@@ -610,7 +637,24 @@ class ExternalTaskService:
             await tracker.unregister_running_task(task_id)
             auth = await self._task_auth(task_id, account_id, user_id)
             saved_failure = auth.get("external_cleanup_failure")
-            if saved_failure:
+            if isinstance(failure, CompileDependencyFailure):
+                await self._record_dependency_failure(task_id, account_id, user_id, failure)
+                session_id = auth.get("external_task_id")
+                if session_id:
+                    task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
+                    if task is not None:
+                        try:
+                            await self._provider(task.task_type).on_cancel(
+                                task,
+                                external_task_id=session_id,
+                                failure=failure,
+                                **self._session_request(task, auth),
+                            )
+                        except ExternalTaskError as exc:
+                            logger.warning(
+                                "Failed to stop Compile session %s: %s", session_id, exc.code
+                            )
+            elif saved_failure:
                 failure = ExternalTaskError(
                     saved_failure["code"], saved_failure["message"], transient=False
                 )
@@ -642,6 +686,8 @@ class ExternalTaskService:
                         max_attempts=3,
                     )
                     return
+                except CompileDependencyFailure as exc:
+                    await self._record_dependency_failure(task_id, account_id, user_id, exc)
                 except ExternalTaskRetryExhaustedError as exc:
                     task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
                     if task is None:
@@ -674,10 +720,43 @@ class ExternalTaskService:
             )
             raise
 
+    @staticmethod
+    async def _record_dependency_failure(
+        task_id: str, account_id: str, user_id: str, failure: CompileDependencyFailure
+    ) -> None:
+        """Checkpoint the redacted failure before remote cleanup; only active tasks accept it."""
+        snapshot = ExternalTaskSnapshot(
+            status="failed",
+            error_code=sanitize_error(failure.code),
+            error_message=sanitize_error(str(failure)),
+        )
+        patch = TaskPatch(
+            meta={"compile_runtime_http_status": 424},
+            auth={"external_terminal_snapshot": asdict(snapshot)},
+        )
+        saved = await run_to_completion(
+            lambda: get_task_tracker().patch_task(
+                task_id, patch, account_id=account_id, user_id=user_id
+            )
+        )
+        if not saved.is_applied:
+            raise failure
+
+    def _session_request(self, task: TaskRecord, auth: dict[str, Any]) -> dict[str, Any]:
+        """Restore the original session arguments and account identity for cancellation and polling."""
+        return {
+            "payload": task.meta["request"],
+            "private_payload": self._mapping(auth.get("external_request_private")),
+            "connection": {
+                **self._mapping(auth.get("openviking_connection")),
+                "account_id": task.account_id,
+            },
+        }
+
     async def _cancel_recovered_once(
         self, task_id: str, account_id: str, user_id: str, failure: Exception | None = None
     ) -> None:
-        """Resume cancellation without releasing a submitted task before Runtime stops."""
+        """Resume remote cancellation or the local rollback of a persisted dependency failure."""
         tracker = get_task_tracker()
         task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
         if task is None:
@@ -706,19 +785,19 @@ class ExternalTaskService:
             self._release(task)
             return
         provider = self._provider(task.task_type)
-        private_payload = self._mapping(auth.get("external_request_private"))
-        connection = {
-            **self._mapping(auth.get("openviking_connection")),
-            "account_id": task.account_id,
-        }
-        cancellation = await provider.on_cancel(
-            task,
-            external_task_id=str(auth.get("external_task_id") or "").strip() or None,
-            payload=payload,
-            private_payload=private_payload,
-            connection=connection,
-            failure=failure,
-        )
+        request = self._session_request(task, auth)
+        if task.has_compile_dependency_failure():
+            cancellation = ExternalTaskCancellation(
+                auth.get("external_task_id"),
+                ExternalTaskSnapshot(**auth["external_terminal_snapshot"]),
+            )
+        else:
+            cancellation = await provider.on_cancel(
+                task,
+                external_task_id=str(auth.get("external_task_id") or "").strip() or None,
+                failure=failure,
+                **request,
+            )
         external_task_id = cancellation.external_task_id
         if external_task_id and auth.get("external_task_id") != external_task_id:
             await tracker.patch_task(
@@ -753,12 +832,7 @@ class ExternalTaskService:
                     "Provider cancellation remained active without an external task ID",
                     transient=False,
                 )
-            snapshot = await provider.get(
-                external_task_id,
-                connection,
-                payload=payload,
-                private_payload=private_payload,
-            )
+            snapshot = await provider.get(external_task_id, **request)
 
     async def _task_auth(self, task_id: str, account_id: str, user_id: str) -> dict[str, Any]:
         auth = await get_task_tracker().get_task_auth(

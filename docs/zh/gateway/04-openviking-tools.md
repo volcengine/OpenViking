@@ -187,7 +187,7 @@ Token 预算只计算模型使用 OpenViking 工具时新增的调用、结果�
 
 - 服务商拒绝了后续的模型请求。
 - 模型调用了这段对话里没有提供的 OpenViking 工具，或者 OpenViking 调用被拒绝后仍坚持调用。
-- **Hidden tool request timed out**：OpenViking 工具的往返超过了上下文配置中工具的**总时长**；没有设置总时长时，是往返中某次模型请求超过了 `upstream_timeout_seconds`。
+- **Hidden tool request timed out**：OpenViking 工具的往返超过了上下文配置中工具的**总时长**；或者在往返中，服务商超过 `upstream_timeout_seconds` 还没开始回复，或在回复中途这么久没有发送任何数据。持续有数据的模型回复只受**总时长**限制。
 
 这时客户端收到错误，请求日志显示 **OpenViking 工具调用失败**（`hidden_tool_loop_failed`）。错误的形式取决于请求类型：
 

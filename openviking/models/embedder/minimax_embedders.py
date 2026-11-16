@@ -12,6 +12,19 @@ from openviking.models.model_error import ModelError, ModelErrorKind, model_erro
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
+_MINIMAX_CODE_KINDS = {
+    "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+    "1001": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+    "1002": ModelErrorKind.RATE_LIMIT_ERROR,
+    "1004": ModelErrorKind.AUTHENTICATION_ERROR,
+    "1008": ModelErrorKind.QUOTA_EXHAUSTED,
+    "1013": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+    "1026": ModelErrorKind.CONTENT_SAFETY,
+    "1027": ModelErrorKind.CONTENT_SAFETY,
+    "2013": ModelErrorKind.INVALID_REQUEST,
+    "2049": ModelErrorKind.AUTHENTICATION_ERROR,
+}
+
 
 class MinimaxDenseEmbedder(DenseEmbedderBase):
     """MiniMax Dense Embedder Implementation
@@ -93,6 +106,16 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         result = self.embed("test")
         return len(result.dense_vector) if result.dense_vector else 1536
 
+    @staticmethod
+    def _business_error(base_resp: Dict[str, Any]) -> ModelError:
+        code = str(base_resp.get("status_code"))
+        return ModelError(
+            _MINIMAX_CODE_KINDS.get(code, ModelErrorKind.UNKNOWN),
+            f"MiniMax API error: {base_resp.get('status_msg')}",
+            provider="minimax",
+            code=code,
+        )
+
     def _call_api(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
         """Call MiniMax API"""
         headers = self._build_headers()
@@ -113,12 +136,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             # Check for business error code
             base_resp = data.get("base_resp", {})
             if base_resp.get("status_code") != 0:
-                raise ModelError(
-                    ModelErrorKind.UNKNOWN,
-                    f"MiniMax API error: {base_resp.get('status_msg')}",
-                    provider="minimax",
-                    code=str(base_resp.get("status_code")),
-                )
+                raise self._business_error(base_resp)
 
             vectors = data.get("vectors", [])
             if not vectors:
@@ -177,12 +195,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
             base_resp = data.get("base_resp", {})
             if base_resp.get("status_code") != 0:
-                raise ModelError(
-                    ModelErrorKind.UNKNOWN,
-                    f"MiniMax API error: {base_resp.get('status_msg')}",
-                    provider="minimax",
-                    code=str(base_resp.get("status_code")),
-                )
+                raise self._business_error(base_resp)
 
             vectors = data.get("vectors", [])
             if not vectors:

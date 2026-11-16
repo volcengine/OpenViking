@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { stripVersionPrefix } from '#/features/workbench/monitoring/lib/version'
+import { stripVersionPrefix } from '#/shared/lib/version'
 
 describe('stripVersionPrefix', () => {
   it('removes a leading version prefix', () => {

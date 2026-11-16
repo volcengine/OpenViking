@@ -12,6 +12,7 @@ from typing import NamedTuple
 from urllib.parse import quote, unquote_plus
 
 import aiohttp
+import async_timeout
 import orjson
 from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
@@ -53,6 +54,20 @@ PRIMARY_PATH = {
     "chat": "/v1/chat/completions",
     "responses": "/v1/responses",
 }
+
+
+async def open_upstream(http, method, url, wait, total=None, **kwargs):
+    """Start a model call that waits at most ``wait`` seconds at a time on the upstream.
+
+    The reply must start within ``wait`` (connecting, sending the body and receiving the
+    headers), and its body may then pause for at most ``wait`` between reads, so a reply that
+    keeps arriving is never cut. ``total``, when given, also bounds the whole call.
+    """
+    # aiohttp's sock_read covers the headers and every body read but starts only after the
+    # request body is written; the outer bound covers connecting and sending the body.
+    timeout = aiohttp.ClientTimeout(total=total, sock_read=wait)
+    async with async_timeout.timeout(wait):
+        return await http.request(method, url, timeout=timeout, **kwargs)
 
 
 class _ClosingStreamingResponse(StreamingResponse):
@@ -299,12 +314,13 @@ class ProxyRequest:
             self.headers.setdefault("content-type", "application/json")
         self.started = time.monotonic()
         try:
-            self.response = await self.app.state.http.request(
+            self.response = await open_upstream(
+                self.app.state.http,
                 self.request.method,
                 self.target,
+                self.config.upstream_timeout_seconds,
                 data=self.raw or None,
                 headers=self.headers,
-                timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
                 allow_redirects=False,
             )
         except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -535,14 +551,15 @@ class ProxyRequest:
         }
 
         async def send(payload, timeout):
-            # Without a total tool deadline each continuation gets the usual upstream timeout.
-            return await self.app.state.http.post(
+            # A total tool deadline also bounds the whole continuation, body included.
+            return await open_upstream(
+                self.app.state.http,
+                "POST",
                 self.target,
+                self.config.upstream_timeout_seconds,
+                total=timeout,
                 data=orjson.dumps(payload),
                 headers=self.headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=timeout or self.config.upstream_timeout_seconds
-                ),
                 allow_redirects=False,
             )
 

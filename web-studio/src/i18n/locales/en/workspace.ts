@@ -71,6 +71,8 @@ const workspace = {
       github: 'GitHub',
       sdkApi: 'SDK & API',
       users: 'Users & Permissions',
+      version: 'v{{version}}',
+      versionTitle: 'OpenViking version',
     },
     header: {
       backToConfig: 'Back to workspace setup',

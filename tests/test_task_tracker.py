@@ -491,7 +491,7 @@ async def test_fail_task(tracker: TaskTracker):
 async def test_mark_externally_cancelled_task_without_enabling_active_cancel(
     tracker: TaskTracker,
 ):
-    task = await tracker.create("content_write", **_owner_kwargs())
+    task = await tracker.create("external_only", **_owner_kwargs())
     await tracker.start(task.task_id)
 
     with pytest.raises(ValueError, match="does not support cancellation"):

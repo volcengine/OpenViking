@@ -96,6 +96,7 @@ class QueueManager:
     ADD_RESOURCE = "AddResource"
     REINDEX = "Reindex"
     CONTENT_WRITE = "ContentWrite"
+    COMPILE_TARGET_TAG = "CompileTargetTag"
     SESSION_COMMIT = "SessionCommit"
     EXTERNAL_TASK = "ExternalTask"
     # Account and user cleanup share one consumer. Retain the persisted name
@@ -312,6 +313,8 @@ class QueueManager:
         """Return the worker concurrency limit for a named queue."""
         if queue_name == self.DATA_CLEANUP:
             return 1
+        if queue_name == self.COMPILE_TARGET_TAG:
+            return 2
         if queue_name == self.EMBEDDING:
             return self._max_concurrent_embedding
         if queue_name == self.EXTERNAL_PARSE:
