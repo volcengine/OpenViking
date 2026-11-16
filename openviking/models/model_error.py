@@ -83,22 +83,20 @@ _CODE_KINDS = {
     "UNSUPPORTEDVALUE": ModelErrorKind.UNSUPPORTED,
 }
 
-# MiniMax business codes come from base_resp.status_code.
-# Keep numeric codes provider-scoped: the same number has no portable meaning
+# MiniMax business codes come from base_resp.status_code. Keep them scoped to
+# the MiniMax branch in _sdk_kind: the same number has no portable meaning
 # across model APIs.
-_PROVIDER_CODE_KINDS = {
-    "minimax": {
-        "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
-        "1001": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
-        "1002": ModelErrorKind.RATE_LIMIT_ERROR,
-        "1004": ModelErrorKind.AUTHENTICATION_ERROR,
-        "1008": ModelErrorKind.QUOTA_EXHAUSTED,
-        "1013": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
-        "1026": ModelErrorKind.CONTENT_SAFETY,
-        "1027": ModelErrorKind.CONTENT_SAFETY,
-        "2013": ModelErrorKind.INVALID_REQUEST,
-        "2049": ModelErrorKind.AUTHENTICATION_ERROR,
-    }
+_MINIMAX_CODE_KINDS = {
+    "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+    "1001": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+    "1002": ModelErrorKind.RATE_LIMIT_ERROR,
+    "1004": ModelErrorKind.AUTHENTICATION_ERROR,
+    "1008": ModelErrorKind.QUOTA_EXHAUSTED,
+    "1013": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+    "1026": ModelErrorKind.CONTENT_SAFETY,
+    "1027": ModelErrorKind.CONTENT_SAFETY,
+    "2013": ModelErrorKind.INVALID_REQUEST,
+    "2049": ModelErrorKind.AUTHENTICATION_ERROR,
 }
 
 _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
@@ -224,6 +222,13 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
     name = type(error).__name__
     mro_names = {base.__name__ for base in type(error).__mro__}
 
+    if isinstance(error, ModelError) and error.provider == "minimax":
+        kind = error.kind
+        if kind is ModelErrorKind.UNKNOWN:
+            normalized = _normalized_code(error.code) or ""
+            kind = _MINIMAX_CODE_KINDS.get(normalized, ModelErrorKind.UNKNOWN)
+        return kind, "minimax"
+
     if isinstance(error, TimeoutError):
         return ModelErrorKind.TRANSIENT_NETWORK_ERROR, "network"
     if isinstance(error, ConnectionError):
@@ -338,30 +343,21 @@ def model_error_from_status(
     )
 
 
-def model_error_from_code(
-    code: str | int | None,
-    message: str,
-    *,
-    provider: str,
-) -> ModelError:
-    """Build a model error from a provider-scoped business error code."""
-    code_text = str(code) if code is not None else None
-    normalized = _normalized_code(code_text) or ""
-    provider_kinds = _PROVIDER_CODE_KINDS.get(provider.lower(), {})
-    kind = provider_kinds.get(normalized) or _CODE_KINDS.get(normalized)
-    return ModelError(
-        kind or ModelErrorKind.UNKNOWN,
-        message,
-        provider=provider,
-        code=code_text,
-    )
-
-
 def model_error_from_exception(error: BaseException) -> ModelError | None:
     """Reuse the nearest classification or classify the first SDK failure."""
     for item in model_exception_chain(error):
         if isinstance(item, ModelError):
-            return item
+            classified = _sdk_kind(item)
+            if classified is None or classified[0] is item.kind:
+                return item
+            kind, provider = classified
+            return ModelError(
+                kind,
+                str(item),
+                provider=provider,
+                status_code=item.status_code,
+                code=item.code,
+            )
         carried_kind = getattr(item, "kind", None)
         if isinstance(carried_kind, ModelErrorKind):
             provider = getattr(item, "provider", None)
@@ -389,10 +385,6 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
 
 def model_error_kind(error: BaseException) -> ModelErrorKind | None:
     """Return the structured model kind carried by an exception chain."""
-    for item in model_exception_chain(error):
-        kind = getattr(item, "kind", None)
-        if isinstance(kind, ModelErrorKind):
-            return kind
     converted = model_error_from_exception(error)
     return converted.kind if converted is not None else None
 
