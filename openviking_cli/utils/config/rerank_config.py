@@ -5,8 +5,8 @@ from typing import Dict, Optional
 from pydantic import BaseModel, Field, model_validator
 
 
-class RerankConfig(BaseModel):
-    """Configuration for rerank API. Supports VikingDB, Cohere, OpenAI-compatible, LiteLLM, and Jev (TypeSafe) providers."""
+class RerankTargetConfig(BaseModel):
+    """Configuration for one rerank provider."""
 
     provider: Optional[str] = Field(
         default=None,
@@ -55,10 +55,6 @@ class RerankConfig(BaseModel):
         ),
     )
 
-    threshold: float = Field(
-        default=0.1, description="Relevance threshold (score > threshold is relevant)"
-    )
-
     max_input_tokens: int = Field(
         default=0,
         ge=0,
@@ -91,7 +87,7 @@ class RerankConfig(BaseModel):
         return None
 
     @model_validator(mode="after")
-    def validate_provider_fields(self) -> "RerankConfig":
+    def validate_provider_fields(self) -> "RerankTargetConfig":
         if 0 < self.max_input_tokens < 128:
             raise ValueError("Rerank max_input_tokens must be 0 or at least 128")
 
@@ -142,3 +138,18 @@ class RerankConfig(BaseModel):
         if p == "vikingdb":
             return self.ak is not None and self.sk is not None
         return False
+
+
+class RerankConfig(RerankTargetConfig):
+    """Configuration for the primary reranker and an optional fallback reranker."""
+
+    threshold: float = Field(
+        default=0.1, description="Relevance threshold (score > threshold is relevant)"
+    )
+    fallback: Optional[RerankTargetConfig] = Field(
+        default=None,
+        description=(
+            "Optional secondary provider tried when the primary provider fails or "
+            "returns an invalid result"
+        ),
+    )

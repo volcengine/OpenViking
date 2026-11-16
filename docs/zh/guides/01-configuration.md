@@ -1293,6 +1293,35 @@ Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 
 `min_score` 会覆盖该配置，因此通过 MCP 使用 Choice 时还需要显式传入
 `min_score=0`。
 
+**回退 Reranker：**
+
+主 Reranker 可以声明一个使用相同 provider 字段的 `fallback` 目标。仅当主
+Reranker 抛出异常、不返回分数或返回的分数数量与文档数量不一致时，才会尝试
+回退目标；两者都失败时，检索继续使用原有的向量分数回退。
+
+```json
+{
+  "rerank": {
+    "provider": "openai",
+    "api_key": "primary-key",
+    "api_base": "https://primary.example/v1/rerank",
+    "model": "primary-model",
+    "fallback": {
+      "provider": "openai",
+      "api_key": "fallback-key",
+      "api_base": "http://127.0.0.1:8731/v1/rerank",
+      "model": "qwen3-reranker-4b",
+      "max_input_tokens": 2600,
+      "timeout": 90
+    }
+  }
+}
+```
+
+`fallback.max_input_tokens` 只作用于回退请求。顶层 `rerank.threshold` 仍是唯一
+的分数阈值，并应用于实际产出分数的 provider。回退目标不能继续声明
+`fallback`，也不能声明独立的 `threshold`。
+
 **参数**
 
 | 参数 | 类型 | 说明 |
@@ -1311,6 +1340,7 @@ Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 
 | `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |
 | `threshold` | float | Rerank 分数阈值，范围为 `0.0` 到 `1.0`。Rerank 后低于此值的结果会被过滤；它不过滤向量分数（未使用 Rerank 或 Rerank 失败时），请求中的 `score_threshold` 优先。默认：`0.1` |
 | `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |
+| `fallback` | object | 可选的第二个 Rerank 目标，使用相同的 provider 字段；主 Rerank 结果不可用时尝试该目标，若它也失败则回退到向量分数。 |
 
 **支持的提供方:**
 - `vikingdb`: 火山引擎 VikingDB Rerank API (使用 AK/SK)

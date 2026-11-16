@@ -1288,6 +1288,37 @@ absolute score filtering. When enabling Choice, set `"threshold": 0`. The MCP `f
 and `search` `min_score` argument overrides that setting, so pass `min_score=0` when
 using Choice through MCP.
 
+**Fallback reranker:**
+
+A primary reranker can declare one `fallback` target with the same provider fields.
+The fallback is attempted only when the primary raises an exception, returns no
+scores, or returns a score count different from the document count. If both
+providers fail, search retains its existing vector-score fallback.
+
+```json
+{
+  "rerank": {
+    "provider": "openai",
+    "api_key": "primary-key",
+    "api_base": "https://primary.example/v1/rerank",
+    "model": "primary-model",
+    "fallback": {
+      "provider": "openai",
+      "api_key": "fallback-key",
+      "api_base": "http://127.0.0.1:8731/v1/rerank",
+      "model": "qwen3-reranker-4b",
+      "max_input_tokens": 2600,
+      "timeout": 90
+    }
+  }
+}
+```
+
+`fallback.max_input_tokens` applies only to the fallback request. The top-level
+`rerank.threshold` remains the single score threshold and applies to whichever
+provider produced the scores. A fallback target cannot declare another fallback
+or its own threshold.
+
 **Parameters**
 
 | Parameter | Type | Description |
@@ -1306,6 +1337,7 @@ using Choice through MCP.
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
 | `threshold` | float | Rerank score threshold between `0.0` and `1.0`; reranked results below this are filtered out. It never filters vector scores (rerank not used, or failed), and a request `score_threshold` overrides it. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
+| `fallback` | object | Optional secondary rerank target using the same provider fields. It is tried after an unusable primary result; if it also fails, search falls back to vector scores. |
 
 **Supported providers:**
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)

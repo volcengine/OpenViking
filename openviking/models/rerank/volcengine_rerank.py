@@ -208,19 +208,8 @@ class RerankClient(RerankBase):
             return None
 
     @classmethod
-    def from_config(cls, config) -> Optional["RerankClient"]:
-        """
-        Create RerankClient from RerankConfig.
-
-        Args:
-            config: RerankConfig instance
-
-        Returns:
-            RerankClient instance or None if config is not available
-        """
-        if not config or not config.is_available():
-            return None
-
+    def _from_target_config(cls, config) -> Optional[RerankBase]:
+        """Create one provider client without fallback wrapping."""
         provider = config._effective_provider()
 
         if provider == "cohere":
@@ -249,4 +238,29 @@ class RerankClient(RerankBase):
             host=config.host,
             model_name=config.model_name,
             model_version=config.model_version,
+        )
+
+    @classmethod
+    def from_config(cls, config) -> Optional[RerankBase]:
+        """Create the configured reranker, including its optional fallback."""
+        if not config or not config.is_available():
+            return None
+
+        primary = cls._from_target_config(config)
+        if primary is None:
+            return None
+        fallback_config = getattr(config, "fallback", None)
+        if not fallback_config or not fallback_config.is_available():
+            return primary
+
+        fallback = cls._from_target_config(fallback_config)
+        if fallback is None:
+            return primary
+
+        from openviking.models.rerank.fallback_rerank import FallbackRerankClient
+
+        return FallbackRerankClient(
+            primary=primary,
+            fallback=fallback,
+            fallback_max_input_tokens=fallback_config.max_input_tokens,
         )

@@ -100,7 +100,7 @@ Rerank processes only the candidates from the completed global search; it never 
 - Candidate index records supply the `abstract` text for reranking.
 - Scores and ranking use rerank scores when available, otherwise vector scores; access frequency, update time, and parent-directory scores do not affect them.
 - Score thresholds apply after reranking. A request `score_threshold` filters any score; without one, `rerank.threshold` filters only model rerank scores; vector scores (reranking disabled or failed) only need to exceed `0`.
-- Failed requests or invalid rerank results retain the existing fallback to vector scores.
+- When `rerank.fallback` is configured, failed or invalid primary results try the fallback reranker before vector scores.
 - Directory priority queues, parent-to-child score propagation, and convergence rounds are removed.
 
 See [rerank configuration](../guides/01-configuration.md#rerank) for supported providers and settings.
