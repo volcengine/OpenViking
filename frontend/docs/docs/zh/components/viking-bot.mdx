@@ -128,18 +128,19 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### VikingBotMessage
 
-| 参数        | 说明                                                                                                | 类型                                                                                                                               | 默认值   |
-| ----------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| id          | 消息的唯一标识                                                                                      | `string`                                                                                                                           | 必填     |
-| role        | 消息角色；`system` 显示为提示条，`tool` 用于独立的工具块                                            | `'user' \| 'assistant' \| 'system' \| 'tool'`                                                                                      | 必填     |
-| parts       | 消息内容，由多个片段组成                                                                            | `readonly VikingBotMessagePart[]`                                                                                                  | 必填     |
-| turnId      | 轮次标识；相邻的助手消息 `turnId` 相同或任一条未设置时，合并为一轮显示                              | `string`                                                                                                                           | -        |
-| createdAt   | 创建时间，ISO 时间字符串；用户消息和每轮最后一条含文本的助手回复在悬停或聚焦时显示，格式随 `locale` | `string`                                                                                                                           | -        |
-| streaming   | 该助手消息是否仍在生成；为 `true` 且没有片段时显示加载气泡                                          | `boolean`                                                                                                                          | -        |
-| tone        | `system` 消息的语气，`'error'` 显示淡红底、细边框的行内错误提示                                     | `'info' \| 'error'`                                                                                                                | `'info'` |
-| clientError | 客户端失败原文，仅用于展示，不保存到会话或发送给模型                                                | `Error`                                                                                                                            | -        |
-| action      | 消息下方的动作按钮，点击后触发 `onMessageAction`                                                    | `{ key: string; label?: ReactNode; status?: 'idle' \| 'pending' \| 'submitted' \| 'success' \| 'error'; disabledReason?: string }` | -        |
-| actions     | 合并同一轮助手消息后保留的动作清单，每项带原消息 ID；由组件生成，一般不需要设置                     | `readonly { messageId: string; action: NonNullable<VikingBotMessage['action']> }[]`                                                | -        |
+| 参数          | 说明                                                                                                | 类型                                                                                                                               | 默认值   |
+| ------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| id            | 消息的唯一标识                                                                                      | `string`                                                                                                                           | 必填     |
+| role          | 消息角色；`system` 显示为提示条，`tool` 用于独立的工具块                                            | `'user' \| 'assistant' \| 'system' \| 'tool'`                                                                                      | 必填     |
+| parts         | 消息内容，由多个片段组成                                                                            | `readonly VikingBotMessagePart[]`                                                                                                  | 必填     |
+| turnId        | 轮次标识；相邻的助手消息 `turnId` 相同或任一条未设置时，合并为一轮显示                              | `string`                                                                                                                           | -        |
+| createdAt     | 创建时间，ISO 时间字符串；用户消息和每轮最后一条含文本的助手回复在悬停或聚焦时显示，格式随 `locale` | `string`                                                                                                                           | -        |
+| streaming     | 该助手消息是否仍在生成；为 `true` 且没有片段时显示加载气泡                                          | `boolean`                                                                                                                          | -        |
+| tone          | `system` 消息的语气，`'error'` 显示淡红底、细边框的行内错误提示                                     | `'info' \| 'error'`                                                                                                                | `'info'` |
+| clientError   | 客户端失败原文，仅用于展示，不保存到会话或发送给模型                                                | `Error`                                                                                                                            | -        |
+| action        | 消息下方的动作按钮，点击后触发 `onMessageAction`                                                    | `{ key: string; label?: ReactNode; status?: 'idle' \| 'pending' \| 'submitted' \| 'success' \| 'error'; disabledReason?: string }` | -        |
+| answerSummary | 提交答案的可读标签和值，替换用户气泡及复制展示，保留 `parts` 原文                                   | `readonly { label: string; value: string }[]`                                                                                      | -        |
+| actions       | 合并同一轮助手消息后保留的动作清单，每项带原消息 ID；由组件生成，一般不需要设置                     | `readonly { messageId: string; action: NonNullable<VikingBotMessage['action']> }[]`                                                | -        |
 
 ### VikingBotMessage.action
 
@@ -418,6 +419,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | slots      | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                                                | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
 | labels     | 覆盖界面文案，全部键见 `DEFAULT_INTERACTION_LABELS`；`answer` 是文本答案的无障碍名称，`progress` 接收当前序号和总数，`weekdays` 按周一至周日排列 | `VikingBotInteractionLabels`                                          | -                        |
 | locale     | 界面语言，规则见[国际化](../guide/i18n)；在 `VikingBot` 的 `interaction` 中默认跟随 `VikingBot` 的语言                                           | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
+| fields     | 内置字段的标签、说明、校验器和控件渲染                                                                                                           | `VikingBotInteractionFields`                                          | -                        |
 | className  | 附加到根元素的类名                                                                                                                               | `string`                                                              | -                        |
 
 待确认交互使用库内表单与基础控件，单独使用 `VikingBotInteraction` 无需安装 Ark Design。提交失败时保留草稿并显示错误，可以修改后重试；取消会恢复初始值。
@@ -469,6 +471,38 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | directoryLoadFailed         | 目录流程文案               | `string`                                   | 目录加载失败                                             |
 | directoryParent             | 父目录说明                 | `(uri: string) => string`                  | `父目录：{uri}`                                          |
 
+### VikingBotInteractionFields
+
+| 参数    | 说明                                        | 类型                                                         | 默认值 |
+| ------- | ------------------------------------------- | ------------------------------------------------------------ | ------ |
+| value   | 文本、单选、修复或目录答案的 `answer.value` | `VikingBotInteractionField<string>`                          | -      |
+| mode    | 定时答案的 `answer.value.mode`              | `VikingBotInteractionField<'none' \| 'daily' \| 'weekly'>`   | -      |
+| time    | 定时答案的 `answer.value.time`              | `VikingBotInteractionField<string>`                          | -      |
+| weekday | 定时答案的 `answer.value.weekday`，周一为 1 | `VikingBotInteractionField<1 \| 2 \| 3 \| 4 \| 5 \| 6 \| 7>` | -      |
+
+只运行当前可见字段的校验：`mode: 'none'` 不校验时间和星期，`daily` 不校验星期。先检查内置格式，再执行外部校验，通过后调用 `onSubmit`。修改字段会清除该字段的错误；切换频率也会清除已隐藏字段的错误。异步校验期间防止重复提交，切换问题或卸载时取消校验信号并忽略过期结果。
+
+### VikingBotInteractionField
+
+| 参数        | 说明                                                        | 类型                                                                                                                      | 默认值   |
+| ----------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------- |
+| label       | 替换字段标签                                                | `ReactNode`                                                                                                               | 内置标签 |
+| description | 替换字段说明                                                | `ReactNode`                                                                                                               | 内置说明 |
+| validate    | 返回错误提示阻止提交，返回空值通过；`answer` 为当前完整答案 | `(value: Value, answer: VikingBotInteractionAnswer, context: { signal: AbortSignal }) => ReactNode \| Promise<ReactNode>` | -        |
+| render      | 替换输入控件，保留统一标签、错误状态和提示                  | `(context: VikingBotInteractionFieldContext<Value>) => ReactNode`                                                         | 内置控件 |
+
+### VikingBotInteractionFieldContext
+
+| 参数         | 说明                                                                         | 类型                     | 默认值 |
+| ------------ | ---------------------------------------------------------------------------- | ------------------------ | ------ |
+| value        | 当前字段值                                                                   | `Value`                  | 必填   |
+| onChange     | 更新字段并清除该字段错误                                                     | `(value: Value) => void` | 必填   |
+| disabled     | 校验、提交或宿主禁用期间为真                                                 | `boolean`                | 必填   |
+| error        | 当前字段错误                                                                 | `ReactNode`              | -      |
+| controlProps | 传给实际控件的 `id`、`aria-labelledby`、`aria-describedby` 和 `aria-invalid` | `object`                 | 必填   |
+
+自定义控件将 `controlProps` 透传给可聚焦元素，用 `onChange` 回写值。整体替换问题使用 `request.kind: 'custom'`；自定义组件负责自己的字段校验，通过 `context.submit(value)` 上报答案。
+
 ### VikingBotInteractionRequest
 
 `kind` 决定问题类型和可用字段，下面按类型分别列出。
@@ -498,7 +532,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | kind         | 问题类型                                        | `'text'`    | 必填   |
 | question     | 问题文案                                        | `ReactNode` | -      |
 | initialValue | 输入框的初始文本                                | `string`    | `''`   |
-| description  | 补充说明，显示在输入框上方                      | `ReactNode` | -      |
+| description  | 补充说明，显示在输入框下方                      | `ReactNode` | -      |
 | multiline    | 默认使用多行文本域，传 `false` 时使用单行输入框 | `boolean`   | `true` |
 
 #### schedule 定时
@@ -598,6 +632,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | submit     | 上报答案，`onSubmit` 会收到 `{ kind: 'custom', value }` | `(value: unknown) => void \| Promise<void>` | 必填   |
 | cancel     | 放弃本次交互，调用 `onCancel`                           | `() => void`                                | 必填   |
 | disabled   | 是否禁用提交，即 `disabled` 或 `submitting` 为真        | `boolean`                                   | -      |
+| clearError | 自定义输入变化时清除本次提交错误                        | `() => void`                                | 必填   |
 | submitting | 是否正在提交                                            | `boolean`                                   | -      |
 
 ### VikingBotInteractionAnswer
@@ -637,6 +672,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 - 引用标签显示图标和完整 URI，空间不足时省略并在标题中保留完整路径；只显示前 5 个，其余收进 `+N`，悬停、聚焦或点击 `+N` 展开。
 - 引用只出现在 `VikingBotDraft.references`，不会写进草稿文本。切换账号或会话时，宿主需要同时重置 `references.selected` 和 `attachments`。
 - 待确认交互是宿主状态，不是后端暂停：宿主根据自己的流生成问题，答案发回后清除 `interaction`。组件只渲染表单，并通过 `onSubmit` 上报答案。
+- 内置待确认表单在对应字段下方显示校验提示，修改输入会清除本地校验错误和提交错误；`error` prop 由宿主清除。
 - 消息列表和输入区在首次渲染时才加载 `@ark-design/ui`，加载期间先显示空容器。导入 VikingBot 本身不会加载它，因此模块在没有 `window` 的环境中也能导入。
 - `VikingBotComposer`、`VikingBotMessageList` 和 `VikingBotSessionActions` 可以单独使用，例如把 `VikingBotSessionActions` 放进自己的顶栏。
 - `groupMessages`、`groupByActivity` 和 `messageText` 与内置消息列表使用同一套规则，自定义 `messageList` 时可以直接使用。

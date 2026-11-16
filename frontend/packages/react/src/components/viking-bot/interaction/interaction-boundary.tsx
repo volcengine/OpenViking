@@ -1,3 +1,4 @@
+import { NotificationScope } from '../../../shared/feedback/notification-scope.js';
 import { useRenderErrors } from '../labels.js';
 import { ErrorBoundary } from '../../../shared/error-boundary/error-boundary.js';
 import { VikingBotInteractionView } from './viking-bot-interaction.js';
@@ -13,7 +14,9 @@ export function VikingBotInteraction(props: VikingBotInteractionProps) {
       locale={props.locale}
       resetKeys={[props.requestKey, props.request.kind, props.index]}
     >
-      <VikingBotInteractionView {...contentProps} />
+      <NotificationScope locale={props.locale}>
+        <VikingBotInteractionView {...contentProps} />
+      </NotificationScope>
     </ErrorBoundary>
   );
 }

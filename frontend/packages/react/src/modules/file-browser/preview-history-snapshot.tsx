@@ -68,7 +68,10 @@ export function PreviewHistorySnapshot({
           {text.saveSnapshot}
         </Button>
       </div>
-      <PreviewMutationError error={mutation.error} text={text} />
+      <PreviewMutationError
+        error={mutation.error}
+        title={text.failureTitle(text.saveSnapshot)}
+      />
       {mutation.succeeded ? (
         <p role="status">
           {created ? text.snapshotSaved : text.snapshotUnchanged}

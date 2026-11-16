@@ -6,7 +6,7 @@ resources, shared resources, experiences and peers.
 
 Original raster artwork is resized for the displayed illustration slots at 2×
 resolution and losslessly encoded as WebP. The build inlines the small files so
-Node/SSR and consumers need no asset hosting.
+Consumers need no separate asset hosting.
 
 Display sizes are 212×70, 216×72, 223×72, 216×72, 216×72, and 252×84.
 The 72px illustration viewport clips the peers artwork.

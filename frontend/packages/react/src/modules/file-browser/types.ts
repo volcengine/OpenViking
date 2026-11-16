@@ -1,3 +1,4 @@
+import type { Workflow } from '../../shared/monitoring/workflow.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
@@ -336,6 +337,8 @@ export interface FileBrowserProps extends Omit<
  * own view from these without the composite one.
  */
 export interface FileBrowserApi {
+  treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
+  previewMonitoring?: Workflow<'file_browser_preview_load'>;
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;

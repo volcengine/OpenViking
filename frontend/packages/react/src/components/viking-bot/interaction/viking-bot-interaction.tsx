@@ -1,6 +1,8 @@
 import { useTrack } from '../../../shared/analytics/use-track.js';
-import { useLocale } from '../../../shared/locale-context.js';
+import { LocaleProvider, useLocale } from '../../../shared/locale-context.js';
 import { TargetInteraction } from './target-interaction.js';
+import { CustomInteraction } from './custom-interaction.js';
+import { InteractionSteps } from './interaction-steps.js';
 import { InteractionForm } from './interaction-form.js';
 import { resolveInteractionLabels } from './labels.js';
 import type {
@@ -18,7 +20,7 @@ export function VikingBotInteractionView({
   locale: localeProp,
   labels: overrides,
   ...props
-}: VikingBotInteractionProps) {
+}: VikingBotInteractionProps & { onPrevious?: () => void }) {
   const track = useTrack();
   const events = {
     onSubmit: (answer: VikingBotInteractionAnswer) => {
@@ -34,57 +36,65 @@ export function VikingBotInteractionView({
   };
   const locale = useLocale(localeProp);
   const labels = resolveInteractionLabels(locale, overrides);
-  const blocked = Boolean(props.disabled || props.submitting);
+  if (request.kind === 'steps')
+    return (
+      <LocaleProvider locale={locale}>
+        <InteractionSteps
+          key={JSON.stringify([request.kind, requestKey])}
+          {...props}
+          request={request}
+          className={className}
+          locale={locale}
+          labels={labels}
+        />
+      </LocaleProvider>
+    );
   return (
-    <section
-      className={['ov-viking-bot__interaction', className]
-        .filter(Boolean)
-        .join(' ')}
-      aria-label={labels.title}
-      aria-busy={props.submitting || undefined}
-    >
-      {total > 1 ? (
-        <p className="ov-viking-bot__interaction-progress">
-          {labels.progress(index, total)}
-        </p>
-      ) : null}
-      {request.kind === 'custom' ? (
-        <>
-          {props.error ? (
-            <p role="alert" className="ov-viking-bot__interaction-error">
-              {props.error}
-            </p>
-          ) : null}
-          {request.render({
-            disabled: blocked,
-            submitting: props.submitting,
-            submit: (value) => {
-              if (!blocked) return events.onSubmit({ kind: 'custom', value });
-            },
-            cancel: () => {
-              if (!blocked) events.onCancel?.();
-            },
-          })}
-        </>
-      ) : request.kind === 'target' ? (
-        <TargetInteraction
-          key={JSON.stringify([request.kind, requestKey ?? index])}
-          {...props}
-          {...events}
-          request={request}
-          labels={labels}
-          locale={locale}
-        />
-      ) : (
-        <InteractionForm
-          key={JSON.stringify([request.kind, requestKey ?? index])}
-          {...props}
-          {...events}
-          request={request}
-          locale={locale}
-          labels={labels}
-        />
-      )}
-    </section>
+    <LocaleProvider locale={locale}>
+      <section
+        className={['ov-viking-bot__interaction', className]
+          .filter(Boolean)
+          .join(' ')}
+        aria-label={labels.title}
+        aria-busy={props.submitting || undefined}
+      >
+        {total > 1 ? (
+          <p
+            className="ov-viking-bot__interaction-progress"
+            aria-current="step"
+          >
+            {labels.progress(index, total)}
+          </p>
+        ) : null}
+        {request.kind === 'custom' ? (
+          <CustomInteraction
+            key={JSON.stringify([request.kind, requestKey ?? index])}
+            {...props}
+            {...events}
+            request={request}
+            labels={labels}
+            locale={locale}
+          />
+        ) : request.kind === 'target' ? (
+          <TargetInteraction
+            key={JSON.stringify([request.kind, requestKey ?? index])}
+            {...props}
+            {...events}
+            request={request}
+            labels={labels}
+            locale={locale}
+          />
+        ) : (
+          <InteractionForm
+            key={JSON.stringify([request.kind, requestKey ?? index])}
+            {...props}
+            {...events}
+            request={request}
+            locale={locale}
+            labels={labels}
+          />
+        )}
+      </section>
+    </LocaleProvider>
   );
 }

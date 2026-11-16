@@ -1,3 +1,10 @@
+import { useMonitoringFlow } from '../monitoring/flow-context.js';
+import type {
+  ComponentName,
+  RegionByComponent,
+} from '../../client/monitoring/source.js';
+import { useMonitoringBinding } from '../monitoring/context.js';
+import type { MonitoringFrame } from '../monitoring/frame.js';
 import { Component, createContext, useContext } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 
@@ -10,11 +17,13 @@ import { zhCN } from './locales/zh-CN.js';
 import type { ErrorFallback } from './types.js';
 
 interface ErrorBoundaryProps {
+  monitoringRegion?: RegionByComponent[ComponentName];
   children?: ReactNode;
   message?: string;
   fallback?: ErrorFallback;
   resetKeys?: readonly unknown[];
   locale?: Locale;
+  onReset?: () => void;
   onError?: (error: unknown, info: ErrorInfo) => void;
 }
 
@@ -55,7 +64,10 @@ class RenderBoundary extends Component<
     }
   }
 
-  reset = () => this.setState({ failed: false });
+  reset = () => {
+    this.props.onReset?.();
+    this.setState({ failed: false });
+  };
 
   render() {
     if (!this.state.failed) return this.props.children;
@@ -69,8 +81,11 @@ export function ErrorBoundary({
   locale: localeProp,
   message,
   fallback,
+  monitoringRegion,
   ...props
 }: ErrorBoundaryProps) {
+  const flow = useMonitoringFlow();
+  const monitoring = useMonitoringBinding() as MonitoringFrame | undefined;
   const inheritedFallback = useContext(FallbackContext);
   const resolvedFallback =
     fallback === undefined ? inheritedFallback : fallback;
@@ -80,6 +95,16 @@ export function ErrorBoundary({
     <FallbackContext.Provider value={resolvedFallback}>
       <RenderBoundary
         {...props}
+        onError={(error, info) => {
+          monitoring?.renderError(
+            error,
+            info.componentStack,
+            monitoringRegion,
+            flow,
+          );
+          if (props.onError) props.onError(error, info);
+          else console.error(error, info.componentStack);
+        }}
         fallback={
           resolvedFallback === undefined
             ? (reset) => (

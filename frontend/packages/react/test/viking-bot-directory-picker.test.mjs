@@ -67,24 +67,32 @@ test('directory selection is staged until confirmation; cancellation preserves t
     await click(trigger(view));
     assert.equal(modal().getAttribute('aria-label'), 'Choose a save directory');
     assert.ok(confirm().disabled);
-    assert.equal(treeItem('readme'), undefined);
+    assert.equal(treeItem('readme') === undefined, true);
     await click(treeItem('locked'));
     assert.ok(confirm().disabled);
     await click(treeItem('wiki'));
     assert.equal(confirm().disabled, false);
     await click(cancel());
     await settle();
-    assert.equal(modal(), null);
-    assert.equal(document.activeElement, trigger(view));
+    assert.equal(modal() === null, true);
+    assert.equal(
+      document.activeElement === trigger(view),
+      true,
+      'focus returns to the picker trigger',
+    );
     await submit(view);
     assert.deepEqual(answers.at(-1), { kind: 'choice', value: 'recommended' });
     await click(trigger(view));
     await click(treeItem('wiki'));
     await click(confirm());
     await settle();
-    assert.equal(modal(), null);
+    assert.equal(modal() === null, true);
     assert.match(trigger(view).textContent, /viking:\/\/resources\/wiki/);
-    assert.equal(document.activeElement, trigger(view));
+    assert.equal(
+      document.activeElement === trigger(view),
+      true,
+      'focus returns to the picker trigger',
+    );
     await submit(view);
     assert.deepEqual(answers.at(-1), {
       kind: 'choice',
@@ -99,7 +107,7 @@ test('directory selection is staged until confirmation; cancellation preserves t
       ),
     );
     await settle();
-    assert.equal(modal(), null);
+    assert.equal(modal() === null, true);
     await submit(view);
     assert.deepEqual(answers.at(-1), {
       kind: 'choice',
@@ -117,12 +125,12 @@ test('disabled interactions close the picker and cannot reopen it; host loading 
     await click(trigger(view));
     assert.ok(modal());
     await view.render(render({ disabled: true }));
-    assert.equal(modal(), null);
+    assert.equal(modal() === null, true);
     assert.ok(trigger(view).disabled);
     await click(trigger(view));
-    assert.equal(modal(), null);
+    assert.equal(modal() === null, true);
     await view.render(render());
-    assert.equal(modal(), null);
+    assert.equal(modal() === null, true);
     await view.render(
       render({
         request: {

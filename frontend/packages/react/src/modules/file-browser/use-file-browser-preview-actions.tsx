@@ -64,6 +64,9 @@ export function useFileBrowserPreviewActions({
     uri: string;
   }>();
   const deletion = usePreviewMutation(`${rootUri}:${uri}`, requestOptions);
+  const [transferAction, setTransferAction] = useState<
+    'download' | 'exportPack'
+  >('download');
   const transfer = usePreviewMutation(`${rootUri}:${uri}`, requestOptions);
   const canDelete = Boolean(client && enabled && policy.delete);
   const show = (kind: NonNullable<typeof opened>['kind']) => {
@@ -106,12 +109,15 @@ export function useFileBrowserPreviewActions({
           canDelete,
           show,
           deleteFile,
-          download: (pack) =>
-            transfer.run(
+          download: (pack) => {
+            if (!transfer.pending)
+              setTransferAction(pack ? 'exportPack' : 'download');
+            return transfer.run(
               (api, overrides) => downloadPreview(api, uri, pack, overrides),
               undefined,
               pack ? 'file_browser_pack_export' : 'file_preview_download',
-            ),
+            );
+          },
         })
       : [];
   const kind = opened?.key === key ? opened.kind : undefined;
@@ -121,7 +127,11 @@ export function useFileBrowserPreviewActions({
     context: { canDelete, deleteFile },
     dialog: (
       <>
-        <PreviewMutationError error={transfer.error} text={text.workflow} />
+        <PreviewMutationError
+          error={transfer.error}
+          title={text.workflow.failureTitle(text[transferAction])}
+          locale={locale}
+        />
         {uri && kind === 'delete' ? (
           <FileBrowserDeleteDialog
             key={key}

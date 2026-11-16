@@ -1,3 +1,4 @@
+import { notificationContent, toastContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { act, createElement as h } from 'react';
@@ -56,6 +57,28 @@ const target = (operations = {}) => ({
 });
 const reasons = [undefined, null, false, '', new Error('')];
 
+test('empty target selection uses Toast without submitting or showing a backend notification', async () => {
+  let submissions = 0;
+  const view = await mount(
+    h(VikingBotInteraction, {
+      locale: 'zh-CN',
+      request: { ...target(), initialUri: '' },
+      onSubmit: () => {
+        submissions++;
+      },
+    }),
+  );
+  try {
+    await submit(view.container.querySelector('form'));
+    assert.equal(submissions, 0);
+    assert.match(toastContent()?.textContent ?? '', /目录/);
+    assert.equal(Boolean(notificationContent()), false);
+    assert.equal(document.activeElement === trigger(view), true);
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('target picker stays closed after disabling or submitting and preserves the answer', async () => {
   const render = (extra) =>
     h(VikingBotInteraction, { request: target(), ...extra });
@@ -66,16 +89,20 @@ test('target picker stays closed after disabling or submitting and preserves the
       assert.ok(modal());
       await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
       await view.render(render(state));
-      assert.equal(modal(), null);
+      assert.equal(modal() === null, true);
       await view.render(render());
-      assert.equal(modal(), null);
+      assert.equal(modal() === null, true);
       assert.equal(trigger(view).getAttribute('aria-expanded'), 'false');
       assert.match(trigger(view).textContent, /resources\/wiki/);
     }
     await click(trigger(view));
     assert.ok(modal());
     await click(button(modal(), 'Cancel'));
-    assert.equal(document.activeElement, trigger(view));
+    assert.equal(
+      document.activeElement === trigger(view),
+      true,
+      'focus returns to the picker trigger',
+    );
   } finally {
     await view.unmount();
   }
@@ -93,14 +120,11 @@ test('target submission reports reasonless failures using current locale labels'
     try {
       await submit(view.container.querySelector('form'));
       assert.equal(
-        view.container.querySelector('[role=alert]').textContent,
+        notificationContent().textContent,
         'Submission failed. Please try again.',
       );
       await view.render(render('zh-CN'));
-      assert.equal(
-        view.container.querySelector('[role=alert]').textContent,
-        '提交失败，请重试',
-      );
+      assert.equal(notificationContent().textContent, '提交失败，请重试');
       assert.match(trigger(view).textContent, /resources\/wiki/);
       assert.equal(trigger(view).disabled, false);
     } finally {
@@ -146,8 +170,8 @@ test('reasonless directory creation reports a localized error, preserves input a
       fail = false;
       await submit(form);
       assert.equal(
-        document.querySelector('.ov-viking-bot__create-directory'),
-        null,
+        document.querySelector('.ov-viking-bot__create-directory') === null,
+        true,
       );
       assert.match(trigger(view).textContent, /wiki\/notes/);
     } finally {

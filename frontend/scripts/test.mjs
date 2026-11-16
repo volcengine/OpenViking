@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { startTests } from './test-process.mjs';
 import { createRslib } from '@rslib/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginSvgr } from '@rsbuild/plugin-svgr';
@@ -28,6 +28,7 @@ try {
           dts: false,
           source: {
             entry: {
+              monitoring: './test/fixtures/monitoring.tsx',
               'error-boundary':
                 './src/shared/error-boundary/error-boundary.tsx',
               'lazy-content': './src/shared/lazy-content.tsx',
@@ -51,7 +52,10 @@ try {
               'overlay-position':
                 './src/shared/primitives/overlay/use-overlay-position.ts',
               modal: './src/shared/primitives/modal/modal.tsx',
+              'time-picker':
+                './src/shared/primitives/time-picker/time-picker.tsx',
               notification: './src/shared/primitives/notification/index.ts',
+              toast: './src/shared/primitives/toast/index.ts',
               select: './src/shared/primitives/select/index.ts',
 
               dropdown: './src/shared/primitives/dropdown/index.ts',
@@ -78,9 +82,16 @@ try {
               'bot-submit': './src/components/viking-bot/composer-controls.tsx',
               'bot-composer-events':
                 './src/components/viking-bot/composer-events.ts',
+              'console-hitl-protocol': './src/modules/console/hitl/protocol.ts',
+              'console-hitl-summary': './src/modules/console/hitl/summary.ts',
               'console-conversation':
                 './src/modules/console/use-conversation.tsx',
               provider: './src/client/provider.tsx',
+              'request-errors': './src/client/error-events.ts',
+              'observe-errors': './src/client/observe-errors.ts',
+              'error-feedback': './src/shared/feedback/error-notification.tsx',
+              'notification-scope':
+                './src/shared/feedback/notification-scope.tsx',
               'reference-tags':
                 './src/components/viking-bot/composer-reference-tags.tsx',
               'wiki-pane': './src/modules/file-browser/wiki-dashboard-pane.tsx',
@@ -138,31 +149,26 @@ try {
     join(modules, '@tanstack/react-query'),
     linkType,
   );
-  process.exitCode = await new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        '--import',
-        './packages/react/test/helpers/query-timers.mjs',
-        '--test',
-        ...(process.argv.length > 2
-          ? process.argv.slice(2)
-          : [
-              'scripts/package.test.mjs',
-              'scripts/react-release*.test.mjs',
-              'scripts/release-notes*.test.mjs',
-              'packages/react/test/*.test.mjs',
-            ]),
-      ],
-      {
-        cwd: root,
-        stdio: 'inherit',
-        env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
-      },
-    );
-    child.once('error', reject);
-    child.once('exit', (code) => resolve(code ?? 1));
-  });
+  const { completed } = startTests(
+    [
+      '--import',
+      './packages/react/test/helpers/query-timers.mjs',
+      ...(process.argv.length > 2
+        ? process.argv.slice(2)
+        : [
+            'scripts/package.test.mjs',
+            'scripts/test-process.test.mjs',
+            'scripts/react-release*.test.mjs',
+            'scripts/release-notes*.test.mjs',
+            'packages/react/test/*.test.mjs',
+          ]),
+    ],
+    {
+      cwd: root,
+      env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
+    },
+  );
+  process.exitCode = await completed;
 } finally {
   await rm(output, { recursive: true, force: true });
 }

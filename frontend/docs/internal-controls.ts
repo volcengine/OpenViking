@@ -10,3 +10,4 @@ export {
   Select,
   SelectOption,
 } from '../packages/react/dist/docs/shared/primitives/select/index.js';
+export { useToast } from '../packages/react/dist/docs/shared/primitives/toast/index.js';

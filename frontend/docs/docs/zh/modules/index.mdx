@@ -49,7 +49,7 @@ import '@openviking/react/modules/style.css';
 
 没有 Provider 时，FileBrowser 不发起请求，目录树一直停在加载状态；Console 使用不带身份信息的同源默认 Client。
 
-ScopeCascade 不走共享 Client，没有 `requestOptions`，也不需要 Provider；放在 Provider 内时，它可继承语言并通过 Provider 接入[埋点](../guide/analytics)。
+ScopeCascade 不走共享 Client，没有 `requestOptions`，也不需要 Provider；放在 Provider 内时，它可继承语言并通过 Provider 接入[埋点](../guide/analytics)和[前端监控](../guide/monitoring)。
 
 ### OpenVikingProvider
 
@@ -67,6 +67,7 @@ ScopeCascade 不走共享 Client，没有 `requestOptions`，也不需要 Provid
 | fetch              | 替换全局 `fetch`，用于测试、链路追踪或没有全局 `fetch` 的环境                                        | `typeof fetch`                                | 全局 `fetch`             |
 | locale             | 子树的界面语言，规则见[国际化](../guide/i18n)                                                        | `'zh-CN' \| 'en-US'`                          | 继承上级，默认 `'en-US'` |
 | analytics          | 操作和曝光事件的接入配置，见[埋点指南](../guide/analytics)                                           | `OpenVikingAnalyticsOptions \| false`         | 继承上级，根默认关闭     |
+| monitoring         | 前端质量和异常的接入配置，见[前端监控](../guide/monitoring)                                          | `OpenVikingMonitoringOptions \| false`        | 继承上级，根默认关闭     |
 | queryClient        | 复用宿主的 TanStack Query v5 客户端，省略时继承上层或创建内部实例                                    | `QueryClient`                                 | 按 Provider 生命周期创建 |
 | requestConcurrency | 按接口路径设置最大在途请求数，值为正整数，逐接口覆盖并继承                                           | `Partial<Record<OvPath, number>>`             | `{ [OV_PATHS.fsLs]: 3 }` |
 | children           | 使用这套请求配置的子树                                                                               | `ReactNode`                                   | -                        |

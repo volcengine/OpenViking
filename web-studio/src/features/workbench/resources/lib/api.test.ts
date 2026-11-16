@@ -1,28 +1,62 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type * as OvClient from '#/shared/api/ov-client/index'
 
 import {
+  deleteSharedResource,
   fetchDirectorySidecarContent,
   fetchFsList,
   fetchFsStat,
+  transferSharedResource,
 } from '#/features/workbench/resources/lib/api'
 
-const { getContentReadMock, getFsLsMock, getFsStatMock } = vi.hoisted(() => ({
+const {
+  deleteResourcesMock,
+  getContentReadMock,
+  getFsLsMock,
+  getFsStatMock,
+  postResourcesCpMock,
+  postResourcesMvMock,
+} = vi.hoisted(() => ({
+  deleteResourcesMock: vi.fn(),
   getContentReadMock: vi.fn(),
   getFsLsMock: vi.fn(),
   getFsStatMock: vi.fn(),
+  postResourcesCpMock: vi.fn(),
+  postResourcesMvMock: vi.fn(),
 }))
 
 vi.mock('#/shared/api/ov-client/index', async (importOriginal) => {
-  const original = await importOriginal()
+  const original = await importOriginal<typeof OvClient>()
   return {
     ...original,
+    deleteResources: deleteResourcesMock,
     getContentRead: getContentReadMock,
     getFsLs: getFsLsMock,
     getFsStat: getFsStatMock,
+    postResourcesCp: postResourcesCpMock,
+    postResourcesMv: postResourcesMvMock,
   }
 })
 
 beforeEach(() => {
+  deleteResourcesMock.mockReset()
+  deleteResourcesMock.mockResolvedValue({
+    data: { status: 'ok', result: { semantic_status: 'complete' } },
+    headers: {},
+    status: 200,
+  })
+  postResourcesCpMock.mockReset()
+  postResourcesCpMock.mockResolvedValue({
+    data: { status: 'ok', result: { semantic_status: 'queued' } },
+    headers: {},
+    status: 200,
+  })
+  postResourcesMvMock.mockReset()
+  postResourcesMvMock.mockResolvedValue({
+    data: { status: 'ok', result: {} },
+    headers: {},
+    status: 200,
+  })
   getContentReadMock.mockReset()
   getFsLsMock.mockReset()
   getFsStatMock.mockReset()
@@ -82,6 +116,70 @@ describe('fetchDirectorySidecarContent', () => {
         raw: true,
       },
     })
+  })
+})
+
+describe('deleteSharedResource', () => {
+  it('uses the restricted endpoint and waits for index cleanup', async () => {
+    await deleteSharedResource('viking://resources/project', true)
+
+    expect(deleteResourcesMock).toHaveBeenCalledWith({
+      query: { uri: 'viking://resources/project', recursive: true, wait: true },
+    })
+  })
+
+  it('rejects non-shared URIs before sending a request', async () => {
+    await expect(
+      deleteSharedResource('viking://user/alice/resources/private', true),
+    ).rejects.toThrow()
+    expect(deleteResourcesMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('transferSharedResource', () => {
+  it('copies directories recursively through the restricted endpoint', async () => {
+    await expect(
+      transferSharedResource(
+        'copy',
+        'viking://resources/source/',
+        'viking://resources/copy/',
+        true,
+      ),
+    ).resolves.toEqual({ semanticStatus: 'queued' })
+    expect(postResourcesCpMock).toHaveBeenCalledWith({
+      body: {
+        from_uri: 'viking://resources/source',
+        to_uri: 'viking://resources/copy',
+        recursive: true,
+      },
+    })
+  })
+
+  it('moves through the restricted endpoint', async () => {
+    await transferSharedResource(
+      'move',
+      'viking://resources/old.md',
+      'viking://resources/new.md',
+      false,
+    )
+    expect(postResourcesMvMock).toHaveBeenCalledWith({
+      body: {
+        from_uri: 'viking://resources/old.md',
+        to_uri: 'viking://resources/new.md',
+      },
+    })
+  })
+
+  it('rejects a non-shared target before sending a request', async () => {
+    await expect(
+      transferSharedResource(
+        'copy',
+        'viking://resources/source',
+        'viking://user/alice/resources/copy',
+        true,
+      ),
+    ).rejects.toThrow()
+    expect(postResourcesCpMock).not.toHaveBeenCalled()
   })
 })
 

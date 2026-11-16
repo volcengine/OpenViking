@@ -1,9 +1,5 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import type { OverlayPlacement } from './types.js';
-
-// Measure before paint in browsers; server renderers have no viewport.
-const usePositionEffect =
-  typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** 浮层与触发元素之间的间隙。 Gap between the surface and its trigger. */
 export const OVERLAY_OFFSET = 6;
@@ -126,9 +122,10 @@ export function useOverlayPosition(
     placement,
   });
 
-  // Sync committed geometry and scoped theme; release both on close or unmount.
-  // The server uses an inert effect instead of attempting layout measurement.
-  usePositionEffect(() => {
+  // Sync the committed portal's geometry and theme with browser layout changes;
+  // viewport/ancestor mutations need updates beyond React renders or UI events.
+  // Close, dependency changes and unmount release observers, listeners and styles.
+  useLayoutEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;
     if (!trigger || !surface) return;

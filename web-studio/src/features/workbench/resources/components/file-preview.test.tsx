@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { configure } from '@testing-library/dom'
@@ -1473,7 +1474,10 @@ describe('FilePreview complete-content editing', () => {
     })
     vi.mocked(saveFileContent).mockRejectedValue(new Error('Forbidden'))
     fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
-    await screen.findByRole('alert')
+    const notification = await screen.findByRole('region', {
+      name: 'Notifications',
+    })
+    expect(await within(notification).findByText('Forbidden')).toBeTruthy()
     expect(
       screen.getByLabelText('filePreview.edit', { selector: '.cm-content' })
         .textContent,

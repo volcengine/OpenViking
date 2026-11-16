@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -64,7 +65,8 @@ test('compile configuration uses the nearest registered root and preserves draft
       input.dispatchEvent(new window.Event('input', { bubbles: true }));
     });
     await submit();
-    assert.ok(workflow().querySelector('[role="alert"]'));
+    assert.ok(notificationError());
+    assert.equal(Boolean(workflow().querySelector('[role="alert"]')), false);
     const count = fetch.calls.length;
     await view.render(tree(fetch, uri, { locale: 'zh-CN' }));
     assert.equal(fetch.calls.length, count);
@@ -87,7 +89,7 @@ test('compile configuration uses the nearest registered root and preserves draft
       workflow().querySelector('[role="status"]').textContent,
       /配置已保存/,
     );
-    assert.equal(workflow().querySelector('[role="alert"]'), null);
+    assert.equal(Boolean(notificationError()), false);
   } finally {
     await view.unmount();
   }

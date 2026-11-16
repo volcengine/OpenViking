@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
-import { renderToString } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
 import { mount } from './helpers/module-dom.mjs';
 import { Host, cards, close } from './helpers/notification-host.mjs';
@@ -67,16 +67,5 @@ test('notification follows locale scopes and scoped theme overrides without rese
     assert.equal(document.activeElement, cards()[0].querySelector('button'));
   } finally {
     await view.unmount();
-  }
-});
-
-test('notification supports server rendering with and without document', () => {
-  assert.doesNotThrow(() => renderToString(h(Host, { capture() {} })));
-  const saved = globalThis.document;
-  try {
-    delete globalThis.document;
-    assert.doesNotThrow(() => renderToString(h(Host, { capture() {} })));
-  } finally {
-    globalThis.document = saved;
   }
 });

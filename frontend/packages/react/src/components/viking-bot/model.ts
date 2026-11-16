@@ -160,6 +160,8 @@ export type VikingBotMessagePart =
 
 /** 一条消息。A single message. */
 export interface VikingBotMessage {
+  /** Readable submitted answers; original parts remain available for persistence. */
+  answerSummary?: readonly { label: string; value: string }[];
   /** 消息唯一标识。Unique message key. */
   id: string;
   /**

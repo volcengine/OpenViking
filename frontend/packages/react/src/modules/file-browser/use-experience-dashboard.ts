@@ -150,18 +150,27 @@ export function useExperienceDashboard({
     requestOptions,
     enabled && directory,
     refreshGeneration,
+    'file_browser_experience_dashboard_load',
+    (value) => value.items.length === 0,
+    !!listSource,
   );
   const sources = useDashboardQuery(
     loadSources,
     requestOptions,
     enabled && !directory && tab === 'source',
     refreshGeneration,
+    'file_browser_experience_dashboard_load',
+    (value) => value.length === 0,
+    !!sourcesSource,
   );
   const outcomes = useDashboardQuery(
     loadOutcomes,
     requestOptions,
     enabled && !directory && tab === 'impact',
     refreshGeneration,
+    'file_browser_experience_dashboard_load',
+    (value) => value.length === 0,
+    !!outcomesSource,
   );
   return {
     list,

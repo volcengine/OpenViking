@@ -1,4 +1,8 @@
 import { useExposure } from '../../../shared/analytics/use-exposure.js';
+import {
+  ErrorNotification,
+  errorMessage,
+} from '../../../shared/feedback/error-notification.js';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { useEffect, useId, useRef, type RefObject } from 'react';
 import { Modal } from '../../../shared/primitives/modal/modal.js';
@@ -94,9 +98,19 @@ export function AclModal({
       >
         {text.title}
       </h2>
-      {model.error ? (
+      {model.error && model.report ? (
+        <ErrorNotification
+          title={text.saveFailed}
+          identity={model.error}
+          error={model.error}
+          locale={locale}
+        >
+          {errorMessage(model.error)}
+        </ErrorNotification>
+      ) : null}
+      {model.error && !model.report ? (
         <div className="ov-file-browser-acl__failure" role="alert">
-          <p>{model.report ? text.saveFailed : text.loadFailed}</p>
+          <p>{text.loadFailed}</p>
           <p>{model.error.message}</p>
           {!model.report ? (
             <Button

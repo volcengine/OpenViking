@@ -17,6 +17,7 @@ import {
   BarChart3Icon,
   PencilIcon,
   ArrowLeftIcon,
+  CopyIcon,
   HistoryIcon,
   Trash2Icon,
   DownloadIcon,
@@ -70,7 +71,10 @@ import { AgentPanel } from '#/features/workbench/filesystem/components/agent-pan
 import { FilesystemResizeHandle } from '#/features/workbench/filesystem/components/filesystem-resize-handle'
 import { DeleteDocumentDialog } from './components/delete-document-dialog'
 import { DataManagementDialog } from '#/features/workbench/filesystem/components/data-management-dialog'
+import { DeleteResourceDialog } from '#/features/workbench/filesystem/components/delete-resource-dialog'
 import { SnapshotComparisonDialog } from '#/features/workbench/filesystem/components/snapshot-comparison-dialog'
+import { TransferResourceDialog } from '#/features/workbench/filesystem/components/transfer-resource-dialog'
+import type { ResourceTransferOperation } from '#/features/workbench/filesystem/components/transfer-resource-dialog'
 import { WorkbenchConsole } from '#/features/workbench/filesystem/components/workbench-console'
 import {
   FILESYSTEM_MAIN_MIN_WIDTH,
@@ -165,6 +169,9 @@ function FilesystemWorkbench() {
   })
   const [findPaletteOpen, setFindPaletteOpen] = useState(false)
   const [resourceDialogOpen, setResourceDialogOpen] = useState(false)
+  const [sharedResourceAction, setSharedResourceAction] = useState<
+    ResourceTransferOperation | 'delete' | null
+  >(null)
   const [compileSource, setCompileSource] = useState<{
     scope: string
     uri: string
@@ -410,13 +417,20 @@ function FilesystemWorkbench() {
 
   const selectedUri = selectedFile?.uri ?? currentUri
   const selectedIsDirectory = selectedFile?.isDir ?? true
+  const sharedResourceScope = `${identityScopeKey}:${selectedUri}`
+  const sharedResourceScopeRef = useRef(sharedResourceScope)
+  sharedResourceScopeRef.current = sharedResourceScope
   const transferUri = selectedIsDirectory
     ? selectedUri
     : normalizeDirUri(parentUri(selectedUri))
   useEffect(() => {
     setDataManagementMode(null)
     setResourceDialogOpen(false)
-  }, [selectedUri])
+    setSharedResourceAction(null)
+  }, [identityScopeKey, selectedUri])
+  const canManageSharedResource =
+    canUseLocalTools &&
+    normalizeFileUri(selectedUri).startsWith('viking://resources/')
   const importDirectoryUri = normalizeDirUri(transferUri)
   const canTransferSelectedUri =
     /^viking:\/\/(?:resources|user\/[^/]+\/resources)\//.test(
@@ -596,8 +610,38 @@ function FilesystemWorkbench() {
     })
   }
 
+  const sharedResourceActions: FilePreviewAction[] = canManageSharedResource
+    ? [
+        {
+          key: 'studio-copy-shared-resource',
+          icon: <CopyIcon size={16} />,
+          label: t('transferResource.copyButton'),
+          onClick: () => setSharedResourceAction('copy'),
+        },
+        {
+          key: 'studio-move-shared-resource',
+          icon: <PencilIcon size={16} />,
+          label: t('transferResource.moveButton'),
+          onClick: () => {
+            if (dirtyRef.current && !window.confirm(t('ide.discard'))) return
+            setSharedResourceAction('move')
+          },
+        },
+        {
+          key: 'studio-delete-shared-resource',
+          icon: <Trash2Icon size={16} />,
+          label: t('deleteResource.button'),
+          className: styles.deleteAction,
+          onClick: () => setSharedResourceAction('delete'),
+        },
+      ]
+    : []
+
   const deleteActions: FilePreviewAction[] =
-    selectedFile && !selectedIsDirectory && !isSystemUri(selectedUri)
+    selectedFile &&
+    !selectedIsDirectory &&
+    !isSystemUri(selectedUri) &&
+    !canManageSharedResource
       ? [
           {
             key: 'studio-delete',
@@ -613,6 +657,34 @@ function FilesystemWorkbench() {
           },
         ]
       : []
+
+  const handleSharedResourceChange = (
+    targetUri?: string,
+    isDirectory = true,
+  ) => {
+    if (targetUri && selectedFileRef.current?.uri === selectedUri) {
+      navigationVersion.current += 1
+      const nextUri = isDirectory
+        ? normalizeDirUri(targetUri)
+        : normalizeFileUri(targetUri)
+      const directory = isDirectory
+        ? nextUri
+        : normalizeDirUri(parentUri(nextUri))
+      const entry = createEntryFromUri(nextUri, isDirectory)
+      handleDirtyChange(false)
+      selectedFileRef.current = entry
+      setSelectedFile(entry)
+      setCurrentUri(directory)
+      syncSearch({ file: isDirectory ? undefined : nextUri, uri: directory })
+    }
+    refreshBrowser()
+    void invalidateAll()
+  }
+  const handleSharedResourceDialogChange = (open: boolean) => {
+    if (!open && sharedResourceScopeRef.current === sharedResourceScope) {
+      setSharedResourceAction(null)
+    }
+  }
 
   return (
     <div className={styles.workbench}>
@@ -668,6 +740,7 @@ function FilesystemWorkbench() {
             actionItems: ({ defaultActions }) => [
               ...defaultActions,
               ...(selectedFile ? [resourceActions, transferActions] : []),
+              sharedResourceActions,
               deleteActions,
             ],
           }}
@@ -874,6 +947,46 @@ function FilesystemWorkbench() {
             refreshBrowser()
             toast.success(t('dataManagement:documentDeleted'))
             void invalidateAll()
+          }}
+        />
+      ) : null}
+      {canManageSharedResource && sharedResourceAction === 'delete' ? (
+        <DeleteResourceDialog
+          key={sharedResourceScope}
+          open
+          onOpenChange={handleSharedResourceDialogChange}
+          uri={selectedUri}
+          isDirectory={selectedIsDirectory}
+          dirty={dirtyRef.current}
+          onDeleted={({ semanticStatus }) => {
+            if (sharedResourceScopeRef.current !== sharedResourceScope) return
+            handleSharedResourceChange(parentUri(selectedUri))
+            if (semanticStatus === 'failed') {
+              toast.warning(t('deleteResource.deletedIndexFailed'))
+            } else {
+              toast.success(t('deleteResource.deleted'))
+            }
+          }}
+        />
+      ) : null}
+      {canManageSharedResource &&
+      (sharedResourceAction === 'copy' || sharedResourceAction === 'move') ? (
+        <TransferResourceDialog
+          key={sharedResourceScope}
+          open
+          onOpenChange={handleSharedResourceDialogChange}
+          operation={sharedResourceAction}
+          uri={selectedUri}
+          isDirectory={selectedIsDirectory}
+          onCompleted={(targetUri) => {
+            if (sharedResourceScopeRef.current !== sharedResourceScope) return
+            if (sharedResourceAction === 'move') {
+              handleSharedResourceChange(targetUri, selectedIsDirectory)
+              toast.success(t('transferResource.moved'))
+            } else {
+              handleSharedResourceChange()
+              toast.success(t('transferResource.copied'))
+            }
           }}
         />
       ) : null}

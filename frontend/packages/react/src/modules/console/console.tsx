@@ -1,3 +1,5 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { NotificationScope } from '../../shared/feedback/notification-scope.js';
 import { useRenderErrors } from './labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { TaskTrackingProvider } from '../../shared/task-tracking/context.js';
@@ -52,7 +54,8 @@ function ConsoleView({
     { conversation, chatOptions, scopeKey, requestOptions, locale, modes },
     state.setConversationDraft,
   );
-  const { sessions, headerActions, ...conversationProps } = managedConversation;
+  const { sessions, headerActions, feedback, ...conversationProps } =
+    managedConversation;
   const botLocale = conversationProps.locale ?? locale;
   const botLabels = {
     ...consoleLabels(botLocale, overrides).vikingBot,
@@ -72,6 +75,7 @@ function ConsoleView({
         {...rest}
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
+        {feedback}
         <ConsoleTaskNotifications locale={locale} />
         {state.mode ? (
           <ErrorBoundary message={renderErrors.toolbar} resetKeys={[scopeKey]}>
@@ -139,6 +143,7 @@ function ConsoleView({
             hidden={state.mode !== 'command'}
           >
             <ErrorBoundary
+              monitoringRegion="commands"
               message={renderErrors.command}
               resetKeys={[scopeKey]}
             >
@@ -164,7 +169,7 @@ function ConsoleView({
   );
 }
 
-export function Console(props: ConsoleProps) {
+function ConsoleMonitoredView(props: ConsoleProps) {
   return (
     <ErrorBoundary
       fallback={props.slots?.errorFallback}
@@ -173,8 +178,12 @@ export function Console(props: ConsoleProps) {
       resetKeys={[props.scopeKey]}
     >
       <TaskTrackingProvider service={props.taskService}>
-        <ConsoleView {...props} />
+        <NotificationScope locale={props.locale} isolateRequests>
+          <ConsoleView {...props} />
+        </NotificationScope>
       </TaskTrackingProvider>
     </ErrorBoundary>
   );
 }
+
+export const Console = withMonitoring(ConsoleMonitoredView, 'Console');

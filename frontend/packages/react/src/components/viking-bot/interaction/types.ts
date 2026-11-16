@@ -13,6 +13,7 @@ export type {
 import type { ErrorFallback } from '../../../shared/error-boundary/types.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { ReactNode } from 'react';
+import type { VikingBotInteractionFields } from './field-types.js';
 
 /** 宿主接管自定义答案时的上下文。Host-controlled custom selection. */
 export interface VikingBotInteractionCustomInputContext {
@@ -65,6 +66,8 @@ export interface VikingBotRepairOption {
 
 /** 自定义问题的渲染上下文。Render context for a custom question. */
 export interface VikingBotInteractionRenderContext {
+  /** Call when a custom input changes to dismiss its submission error. */
+  clearError: () => void;
   /** 是否禁用提交。Whether submission is disabled. */
   disabled?: boolean;
   /** 是否正在提交。Whether a submission is in flight. */
@@ -73,13 +76,15 @@ export interface VikingBotInteractionRenderContext {
   submit: (value: unknown) => void | Promise<void>;
   /** 放弃本次交互。Abandons this interaction. */
   cancel: () => void;
+  /** 分步模式下返回上一步。Go back in a sequence. */
+  previous?: () => void;
 }
 
 /**
  * 一次待确认交互，内置单选、文本、定时、修复和输出目录表单。
  * A pending interaction with choice, text, schedule, repair and target forms.
  */
-export type VikingBotInteractionRequest =
+export type VikingBotInteractionSingleRequest =
   | VikingBotInteractionTargetRequest
   | {
       /** 单选。Single choice. */
@@ -112,6 +117,8 @@ export type VikingBotInteractionRequest =
       description?: ReactNode;
       /** 是否多行。Whether the input is multiline. */
       multiline?: boolean;
+      /** 是否必填，默认 true。Required by default; false allows an empty answer. */
+      required?: boolean;
     }
   | {
       /** 定时。Schedule. */
@@ -142,14 +149,31 @@ export type VikingBotInteractionRequest =
       render: (context: VikingBotInteractionRenderContext) => ReactNode;
     };
 
+/** 单题或由组件管理的分步问题。A question or a built-in sequence. */
+export type VikingBotInteractionRequest =
+  | VikingBotInteractionSingleRequest
+  | {
+      kind: 'steps';
+      /** 按顺序展示的问题。Questions in display order. */
+      steps: readonly [
+        VikingBotInteractionSingleRequest,
+        ...VikingBotInteractionSingleRequest[],
+      ];
+    };
+
 /** 交互答案。An interaction answer. */
-export type VikingBotInteractionAnswer =
+export type VikingBotInteractionSingleAnswer =
   | { kind: 'target'; value: string }
   | { kind: 'choice'; value: string }
   | { kind: 'text'; value: string }
   | { kind: 'schedule'; value: VikingBotScheduleValue }
   | { kind: 'repair'; value: string }
   | { kind: 'custom'; value: unknown };
+
+/** 分步答案按问题顺序返回。Sequence answers follow question order. */
+export type VikingBotInteractionAnswer =
+  | VikingBotInteractionSingleAnswer
+  | { kind: 'steps'; value: readonly VikingBotInteractionSingleAnswer[] };
 
 /**
  * 交互区文案。组件内置中英文文案，宿主可按需覆盖。
@@ -163,12 +187,20 @@ export interface VikingBotInteractionLabels extends VikingBotInteractionDirector
   title?: string;
   /** 提交按钮。Submit button. */
   submit?: string;
+  /** 下一步。Next step. */
+  next?: string;
+  /** 上一步。Previous step. */
+  previous?: string;
   /** 取消按钮。Cancel button. */
   cancel?: string;
   /** 「其他」输入项文案。Label of the "other" input. */
   other?: string;
   /** 提交成功提示。Shown after a successful submission. */
   submitted?: string;
+  /** 提交失败的通知标题。Title of the submission failure notification. */
+  submitFailed?: string;
+  /** 无效选项的校验提示。Validation feedback for invalid options. */
+  invalidAnswer?: string;
   /** 取消提示。Shown after cancelling. */
   cancelled?: string;
   /** 步骤进度，接收当前序号与总数。Step progress, given index and total. */
@@ -193,8 +225,6 @@ export interface VikingBotInteractionLabels extends VikingBotInteractionDirector
   timeInvalid?: string;
   /** 星期必选提示。Required weekday. */
   weekdayRequired?: string;
-  /** 无错误详情时的提交失败提示。Submission failure without details. */
-  submitFailed?: string;
   /** 每天的选项文案。Label of the daily option. */
   scheduleDaily?: string;
   /** 每周的选项文案。Label of the weekly option. */
@@ -236,6 +266,8 @@ export interface VikingBotInteractionProps {
   submitting?: boolean;
   /** 提交失败的原因。Why the last submission failed. */
   error?: ReactNode;
+  /** Field labels, validators and control renderers. */
+  fields?: VikingBotInteractionFields;
   /** 上报答案。Reports an answer. */
   onSubmit?: (answer: VikingBotInteractionAnswer) => void | Promise<void>;
   /** 放弃本次交互。Abandons this interaction. */

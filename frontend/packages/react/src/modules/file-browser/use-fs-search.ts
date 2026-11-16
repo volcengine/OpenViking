@@ -1,9 +1,10 @@
-import { QueryObserver } from '@tanstack/query-core';
-import { useMemo, useSyncExternalStore } from 'react';
+import { createSearchObserver, type SearchTarget } from './search-observer.js';
+import { QueryObservation } from './query-observation.js';
+import { type Workflow } from '../../shared/monitoring/workflow.js';
+import { bindingOf } from '../../shared/monitoring/client.js';
+import { useWorkflowCommit } from '../../shared/monitoring/use-workflow-commit.js';
+import { useMemo, useRef, useSyncExternalStore } from 'react';
 import { useAnalyticsRef } from '../../shared/analytics/context.js';
-import { startOperation, errorKind } from '../../shared/analytics/reporter.js';
-import { OV_PATHS, type OvPath } from '../../client/paths.js';
-import { queryKeys } from '../../client/query-keys.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { useQueryScope } from './use-query-scope.js';
 import type {
@@ -11,22 +12,10 @@ import type {
   SearchMode,
   SearchResult,
 } from './search-types.js';
-import {
-  buildSearchBody,
-  isSemantic,
-  normalizeFindResult,
-  normalizeGlobResult,
-  normalizeGrepResult,
-  type RawFindResult,
-} from './search-model.js';
+import { buildSearchBody, isSemantic } from './search-model.js';
 
-const SEARCH_PATHS: Record<SearchMode, OvPath> = {
-  find: OV_PATHS.searchFind,
-  search: OV_PATHS.searchQuery,
-  grep: OV_PATHS.searchGrep,
-  glob: OV_PATHS.searchGlob,
-};
 export interface SearchState {
+  monitoring?: Workflow<SearchTarget>;
   result: SearchResult | null;
   loading: boolean;
   error: Error | null;
@@ -41,14 +30,6 @@ export interface UseFsSearchOptions {
   rootUri: string;
   requestOptions?: OvRequestOptions;
 }
-function normalize(mode: SearchMode, raw: unknown): SearchResult {
-  const payload = (raw ?? {}) as { matches?: unknown } & RawFindResult;
-  return mode === 'grep'
-    ? normalizeGrepResult(payload.matches)
-    : mode === 'glob'
-      ? normalizeGlobResult(payload.matches)
-      : normalizeFindResult(payload);
-}
 const emptySubscribe = () => () => {};
 const emptySnapshot = () => undefined;
 
@@ -61,12 +42,17 @@ export function useFsSearch({
   requestOptions,
 }: UseFsSearchOptions): SearchState {
   const analytics = useAnalyticsRef();
+  const retryCause = useRef<WeakRef<Error> | undefined>(undefined);
   const {
     request,
     error,
     aborted,
     retry: retryScope,
-  } = useQueryScope(client, requestOptions);
+  } = useQueryScope(
+    client,
+    requestOptions,
+    `file_browser_search_${mode === 'search' ? 'query' : mode}` as SearchTarget,
+  );
   const bodyKey = JSON.stringify(
     buildSearchBody(mode, query, filters, rootUri),
   );
@@ -78,77 +64,74 @@ export function useFsSearch({
   );
   const observer = useMemo(
     () =>
-      request && query.trim()
-        ? new QueryObserver(request.queryClient, {
-            queryKey: queryKeys.search(
-              request.scope,
-              SEARCH_PATHS[mode],
-              JSON.parse(bodyKey),
-            ),
-            queryFn: async ({ signal }) => {
-              const current = await request.current(signal);
-              const operation = analytics.current && startOperation();
-              const params = () => ({
-                operation_id: operation!.operation_id,
-                mode,
-                has_filters: hasFilters,
-              });
-              if (operation)
-                analytics.current?.emit('file_browser_search_submit', params);
-              try {
-                const raw = await current.client.request({
-                  method: 'POST',
-                  path: SEARCH_PATHS[mode],
-                  body: JSON.parse(bodyKey),
-                  options: { ...current.options, signal },
-                });
-                signal.throwIfAborted();
-                const result = normalize(mode, raw);
-                if (operation)
-                  analytics.current?.emit(
-                    'file_browser_search_success',
-                    () => ({
-                      ...params(),
-                      ...operation.finish(),
-                      result_count: result.total,
-                    }),
-                  );
-                return result;
-              } catch (cause) {
-                if (!signal.aborted && operation)
-                  analytics.current?.emit('file_browser_search_fail', () => ({
-                    ...params(),
-                    ...operation.finish(),
-                    error_kind: errorKind(cause),
-                  }));
-                throw cause;
-              }
-            },
-          })
-        : undefined,
-    [request, mode, bodyKey, query, hasFilters, analytics],
+      createSearchObserver(
+        request,
+        mode,
+        query,
+        bodyKey,
+        hasFilters,
+        analytics,
+        retryCause,
+      ),
+    [request, mode, query, bodyKey, hasFilters, analytics],
+  );
+  const observation = useMemo(
+    () =>
+      new QueryObservation(
+        request?.client ?? null,
+        `file_browser_search_${mode === 'search' ? 'query' : mode}` as SearchTarget,
+      ),
+    [request, mode],
   );
   const subscribe = useMemo(
     () =>
       observer && !aborted
-        ? (notify: () => void) => observer.subscribe(notify)
+        ? (notify: () => void) => {
+            observation.observe(
+              observer.getCurrentResult(),
+              observer.getCurrentQuery(),
+            );
+            const unsubscribe = observer.subscribe((result) => {
+              observation.observe(result, observer.getCurrentQuery());
+              notify();
+            });
+            return () => {
+              observation.cancel();
+              unsubscribe();
+            };
+          }
         : emptySubscribe,
-    [observer, aborted],
+    [observer, aborted, observation],
   );
   const getSnapshot = useMemo(
     () => (observer ? () => observer.getCurrentResult() : emptySnapshot),
     [observer],
   );
-  const result = useSyncExternalStore(subscribe, getSnapshot, emptySnapshot);
+  const result = useSyncExternalStore(subscribe, getSnapshot);
+  const monitoring = observer
+    ? observation.operations(observer.getCurrentQuery())[0]
+    : undefined;
+  useWorkflowCommit(
+    monitoring,
+    !!result?.data && !result.isFetching && !result.error,
+    () => ({ resultCount: result!.data!.total, hasMore: null }),
+  );
   return {
+    monitoring,
     result: result?.data ?? null,
     loading:
       !!client && !!query.trim() && !error && (!result || result.isFetching),
     error: error ?? result?.error ?? null,
     retry: () => {
       if (aborted) return;
-      if (observer) void observer.refetch({ cancelRefetch: false });
-      else retryScope();
+      if (observer) {
+        const binding = bindingOf(client);
+        retryCause.current =
+          result?.error && binding?.controller.options && binding.active()
+            ? new WeakRef(result.error)
+            : undefined;
+        void observer.refetch({ cancelRefetch: false });
+      } else retryScope();
     },
   };
 }

@@ -111,7 +111,7 @@ export interface FileTreeEntryRow extends FileTreeRowBase {
   disabled?: boolean;
   /** 允许展开但不选中，例如仅能遍历的目录。Allows expansion without selection. */
   selectable?: boolean;
-  /** 权限状态的纯展示标签，不执行鉴权。Display-only permission status. */
+  /** 权限元数据，不展示标记或执行鉴权。Permission metadata; no badge or authorization. */
   access?: 'read-only' | 'denied' | 'container';
   /**
    * 名称右侧的次要说明，例如摘要或行内描述。
@@ -409,9 +409,6 @@ export interface FileTreeInfoLabels {
  * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FileTreeLabels {
-  readOnly?: string;
-  noAccess?: string;
-  traverseOnly?: string;
   /** 搜索入口文案。Search trigger label. */
   search?: string;
   /** 刷新按钮的无障碍名称。Accessible refresh button label. */

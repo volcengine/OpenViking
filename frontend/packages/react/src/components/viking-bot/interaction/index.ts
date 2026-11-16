@@ -8,6 +8,8 @@ export type {
   VikingBotInteractionDirectoryInfo,
   VikingBotInteractionDirectoryOperations,
   VikingBotInteractionTargetRequest,
+  VikingBotInteractionSingleRequest,
+  VikingBotInteractionSingleAnswer,
   VikingBotInteractionAnswer,
   VikingBotInteractionLabels,
   VikingBotInteractionOption,
@@ -17,3 +19,9 @@ export type {
   VikingBotRepairOption,
   VikingBotScheduleValue,
 } from './types.js';
+
+export type {
+  VikingBotInteractionFields,
+  VikingBotInteractionField,
+  VikingBotInteractionFieldContext,
+} from './field-types.js';

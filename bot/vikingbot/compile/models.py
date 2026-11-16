@@ -23,12 +23,12 @@ WikiLanguage = Literal["en", "zh-CN"]
 
 
 class CompileLimits(BaseModel):
-    """Bound task execution and source loading; output size is checked per submission."""
+    """Bound task execution, source loading and Markdown routing concurrency."""
 
     model_config = ConfigDict(frozen=True)
 
-    # Soft request budget for prompt, input JSON, emit schema and estimated output space.
-    # Larger indivisible records may exceed it; this is not the model's token limit.
+    # Soft request budget for prompt, input JSON, control schema and estimated output space.
+    # Larger indivisible inputs may exceed it; this is not the model's token limit.
     merge_input_chars: int = Field(default=60_000, ge=1)
     # Source text plus repeated context per range/read batch, independent of request packing.
     source_batch_chars: int = Field(default=40_000, ge=1)
@@ -40,7 +40,7 @@ class CompileLimits(BaseModel):
     source_concurrency: int = Field(default=6, ge=1)
     # Per-task Shuffle routing workers and embedding batches.
     shuffle_concurrency: int = Field(default=6, ge=1)
-    # Maximum primary records per routing request, including retried records.
+    # Maximum primary Markdown drafts per routing request.
     shuffle_batch_size: int = Field(default=4, ge=1, strict=True)
     # Per-task Reduce workers, also used for consolidating same-path candidate files.
     merge_concurrency: int = Field(default=10, ge=1)
