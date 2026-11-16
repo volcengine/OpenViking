@@ -708,10 +708,23 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     before = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert before["execution_context"]["executor"]["user_id"] == ctx.user.user_id
     due = datetime.fromisoformat(before["next_triggered_slot"])
-    assert (
-        await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
-        == "submitted"
-    )
+    queue = SimpleNamespace(enqueue=AsyncMock(side_effect=[OSError("queue unavailable"), None]))
+    with monkeypatch.context() as patch:
+        patch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue)
+        patch.setattr(
+            get_task_tracker()._store,
+            "list_durable",
+            AsyncMock(side_effect=AssertionError("Unexpected account-wide task scan")),
+        )
+        with pytest.raises(OSError, match="queue unavailable"):
+            await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
+        assert await store.get(ctx.account_id, ctx.user.user_id, compile_name) == before
+        assert (
+            await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
+            == "submitted"
+        )
+    first_delivery, retry = queue.enqueue.await_args_list
+    assert first_delivery == retry
     after = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert after["task_first_create_time"] == after["last_run_time"] is not None
     assert after["last_triggered_slot"] == due.isoformat()
@@ -720,10 +733,20 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     assert len(runs) == 1 and runs[0]["meta"]["trigger"] == "initial"
     assert runs[0]["actor"] == executor.user.user_id
     assert await store.get(ctx.account_id, executor.user.user_id, compile_name) is None
-    assert (
-        await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
-        == "not_due"
-    )
+    assert runs[0]["task_id"] == retry.args[1]["task_id"]
+    async with store.edit(ctx.account_id, ctx.user.user_id, compile_name) as record:
+        record["execution_context"]["executor"]["user_id"] = "replacement-user"
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            scheduler, "_executor", AsyncMock(side_effect=AssertionError("slot is complete"))
+        )
+        assert (
+            await scheduler.trigger_if_due(
+                ctx.account_id, ctx.user.user_id, compile_name, due + timedelta(hours=1)
+            )
+            == "not_due"
+        )
+    after = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     plan = {**before["update_schedule"], "hour": 9}
     other_owner = "another-owner"
     await service.compile.create_compile_task(
@@ -735,7 +758,8 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
         ),
         ctx=ctx,
     )
-    assert scheduler._expiry.report.await_args.args[0].identity.user_id == other_owner
+    scheduled_identity = scheduler._expiry.report.await_args.args[0].identity
+    assert scheduled_identity.user_id == other_owner
     assert (await store.get(ctx.account_id, other_owner, compile_name))["updated_by"] == other_owner
     assert (
         await scheduler.trigger_if_due(ctx.account_id, other_owner, compile_name, due)
@@ -763,6 +787,7 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     disabled = await store.get(ctx.account_id, other_owner, compile_name)
     assert disabled["execution_context"]["executor"]["user_id"] == ctx.user.user_id
     assert disabled["execution_context"]["credential"] is disabled["next_triggered_slot"] is None
+    scheduler._expiry.unregister.assert_awaited_with(scheduled_identity)
 
 
 async def test_configuration_update_preserves_times_and_retry_payload(service, app, monkeypatch):
