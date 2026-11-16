@@ -776,7 +776,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 11 + DSH_DESKTOP_OFFERED ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 12 + DSH_DESKTOP_OFFERED ))
 }
 
 tui_total_count() {
@@ -822,6 +822,7 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'codebuddy|codebuddy'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'qoder|qodercli'; return 0; fi
+  i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'antigravity|agy'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'cli|ov'; return 0; fi
