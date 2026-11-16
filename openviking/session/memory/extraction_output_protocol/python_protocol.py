@@ -263,6 +263,12 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
     def parse(
         self, content: str, context: ExtractionOutputContext
     ) -> tuple[Any | None, str | None]:
+        operations, error = self.parse_with_error(content, context)
+        return operations, str(error) if error is not None else None
+
+    def parse_with_error(
+        self, content: str, context: ExtractionOutputContext
+    ) -> tuple[Any | None, ExtractionOutputProtocolError | None]:
         self._last_error_allows_tool_retry = False
         self._capture_prompt_capabilities(context)
         try:
@@ -274,9 +280,11 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             self._last_error_allows_tool_retry = exc.allow_tool_retry and bool(
                 self._inspection_tools
             )
-            return None, str(exc)
+            return None, exc
         except Exception as exc:
-            return None, str(exc)
+            error = ExtractionOutputProtocolError(str(exc))
+            error.__cause__ = exc
+            return None, error
 
     def render_final_instruction(self, context: ExtractionOutputContext) -> str:
         del context
@@ -286,12 +294,15 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             "Python code. If there are no changes, return only sdk.commit()."
         )
 
-    def render_format_retry(self, error: str | None = None) -> str:
-        detail = f" Parser error: {error}" if error else ""
+    def render_format_retry(self, error: str | ExtractionOutputProtocolError | None = None) -> str:
+        message = str(error) if error is not None else ""
+        detail = f" Parser error: {message}" if message else ""
+        cause = error.__cause__ if isinstance(error, ExtractionOutputProtocolError) else None
+        syntax_message = cause.msg if isinstance(cause, SyntaxError) else message
         tool_guidance = ""
         binding_guidance = ""
         quote_guidance = ""
-        if error and "sdk.existing() is reserved" in error:
+        if "sdk.existing() is reserved" in message:
             binding_guidance = (
                 " Use the object_name from the system-provided existing-memory context record "
                 "as an already-bound variable; do not declare it or emit sdk.existing(). "
@@ -299,20 +310,23 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
                 "first, for example `canonical = sdk.create_<type>(...)`, then call "
                 "`duplicate_1.delete(replacement=canonical)`."
             )
-        if error and _is_string_literal_syntax_error(error):
+        if _is_string_literal_syntax_error(syntax_message):
             argument_examples = (
                 "content, summary, goal, and every search=/replace=/text= snippet"
                 if self._supports_string_patch
                 else "content, summary, goal"
             )
             quote_guidance = (
-                " If the error is about a string literal, the offending line is shown above; a "
-                "quote or newline inside prose likely ended the string early. Rewrite every "
-                f"natural-language argument ({argument_examples}) as a triple-quoted string "
-                '("""...""") so embedded quotes and '
-                "newlines stay inside the literal."
+                " Check the string delimiters on the offending line shown above. "
+                f"For natural-language arguments ({argument_examples}), "
+                "use triple-single or triple-double quotes. If the text ends with the same "
+                "quote character as the delimiter, escape that character or choose the other "
+                "delimiter if it does not occur in the text. Preserve the ending quote in "
+                "the decoded string. "
+                "For example, write obj.content.update('''Use \"fast\"''') "
+                "for text ending in a double quote."
             )
-        if self.keep_tools_enabled_after_parse_error(error):
+        if self.keep_tools_enabled_after_parse_error(message):
             tool_guidance = (
                 " The memory SDK is write-only. Call the available native "
                 f"{'/'.join(self._inspection_tools)} tool now; "
@@ -321,12 +335,11 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             )
         return (
             "Your previous output was not a valid restricted Python memory SDK program."
-            f"{detail}{tool_guidance}{binding_guidance}{quote_guidance} Regenerate the complete "
-            "program and output no explanation. "
-            "Put Markdown memory content inside quoted SDK arguments, using triple-quoted strings "
-            '("""...""") for any multi-line or Markdown text so newlines and quotes stay inside '
-            "the literal; never return it as the program itself. No changes from the invalid program "
-            "were applied."
+            f"{detail}{tool_guidance}{binding_guidance}{quote_guidance} "
+            "Fix the reported errors and return the complete program, including unaffected calls. "
+            "Preserve the intended operations, target bindings, and decoded memory text. "
+            "Return only Python code. Put Markdown memory content inside quoted SDK arguments. "
+            "No changes from the invalid program were applied."
         )
 
     def keep_tools_enabled_after_parse_error(self, error: str | None) -> bool:
@@ -653,9 +666,11 @@ class _PythonProgramCompiler:
                     "Output is bare Markdown, not a Python SDK program; put memory content inside "
                     "a quoted sdk.create_*/sdk.set_* argument or an existing object's update() call"
                 ) from exc
+            location = f"Line {exc.lineno or 1}"
+            if exc.offset and exc.offset > 0:
+                location += f", column {exc.offset}"
             raise ExtractionOutputProtocolError(
-                f"Line {exc.lineno or 1}: invalid Python syntax: {exc.msg}"
-                + _format_syntax_error_source(exc)
+                f"{location}: invalid Python syntax: {exc.msg}" + _format_syntax_error_source(exc)
             ) from exc
         # sdk.commit() is optional: an empty program (or one without commit) simply
         # means "no changes". When present, commit() still acts as a terminator and
@@ -1522,12 +1537,7 @@ def _fence_is_python_content(source: str, offset: int) -> bool:
 
 
 def _is_string_literal_syntax_error(error: str) -> bool:
-    """Heuristic: does this parse error point at a broken string literal?
-
-    These are almost always caused by an apostrophe or quote inside prose that
-    was wrapped in a single-/double-quoted literal instead of a triple-quoted
-    one, so the retry should push hard on triple quotes.
-    """
+    """Recognize diagnostics that may be caused by broken string delimiters."""
     lowered = error.lower()
     return any(
         marker in lowered
@@ -1542,14 +1552,8 @@ def _is_string_literal_syntax_error(error: str) -> bool:
 
 
 def _format_syntax_error_source(exc: SyntaxError, *, max_len: int = 120) -> str:
-    """Render the offending source line (and a caret) from a SyntaxError.
-
-    Python's own message (e.g. "Perhaps you forgot a comma?") is often
-    misleading for these programs; the real cause is usually a quote or newline
-    inside prose that should have been triple-quoted. Showing the actual line
-    lets the model see the break point instead of guessing.
-    """
-    text = (exc.text or "").rstrip("\n")
+    """Render an excerpt around the offending column, with a caret."""
+    text = (exc.text or "").rstrip("\r\n")
     if not text:
         return ""
     stripped = text.lstrip()
@@ -1557,11 +1561,15 @@ def _format_syntax_error_source(exc: SyntaxError, *, max_len: int = 120) -> str:
     offset = exc.offset
     caret_col = None
     if isinstance(offset, int) and offset >= 1:
-        caret_col = max(0, offset - 1 - lead)
+        caret_col = min(len(stripped), max(0, offset - 1 - lead))
     if len(stripped) > max_len:
-        stripped = stripped[:max_len] + "…"
-        if caret_col is not None and caret_col > max_len:
-            caret_col = None
+        start = min(max(0, (caret_col or 0) - max_len // 2), len(stripped) - max_len)
+        end = start + max_len
+        prefix = "…" if start else ""
+        suffix = "…" if end < len(stripped) else ""
+        stripped = prefix + stripped[start:end] + suffix
+        if caret_col is not None:
+            caret_col += len(prefix) - start
     lines = [f"\n  {stripped}"]
     if caret_col is not None and caret_col <= len(stripped):
         lines.append("\n  " + " " * caret_col + "^")

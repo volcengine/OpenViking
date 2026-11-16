@@ -25,11 +25,10 @@ PYTHON_CONTENT_RULE = (
     "Never return memory content as bare Markdown; all changes must be arguments to SDK calls."
 )
 PYTHON_STRING_LITERAL_RULE = (
-    'ALWAYS use a triple-quoted string ("""...""") for EVERY natural-language argument '
-    "(e.g. content, summary, goal), even one-liners. "
-    "Prose frequently contains apostrophes (e.g. Evan's), quotes, colons, or dates that break "
-    'single- or double-quoted literals. Inside triple quotes, escape any literal """ and '
-    "backslash; never put a real newline inside a single- or double-quoted string."
+    "Use triple-single or triple-double quotes for natural-language arguments "
+    "(e.g. content, summary, goal). Choose a delimiter that does not occur in the text. "
+    "Escape literal backslashes, the closing delimiter if it occurs in the text, and any "
+    "trailing quote that matches the delimiter, so the decoded text stays unchanged."
 )
 PYTHON_COMMIT_RULE = (
     "You may end the program with sdk.commit(); when present it must be the final call. "
@@ -67,7 +66,7 @@ PYTHON_PATCH_RULES = (
     "Each search= (and drop text=) MUST be copied verbatim from the current field value in the object's existing-memory context record, and must occur exactly once. Decode JSON string escapes when copying the text. If the snippet appears more than once, include an adjacent unique line just before or after it so the match is unique. Never use text from the conversation or the new facts you intend to add as a search anchor; that text is not in the current content and the edit will fail.",
     "edit()/drop() only work on an existing memory's editable string field (merge_op=patch); new memories from create/set must be given complete field values.",
     "For existing editable strings (merge_op=patch), prefer the smallest unique edit()/drop(). Do not rewrite the entire field just to add or change a few facts; large full-content rewrites are more likely to be truncated or malformed. Use obj.content.update() only when most of such an editable string changes.",
-    'Use triple-quoted strings ("""...""") for every search=/replace=/text= snippet too.',
+    "Use the same triple-quoted string rules for every search=/replace=/text= snippet.",
 )
 PYTHON_UPSERT_FOOTER = (
     PYTHON_STRING_LITERAL_RULE,
