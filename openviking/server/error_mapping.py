@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
-from openviking.models.model_error import ModelError, ModelErrorKind, model_error_from_exception
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -339,37 +339,6 @@ def _build_upstream_error(
     return OpenVikingError(display, code=code, details=details)
 
 
-def _map_structured_model_error(error: ModelError, *, context: Exception) -> OpenVikingError:
-    # An upstream status is the public fact when present. A status-less model
-    # error uses the complete protocol projection declared by its kind.
-    code = error.kind.protocol_code
-    if error.status_code is not None:
-        code = error_code_from_http_status(error.status_code, default=code)
-    if (
-        error.kind is ModelErrorKind.TRANSIENT_NETWORK_ERROR
-        and error.status_code is None
-        and any(
-            isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
-            for item in _iter_exception_chain(context)
-        )
-    ):
-        code = "DEADLINE_EXCEEDED"
-
-    details: dict[str, Any] = {"model_error_kind": error.kind.value}
-    if error.provider:
-        details["provider"] = error.provider
-    if error.code:
-        details["provider_error_code"] = error.code
-    return _build_upstream_error(
-        code=code,
-        message=_upstream_detail_message(context),
-        status=error.status_code,
-        source=error,
-        vlm_context=context,
-        extra_details=details,
-    )
-
-
 def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
     for item in _iter_exception_chain(exc):
         if isinstance(item, AllCredentialsFailedError):
@@ -385,13 +354,6 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
                 source=item,
                 vlm_context=exc,
             )
-
-    # A provider boundary owns classification. Project its kind and status
-    # without classifying the message again.
-    for item in _iter_exception_chain(exc):
-        if isinstance(item, ModelError):
-            model_error = model_error_from_exception(item) or item
-            return _map_structured_model_error(model_error, context=exc)
 
     status, source = _extract_structured_http_status(exc)
     if status is None:
@@ -419,6 +381,39 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             source=source,
             message=_upstream_detail_message(exc),
             vlm_context=exc,
+        )
+
+    # Only use a carried kind after the existing status/transport handling.
+    # UNKNOWN keeps the legacy configuration and message fallbacks below.
+    for item in _iter_exception_chain(exc):
+        if not isinstance(item, ModelError):
+            continue
+        model_code = {
+            ModelErrorKind.TRANSIENT_SERVICE_ERROR: "UNAVAILABLE",
+            ModelErrorKind.TRANSIENT_NETWORK_ERROR: "UNAVAILABLE",
+            ModelErrorKind.RATE_LIMIT_ERROR: "RESOURCE_EXHAUSTED",
+            ModelErrorKind.AUTHENTICATION_ERROR: "UNAUTHENTICATED",
+            ModelErrorKind.PERMISSION_DENIED: "PERMISSION_DENIED",
+            ModelErrorKind.QUOTA_EXHAUSTED: "RESOURCE_EXHAUSTED",
+            ModelErrorKind.MODEL_NOT_FOUND: "NOT_FOUND",
+            ModelErrorKind.UNSUPPORTED: "INVALID_ARGUMENT",
+            ModelErrorKind.INVALID_REQUEST: "INVALID_ARGUMENT",
+            ModelErrorKind.INPUT_TOO_LARGE: "INVALID_ARGUMENT",
+            ModelErrorKind.CONTENT_SAFETY: "INVALID_ARGUMENT",
+        }.get(item.kind)
+        if model_code is None:
+            break
+        details: dict[str, Any] = {"model_error_kind": item.kind.value}
+        if item.provider:
+            details["provider"] = item.provider
+        if item.code:
+            details["provider_error_code"] = item.code
+        return _build_upstream_error(
+            code=model_code,
+            message=_upstream_detail_message(exc),
+            source=item,
+            vlm_context=exc,
+            extra_details=details,
         )
 
     if _is_model_api_key_configuration_error(exc):

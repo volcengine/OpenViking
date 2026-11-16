@@ -6,6 +6,7 @@
 import httpx
 import pytest
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -214,6 +215,25 @@ def test_upstream_status_survives_circuit_breaker(status, message, expected_code
 
 
 @pytest.mark.parametrize(
+    ("cause_status", "expected_status"), [(None, 401), (401, 401), (429, 429), (504, 504)]
+)
+def test_unknown_model_error_preserves_legacy_mapping(cause_status, expected_status):
+    error = ModelError(
+        ModelErrorKind.UNKNOWN,
+        "MiniMax API error: invalid api key",
+        provider="minimax",
+        code="9999",
+    )
+    if cause_status is not None:
+        error.__cause__ = _HTTPStatusError(cause_status, "upstream request failed")
+
+    mapped = map_exception(error)
+
+    assert mapped is not None
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == expected_status
+
+
+@pytest.mark.parametrize(
     ("message", "expected_code"),
     [
         ("Cohere API error: 403 Forbidden", "PERMISSION_DENIED"),
@@ -397,6 +417,9 @@ def test_git_auth_failure_remains_a_client_error():
     assert error.code == GIT_AUTH_FAILED
     assert ERROR_CODE_TO_HTTP_STATUS.get(error.code, 500) == 400
     assert error_response(error.code, error.message).status_code == 400
-    assert response_from_result(
-        {"status": "error", "code": error.code, "errors": [error.message]}
-    ).status_code == 400
+    assert (
+        response_from_result(
+            {"status": "error", "code": error.code, "errors": [error.message]}
+        ).status_code
+        == 400
+    )

@@ -12,26 +12,18 @@ from typing import Any, Callable, TypeVar, cast
 
 
 class ModelErrorKind(str, Enum):
-    protocol_code: str
-
-    def __new__(cls, value: str, protocol_code: str) -> "ModelErrorKind":
-        member = str.__new__(cls, value)
-        member._value_ = value
-        member.protocol_code = protocol_code
-        return member
-
-    TRANSIENT_SERVICE_ERROR = "transient_service_error", "UNAVAILABLE"
-    TRANSIENT_NETWORK_ERROR = "transient_network_error", "UNAVAILABLE"
-    RATE_LIMIT_ERROR = "rate_limit_error", "RESOURCE_EXHAUSTED"
-    AUTHENTICATION_ERROR = "authentication_error", "UNAUTHENTICATED"
-    PERMISSION_DENIED = "permission_denied", "PERMISSION_DENIED"
-    QUOTA_EXHAUSTED = "quota_exhausted", "RESOURCE_EXHAUSTED"
-    MODEL_NOT_FOUND = "model_not_found", "NOT_FOUND"
-    UNSUPPORTED = "unsupported", "INVALID_ARGUMENT"
-    INVALID_REQUEST = "invalid_request", "INVALID_ARGUMENT"
-    INPUT_TOO_LARGE = "input_too_large", "INVALID_ARGUMENT"
-    CONTENT_SAFETY = "content_safety", "INVALID_ARGUMENT"
-    UNKNOWN = "unknown", "INTERNAL"
+    TRANSIENT_SERVICE_ERROR = "transient_service_error"
+    TRANSIENT_NETWORK_ERROR = "transient_network_error"
+    RATE_LIMIT_ERROR = "rate_limit_error"
+    AUTHENTICATION_ERROR = "authentication_error"
+    PERMISSION_DENIED = "permission_denied"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    MODEL_NOT_FOUND = "model_not_found"
+    UNSUPPORTED = "unsupported"
+    INVALID_REQUEST = "invalid_request"
+    INPUT_TOO_LARGE = "input_too_large"
+    CONTENT_SAFETY = "content_safety"
+    UNKNOWN = "unknown"
 
 
 class ModelError(Exception):
@@ -203,16 +195,6 @@ def _kind_from_code(error: BaseException) -> ModelErrorKind | None:
     return None
 
 
-def _provider_kind_from_code(error: BaseException) -> ModelErrorKind | None:
-    provider = getattr(error, "provider", None)
-    if not isinstance(provider, str):
-        return None
-    normalized = _normalized_code(_error_code(error))
-    if normalized is None:
-        return None
-    return _PROVIDER_CODE_KINDS.get(provider.lower(), {}).get(normalized)
-
-
 def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
     if status_code in _TRANSIENT_SERVICE_STATUS:
         return ModelErrorKind.TRANSIENT_SERVICE_ERROR
@@ -240,13 +222,12 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str | None] | None:
     name = type(error).__name__
     mro_names = {base.__name__ for base in type(error).__mro__}
 
-    carried_kind = getattr(error, "kind", None)
-    if isinstance(carried_kind, ModelErrorKind):
-        kind = carried_kind
-        if kind is ModelErrorKind.UNKNOWN:
-            kind = _provider_kind_from_code(error) or ModelErrorKind.UNKNOWN
-        provider = getattr(error, "provider", None)
-        return kind, provider if isinstance(provider, str) else None
+    if isinstance(error, ModelError):
+        carried_kind = error.kind
+        if carried_kind is ModelErrorKind.UNKNOWN:
+            code_kinds = _PROVIDER_CODE_KINDS.get((error.provider or "").lower(), {})
+            carried_kind = code_kinds.get(error.code or "", carried_kind)
+        return carried_kind, error.provider
 
     if isinstance(error, TimeoutError):
         return ModelErrorKind.TRANSIENT_NETWORK_ERROR, "network"
@@ -383,6 +364,14 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
 
 def model_error_kind(error: BaseException) -> ModelErrorKind | None:
     """Return the structured model kind carried by an exception chain."""
+    for item in _exception_chain(error):
+        if isinstance(item, ModelError):
+            # Preserve the carried classification before inspecting SDK wrappers.
+            error = item
+            break
+        kind = getattr(item, "kind", None)
+        if isinstance(kind, ModelErrorKind):
+            return kind
     converted = model_error_from_exception(error)
     return converted.kind if converted is not None else None
 
