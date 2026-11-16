@@ -6,11 +6,8 @@ import {
   type FilePreviewToolbarOptions,
   type FilePreviewHeaderSlots,
 } from '../../components/file-preview/index.js';
-import { useState, type ReactNode } from 'react';
-import {
-  FilePreviewEditContext,
-  type FilePreviewEditRequest,
-} from '../../components/file-preview/file-preview-edit-request.js';
+import { useCallback, useRef, type ReactNode } from 'react';
+import { FilePreviewEditContext } from '../../components/file-preview/file-preview-edit-context.js';
 import { dashboardKey } from './dashboard-model.js';
 import { isEditableText } from './preview-policy.js';
 
@@ -47,7 +44,15 @@ export function FileBrowserDetail({
   onActiveKeyChange,
   onSave,
 }: FileBrowserDetailProps) {
-  const [request, setRequest] = useState<FilePreviewEditRequest | null>(null);
+  const pendingEdit = useRef<string | null>(null);
+  const onFileReady = useCallback(
+    (key: string, startEditing?: () => void) => {
+      if (pendingEdit.current !== key) return;
+      pendingEdit.current = null;
+      if (canEditConflict) startEditing?.();
+    },
+    [canEditConflict],
+  );
   const conflictFile = canEditConflict
     ? tabs.find(
         (tab) =>
@@ -59,20 +64,13 @@ export function FileBrowserDetail({
     : undefined;
   const editFile = conflictFile
     ? () => {
-        const next = {
-          tabKey: conflictFile.key,
-          onConsumed: () =>
-            setRequest((pending) => (pending === next ? null : pending)),
-        };
-        setRequest(next);
+        pendingEdit.current = conflictFile.key;
         onActiveKeyChange(conflictFile.key);
       }
     : null;
   return (
     <div className="ov-file-browser__detail">
-      <FilePreviewEditContext.Provider
-        value={{ request: canEditConflict ? request : null, editFile }}
-      >
+      <FilePreviewEditContext.Provider value={{ editFile, onFileReady }}>
         <FilePreview
           tabs={
             decorateTabs(
@@ -90,7 +88,7 @@ export function FileBrowserDetail({
           locale={locale}
           labels={labels}
           onActiveKeyChange={(key) => {
-            setRequest(null);
+            pendingEdit.current = null;
             onActiveKeyChange(key);
           }}
         />

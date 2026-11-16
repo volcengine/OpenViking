@@ -276,6 +276,7 @@ The context the component passes to an `actions` function and a `slots.actions` 
 | setViewMode   | Switches the view mode                                                                                                       | `(mode: FilePreviewViewMode) => void` | -       |
 | canSwitchView | Whether the format supports both preview and source; render no switch when `false`                                           | `boolean`                             | -       |
 | editing       | Whether the tab is being edited                                                                                              | `boolean`                             | -       |
+| draft         | Current draft while editing, including an empty string                                                                       | `string`                              | -       |
 | busy          | Whether a save or a read is in progress                                                                                      | `boolean`                             | -       |
 | canEdit       | Whether editing can start: `editing` is supplied, the file is not an image or video, and the tab is not already being edited | `boolean`                             | -       |
 | startEditing  | Enters editing, reading the full text first                                                                                  | `() => void`                          | -       |

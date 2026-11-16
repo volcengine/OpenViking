@@ -3,7 +3,7 @@ import {
   type WikiDashboardProps,
 } from '../../components/wiki-dashboard/index.js';
 import { useContext } from 'react';
-import { FilePreviewEditContext } from '../../components/file-preview/file-preview-edit-request.js';
+import { FilePreviewEditContext } from '../../components/file-preview/file-preview-edit-context.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useWikiDashboard } from './use-wiki-dashboard.js';
 

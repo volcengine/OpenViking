@@ -93,7 +93,7 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
     if (path.endsWith('/fs/stat')) return ok({ uri, isDir: false });
-    if (path.endsWith('/content/read')) return ok('# Initial');
+    if (path.endsWith('/content/read')) return ok('# Preview excerpt');
     if (path.endsWith('/content/write')) {
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
@@ -116,13 +116,22 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
     }
     return requests(input, init);
   };
-  const render = (readOnly) =>
+  const render = (readOnly, previewActions) =>
     createElement(
       OpenVikingProvider,
       { fetch },
-      createElement(FileBrowser, { rootUri, uri, readOnly }),
+      createElement(FileBrowser, { rootUri, uri, readOnly, previewActions }),
     );
   const view = await mount(render(false));
+  const originalClipboard = Object.getOwnPropertyDescriptor(
+    navigator,
+    'clipboard',
+  );
+  const copied = [];
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (text) => copied.push(text) },
+  });
   try {
     const reads = requests.countOf('/api/v1/content/read');
     await click(view, 'Edit');
@@ -146,7 +155,15 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
       '# Initial',
     );
     assert.equal(fullReads, 1);
-    await setEditor(view.container.querySelector('.cm-content'), '# Updated');
+    await click(view, 'Copy content');
+    const editor = view.container.querySelector('.cm-content');
+    await setEditor(editor, '');
+    await click(view, 'Copy content');
+    await setEditor(editor, '# Updated');
+    await click(view, 'Copy content');
+    assert.deepEqual(copied, ['# Initial', '', '# Updated']);
+    await view.render(render(false, { copyContent: false }));
+    assert.equal(button(view, 'Copy content'), undefined);
     await click(view, 'Save');
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
     assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
@@ -160,6 +177,11 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
     await view.render(render(true));
     assert.equal(button(view, 'Edit'), undefined);
   } finally {
+    if (originalClipboard) {
+      Object.defineProperty(navigator, 'clipboard', originalClipboard);
+    } else {
+      delete navigator.clipboard;
+    }
     await view.unmount();
   }
 });

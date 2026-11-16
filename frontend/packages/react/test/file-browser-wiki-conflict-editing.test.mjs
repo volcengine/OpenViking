@@ -8,6 +8,7 @@ import {
   mount,
   ok,
   rootUri,
+  settle,
   target,
   tree,
 } from './helpers/preview-native-dom.mjs';
@@ -15,6 +16,8 @@ import { deferred } from './helpers/module-dom.mjs';
 import { waitForEditor } from './helpers/preview-editor-dom.mjs';
 
 const file = `${target}/approvals.md`;
+const otherFile = `${target}/other.md`;
+const otherBody = 'This file has no pending edits.';
 const body = 'The process requires two approvals.';
 const pending = {
   match_text: 'two approvals',
@@ -46,8 +49,15 @@ async function mountWikiFile(props, pendingPreview) {
             { uri: target, isDir: true, tags: ['compile_target=true'] },
           ]);
         if (uri === target)
-          return ok([{ uri: file, isDir: false, tags: ['has_conflict=true'] }]);
+          return ok([
+            { uri: file, isDir: false, tags: ['has_conflict=true'] },
+            { uri: otherFile, isDir: false },
+          ]);
         return ok([]);
+      }
+      if (uri === otherFile) {
+        if (path.endsWith('/fs/stat')) return ok({ isDir: false });
+        if (path.endsWith('/content/read')) return ok(otherBody);
       }
       if (path.endsWith('/search/find'))
         return ok({ resources: [{ uri: file, level: 2 }] });
@@ -58,12 +68,13 @@ async function mountWikiFile(props, pendingPreview) {
     },
     [{ to: target }],
   );
-  const view = await mount(
-    tree(fetch, file, { defaultExpandedUri: target, ...props }),
-  );
+  const render = (uri) =>
+    tree(fetch, uri, { defaultExpandedUri: target, ...props });
+  const view = await mount(render(file));
   return {
     view,
     fetch,
+    navigate: (uri) => view.render(render(uri)),
     openDashboard: () =>
       click(
         view.container.querySelector(
@@ -120,6 +131,43 @@ test('the FileBrowser Wiki conflict pencil waits for the selected file preview',
     assert.equal(view.container.querySelector('.cm-content'), null);
     await act(async () => preview.resolve());
     assert.equal((await waitForEditor(view.container)).textContent, body);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('navigating away discards a pending Wiki conflict edit before preview loading finishes', async () => {
+  const preview = deferred();
+  const { view, fetch, navigate, openDashboard, pencil, activeTab } =
+    await mountWikiFile(undefined, preview.promise);
+  const editReads = (path) =>
+    fetch.calls.filter(
+      (call) =>
+        call.path.endsWith('/content/read') &&
+        call.uri === path &&
+        call.query.limit === '-1',
+    ).length;
+  try {
+    await openDashboard();
+    const dashboardReads = editReads(file);
+    await click(pencil());
+    assert.equal(activeTab(), file);
+    assert.equal(view.container.querySelector('.cm-content'), null);
+
+    await navigate(otherFile);
+    await settle();
+    assert.equal(activeTab(), otherFile);
+    assert.match(
+      view.container.textContent,
+      new RegExp(`${otherBody.length} characters`),
+    );
+
+    await act(async () => preview.resolve());
+    await settle();
+    assert.equal(activeTab(), otherFile);
+    assert.equal(view.container.querySelector('.cm-content'), null);
+    assert.equal(editReads(file), dashboardReads);
+    assert.equal(editReads(otherFile), 0);
   } finally {
     await view.unmount();
   }

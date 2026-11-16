@@ -11,7 +11,7 @@ import type {
 } from './preview-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
-/** Content copying is a module command; the component only exposes the active source. */
+/** Content copying uses the editor draft when editing and the preview source otherwise. */
 export function previewActionContext(
   context: FilePreviewActions,
   controls: Pick<FileBrowserPreviewActionContext, 'canDelete' | 'deleteFile'>,
@@ -19,11 +19,11 @@ export function previewActionContext(
   options: FileBrowserPreviewActions | undefined,
   text: ResolvedLabels,
 ): FileBrowserPreviewActionContext {
-  const content = context.source?.content;
+  const content = context.editing ? context.draft : context.source?.content;
   const commands: FilePreviewAction[] = [];
   if (
     typeof content === 'string' &&
-    content.length > 0 &&
+    (context.editing || content.length > 0) &&
     options?.copyContent !== false
   ) {
     commands.push(

@@ -452,6 +452,8 @@ export interface FilePreviewActions {
   canSwitchView: boolean;
   /** 是否处于编辑态。Whether the tab is being edited. */
   editing: boolean;
+  /** 当前编辑草稿，可为空字符串；未进入编辑态时省略。The current draft, which may be empty; omitted outside editing. */
+  draft?: string;
   /** 是否有保存或读取在进行中。Whether a save or load is in flight. */
   busy: boolean;
   /** 该页签是否可编辑，即可提供 `editing`。Whether the tab is editable. */

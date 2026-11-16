@@ -4,8 +4,8 @@
 
 ## en-US
 
-Hide the Preview / Source switch during editing and keep version history and content copy available in FileBrowser.
+Hide the Preview / Source switch during editing. FileBrowser keeps version history available and copies the current editor draft.
 
 ## zh-CN
 
-编辑态隐藏「预览 / 源码」切换，文件浏览区块保留版本历史与正文复制入口。
+编辑态隐藏「预览 / 源码」切换。文件浏览区块保留版本历史，复制正文时取当前编辑草稿。

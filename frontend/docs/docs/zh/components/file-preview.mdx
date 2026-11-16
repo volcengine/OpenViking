@@ -276,6 +276,7 @@ import '@openviking/react/components/file-preview/style.css';
 | setViewMode   | 切换视图模式                                                     | `(mode: FilePreviewViewMode) => void` | -      |
 | canSwitchView | 当前格式是否同时支持预览与源码，为 `false` 时不要渲染切换控件    | `boolean`                             | -      |
 | editing       | 是否处于编辑态                                                   | `boolean`                             | -      |
+| draft         | 当前编辑草稿，可以为空字符串，退出编辑后省略                     | `string`                              | -      |
 | busy          | 是否有保存或读取正在进行                                         | `boolean`                             | -      |
 | canEdit       | 是否可以进入编辑：提供了 `editing`，不是图片或视频，且不在编辑态 | `boolean`                             | -      |
 | startEditing  | 进入编辑态，先读取完整文本                                       | `() => void`                          | -      |
