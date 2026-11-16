@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -283,6 +283,39 @@ test("SessionEnd commits turns a Stop already sent below the commit threshold", 
         assert.equal(seen.commit, 1, "SessionEnd commits what Stop already sent");
         await run("session-end");
         assert.equal(seen.commit, 1, "nothing is left to commit");
+      } finally {
+        await rmSync(files.dir, { recursive: true, force: true });
+      }
+    });
+  } finally {
+    await rmSync(box.files.dir, { recursive: true, force: true });
+    restoreEnv();
+  }
+});
+
+test("SessionEnd waits out a Stop still holding the session lock instead of skipping the commit", async () => {
+  const restoreEnv = scrubOpenVikingEnv();
+  const box = await sandbox();
+  const seen = { batches: [], commit: 0 };
+  try {
+    await withMockOpenViking(healthyMock(seen), async (url) => {
+      const files = await writeCredentialFiles("ov-qd-capture-url-", {
+        ovcli: { url, api_key: "k" },
+        ov: {},
+      });
+      try {
+        const env = { ...files.env, ...box.env };
+        const input = stopPayload(box.transcript, box.files.dir);
+        const run = (event) => runHookScript(HOOK, { argv: [event, "qoder"], input, cwd: box.files.dir, env });
+        expectExit(await run("stop"), 0);
+        const lock = join(box.env.OPENVIKING_HOOK_STATE_DIR, "qoder", "sess-1.json.lock");
+        mkdirSync(lock);
+        const ending = run("session-end");
+        await new Promise((resolve) => setTimeout(resolve, 6000));
+        assert.equal(seen.commit, 0, "SessionEnd is still waiting for the lock");
+        rmSync(lock, { recursive: true, force: true });
+        expectExit(await ending, 0);
+        assert.equal(seen.commit, 1, "SessionEnd commits once the lock frees up");
       } finally {
         await rmSync(files.dir, { recursive: true, force: true });
       }
