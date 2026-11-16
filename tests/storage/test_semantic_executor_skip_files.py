@@ -13,7 +13,7 @@ from openviking_cli.session.user_id import UserIdentifier
 @pytest.fixture(autouse=True)
 def _semantic_config(monkeypatch):
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
@@ -98,6 +98,7 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         file_md5=None,
+        action="merge",
     ):
         self.vectorized_files.append(file_path)
 

@@ -748,25 +748,28 @@ class SkillProcessor:
         *,
         source_path: str = "",
     ) -> None:
+        from openviking.storage.context_update_plan import SemanticRefreshIntent
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.semantic_msg import SemanticMsg
 
         telemetry = get_current_telemetry()
         register_telemetry(telemetry)
         lock_guard = PathLockGuard(viking_fs._async_agfs, lease)
-        msg = SemanticMsg(
-            uri=uri,
-            context_type="skill",
-            recursive=True,
+        msg = SemanticMsg.from_refresh(
+            SemanticRefreshIntent(
+                uri=uri,
+                context_type="skill",
+                recursive=True,
+                generation_trigger="skill_ingest",
+                propagate_to_parent=False,
+                source={"path": source_path},
+            ),
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             group_ids=ctx.group_ids,
             role=str(ctx.role),
             telemetry_id=telemetry.telemetry_id,
             lock_handoff=await lock_guard.to_handoff(),
-            generation_trigger="skill_ingest",
-            propagate_to_parent=False,
-            source={"path": source_path},
         )
         try:
             queue_manager = get_queue_manager()

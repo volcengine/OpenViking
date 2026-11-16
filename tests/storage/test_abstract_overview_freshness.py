@@ -174,3 +174,103 @@ async def test_pending_snapshot_reads_existing_sidecars_under_lock():
         await read_abstract_overview_pending_snapshot(viking_fs=fs, dir_uri=dir_uri, ctx=None) == 3
     )
     assert fs.lock_timeouts == [0.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("window", ["before_write_lock", "after_write_lock"])
+async def test_prepared_refresh_rechecks_revision_at_both_commit_windows(monkeypatch, window):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+
+    root = "viking://resources/repo"
+    original = _files(root, total=161, pending=17)
+    fs = _FakeFS(original)
+    fs.ls = AsyncMock(return_value=[])
+    generated, finish_generation = asyncio.Event(), asyncio.Event()
+    acquiring_write, finish_acquire = asyncio.Event(), asyncio.Event()
+    obsolete = False
+    lock_count = 0
+    original_acquire = fs.pathlock_acquire_exact_batch
+
+    async def acquire(paths, timeout_secs=0.0):
+        nonlocal lock_count
+        lock_count += 1
+        if lock_count == 2 and window == "after_write_lock":
+            acquiring_write.set()
+            await finish_acquire.wait()
+        return await original_acquire(paths, timeout_secs)
+
+    async def generate(*args, **kwargs):
+        generated.set()
+        await finish_generation.wait()
+        return "new overview"
+
+    async def stale():
+        return obsolete
+
+    fs.pathlock_acquire_exact_batch = acquire
+    processor = SimpleNamespace(
+        _generate_overview=generate,
+        _normalize_overview_generation=lambda overview: (overview, "new abstract"),
+        _vectorize_directory=AsyncMock(),
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    executor = SemanticTreeExecutor(processor, "resource", 1, None)
+    executor._is_stale = stale
+    task = asyncio.create_task(executor.run(root))
+    await asyncio.wait_for(generated.wait(), 2)
+    if window == "before_write_lock":
+        obsolete = True
+        finish_generation.set()
+    else:
+        finish_generation.set()
+        await asyncio.wait_for(acquiring_write.wait(), 2)
+        obsolete = True
+        finish_acquire.set()
+    await asyncio.wait_for(task, 2)
+    assert fs.files == original
+    assert executor.stale
+    processor._vectorize_directory.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "force, expected_pending, aggregate", [(None, 15, True), (False, 16, False), (True, 16, True)]
+)
+async def test_committed_refresh_keeps_force_refresh_tristate(
+    monkeypatch, force, expected_pending, aggregate
+):
+    from types import SimpleNamespace
+
+    from openviking.storage.context_update_plan import SemanticRefreshIntent
+    from openviking.storage.semantic_planning import (
+        prepare_committed_refresh,
+        resolve_semantic_execution,
+    )
+
+    root = "viking://resources/wide"
+    fs = _FakeFS(_files(root, total=161, pending=15))
+    monkeypatch.setattr(
+        "openviking.storage.semantic_planning.get_openviking_config",
+        lambda: SimpleNamespace(
+            semantic=SimpleNamespace(overview_sample_limit=32, freshness_refresh_ratio=0.10)
+        ),
+    )
+    intent, _ = await prepare_committed_refresh(
+        SemanticRefreshIntent(
+            root, "resource", recursive=False, changes={"modified": [f"{root}/a.py"]}
+        ),
+        viking_fs=fs,
+        ctx=None,
+        force_refresh=force,
+    )
+    assert intent.aggregate_directory is aggregate
+    # Resolution/retry does not admit the original changes a second time.
+    resolve_semantic_execution(intent)
+    resolve_semantic_execution(intent)
+    assert {
+        parse_abstract_overview(raw).metadata["freshness"]["pending_child_changes"]
+        for raw in fs.files.values()
+    } == {expected_pending}

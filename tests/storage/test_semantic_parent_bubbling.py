@@ -21,11 +21,9 @@ async def test_unchanged_l0_does_not_mark_or_enqueue_parent(monkeypatch):
     plan = AsyncMock(
         return_value=FreshnessDecision(FreshnessAction.NOOP, pending_after=3, total_entries=161)
     )
+    monkeypatch.setattr("openviking.storage.semantic_planning.plan_abstract_overview_refresh", plan)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh", plan
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(overview_sample_limit=32, freshness_refresh_ratio=0.10)
         ),
@@ -55,9 +53,7 @@ async def test_unchanged_l0_does_not_mark_or_enqueue_parent(monkeypatch):
 @pytest.mark.asyncio
 async def test_non_recursive_reindex_does_not_bubble_to_parent(monkeypatch):
     plan = AsyncMock(side_effect=AssertionError("non-recursive reindex must stop at target"))
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh", plan
-    )
+    monkeypatch.setattr("openviking.storage.semantic_planning.plan_abstract_overview_refresh", plan)
 
     msg = SemanticMsg(
         uri="viking://resources/root/child",
@@ -87,11 +83,11 @@ async def test_parent_refresh_stops_at_nonsemantic_namespace_root(monkeypatch, u
         side_effect=AssertionError("non-semantic namespace root must not be refreshed")
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh",
+        "openviking.storage.semantic_planning.plan_abstract_overview_refresh",
         plan,
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(
                 overview_sample_limit=32,
@@ -132,11 +128,11 @@ async def test_parent_refresh_preserves_semantic_roots(
 ):
     plan = AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy"))
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh",
+        "openviking.storage.semantic_planning.plan_abstract_overview_refresh",
         plan,
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(
                 overview_sample_limit=32,

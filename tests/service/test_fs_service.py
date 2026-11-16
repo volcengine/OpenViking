@@ -1598,7 +1598,7 @@ async def test_copy_refresh_message_only_rebuilds_parent_semantics(
         lambda: queue_manager,
     )
     monkeypatch.setattr(
-        "openviking.service.fs_service.mark_abstract_overview_pending",
+        "openviking.storage.semantic_planning.plan_abstract_overview_refresh",
         mark_pending,
     )
 
@@ -1633,7 +1633,7 @@ async def test_transfer_refresh_message_records_deleted_source_entry(
         lambda: queue_manager,
     )
     monkeypatch.setattr(
-        "openviking.service.fs_service.mark_abstract_overview_pending",
+        "openviking.storage.semantic_planning.plan_abstract_overview_refresh",
         AsyncMock(),
     )
 
@@ -1665,7 +1665,7 @@ async def test_file_only_transfer_rebuild_uses_fresh_semantic_processing(
         lambda: queue_manager,
     )
     monkeypatch.setattr(
-        "openviking.service.fs_service.mark_abstract_overview_pending",
+        "openviking.storage.semantic_planning.plan_abstract_overview_refresh",
         mark_pending,
     )
     target = (

@@ -49,9 +49,9 @@ from openviking.storage.abstract_overview import (
     freshness_metadata,
     markdown_safe_viking_uri,
     parse_overview_file_summaries,
-    plan_abstract_overview_refresh,
     write_abstract_overview,
 )
+from openviking.storage.context_update_plan import SemanticPlan
 from openviking.storage.errors import (
     HandoffRecoveryBlocked,
     InvalidPathLockRequestError,
@@ -65,9 +65,13 @@ from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor, SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
-from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_work import SemanticMessageWork, SkillSemanticMessageWork
+from openviking.storage.semantic_planning import (
+    load_transfer_file_summaries,
+    prepare_parent_followup,
+    resolve_semantic_execution,
+)
 from openviking.storage.viking_fs import LS_ALL_NODES, SyncDiff, get_viking_fs
 from openviking.telemetry import (
     bind_telemetry,
@@ -393,65 +397,18 @@ class SemanticProcessor(DequeueHandlerBase):
     async def _enqueue_parent_refresh(
         self, msg: SemanticMsg, uri: str, *, l0_body_changed: bool
     ) -> None:
-        if msg.generation_trigger == "content_copy":
-            return
-        if msg.context_type not in {"resource", "skill"}:
-            return
-        if not msg.propagate_to_parent:
-            return
-        parent = VikingURI(uri).parent
-        if parent is None:
-            return
-        parent_uri = parent.uri.rstrip("/")
-        if msg.context_type == "skill":
-            classification = classify_uri(parent_uri)
-            if (
-                not classification.is_skill
-                or classification.is_skill_namespace
-                or classification.is_skill_root
-            ):
-                return
-        if (
-            not parent_uri
-            or parent_uri in {"viking://", "viking:", "viking://user", "viking://agent"}
-            or parent_uri == uri.rstrip("/")
-        ):
-            return
-        parent_ctx = self._ctx_from_semantic_msg(msg)
-        semantic_config = get_openviking_config().semantic
-        try:
-            decision = await plan_abstract_overview_refresh(
-                viking_fs=get_viking_fs(),
-                dir_uri=parent_uri,
-                changed_entries=1,
-                ctx=parent_ctx,
-                l0_body_changed=l0_body_changed,
-                # This helper handles automatic upward propagation only. Manual
-                # refresh/ingest bypasses the threshold for its requested root,
-                # not for every ancestor reached afterwards.
-                force_refresh=False,
-                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-                lock_timeout_secs=1.0,
+        followup = await prepare_parent_followup(
+            msg.preparation_input(),
+            uri,
+            viking_fs_factory=get_viking_fs,
+            ctx=self._ctx_from_semantic_msg(msg),
+            l0_body_changed=l0_body_changed,
+            propagate_to_parent=msg.propagate_to_parent,
+        )
+        if followup is not None:
+            await self._enqueue_directory_refresh(
+                msg, followup.uri, changes=dict(followup.changes or {})
             )
-        except LockAcquisitionError:
-            logger.info(
-                "Skipping best-effort parent freshness update because sidecars are busy: %s",
-                parent_uri,
-            )
-            return
-
-        if decision.action is not FreshnessAction.REFRESH_NOW:
-            logger.debug(
-                "Parent semantic refresh %s for %s (pending=%d, total=%d)",
-                decision.action.value,
-                parent_uri,
-                decision.pending_after,
-                decision.total_entries,
-            )
-            return
-
-        await self._enqueue_directory_refresh(msg, parent_uri, changes={"modified": [uri]})
 
     async def _enqueue_directory_refresh(
         self, msg: SemanticMsg, parent_uri: str, *, changes: Dict[str, List[str]]
@@ -645,78 +602,20 @@ class SemanticProcessor(DequeueHandlerBase):
                     dag_stats = None
                     processing_succeeded = False
                     try:
-                        if msg.plan is not None:
-                            if msg.uri.rstrip("/") != msg.plan.root_uri:
-                                raise ValueError("semantic message URI must match plan root_uri")
-                            if msg.context_type != msg.plan.context_type:
-                                raise ValueError(
-                                    "semantic message context_type must match semantic plan"
-                                )
-                            for run_uri in msg.plan.execution_root_uris():
-                                executor = SemanticTreeExecutor(
-                                    processor=self,
-                                    context_type=msg.context_type,
-                                    max_concurrent_llm=self.max_concurrent_llm,
-                                    ctx=current_ctx,
-                                    lock=semantic_lock.lock,
-                                    source=msg.plan.source_metadata,
-                                    semantic_plan=msg.plan,
-                                    telemetry_id=msg.telemetry_id,
-                                    generation_trigger=msg.generation_trigger,
-                                )
-                                await executor.run(run_uri)
-                                self._cache_tree_stats(
-                                    msg.telemetry_id, run_uri, executor.get_stats()
-                                )
-                                if not executor.stale:
-                                    write_result = getattr(
-                                        executor,
-                                        "root_write_result",
-                                        AbstractOverviewWriteResult(
-                                            wrote=True, abstract_body_changed=True
-                                        ),
-                                    )
-                                    await self._enqueue_parent_refresh(
-                                        msg,
-                                        run_uri,
-                                        l0_body_changed=write_result.abstract_body_changed,
-                                    )
-                            from collections import Counter
-
-                            entries = msg.plan.tree.entries
-                            action_counts = Counter(
-                                entry.semantic_action.value for entry in entries
-                            )
-                            vector_slots = sum(
-                                slot.action.value in {"upsert", "merge"}
-                                for entry in entries
-                                for slot in entry.index_slots
-                            )
-                            logger.debug(
-                                "[SemanticPlanExecution] root=%s execution_roots=%d "
-                                "semantic_entries=%d actions=%s planned_vector_upserts=%d",
-                                msg.plan.root_uri,
-                                len(msg.plan.execution_root_uris()),
-                                len(entries),
-                                dict(action_counts),
-                                vector_slots,
-                            )
-                        # Regular memory writes keep their specialized update path.
-                        # Callers must explicitly opt into directory aggregation; the
-                        # trigger remains descriptive metadata, not an algorithm switch.
-                        elif msg.context_type == "memory" and not msg.use_hierarchical_aggregation:
+                        if (
+                            msg.plan is None
+                            and msg.context_type == "memory"
+                            and not msg.use_hierarchical_aggregation
+                        ):
                             await self._process_memory_directory(
-                                msg,
-                                ctx=current_ctx,
-                                lock=semantic_lock.lock,
+                                msg, ctx=current_ctx, lock=semantic_lock.lock
                             )
                         else:
                             is_incremental = False
-                            target_uri = msg.target_uri
                             run_uri = msg.uri
                             changes = msg.changes
                             viking_fs = get_viking_fs()
-                            if msg.target_uri:
+                            if msg.plan is None and msg.target_uri:
                                 target_exists = await viking_fs.exists(
                                     msg.target_uri, ctx=current_ctx
                                 )
@@ -745,7 +644,6 @@ class SemanticProcessor(DequeueHandlerBase):
                                     )
                                     changes = diff.to_changes()
                                     is_incremental = True
-                                    target_uri = msg.target_uri
                                     run_uri = msg.target_uri
                                 elif (
                                     target_exists
@@ -756,74 +654,86 @@ class SemanticProcessor(DequeueHandlerBase):
                                     logger.info(
                                         f"Using direct incremental semantic update for: {msg.uri}"
                                     )
-                            elif msg.changes is not None:
+                            elif msg.plan is None and msg.changes is not None:
                                 is_incremental = True
-                                target_uri = msg.uri
                                 logger.info(
                                     f"Using direct incremental semantic update for: {msg.uri}"
                                 )
 
-                            defer_directory_refresh = (
-                                msg.generation_trigger == "content_write"
-                                and msg.context_type == "resource"
-                                and not msg.recursive
-                                and msg.changes is not None
-                                and msg.aggregate_directory
-                            )
-                            executor = SemanticTreeExecutor(
-                                processor=self,
-                                context_type=msg.context_type,
-                                max_concurrent_llm=self.max_concurrent_llm,
-                                ctx=current_ctx,
+                            request = msg.preparation_input()
+                            if isinstance(request, SemanticPlan):
+                                if msg.uri.rstrip("/") != request.root_uri:
+                                    raise ValueError(
+                                        "semantic message URI must match plan root_uri"
+                                    )
+                                if msg.context_type != request.context_type:
+                                    raise ValueError(
+                                        "semantic message context_type must match semantic plan"
+                                    )
+                            execution = resolve_semantic_execution(
+                                request,
+                                root_uri=run_uri,
                                 incremental_update=is_incremental,
-                                target_uri=target_uri,
-                                recursive=msg.recursive,
-                                lock=_executor_lock(msg, semantic_lock.lock),
-                                is_code_repo=msg.is_code_repo,
                                 changes=changes,
-                                skip_vectorization=msg.skip_vectorization,
-                                ingest_options=msg.ingest_options,
-                                coalesce_key=msg.coalesce_key,
-                                coalesce_version=msg.coalesce_version,
-                                source=msg.source,
+                                separate_directory_refresh=True,
                                 generation_trigger=msg.generation_trigger,
-                                aggregate_directory=(
-                                    msg.aggregate_directory and not defer_directory_refresh
-                                ),
-                                copy_source_uri=msg.copy_source_uri,
-                                file_md5s=msg.file_md5s,
-                                artifact_files=msg.artifact_files,
-                                file_abstracts=msg.file_abstracts,
-                                file_vector_actions=msg.file_vector_actions,
-                                file_ingest_options=msg.file_ingest_options,
-                                telemetry_id=msg.telemetry_id,
                             )
-                            await executor.run(run_uri)
-                            dag_stats = executor.get_stats()
-                            self._cache_tree_stats(
-                                msg.telemetry_id,
-                                run_uri,
-                                dag_stats,
+                            logger.debug(
+                                "[SemanticPlanExecution] root=%s execution_roots=%d nodes=%d",
+                                execution.root_uri,
+                                len(execution.execution_roots),
+                                len(execution.bindings),
                             )
-                            if not executor.stale and defer_directory_refresh:
-                                # The shared directory task reads committed file abstracts.
-                                await work._wait_for_embedding_work(
-                                    stop_waiting=self._embedding_worker_stopped,
+                            dag_stats = SemanticTreeStats()
+                            for execution_root in execution.execution_roots:
+                                executor = SemanticTreeExecutor(
+                                    processor=self,
+                                    context_type=execution.context_type,
+                                    max_concurrent_llm=self.max_concurrent_llm,
+                                    ctx=current_ctx,
+                                    lock=_executor_lock(msg, semantic_lock.lock),
+                                    execution_plan=execution,
+                                    telemetry_id=msg.telemetry_id,
+                                    generation_trigger=msg.generation_trigger,
                                 )
-                                await self._enqueue_directory_refresh(msg, run_uri, changes=changes)
-                            elif not executor.stale and msg.aggregate_directory:
-                                write_result = getattr(
-                                    executor,
-                                    "root_write_result",
-                                    AbstractOverviewWriteResult(
-                                        wrote=True, abstract_body_changed=True
-                                    ),
-                                )
-                                await self._enqueue_parent_refresh(
-                                    msg,
-                                    target_uri or msg.uri,
-                                    l0_body_changed=write_result.abstract_body_changed,
-                                )
+                                await executor.run(execution_root)
+                                stats = executor.get_stats()
+                                for name in (
+                                    "total_nodes",
+                                    "pending_nodes",
+                                    "in_progress_nodes",
+                                    "done_nodes",
+                                    "indexed_records",
+                                ):
+                                    setattr(
+                                        dag_stats,
+                                        name,
+                                        getattr(dag_stats, name) + getattr(stats, name),
+                                    )
+                                dag_stats.failures.extend(stats.failures)
+                                self._cache_tree_stats(msg.telemetry_id, execution_root, stats)
+                                if executor.stale:
+                                    continue
+                                if execution.defer_directory_refresh:
+                                    await work._wait_for_embedding_work(
+                                        stop_waiting=self._embedding_worker_stopped
+                                    )
+                                    await self._enqueue_directory_refresh(
+                                        msg, execution_root, changes=changes
+                                    )
+                                elif execution.refresh.aggregate_directory:
+                                    write_result = getattr(
+                                        executor,
+                                        "root_write_result",
+                                        AbstractOverviewWriteResult(
+                                            wrote=True, abstract_body_changed=True
+                                        ),
+                                    )
+                                    await self._enqueue_parent_refresh(
+                                        msg,
+                                        execution_root,
+                                        l0_body_changed=write_result.abstract_body_changed,
+                                    )
                         processing_succeeded = True
                     finally:
                         await work.finish_processing(processing_succeeded)
@@ -2065,14 +1975,11 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, str]:
         """Load copied/moved file summaries from their existing target L2 vectors."""
-        if not file_paths:
-            return {}
-        viking_fs = get_viking_fs()
-        vector_store = viking_fs._get_vector_store()
-        if vector_store is None:
-            return {}
-        active_ctx = ctx or self._default_ctx
-        return await vector_store.get_l2_abstracts_by_uris(file_paths, ctx=active_ctx)
+        return await load_transfer_file_summaries(
+            get_viking_fs(),
+            file_paths,
+            ctx=ctx or self._default_ctx,
+        )
 
     async def _update_vector_fields(
         self,

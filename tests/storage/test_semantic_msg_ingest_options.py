@@ -8,6 +8,39 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.utils.ingest_options import IngestOptions
 
 
+def test_refresh_factory_preserves_legacy_wire_format_and_effective_retry_state():
+    from openviking.storage.context_update_plan import SemanticRefreshIntent
+
+    uri = "viking://resources/repo"
+    file_uri = f"{uri}/a.py"
+    intent = SemanticRefreshIntent(
+        uri=uri,
+        context_type="resource",
+        recursive=False,
+        changes={"modified": [file_uri]},
+        generation_trigger="content_write",
+        file_md5s={file_uri: "fingerprint"},
+        file_ingest_options={file_uri: IngestOptions(search_tags=["team=one"])},
+    )
+    msg = SemanticMsg.from_refresh(intent, account_id="account", task_id="task")
+    payload = msg.to_dict()
+    assert "intent" not in payload
+    assert "execution_plan" not in payload
+    assert payload["changes"] == {"modified": [file_uri]}
+    assert payload["task_id"] == "task"
+    restored = SemanticMsg.from_json(msg.to_json())
+    assert restored.preparation_input() == intent
+
+    # A stale delivery's replacement must carry its effective file-only work.
+    restored.aggregate_directory = False
+    restored.coalesce_key = ""
+    restored.coalesce_version = 0
+    retry = SemanticMsg.from_json(restored.to_json())
+    assert retry.preparation_input().aggregate_directory is False
+    assert retry.file_md5s == {file_uri: "fingerprint"}
+    assert retry.file_ingest_options[file_uri].search_tags == ["team=one"]
+
+
 def test_semantic_msg_serializes_ingest_options():
     update = AclUpdate(
         uri="viking://resources/demo", acl=AclSpec(acl_mode="restricted", entries=[])

@@ -57,7 +57,6 @@ from openviking.session.memory.utils.resource_refs import (
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     is_abstract_overview_uri,
-    plan_abstract_overview_refresh,
     prepare_abstract_overview_write,
 )
 from openviking.storage.acl import AclAction, AclSpec
@@ -70,6 +69,7 @@ from openviking.storage.context_update_plan import (
     ContextUpdatePlan,
     DirectIndexAction,
     FileRefreshIntent,
+    SemanticRefreshIntent,
     build_context_update_plan_from_snapshot,
     execute_content_tree_actions,
 )
@@ -95,6 +95,7 @@ from openviking.storage.resource_rnfv import (
     canonical_vector_records_by_level,
 )
 from openviking.storage.resource_target import AgfsResourceTarget
+from openviking.storage.semantic_planning import prepare_committed_refresh
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
@@ -116,7 +117,6 @@ from openviking_cli.exceptions import (
     OpenVikingError,
 )
 from openviking_cli.utils import VikingURI
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -1294,6 +1294,18 @@ class ContentWriteCoordinator:
             )
             if plan.file_refresh is not None:
                 existed = bool(item.get("existed", False))
+                refresh_options = ingest_options
+                if any(
+                    action.uri == plan.file_refresh.file_uri
+                    and action.level == int(ContextLevel.DETAIL)
+                    and action.field_patch is not None
+                    and "search_tags" in action.field_patch.values
+                    for action in plan.direct_index_actions
+                ):
+                    # A summary repair may accompany a scalar-only action.
+                    # That action already owns the tag intent; the later L2
+                    # refresh merges the worker's current record without it.
+                    refresh_options = IngestOptions(acl_update=ingest_options.acl_update)
                 planned_refreshes.append(
                     FileRefreshRequest(
                         file_uri=plan.file_refresh.file_uri,
@@ -1301,7 +1313,7 @@ class ContentWriteCoordinator:
                         md5=plan.file_refresh.md5,
                         abstract=str(item.get("previous_abstract") or ""),
                         vector_action="upsert" if not existed else "",
-                        ingest_options=ingest_options,
+                        ingest_options=refresh_options,
                     )
                 )
 
@@ -1371,35 +1383,36 @@ class ContentWriteCoordinator:
         file_abstracts: dict[str, str] | None = None,
         file_ingest_options: dict[str, IngestOptions] | None = None,
     ) -> FreshnessAction:
-        changed_entries = len({uri for values in changes.values() for uri in values})
-        semantic_config = get_openviking_config().semantic
-        try:
-            decision = await plan_abstract_overview_refresh(
-                viking_fs=self._viking_fs,
-                dir_uri=root_uri,
-                changed_entries=changed_entries,
-                ctx=ctx,
-                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-                force_refresh=force_refresh,
-            )
-            action = decision.action
-        except LockAcquisitionError:
-            # Parent aggregation is best-effort; changed-file work must still run.
-            logger.info("Skipping busy parent semantic refresh: %s", root_uri)
-            action = FreshnessAction.NOOP
-        aggregate_directory = action is FreshnessAction.REFRESH_NOW
-        has_live_files = any(changes.get(kind) for kind in ("added", "modified"))
-        if not aggregate_directory and not has_live_files:
+        intent, action = await prepare_committed_refresh(
+            SemanticRefreshIntent(
+                uri=root_uri,
+                target_uri=target_uri,
+                context_type=context_type,
+                recursive=recursive,
+                ingest_options=IngestOptions.from_value(ingest_options),
+                changes={
+                    kind: sorted(changes.get(kind, []))
+                    for kind in ("added", "modified")
+                    if changes.get(kind)
+                },
+                generation_trigger="content_write",
+                file_md5s=file_md5s or {},
+                file_abstracts=file_abstracts or {},
+                file_ingest_options=file_ingest_options or {},
+            ),
+            viking_fs=self._viking_fs,
+            ctx=ctx,
+            force_refresh=force_refresh,
+            changed_entries=len({uri for values in changes.values() for uri in values}),
+        )
+        if intent is None:
             return action
+        aggregate_directory = intent.aggregate_directory
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry = get_current_telemetry()
-        msg = SemanticMsg(
-            uri=root_uri,
-            target_uri=target_uri,
-            context_type=context_type,
-            recursive=recursive,
+        msg = SemanticMsg.from_refresh(
+            intent,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             group_ids=ctx.group_ids,
@@ -1417,16 +1430,6 @@ class ContentWriteCoordinator:
                 if aggregate_directory and context_type in {"resource", "skill"}
                 else ""
             ),
-            changes={
-                change_type: sorted(changes.get(change_type, []))
-                for change_type in ("added", "modified")
-                if changes.get(change_type)
-            },
-            generation_trigger="content_write",
-            aggregate_directory=aggregate_directory,
-            file_md5s=file_md5s,
-            file_abstracts=file_abstracts,
-            file_ingest_options=file_ingest_options,
         )
         await semantic_queue.enqueue(msg)
         return action

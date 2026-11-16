@@ -54,12 +54,11 @@ from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     body_for_preview,
     is_abstract_overview_uri,
-    mark_abstract_overview_pending,
-    plan_abstract_overview_refresh,
     render_abstract_overview,
 )
 from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.context_update_plan import SemanticRefreshIntent
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.internal_names import is_storage_internal_name
@@ -68,6 +67,7 @@ from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.semantic_planning import prepare_committed_refresh
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
@@ -86,7 +86,6 @@ from openviking_cli.exceptions import (
     ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI, get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -820,29 +819,30 @@ class FSService:
         ctx: RequestContext,
         force_refresh: bool = False,
     ) -> FreshnessAction:
-        semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
+        intent, action = await prepare_committed_refresh(
+            SemanticRefreshIntent(
+                uri=root_uri,
+                context_type=context_type,
+                recursive=False,
+                changes={"deleted": [deleted_uri]},
+                generation_trigger="content_delete",
+            ),
             viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=1,
             ctx=ctx,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
             force_refresh=force_refresh,
+            skip_busy=False,
         )
-        if decision.action is not FreshnessAction.REFRESH_NOW:
-            return decision.action
+        if intent is None:
+            return action
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
             logger.warning("QueueManager not available, skipping delete refresh: %s", exc)
-            return decision.action
+            return action
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
-        msg = SemanticMsg(
-            uri=root_uri,
-            context_type=context_type,
-            recursive=False,
+        msg = SemanticMsg.from_refresh(
+            intent,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             group_ids=ctx.group_ids,
@@ -857,11 +857,9 @@ class FSService:
                 user_id=ctx.user.user_id,
                 peer_id=ctx.user.user_id,
             ),
-            changes={"deleted": [deleted_uri]},
-            generation_trigger="content_delete",
         )
         await semantic_queue.enqueue(msg)
-        return decision.action
+        return action
 
     async def _enqueue_copy_refresh(
         self,
@@ -874,12 +872,21 @@ class FSService:
         change_kind: Literal["added", "deleted"] = "added",
     ) -> str:
         """Queue a parent-only semantic refresh after a committed transfer."""
-        await mark_abstract_overview_pending(
+        intent, _ = await prepare_committed_refresh(
+            SemanticRefreshIntent(
+                uri=root_uri,
+                context_type=context_type,
+                recursive=False,
+                changes={change_kind: [copied_uri]},
+                generation_trigger="content_copy",
+                copy_source_uri=source_uri,
+            ),
             viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=1,
             ctx=ctx,
+            pending_only=True,
+            skip_busy=False,
         )
+        assert intent is not None
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
@@ -888,10 +895,8 @@ class FSService:
 
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
-        msg = SemanticMsg(
-            uri=root_uri,
-            context_type=context_type,
-            recursive=False,
+        msg = SemanticMsg.from_refresh(
+            intent,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             peer_id=ctx.user.user_id,
@@ -905,9 +910,6 @@ class FSService:
                 user_id=ctx.user.user_id,
                 peer_id=ctx.user.user_id,
             ),
-            changes={change_kind: [copied_uri]},
-            generation_trigger="content_copy",
-            copy_source_uri=source_uri,
         )
         await semantic_queue.enqueue(msg)
         return "queued"
@@ -922,13 +924,20 @@ class FSService:
         ctx: RequestContext,
     ) -> str:
         """Queue fresh semantic processing when the source has no index artifacts."""
-        if not recursive:
-            await mark_abstract_overview_pending(
-                viking_fs=self._viking_fs,
-                dir_uri=root_uri,
-                changed_entries=1,
-                ctx=ctx,
-            )
+        intent, _ = await prepare_committed_refresh(
+            SemanticRefreshIntent(
+                uri=root_uri,
+                context_type=context_type,
+                recursive=recursive,
+                changes=None if recursive else {"added": [target_uri]},
+                generation_trigger="content_transfer_rebuild",
+            ),
+            viking_fs=self._viking_fs,
+            ctx=ctx,
+            pending_only=not recursive,
+            skip_busy=False,
+        )
+        assert intent is not None
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
@@ -936,10 +945,8 @@ class FSService:
             return "skipped"
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
-        msg = SemanticMsg(
-            uri=root_uri,
-            context_type=context_type,
-            recursive=recursive,
+        msg = SemanticMsg.from_refresh(
+            intent,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             group_ids=ctx.group_ids,
@@ -958,8 +965,6 @@ class FSService:
                     peer_id=ctx.user.user_id,
                 )
             ),
-            changes=None if recursive else {"added": [target_uri]},
-            generation_trigger="content_transfer_rebuild",
         )
         await semantic_queue.enqueue(msg)
         return "queued"

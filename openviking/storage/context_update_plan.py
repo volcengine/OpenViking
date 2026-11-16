@@ -160,6 +160,19 @@ class IndexSlot:
         return cls(**values)
 
 
+def _validate_semantic_node(
+    kind: str, action: SemanticAction, slots: tuple[IndexSlot, ...]
+) -> None:
+    if kind not in {"file", "directory"}:
+        raise ValueError("invalid semantic entry kind")
+    if kind == "file" and action is SemanticAction.AGGREGATE:
+        raise ValueError("file semantic action must be generate or reuse")
+    if kind == "directory" and action is SemanticAction.GENERATE:
+        raise ValueError("directory semantic action must be aggregate or reuse")
+    if len({slot.level for slot in slots}) != len(slots):
+        raise ValueError("duplicate index slot level")
+
+
 @dataclass(frozen=True)
 class SemanticTreeEntry:
     """A retained node in the serializable minimal semantic-tree closure.
@@ -182,17 +195,9 @@ class SemanticTreeEntry:
         _validate_relative_path(self.relative_path)
         object.__setattr__(self, "content_state", ContentState(self.content_state))
         object.__setattr__(self, "semantic_action", SemanticAction(self.semantic_action))
-        if self.kind not in {"file", "directory"}:
-            raise ValueError("invalid semantic entry kind")
-        if self.kind == "file" and self.semantic_action is SemanticAction.AGGREGATE:
-            raise ValueError("file semantic action must be generate or reuse")
-        if self.kind == "directory" and self.semantic_action is SemanticAction.GENERATE:
-            raise ValueError("directory semantic action must be aggregate or reuse")
+        _validate_semantic_node(self.kind, self.semantic_action, self.index_slots)
         if self.kind == "directory" and self.md5:
             raise ValueError("directory entry cannot carry md5")
-        levels = [slot.level for slot in self.index_slots]
-        if len(levels) != len(set(levels)):
-            raise ValueError(f"duplicate index slot level for {self.relative_path}")
         if self.semantic_action is SemanticAction.REUSE:
             if any(slot.action is not IndexAction.NONE for slot in self.index_slots):
                 raise ValueError("reuse semantic entry cannot contain index mutations")
@@ -324,6 +329,158 @@ class SemanticPlan:
         ):
             roots = [""]
         return tuple(self.root_uri if not path else f"{self.root_uri}/{path}" for path in roots)
+
+
+@dataclass(frozen=True)
+class FileRefreshRequest:
+    """One committed flat-file change awaiting parent semantic maintenance.
+
+    This is an execution-time input for the shared summarizer, not a durable
+    RNFV or queue schema.  A batch coordinator collects one request per
+    successfully committed file and lets :meth:`refresh_file_parents` coalesce
+    them by direct parent.
+    """
+
+    file_uri: str
+    created: bool = False
+    md5: str | None = None
+    abstract: str = ""
+    vector_action: str = ""
+    ingest_options: IngestOptions = field(default_factory=IngestOptions)
+
+    def __post_init__(self) -> None:
+        if self.vector_action not in {"", "upsert", "merge"}:
+            raise ValueError(f"unsupported file vector action: {self.vector_action}")
+
+
+@dataclass(frozen=True)
+class SemanticRefreshIntent:
+    """In-memory refresh request; encoded using the existing queue fields.
+
+    Unlike SemanticPlan this input leaves live state to the original per-node
+    read boundary. It never claims a hydrated tree or a persisted action list.
+    """
+
+    uri: str
+    context_type: str
+    target_uri: str = ""
+    recursive: bool = True
+    incremental_update: bool = False
+    skip_vectorization: bool = False
+    is_code_repo: bool = False
+    ingest_options: IngestOptions = field(default_factory=IngestOptions)
+    changes: Mapping[str, list[str]] | None = None
+    source: Mapping[str, str] | None = None
+    generation_trigger: str = "semantic_refresh"
+    aggregate_directory: bool = True
+    propagate_to_parent: bool = True
+    copy_source_uri: str = ""
+    coalesce_key: str = ""
+    coalesce_version: int = 0
+    file_md5s: Mapping[str, str] = field(default_factory=dict)
+    artifact_files: tuple[str, ...] = ()
+    file_abstracts: Mapping[str, str] = field(default_factory=dict)
+    file_vector_actions: Mapping[str, str] = field(default_factory=dict)
+    file_ingest_options: Mapping[str, IngestOptions] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.uri.startswith("viking://"):
+            raise ValueError("semantic refresh requires a Viking URI")
+        object.__setattr__(self, "ingest_options", IngestOptions.from_value(self.ingest_options))
+        object.__setattr__(self, "artifact_files", tuple(self.artifact_files))
+        object.__setattr__(
+            self,
+            "file_ingest_options",
+            {
+                uri: IngestOptions.from_value(options)
+                for uri, options in self.file_ingest_options.items()
+            },
+        )
+        if any(action not in {"upsert", "merge"} for action in self.file_vector_actions.values()):
+            raise ValueError("unsupported file vector action")
+
+
+@dataclass(frozen=True)
+class NodeInputBinding:
+    """A runtime node, including structural nodes and independent summaries.
+
+    Persisted tree validation remains stricter: runtime REUSE can publish an
+    explicit index slot without regenerating the semantic input.
+    """
+
+    uri: str
+    kind: str
+    semantic_action: SemanticAction
+    index_slots: tuple[IndexSlot, ...] = ()
+    abstract: str = ""
+    overview: str = ""
+    repair: bool = False
+    membership_changed: bool = False
+    md5: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "semantic_action", SemanticAction(self.semantic_action))
+        _validate_semantic_node(self.kind, self.semantic_action, self.index_slots)
+
+    def slot(self, level: int) -> IndexSlot | None:
+        return next((slot for slot in self.index_slots if slot.level == level), None)
+
+
+@dataclass(frozen=True)
+class SemanticExecutionPlan:
+    """Explicit execution scope and failure/publication policy, never serialized."""
+
+    root_uri: str
+    context_type: str
+    refresh: SemanticRefreshIntent
+    execution_roots: tuple[str, ...]
+    bindings: Mapping[str, NodeInputBinding] = field(default_factory=dict)
+    children: Mapping[str, tuple[list[str], list[str]]] = field(default_factory=dict)
+    active_directories: frozenset[str] = frozenset()
+    fixed_actions: bool = False
+    fail_dispatch: bool = False
+    fail_directory_write: bool = False
+    record_failures: bool = False
+    tolerate_index_failure: bool = False
+    index_failed_file: bool = True
+    index_changed_body_only: bool = False
+    directory_only: bool = False
+    ready_inputs_only: bool = False
+    defer_directory_refresh: bool = False
+    observe_parent_aggregation: bool = False
+
+
+@dataclass
+class ResolvedSemanticNode:
+    """Inputs and actions prepared at one scheduler stage, without model calls."""
+
+    binding: NodeInputBinding
+    children_dirs: list[str] = field(default_factory=list)
+    file_paths: list[str] = field(default_factory=list)
+    required_files: set[str] = field(default_factory=set)
+    required_directories: set[str] = field(default_factory=set)
+    sampled_files: set[str] = field(default_factory=set)
+    sampled_directories: set[str] = field(default_factory=set)
+    file_summaries: list[dict[str, str] | None] = field(default_factory=list)
+    children_abstracts: list[dict[str, str] | None] = field(default_factory=list)
+    pending_snapshot: int = 0
+    total_entries: int | None = None
+    missing_summary_entries: int | None = None
+    summary: dict[str, str] | None = None
+    summary_source: str = ""
+    file_content: bytes | None = None
+    input_changed: bool = False
+    vectorize: bool = False
+    write_semantics: bool = False
+    definition_source: bool = False
+    regenerate_definition: bool = False
+    use_direct_media: bool = True
+    overview: str | None = None
+    abstract: str | None = None
+    ingest_options: IngestOptions = field(default_factory=IngestOptions)
+    index_action: str = "merge"
+    scalar_override: dict[str, Any] | None = None
+    field_patch: FieldPatch | None = None
 
 
 class ContentTreeOperation(str, Enum):

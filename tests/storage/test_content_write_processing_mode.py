@@ -119,8 +119,7 @@ async def test_semantic_message_carries_file_md5_and_old_abstract(monkeypatch, c
     manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue)
     monkeypatch.setattr(content_write_module, "get_queue_manager", lambda: manager)
     monkeypatch.setattr(
-        content_write_module,
-        "plan_abstract_overview_refresh",
+        "openviking.storage.semantic_planning.plan_abstract_overview_refresh",
         AsyncMock(return_value=SimpleNamespace(action=FreshnessAction.REFRESH_NOW)),
     )
     coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())

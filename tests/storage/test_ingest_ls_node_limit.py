@@ -158,7 +158,7 @@ async def test_semantic_executor_list_dir_enumerates_all_children(monkeypatch):
         max_concurrent_llm=1,
         ctx=None,
     )
-    children_dirs, file_paths = await executor._list_dir(dir_uri, from_hint="test")
+    children_dirs, file_paths = await executor._preparation._list_dir(dir_uri, from_hint="test")
 
     assert len(children_dirs) == n_children, (
         f"only {len(children_dirs)}/{n_children} children listed — semantic tree "

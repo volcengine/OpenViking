@@ -3220,7 +3220,7 @@ async def test_directory_index_slots_choose_exact_levels(monkeypatch):
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
@@ -3285,7 +3285,7 @@ async def test_directory_sidecar_write_failure_fails_semantic_plan(monkeypatch):
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
@@ -3337,7 +3337,7 @@ async def test_directory_repair_passes_partial_update_per_missing_level(monkeypa
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
@@ -3418,7 +3418,7 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
@@ -3483,7 +3483,9 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
         return_value=AbstractOverviewWriteResult(wrote=True)
     )
     executor._check_dir_children_changed = AsyncMock(return_value=False)
-    executor._read_existing_overview_abstract = AsyncMock(return_value=("overview", "abstract"))
+    executor._preparation._read_existing_overview_abstract = AsyncMock(
+        return_value=("overview", "abstract")
+    )
 
     await executor.run(root)
 
@@ -3518,7 +3520,7 @@ async def test_code_summary_unchanged_still_reembeds_after_content_change(monkey
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
@@ -3604,7 +3606,7 @@ async def test_file_repair_passes_partial_update_to_embedding(monkeypatch):
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
@@ -3845,7 +3847,9 @@ async def test_semantic_processor_runs_only_plan_execution_roots(monkeypatch):
             calls.append(("run", uri))
 
         def get_stats(self):
-            return SimpleNamespace()
+            from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
+
+            return SemanticTreeStats()
 
     root = "viking://resources/repo"
     plan = SemanticPlan(
@@ -3929,7 +3933,8 @@ async def test_semantic_processor_runs_only_plan_execution_roots(monkeypatch):
         generation_trigger="reindex",
     )
 
-    await processor.on_dequeue(msg.to_dict())
+    result = await processor.on_dequeue(msg.to_dict())
+    assert result.error is None
 
     assert [value for kind, value in calls if kind == "run"] == [root]
     assert calls[0][1]["generation_trigger"] == "reindex"
@@ -4001,3 +4006,49 @@ async def test_process_resource_does_not_handoff_local_artifact(
     assert "artifact_files" not in result["_post_process"]
     artifact_path = tmp_path.joinpath("artifacts", ref.root.split("/")[-1])
     assert artifact_path.exists() is cleanup_fails
+
+
+def test_runtime_conversion_keeps_committed_closure_identity_and_patch():
+    from openviking.storage.context_update_plan import (
+        IndexSlot,
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+    from openviking.storage.index_action import FieldPatch
+    from openviking.storage.queuefs.semantic_msg import SemanticMsg
+    from openviking.storage.semantic_planning import resolve_semantic_execution
+
+    root = "viking://resources/repo"
+    patch = FieldPatch({"search_tags": ["team=search"]}, {"search_tags": "append"})
+    slot = IndexSlot(
+        2, "actual-stored-id", {"abstract": "previous"}, action="merge", field_patch=patch
+    )
+    plan = SemanticPlan(
+        root,
+        "resource",
+        SemanticTreeSnapshot(
+            (
+                SemanticTreeEntry("", "directory", "unchanged", "aggregate"),
+                SemanticTreeEntry("a.py", "file", "modified", "generate", index_slots=(slot,)),
+            )
+        ),
+    )
+    # Historical flags accompany an already committed plan; they cannot replace it.
+    msg = SemanticMsg(
+        uri=root,
+        context_type="resource",
+        recursive=False,
+        aggregate_directory=False,
+        changes={"deleted": [f"{root}/a.py"]},
+        plan=plan,
+    )
+    restored = SemanticMsg.from_json(msg.to_json())
+    execution = resolve_semantic_execution(
+        restored.preparation_input(), changes={"added": [f"{root}/other.py"]}
+    )
+    assert execution.execution_roots == (root,)
+    assert set(execution.bindings) == {root, f"{root}/a.py"}
+    assert execution.bindings[f"{root}/a.py"].slot(2) == slot
+    assert execution.bindings[f"{root}/a.py"].slot(2).field_patch == patch
+    assert execution.children == {root: ([], [f"{root}/a.py"])}
