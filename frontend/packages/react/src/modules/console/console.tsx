@@ -154,7 +154,7 @@ function ConsoleView({
                 commands={state.commands}
                 commandGroups={consoleCommandGroups(locale)}
                 locale={locale}
-                disabled={state.isExecuting}
+                busy={state.isExecuting}
                 quickCommands={quickCommands ?? consoleQuickCommands(locale)}
                 onValueChange={state.setCommand}
                 onSubmit={(next) => void state.execute(next)}

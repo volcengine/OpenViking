@@ -22,6 +22,7 @@ export interface FileBrowserDetailProps {
   toolbar?: FilePreviewToolbarOptions;
   actions?: FilePreviewActionSource;
   onActiveKeyChange: (key: string) => void;
+  onSave?: () => void;
 }
 
 export function FileBrowserDetail({
@@ -36,6 +37,7 @@ export function FileBrowserDetail({
   toolbar,
   actions,
   onActiveKeyChange,
+  onSave,
 }: FileBrowserDetailProps) {
   return (
     <div className="ov-file-browser__detail">
@@ -48,6 +50,7 @@ export function FileBrowserDetail({
             readOnly,
             previewSlots,
             actions,
+            onSave,
           ) as [FilePreviewTab, ...FilePreviewTab[]]
         }
         toolbar={toolbar}
@@ -67,6 +70,7 @@ function decorateTabs(
   readOnly?: boolean,
   previewSlots?: FilePreviewHeaderSlots,
   actions?: FilePreviewActionSource,
+  onSave?: () => void,
 ): readonly FilePreviewTab[] {
   return tabs.map((tab) => {
     if (tab.kind === 'content') return tab;
@@ -83,6 +87,17 @@ function decorateTabs(
         : tab;
     return {
       ...editableTab,
+      ...(editableTab.kind === 'file' && editableTab.editing && onSave
+        ? {
+            editing: {
+              ...editableTab.editing,
+              onSave: (value: string) => {
+                editableTab.editing?.onSave?.(value);
+                onSave();
+              },
+            },
+          }
+        : {}),
       actions: actions ?? tab.actions,
       slots: {
         ...tab.slots,
