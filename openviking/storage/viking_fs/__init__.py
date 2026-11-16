@@ -77,6 +77,7 @@ from openviking.storage.viking_fs._base import (
     logger,
 )
 from openviking.storage.viking_fs._grep import _GrepMixin
+from openviking.storage.viking_fs._listing import ListingPage, _ListingMixin
 from openviking.storage.viking_fs._ops import _OpsMixin
 from openviking.storage.viking_fs._semantic import _SemanticMixin
 from openviking.storage.viking_fs._snapshot import _SnapshotMixin
@@ -110,6 +111,7 @@ if TYPE_CHECKING:
 class VikingFS(
     _AccessMixin,
     _OpsMixin,
+    _ListingMixin,
     _SyncMixin,
     _GrepMixin,
     _SemanticMixin,
@@ -222,6 +224,7 @@ _sys.modules[__name__] = _ModuleProxy(_sys.modules[__name__])  # type: ignore[as
 
 __all__ = [
     "LS_ALL_NODES",
+    "ListingPage",
     "SNAPSHOT_DIFF_MAX_FILE_BYTES",
     "SNAPSHOT_DIFF_MAX_LINES",
     "SNAPSHOT_DIFF_MAX_OUTPUT_BYTES",

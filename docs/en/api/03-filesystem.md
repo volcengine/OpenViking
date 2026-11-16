@@ -42,8 +42,10 @@ List directory contents.
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
+| since | str | No | None | Lower time bound on the entry modification time, accepts `2h` / `7d` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC |
+| until | str | No | None | Upper time bound on the entry modification time, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC |
 
-`tags` uses AND semantics and is applied before `offset` and `limit`. L0/L1 content is attached only to the selected page of directory entries and does not consume `node_limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. `since` and `until` restrict the result to entries whose `modTime` falls inside the window; they are evaluated before `offset` and `limit` as well, so a narrow window still returns entries that sit past the first raw page. Entries without a resolvable modification time are omitted when a window is given. A `mtime`-ordered listing stops scanning once it walks past the window, so a bounded window stays cheap on large directories. Such a listing is ordered as "directories first, then files", so the scan may only stop after the directory group has been consumed; stopping earlier would skip the file group, where entries inside the window can sit. L0/L1 content is attached only to the selected page of directory entries and does not consume `node_limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 **Entry Structure**
 
@@ -225,8 +227,10 @@ Get directory tree structure.
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
+| since | str | No | None | Lower time bound on the node modification time, accepts `2h` / `7d` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC |
+| until | str | No | None | Upper time bound on the node modification time, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC |
 
-Directory filtering and `tags` are applied before `offset` and `limit`. Abstracts and overviews are attached to the selected directory nodes and do not count toward `node_limit`. Explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+Directory filtering, `tags`, and the `since`/`until` window are applied before `offset` and `limit`. Abstracts and overviews are attached to the selected directory nodes and do not count toward `node_limit`. Explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 
 **Python SDK (HTTP)**

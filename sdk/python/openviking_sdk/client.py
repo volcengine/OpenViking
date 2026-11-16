@@ -1336,6 +1336,8 @@ class AsyncHTTPClient:
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> List[Any]:
         page = await self.ls_page(
             uri,
@@ -1355,6 +1357,8 @@ class AsyncHTTPClient:
             include_abstract=include_abstract,
             include_overview=include_overview,
             overview_limit=overview_limit,
+            since=since,
+            until=until,
         )
         return page["result"]
 
@@ -1377,6 +1381,8 @@ class AsyncHTTPClient:
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> ListPage:
         params: Dict[str, Any] = {
             "uri": VikingURI.normalize(uri),
@@ -1404,6 +1410,10 @@ class AsyncHTTPClient:
             params["include_tags"] = True
         if limit is not None:
             params["limit"] = limit
+        if since is not None:
+            params["since"] = since
+        if until is not None:
+            params["until"] = until
         response = await self._request(
             "GET",
             "/api/v1/fs/ls",
@@ -1921,8 +1931,26 @@ class AsyncHTTPClient:
         response = await self._request("POST", "/api/v1/sessions", json=json_body)
         return self._handle_response_data(response).get("result", {})
 
-    async def list_sessions(self) -> List[Any]:
-        response = await self._request("GET", "/api/v1/sessions")
+    async def list_sessions(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[Any]:
+        params: Dict[str, Any] = {}
+        if since is not None:
+            params["since"] = since
+        if until is not None:
+            params["until"] = until
+        if time_field is not None:
+            params["time_field"] = time_field
+        if limit is not None:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
+        response = await self._request("GET", "/api/v1/sessions", params=params)
         return self._handle_response(response)
 
     async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:

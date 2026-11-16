@@ -173,7 +173,7 @@ ov session new
 
 #### 1. API Implementation Introduction
 
-List all sessions for the current user. Returns session IDs and URI info for further operations.
+List all sessions for the current user. Returns session IDs and URI info for further operations. The listing can be restricted to a time window and paginated.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:list_sessions()` - HTTP route
@@ -184,7 +184,15 @@ List all sessions for the current user. Returns session IDs and URI info for fur
 
 **Parameters**
 
-None.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| since | str | No | None | Lower time bound on the session timestamp, accepts `2h` / `7d` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC |
+| until | str | No | None | Upper time bound on the session timestamp, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC |
+| time_field | str | No | `updated_at` | Which session timestamp the bounds apply to: `updated_at`, `created_at`, `last_message_at`, or `mod_time` |
+| limit | int | No | None | Maximum number of sessions to return |
+| offset | int | No | 0 | Number of matched sessions to skip |
+
+The bounds are evaluated against the session metadata, so `updated_at` reflects the last write of the session rather than the creation of its directory. When a window is given, the matched sessions also carry their `created_at`, `updated_at`, and `last_message_at` timestamps.
 
 #### 3. Usage Examples
 
@@ -196,6 +204,10 @@ GET /api/v1/sessions
 
 ```bash
 curl -X GET http://localhost:1933/api/v1/sessions \
+  -H "X-API-Key: your-key"
+
+# Sessions touched in the last seven days
+curl -X GET "http://localhost:1933/api/v1/sessions?since=7d&time_field=updated_at" \
   -H "X-API-Key: your-key"
 ```
 
@@ -210,12 +222,16 @@ client.initialize()
 sessions = client.list_sessions()
 for s in sessions:
     print(f"{s['session_id']} -> {s['uri']}")
+
+# Only the sessions touched in the last seven days
+recent = client.list_sessions(since="7d", time_field="updated_at")
 ```
 
 **TypeScript SDK**
 
 ```typescript
 console.log(await client.listSessions());
+console.log(await client.listSessions({ since: "7d", timeField: "updated_at" }));
 ```
 
 **Go SDK**
@@ -228,6 +244,12 @@ if err != nil {
 for _, session := range sessions {
     fmt.Println(session)
 }
+
+// Only the sessions touched in the last seven days
+recent, err := client.ListSessions(ctx, &openviking.ListSessionsOptions{
+    Since:    "7d",
+    TimeField: "updated_at",
+})
 ```
 
 **CLI**

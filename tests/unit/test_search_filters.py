@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import (
+    filter_entries_by_time,
+    merge_time_filter,
+    parse_timestamp_value,
+)
 from openviking.utils.time_utils import parse_iso_datetime
 
 
@@ -119,3 +123,61 @@ def test_merge_time_filter_date_only_uses_now_timezone():
 
     assert result["gte"].endswith("Z")
     assert result["lte"].endswith("Z")
+
+
+def test_parse_timestamp_value_returns_utc_aware_datetime():
+    parsed = parse_timestamp_value("2026-03-11T16:00:00+08:00")
+
+    assert parsed is not None
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset().total_seconds() == 0
+    assert parsed.hour == 8
+
+
+def test_parse_timestamp_value_tolerates_nanosecond_precision():
+    parsed = parse_timestamp_value("2026-02-21T13:20:23.1470042+08:00")
+
+    assert parsed is not None
+    assert parsed.tzinfo is not None
+
+
+def test_parse_timestamp_value_returns_none_for_unusable_values():
+    assert parse_timestamp_value(None) is None
+    assert parse_timestamp_value("") is None
+    assert parse_timestamp_value("   ") is None
+    assert parse_timestamp_value("not-a-timestamp") is None
+    assert parse_timestamp_value(12345) is None
+
+
+def test_filter_entries_by_time_keeps_only_entries_inside_the_window():
+    since = parse_timestamp_value("2026-03-10T00:00:00Z")
+    until = parse_timestamp_value("2026-03-11T23:59:59Z")
+
+    entries = [
+        {"name": "old", "modTime": "2026-03-09T10:00:00Z"},
+        {"name": "inside", "modTime": "2026-03-11T10:00:00Z"},
+        {"name": "new", "modTime": "2026-03-12T10:00:00Z"},
+    ]
+
+    kept = filter_entries_by_time(entries, since, until)
+
+    assert [entry["name"] for entry in kept] == ["inside"]
+
+
+def test_filter_entries_by_time_drops_entries_without_a_usable_timestamp():
+    since = parse_timestamp_value("2026-03-10T00:00:00Z")
+
+    entries = [
+        {"name": "undated"},
+        {"name": "inside", "modTime": "2026-03-11T10:00:00Z"},
+    ]
+
+    kept = filter_entries_by_time(entries, since, None)
+
+    assert [entry["name"] for entry in kept] == ["inside"]
+
+
+def test_filter_entries_by_time_without_bounds_returns_entries_unchanged():
+    entries = [{"name": "undated"}]
+
+    assert filter_entries_by_time(entries, None, None) is entries

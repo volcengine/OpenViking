@@ -38,10 +38,20 @@ func (c *Client) CreateSession(ctx context.Context, opts *CreateSessionOptions) 
 	return result, err
 }
 
-// ListSessions lists sessions.
-func (c *Client) ListSessions(ctx context.Context) ([]any, error) {
+// ListSessions lists sessions. The optional argument restricts the listing
+// to a time window and paginates the result.
+func (c *Client) ListSessions(ctx context.Context, opts ...*ListSessionsOptions) ([]any, error) {
+	query := url.Values{}
+	if len(opts) > 0 && opts[0] != nil {
+		option := opts[0]
+		query.Set("since", option.Since)
+		query.Set("until", option.Until)
+		query.Set("time_field", option.TimeField)
+		queryInt(query, "limit", option.Limit)
+		queryInt(query, "offset", option.Offset)
+	}
 	var result []any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions", nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions", query, nil, &result)
 	return result, err
 }
 

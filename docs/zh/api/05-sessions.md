@@ -172,7 +172,7 @@ ov session new
 
 #### 1. API 实现介绍
 
-列出当前用户的所有会话。返回会话 ID 和 URI 信息，用于进一步操作会话。
+列出当前用户的所有会话。返回会话 ID 和 URI 信息，用于进一步操作会话。列表可以按时间窗口过滤并分页。
 
 **代码入口**：
 - `openviking/server/routers/sessions.py:list_sessions()` - HTTP 路由
@@ -183,7 +183,15 @@ ov session new
 
 **参数**
 
-无参数。
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| since | str | 否 | None | 会话时间戳下界，接受 `2h`/`7d` 或 ISO 8601 / `YYYY-MM-DD`。无时区的值按 UTC 解释 |
+| until | str | 否 | None | 会话时间戳上界，接受 `30m` 或 ISO 8601 / `YYYY-MM-DD`。无时区的值按 UTC 解释 |
+| time_field | str | 否 | `updated_at` | 时间边界作用的会话时间戳：`updated_at`、`created_at`、`last_message_at` 或 `mod_time` |
+| limit | int | 否 | None | 最多返回的会话数 |
+| offset | int | 否 | 0 | 跳过的匹配会话数 |
+
+时间边界基于会话元数据求值，因此 `updated_at` 反映会话的最后一次写入，而不是其目录的创建时间。给定时间窗口时，命中的会话还会带上 `created_at`、`updated_at` 与 `last_message_at` 时间戳。
 
 #### 3. 使用示例
 
@@ -195,6 +203,10 @@ GET /api/v1/sessions
 
 ```bash
 curl -X GET http://localhost:1933/api/v1/sessions \
+  -H "X-API-Key: your-key"
+
+# 最近七天有活动的会话
+curl -X GET "http://localhost:1933/api/v1/sessions?since=7d&time_field=updated_at" \
   -H "X-API-Key: your-key"
 ```
 

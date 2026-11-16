@@ -235,6 +235,24 @@ type ListOptions struct {
 	ExtraFields     []string
 	Tags            []string
 	IncludeTags     bool
+	// Since restricts the listing to entries modified at or after this time.
+	Since string
+	// Until restricts the listing to entries modified at or before this time.
+	Until string
+}
+
+// ListSessionsOptions controls ListSessions.
+type ListSessionsOptions struct {
+	// Since restricts the listing to sessions at or after this time.
+	Since string
+	// Until restricts the listing to sessions at or before this time.
+	Until string
+	// TimeField selects which session timestamp the bounds apply to.
+	TimeField string
+	// Limit caps the number of returned sessions.
+	Limit int
+	// Offset skips the first N matched sessions.
+	Offset int
 }
 
 // ListPage contains a page of directory entries and pagination metadata.
