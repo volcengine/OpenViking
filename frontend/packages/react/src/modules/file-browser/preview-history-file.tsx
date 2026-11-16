@@ -30,7 +30,7 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
   };
   const selected = history.selected;
   const comparison =
-    history.compare && history.base ? (
+    history.compare && (history.query.data?.length ?? 0) > 1 ? (
       <PreviewHistoryControls
         history={history}
         text={text}
@@ -139,7 +139,8 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
             text={text}
             setView={setView}
             extraActions={
-              props.canWrite && props.versioned && selected ? (
+              // Retain the confirmation and its error scope while versions refresh.
+              props.canWrite && props.versioned ? (
                 <PreviewHistoryRestore
                   {...props}
                   selected={selected}
@@ -152,6 +153,7 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
                     history.query.retry();
                     props.onUpdated();
                   }}
+                  onConflict={history.query.retry}
                 />
               ) : null
             }

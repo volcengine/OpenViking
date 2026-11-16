@@ -88,3 +88,36 @@ test('schedule uses visible radio choices, the shared weekday picker and preserv
     await view.unmount();
   }
 });
+
+for (const label of [
+  'Update schedule',
+  'Source directories',
+  'Compilation Skill',
+]) {
+  test(`${label} closes when the host revokes write capability`, async () => {
+    const fetch = fixture(
+      target,
+      true,
+      (call) =>
+        call.path.endsWith('/compile/config') ? ok(config) : undefined,
+      [{ to: target }],
+    );
+    const view = await mount(tree(fetch, target));
+    try {
+      await openAction('Compile configuration');
+      await click(document.querySelector(`[aria-label="${label}"]`));
+      assert.equal(document.querySelectorAll('[role="dialog"]').length, 2);
+      await view.render(tree(fetch, target, { readOnly: true }));
+      assert.equal(document.querySelectorAll('[role="dialog"]').length, 1);
+      assert.equal(
+        document.querySelector(`[aria-label="${label}"]`).disabled,
+        true,
+      );
+      assert.equal(fetch.countOf('/api/v1/compile/config/update'), 0);
+      await view.render(tree(fetch, target));
+      assert.equal(document.querySelectorAll('[role="dialog"]').length, 1);
+    } finally {
+      await view.unmount();
+    }
+  });
+}

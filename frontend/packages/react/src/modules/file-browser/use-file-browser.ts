@@ -147,6 +147,7 @@ export function useFileBrowser({
   const boards = useBrowserDashboards({
     rows,
     metadataRows: tree.metadataRows,
+    identifyUri,
     uri: blocked ? null : activeUri,
     rootUri,
     generation: refreshGeneration,
@@ -181,11 +182,6 @@ export function useFileBrowser({
         ? 'wiki'
         : 'plain',
   });
-
-  const selectedId = useMemo(
-    () => findSelectedRowId(rows, activeUri, identifyUri),
-    [rows, activeUri, identifyUri],
-  );
 
   const { open: openDashboard, close: closeDashboard } = boards;
   const navigateResource = useMemo<FileBrowserActions['openResource']>(
@@ -280,7 +276,10 @@ export function useFileBrowser({
     : preview.error;
   return {
     rows,
-    selectedId,
+    selectedId: useMemo(
+      () => findSelectedRowId(rows, activeUri, identifyUri),
+      [rows, activeUri, identifyUri],
+    ),
     identifyUri,
     // 上报**实际生效**的资源，而不是宿主传进来的那个 prop：非受控时后者只是初值，
     // 选中新的文件之后它不再变化，消费 `currentUri` 的自定义视图与操作会指向一个

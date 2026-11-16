@@ -29,9 +29,7 @@ export function usePreviewHistory(props: PreviewHistoryProps) {
   const base =
     entries?.find(
       (entry) => entry.id === baseId && entry.id !== selected?.id,
-    ) ??
-    previous ??
-    entries?.find((entry) => entry.id !== selected?.id);
+    ) ?? previous;
   const content = useDashboardQuery(
     useCallback(
       (client: OvClient, options: OvRequestOptions) =>
@@ -50,7 +48,7 @@ export function usePreviewHistory(props: PreviewHistoryProps) {
     requestOptions,
     Boolean(base) && compare,
   );
-  const addedFile = Boolean(selected && entries?.length === 1);
+  const addedFile = Boolean(selected && !base);
   const canCompare = Boolean(base) || addedFile;
   const changes = useMemo(
     () =>

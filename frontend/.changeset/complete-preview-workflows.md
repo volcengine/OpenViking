@@ -4,6 +4,8 @@
 
 ## en-US
 
+Propagate pending Wiki conflicts to every ancestor directory, including collapsed subtrees, and refresh cleared markers. Respect write-permission changes in open configuration editors, compare the first version against an empty baseline, and refresh the current version after a restore conflict before allowing another confirmation.
+
 Align compilation settings with directory and Skill pickers, full-path tooltips, frequency radio cards and time selection. Add file selection, historical comparison and file restore to Wiki history in a full-width document panel with the FileViewer diff renderer, hide history for ordinary resource files and while editing, improve pack upload, and keep model names and dashboard tooltips readable.
 
 Keep history loading indicators centred, show initial picker loading immediately, reuse an Arco-derived Switch, keep target paths on one line and hide view switching while editing. Fix the selected background of the history Preview / Markdown tabs.
@@ -11,6 +13,8 @@ Keep history loading indicators centred, show initial picker loading immediately
 Complete theme fallbacks on migrated workflow roots, align dark surfaces, schedule selection borders, history badges and diff legends, and apply the console theme to Switch sizes and unavailable states. Preserve the FileViewer's native diff colours. Show the empty state when a selected directory file has no historical versions, including after retrying a failed request.
 
 ## zh-CN
+
+Wiki 待处理冲突沿祖先目录逐级显示，目录折叠时保留，刷新后清除已解决的标记。已打开的配置编辑器响应写权限变化，首个版本默认与空内容比较，版本回滚冲突后刷新当前版本，供用户再次确认。
 
 编译配置使用目录和 Skill 选择器，补充完整路径提示、频次单选卡片与时间选择。Wiki 历史使用全宽文档面板和 FileViewer 差异视图，支持文件选择、历史版本对比和文件回滚；普通资源文件及编辑状态隐藏历史入口，优化 pack 上传界面、模型名称换行与看板提示位置。
 

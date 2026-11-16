@@ -31,6 +31,7 @@ export function PreviewCompileConfig(props: Props) {
   );
   const [saved, setSaved] = useState<CompileConfig>();
   const [editing, setEditing] = useState<CompileField>();
+  if (editing && !props.canWrite) setEditing(undefined);
   const config = saved ?? query.data;
   const { text } = props;
   const rule = config?.auto_update ? config.update_schedule : null;
@@ -124,7 +125,7 @@ export function PreviewCompileConfig(props: Props) {
             )}
           </div>
           <p className="ov-compile-config__hint">{text.configurationHint}</p>
-          {editing ? (
+          {editing && props.canWrite ? (
             <PreviewCompileEdit
               {...props}
               initial={config}

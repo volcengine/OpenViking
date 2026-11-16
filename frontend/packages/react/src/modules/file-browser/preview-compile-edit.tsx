@@ -25,6 +25,7 @@ export function PreviewCompileEdit({
   onSaved,
   ...props
 }: PreviewWorkflowProps & {
+  canWrite: boolean;
   initial: CompileConfig;
   loadingText: string;
   field: CompileField;
@@ -49,10 +50,10 @@ export function PreviewCompileEdit({
       type: 'directory',
     })),
   );
-  const [search, setSearch] = useState('');
   const anchor = useRef<HTMLElement>(null);
   const mutation = usePreviewMutation(props.uri, props.requestOptions);
   const save = (items = selection) => {
+    if (!props.canWrite) return;
     const next = {
       ...initial,
       ...(field === 'from' ? { from: items.map((item) => item.uri) } : {}),
@@ -180,8 +181,6 @@ export function PreviewCompileEdit({
           locale={props.locale}
           value={selection}
           multiple={field === 'from'}
-          query={search}
-          onQueryChange={setSearch}
           field={field}
           requestOptions={props.requestOptions}
           error={error}

@@ -150,6 +150,7 @@ for (const [field, label] of [
         null,
       );
       assert.ok(picker().querySelectorAll('[role="treeitem"]').length);
+      assert.equal(picker().querySelector('input[type="search"]'), null);
     } finally {
       await view.unmount();
     }

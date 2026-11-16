@@ -65,6 +65,14 @@ test('history previews, compares, and copies a revision without writing', async 
       false,
     );
     await click(workflow().querySelector('[role="switch"]'));
+    const added = workflow().querySelector(
+      '[data-testid="history-viewer-source"]',
+    ).textContent;
+    assert.match(added, /--- \/dev\/null/);
+    assert.match(added, /\+Before/);
+    assert.doesNotMatch(added, /-After/);
+    await click(workflow().querySelector('[aria-label="Compare with"]'));
+    await click(document.querySelector('[role="option"]'));
     const patch = workflow().querySelector(
       '[data-testid="history-viewer-source"]',
     ).textContent;
