@@ -72,8 +72,11 @@ function normalizeLarkMessageEvent(input, instance) {
   const target = valueOrNull(raw.message_id);
   if (!id || !/^om_[A-Za-z0-9_-]{8,}$/.test(target ?? '')) throw new Error('invalid Lark message event');
   const recall = kind === 'message.recalled';
-  const operator = recall ? null : valueOrNull(raw.user_id?.open_id ?? raw.operator_id?.open_id);
   const operatorType = recall ? null : valueOrNull(raw.operator_type) ?? 'user';
+  const operator = recall ? null : operatorType === 'app' ? valueOrNull(raw.app_id)
+    : valueOrNull(raw.user_id?.open_id ?? raw.operator_id?.open_id);
+  // The envelope names the subscribing app; the event names the reacting app.
+  const receiverAppId = valueOrNull(input.header?.app_id);
   const emoji = recall ? null : valueOrNull(raw.reaction_type?.emoji_type);
   if (!recall && (!emoji || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(emoji))) throw new Error('invalid Lark reaction');
   const at = Number.parseInt(String((recall ? raw.recall_time : raw.action_time) ?? input.header?.create_time ?? Date.now()), 10);
@@ -81,13 +84,14 @@ function normalizeLarkMessageEvent(input, instance) {
     instance, id, kind, occurred_at: Number.isFinite(at) ? at : Date.now(),
     subject: { type: 'message', id: target },
     actor: operator ? { type: operatorType === 'app' ? 'app' : 'user', id: operator }
-      : operatorType === 'app' ? { type: 'app', id: valueOrNull(raw.app_id) ?? 'bot' } : null,
+      : operatorType === 'app' ? { type: 'app', id: 'bot' } : null,
     message: { id: `${recall ? 'rc' : 're'}_${createHash('sha256').update(JSON.stringify([instance, id])).digest('hex').slice(0, 40)}`,
       type: recall ? 'recall' : 'reaction', parent_id: target },
     content: { text: recall ? '[recalled a message]'
       : kind === 'message.reaction.created' ? `[reaction ${emoji}]` : `[removed reaction ${emoji}]` },
     data: { target_message_id: target, chat_id: valueOrNull(raw.chat_id), recall_type: valueOrNull(raw.recall_type),
-      emoji_type: emoji },
+      emoji_type: emoji, supported: operatorType !== 'app'
+        || Boolean(operator && receiverAppId && operator !== receiverAppId) },
   });
 }
 
