@@ -158,9 +158,10 @@ class TestExtraHeadersViaFactory:
 
         with (
             patch("openviking.models.embedder.openai_embedders.logger.warning") as mock_warning,
+            # the embedder's clock only: asyncio timers read the global time.monotonic
             patch(
-                "openviking.models.embedder.base.time.monotonic",
-                side_effect=[0.0, 0.0, 0.0, 3.2],
+                "openviking.models.embedder.base.time",
+                MagicMock(monotonic=MagicMock(side_effect=[0.0, 0.0, 0.0, 3.2])),
             ),
         ):
             await embedder.embed_async("hello")
