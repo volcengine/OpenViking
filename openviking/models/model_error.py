@@ -83,20 +83,21 @@ _CODE_KINDS = {
     "UNSUPPORTEDVALUE": ModelErrorKind.UNSUPPORTED,
 }
 
-# MiniMax business codes come from base_resp.status_code. Keep them scoped to
-# the MiniMax branch in _sdk_kind: the same number has no portable meaning
-# across model APIs.
-_MINIMAX_CODE_KINDS = {
-    "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
-    "1001": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
-    "1002": ModelErrorKind.RATE_LIMIT_ERROR,
-    "1004": ModelErrorKind.AUTHENTICATION_ERROR,
-    "1008": ModelErrorKind.QUOTA_EXHAUSTED,
-    "1013": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
-    "1026": ModelErrorKind.CONTENT_SAFETY,
-    "1027": ModelErrorKind.CONTENT_SAFETY,
-    "2013": ModelErrorKind.INVALID_REQUEST,
-    "2049": ModelErrorKind.AUTHENTICATION_ERROR,
+# Numeric business codes are provider-scoped: the same number has no portable
+# meaning across model APIs.
+_PROVIDER_CODE_KINDS = {
+    "minimax": {
+        "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+        "1001": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+        "1002": ModelErrorKind.RATE_LIMIT_ERROR,
+        "1004": ModelErrorKind.AUTHENTICATION_ERROR,
+        "1008": ModelErrorKind.QUOTA_EXHAUSTED,
+        "1013": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+        "1026": ModelErrorKind.CONTENT_SAFETY,
+        "1027": ModelErrorKind.CONTENT_SAFETY,
+        "2013": ModelErrorKind.INVALID_REQUEST,
+        "2049": ModelErrorKind.AUTHENTICATION_ERROR,
+    }
 }
 
 _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
@@ -195,6 +196,16 @@ def _kind_from_code(error: BaseException) -> ModelErrorKind | None:
     return None
 
 
+def _provider_kind_from_code(error: BaseException) -> ModelErrorKind | None:
+    provider = getattr(error, "provider", None)
+    if not isinstance(provider, str):
+        return None
+    normalized = _normalized_code(_error_code(error))
+    if normalized is None:
+        return None
+    return _PROVIDER_CODE_KINDS.get(provider.lower(), {}).get(normalized)
+
+
 def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
     if status_code in _TRANSIENT_SERVICE_STATUS:
         return ModelErrorKind.TRANSIENT_SERVICE_ERROR
@@ -217,17 +228,18 @@ def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
     return None
 
 
-def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
+def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str | None] | None:
     module = type(error).__module__
     name = type(error).__name__
     mro_names = {base.__name__ for base in type(error).__mro__}
 
-    if isinstance(error, ModelError) and error.provider == "minimax":
-        kind = error.kind
+    carried_kind = getattr(error, "kind", None)
+    if isinstance(carried_kind, ModelErrorKind):
+        kind = carried_kind
         if kind is ModelErrorKind.UNKNOWN:
-            normalized = _normalized_code(error.code) or ""
-            kind = _MINIMAX_CODE_KINDS.get(normalized, ModelErrorKind.UNKNOWN)
-        return kind, "minimax"
+            kind = _provider_kind_from_code(error) or ModelErrorKind.UNKNOWN
+        provider = getattr(error, "provider", None)
+        return kind, provider if isinstance(provider, str) else None
 
     if isinstance(error, TimeoutError):
         return ModelErrorKind.TRANSIENT_NETWORK_ERROR, "network"
@@ -346,36 +358,15 @@ def model_error_from_status(
 def model_error_from_exception(error: BaseException) -> ModelError | None:
     """Reuse the nearest classification or classify the first SDK failure."""
     for item in model_exception_chain(error):
-        if isinstance(item, ModelError):
-            classified = _sdk_kind(item)
-            if classified is None or classified[0] is item.kind:
-                return item
-            kind, provider = classified
-            return ModelError(
-                kind,
-                str(item),
-                provider=provider,
-                status_code=item.status_code,
-                code=item.code,
-            )
-        carried_kind = getattr(item, "kind", None)
-        if isinstance(carried_kind, ModelErrorKind):
-            provider = getattr(item, "provider", None)
-            return ModelError(
-                carried_kind,
-                str(error),
-                provider=provider if isinstance(provider, str) else None,
-                status_code=_status_code(item),
-                code=_error_code(item),
-            )
-
         classified = _sdk_kind(item)
         if classified is None:
             continue
         kind, provider = classified
+        if isinstance(item, ModelError) and kind is item.kind:
+            return item
         return ModelError(
             kind,
-            str(error),
+            str(item) if isinstance(item, ModelError) else str(error),
             provider=provider,
             status_code=_status_code(item),
             code=_error_code(item),
