@@ -42,6 +42,18 @@ jobs:
       api_changed: ${{ steps.plan.outputs.api_changed }}
       cuvs_changed: ${{ steps.plan.outputs.cuvs_changed }}
     steps:
+      - name: Restore self-hosted workspace ownership before checkout
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Recover files left by interrupted root container jobs before
+          # checkout attempts git clean. A local action needs checkout first.
+          test -d "$GITHUB_WORKSPACE"
+          test ! -L "$GITHUB_WORKSPACE"
+          docker run --rm --network none \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace" \
+            ubuntu:24.04 chown -hR "$(id -u):$(id -g)" /workspace
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -73,10 +85,11 @@ jobs:
           (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
           '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
     container:
-      image: ubuntu:24.04
+      image: ${{ vars.CI_UBUNTU24_IMAGE || 'ubuntu:24.04' }}
       # Bootstrap HTTPS apt with the host's read-only CA bundle.
       options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
-    timeout-minutes: 30
+    # Keep the existing native build budget after cold container bootstrap.
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -87,14 +100,27 @@ jobs:
         id: test-pool
         env:
           TEST_RUNNER: ${{ runner.environment == 'self-hosted' && '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]' }}
-          TEST_CONTAINER: ${{ runner.environment == 'self-hosted' && 'ubuntu:24.04' || '' }}
+          TEST_CONTAINER: ${{ runner.environment == 'self-hosted' && (vars.CI_UBUNTU24_IMAGE || 'ubuntu:24.04') || '' }}
         run: |
           echo "runner=$TEST_RUNNER" >> "$GITHUB_OUTPUT"
           echo "container=$TEST_CONTAINER" >> "$GITHUB_OUTPUT"
       - name: Install native build system dependencies
+        timeout-minutes: 15
         env:
           UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
         run: |
+          packages=(git ca-certificates build-essential pkg-config curl unzip xz-utils python3 libssl-dev cmake ccache)
+          ready=true
+          for package in "${packages[@]}"; do
+            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+              ready=false
+              break
+            fi
+          done
+          if "$ready"; then
+            echo "System dependencies are already installed in the CI image."
+            exit 0
+          fi
           sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
           if [ -n "$UBUNTU_MIRROR" ]; then
             case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
@@ -106,9 +132,9 @@ jobs:
             -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
             -o APT::Update::Error-Mode=any update
           apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
-            -o Acquire::Retries=2 install -y \
-            git ca-certificates build-essential clang pkg-config curl unzip xz-utils \
-            python3 libssl-dev
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            install -y --no-install-recommends \
+            "${packages[@]}"
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -205,6 +231,18 @@ jobs:
           UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
           DEBIAN_FRONTEND: noninteractive
         run: |
+          packages=(git ca-certificates curl python3 cmake build-essential)
+          ready=true
+          for package in "${packages[@]}"; do
+            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+              ready=false
+              break
+            fi
+          done
+          if "$ready"; then
+            echo "System dependencies are already installed in the CI image."
+            exit 0
+          fi
           sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
           if [ -n "$UBUNTU_MIRROR" ]; then
             case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
@@ -217,7 +255,7 @@ jobs:
             -o APT::Update::Error-Mode=any update
           apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
             -o Acquire::Retries=2 install -y --no-install-recommends \
-            git ca-certificates curl python3 cmake build-essential
+            "${packages[@]}"
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -292,6 +330,18 @@ jobs:
           UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
           DEBIAN_FRONTEND: noninteractive
         run: |
+          packages=(git ca-certificates curl python3 cmake build-essential ffmpeg lsof procps)
+          ready=true
+          for package in "${packages[@]}"; do
+            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+              ready=false
+              break
+            fi
+          done
+          if "$ready"; then
+            echo "System dependencies are already installed in the CI image."
+            exit 0
+          fi
           sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
           if [ -n "$UBUNTU_MIRROR" ]; then
             case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
@@ -304,7 +354,7 @@ jobs:
             -o APT::Update::Error-Mode=any update
           apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
             -o Acquire::Retries=2 install -y --no-install-recommends \
-            git ca-certificates curl python3 cmake build-essential ffmpeg lsof procps
+            "${packages[@]}"
       - uses: actions/checkout@v6
         with:
           submodules: recursive

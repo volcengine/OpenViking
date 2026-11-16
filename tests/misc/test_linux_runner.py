@@ -2,6 +2,10 @@
 
 import json
 import re
+import shutil
+import subprocess
+import sys
+from os import environ, pathsep
 from pathlib import Path
 
 import pytest
@@ -9,6 +13,61 @@ import yaml
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github/workflows"
 SELF_HOSTED = ["self-hosted", "Linux", "X64", "ci-linux-builds"]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("node") is None,
+    reason="The Linux CI action requires Node and POSIX command shims",
+)
+def test_cleanup_recovers_host_owner_when_checkout_recreates_workspace(tmp_path):
+    """Execute the action with Linux stat/chown shims for a root-owned checkout."""
+    workspace = tmp_path / "OpenViking" / "OpenViking"
+    workspace.mkdir(parents=True)
+    runner_temp = tmp_path / "_temp"
+    runner_temp.mkdir()
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    stat = commands / "stat"
+    stat.write_text(
+        "#!/bin/sh\n"
+        'if [ "$3" = "$EXPECTED_PARENT" ]; then\n'
+        '  printf "1001:1002\\n"\n'
+        "else\n"
+        '  printf "0:0\\n"\n'
+        "fi\n"
+    )
+    chown = commands / "chown"
+    chown.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CHOWN_LOG"\n')
+    stat.chmod(0o755)
+    chown.chmod(0o755)
+    state_file = tmp_path / "state"
+    env_file = tmp_path / "environment"
+    chown_log = tmp_path / "chown.log"
+    env = {
+        **environ,
+        "PATH": f"{commands}{pathsep}{environ['PATH']}",
+        "GITHUB_WORKSPACE": str(workspace),
+        "RUNNER_TEMP": str(runner_temp),
+        "GITHUB_STATE": str(state_file),
+        "GITHUB_ENV": str(env_file),
+        "EXPECTED_PARENT": str(workspace.parent),
+        "CHOWN_LOG": str(chown_log),
+    }
+    action = WORKFLOWS.parent / "actions/linux-test-env"
+    subprocess.run(["node", str(action / "bootstrap.mjs")], env=env, check=True)
+    state = dict(line.split("=", 1) for line in state_file.read_text().splitlines())
+    assert state["owner"] == "1001:1002"
+    home = Path(state["home"])
+    assert home.parent == runner_temp
+    assert f"HOME={home}\n" in env_file.read_text()
+    assert workspace.as_posix() in (home / ".gitconfig").read_text()
+    subprocess.run(
+        ["node", str(action / "cleanup.mjs")],
+        env={**env, **{f"STATE_{key}": value for key, value in state.items()}},
+        check=True,
+    )
+    # Cleanup must restore the host UID/GID and avoid dereferencing symlinks.
+    assert chown_log.read_text().splitlines() == ["-hR", "1001:1002", str(workspace), str(home)]
 
 
 def jobs(file):
@@ -25,6 +84,7 @@ def labels(
     disabled="",
     enabled="true",
     run_number=2,
+    ubuntu24_image="",
     contexts=None,
 ):
     """Evaluate only the routing expressions in these checked-in workflows."""
@@ -41,6 +101,7 @@ def labels(
         "vars.CI_DISABLE_SELF_HOSTED": disabled,
         "vars.CI_LINUX_BUILDS_ENABLED": enabled,
         "github.run_number": run_number,
+        "vars.CI_UBUNTU24_IMAGE": ubuntu24_image,
     }.items():
         expression = expression.replace(key, repr(value))
     expression = re.sub(r"matrix\.(\w+)", lambda match: repr(row[match[1]]), expression)
@@ -135,7 +196,7 @@ def test_studio_stays_hosted_and_native_runtime_keeps_ubuntu24_baseline():
         assert "container" not in job
         assert all(step.get("uses") != "./.github/actions/linux-test-env" for step in job["steps"])
     native = jobs("api_test.yml")["native-runtime"]
-    assert native["container"]["image"] == "ubuntu:24.04"
+    assert labels(native["container"]["image"], {}) == ["ubuntu:24.04"]
     assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in native["steps"])
 
 
@@ -229,7 +290,8 @@ def test_runner_diagnostic_is_explicit_and_does_not_checkout_code():
 
 @pytest.mark.parametrize("number", [1, 2])
 @pytest.mark.parametrize("source", ["volcengine/OpenViking", "fork/OpenViking"])
-def test_api_consumers_inherit_the_trusted_native_producer_pool(number, source):
+@pytest.mark.parametrize("image", ["", "ghcr.io/volcengine/openviking-ci-ubuntu24:tested"])
+def test_api_consumers_inherit_the_trusted_native_producer_pool(number, source, image):
     workflow = jobs("api_test.yml")
     native = workflow["native-runtime"]
     destination = labels(
@@ -247,9 +309,14 @@ def test_api_consumers_inherit_the_trusted_native_producer_pool(number, source):
         "test_container": "${{ steps.test-pool.outputs.container }}",
     }
     container = labels(
-        pool["env"]["TEST_CONTAINER"], {}, contexts={"runner.environment": environment}
+        pool["env"]["TEST_CONTAINER"],
+        {},
+        ubuntu24_image=image,
+        contexts={"runner.environment": environment},
     )[0]
-    assert container == ("ubuntu:24.04" if environment == "self-hosted" else "")
+    selected_image = image or "ubuntu:24.04"
+    assert labels(native["container"]["image"], {}, ubuntu24_image=image) == [selected_image]
+    assert container == (selected_image if environment == "self-hosted" else "")
     contexts = {
         "needs.native-runtime.outputs.test_runner": json.dumps(destination),
         "needs.native-runtime.outputs.test_container": container,
@@ -301,6 +368,60 @@ def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
     assert steps.index(cleanup) < next(
         index for index, step in enumerate(steps) if step.get("uses") == "actions/setup-python@v6"
     )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Ubuntu bootstrap uses bash/POSIX tools")
+@pytest.mark.parametrize(
+    "file,name",
+    [
+        ("api_test.yml", "native-runtime"),
+        ("api_test.yml", "api-tests"),
+        ("api_test.yml", "database-tests"),
+        ("_test_lite.yml", "test-lite"),
+    ],
+)
+@pytest.mark.parametrize("installed", [True, False])
+def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, file, name, installed):
+    step = next(step for step in jobs(file)[name]["steps"] if "packages=(" in step.get("run", ""))
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    apt_log = tmp_path / "apt.log"
+    scripts = {
+        # A removed package can have dpkg metadata and exit successfully.
+        "dpkg-query": (
+            '#!/bin/sh\nif [ "$3" = "$MISSING_PACKAGE" ]; then\n'
+            'printf "deinstall ok config-files"\nelse\n'
+            'printf "install ok installed"\nfi\n'
+        ),
+        "sed": "#!/bin/sh\nexit 0\n",
+        "apt-get": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$APT_LOG"\n',
+    }
+    for name, script in scripts.items():
+        executable = command_dir / name
+        executable.write_text(script)
+        executable.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+        env={
+            **environ,
+            "PATH": f"{command_dir}{pathsep}{environ['PATH']}",
+            "APT_LOG": str(apt_log),
+            "MISSING_PACKAGE": "" if installed else "git",
+            "UBUNTU_MIRROR": "",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    if installed:
+        assert "already installed" in result.stdout
+        assert not apt_log.exists()
+    else:
+        calls = apt_log.read_text().splitlines()
+        assert len(calls) == 2
+        assert calls[0].endswith(" update")
+        assert "install -y --no-install-recommends" in calls[1]
+        assert "git" in calls[1].split()
 
 
 @pytest.mark.parametrize("container", ["", "ubuntu:24.04"])
