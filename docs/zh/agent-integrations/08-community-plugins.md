@@ -90,23 +90,24 @@ Antigravity 的 `hooks.json` 格式与 Claude Code 不同：顶层 key 是 Hook 
 
 ### 安装
 
-前置条件：Node.js 18+、运行中的 OpenViking 服务、OpenViking 仓库 checkout，以及 Antigravity app 或 `agy`。安装脚本暂不支持 Antigravity，请在 checkout 根目录运行：
+前置条件：Node.js 18+、运行中的 OpenViking 服务，以及 Antigravity app 或 `agy`。
 
 ```bash
-dest=~/.gemini/config/plugins/openviking-memory
-mkdir -p "$dest"
-cp examples/agent-hook-plugin/hosts/antigravity/plugin.json "$dest/"
-sed -e "s#__OPENVIKING_PLUGIN_ROOT__#$PWD/examples/agent-hook-plugin#g" \
-    -e "s#__OPENVIKING_CLIENT_ID__#antigravity#g" \
-    examples/agent-hook-plugin/hosts/antigravity/hooks.json > "$dest/hooks.json"
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
 ```
 
-连接配置与其他集成一样读取 `~/.openviking/ovcli.conf`。如果希望 Agent 主动检索记忆，另外在 `~/.gemini/config/mcp_config.json` 中添加 OpenViking MCP 服务。
+安装脚本把插件写到 `~/.gemini/config/plugins/openviking-memory`，运行时写到 `~/.openviking/agent-integrations/antigravity`。如果同名目录已存在且不是 OpenViking 写入的，安装脚本会保留它并停止。连接配置与其他集成一样读取 `~/.openviking/ovcli.conf`。安装脚本不添加 MCP 服务；如果希望 Agent 主动检索记忆，另外在 `~/.gemini/config/mcp_config.json` 中添加 OpenViking MCP 服务。
 
 重启 Antigravity app 或开启新的 `agy` 会话后，确认：
 
 - `~/.gemini/antigravity-cli/log/` 下的 `agy` 日志出现 `loaded 1 named hooks`；
 - 一轮对话结束后，`~/.openviking/hook-state/antigravity/<conversation-id>.json` 记录了 `lastStep`。
+
+卸载：
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
+```
 
 ## AstrBot 插件
 

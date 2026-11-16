@@ -1748,6 +1748,7 @@ class FSService:
         commit_content: Optional[Callable[..., Awaitable[Any]]] = None,
         resolve_conflicts: bool = False,
         use_snapshot: bool = False,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
         """Write content with optional snapshots; restores supply their own commit callback."""
         viking_fs = self._ensure_initialized()
@@ -1771,6 +1772,7 @@ class FSService:
             tag_mode=tag_mode,
             acl=acl,
             resolve_conflicts=resolve_conflicts,
+            defer_processing=defer_processing,
         )
         return await write()
 
