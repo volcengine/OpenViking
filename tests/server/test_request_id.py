@@ -192,7 +192,7 @@ async def test_unhandled_500_keeps_request_id_for_log_and_response(monkeypatch) 
     ]
     assert len(error_records) == 1
     assert error_records[0].request_id == "failed-request-001"
-    assert error_records[0].getMessage().startswith("[request_id=failed-request-001] ")
+    assert "request_id=" not in error_records[0].getMessage()
     assert len(completed_requests) == 1
     assert completed_requests[0]["error_code"] == "INTERNAL"
     assert completed_requests[0]["error_message"] == "Internal server error"

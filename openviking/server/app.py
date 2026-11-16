@@ -71,7 +71,10 @@ from openviking_cli.utils.config import (
     get_openviking_config,
     resolve_config_path,
 )
-from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
+from openviking_cli.utils.logger import (
+    configure_server_logging,
+    init_otel_log_handler_from_server_config,
+)
 from openviking_gateway.config import MOUNT_PATH as GATEWAY_MOUNT_PATH
 
 logger = get_logger(__name__)
@@ -103,6 +106,7 @@ def _configure_default_executor(config: ServerConfig) -> None:
 
 def create_worker_app() -> FastAPI:
     """Load file config and replay parent-process Bot CLI overrides."""
+    configure_server_logging(bootstrap=True)
     resolved_config_path = resolve_config_path(
         None,
         OPENVIKING_CONFIG_ENV,
@@ -110,6 +114,7 @@ def create_worker_app() -> FastAPI:
     )
     config_path = str(resolved_config_path) if resolved_config_path is not None else None
     config = load_server_config(config_path)
+    configure_server_logging()
     with_bot = os.environ.get(WORKER_WITH_BOT_ENV)
     if with_bot is not None:
         config.with_bot = with_bot == "1"
