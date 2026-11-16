@@ -364,6 +364,10 @@ class TaskWorkStore(Protocol):
         user_id: Optional[str],
     ) -> bool: ...
 
+    async def count_open_account_work(self, *, account_id: str) -> int:
+        """Count open non-Inline Work across all users; requires a SQL store."""
+        raise NotImplementedError("Account wait requires a SQL task store")
+
     async def summarize_works(
         self,
         task_id: str,

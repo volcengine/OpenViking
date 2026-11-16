@@ -99,6 +99,7 @@ class RetrievalStatsCollector:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._stats = RetrievalStats()
+        self._account_stats: Dict[str, RetrievalStats] = {}
 
     def record_query(
         self,
@@ -108,34 +109,27 @@ class RetrievalStatsCollector:
         latency_ms: float = 0.0,
         rerank_used: bool = False,
         rerank_fallback: bool = False,
+        account_id: str | None = None,
     ) -> None:
         """Record metrics from a single retrieval query."""
         with self._lock:
-            self._stats.total_queries += 1
-            self._stats.total_results += result_count
-
-            if result_count == 0:
-                self._stats.zero_result_queries += 1
-
-            for s in scores:
-                self._stats.total_score_sum += s
-                if s > self._stats.max_score:
-                    self._stats.max_score = s
-                if s < self._stats.min_score:
-                    self._stats.min_score = s
-
-            self._stats.queries_by_type[context_type] = (
-                self._stats.queries_by_type.get(context_type, 0) + 1
-            )
-
-            if rerank_used:
-                self._stats.rerank_used += 1
-            if rerank_fallback:
-                self._stats.rerank_fallback += 1
-
-            self._stats.total_latency_ms += latency_ms
-            if latency_ms > self._stats.max_latency_ms:
-                self._stats.max_latency_ms = latency_ms
+            targets = [self._stats]
+            if account_id is not None:
+                targets.append(self._account_stats.setdefault(account_id, RetrievalStats()))
+            for stats in targets:
+                stats.total_queries += 1
+                stats.total_results += result_count
+                if result_count == 0:
+                    stats.zero_result_queries += 1
+                for s in scores:
+                    stats.total_score_sum += s
+                    stats.max_score = max(stats.max_score, s)
+                    stats.min_score = min(stats.min_score, s)
+                stats.queries_by_type[context_type] = stats.queries_by_type.get(context_type, 0) + 1
+                stats.rerank_used += int(rerank_used)
+                stats.rerank_fallback += int(rerank_fallback)
+                stats.total_latency_ms += latency_ms
+                stats.max_latency_ms = max(stats.max_latency_ms, latency_ms)
 
         try:
             from openviking.metrics.datasources import RetrievalStatsDataSource
@@ -150,17 +144,22 @@ class RetrievalStatsCollector:
         except Exception:
             pass
 
-    def snapshot(self) -> RetrievalStats:
+    def snapshot(self, account_id: str | None = None) -> RetrievalStats:
         """Return a copy of the current stats."""
         with self._lock:
             import copy
 
-            return copy.deepcopy(self._stats)
+            return copy.deepcopy(
+                self._stats
+                if account_id is None
+                else self._account_stats.get(account_id, RetrievalStats())
+            )
 
     def reset(self) -> None:
         """Reset all counters (useful for testing)."""
         with self._lock:
             self._stats = RetrievalStats()
+            self._account_stats.clear()
 
 
 # Module-level singleton.

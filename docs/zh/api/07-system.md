@@ -335,6 +335,10 @@ ov system consistency viking://resources/my-project
 
 无必填参数。可选 JSON 请求体仍接受旧版 `timeout` 字段，但该字段已废弃，传入值会被忽略。不传请求体仍可调用。HTTP 请求超时使用客户端配置。
 
+`{"scope":"account"}` 等待当前鉴权 account 在同一 service 分区下、跨用户和节点登记的非 `Inline` 开放 Work（`pending` / `running`），需要 SQL task store。入口立即查询，查到 0 立即返回；否则每五秒重新查询当前集合，期间新登记的 Work 纳入后续查询。SQL 失败返回 `UNAVAILABLE`，不回退共享队列统计。
+
+回包保持下方队列字段形状，使用本 account 的节点内存 delivery 计数和错误。完成只表示某次 SQL 查询没有非 `Inline` 开放 Work，不阻止后续提交，也不覆盖 SQL 外操作。省略 scope 或传 `"runtime"` 保留原有队列排空行为；其他 scope 值无效。
+
 #### 3. 使用示例
 
 **HTTP API**

@@ -62,6 +62,21 @@ impl PathLockManager {
         }
     }
 
+    /// Observe only this account's local leases and acquisition counters.
+    pub async fn observe_account(&self, account_id: &str) -> PathLockObserveSnapshot {
+        let account = self.account_metrics(account_id);
+        let metrics = account
+            .counters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        PathLockObserveSnapshot {
+            active_locks: self.lease_registry.active_account_count(account_id),
+            waiting_locks: account.waiting.load(AtomicOrdering::Relaxed),
+            stale_locks_removed: metrics.stale_tokens_removed,
+            conflicts: metrics.recent_conflicts.clone(),
+        }
+    }
+
     /// Look up an owned lease by owner_id for cross-FFI lease operations.
     pub async fn get_owned_lease(&self, owner_id: &str) -> Option<OwnedPathLockLease> {
         let owner = self.lease_registry.resolve_owner(owner_id)?;

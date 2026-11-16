@@ -95,9 +95,31 @@ pub struct PathLockManager {
     metrics: Arc<RwLock<LockMetrics>>,
     waiting_lock_count: AtomicUsize,
     wait_duration_ns: AtomicU64,
+    account_metrics: StdMutex<HashMap<String, Arc<AccountLockMetrics>>>,
+}
+
+#[derive(Default)]
+struct AccountLockMetrics {
+    waiting: AtomicUsize,
+    counters: StdMutex<LockMetrics>,
 }
 
 impl PathLockManager {
+    fn account_metrics(&self, account_id: &str) -> Arc<AccountLockMetrics> {
+        self.account_metrics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(account_id.to_string())
+            .or_default()
+            .clone()
+    }
+
+    fn current_account_metrics(&self) -> Option<Arc<AccountLockMetrics>> {
+        FsContextView::current()
+            .account_id()
+            .map(|id| self.account_metrics(id))
+    }
+
     /// Return the actual provider's lease handle representation.
     pub fn handle_mode(&self) -> PathLockHandleMode {
         self.provider.handle_mode()
@@ -188,6 +210,7 @@ impl PathLockManager {
             metrics,
             waiting_lock_count: AtomicUsize::new(0),
             wait_duration_ns: AtomicU64::new(0),
+            account_metrics: StdMutex::new(HashMap::new()),
         }
     }
 

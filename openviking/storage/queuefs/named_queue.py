@@ -99,6 +99,42 @@ class NamedQueue:
         self._requeue_count = 0
         self._error_count = 0
         self._errors: List[QueueError] = []
+        self._account_status: Dict[str, QueueStatus] = {}
+        # Only deliveries fetched by this node are owned locally.
+        self._local_deliveries: Dict[int, tuple[str, bool]] = {}
+
+    @staticmethod
+    def _account_id(data: Any) -> str | None:
+        from openviking.service.task_work_index import extract_queue_account_id
+
+        return extract_queue_account_id(data)
+
+    def _track_delivery(self, data: Dict[str, Any], *, running: bool = False) -> None:
+        account_id = self._account_id(data)
+        if account_id is None:
+            return
+        with self._lock:
+            previous = self._local_deliveries.get(id(data))
+            status = self._account_status.setdefault(account_id, QueueStatus())
+            if previous is None:
+                status.pending += 1
+                self._local_deliveries[id(data)] = (account_id, False)
+            if running and (previous is None or not previous[1]):
+                status.pending -= 1
+                status.in_progress += 1
+                self._local_deliveries[id(data)] = (account_id, True)
+
+    def release_local_delivery(self, data: Dict[str, Any]) -> None:
+        """Forget local ownership even when backend settlement fails."""
+        with self._lock:
+            delivery = self._local_deliveries.pop(id(data), None)
+            if delivery is not None:
+                account_id, running = delivery
+                status = self._account_status[account_id]
+                if running:
+                    status.in_progress -= 1
+                else:
+                    status.pending -= 1
 
     async def _run_middleware(
         self,
@@ -125,6 +161,12 @@ class NamedQueue:
             self._processed += 1
             if result.outcome in (ProcessOutcome.REQUEUED, ProcessOutcome.RETRY):
                 self._requeue_count += 1
+            account_id = self._account_id(data)
+            if account_id is not None:
+                status = self._account_status.setdefault(account_id, QueueStatus())
+                status.processed += 1
+                if result.outcome in (ProcessOutcome.REQUEUED, ProcessOutcome.RETRY):
+                    status.requeue_count += 1
 
     def _record_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         with self._lock:
@@ -138,9 +180,26 @@ class NamedQueue:
             )
             if len(self._errors) > self.MAX_ERRORS:
                 self._errors = self._errors[-self.MAX_ERRORS :]
+            account_id = self._account_id(data)
+            if account_id is not None:
+                status = self._account_status.setdefault(account_id, QueueStatus())
+                status.error_count += 1
+                status.errors.append(self._errors[-1])
+                status.errors = status.errors[-self.MAX_ERRORS :]
 
-    async def get_status(self) -> QueueStatus:
+    async def get_status(self, account_id: str | None = None) -> QueueStatus:
         """Get queue status."""
+        if account_id is not None:
+            with self._lock:
+                status = self._account_status.get(account_id, QueueStatus())
+                return QueueStatus(
+                    pending=status.pending,
+                    in_progress=status.in_progress,
+                    processed=status.processed,
+                    requeue_count=status.requeue_count,
+                    error_count=status.error_count,
+                    errors=list(status.errors),
+                )
         backend_status = await self._read_backend_status()
         with self._lock:
             return QueueStatus(
@@ -159,6 +218,9 @@ class NamedQueue:
             self._requeue_count = 0
             self._error_count = 0
             self._errors = []
+            for status in self._account_status.values():
+                status.processed = status.requeue_count = status.error_count = 0
+                status.errors = []
 
     def has_dequeue_handler(self) -> bool:
         """Check if dequeue handler exists."""
@@ -214,6 +276,9 @@ class NamedQueue:
             raise
         except Exception as e:
             logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
+        finally:
+            if message is not None:
+                self.release_local_delivery(message)
 
     async def _ack(self, ctx: AckContext) -> None:
         await self._async_agfs.write(f"{self.path}/ack", ctx.message_id.encode("utf-8"))
@@ -226,10 +291,13 @@ class NamedQueue:
 
     async def settle_dequeued(self, message: Dict[str, Any], result: ProcessResult) -> None:
         msg_id = message.get("id", "")
-        if result.outcome is ProcessOutcome.RETRY:
-            await self.retry(msg_id)
-        else:
-            await self.ack(msg_id, message)
+        try:
+            if result.outcome is ProcessOutcome.RETRY:
+                await self.retry(msg_id)
+            else:
+                await self.ack(msg_id, message)
+        finally:
+            self.release_local_delivery(message)
 
     async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
         """Read and remove one message from the AGFS queue; return parsed dict or None.
@@ -247,7 +315,10 @@ class NamedQueue:
             raw = content.content
         else:
             raw = str(content).encode("utf-8")
-        return json.loads(raw.decode("utf-8"))
+        message = json.loads(raw.decode("utf-8"))
+        if message:
+            self._track_delivery(message)
+        return message
 
     async def dequeue(self) -> Optional[Dict[str, Any]]:
         """Dequeue and process a message, then ACK or retry its original delivery.
@@ -301,12 +372,15 @@ class NamedQueue:
             return self._validate_result(await handler.on_cancelled(ctx.message))
 
         ctx = ProcessContext(self.name, data, cancel=cancel)
+        self._track_delivery(data, running=True)
         try:
             result = self._validate_result(await self._run_middleware("process", ctx, process))
         except asyncio.CancelledError:
+            self.release_local_delivery(data)
             self._publish_duration(data, process_started, "exception")
             raise
         except Exception as exc:
+            self.release_local_delivery(data)
             self._record_error(str(exc), data)
             self._publish_duration(data, process_started, "exception")
             raise

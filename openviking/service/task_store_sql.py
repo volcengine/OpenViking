@@ -12,7 +12,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Collection, Dict, Iterable, Optional
 
-from sqlalchemy import and_, delete, exists, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -1928,6 +1928,22 @@ class SQLTaskWorkStore(TaskWorkStore):
             if exclude_work_id is not None:
                 predicates.append(Work.work_id != exclude_work_id)
             return bool(await session.scalar(select(exists().where(*predicates))))
+
+    async def count_open_account_work(self, *, account_id: str) -> int:
+        Work = self._models.Work
+        async with self._session_factory() as session:
+            return int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Work)
+                    .where(
+                        Work.service_name == self._service_name,
+                        Work.account_id == account_id,
+                        Work.queue_name != "Inline",
+                        Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]),
+                    )
+                )
+            )
 
     async def summarize_works(
         self,

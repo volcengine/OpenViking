@@ -2953,14 +2953,27 @@ class ResourceService:
         self._ensure_initialized()
         return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
 
-    async def wait_processed(self) -> Dict[str, Any]:
+    async def wait_processed(self, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete.
 
         Returns:
             Queue status
         """
         qm = get_queue_manager()
-        status = await qm.wait_complete()
+        if ctx is None:
+            status = await qm.wait_complete()
+        else:
+            from openviking.service.task_tracker import get_task_tracker
+            from openviking_cli.exceptions import UnavailableError
+
+            store = get_task_tracker()._store
+            try:
+                while await store.count_open_account_work(account_id=ctx.account_id):
+                    await asyncio.sleep(5)
+            except Exception as exc:
+                logger.exception("Account wait task-store query failed")
+                raise UnavailableError("task store", "account wait query failed") from exc
+            status = await qm.check_status(account_id=ctx.account_id)
         return {
             name: {
                 "processed": s.processed,

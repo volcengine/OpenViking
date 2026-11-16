@@ -647,4 +647,5 @@ class AsyncAGFSClient:
         return await self.run(
             "pathlock_observe",
             _fs_ctx_or_default("/", fs_ctx),
+            **({"account_scope": True} if fs_ctx is not None else {}),
         )

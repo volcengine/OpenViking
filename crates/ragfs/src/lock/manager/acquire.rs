@@ -44,13 +44,28 @@ impl PathLockManager {
     }
 }
 
-struct WaitingCountGuard<'a>(Option<&'a AtomicUsize>);
+struct WaitingCountGuard<'a>(Option<&'a AtomicUsize>, Option<Arc<AccountLockMetrics>>);
+
+impl<'a> WaitingCountGuard<'a> {
+    fn enter(&mut self, counter: &'a AtomicUsize) {
+        if self.0.is_none() {
+            self.0 = Some(counter);
+            counter.fetch_add(1, AtomicOrdering::Relaxed);
+            if let Some(account) = &self.1 {
+                account.waiting.fetch_add(1, AtomicOrdering::Relaxed);
+            }
+        }
+    }
+}
 
 impl Drop for WaitingCountGuard<'_> {
     /// Undo the waiting increment on every exit path.
     fn drop(&mut self) {
         if let Some(counter) = self.0 {
             counter.fetch_sub(1, AtomicOrdering::Relaxed);
+            if let Some(account) = &self.1 {
+                account.waiting.fetch_sub(1, AtomicOrdering::Relaxed);
+            }
         }
     }
 }
@@ -231,7 +246,8 @@ impl PathLockManager {
         debug!(owner_id = %owner_id, requests = ?requests, normalized_requests = ?sorted, timeout_ms = timeout.as_millis() as u64, "pathlock acquire batch start");
 
         let start = Instant::now();
-        let mut waiting = WaitingCountGuard(None);
+        let account_metrics = self.current_account_metrics();
+        let mut waiting = WaitingCountGuard(None, account_metrics.clone());
         let mut retry_attempt: u32 = 0;
         let mut first_attempt = true;
         let mut conflicting_owner = None;
@@ -243,9 +259,7 @@ impl PathLockManager {
                     conflicting_owner = None;
                     if waiting.0.is_none() {
                         debug!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, "pathlock acquire batch waiting for owner state");
-                        waiting.0 = Some(&self.waiting_lock_count);
-                        self.waiting_lock_count
-                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        waiting.enter(&self.waiting_lock_count);
                     }
                     let remaining = timeout.saturating_sub(start.elapsed());
                     if remaining.is_zero() {
@@ -296,9 +310,7 @@ impl PathLockManager {
 
                     if waiting.0.is_none() {
                         debug!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, error = %err, "pathlock acquire batch entered wait state");
-                        waiting.0 = Some(&self.waiting_lock_count);
-                        self.waiting_lock_count
-                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        waiting.enter(&self.waiting_lock_count);
                     }
                     if let PathLockError::Conflict {
                         lock_path,
@@ -306,14 +318,22 @@ impl PathLockManager {
                         kind,
                     } = err
                     {
+                        let conflict = PathLockConflict {
+                            lock_path,
+                            conflicting_owner: owner.clone(),
+                            conflicting_kind: kind,
+                        };
                         self.metrics
                             .write()
                             .await
-                            .record_conflict(PathLockConflict {
-                                lock_path,
-                                conflicting_owner: owner.clone(),
-                                conflicting_kind: kind,
-                            });
+                            .record_conflict(conflict.clone());
+                        if let Some(account) = &account_metrics {
+                            account
+                                .counters
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .record_conflict(conflict);
+                        }
                         conflicting_owner = Some(owner);
                     } else {
                         conflicting_owner = None;
@@ -436,6 +456,13 @@ impl PathLockManager {
             Ok(Some(result)) => {
                 if result.stale_tokens_removed != 0 {
                     self.metrics.write().await.stale_tokens_removed += result.stale_tokens_removed;
+                    if let Some(account) = self.current_account_metrics() {
+                        account
+                            .counters
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .stale_tokens_removed += result.stale_tokens_removed;
+                    }
                 }
                 return Ok(result.acquisitions);
             }

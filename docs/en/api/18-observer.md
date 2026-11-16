@@ -4,6 +4,10 @@ The Observer API reports immediate status for queues, the vector database, model
 
 ## Observer API
 
+The queue, lock, retrieval, and system HTTP endpoints accept `scope=account` or `scope=runtime`. Account scope always uses the authenticated account; an arbitrary account cannot be supplied. Omitted scope and runtime scope retain existing behavior. Unknown scope values are rejected. JSON/table representations and response fields remain unchanged.
+
+For account scope, queue delivery counters, active semantic trees, lock leases/waiters/conflicts/stale removal, and retrieval diagnostics come from this node's memory. Queue pending counts deliveries fetched here but not yet started; in-progress counts locally executing deliveries until settlement or abandonment. Counters retain their existing event meanings and resets. Existing model and vector observers already select account providers. System combines those five account components for health/errors; filesystem stays in the response but does not participate in account health. These account counters do not add metrics labels or exports.
+
 Python examples below use `SyncHTTPClient`. Observer accessors are properties returning dictionaries: use `client.observer.queue`, without parentheses. Each access makes a request; keep the result when reading several fields.
 
 ### observer.queue

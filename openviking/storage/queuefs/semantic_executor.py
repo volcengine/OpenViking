@@ -562,11 +562,13 @@ class SemanticTreeExecutor:
             self._active_executors.discard(self)
 
     @classmethod
-    def get_active_stats(cls) -> SemanticTreeStats:
+    def get_active_stats(cls, account_id: str | None = None) -> SemanticTreeStats:
         stats = SemanticTreeStats()
         with cls._active_lock:
             executors = list(cls._active_executors)
         for executor in executors:
+            if account_id is not None and executor._ctx.account_id != account_id:
+                continue
             current = executor.get_stats()
             stats.total_nodes += current.total_nodes
             stats.pending_nodes += current.pending_nodes

@@ -982,8 +982,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 await run_to_completion(scope.close)
             raise
 
-    def get_tree_stats(self) -> Optional["SemanticTreeStats"]:
-        return SemanticTreeExecutor.get_active_stats()
+    def get_tree_stats(self, account_id: str | None = None) -> Optional["SemanticTreeStats"]:
+        return SemanticTreeExecutor.get_active_stats(account_id=account_id)
 
     async def _process_memory_directory(
         self,

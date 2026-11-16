@@ -344,6 +344,10 @@ Wait until the processing queues are drained. This check is not scoped to the ca
 
 No parameters are required. The optional JSON body accepts legacy `timeout`, which is deprecated and ignored. Empty-body calls continue to work. Configure HTTP timeouts on the client.
 
+`{"scope":"account"}` waits for the authenticated account's registered non-`Inline` Work in `pending` or `running` state, across all users and nodes in the same service partition. It requires a SQL task store. The first query is immediate; zero returns immediately, otherwise the current set is queried every five seconds. New Work registered while waiting participates in subsequent queries. SQL failures return `UNAVAILABLE` and never fall back to shared queue totals.
+
+The response retains the queue fields shown below, using this account's local in-memory delivery counters and errors. Completion means one SQL observation found no open non-`Inline` Work; it does not fence future submissions or wait for SQL-external operations. Omitted scope or `"runtime"` retains the original queue-drain behavior; other scope values are invalid.
+
 #### 3. Usage Examples
 
 **HTTP API**

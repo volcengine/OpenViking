@@ -409,13 +409,15 @@ class QueueManager:
         active_tasks: Set[asyncio.Task] = set()
 
         async def process_one(data: Dict[str, Any]) -> None:
-            async with sem:
-                try:
+            try:
+                async with sem:
                     result = await queue.process_dequeued(data)
                     await queue.settle_dequeued(data, result)
-                except Exception as e:
-                    # The message remains in processing and will be recovered.
-                    logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
+            except Exception as e:
+                # The message remains in processing and will be recovered.
+                logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
+            finally:
+                queue.release_local_delivery(data)
 
         while not stop_event.is_set():
             # Prune completed tasks
@@ -566,13 +568,15 @@ class QueueManager:
 
     # ========== Status check interface ==========
 
-    async def check_status(self, queue_name: Optional[str] = None) -> Dict[str, QueueStatus]:
+    async def check_status(
+        self, queue_name: Optional[str] = None, *, account_id: str | None = None
+    ) -> Dict[str, QueueStatus]:
         """Check queue status."""
         if queue_name:
             if queue_name not in self._queues:
                 return {}
-            return {queue_name: await self._queues[queue_name].get_status()}
-        return {name: await q.get_status() for name, q in self._queues.items()}
+            return {queue_name: await self._queues[queue_name].get_status(account_id)}
+        return {name: await q.get_status(account_id) for name, q in self._queues.items()}
 
     def has_errors(self, queue_name: Optional[str] = None) -> bool:
         """Check if there are errors."""

@@ -112,6 +112,7 @@ class SkillPackageRetriever(HierarchicalRetriever):
         final = matches[:limit]
         telemetry.set("vector.returned", len(final))
         get_stats_collector().record_query(
+            account_id=ctx.account_id,
             context_type="skill",
             result_count=len(final),
             scores=[item.score for item in final],
