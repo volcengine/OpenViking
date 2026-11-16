@@ -1101,14 +1101,20 @@ class AsyncHTTPClient:
         self,
         tool_uri: str,
         arguments: Optional[Mapping[str, Any]] = None,
+        *,
+        timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
+        """Invoke a discovered or Live Context-referenced tool with explicit arguments."""
+        payload: Dict[str, Any] = {
+            "uri": VikingURI.normalize(tool_uri),
+            "arguments": dict(arguments or {}),
+        }
+        if timeout_seconds is not None:
+            payload["timeout_seconds"] = timeout_seconds
         response = await self._request(
             "POST",
             "/api/v1/mcps/invoke",
-            json={
-                "uri": VikingURI.normalize(tool_uri),
-                "arguments": dict(arguments or {}),
-            },
+            json=payload,
         )
         return self._handle_response(response)
 
@@ -3031,8 +3037,14 @@ class SyncHTTPClient:
         self,
         tool_uri: str,
         arguments: Optional[Mapping[str, Any]] = None,
+        *,
+        timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.invoke_mcp_tool(tool_uri, arguments=arguments))
+        return run_async(
+            self._async_client.invoke_mcp_tool(
+                tool_uri, arguments=arguments, timeout_seconds=timeout_seconds
+            )
+        )
 
     def mount_mcp_tool(
         self,

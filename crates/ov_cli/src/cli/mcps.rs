@@ -138,5 +138,8 @@ pub(crate) enum McpCommands {
         /// Tool arguments as a JSON object
         #[arg(long = "args", default_value = "{}", value_name = "json")]
         arguments: String,
+        /// Per-call timeout in seconds; use the Live Context node's value when present
+        #[arg(long, value_name = "seconds")]
+        timeout_seconds: Option<f64>,
     },
 }

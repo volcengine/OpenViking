@@ -22,6 +22,39 @@ from openviking_sdk.errors import NotFoundError
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+@pytest.mark.parametrize("timeout_seconds", [None, 65.5])
+async def test_invoke_mcp_tool_timeout_payload(client_type, timeout_seconds):
+    def handle(request):
+        assert request.url.path == "/api/v1/mcps/invoke"
+        expected = {
+            "uri": "viking://agent/tools/weather/current.json",
+            "arguments": {"city": "Beijing"},
+        }
+        if timeout_seconds is not None:
+            expected["timeout_seconds"] = timeout_seconds
+        assert json.loads(request.content) == expected
+        return httpx.Response(200, json={"status": "ok", "result": {"content": []}})
+
+    client = client_type(url="http://localhost:1933")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    try:
+        result = client.invoke_mcp_tool(
+            "viking://agent/tools/weather/current.json",
+            {"city": "Beijing"},
+            timeout_seconds=timeout_seconds,
+        )
+        if client_type is AsyncHTTPClient:
+            result = await result
+        assert result == {"content": []}
+    finally:
+        await async_client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
 @pytest.mark.parametrize(
     "method_name,user_id,http_method,result",
     [

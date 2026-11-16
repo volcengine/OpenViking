@@ -876,9 +876,13 @@ class VikingClient:
         self,
         tool_uri: str,
         arguments: Optional[Mapping[str, Any]] = None,
+        *,
+        timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Invoke an OpenViking-managed MCP tool using the current identity."""
-        return await self.client.invoke_mcp_tool(tool_uri, arguments=arguments)
+        return await self.client.invoke_mcp_tool(
+            tool_uri, arguments=arguments, timeout_seconds=timeout_seconds
+        )
 
     async def search_user_memory(self, query: str, user_id: str) -> list[Any]:
         effective_user_id = self._effective_user_id(user_id)

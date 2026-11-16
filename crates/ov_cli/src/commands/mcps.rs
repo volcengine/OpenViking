@@ -634,16 +634,21 @@ pub async fn invoke(
     client: &HttpClient,
     uri: &str,
     raw_arguments: &str,
+    timeout_seconds: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let arguments = parse_arguments(raw_arguments)?;
-    let response: Value = client
-        .post(
-            "/api/v1/mcps/invoke",
-            &json!({"uri": uri, "arguments": arguments}),
-        )
-        .await?;
+    let mut payload = json!({"uri": uri, "arguments": arguments});
+    if let Some(timeout) = timeout_seconds {
+        if !timeout.is_finite() || timeout <= 0.0 {
+            return Err(Error::Parse(
+                "--timeout-seconds must be a positive finite number".to_string(),
+            ));
+        }
+        payload["timeout_seconds"] = json!(timeout);
+    }
+    let response: Value = client.post("/api/v1/mcps/invoke", &payload).await?;
     match crate::output::output_tool_result(&response, output_format, compact) {
         Some(true) => Err(Error::AlreadyReported),
         Some(false) => Ok(()),
