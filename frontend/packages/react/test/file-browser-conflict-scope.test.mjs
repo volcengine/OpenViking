@@ -22,7 +22,7 @@ for (const [field, header] of [
       target,
       true,
       (call) => {
-        if (call.path.endsWith('/fs/ls') && call.query.recursive === 'true')
+        if (call.path.endsWith('/fs/ls') && call.query.recursive === 'false')
           return new Headers(call.init.headers).get(header) === 'before'
             ? delayed.promise
             : ok([]);
@@ -36,17 +36,21 @@ for (const [field, header] of [
     const view = await mount(render('before'));
     try {
       const pending = fetch.calls.find(
-        (call) => call.query.recursive === 'true',
+        (call) => call.query.recursive === 'false',
       );
       assert.ok(pending);
       await view.render(render('after'));
       assert.equal(pending.init.signal.aborted, true);
       const count = fetch.calls.filter(
-        (call) => call.query.recursive === 'true',
+        (call) => call.query.recursive === 'false',
       ).length;
       assert.equal(count, 2);
       await act(async () =>
-        delayed.resolve(await ok([{ uri: `${target}/concept/conflict.md` }])),
+        delayed.resolve(
+          await ok([
+            { uri: `${target}/conflict.md`, tags: ['has_conflict=true'] },
+          ]),
+        ),
       );
       await settle();
       assert.equal(

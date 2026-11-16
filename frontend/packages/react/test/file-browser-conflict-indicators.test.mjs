@@ -32,32 +32,34 @@ test('descendant conflicts mark every collapsed Wiki ancestor across pages and c
   let conflicts = true;
   const fetch = fixture(target, true, ({ path, uri, query }) => {
     if (!path.endsWith('/fs/ls')) return;
-    if (query.recursive === 'true' && query.tags === 'has_conflict=true') {
-      assert.equal(uri, target);
-      assert.equal(query.limit, '100');
-      if (!conflicts) return ok([]);
-      return query.offset === '0'
-        ? ok(
-            Array.from({ length: 100 }, (_, i) => ({
-              uri: `${target}/other/${i}.md`,
-            })),
-            true,
-          )
-        : ok([
-            { uri: `${deep}/conflict.md` },
-            { uri: `${target}-old/safe/foreign.md` },
-          ]);
-    }
     if (uri === rootUri)
       return ok([
         directory(target, ['compile_target=true', 'has_conflict=false']),
         directory(`${target}-old`),
       ]);
-    if (uri === target)
-      return ok([directory(concept), directory(`${target}/safe`)]);
+    if (uri === target) {
+      const entries = [
+        ...Array.from({ length: 100 }, (_, i) => ({
+          uri: `${target}/${i}.md`,
+        })),
+        directory(concept),
+        directory(`${target}/safe`),
+      ];
+      const offset = Number(query.offset ?? 0);
+      const limit = Number(query.limit ?? query.node_limit ?? 1000);
+      return ok(
+        entries.slice(offset, offset + limit),
+        offset + limit < entries.length,
+      );
+    }
     if (uri === concept) return ok([directory(deep)]);
     if (uri === deep)
-      return ok([{ uri: `${deep}/conflict.md`, tags: ['has_conflict=true'] }]);
+      return ok([
+        {
+          uri: `${deep}/conflict.md`,
+          tags: [conflicts ? 'has_conflict=true' : 'has_conflict=false'],
+        },
+      ]);
     return ok([]);
   });
   const view = await mount(tree(fetch, null));
@@ -77,16 +79,16 @@ test('descendant conflicts mark every collapsed Wiki ancestor across pages and c
     await toggle('wiki');
     assert.equal(pending('wiki'), true);
     const indexed = () =>
-      fetch.calls.filter((call) => call.query.recursive === 'true');
+      fetch.calls.filter((call) => call.query.recursive === 'false');
     assert.equal(
       indexed().length,
-      2,
+      5,
       'expanding and collapsing does not refetch the index',
     );
     conflicts = false;
     await click(document.querySelector('[aria-label="Refresh"]'));
     assert.equal(pending('wiki'), false);
-    assert.equal(indexed().length, 3);
+    assert.equal(indexed().length, 10);
     await toggle('wiki');
     assert.equal(pending('concept'), false);
   } finally {
@@ -100,7 +102,7 @@ test('Wiki conflict indexes are disabled with Wiki dashboards and retry after a 
     target,
     true,
     ({ path, query }) => {
-      if (path.endsWith('/fs/ls') && query.recursive === 'true')
+      if (path.endsWith('/fs/ls') && query.recursive === 'false')
         return fail
           ? Promise.resolve(
               new Response(
@@ -114,14 +116,14 @@ test('Wiki conflict indexes are disabled with Wiki dashboards and retry after a 
                 { status: 500 },
               ),
             )
-          : ok([{ uri: `${deep}/conflict.md` }]);
+          : ok([{ uri: `${target}/conflict.md`, tags: ['has_conflict=true'] }]);
     },
     [{ to: target }],
   );
   const view = await mount(tree(fetch, null, { dashboardKinds: [] }));
   try {
     assert.equal(
-      fetch.calls.some((call) => call.query.recursive === 'true'),
+      fetch.calls.some((call) => call.query.recursive === 'false'),
       false,
     );
     await view.render(tree(fetch, null));

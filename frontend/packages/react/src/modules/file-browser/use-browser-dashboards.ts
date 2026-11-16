@@ -107,8 +107,9 @@ export function useBrowserDashboards({
           ...match,
           pendingConflicts:
             match.kind === 'wiki'
-              ? (conflicts.presence(identifyUri(target)) ??
-                match.pendingConflicts)
+              ? match.pendingConflicts ||
+                (conflicts.presence(identifyUri(target)) ??
+                  match.pendingConflicts)
               : undefined,
           uri: target,
         }
