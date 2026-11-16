@@ -381,7 +381,7 @@ ov write viking://resources/docs/api.md \
 - `processing_mode` 对整个 batch 生效，不能在不同 operation 中混用语义模式；`vectors_only` 不刷新父目录语义，只维护变化文件的向量。
 - `tags`、`tag_mode` 与 `acl` 按 operation 生效；tags 会随该文件首次向量 upsert 写入，`clear` 不要求传 `tags` 并会忽略同时传入的标签值。
 - `expected_sha256` 和 `if_absent` 会在整批目标锁持有期间校验。设置 `skip_conflicts=true` 后，校验失败的目标会进入 `conflicts` 且不会被覆盖；权限、传输和实际写入失败仍然报错。
-- `resolve_conflicts=true` 会比较新旧 Markdown、保留冲突历史，并更新 `has_conflict` 与 `conflict_num` 标签。它只接受文本正文，不能与 `defer_processing` 同时使用；目标不存在、不是 Resource Markdown 或 mode 不是 `replace` 时仍按普通写入处理。
+- `resolve_conflicts=true` 会比较新旧 Markdown、保留冲突历史，并更新 `has_conflict` 与 `conflict_num` 标签。它对 `replace` 及其兼容别名 `create` 生效，只接受文本正文，且不能与 `defer_processing` 同时使用；目标不存在、不是 Resource Markdown，或 mode 为 `append` / `upsert` 时仍按普通写入处理。
 - 整批先获取所有目标文件的精确锁，再校验文件状态并写入；同一目录下不涉及相同文件的写入可以并行，重叠文件的写入或父目录删除、移动仍会冲突。未启用延迟模式时，异步处理持有文件锁直到关联工作结束，统一刷新受影响的 `.overview.md` / `.abstract.md`。
 - 资源父目录刷新与 `write()` 一样采用尽力更新：L0/L1 锁冲突时跳过目录刷新及对应目录向量更新，保留原文和文件自身的处理，不保证自动补刷。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。

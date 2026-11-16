@@ -1023,8 +1023,10 @@ async def test_batch_same_content_applies_tags(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["replace", "create"])
 async def test_batch_resolve_conflicts_updates_content_and_tags(
     _coordinator_queue_for_unit_tests,
+    mode,
 ):
     root = "viking://resources/wiki"
     uri = f"{root}/a.md"
@@ -1046,7 +1048,7 @@ async def test_batch_resolve_conflicts_updates_content_and_tags(
             {
                 "uri": uri,
                 "content": edited,
-                "mode": "replace",
+                "mode": mode,
                 "resolve_conflicts": True,
                 "tags": ["team=search"],
                 "tag_mode": "append",
@@ -1066,6 +1068,47 @@ async def test_batch_resolve_conflicts_updates_content_and_tags(
         "team=search",
         "has_conflict=false",
         "conflict_num=0",
+    }
+
+
+@pytest.mark.asyncio
+async def test_batch_resolve_conflicts_is_not_skipped_when_content_matches(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://resources/wiki"
+    uri = f"{root}/a.md"
+    conflict = {"state": "unfixed", "match_text": "Conflicting content"}
+    previous = (
+        "# Original\n\nConflicting content\n\n"
+        "<!-- CONFLICTS_CONTENT\n"
+        + json.dumps(conflict)
+        + "\n-->"
+    )
+    vfs = _VFS(root, {uri: previous})
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": uri,
+                "content": previous,
+                "expected_sha256": hashlib.sha256(previous.encode()).hexdigest(),
+                "resolve_conflicts": True,
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+        skip_conflicts=True,
+    )
+
+    assert result["updated"] == [uri]
+    assert result["unchanged"] == []
+    refresh = _last_content_write_refresh(_coordinator_queue_for_unit_tests)
+    assert set(refresh["file_ingest_options"][uri]["search_tags"]) == {
+        "has_conflict=true",
+        "conflict_num=1",
     }
 
 

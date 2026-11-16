@@ -831,6 +831,7 @@ class ContentWriteCoordinator:
                             and write_mode == "replace"
                             and current == desired
                             and operation["ingest_options"] == IngestOptions()
+                            and not operation["resolve_conflicts"]
                         ):
                             unchanged.append(uri)
                             continue
@@ -847,7 +848,7 @@ class ContentWriteCoordinator:
                     if not (
                         operation["resolve_conflicts"]
                         and existed
-                        and operation["mode"] == "replace"
+                        and operation["mode"] in {"replace", "create"}
                         and context_type_for_uri(uri) == "resource"
                         and uri.lower().endswith(".md")
                     ):

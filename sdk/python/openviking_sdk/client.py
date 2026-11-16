@@ -59,6 +59,7 @@ from .options import (
     AddResourceOptions,
     AddSkillOptions,
     BatchAddMessagesOptions,
+    BatchWriteOperation,
     BatchWriteOptions,
     CommitSessionOptions,
     CompileOptions,
@@ -1626,7 +1627,7 @@ class AsyncHTTPClient:
     async def batch_write(
         self,
         root_uri: str,
-        operations: List[Dict[str, Any]],
+        operations: Sequence[Union[BatchWriteOperation, Mapping[str, Any]]],
         wait: bool = True,
         timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
@@ -3360,7 +3361,7 @@ class SyncHTTPClient:
     def batch_write(
         self,
         root_uri: str,
-        operations: List[Dict[str, Any]],
+        operations: Sequence[Union[BatchWriteOperation, Mapping[str, Any]]],
         wait: bool = True,
         timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,

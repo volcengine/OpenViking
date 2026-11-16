@@ -3,6 +3,7 @@
 
 import asyncio
 from pathlib import Path
+from typing import get_type_hints
 
 import pytest
 from openviking_sdk import AsyncHTTPClient
@@ -24,6 +25,12 @@ def test_options_payload_uses_typed_dict_fields_on_supported_python_versions():
     )
 
     assert payload == {"node_limit": 3}
+
+
+def test_batch_write_signature_exposes_operation_type():
+    operations = get_type_hints(AsyncHTTPClient.batch_write)["operations"]
+
+    assert "BatchWriteOperation" in str(operations)
 
 
 def test_run_async_reuses_worker_loop_across_sync_and_async_contexts():
