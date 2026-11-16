@@ -416,6 +416,7 @@ fn is_privacy_subcommand(token: &str) -> bool {
             | "get"
             | "reference"
             | "resolve"
+            | "run"
             | "upsert"
             | "versions"
             | "version"
@@ -522,6 +523,10 @@ fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
 
     while i < args.len() {
         let token = args[i].to_string_lossy();
+        if token == "--" {
+            converted.extend(args[i..].iter().cloned());
+            break;
+        }
         if token == "--compact" || token == "-c" {
             if let Some(next) = args.get(i + 1) {
                 let next_value = next.to_string_lossy();

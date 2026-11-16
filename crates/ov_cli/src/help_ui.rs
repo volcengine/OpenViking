@@ -832,6 +832,18 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Show a reference; infer the field only when exactly one exists.",
             },
             HelpItem {
+                label: "ov privacy run --env NAME=<reference> -- <command>",
+                description: "Resolve NAME, run the command, and mask matching output.",
+            },
+            HelpItem {
+                label: "ov privacy run --env-file ./privacy.env -- <command>",
+                description: "Resolve file entries, run the command, and mask matching output.",
+            },
+            HelpItem {
+                label: "ov privacy run -- curl -H 'Authorization: Bearer <reference>' <url>",
+                description: "Resolve references in arguments, then mask matching output.",
+            },
+            HelpItem {
                 label: "ov privacy resolve <category> <target> [field]",
                 description: "Reveal a field; infer it only when exactly one exists.",
             },
