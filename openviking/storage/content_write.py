@@ -2940,6 +2940,10 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"invalid write uri: {uri}")
 
         root_uri = uri
+        if parts[:2] == ["agent", "skills"]:
+            raise InvalidArgumentError(
+                f"generic content writes cannot modify Skills; use the Skill API instead: {uri}"
+            )
         if parts[0] == "resources":
             if len(parts) >= 2:
                 if anchor_to_parent:

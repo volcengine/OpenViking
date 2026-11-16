@@ -194,6 +194,100 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert missing_privacy_response.status_code == 404
 
 
+async def test_skill_ownership_and_change_history_survive_update_and_delete(client):
+    created = await client.post(
+        "/api/v1/skills",
+        headers={"X-Request-ID": "skill-create-request"},
+        json={
+            "data": _skill_md("history-skill", "Original description"),
+            "source_metadata": {
+                "type": "api",
+                "owner_user_id": "payload-must-not-be-trusted",
+                "created_by": "payload-must-not-be-trusted",
+            },
+            "wait": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    created_result = created.json()["result"]
+    assert created_result["owner_user_id"] == "default"
+    assert created_result["created_by"] == "default"
+    original_created_at = created_result["created_at"]
+
+    listed = await client.get("/api/v1/skills")
+    skill = next(
+        item for item in listed.json()["result"]["skills"] if item["name"] == "history-skill"
+    )
+    assert skill["owner_user_id"] == "default"
+    assert skill["updated_by"] == "default"
+    assert skill["created_at"] == original_created_at
+
+    updated = await client.put(
+        "/api/v1/skills/history-skill",
+        headers={"X-Request-ID": "skill-update-request"},
+        json={
+            "data": _skill_md("history-skill", "Updated description", "Changed instructions"),
+            "wait": True,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    shown = await client.get("/api/v1/skills/history-skill")
+    shown_result = shown.json()["result"]
+    assert shown_result["owner_user_id"] == "default"
+    assert shown_result["created_at"] == original_created_at
+    assert shown_result["current_revision"] != created_result["current_revision"]
+    assert [event["operation"] for event in shown_result["history"]] == ["create", "update"]
+    assert shown_result["history"][0]["before_hash"] is None
+    assert shown_result["history"][1]["before_hash"] == created_result["current_revision"]
+    assert shown_result["history"][1]["after_hash"] == shown_result["current_revision"]
+    assert shown_result["history"][1]["request_id"] == "skill-update-request"
+
+    deleted = await client.delete(
+        "/api/v1/skills/history-skill",
+        headers={"X-Request-ID": "skill-delete-request"},
+    )
+    assert deleted.status_code == 200, deleted.text
+    audit = await client.get("/api/v1/skills/history-skill/audit")
+    assert audit.status_code == 200, audit.text
+    record = audit.json()["result"]
+    assert record["deleted"] is True
+    assert record["owner_user_id"] == "default"
+    assert record["created_at"] == original_created_at
+    assert [event["operation"] for event in record["events"]] == ["create", "update", "delete"]
+    assert record["events"][-1]["before_hash"] == shown_result["current_revision"]
+    assert record["events"][-1]["after_hash"] is None
+    assert record["events"][-1]["request_id"] == "skill-delete-request"
+
+
+async def test_generic_mutation_apis_cannot_bypass_skill_history(client):
+    write = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": "viking://agent/skills/example/SKILL.md",
+            "content": "untracked change",
+        },
+    )
+    assert write.status_code == 400
+    assert "use the Skill API" in write.json()["error"]["message"]
+
+    removed = await client.delete(
+        "/api/v1/fs",
+        params={"uri": "viking://agent/skills/example", "recursive": True},
+    )
+    assert removed.status_code == 400
+    assert "use the Skill API" in removed.json()["error"]["message"]
+
+    restored = await client.post(
+        "/api/v1/snapshot/restore",
+        json={
+            "path": "viking://agent/skills/example/SKILL.md",
+            "restore_commit_id": "0" * 40,
+        },
+    )
+    assert restored.status_code == 400
+    assert "use the Skill API" in restored.json()["error"]["message"]
+
+
 async def test_skills_api_update_requires_matching_name(client):
     await _add_skill(client, "update-skill", "Original description")
 

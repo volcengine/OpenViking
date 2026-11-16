@@ -2733,6 +2733,8 @@ class ResourceService:
         source_metadata: Optional[Dict[str, Any]] = None,
         task_id: Optional[str] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None,
+        before_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -2806,6 +2808,8 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
+                            request_id=request_id,
+                            before_hash=before_hash,
                         )
                     else:
                         result = await self._skill_processor.process_skill(
@@ -2819,6 +2823,8 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
+                            request_id=request_id,
+                            before_hash=before_hash,
                         )
                 if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                     result["root_uri"] = result["uri"]
