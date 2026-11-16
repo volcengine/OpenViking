@@ -30,6 +30,7 @@ function fixture(t, prefix = "superagent-termux-' ") {
   fs.writeFileSync(path.join(source, 'package.json'), '{}');
   fs.writeFileSync(path.join(source, 'permission.json'), '{"scopes":{}}');
   fs.writeFileSync(path.join(source, '.env'), 'private');
+  fs.writeFileSync(path.join(source, 'packages/cli/.env.local'), 'private override');
   const calls = [];
   return { root, env, source, calls, platform: 'android',
     run: (...args) => calls.push(args), output: { write() {} } };
@@ -65,6 +66,7 @@ test('failed runtime check leaves no active installation, credentials or staged 
   f.run = (_cmd, args, options) => {
     if (args[0]?.endsWith('check-durable.mjs')) {
       assert.equal(fs.existsSync(path.join(options.cwd, '.env')), false);
+      assert.equal(fs.existsSync(path.join(options.cwd, 'packages/cli/.env.local')), false);
       throw new Error('broken durable');
     }
   };

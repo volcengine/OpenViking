@@ -43,14 +43,15 @@ export function installTermux({ source = sourceRoot, env = process.env,
   let linked = false;
   let launcherCreated = false;
   try {
-    // Copy application inputs, never credentials, installed dependencies or local data.
+    // Copy application inputs, excluding dependency trees and local .env files.
     for (const name of fs.readdirSync(source)) {
       if (!['packages', 'scripts', 'bin', 'docs', 'package.json', 'package-lock.json',
         'permission.json', 'config.example.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'install.md',
         'deployment-config.cjs', 'ecosystem.config.cjs'].includes(name)) continue;
       fs.cpSync(path.join(source, name), path.join(release, name), {
         recursive: true,
-        filter: p => !['node_modules', '.env', '.git', 'dist'].includes(path.basename(p)),
+        filter: p => !['node_modules', '.env', '.git', 'dist'].includes(path.basename(p))
+          && !path.basename(p).startsWith('.env.'),
       });
     }
     const cli = path.join(current, 'packages/cli/bin/ov-superagent.mjs');
