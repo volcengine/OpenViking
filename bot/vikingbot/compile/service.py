@@ -12,13 +12,11 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Mapping
 
 from loguru import logger
-from pydantic import TypeAdapter
 
 from openviking.core.namespace import classify_uri, relative_uri_path, uri_parts
 from openviking.core.skill_loader import validate_skill_format
@@ -101,12 +99,6 @@ _SKILL_EXCLUDED_FILES = frozenset(
 )
 _CATALOG_FRONTMATTER_LINES = 128  # prefix read to detect unclosed OKF frontmatter
 _COMPILE_BUDGET_REMINDER_THRESHOLDS = (15, 8, 3)  # remaining iterations
-
-
-def _compile_time(value: Any) -> datetime:
-    """Parse ISO/Unix timestamps; naive values use UTC and invalid values raise ValueError."""
-    parsed = TypeAdapter(datetime).validate_python(value)
-    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
 
 
 def _merge_usage(*values: Mapping[str, Any]) -> dict[str, int]:
@@ -503,7 +495,7 @@ class BotCompileService:
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
         args = request.args or {}
-        if args.keys() - {"last_compile_time", "changes"}:
+        if args.keys() - {"changes"}:
             raise CompileFailure(
                 "INVALID_ARGUMENT",
                 "VikingBot Compile does not implement provider-specific args.",
@@ -556,9 +548,6 @@ class BotCompileService:
             )
         client = await VikingClient.create(connection=connection, config=self.config)
         try:
-            cutoff = (
-                _compile_time(args["last_compile_time"]) if "last_compile_time" in args else None
-            )
             sources: list[str] = []
             for raw_uri in raw_sources:
                 attrs = await client.attrs(raw_uri)
@@ -613,9 +602,7 @@ class BotCompileService:
                 "from": sources,
                 "to": target,
                 "instruction": instruction or DEFAULT_COMPILE_INSTRUCTION,
-                "instruction_provided": bool(instruction),
                 "skill": canonical_skill,
-                "last_compile_time": None if changes is not None else cutoff,
                 "changes": changes,
             }
         )
@@ -795,9 +782,7 @@ class BotCompileService:
             source_files = None
             source_request = request
             execution = (request.changes or {}).get("execution") or {}
-            full_execution = execution.get("mode") == "full" or (
-                not execution and request.instruction_provided
-            )
+            full_execution = execution.get("mode", "full") == "full"
             directory_plan = has_directory_plan(request.changes)
             if directory_plan and request.changes.get("head"):
                 pass
@@ -805,26 +790,7 @@ class BotCompileService:
                 source_files = await self._list_source_files(
                     client, request.from_, allow_empty=True
                 )
-                source_request = request.model_copy(update={"last_compile_time": None})
-            elif request.last_compile_time is not None:
-                source_files = await self._list_source_files(
-                    client, request.from_, cutoff=request.last_compile_time
-                )
             if source_files is not None:
-                if not full_execution and not source_files and request.changes is None:
-
-                    def complete_without_sources(task: CompileTask) -> None:
-                        """Finish an incremental no-op without model calls or target writes."""
-                        if task.status == "cancelling":
-                            return
-                        task.status = task.stage = "completed"
-                        task.error = None
-                        task.result = CompileResult(
-                            from_=request.from_, to=request.to, skill=request.skill
-                        )
-
-                    await self.store.update(task_id, complete_without_sources)
-                    return
                 source_request = source_request.model_copy(update={"from_": source_files})
             skill_text = await client.read_raw(f"{request.skill}/SKILL.md")
             if not skill_text.strip():
@@ -990,7 +956,6 @@ class BotCompileService:
                         root_uri=request.to,
                         operations=rendered.operations,
                         wait=False,
-                        edit_source="compile",
                     )
                 except OpenVikingError as exc:
                     if exc.code == "CONFLICT":
@@ -1189,7 +1154,6 @@ class BotCompileService:
                     operations=rendered.operations,
                     wait=False,
                     skip_conflicts=True,
-                    edit_source="compile",
                 )
             conflicts = result.get("conflicts", [])
             for conflict in conflicts:
@@ -1535,14 +1499,9 @@ class BotCompileService:
         client: VikingClient,
         roots: list[str],
         *,
-        cutoff: datetime | None = None,
         allow_empty: bool = False,
     ) -> list[str]:
-        """List unique sources, excluding files strictly older than the UTC cutoff.
-
-        Unknown file times are retained; directory times never prune descendants.
-        Full reprocessing allows empty roots; listing failures propagate.
-        """
+        """List unique sources within the requested roots; full reprocessing permits empty roots."""
 
         async def inventory(root: str) -> list[dict[str, Any]]:
             entry = await client.stat(root)
@@ -1579,14 +1538,8 @@ class BotCompileService:
                     raise ValueError(f"Source inventory returned an out-of-scope URI: {uri}")
                 if entry.get("isDir", entry.get("is_dir", False)):
                     continue
-                if cutoff is not None:
-                    try:
-                        if _compile_time(entry.get("modTime", entry.get("mtime"))) < cutoff:
-                            continue
-                    except ValueError:
-                        pass
                 files.add(uri)
-        if not files and cutoff is None and not allow_empty:
+        if not files and not allow_empty:
             raise ValueError("Compile sources contain no files")
         return sorted(files)
 
@@ -1808,11 +1761,6 @@ class BotCompileService:
                 "and retrieve missing/truncated parts. Check after writes and submit after checks.",
             )
         )
-        if request.last_compile_time is not None:
-            system += (
-                "\nThe from list is filtered by last_compile_time. Use only these source files "
-                "or their prepared ranges; do not scan parents or read excluded sources."
-            )
         if draft_root is None and subagent_max_concurrency:
             system += (
                 "\nFirst response: dispatch prepared source_batches with "

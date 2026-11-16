@@ -642,6 +642,12 @@ class MySQLTaskWorkStore(TaskWorkStore):
             await self._populate_processing_seconds(session, [task])
             return task
 
+    async def get_durable_task(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> Optional[TaskRecord]:
+        """Read the owner's current Task in a fresh SQL session, or return None if absent."""
+        return await self.get_task(task_id, account_id=account_id, user_id=user_id)
+
     async def get_task_with_events(
         self,
         task_id: str,
@@ -663,6 +669,12 @@ class MySQLTaskWorkStore(TaskWorkStore):
             )
             await self._populate_processing_seconds(session, [task])
             return task
+
+    async def list_durable(
+        self, account_id: str, *, task_type: Optional[str] = None
+    ) -> list[TaskRecord]:
+        """Read current SQL records, including private claims, for locked resource admission."""
+        return await self.list(account_id, task_type=task_type, limit=None)
 
     async def list(
         self,

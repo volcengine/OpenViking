@@ -63,14 +63,6 @@ class CompileRequest(BaseModel):
     openviking_connection: OpenVikingConnection | None = None
     _principal_scope: str = PrivateAttr(default="local")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_reason(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "reason" in data:
-            data = dict(data)
-            data.setdefault("instruction", data.pop("reason"))
-        return data
-
 
 class SanitizedCompileRequest(BaseModel):
     """Stored normalized inputs ignore unknown fields; the service validates public arguments."""
@@ -80,11 +72,8 @@ class SanitizedCompileRequest(BaseModel):
     from_: list[str] = Field(alias="from")
     to: str
     instruction: str
-    instruction_provided: bool = False
     skill: str
-    # Inclusive source modification cutoff in UTC; None compiles all source files.
-    last_compile_time: datetime | None = None
-    # Kernel change plan for incremental Compile; supersedes last_compile_time.
+    # The OV service freezes the directory plan before submitting this execution.
     changes: dict[str, Any] | None = None
 
 
@@ -263,7 +252,7 @@ class CompileAccepted(BaseModel):
 
 
 class CompileSessionRequest(BaseModel):
-    """Status or cancellation request scoped by the authenticated caller and session ID."""
+    """Status, cancellation, or archive request scoped by authenticated caller and session ID."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -45,6 +45,7 @@ from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
+from openviking.storage.queuefs.compile_target_tag_processor import CompileTargetTagProcessor
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
@@ -727,19 +728,11 @@ class OpenVikingService:
             self._compile_scheduler = CompileScheduler(
                 self._compile_service,
                 compile_store,
-                self._viking_fs,
             )
             self._compile_scheduler.credential_encryptor = (
                 self._external_task_service.credential_encryptor
             )
-            self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
-            self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule
-            self._compile_service.lifecycle.save_credential = (
-                self._compile_scheduler.save_credential
-            )
-        self._fs_service.compile_versions = self._compile_service.lifecycle.versions
-        self._fs_service.compile_lifecycle = self._compile_service.lifecycle
-        self._resource_service.compile_versions = self._compile_service.lifecycle.versions
+            self._compile_service.configure_scheduler(self._compile_scheduler)
 
         if self._queue_manager:
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
@@ -768,6 +761,11 @@ class OpenVikingService:
             self._queue_manager.get_queue(
                 self._queue_manager.CONTENT_WRITE,
                 dequeue_handler=ContentWriteProcessor(self._viking_fs, self._vikingdb_manager),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.COMPILE_TARGET_TAG,
+                dequeue_handler=CompileTargetTagProcessor(self._fs_service),
                 allow_create=True,
             )
             self._queue_manager.get_queue(
