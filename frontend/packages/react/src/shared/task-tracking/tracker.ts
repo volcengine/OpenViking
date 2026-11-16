@@ -162,7 +162,8 @@ export function createTaskTracker({ interval = 3000, concurrency = 4 } = {}) {
     track(
       reference: TaskReference,
       source: TaskSource,
-      origin?: MonitoringSpan,
+      monitoringOrigin?: MonitoringSpan,
+      taskOrigin?: TrackedTask['origin'],
     ) {
       const key = `${source.key}:${reference.id}`;
       if (!reference.id.trim()) return key;
@@ -173,14 +174,21 @@ export function createTaskTracker({ interval = 3000, concurrency = 4 } = {}) {
           observedAtStart:
             !!source.monitoring?.active() &&
             !!source.monitoring.controller.options,
-          snapshot: { ...reference, key },
+          snapshot: {
+            ...reference,
+            key,
+            ...(taskOrigin && { origin: taskOrigin }),
+          },
           due: Date.now(),
           failures: 0,
         };
-        retainTaskMonitoring(entry, source.monitoring, origin);
+        retainTaskMonitoring(entry, source.monitoring, monitoringOrigin);
         entries.set(key, entry);
         publish();
         schedule();
+      } else if (taskOrigin && !existing.snapshot.origin) {
+        existing.snapshot = { ...existing.snapshot, origin: taskOrigin };
+        publish();
       }
       return key;
     },

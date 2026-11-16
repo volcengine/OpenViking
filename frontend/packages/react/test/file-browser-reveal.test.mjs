@@ -57,20 +57,22 @@ for (const controlled of [false, true]) {
     }
   });
 }
-test('preview-only opening skips tree requests and scrolling', async () => {
-  scrolled.length = 0;
-  const fetch = recordingFetch(listing);
-  const handle = createRef();
-  const view = await mount(render(fetch, handle));
-  try {
-    const count = fetch.countOf('/api/v1/fs/ls');
-    assert.equal(await command(handle, FILE, { reveal: false }), true);
-    assert.equal(fetch.countOf('/api/v1/fs/ls'), count);
-    assert.equal(scrolled.length, 0);
-  } finally {
-    await view.unmount();
-  }
-});
+for (const controlled of [false, true]) {
+  test(`preview-only opening skips tree requests and scrolling (${controlled ? 'controlled' : 'uncontrolled'})`, async () => {
+    scrolled.length = 0;
+    const fetch = recordingFetch(listing);
+    const handle = createRef();
+    const view = await mount(render(fetch, handle, controlled));
+    try {
+      const count = fetch.countOf('/api/v1/fs/ls');
+      assert.equal(await command(handle, FILE, { reveal: false }), true);
+      assert.equal(fetch.countOf('/api/v1/fs/ls'), count);
+      assert.equal(scrolled.length, 0);
+    } finally {
+      await view.unmount();
+    }
+  });
+}
 test('missing and out-of-root targets resolve false without endless pagination', async () => {
   const fetch = recordingFetch(listing);
   const handle = createRef();
@@ -120,34 +122,100 @@ test('a newer command cancels a slow reveal and only scrolls the new selection',
   }
 });
 
-test('ordinary controlled URI changes preserve collapsed branches and do not scroll', async () => {
+test('controlled URI changes reveal and scroll without emitting a selection change', async () => {
   scrolled.length = 0;
-  const handle = createRef();
+  const changes = [];
   const fetch = recordingFetch(listing);
   const element = (uri) =>
-    h(
-      OpenVikingProvider,
-      { fetch, baseURL: 'https://ov.test' },
-      h(FileBrowser, { ref: handle, rootUri: ROOT, dashboardKinds: [], uri }),
-    );
+    controlledBrowser(fetch, uri, (next) => changes.push(next));
   const view = await mount(element(''));
   try {
-    const count = fetch.countOf('/api/v1/fs/ls');
     await view.render(element(FILE));
-    assert.equal(fetch.countOf('/api/v1/fs/ls'), count);
+    await settle();
     assert.equal(
-      view.container.querySelector(
-        '[data-file-tree-row-id][aria-selected="true"]',
-      ),
-      null,
+      view.container
+        .querySelector('[data-file-tree-row-id][aria-selected="true"]')
+        ?.getAttribute('data-file-tree-row-id'),
+      FILE,
     );
-    assert.equal(scrolled.length, 0);
+    assert.deepEqual(scrolled, [FILE]);
+    assert.deepEqual(changes, []);
+    await view.render(element(FILE));
+    assert.deepEqual(scrolled, [FILE]);
   } finally {
     await view.unmount();
   }
 });
 
-test('a new import result is revealed even if its cached root skips a virtual ancestor', async () => {
+test('the initial controlled URI leaves initial tree expansion to defaultExpandedUri', async () => {
+  scrolled.length = 0;
+  const fetch = recordingFetch(listing);
+  const view = await mount(controlledBrowser(fetch, FILE));
+  try {
+    assert.equal(fetch.countOf('/api/v1/fs/ls'), 1);
+    assert.deepEqual(scrolled, []);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('a controlled URI received during initial loading is revealed when the tree is ready', async () => {
+  scrolled.length = 0;
+  const initialPage = deferred();
+  const fetch = recordingFetch((call) =>
+    call.path === '/api/v1/fs/ls' &&
+    call.uri === ROOT &&
+    !Number(call.query.offset)
+      ? initialPage.promise
+      : listing(call),
+  );
+  const view = await mount(controlledBrowser(fetch, ''));
+  try {
+    await view.render(controlledBrowser(fetch, FILE));
+    assert.deepEqual(scrolled, []);
+    await act(async () =>
+      initialPage.resolve(await ok([{ uri: `${ROOT}/first.png` }], true)),
+    );
+    await settle();
+    assert.deepEqual(scrolled, [FILE]);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('clearing a controlled URI cancels its unfinished tree navigation', async () => {
+  scrolled.length = 0;
+  const pending = deferred();
+  const fetch = recordingFetch((call) =>
+    call.path === '/api/v1/fs/ls' && call.uri === DIR
+      ? pending.promise
+      : listing(call),
+  );
+  const view = await mount(controlledBrowser(fetch, ''));
+  try {
+    await view.render(controlledBrowser(fetch, FILE));
+    await settle();
+    const signal = fetch.calls.find(
+      (c) => c.path === '/api/v1/fs/ls' && c.uri === DIR,
+    ).init.signal;
+    await view.render(controlledBrowser(fetch, ''));
+    assert.equal(signal.aborted, true);
+    await act(async () => pending.resolve(await ok([{ uri: FILE }])));
+    assert.deepEqual(scrolled, []);
+  } finally {
+    await view.unmount();
+  }
+});
+
+function controlledBrowser(fetch, uri, onUriChange) {
+  return h(
+    OpenVikingProvider,
+    { fetch, baseURL: 'https://ov.test' },
+    h(FileBrowser, { rootUri: ROOT, dashboardKinds: [], uri, onUriChange }),
+  );
+}
+
+test('a new controlled import result is revealed even if its cached root skips a virtual ancestor', async () => {
   let imported = false;
   const resultDir = `${ROOT}/virtual/nested`;
   const result = `${resultDir}/result.png`;
@@ -158,11 +226,10 @@ test('a new import result is revealed even if its cached root skips a virtual an
       return ok([{ uri: result }]);
     return listing(call);
   });
-  const handle = createRef();
-  const view = await mount(render(fetch, handle));
+  const view = await mount(controlledBrowser(fetch, ''));
   try {
     imported = true;
-    assert.equal(await command(handle, result), true);
+    await view.render(controlledBrowser(fetch, result));
     assert.equal(
       view.container
         .querySelector('[data-file-tree-row-id][aria-selected="true"]')

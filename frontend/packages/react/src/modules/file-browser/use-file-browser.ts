@@ -106,7 +106,7 @@ export function useFileBrowser({
   // 回调引用必须稳定，且不能依赖 `onUriChange`：宿主传内联箭头函数时它每轮都
   // 变，这个回调跟着变，预览的取数 effect 依赖它，于是每次提交都重跑并取消
   // 上一次请求——一次选中就能滚成无限重载。用 ref 读最新的通知函数，依赖只留
-  // `openTree`。
+  // 树操作。
   //
   // Clicking an ancestor in the breadcrumb selects it — the same action as clicking
   // that row in the tree, so it goes through the same selection path rather than a
@@ -117,23 +117,32 @@ export function useFileBrowser({
   // change this callback, and the preview's loading effect depends on it — so every
   // commit would re-run the effect and cancel the previous request, turning one
   // selection into an endless reload. A ref carries the latest notification and
-  // only `openTree` remains as a dependency.
-  const { open: openTree, toggleExpand, loadMore, retry, refresh } = tree;
+  // only the tree operations remain as dependencies.
+  const {
+    open: openTree,
+    toggleExpand,
+    loadMore,
+    retry,
+    refresh,
+    cancelReveal,
+  } = tree;
   const notifyUriChange = useRef(onUriChange);
   notifyUriChange.current = onUriChange;
   const openParent = useMemo(
     () => async (uri: string) => {
+      cancelReveal();
       setPendingUri(uri);
       notifyUriChange.current(uri);
       await openTree(uri);
     },
-    [openTree],
+    [cancelReveal, openTree],
   );
 
-  const { rows, openPath, reveal, cancelReveal } = tree;
+  const { rows, openPath, reveal } = tree;
   const openResource = useMemo(
     () => async (resource: string) => {
       const uri = requestUri(resource);
+      cancelReveal();
       setPendingUri(uri);
       notifyUriChange.current(uri);
       const directory = tree.directoryUris.has(identifyUri(uri))
@@ -141,7 +150,7 @@ export function useFileBrowser({
         : uri.slice(0, uri.lastIndexOf('/'));
       await openPath(directory);
     },
-    [openPath, tree.directoryUris, identifyUri, requestUri],
+    [cancelReveal, openPath, tree.directoryUris, identifyUri, requestUri],
   );
 
   const boards = useBrowserDashboards({
@@ -243,6 +252,8 @@ export function useFileBrowser({
       },
       openUri: openResource,
       openResource: navigateResource,
+      reveal,
+      cancelReveal,
       openDashboard,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
@@ -271,6 +282,7 @@ export function useFileBrowser({
       openDashboard,
       closeDashboard,
       openResource,
+      reveal,
       activeUri,
     ],
   );

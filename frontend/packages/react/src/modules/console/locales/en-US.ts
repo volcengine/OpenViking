@@ -51,6 +51,12 @@ const messages = {
       | 'quickStart'
     >
   >,
+  taskCompletion: {
+    title: 'Task complete',
+    description: 'Background task completed.',
+    resource: 'The resource import is complete. Click to view the result.',
+    viewResult: 'View result',
+  },
   commands,
   commandGuides: {
     'add-resource': {

@@ -1,6 +1,6 @@
 import { useExposureRef } from '../../shared/analytics/use-exposure.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useCallback, useMemo, useState } from 'react';
+import { forwardRef, useCallback, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
@@ -84,6 +84,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   // and there is no "deselect" interaction — so no separate `null` branch is needed.
   const isControlled = uri !== undefined;
   const currentUri = isControlled ? uri : internalUri;
+  const reportedUri = useRef<string | undefined>(undefined);
   const { ref: layoutRef, width: layoutWidth } =
     useContainerWidth<HTMLDivElement>();
   const stacked = layoutWidth > 0 && layoutWidth < SIDE_BY_SIDE_MIN_WIDTH;
@@ -108,9 +109,11 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   const changeUri = useCallback(
     (next: string | null) => {
       if (!isControlled) setInternalUri(next);
+      else if (onUriChange)
+        reportedUri.current = next === uri ? undefined : (next ?? undefined);
       onUriChange?.(next);
     },
-    [isControlled, onUriChange],
+    [isControlled, onUriChange, uri],
   );
 
   // 摘要文案只影响展示，不作为预览请求的依赖。
@@ -155,7 +158,13 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     requestOptions,
     refresh: browser.actions.refresh,
   });
-  const navigation = useFileBrowserHandle(browser, ref, rootUri);
+  const navigation = useFileBrowserHandle(
+    browser,
+    ref,
+    rootUri,
+    uri,
+    reportedUri,
+  );
 
   const search = useFileBrowserSearchDialog(layoutRef);
   const baseClass = stacked
@@ -242,7 +251,9 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
         requestOptions={requestOptions}
         advancedOpen={search.advanced}
         onToggleAdvanced={search.setAdvanced}
-        onOpenResource={navigation.openResource}
+        onOpenResource={(target) => {
+          void navigation.openResource(target).catch(() => {});
+        }}
         onClose={search.close}
       />
     </LocaleProvider>

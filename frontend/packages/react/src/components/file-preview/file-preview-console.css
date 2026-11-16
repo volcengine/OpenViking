@@ -74,6 +74,16 @@
   color: inherit;
 }
 
+.ov-file-preview
+  .ark-agentic-file-viewer-markdown__content
+  :not(pre)
+  > code:not(.ark-agentic-markdown__code-content) {
+  background-color: var(
+    --ov-ui-color-preview-inline-code-bg,
+    var(--ov-ui-preview-inline-code-bg-default)
+  );
+}
+
 /* Only the document surround receives dots; the pages keep their own surface. */
 .ov-file-preview [data-document-backdrop='true'] {
   --agentic-file-viewer-internal-document-backdrop: var(

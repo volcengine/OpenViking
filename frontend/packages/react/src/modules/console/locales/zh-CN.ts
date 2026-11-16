@@ -21,6 +21,12 @@ const messages: typeof enUS = {
       | 'quickStart'
     >
   >,
+  taskCompletion: {
+    title: '任务完成',
+    description: '异步任务已完成。',
+    resource: '资源添加任务已完成，可点击查看结果。',
+    viewResult: '查看结果',
+  },
   commands: {
     'add-resource': '添加路径或 URL 到资源',
     'add-skill': '添加 Skill 到技能目录',

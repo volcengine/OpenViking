@@ -98,7 +98,7 @@ When host content fails to render, the block shows the default fallback: an illu
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------ |
 | uri                      | Controlled current resource URI: setting it (even to an empty string) hands the selection to your app, and an empty string selects nothing                                                  | `string`                                                                | -                              |
 | defaultUri               | Initial resource URI when uncontrolled; nothing is selected when omitted                                                                                                                    | `string`                                                                | -                              |
-| onUriChange              | Called after the selected resource changes, with the new URI; there is no way to deselect, so it never receives `null`                                                                      | `(uri: string \| null) => void`                                         | -                              |
+| onUriChange              | Reports resource selection from within the browser with the new URI                                                                                                                         | `(uri: string \| null) => void`                                         | -                              |
 | rootUri                  | Root of the tree; limits browsing and search to this subtree                                                                                                                                | `string`                                                                | `'viking://'`                  |
 | defaultExpandedUri       | Path to expand to after the first load, loading each level; only the root is expanded when omitted                                                                                          | `string`                                                                | -                              |
 | readOnly                 | Disables editing, import and deletion and makes the compile configuration view-only; the permission dialog is unaffected, so use `acl.readOnly` there                                       | `boolean`                                                               | `false`                        |
@@ -425,7 +425,7 @@ All fields are optional, and omitted fields follow `locale`.
 - Under the `viking://` root, directories appear in the order user, session, agent, resources, followed by the rest. With any other `rootUri`, the order the server returns is kept.
 - Click a file to preview its content; click a directory to expand and select it, and the preview shows its L0 summary and L1 overview.
 - Directories under `viking://system` show no summaries.
-- Setting `uri` only changes the previewed resource and does not expand the tree. Use `defaultExpandedUri` to start with the tree expanded to a location.
+- Set `defaultExpandedUri` to start with the tree expanded to a location. After the first render, changes to the controlled `uri` [open and reveal the resource](#open-and-reveal-a-resource).
 - Text files are read up to 2000 lines, and the preview says when the content is truncated.
 - Images, video, audio, PDF, Office documents and archives are read through the content download endpoint, chosen by file extension.
 - Editable formats are `.md`, `.json`, `.jsonl`, `.txt`, `.yaml` and `.yml`: editing reloads the full content, saving calls `POST /api/v1/content/write`, and the preview reloads afterwards.
@@ -440,7 +440,9 @@ All fields are optional, and omitted fields follow `locale`.
 
 ### Open and reveal a resource
 
-`FileBrowser` accepts a React 18/19 ref. Call `openResource` for import results, search results, or file links; the module opens the preview, expands ancestors, loads additional pages until the target is found, selects the row and scrolls it into view. It preserves other expanded branches. Repeating a call for the same URI scrolls again.
+Pass a terminal link, search result, or import result URI to the mounted `FileBrowser` through `uri`. The browser opens the preview, expands ancestors, loads additional pages as needed, selects the target and scrolls it into view. Other expanded branches are preserved.
+
+`FileBrowser` accepts a React 18/19 ref for explicit navigation. Call `openResource` to reveal the current URI again, wait for navigation to finish, or open only the preview.
 
 ```tsx
 import { useRef } from 'react';
@@ -459,7 +461,7 @@ await browserRef.current?.openResource(directoryUri);
 
 Links ending in `/.abstract.md` or `/.overview.md` open the parent directory at L0 Summary or L1 Overview, respectively. Tree navigation and `onUriChange` use the parent URI. Opening another summary link in the same directory selects its requested level; manual level switching remains available.
 
-Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resolves to `true` once the request is issued. Ordinary `uri` prop changes do not expand or scroll the tree. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts.
+`openResource` reveals the target by default. With `{ reveal: false }`, it requests only a preview and resolves to `true` once it issues the request. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts.
 
 Directory targets automatically expand and refresh their children; file targets only expand their ancestors and never request children. Refresh keeps the old list visible and replaces it atomically after reloading the loaded range. A previously exhausted listing is reloaded through its new last page. If expanded child directories move beyond the loaded range, loading continues until they are found or the listing ends. Other directories keep their cached data and expansion state. Entries confirmed deleted by the refreshed listing are removed. A failed child refresh retains the old list and selection, with the existing directory error row and retry action; it does not turn successful navigation into failure.
 

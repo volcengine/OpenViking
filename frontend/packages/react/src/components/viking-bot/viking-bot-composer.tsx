@@ -181,6 +181,7 @@ export const VikingBotComposerView = forwardRef<
           disabled,
           minRows: 1,
           maxRows: 6,
+          lineHeight: 22,
           style: { minHeight: 44 },
         }}
         renderFooter={({ components }) => (
