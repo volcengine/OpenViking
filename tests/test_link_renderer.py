@@ -183,6 +183,25 @@ class TestLinkSatisfaction:
             self.target_uri,
         )
 
+    def test_escaped_link_syntax_does_not_count_as_an_existing_link(self):
+        assert list(LinkRenderer.iter_markdown_links(r"\[Tags](./tags.md)")) == []
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "> ```md\n> behavior tags\n> ```",
+            "- ```md\n  behavior tags\n  ```",
+            "```md\nbehavior tags",
+        ],
+    )
+    def test_commonmark_code_blocks_are_not_linkable(self, content):
+        assert not LinkRenderer.can_render_link(
+            content,
+            "behavior tags",
+            self.source_uri,
+            self.target_uri,
+        )
+
 
 class TestRenderLinks:
     def test_single_link(self):

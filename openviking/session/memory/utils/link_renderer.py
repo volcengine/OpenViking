@@ -1,10 +1,37 @@
 import posixpath
 import re
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable, Dict, Iterator, List, Optional
 from urllib.parse import quote, unquote
 
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import backtick
+from markdown_it.rules_inline import image as image_rule
+
 from openviking.core.namespace import uri_parts
+
+
+def _inline_with_source_span(rule, state, silent):
+    """Keep source offsets consumed by CommonMark's code and image rules."""
+    start, count = state.pos, len(state.tokens)
+    matched = rule(state, silent)
+    if matched and not silent and len(state.tokens) > count:
+        token = state.tokens[-1]
+        if token.type in {"code_inline", "image"}:
+            token.meta["source_span"] = (start, state.pos)
+    return matched
+
+
+def _inline_code_spans(tokens, offset=0):
+    for token in tokens:
+        if token.type == "code_inline":
+            start, end = token.meta["source_span"]
+            yield offset + start, offset + end
+        elif token.type == "image":
+            # Image alt text is parsed separately, starting just after ![.
+            start, _ = token.meta["source_span"]
+            yield from _inline_code_spans(token.children or [], offset + start + 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,12 +131,19 @@ class LinkRenderer:
         """Yield parsed inline Markdown links with their source spans."""
         position = 0
         while opener := LinkRenderer._LINK_START_RE.search(content, position):
+            start = opener.start()
+            escape_start = start
+            while escape_start > 0 and content[escape_start - 1] == "\\":
+                escape_start -= 1
+            if (start - escape_start) % 2:
+                position = start + 1
+                continue
             parsed = LinkRenderer._parse_inline_markdown_link(content, opener.end())
             if parsed is None:
-                position = opener.start() + 1
+                position = start + 1
                 continue
             target, end = parsed
-            yield MarkdownLink(opener.start(), end, opener.group("text"), target)
+            yield MarkdownLink(start, end, opener.group("text"), target)
             position = end
 
     @staticmethod
@@ -127,11 +161,35 @@ class LinkRenderer:
     def protected_markdown_spans(content: str) -> List[tuple[int, int]]:
         """Return spans where Compile must never insert a generated WikiLink."""
         spans = [(link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)]
-        spans.extend(
-            (m.start(), m.end())
-            for m in re.finditer(r"(?ms)^(?:```|~~~).*?^(?:```|~~~)[ \t]*$", content)
-        )
-        spans.extend((m.start(), m.end()) for m in re.finditer(r"`+[^\n`]*?`+", content))
+        # CommonMark resolves container boundaries (quotes/lists) and unclosed
+        # fences. Line maps let us preserve original bytes instead of rerendering.
+        offsets = [0, *(m.end() for m in re.finditer(r"\r\n|\r|\n", content)), len(content)]
+        parser = MarkdownIt("commonmark")
+        parser.inline.ruler.at("backticks", partial(_inline_with_source_span, backtick))
+        parser.inline.ruler.at("image", partial(_inline_with_source_span, image_rule))
+        for token in parser.parse(content):
+            if token.map is None:
+                continue
+            start, end = (offsets[line] for line in token.map)
+            if token.type in {"fence", "code_block"}:
+                spans.append((start, end))
+            elif token.type == "inline":
+                code_spans = list(_inline_code_spans(token.children or []))
+                if not code_spans:
+                    continue
+                # Container/heading markers and indentation are stripped from
+                # token.content, but every backtick remains in source order.
+                # Map only delimiters; HTML attributes and escaped backticks are
+                # interpreted by the parser instead of guessed here.
+                ticks = dict(
+                    zip(
+                        (m.start() for m in re.finditer("`", token.content)),
+                        (start + m.start() for m in re.finditer("`", content[start:end])),
+                        strict=True,
+                    )
+                )
+                for opening, closing in code_spans:
+                    spans.append((ticks[opening], ticks[closing - 1] + 1))
 
         for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):
             if not any(start <= match.start() < end for start, end in spans):
