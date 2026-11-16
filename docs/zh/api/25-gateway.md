@@ -137,7 +137,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `inflight_requests`、`inflight_streams` | 写入时从收到到响应结束之间的模型请求数，以及其中正在流式回复的请求数 |
 | `requests` | 这段时间写出的请求记录数 |
 | `errors`、`degradations`、`stream_errors` | 这些记录按 `error_reason`、按 `degradations` 的每一项、按 `stream_error` 的计数 |
-| `rejected_overload` | 因进程过载被拒绝的请求 |
+| `rejected_overload` | 进程达到 `max_inflight_requests` 而以 `gateway_overloaded` 拒绝的请求 |
 | `records_unlogged` | 因请求没有账户而未被 `store` 输出保存的记录 |
 | `records_failed`、`records_dropped` | 输出写入失败的记录，以及 `file` 输出因队列已满而丢弃的记录 |
 | `store_errors` | 因状态存储出错而失败或失去记忆的请求（`store_unavailable`，或异常 `memory_store_failure`） |
@@ -356,6 +356,7 @@ OpenViking 返回的其他 HTTP 错误记为 `openviking_http_<status>`；网关
 | 401 | `upstream_key_missing` | gateway | 上游没有保存 API Key，请求也没有在 `X-OpenViking-Upstream-Key` 中携带。 |
 | 403 | `coding_plan_disabled` | gateway | 上游是不允许通过网关使用的 Coding Plan 密钥。 |
 | 503 | `store_unavailable` | gateway | 网关的状态存储出错。响应带 `Retry-After: 1`。 |
+| 503 | `gateway_overloaded` | gateway | 进程正在处理的模型请求已达 `max_inflight_requests`。请求没有发给服务商。响应带 `Retry-After: 1`。 |
 | 500 | `internal_error` | gateway | 网关意外出错。错误详情是通用文本，调用栈在网关日志里。 |
 | 504 | `upstream_timeout` | upstream | 服务商没有在 `upstream_timeout_seconds` 内开始回复，或者非流式回复中途这么久没有数据。 |
 | 502 | `upstream_unreachable` | upstream | 网关连不上服务商（DNS、连接被拒绝、TLS）。 |

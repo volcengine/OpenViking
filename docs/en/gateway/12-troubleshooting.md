@@ -96,6 +96,7 @@ The gateway checks each client request before forwarding it: the gateway key, th
 | 404 `response_unknown`, 403 `response_upstream_disallowed` | The Responses response being looked up was not created with this key, or the upstream that created it is now turned off or no longer bound to the key. |
 | 413 `body_too_large` | The request body is larger than `max_body_bytes` (see [the request size limit](05-long-conversations.md#side-effects)), or than your proxy's own limit. |
 | 426 | A WebSocket connection to the Responses API. Expected: Codex falls back to HTTP. |
+| 503 `gateway_overloaded` | The gateway process already serves `max_inflight_requests` model requests. Nothing was sent to the provider; retry after `Retry-After`, or add replicas. See [Scaling](../guides/22-gateway-operations.md#scaling). |
 | 503 `store_unavailable` | The gateway's state store failed while it authenticated or routed the request. Nothing was sent to the provider; retry after `Retry-After`. See [Redis unavailable](#redis-unavailable). |
 | 500 `internal_error` | The gateway failed unexpectedly. The gateway's log has the traceback; the request record carries the response's `request_id`. |
 | 504 `upstream_timeout` | The provider did not start its reply within `upstream_timeout_seconds`, or a non-streamed reply stopped arriving for that long. Check the provider's status, or raise `upstream_timeout_seconds` for models that think long before they answer. |

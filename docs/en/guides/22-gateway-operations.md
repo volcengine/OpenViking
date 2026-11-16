@@ -365,6 +365,8 @@ Redis `mode: standalone` covers a single endpoint, including a managed proxy; `m
 
 Redis deployments use `RollingUpdate` with `maxUnavailable: 0`, `maxSurge: 1`, and a PDB with `maxUnavailable: 1` when there are multiple replicas. Use `affinity` to spread replicas across nodes. Management changes and issued-key revocations can take up to **2 seconds** to reach another replica because each process caches management records.
 
+`max_inflight_requests` caps the model requests one process serves at once; `0`, the default, sets no limit. A request above the cap gets HTTP 503 `gateway_overloaded` with `Retry-After: 1` at once, before the gateway reads its store or calls OpenViking, and never reaches the provider (`X-OpenViking-Upstream-Attempted: 0`), so a client or a fronting service may send it again elsewhere. A streamed reply keeps its place until its body ends. `.../models` is not limited. Pick the value from a load test: the [status line](#status-line) shows requests in flight as `inflight_requests` and refusals as `rejected_overload`.
+
 All probes call `/health` without credentials; it reports local state without calling OpenViking or Redis. Startup has a 300-second probe budget (`2 × 150`). After startup, an OpenViking outage does not remove Pods from service.
 
 The shutdown budget is `15s preStop + the longest request still in flight + up to 100s capture drain`. `upstream_timeout_seconds` limits how long a request waits on a provider that sends nothing, not how long a reply that keeps arriving may run, so apart from the OpenViking tools **Total time**, when set, the gateway puts no upper limit on how long a request runs. A client that stops reading without disconnecting also holds its request open; rely on the ingress or load balancer idle timeout to close such connections. The chart's default `terminationGracePeriodSeconds: 660` gives in-flight requests 645 seconds after preStop; a reply still streaming when the grace period ends is cut off when the Pod is killed, and the client sees the connection close. If Kubernetes stops capture delivery before it drains, another replica picks it up after its lease expires. To let requests of up to N seconds finish and captures drain before the Pod is killed, set it to `15 + N + 100` (715 for N = 600).
@@ -394,7 +396,7 @@ Every response on a model route carries these headers back to the host:
 | `X-OpenViking-Error-Origin` | Same responses | `gateway`, `openviking` or `upstream` |
 | `X-OpenViking-Upstream-Attempted` | Same responses | `1` when the gateway had started a request to the provider, a compaction summary call included; else `0` |
 | `X-OpenViking-Degraded` | When the request was degraded by the time the response headers were sent | The issue codes joined with `,`, for example `revocation_check_unavailable,recall_failed` |
-| `Retry-After` | `store_unavailable` responses | `1` |
+| `Retry-After` | `store_unavailable` and `gateway_overloaded` responses | `1` |
 
 A non-2xx response without `X-OpenViking-Error-Reason` is the provider's own error, relayed unchanged. A host may retry a request elsewhere only when it carries `X-OpenViking-Upstream-Attempted: 0`; with `1`, the provider may already have received it. OpenViking calls the gateway makes while serving a request carry the same ID in `X-Request-ID`.
 
@@ -452,7 +454,7 @@ Set `snapshot_interval_seconds` (for example `60`) to have each gateway process 
 - `errors.store_unavailable` or `store_errors` above zero: the state store (SQLite or Redis) is failing.
 - `errors.upstream_timeout`, `upstream_unreachable` or `upstream_disconnected` rising: a provider is slow or unreachable.
 - `openviking.state` other than `ok`, or `degradations.recall_failed` rising: OpenViking is not answering.
-- `inflight_requests` close to your capacity, `inflight_streams` for long-running streams.
+- `inflight_requests` close to your capacity, `inflight_streams` for long-running streams, `rejected_overload` above zero: the process is at `max_inflight_requests`.
 - `records_dropped` or `records_failed` above zero: request records are being lost.
 - `capture.oldest_due_age_s` growing or `capture.workers` below `capture_concurrency`: background saving is falling behind or has stopped.
 - `capture.failed` above zero while `capture.delivered` stays at zero: saving to OpenViking is stuck. `capture.due` and `capture.oldest_due_age_s` do not grow while deliveries are retried, because a retry is scheduled in the future.

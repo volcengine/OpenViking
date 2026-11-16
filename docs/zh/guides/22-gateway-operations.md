@@ -365,6 +365,8 @@ Redis `mode: standalone` 用于单个端点，包括托管代理；`mode: cluste
 
 Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`；多副本时创建 `maxUnavailable: 1` 的 PDB。通过 `affinity` 把副本分散到不同节点。各进程缓存管理记录，所以修改管理配置或吊销签发密钥后，其他副本最多 **2 秒**后生效。
 
+`max_inflight_requests` 限制一个进程同时处理的模型请求数；默认 `0` 表示不限制。超出时，请求立即得到 HTTP 503 `gateway_overloaded` 和 `Retry-After: 1`，网关不读存储、不调用 OpenViking，也不会发给服务商（`X-OpenViking-Upstream-Attempted: 0`），客户端或网关前置服务可以把它改发到别处。流式回复在响应体结束前一直占用名额。`.../models` 不受限制。这个值根据压测结果来定：[状态行](#status-line)中的 `inflight_requests` 是在途请求数，`rejected_overload` 是被拒绝的请求数。
+
 所有探针都不带凭证访问 `/health`，只返回本地状态，不调用 OpenViking 或 Redis。startupProbe 预算为 300 秒（`2 × 150`）。启动完成后，OpenViking 故障不会使 Pod 摘流。
 
 停机预算是 `15s preStop + 仍在进行的最长请求 + 最多 100s capture 排空`。`upstream_timeout_seconds` 限制的是请求等待一个不发数据的服务商的时长，而不是持续有数据的回复能持续多久，所以除非设置了 OpenViking 工具的**总时长**，网关不限制请求能持续多久。客户端不断开连接但停止读取时，请求同样会一直保持，需要靠 ingress 或负载均衡的空闲超时来关闭。chart 默认的 `terminationGracePeriodSeconds: 660` 在 preStop 之后给进行中的请求留 645 秒；宽限期结束时仍在流式输出的回复会在 Pod 被终止时切断，客户端看到连接关闭。capture 尚未排空就被 Kubernetes 终止时，其他副本会在 lease 到期后接手。要让最长 N 秒的请求完成、capture 在 Pod 被终止前排空，把它调到 `15 + N + 100`（N = 600 时为 715）。
@@ -394,7 +396,7 @@ Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`�
 | `X-OpenViking-Error-Origin` | 同上 | `gateway`、`openviking` 或 `upstream` |
 | `X-OpenViking-Upstream-Attempted` | 同上 | 网关已开始向服务商发送请求（包括压缩摘要请求）时为 `1`，否则为 `0` |
 | `X-OpenViking-Degraded` | 发送响应头时请求已经降级 | 用 `,` 连接的异常代码，例如 `revocation_check_unavailable,recall_failed` |
-| `Retry-After` | `store_unavailable` 响应 | `1` |
+| `Retry-After` | `store_unavailable` 和 `gateway_overloaded` 响应 | `1` |
 
 非 2xx 响应如果没有 `X-OpenViking-Error-Reason`，就是服务商自己的错误，网关原样转发。只有带 `X-OpenViking-Upstream-Attempted: 0` 的响应，宿主才可以把请求改发到别处；为 `1` 时服务商可能已经收到了请求。网关处理请求时发给 OpenViking 的调用，在 `X-Request-ID` 中带上同一个 ID。
 
@@ -452,7 +454,7 @@ extraVolumeMounts:
 - `errors.store_unavailable` 或 `store_errors` 大于零：状态存储（SQLite 或 Redis）出错。
 - `errors.upstream_timeout`、`upstream_unreachable` 或 `upstream_disconnected` 上升：服务商变慢或无法连接。
 - `openviking.state` 不是 `ok`，或 `degradations.recall_failed` 上升：OpenViking 没有应答。
-- `inflight_requests` 接近容量；`inflight_streams` 反映长时间运行的流。
+- `inflight_requests` 接近容量；`inflight_streams` 反映长时间运行的流；`rejected_overload` 大于零：进程已达 `max_inflight_requests`。
 - `records_dropped` 或 `records_failed` 大于零：请求记录在丢失。
 - `capture.oldest_due_age_s` 持续增长，或 `capture.workers` 小于 `capture_concurrency`：后台保存落后或已停止。
 - `capture.failed` 大于零而 `capture.delivered` 一直为零：保存到 OpenViking 卡住了。保存在重试期间，`capture.due` 和 `capture.oldest_due_age_s` 不会增长，因为重试被安排在之后的时间。

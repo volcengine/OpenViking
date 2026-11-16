@@ -442,6 +442,11 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
         # Not reset: the response body runs in this task after the handler returns.
         CALL.set(CallContext(record.metrics["request_id"]))
         try:
+            # The new record already counts itself among the requests in flight.
+            limit = config.max_inflight_requests
+            if limit and app.state.stats.inflight_requests > limit:
+                app.state.stats.rejected_overload += 1
+                raise GatewayError("gateway_overloaded", "The gateway is at its request limit")
             with record.stage("auth"):
                 credential, degradation = await authenticate(request, record)
             record.identify(credential)

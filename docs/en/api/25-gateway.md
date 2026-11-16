@@ -137,7 +137,7 @@ With `snapshot_interval_seconds` above zero, each gateway process writes one JSO
 | `inflight_requests`, `inflight_streams` | Model requests between receipt and the end of their response, and those of them whose response is streaming, when the line was written |
 | `requests` | Request records written in the interval |
 | `errors`, `degradations`, `stream_errors` | Those records counted by `error_reason`, by each entry of `degradations`, and by `stream_error` |
-| `rejected_overload` | Requests refused because the process was overloaded |
+| `rejected_overload` | Requests refused with `gateway_overloaded` because the process was at `max_inflight_requests` |
 | `records_unlogged` | Records the `store` sink did not keep because the request had no account |
 | `records_failed`, `records_dropped` | Records the sink failed to write, and records the `file` sink dropped because its queue was full |
 | `store_errors` | Requests that failed or lost their memory on a state store error (`store_unavailable`, or the issue `memory_store_failure`) |
@@ -356,6 +356,7 @@ An error the gateway produces on a model route (`/gateway/v1/*`, `/gateway/api/v
 | 401 | `upstream_key_missing` | gateway | No upstream API key is stored or sent in `X-OpenViking-Upstream-Key`. |
 | 403 | `coding_plan_disabled` | gateway | The upstream is a Coding Plan key that is not allowed through the gateway. |
 | 503 | `store_unavailable` | gateway | The gateway's state store failed. The response carries `Retry-After: 1`. |
+| 503 | `gateway_overloaded` | gateway | The process already serves `max_inflight_requests` model requests. Nothing was sent to the provider. The response carries `Retry-After: 1`. |
 | 500 | `internal_error` | gateway | The gateway failed unexpectedly. The detail is generic; the gateway's log has the traceback. |
 | 504 | `upstream_timeout` | upstream | The provider did not start its reply, or a non-streamed reply stopped arriving, within `upstream_timeout_seconds`. |
 | 502 | `upstream_unreachable` | upstream | The gateway could not connect to the provider (DNS, refused connection, TLS). |

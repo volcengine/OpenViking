@@ -96,6 +96,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 404 `response_unknown`、403 `response_upstream_disallowed` | 查询的 Responses 响应不是这把密钥创建的，或者创建它的上游已停用、不再绑定到这把密钥。 |
 | 413 `body_too_large` | 请求体超过了 `max_body_bytes`（见[请求大小上限](05-long-conversations.md#side-effects)），或者超过了代理自己的上限。 |
 | 426 | 对 Responses API 发起了 WebSocket 连接。这是预期行为，Codex 会改用 HTTP。 |
+| 503 `gateway_overloaded` | 网关进程正在处理的模型请求已达 `max_inflight_requests`。请求没有发给服务商；按 `Retry-After` 稍后重试，或增加副本。见[扩展](../guides/22-gateway-operations.md#scaling)。 |
 | 503 `store_unavailable` | 网关在鉴权或路由时状态存储出错。请求没有发给服务商；按 `Retry-After` 稍后重试。见 [Redis 不可用](#redis-unavailable)。 |
 | 500 `internal_error` | 网关意外出错。调用栈在网关日志里；请求记录带有与响应相同的 `request_id`。 |
 | 504 `upstream_timeout` | 服务商没有在 `upstream_timeout_seconds` 内开始回复，或者非流式回复中途这么久没有数据。检查服务商状态；对回答前思考很久的模型，可以调大 `upstream_timeout_seconds`。 |
