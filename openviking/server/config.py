@@ -7,7 +7,7 @@ import sys
 from collections.abc import Mapping
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, BeforeValidator, Field, ValidationError, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, SecretStr, ValidationError, field_validator
 
 # Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
@@ -391,6 +391,16 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    read_cursor_signing_key: SecretStr | None = Field(
+        default=None,
+        repr=False,
+        description=(
+            "Dedicated shared key for opt-in bounded MCP text reads. Configure the same "
+            "random key (at least 32 UTF-8 bytes) on every worker/replica. Changing the "
+            "key invalidates existing cursors. Unset disables only bounded read mode."
+        ),
+    )
+
     executor_threads: int = Field(
         default=0,
         ge=0,
@@ -445,6 +455,13 @@ class ServerConfig(BaseModel):
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
+
+    @field_validator("read_cursor_signing_key")
+    @classmethod
+    def validate_read_cursor_signing_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value().encode("utf-8")) < 32:
+            raise ValueError("read_cursor_signing_key must contain at least 32 UTF-8 bytes")
+        return value
 
     @field_validator("user_config_defaults", mode="before")
     @classmethod

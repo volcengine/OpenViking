@@ -135,7 +135,7 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `find` | Fast semantic retrieval without session context. `context_type="skill"` on its own switches to package-level skill retrieval: one hit per skill package, its URI pointing at that package's `SKILL.md` and its summary taken from the skill itself, even when an auxiliary file inside the package is what matched. Without `target_uri` it searches both your own skills and the account-shared `viking://agent/skills`. Mixing `skill` with another context type keeps the generic retrieval path | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional), `read_content` (optional — inline each hit's content), `events_time_decay_protection` (optional) |
 | `search` | Deep semantic retrieval; `mode="context"` assembles injection-ready context and replaces the former `recall` tool. `list` mode also returns one hit per skill package, its URI pointing at `SKILL.md` and its summary taken from the package itself, but `limit` applies before that merge, so a package matching in several files takes several slots and fewer than `limit` results come back | `query`, `mode` (`list` or `context`), `target_uri` (list mode only), `session_id` (optional), `limit`, `min_score`, `level` (list mode), `context_type` (optional), `events_time_decay_protection` (optional in both modes), plus context-mode `quotas`, `purpose`, `max_tokens`, `detail` or `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, scalar `other_peer_penalty` or `other_peer_penalties` by category, and `rewrite` (`off` or `auto`) |
 | `rule_search` | Retrieve active Rules applicable to a concrete task context. Returned Rules still require the caller to evaluate `applies_when` and `exception` against known facts | `task_context`, `rule_probability_threshold` (optional, default `0.65`) |
-| `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block; use `download` for the original bytes | `uri` (one file) or `uris` (array, several files in one call), `offset`, `limit` (text lines) |
+| `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block; use `download` for the original bytes | `uri` (one file) or `uris` (array, several files in one call), `offset`, `limit` (text lines), `max_tokens`, `cursor` (opt-in bounded text pages) |
 | `download` | Return a short-lived, single-use URL for fetching the original bytes of one file (any type, including PDF, images, archives, audio and video) with `curl`; it does not return the content. Directories are not supported | `uri` |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order` (optional) |
 | `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `offset`, `limit`, `include_abstract` (optional — also show each directory's summary; for a skill directory that is its name and description) |
@@ -177,6 +177,45 @@ user spaces, not a shortcut to yours. See
 > Feishu/Lark imports without `args.feishu_access_token` keep the existing app/tenant-token behavior and can be watched. One-time user-token imports pass only `args.feishu_access_token`; user-token watches must also pass `args.feishu_refresh_token`. They may pass `args.feishu_app_id` and `args.feishu_app_secret` together for that watch, or fall back to the server app credentials. The app must match the issuer of the user token.
 
 > `processing_mode=vectors_only` skips the VLM semantic-understanding stage. It does not generate or refresh `.abstract.md` / `.overview.md`; it only vectorizes current non-hidden resource files, preserving any older semantic artifacts that already exist.
+
+### Bounded stored-text reads
+
+`read(uri="viking://resources/large.md", max_tokens=2000)` opts into lossless
+single-file text pages. Ordinary reads keep their existing return format. Enable
+this mode with a dedicated random key in the server configuration:
+
+```json
+{"server": {"read_cursor_signing_key": "${OV_READ_CURSOR_KEY}"}}
+```
+
+Provision a random key of at least 32 UTF-8 bytes through your deployment's secret
+management; do not reuse an API key. Every worker and replica must use the same
+key. The server does not generate a process-local fallback. Restarting with the
+same key preserves cursors; changing it invalidates them. The cursor itself is
+portable between workers with the same key, caller scope, and visible data. This
+does not change backend process/sharing limits; full multi-instance shared-storage
+integration has not been verified. Cursors have no time-based expiry and confer no permission: each page repeats the normal authorized visible read.
+
+The result is one JSON text block containing `uri`, `content`, `version`,
+`has_more`, and `next_cursor`, without a duplicate structured result. Continue
+with the same `uri`, `max_tokens`, and returned `cursor`. Concatenate the decoded
+`content` fields without trimming to recover the exact visible text, including
+CRLF and portions of oversized lines. EOF returns `has_more=false` and a null cursor.
+
+The budget uses OpenViking's text-token estimator on the complete serialized JSON,
+including escaping and metadata, not a model-specific tokenizer or JSON-RPC
+framing. Each page is also limited to 1 MiB of UTF-8 JSON. An insufficient budget
+fails rather than returning a non-advancing page. Version checks hash the same
+visible string used to form the page; changed text returns `FAILED_PRECONDITION`
+and requires restarting without a cursor. This detects content changes, not a
+historical storage revision; each page still reads and hashes the full visible file
+under existing read limits. It does not promise lower storage I/O or an atomic
+filesystem snapshot. Missing files and revoked access retain their normal errors.
+
+Page mode rejects batch `uris`, non-default `offset`/`limit`, media, Live Context,
+and delegated or ACL-bypass reads. A cursor is bound to the canonical URI, caller
+scope and budget; switching any of these requires a new read.
+
 
 ### Using saved credentials from a skill
 
