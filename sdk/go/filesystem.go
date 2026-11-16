@@ -158,9 +158,9 @@ func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*
 	return &TreePage{Result: result, HasMore: env.HasMore}, nil
 }
 
-// Stat returns metadata for a URI.
+// Stat returns metadata for a URI or a vector record ID.
 func (c *Client) Stat(ctx context.Context, uri string) (map[string]any, error) {
-	query := url.Values{"uri": []string{NormalizeURI(uri)}}
+	query := url.Values{"uri": []string{normalizeFileReference(uri)}}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/stat", query, nil, &result)
 	return result, err
@@ -204,10 +204,10 @@ func (c *Client) Move(ctx context.Context, fromURI, toURI string) error {
 	}, nil)
 }
 
-// Read reads file content.
+// Read reads file content by URI or vector record ID.
 func (c *Client) Read(ctx context.Context, uri string, offset int, limit int) (string, error) {
 	query := url.Values{}
-	query.Set("uri", NormalizeURI(uri))
+	query.Set("uri", normalizeFileReference(uri))
 	queryInt(query, "offset", offset)
 	queryInt(query, "limit", limit)
 	var result string
