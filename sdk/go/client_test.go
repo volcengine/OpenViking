@@ -25,6 +25,31 @@ func TestAddResourceOptionsHasNoTopLevelParseMode(t *testing.T) {
 	}
 }
 
+func TestInvokeMCPToolNodeArguments(t *testing.T) {
+	for _, arguments := range []map[string]any{nil, {}, {"city": "Shanghai"}} {
+		t.Run(fmt.Sprintf("%v", arguments), func(t *testing.T) {
+			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/mcps/invoke" || r.Method != http.MethodPost {
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				expected := map[string]any{"uri": "viking://resources/live/weather.md", "timeout_seconds": 65.5}
+				if arguments != nil {
+					expected["arguments"] = arguments
+				}
+				if body := readJSONBody(t, r); !reflect.DeepEqual(body, expected) {
+					t.Fatalf("body = %#v, want %#v", body, expected)
+				}
+				writeOK(t, w, map[string]any{"content": []any{}, "isError": true})
+			}))
+			defer closeServer()
+			result, err := client.InvokeMCPTool(context.Background(), "resources/live/weather.md", arguments, 65.5)
+			if err != nil || result["isError"] != true {
+				t.Fatalf("result = %#v, err = %v", result, err)
+			}
+		})
+	}
+}
+
 func testClient(t *testing.T, handler http.Handler) (*Client, func()) {
 	t.Helper()
 	server := httptest.NewServer(handler)

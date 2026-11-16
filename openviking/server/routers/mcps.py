@@ -44,8 +44,10 @@ class FindMCPToolsRequest(BaseModel):
 class InvokeMCPToolRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    uri: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    uri: str = Field(description="Tool URI or Live Context node URI")
+    arguments: dict[str, Any] | None = Field(
+        default=None, description="Tool arguments or top-level overrides of node defaults"
+    )
     timeout_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 

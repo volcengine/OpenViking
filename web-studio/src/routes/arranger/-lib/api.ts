@@ -298,23 +298,13 @@ export async function readTextDocument(uri: string): Promise<TextDocument> {
   }
 }
 
-export async function readLiveContext(uri: string): Promise<unknown> {
-  return getOvResult<unknown>(
-    getOvClient().instance.get('/api/v1/content/read', {
-      baseURL: apiBaseUrl(),
-      params: {
-        uri: normalizeVikingUri(uri),
-        offset: 0,
-        limit: -1,
-        raw: false,
-      },
-    }),
-  )
+export async function invokeLiveContext(uri: string): Promise<unknown> {
+  return invokeMcpTool(uri)
 }
 
 export async function invokeMcpTool(
   uri: string,
-  args: Record<string, unknown>,
+  args?: Record<string, unknown>,
 ): Promise<unknown> {
   return getOvResult<unknown>(
     getOvClient().instance.post(

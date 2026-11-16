@@ -4,7 +4,7 @@ description: Connect remote MCP servers, mount tools as live context, and arrang
 
 # Live context integration and arrangement
 
-Live Context mounts a remote MCP tool as a Markdown node under `viking://resources/...`. An agent does not need to know the upstream address, credentials, or preset arguments. It reads the node like ordinary context; OpenViking calls the bound tool and transparently returns the upstream result.
+Live Context mounts a remote MCP tool as a Markdown node under `viking://resources/...`. Reading returns its definition, default arguments, and instructions. The agent explicitly invokes the node URI to use its defaults, adjusting valid arguments when needed. Direct Tool URI invocation is also supported. OpenViking resolves the upstream address and credentials.
 
 This page is for developers who implement and maintain context arrangements. It explains how MCP registration, the Tool Catalog, live nodes, the Agent Gateway, Studio, and Context as Code (CaC) fit together. For MCP client connection settings and the complete built-in tool list, see [MCP tools and protocol](06-mcp-integration.md).
 
@@ -34,7 +34,10 @@ or viking://agent/tools/<server>/<tool>.json
         v
 viking://resources/<project>/<node>.md
         |
-        | complete read
+        | read definition and instructions
+        v
+Agent checks Tool schema -> selects arguments -> invoke_mcp_tool
+        |
         v
 OpenViking resolves credentials -> calls upstream Tool -> returns native Tool result
 ```
@@ -49,7 +52,7 @@ Pre-mount frequent scenarios whose parameters are stable. For infrequent request
 - Tool names must be valid OpenViking filenames.
 - Registration connects to the upstream and performs tool discovery. A connection failure or invalid definition does not write registry state.
 - OpenViking stores headers on the server and uses them for upstream calls. Build CLI configuration from environment variables; never commit real credentials.
-- `invoke` and a live-node read may have external side effects. OpenViking does not automatically retry a tool call whose outcome is unknown.
+- `invoke` may have external side effects. Reading a node does not invoke tools. OpenViking does not automatically retry tool calls.
 - Mount arguments are validated against the tool's `inputSchema`.
 - The user `viking://~/tools` and account-shared `viking://agent/tools` roots are managed directories. Do not mutate them with ordinary `mkdir`, `rm`, `cp`, or `mv`.
 
@@ -144,10 +147,12 @@ ov mcps mount \
   --wait
 ```
 
-Reading the node executes the upstream tool:
+Read the node and referenced Tool schema, then invoke explicitly:
 
 ```bash
 ov read viking://resources/arrange/beijing-weather.md
+ov read viking://agent/tools/weather/current.json
+ov mcps invoke viking://resources/arrange/beijing-weather.md
 ```
 
 List and remove mounts:
@@ -203,17 +208,21 @@ x-openviking:
   args:
     city: Beijing
   timeout_seconds: 60
-  retry:
-    max_attempts: 3
-    backoff_seconds: 1
-    backoff_multiplier: 2
-    max_backoff_seconds: 5
 ---
+
+## Instruction
+
+Reading returns this node's definition; fetch live data by invoking this node's URI through OpenViking.
 ```
 
 Do not maintain this as ordinary Markdown. The account-level `live_context_nodes.dat` database also records the mount for listing, input revision tracking, and safe unmounting. Editing only the file makes the descriptor and mount record inconsistent.
 
-`retry` is reserved policy metadata in the node format. The current execution path does not automatically retry tool calls from this block, avoiding duplicate external side effects when an outcome is unknown.
+The node's `Instruction` section contains only a brief notice. General read and
+invocation rules live in the MCP endpoint and VikingBot tool descriptions; node
+bodies carry node-specific business guidance and constraints so batch reads do not
+repeat the full rules. New nodes do not emit `retry`, and calls are not automatically
+retried. Node invocation uses its stored timeout. Explicit `timeout_seconds` overrides
+it; the server uses 30 seconds when neither is provided.
 
 The catalogs, their space-specific registries, and the account mount database are managed state:
 
@@ -229,17 +238,29 @@ The latter two are internal storage paths, not user-facing Viking URIs.
 
 ## Read semantics
 
-Live execution occurs only on a complete read:
+REST, CLI, MCP, and VikingBot reads return stored definitions. Full, paginated,
+and batch reads never invoke a Tool, regardless of annotations. `raw=true` keeps
+its metadata/privacy behavior and is not an execution switch. `find`, `search`,
+`list`, and `tree` also do not execute nodes.
 
-- REST/CLI: `offset=0` and `limit=-1`.
-- MCP `read`: the default complete read.
-- The response is the upstream MCP tool result, without descriptor frontmatter or an extra label.
-- Tools without annotations are treated as read-only. A tool with `readOnlyHint: false` or `destructiveHint: true` is not executed by `read`; the error returns the mounted URI and arguments for explicit invocation through the current integration.
-- A paginated read returns the stored descriptor and does not call the upstream.
-- `find`, `search`, `list`, and `tree` never execute a live node implicitly.
-- REST `read?raw=true` returns the raw descriptor without executing the tool.
+The usual workflow is `search/list -> read node -> invoke_mcp_tool`. Read the
+referenced Tool definition once if its `tool.inputSchema` is not already available.
+Use the node URI as `tool_uri` and omit arguments and timeout to use stored defaults.
+Explicit arguments override matching top-level defaults, replacing nested objects.
+Adjust arguments within the schema and node constraints when required by the task.
+Any fixed Tool `preset_arguments` remain fixed. An explicit timeout overrides the node's timeout.
+Invocation retains argument validation, authorization, credentials, and native MCP results.
 
-These rules keep retrieval and browsing free of side effects while still allowing write-capable tools to be mounted as agent guidance. An agent should retrieve a node first and call `read` for a live value; write-capable tools require the separately permissioned `invoke_mcp_tool`.
+`invoke_mcp_tool` is the OpenViking MCP server's name; integrations may prefix or
+rename it. Identify the capability for invoking an OpenViking-managed Tool or Live Context node by its
+description and input schema, then use the integration's actual exposed name and
+parameter schema. If this capability is missing, use `ov mcps invoke` only when
+available; otherwise report that this integration cannot fetch live data. Do not
+invent tool names or bypass OpenViking by calling upstream tools directly.
+
+Abstracts describe purpose, metrics, scope, and use cases without repeating generic
+invocation rules or CLI commands. `list` may still return file abstracts when
+requested, but summaries are not an invocation contract.
 
 ## Dynamic agent discovery
 
@@ -370,7 +391,7 @@ The SDK and Studio use these endpoints:
 | `POST` | `/api/v1/mcps/{name}/sync` | Synchronize the Tool Catalog |
 | `GET` | `/api/v1/mcps/status?name=...` | Check upstream status |
 | `POST` | `/api/v1/mcps/find` | Semantically find tools |
-| `POST` | `/api/v1/mcps/invoke` | Invoke a tool |
+| `POST` | `/api/v1/mcps/invoke` | Invoke a Tool URI or Live Context node URI |
 | `POST` | `/api/v1/mcps/mount` | Mount one live node |
 | `POST` | `/api/v1/mcps/batch-mount` | Mount a batch |
 | `DELETE` | `/api/v1/mcps/mount?node_uri=...` | Unmount one node |
@@ -396,8 +417,8 @@ Requests use the current OpenViking identity. User-space server registrations an
 | Registration or validation fails | Invalid URL, network failure, wrong headers, or a non-Streamable HTTP server | Verify the URL and headers, then retry `ov mcps validate` |
 | `find` returns no result | Catalog not published, indexing incomplete, or query mismatch | Confirm with `ov mcps show`, run `sync`, and wait for indexing if needed |
 | Mount rejects arguments | Arguments do not satisfy the current `inputSchema` | Rebuild them from `show` or `find` output |
-| `read` returns the descriptor | The read is paginated or uses `raw=true` | Use the default complete read |
-| `read` fails and outcome is unknown | The upstream timed out or disconnected during execution | Verify the upstream outcome first; OpenViking does not retry a potentially side-effecting call |
+| `read` returns the descriptor | Expected behavior | Follow its instructions and explicitly invoke the Tool |
+| `invoke` fails and outcome is unknown | The upstream timed out or disconnected during execution | Verify the upstream outcome first; OpenViking does not retry a potentially side-effecting call |
 | `sync` reports `REVIEW` | Tool input revision changed but arguments remain valid | Review Tool semantics and remount |
 | `sync` reports `INVALID` | The new schema rejects preset arguments | Fix arguments and remount |
 | `sync` reports `REMOVED` | The tool disappeared upstream | Bind a replacement or explicitly unmount |
@@ -410,7 +431,7 @@ Requests use the current OpenViking identity. User-space server registrations an
 | --- | --- | --- |
 | Publish tool definitions in VikingFS | Tools become searchable, readable, and versioned with the context system | Upstream changes require explicit `sync` |
 | Bind arguments at mount time | Frequent calls are stable and agents do not repeatedly infer fixed values | Argument changes require remounting |
-| Execute only on a complete `read` | Retrieval, listing, and paginated browsing remain side-effect free | Inspecting descriptors requires a paginated or raw read |
+| Read definitions; invoke explicitly | Agents can inspect defaults and adjust valid arguments before execution | Requires an explicit invoke and a Tool schema read when not cached |
 | Do not delete nodes during sync | Upstream changes cannot immediately damage application resource trees | Operators must resolve `REVIEW/INVALID/REMOVED` |
 | Do not prune by default in CaC | An omitted declaration cannot cause accidental deletion | Cleanup requires explicit `--prune` |
 | Do not retry tool execution automatically | Avoid duplicate side effects when the outcome is unknown | Callers must decide whether to retry transient failures |

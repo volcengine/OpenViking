@@ -1104,11 +1104,12 @@ class AsyncHTTPClient:
         *,
         timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Invoke a discovered or Live Context-referenced tool with explicit arguments."""
+        """Invoke a Tool or Live Context URI; arguments override node defaults by key."""
         payload: Dict[str, Any] = {
             "uri": VikingURI.normalize(tool_uri),
-            "arguments": dict(arguments or {}),
         }
+        if arguments is not None:
+            payload["arguments"] = dict(arguments)
         if timeout_seconds is not None:
             payload["timeout_seconds"] = timeout_seconds
         response = await self._request(

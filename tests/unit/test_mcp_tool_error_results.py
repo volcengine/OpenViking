@@ -170,7 +170,6 @@ async def test_read_partial_failure_remains_a_success_result(monkeypatch):
         "get_service",
         lambda: SimpleNamespace(
             fs=SimpleNamespace(read_visible=read_visible),
-            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
         ),
     )
 

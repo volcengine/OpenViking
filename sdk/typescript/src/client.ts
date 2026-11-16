@@ -376,10 +376,10 @@ export class OpenVikingClient {
       query: { name, target_uri: targetUri },
     });
   }
-  /** Invoke a registered MCP tool through OpenViking. */
+  /** Invoke a Tool or Live Context URI; arguments override node defaults by key. */
   invokeMCPTool(
     toolUri: string,
-    toolArguments: JsonObject = {},
+    toolArguments?: JsonObject,
     timeoutSeconds?: number,
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/mcps/invoke", {

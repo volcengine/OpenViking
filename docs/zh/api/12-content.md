@@ -135,6 +135,10 @@ ov overview viking://resources/docs/
 
 ### read()
 
+实时上下文节点返回存储的定义、默认参数和指引。完整及分页读取均不执行绑定工具。
+需要实时数据时，按需读取引用的 Tool schema，再通过[显式 MCP 调用](26-mcp-live-context.md#调用工具)
+获取结果。`raw` 只影响元数据及隐私处理，不控制执行。
+
 读取 L0/L1/L2 文件完整文本内容。
 
 **参数**

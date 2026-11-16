@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import tempfile
@@ -24,6 +25,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, InitializeResult, Tool
 
+from openviking.core.live_context import LIVE_CONTEXT_INSTRUCTION
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -34,7 +36,6 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
-    ProcessingError,
     UnavailableError,
 )
 
@@ -581,17 +582,6 @@ class MCPService:
             )
             raise InvalidArgumentError(f"{prefix}: {exc.message}") from exc
 
-    @staticmethod
-    def _tool_is_read_only(tool_document: dict[str, Any]) -> bool:
-        annotations = tool_document["tool"].get("annotations")
-        if annotations is None:
-            return True
-        return (
-            isinstance(annotations, dict)
-            and annotations.get("readOnlyHint") is not False
-            and annotations.get("destructiveHint") is not True
-        )
-
     async def _readable_mount_rows(
         self,
         rows: list[sqlite3.Row],
@@ -711,12 +701,6 @@ class MCPService:
                     "input_revision": tool_document["input_revision"],
                     "args": arguments,
                     "timeout_seconds": timeout_seconds,
-                    "retry": {
-                        "max_attempts": 3,
-                        "backoff_seconds": 1,
-                        "backoff_multiplier": 2,
-                        "max_backoff_seconds": 5,
-                    },
                 },
             }
         )
@@ -726,7 +710,7 @@ class MCPService:
             sort_keys=False,
             default_flow_style=False,
         ).rstrip()
-        return f"---\n{frontmatter}\n---\n"
+        return f"---\n{frontmatter}\n---\n\n{LIVE_CONTEXT_INSTRUCTION}"
 
     async def add(
         self,
@@ -1637,121 +1621,82 @@ class MCPService:
         }
 
     @staticmethod
-    def _parse_live_context_node(content: str) -> tuple[str, dict[str, Any], int] | None:
-        lines = content.splitlines()
-        if not lines or lines[0] != "---":
-            return None
-        try:
-            closing_index = lines[1:].index("---") + 1
-            metadata = yaml.safe_load("\n".join(lines[1:closing_index]))
-        except (ValueError, yaml.YAMLError):
-            return None
-        if not isinstance(metadata, dict) or metadata.get("type") != "OpenViking Live Context":
-            return None
-        extension = metadata.get("x-openviking")
-        if not isinstance(extension, dict) or extension.get("type") != "mcp":
-            return None
-        tool_uri = extension.get("definition")
-        arguments = extension.get("args", {})
-        timeout_seconds = extension.get("timeout_seconds", 60)
+    def _validate_invocation_timeout(timeout_seconds: Any) -> float:
         if (
-            not isinstance(tool_uri, str)
-            or not isinstance(arguments, dict)
-            or not isinstance(timeout_seconds, int)
-            or isinstance(timeout_seconds, bool)
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds)
             or timeout_seconds <= 0
         ):
-            raise InvalidArgumentError(
-                "Live context node requires string x-openviking.definition "
-                "object x-openviking.args, and positive integer "
-                "x-openviking.timeout_seconds"
-            )
-        return tool_uri, arguments, timeout_seconds
+            raise InvalidArgumentError("timeout_seconds must be a positive finite number")
+        return float(timeout_seconds)
 
-    async def invoke_live_context(
+    async def _resolve_invocation(
         self,
-        content: str,
+        uri: str,
+        arguments: dict[str, Any] | None,
         ctx: RequestContext,
-    ) -> dict[str, Any] | None:
-        invocation = self._parse_live_context_node(content)
-        if invocation is None:
-            return None
-        tool_uri, arguments, timeout_seconds = invocation
-        return await self.invoke(
-            tool_uri,
-            arguments,
-            ctx,
-            timeout_seconds=timeout_seconds,
-        )
-
-    async def read_live_context(
-        self,
-        content: str,
-        ctx: RequestContext,
-    ) -> str | None:
-        invocation = self._parse_live_context_node(content)
-        if invocation is None:
-            return None
-        tool_uri, arguments, timeout_seconds = invocation
-        result = await self.invoke(
-            tool_uri,
-            arguments,
-            ctx,
-            timeout_seconds=timeout_seconds,
-            require_read_only=True,
-        )
-        return self._live_context_read_value(result, tool_uri)
-
-    @staticmethod
-    def _live_context_read_value(
-        result: dict[str, Any],
-        tool_uri: str,
-    ) -> str:
-        content = result.get("content")
-        text_blocks = (
-            [
-                block["text"]
-                for block in content
-                if isinstance(block, dict)
-                and block.get("type") == "text"
-                and isinstance(block.get("text"), str)
-            ]
-            if isinstance(content, list)
-            else []
-        )
-
-        if result.get("isError") is True:
-            detail = "\n".join(text_blocks).strip() or "upstream MCP tool returned an error"
-            raise ProcessingError(
-                f"Live context read failed: {detail}",
-                source=tool_uri,
+        timeout_seconds: float | None,
+    ) -> tuple[str, dict[str, Any], float]:
+        """Resolve node defaults without executing or following node-to-node references."""
+        if arguments is not None and (
+            not isinstance(arguments, dict) or any(not isinstance(key, str) for key in arguments)
+        ):
+            raise InvalidArgumentError("arguments must be a JSON object")
+        if timeout_seconds is not None:
+            timeout_seconds = self._validate_invocation_timeout(timeout_seconds)
+        normalized = validate_request_viking_uri(
+            resolve_path_variables(uri), ctx, field_name="invocation URI"
+        ).rstrip("/")
+        if _TOOL_URI_RE.fullmatch(normalized):
+            return (
+                normalized,
+                dict(arguments or {}),
+                (timeout_seconds if timeout_seconds is not None else _DEFAULT_TIMEOUT_SECONDS),
             )
 
-        if isinstance(content, list):
-            if text_blocks:
-                return "\n".join(text_blocks)
-
-        structured = result.get("structuredContent")
-        if structured is not None:
-            return json.dumps(structured, ensure_ascii=False, indent=2)
-
-        if isinstance(content, list) and not content:
-            return ""
-
-        raise ProcessingError(
-            "Live context read only supports text or structured MCP results",
-            source=tool_uri,
+        self._validate_node_uri(normalized, ctx)
+        content = await self._service.fs.read(normalized, ctx=ctx)
+        frontmatter = re.match(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", content, re.S)
+        if frontmatter is None:
+            raise InvalidArgumentError("Invocation URI must reference a Tool or Live Context node")
+        try:
+            metadata = yaml.safe_load(frontmatter.group(1))
+        except yaml.YAMLError as exc:
+            raise InvalidArgumentError("Invalid Live Context YAML frontmatter") from exc
+        if not isinstance(metadata, dict) or metadata.get("type") != "OpenViking Live Context":
+            raise InvalidArgumentError("Invocation URI must reference a Tool or Live Context node")
+        config = metadata.get("x-openviking")
+        if (
+            not isinstance(config, dict)
+            or config.get("schema_version") != "v1"
+            or config.get("type") != "mcp"
+            or not isinstance(config.get("definition"), str)
+        ):
+            raise InvalidArgumentError("Live Context node must have a valid v1 MCP definition")
+        tool_uri, _, _, _ = self._parse_tool_uri(config["definition"], ctx)
+        defaults = config.get("args", {})
+        if not isinstance(defaults, dict) or any(not isinstance(key, str) for key in defaults):
+            raise InvalidArgumentError("Live Context args must be a JSON object")
+        node_timeout = _DEFAULT_TIMEOUT_SECONDS
+        if "timeout_seconds" in config:
+            node_timeout = self._validate_invocation_timeout(config["timeout_seconds"])
+        return (
+            tool_uri,
+            {**defaults, **(arguments or {})},
+            (timeout_seconds if timeout_seconds is not None else node_timeout),
         )
 
     async def invoke(
         self,
         uri: str,
-        arguments: dict[str, Any],
+        arguments: dict[str, Any] | None,
         ctx: RequestContext,
-        timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
-        *,
-        require_read_only: bool = False,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        uri, arguments, timeout_seconds = await self._resolve_invocation(
+            uri, arguments, ctx, timeout_seconds
+        )
         uri, tools_root, server_name, tool_name = self._parse_tool_uri(uri, ctx)
         server, headers = await self._registered(
             server_name,
@@ -1759,18 +1704,6 @@ class MCPService:
             target_uri=tools_root,
         )
         tool_document = await self._read_tool_document(uri, server_name, tool_name, ctx)
-        if require_read_only and not self._tool_is_read_only(tool_document):
-            invocation = json.dumps(
-                {"tool_uri": uri, "arguments": arguments},
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-            raise ProcessingError(
-                "Live context read cannot execute a tool explicitly marked as "
-                "non-read-only or destructive. Invoke the MCP tool explicitly with "
-                f"{invocation}",
-                source=uri,
-            )
         self._validate_tool_arguments(tool_document, arguments)
 
         async with self._session(server, headers, timeout_seconds) as session:

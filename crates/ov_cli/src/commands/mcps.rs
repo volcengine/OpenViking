@@ -633,13 +633,15 @@ fn render_mounts_for_table(response: &Value, output_format: OutputFormat) -> Opt
 pub async fn invoke(
     client: &HttpClient,
     uri: &str,
-    raw_arguments: &str,
+    raw_arguments: Option<&str>,
     timeout_seconds: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let arguments = parse_arguments(raw_arguments)?;
-    let mut payload = json!({"uri": uri, "arguments": arguments});
+    let mut payload = json!({"uri": uri});
+    if let Some(raw_arguments) = raw_arguments {
+        payload["arguments"] = Value::Object(parse_arguments(raw_arguments)?);
+    }
     if let Some(timeout) = timeout_seconds {
         if !timeout.is_finite() || timeout <= 0.0 {
             return Err(Error::Parse(

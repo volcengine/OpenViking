@@ -127,14 +127,14 @@ func (c *Client) GetMCPStatus(ctx context.Context, name string, targetURI ...str
 	return result, err
 }
 
-// InvokeMCPTool invokes a registered MCP tool through OpenViking.
+// InvokeMCPTool invokes a Tool or Live Context URI; arguments override node defaults by key.
+// Nil arguments omit overrides and use the node's defaults.
 func (c *Client) InvokeMCPTool(ctx context.Context, toolURI string, arguments map[string]any, timeoutSeconds ...float64) (map[string]any, error) {
-	if arguments == nil {
-		arguments = map[string]any{}
-	}
 	payload := map[string]any{
-		"uri":       NormalizeURI(toolURI),
-		"arguments": arguments,
+		"uri": NormalizeURI(toolURI),
+	}
+	if arguments != nil {
+		payload["arguments"] = arguments
 	}
 	if len(timeoutSeconds) > 0 {
 		payload["timeout_seconds"] = timeoutSeconds[0]

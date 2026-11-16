@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 import httpx
 from loguru import logger
 
+from openviking.core.live_context import LIVE_CONTEXT_READ_INSTRUCTION
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -1086,7 +1087,7 @@ class VikingMultiReadTool(OVFileTool):
             "Read content from multiple OpenViking resources concurrently. By default returns "
             "complete content. Large files (over 512 KB) are not returned in full: first use "
             "openviking_grep to locate relevant lines, then read a bounded window with offset "
-            "and limit (line numbers, 0-indexed)."
+            "and limit (line numbers, 0-indexed)." + LIVE_CONTEXT_READ_INSTRUCTION
         )
 
     @property

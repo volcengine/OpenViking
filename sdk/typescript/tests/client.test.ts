@@ -19,6 +19,37 @@ const ok = (result: unknown) =>
   });
 
 describe("OpenVikingClient", () => {
+  it.each([undefined, {}, { city: "Shanghai" }])(
+    "invokes a node with optional argument overrides %j",
+    async (argumentsOverride) => {
+      const native = {
+        content: [],
+        structuredContent: { temperature: 20 },
+        isError: true,
+      };
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok(native));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+      expect(
+        await client.invokeMCPTool(
+          "resources/live/weather.md",
+          argumentsOverride,
+          65.5,
+        ),
+      ).toEqual(native);
+      const [url, init] = fetcher.mock.calls[0]!;
+      expect(String(url)).toBe("https://example.com/api/v1/mcps/invoke");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        uri: "viking://resources/live/weather.md",
+        ...(argumentsOverride === undefined
+          ? {}
+          : { arguments: argumentsOverride }),
+        timeout_seconds: 65.5,
+      });
+    },
+  );
   it("does not expose a top-level resource parse mode option", () => {
     const options: AddResourceOptions = {
       // @ts-expect-error parse_mode is configured through args

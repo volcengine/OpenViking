@@ -1,6 +1,38 @@
-use crate::cli::{Cli, Commands, CompileCommands, ObserverCommands, SnapshotCmd};
+use crate::cli::{Cli, Commands, CompileCommands, McpCommands, ObserverCommands, SnapshotCmd};
 use crate::handlers;
 use clap::{CommandFactory, Parser};
+
+#[test]
+fn cli_parses_mcp_invoke_node_defaults_and_overrides() {
+    for (uri, options, expected_arguments, expected_timeout) in [
+        ("viking://resources/live/weather.md", vec![], None, None),
+        (
+            "viking://agent/tools/weather/current.json",
+            vec!["--args", "{}", "--timeout-seconds", "65.5"],
+            Some("{}"),
+            Some(65.5),
+        ),
+    ] {
+        let mut args = vec!["ov", "mcps", "invoke", uri];
+        args.extend(options);
+        let cli = Cli::try_parse_from(args).expect("invoke should parse");
+        match cli.command {
+            Commands::Mcps {
+                action:
+                    McpCommands::Invoke {
+                        uri: parsed_uri,
+                        arguments,
+                        timeout_seconds,
+                    },
+            } => {
+                assert_eq!(parsed_uri, uri);
+                assert_eq!(arguments.as_deref(), expected_arguments);
+                assert_eq!(timeout_seconds, expected_timeout);
+            }
+            _ => panic!("expected mcps invoke"),
+        }
+    }
+}
 
 #[test]
 fn cli_parses_global_identity_override_flags() {

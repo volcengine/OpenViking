@@ -1,6 +1,6 @@
 # MCP and Live Context API
 
-This module registers Streamable HTTP MCP servers, synchronizes and searches their tool catalogs, invokes tools through OpenViking, and mounts tools as live context nodes. Read-only mounted tools execute transparently on `read`; tools explicitly marked non-read-only or destructive require explicit invocation. Every REST path starts with `/api/v1/mcps` and uses the [standard response envelope](01-overview.md#response-format).
+This module registers Streamable HTTP MCP servers, synchronizes and searches their tool catalogs, invokes tools through OpenViking, and mounts tools as live context nodes. `read` returns a node's stored definition, defaults, and instructions. Fetching live data requires explicit invocation. Every REST path starts with `/api/v1/mcps` and uses the [standard response envelope](01-overview.md#response-format).
 
 > **Scope**
 >
@@ -33,7 +33,7 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 | POST | `/api/v1/mcps/{name}/sync` | Synchronize tools and report affected mounts |
 | DELETE | `/api/v1/mcps/{name}` | Remove a server and its tool catalog |
 | POST | `/api/v1/mcps/find` | Search tools semantically |
-| POST | `/api/v1/mcps/invoke` | Invoke a tool |
+| POST | `/api/v1/mcps/invoke` | Invoke a Tool URI or Live Context node URI |
 | POST | `/api/v1/mcps/mount` | Create or replace one live context node |
 | POST | `/api/v1/mcps/batch-mount` | Create or replace live context nodes in a batch |
 | DELETE | `/api/v1/mcps/mount` | Remove one mount and its node |
@@ -386,14 +386,42 @@ ov mcps find --limit 5 "current weather for a city"
 }
 ```
 
-### Invoke a tool
+### Invoke a tool or live context node
 
-`POST /api/v1/mcps/invoke` invokes a tool through its registered server. OpenViking injects stored upstream headers without exposing credentials to the caller. Calls are not retried automatically. A disconnect or timeout reports that the outcome may be unknown.
+`POST /api/v1/mcps/invoke` accepts a Tool URI or Live Context node URI and invokes the tool through its registered server. For a node, OpenViking reads its stored `x-openviking.definition`, `args`, and `timeout_seconds`, checks access to both the node and Tool, and validates the merged arguments against the current Tool schema. OpenViking injects stored upstream headers without exposing credentials to the caller. Calls are not retried automatically. A disconnect or timeout reports that the outcome may be unknown.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `uri` | string | Yes | - | `viking://agent/tools/<server>/<tool>.json` |
-| `arguments` | object | No | `{}` | Values satisfying the tool's `inputSchema` |
+| `uri` | string | Yes | - | Tool URI under `viking://~/tools` or `viking://agent/tools`, or Live Context `.md` node URI |
+| `arguments` | object/null | No | Node defaults, or `{}` for a Tool | Top-level overrides of node defaults; final values must satisfy the Tool's `inputSchema` |
+| `timeout_seconds` | number/null | No | Node timeout, then `30` | Positive finite per-call timeout in seconds; explicit values override the node timeout |
+
+Omitted or `null` arguments use node defaults. Explicit objects override only supplied top-level keys; `{}` retains all defaults, and nested objects replace the corresponding default object. Invocation does not modify the node. Ordinary Markdown, unsupported node configurations, and node-to-node references are rejected.
+
+```bash
+# Use the stored node defaults.
+ov mcps invoke viking://resources/live/weather-beijing.md
+# Override only city for this call.
+ov mcps invoke viking://resources/live/weather-beijing.md --args '{"city":"Shanghai"}'
+```
+
+```python
+result = client.invoke_mcp_tool("viking://resources/live/weather-beijing.md")
+```
+
+```typescript
+const result = await client.invokeMCPTool("viking://resources/live/weather-beijing.md");
+```
+
+```go
+result, err := client.InvokeMCPTool(ctx, "viking://resources/live/weather-beijing.md", nil)
+```
+
+```json
+{"uri": "viking://resources/live/weather-beijing.md"}
+```
+
+Direct Tool invocation remains available:
 
 ```python
 result = client.invoke_mcp_tool(
@@ -432,7 +460,7 @@ ov mcps invoke viking://agent/tools/weather/current.json \
 
 `POST /api/v1/mcps/mount` creates or replaces one Markdown live context node. `POST /api/v1/mcps/batch-mount` validates each item's arguments and target write permissions, skips invalid items, then writes valid nodes in request order and immediately persists each mount record. Empty batches and duplicate `node_uri` values reject the entire request before any mutation.
 
-Any tool can be mounted. Missing or empty annotations are treated as read-only for compatibility. A complete read refuses to execute tools with `annotations.readOnlyHint: false` or `destructiveHint: true`; the error returns the `tool_uri` and stored arguments needed by the integration's explicit invocation mechanism.
+Any tool can be mounted. Reading never executes the tool, regardless of annotations. Before invoking, inspect the referenced Tool's `inputSchema` and annotations. Start with the node's default arguments and adjust them within the schema and node instructions when the task requires it.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -441,7 +469,7 @@ Any tool can be mounted. Missing or empty annotations are treated as read-only f
 | `title` | string | Yes | - | Non-empty node title |
 | `description` | string/null | No | `null` | Node description |
 | `timeout_seconds` | integer | No | `60` | Per-call timeout; must be positive |
-| `arguments` | object | No | `{}` | Preset arguments validated against the tool schema |
+| `arguments` | object | No | `{}` | Default arguments validated against the tool schema |
 | `tags` | string[]/null | No | `null` | Retrieval tags; omission or `[]` preserves existing tags. Use `set_tags` with clear mode to remove tags |
 | `wait` | boolean | No | `false` | Wait for node processing; at the outer level for a batch |
 
@@ -582,13 +610,15 @@ ov mcps mounts --mcp weather --tool current
 
 ### Read live context
 
-After mounting, use the regular content read API or `ov read`. OpenViking recognizes the node's `OpenViking Live Context` metadata and, for tools allowed by the read-only policy, calls the tool with its stored `tool_uri`, `arguments`, and `timeout_seconds`.
+After mounting, use the regular content read API or `ov read` to obtain the YAML definition and `Instruction` section. Invoke the node URI to use its saved arguments and timeout. Read the referenced `x-openviking.definition` Tool if its `tool.inputSchema` is not already available.
 
 ```bash
 ov read viking://resources/live/weather-beijing.md
+ov read viking://agent/tools/weather/current.json
+ov mcps invoke viking://resources/live/weather-beijing.md
 ```
 
-Live reads support MCP text results and `structuredContent`. Multiple text blocks are joined with newlines. A structured-only result becomes formatted JSON. An upstream `isError=true`, image/audio-only content, or a tool explicitly marked non-read-only or destructive causes a `PROCESSING_ERROR` on read. Direct `/invoke` calls can execute write-capable tools and still preserve native MCP content blocks.
+Full, paginated, and batch reads return stored content without calling the upstream. REST `raw=true` retains its metadata/privacy behavior and is not an execution switch. Explicit `/invoke` preserves native MCP `content`, `structuredContent`, and `isError`, including supported media. Python accepts `timeout_seconds=60`; TypeScript accepts a third timeout argument; Go accepts an optional final timeout argument. MCP `invoke_mcp_tool` accepts `timeout_seconds` alongside `tool_uri` and `arguments`, with `tool_uri` accepting either a Tool or node URI. Omission uses the node timeout, then the server default of 30 seconds. Direct Tool invocation does not infer node settings. Calls are not retried from legacy node `retry` metadata.
 
 ### Remove mounts
 

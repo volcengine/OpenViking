@@ -4,7 +4,7 @@ description: 接入远程 MCP Server，将工具挂载为实时上下文，并�
 
 # 实时上下文接入与编排
 
-实时上下文（Live Context）把远程 MCP Tool 挂载为 `viking://resources/...` 下的 Markdown 节点。Agent 不需要了解上游地址、鉴权方式和固定参数，只需像读取普通上下文一样读取节点；OpenViking 会执行绑定的 Tool，并透明返回上游结果。
+实时上下文（Live Context）把远程 MCP Tool 挂载为 `viking://resources/...` 下的 Markdown 节点。读取返回定义、默认参数和指引；Agent 显式调用节点 URI 使用默认配置，也可按任务需要覆盖合法参数。仍支持直接调用 Tool URI。上游地址和凭证由 OpenViking 解析。
 
 本页面向实现和维护上下文编排的开发者，说明 MCP 注册、Tool Catalog、实时节点、Agent Gateway、Studio 和 Context as Code（CaC）之间的关系。MCP 客户端连接方式和 OpenViking 内置 MCP Tool 的完整清单见 [MCP 工具与协议](06-mcp-integration.md)。
 
@@ -34,7 +34,10 @@ or viking://agent/tools/<server>/<tool>.json
         v
 viking://resources/<project>/<node>.md
         |
-        | complete read
+        | read definition and instructions
+        v
+Agent checks Tool schema -> selects arguments -> invoke_mcp_tool
+        |
         v
 OpenViking resolves credentials -> calls upstream Tool -> returns native Tool result
 ```
@@ -49,7 +52,7 @@ OpenViking resolves credentials -> calls upstream Tool -> returns native Tool re
 - Tool 名称必须能作为 OpenViking 文件名。
 - 注册时会连接上游并执行 Tool discovery；无法连接或 Tool 定义不合法时不会写入注册信息。
 - Header 由 OpenViking 服务端保存并用于上游调用。CLI 示例应从环境变量构造配置，不要把真实凭证提交到仓库。
-- `invoke` 和实时节点读取可能产生外部副作用。OpenViking 不会自动重试未知结果的 Tool 调用。
+- `invoke` 可能产生外部副作用，读取节点不会执行工具。OpenViking 不会自动重试 Tool 调用。
 - 挂载参数会按 Tool 的 `inputSchema` 校验；缺少必填参数或类型不匹配时挂载失败。
 - 用户空间 `viking://~/tools` 和账号共享空间 `viking://agent/tools` 都是受管目录，不能使用普通 `mkdir`、`rm`、`cp` 或 `mv` 修改。
 
@@ -144,10 +147,12 @@ ov mcps mount \
   --wait
 ```
 
-读取节点会执行上游 Tool：
+读取节点及引用的 Tool schema，再显式调用：
 
 ```bash
 ov read viking://resources/arrange/beijing-weather.md
+ov read viking://agent/tools/weather/current.json
+ov mcps invoke viking://resources/arrange/beijing-weather.md
 ```
 
 查看和删除挂载：
@@ -203,17 +208,19 @@ x-openviking:
   args:
     city: Beijing
   timeout_seconds: 60
-  retry:
-    max_attempts: 3
-    backoff_seconds: 1
-    backoff_multiplier: 2
-    max_backoff_seconds: 5
 ---
+
+## Instruction
+
+读取返回节点定义；获取实时数据需通过 OpenViking 调用此节点 URI。
 ```
 
 不要把这个文件当作普通 Markdown 手工维护。挂载关系还记录在账号级 `live_context_nodes.dat` 中，用于列举挂载、跟踪 input revision 和安全卸载；只修改文件会让描述文件与挂载记录失去一致性。
 
-`retry` 是节点格式中的预留策略元数据。当前执行链路不会据此自动重试 Tool 调用，避免在结果未知时重复产生外部副作用。
+节点的 `Instruction` 仅保留一句提示。通用读取及调用规则集中在 MCP endpoint 和
+VikingBot 的读取、调用工具描述中，节点正文用于该节点特有的业务指引与约束，避免批量
+读取时重复携带完整规则。新节点不生成 `retry`，调用不自动重试。调用节点时沿用其超时；
+显式 `timeout_seconds` 优先，两者都没有时使用服务端默认的 30 秒。
 
 Tool Catalog 与对应空间的注册表，以及账号级挂载数据库都属于受管状态：
 
@@ -229,17 +236,24 @@ viking://agent/tools/<server>/<tool>.json
 
 ## 读取语义
 
-实时执行只发生在完整读取：
+REST、CLI、MCP 和 VikingBot 的读取均返回存储的定义。完整、分页和批量读取都不执行
+Tool，与 annotations 无关。`raw=true` 保持元数据及隐私处理语义，不是执行开关。
+`find`、`search`、`list` 和 `tree` 同样不执行节点。
 
-- REST/CLI：`offset=0` 且 `limit=-1`。
-- MCP `read`：默认完整读取。
-- 返回值是上游 MCP Tool 结果，不附加节点 frontmatter 或额外标签。
-- 未声明 annotations 的工具默认按只读处理。`readOnlyHint: false` 或 `destructiveHint: true` 的工具不会由 `read` 执行；错误会返回挂载 URI 和参数，供当前集成显式调用。
-- 分页读取只返回已存储的描述文件，不调用上游 Tool。
-- `find`、`search`、`list` 和 `tree` 不会隐式执行实时节点。
-- REST `read?raw=true` 返回原始描述文件，不执行 Tool。
+典型流程为 `search/list -> read 节点 -> invoke_mcp_tool`。若尚未获取
+`tool.inputSchema`，先读取引用的 Tool 定义。以节点 URI 为 `tool_uri`，省略参数和超时
+即可沿用保存的默认配置。显式参数按顶层键覆盖，嵌套对象整体替换，仅按任务需要在
+schema 和节点约束范围内调整。Tool 定义中固定的 `preset_arguments` 仍不可修改。
+显式传入超时可覆盖节点超时。
+invoke 保留参数校验、鉴权、凭证解析及原生 MCP 结果。
 
-这些规则保证检索和目录浏览保持无副作用，同时允许把写工具挂载为 Agent 指引。Agent 应先通过检索定位节点，再调用 `read` 获取实时结果；写工具必须通过具备独立权限的 `invoke_mcp_tool` 调用。
+`invoke_mcp_tool` 是 OpenViking MCP 服务端的名称，三方集成可能添加前缀或重命名。
+Agent 应根据工具描述和参数 schema 识别 OpenViking 托管 Tool 或实时上下文节点的调用能力，并使用当前
+集成实际暴露的名称和参数 schema。若缺少该能力，仅在可用时使用 `ov mcps invoke`；
+否则报告当前集成无法获取实时数据，不应猜测工具名或绕过 OpenViking 直接调用上游工具。
+
+摘要用于介绍用途、指标、范围和适用场景，不重复通用调用规则或 CLI 命令。
+`list` 仍可按需返回文件摘要，但摘要不承载调用契约。
 
 ## Agent 动态发现
 
@@ -369,7 +383,7 @@ SDK 和 Studio 使用以下接口：
 | `POST` | `/api/v1/mcps/{name}/sync` | 同步 Tool Catalog |
 | `GET` | `/api/v1/mcps/status?name=...` | 检查上游状态 |
 | `POST` | `/api/v1/mcps/find` | 语义检索 Tool |
-| `POST` | `/api/v1/mcps/invoke` | 调用 Tool |
+| `POST` | `/api/v1/mcps/invoke` | 调用 Tool URI 或实时上下文节点 URI |
 | `POST` | `/api/v1/mcps/mount` | 挂载单个实时节点 |
 | `POST` | `/api/v1/mcps/batch-mount` | 批量挂载 |
 | `DELETE` | `/api/v1/mcps/mount?node_uri=...` | 卸载单个节点 |
@@ -395,8 +409,8 @@ SDK 和 Studio 使用以下接口：
 | 注册或验证失败 | URL 无效、网络不可达、Header 错误、不是 Streamable HTTP | 检查 URL 和 Header，并用 `ov mcps validate` 重试 |
 | `find` 没有结果 | Tool Catalog 未发布、索引尚未完成、查询不匹配 | `ov mcps show` 确认 Tool，执行 `sync`，必要时等待索引完成 |
 | 挂载提示参数不合法 | 参数不符合当前 `inputSchema` | 从 `show` 或 `find` 结果重新生成参数 |
-| `read` 返回描述文件 | 使用了分页读取或 `raw=true` | 使用默认完整读取 |
-| `read` 调用失败且结果未知 | 上游超时或连接在调用中断开 | 先确认上游实际状态；OpenViking 不会自动重试可能有副作用的调用 |
+| `read` 返回描述文件 | 预期行为 | 根据定义指引显式调用 Tool |
+| `invoke` 调用失败且结果未知 | 上游超时或连接在调用中断开 | 先确认上游实际状态；OpenViking 不会自动重试可能有副作用的调用 |
 | `sync` 返回 `REVIEW` | Tool input revision 改变但参数仍合法 | 检查 Tool 语义后重新挂载 |
 | `sync` 返回 `INVALID` | 新 schema 不再接受已绑定参数 | 修改参数并重新挂载 |
 | `sync` 返回 `REMOVED` | Tool 已从上游删除 | 绑定替代 Tool，或显式 unmount |
@@ -409,7 +423,7 @@ SDK 和 Studio 使用以下接口：
 | --- | --- | --- |
 | Tool 定义发布到 VikingFS | Tool 可被统一检索、读取和版本化 | 上游变化后需要显式 `sync` |
 | 参数在挂载时预绑定 | 高频场景调用稳定，Agent 不需重复推断固定参数 | 参数变化需要重新挂载 |
-| 完整 `read` 才执行 | 检索、列表和分页浏览保持无副作用 | 调试描述文件需要分页或 raw 读取 |
+| 读取定义，显式调用 | Agent 可检查默认参数并按需调整合法参数 | 增加显式 invoke，未缓存 schema 时需读取 Tool 定义 |
 | 同步不自动删除节点 | 上游变化不会直接破坏业务目录 | 操作者必须处理 `REVIEW/INVALID/REMOVED` |
 | CaC 默认不 prune | 避免声明遗漏造成意外删除 | 清理需要显式 `--prune` |
 | 调用不自动重试 | 避免未知结果下重复产生副作用 | 瞬时故障需要业务侧判断后重试 |

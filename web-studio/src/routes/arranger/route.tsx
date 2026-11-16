@@ -1108,6 +1108,7 @@ function TextInspector({
   if (detectedLive && liveMount) {
     return (
       <LiveContextInspector
+        key={liveMount.node_uri}
         document={documentQuery.data.content}
         mount={liveMount}
         tool={catalog?.tools.find((item) => item.uri === liveMount.tool_uri)}

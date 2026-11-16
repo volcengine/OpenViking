@@ -135,6 +135,11 @@ ov overview viking://resources/docs/
 
 ### read()
 
+Live Context nodes return their stored definition, default arguments, and instructions.
+Full and paginated reads never invoke the bound tool. Read the referenced Tool schema
+when needed, then use [explicit MCP invocation](26-mcp-live-context.md#invoke-a-tool)
+to fetch live data. `raw` only affects metadata/privacy handling, not execution.
+
 Read the complete text of an L0, L1, or L2 file.
 
 **Parameters**

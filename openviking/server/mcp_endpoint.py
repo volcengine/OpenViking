@@ -44,6 +44,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.core.live_context import (
+    LIVE_CONTEXT_INVOKE_INSTRUCTION,
+    LIVE_CONTEXT_READ_INSTRUCTION,
+)
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
@@ -272,12 +276,6 @@ _READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
     destructiveHint=False,
     idempotentHint=True,
     openWorldHint=False,
-)
-_LIVE_CONTEXT_READ_TOOL_ANNOTATIONS = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
 )
 _DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
@@ -565,21 +563,31 @@ async def find_mcp_tools(query: str, limit: int = 10) -> CallToolResult | str:
 
 
 @_mcp_error_results(structured_output=False)
-@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS, structured_output=False)
+@mcp.tool(
+    annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS,
+    structured_output=False,
+    description=(
+        "Invoke an OpenViking-managed MCP Tool URI or a Live Context node URI."
+        + LIVE_CONTEXT_INVOKE_INSTRUCTION
+    ),
+)
 async def invoke_mcp_tool(
-    tool_uri: str,
-    arguments: Optional[Dict[str, Any]] = None,
+    tool_uri: Annotated[str, Field(description="Tool URI or Live Context node URI")],
+    arguments: Annotated[
+        Optional[Dict[str, Any]],
+        Field(description="Tool arguments or top-level overrides of node defaults"),
+    ] = None,
+    timeout_seconds: Annotated[
+        float | None, Field(gt=0, allow_inf_nan=False, description="Per-call timeout in seconds")
+    ] = None,
 ) -> CallToolResult | str:
-    """
-    Execute a tool selected from find_mcp_tools.
-    Pass its returned uri as tool_uri and fill arguments according to the returned tool.inputSchema.
-    OpenViking resolves the server and credentials internally.
-    The upstream tool may have external side effects and calls are not retried.
-    """
+    """Invoke a registered MCP Tool or Live Context node through OpenViking."""
     service = get_service()
     ctx = _get_ctx()
     try:
-        result = await service.mcps.invoke(tool_uri, arguments or {}, ctx)
+        result = await service.mcps.invoke(
+            tool_uri, arguments, ctx, timeout_seconds=timeout_seconds
+        )
     except OpenVikingError as exc:
         return _mcp_failure(str(exc))
     return CallToolResult.model_validate(result)
@@ -609,7 +617,7 @@ async def find(
     read_content: bool = False,
     events_time_decay_protection: Optional[str] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills.  read_content only expands stored content; use read explicitly to execute a Live Context node."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content. For Live Context, read the node definition and referenced Tool schema if needed, then call invoke_mcp_tool explicitly to fetch live data."""
     try:
         validate_event_time_decay_request(events_time_decay_protection)
     except ValueError as exc:
@@ -692,7 +700,8 @@ async def search(
     token-budgeted context block and supports category quotas, purpose presets,
     detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
     ``target_uri`` is only supported in list mode. ``read_content`` only expands
-    stored content; use ``read`` explicitly to execute a Live Context node.
+    stored content. For Live Context, read the definition and referenced Tool schema
+    if needed, then call ``invoke_mcp_tool`` explicitly to fetch live data.
     """
     try:
         validate_event_time_decay_request(events_time_decay_protection)
@@ -1027,7 +1036,16 @@ def _mcp_media_download_hint(uri: str) -> str:
 
 
 @_mcp_error_results(structured_output=False)
-@mcp.tool(annotations=_LIVE_CONTEXT_READ_TOOL_ANNOTATIONS, structured_output=False)
+@mcp.tool(
+    annotations=_READ_ONLY_TOOL_ANNOTATIONS,
+    structured_output=False,
+    description=(
+        "Read stored viking:// files. Pass uri for one file, or uris with a list to "
+        "read several files in one call. Text reads accept line-based offset/limit. "
+        "Raster images and supported audio return native MCP content blocks. "
+        "For directory listing, use the list tool instead." + LIVE_CONTEXT_READ_INSTRUCTION
+    ),
+)
 async def read(
     uri: Annotated[
         str | list[str] | None,
@@ -1040,7 +1058,7 @@ async def read(
     offset: int = 0,
     limit: int = -1,
 ) -> str | list[ContentBlock] | CallToolResult:
-    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. A complete read of an OpenViking Live Context node returns its evaluated text content; paginated reads only return stored descriptor text. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+    """Read stored files without invoking Live Context tools."""
     import asyncio
 
     # `uri` matches every other tool. Both names accept a string or a list, so a
@@ -1163,10 +1181,6 @@ async def read(
                     offset=offset,
                     limit=limit,
                 )
-                if offset == 0 and limit == -1:
-                    result = await service.mcps.read_live_context(content, ctx)
-                    if result is not None:
-                        return result
                 return content
             except OpenVikingError as exc:
                 return _mcp_failure(exc)

@@ -1431,6 +1431,7 @@ class SemanticProcessor(DequeueHandlerBase):
             prompt_variables = {
                 "file_name": file_name,
                 "title": live_context["title"],
+                "content": content,
                 "description": live_context["description"],
                 "tool_uri": live_context["tool_uri"],
                 "arguments": json.dumps(

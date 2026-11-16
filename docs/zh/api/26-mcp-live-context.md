@@ -1,6 +1,6 @@
 # MCP 与实时上下文 API
 
-本模块用于注册 Streamable HTTP MCP Server、同步和检索工具目录、通过 OpenViking 调用工具，以及把工具挂载为实时上下文节点。只读挂载工具可通过 `read` 透明执行；显式声明为非只读或破坏性的工具必须显式调用。所有 REST 路径都以 `/api/v1/mcps` 开头，并使用[通用响应信封](01-overview.md#响应格式)。
+本模块用于注册 Streamable HTTP MCP Server、同步和检索工具目录、通过 OpenViking 调用工具，以及把工具挂载为实时上下文节点。`read` 返回节点存储的定义、默认参数和指引；获取实时数据需要显式调用工具。所有 REST 路径都以 `/api/v1/mcps` 开头，并使用[通用响应信封](01-overview.md#响应格式)。
 
 > **适用范围**
 >
@@ -32,7 +32,7 @@
 | POST | `/api/v1/mcps/{name}/sync` | 同步工具目录并报告受影响挂载 |
 | DELETE | `/api/v1/mcps/{name}` | 删除 Server 和工具目录 |
 | POST | `/api/v1/mcps/find` | 语义检索工具 |
-| POST | `/api/v1/mcps/invoke` | 调用工具 |
+| POST | `/api/v1/mcps/invoke` | 调用 Tool URI 或实时上下文节点 URI |
 | POST | `/api/v1/mcps/mount` | 创建或替换一个实时上下文节点 |
 | POST | `/api/v1/mcps/batch-mount` | 批量创建或替换实时上下文节点 |
 | DELETE | `/api/v1/mcps/mount` | 删除一个挂载及其节点 |
@@ -385,14 +385,42 @@ ov mcps find --limit 5 "查询城市当前天气"
 }
 ```
 
-### 调用工具
+### 调用工具或实时上下文节点
 
-`POST /api/v1/mcps/invoke` 通过已注册 Server 调用工具。OpenViking 注入保存的上游 Header，不向调用方暴露凭证。当前调用不会自动重试；连接断开或超时时，错误会说明执行结果可能未知。
+`POST /api/v1/mcps/invoke` 接受 Tool URI 或实时上下文节点 URI，通过已注册 Server 调用工具。传入节点时，OpenViking 读取存储的 `x-openviking.definition`、`args` 和 `timeout_seconds`，分别检查节点与 Tool 的读取权限，并按当前 Tool schema 校验合并后的参数。OpenViking 注入保存的上游 Header，不向调用方暴露凭证。当前调用不会自动重试；连接断开或超时时，错误会说明执行结果可能未知。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `uri` | string | 是 | - | `viking://agent/tools/<server>/<tool>.json` |
-| `arguments` | object | 否 | `{}` | 符合工具 `inputSchema` 的参数 |
+| `uri` | string | 是 | - | `viking://~/tools` 或 `viking://agent/tools` 下的 Tool URI，或实时上下文 `.md` 节点 URI |
+| `arguments` | object/null | 否 | 节点默认参数；Tool 为 `{}` | 按顶层键覆盖节点默认参数；最终参数须符合 Tool 的 `inputSchema` |
+| `timeout_seconds` | number/null | 否 | 节点超时，其次 `30` | 单次调用超时秒数，必须为正有限数；显式传入时覆盖节点超时 |
+
+省略参数或传入 `null` 时使用节点默认参数。显式对象只覆盖提供的顶层键；`{}` 保留全部默认参数，嵌套对象整体替换对应默认对象。调用不修改节点。普通 Markdown、不支持的节点配置和节点到节点的引用会被拒绝。
+
+```bash
+# 使用节点保存的默认配置。
+ov mcps invoke viking://resources/live/weather-beijing.md
+# 本次调用仅覆盖 city。
+ov mcps invoke viking://resources/live/weather-beijing.md --args '{"city":"Shanghai"}'
+```
+
+```python
+result = client.invoke_mcp_tool("viking://resources/live/weather-beijing.md")
+```
+
+```typescript
+const result = await client.invokeMCPTool("viking://resources/live/weather-beijing.md");
+```
+
+```go
+result, err := client.InvokeMCPTool(ctx, "viking://resources/live/weather-beijing.md", nil)
+```
+
+```json
+{"uri": "viking://resources/live/weather-beijing.md"}
+```
+
+仍支持直接调用 Tool：
 
 ```python
 result = client.invoke_mcp_tool(
@@ -431,7 +459,7 @@ ov mcps invoke viking://agent/tools/weather/current.json \
 
 `POST /api/v1/mcps/mount` 创建或替换一个 Markdown 实时上下文节点。`POST /api/v1/mcps/batch-mount` 逐项校验参数和目标写权限，跳过不合格的节点，按请求顺序写入有效节点并立即保存挂载记录。空批次和重复 `node_uri` 会在任何修改前拒绝整批请求。
 
-任何工具都可以挂载。为兼容未提供 annotations 的工具，annotations 缺失或为空时默认按只读处理。完整读取会拒绝执行 `annotations.readOnlyHint: false` 或 `destructiveHint: true` 的工具；错误会返回当前集成执行显式调用所需的 `tool_uri` 和已保存参数。
+任何工具都可以挂载。读取始终不执行工具，与 annotations 无关。显式调用前检查引用 Tool 的 `inputSchema` 和 annotations；以节点默认参数为起点，仅按任务需要在 schema 和节点指引允许的范围内调整。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -440,7 +468,7 @@ ov mcps invoke viking://agent/tools/weather/current.json \
 | `title` | string | 是 | - | 非空节点标题 |
 | `description` | string/null | 否 | `null` | 节点说明 |
 | `timeout_seconds` | integer | 否 | `60` | 单次工具调用超时，必须大于 0 |
-| `arguments` | object | 否 | `{}` | 固定注入并按工具 schema 校验的参数 |
+| `arguments` | object | 否 | `{}` | 按工具 schema 校验的默认参数 |
 | `tags` | string[]/null | 否 | `null` | 节点检索标签；省略或传 `[]` 均保留原标签，清空标签需调用 `set_tags` 的 clear 模式 |
 | `wait` | boolean | 否 | `false` | 是否等待节点处理完成；批量接口位于最外层 |
 
@@ -584,13 +612,15 @@ ov mcps mounts --mcp weather --tool current
 
 ### 读取实时上下文
 
-挂载后使用普通内容读取接口或 `ov read`。OpenViking 识别节点的 `OpenViking Live Context` 元数据，并对符合只读策略的工具按节点保存的 `tool_uri`、`arguments` 和 `timeout_seconds` 发起调用。
+挂载后使用普通内容读取接口或 `ov read` 获取 YAML 定义及 `Instruction` 指引。调用节点 URI 即可使用保存的参数和超时；如果尚未获取 `tool.inputSchema`，先读取 `x-openviking.definition` 所引用的 Tool 定义。
 
 ```bash
 ov read viking://resources/live/weather-beijing.md
+ov read viking://agent/tools/weather/current.json
+ov mcps invoke viking://resources/live/weather-beijing.md
 ```
 
-实时读取支持 MCP 文本结果和 `structuredContent`。多个文本块用换行连接；只有结构化结果时返回格式化 JSON。上游 `isError=true`、只有图片或音频等非文本内容，或者工具显式声明为非只读或破坏性时，读取返回 `PROCESSING_ERROR`。直接调用 `/invoke` 可以执行写工具，并仍会保留原生 MCP 内容。
+完整、分页和批量读取都返回存储内容，不调用上游。REST `raw=true` 保持元数据及隐私处理语义，不是执行开关。显式 `/invoke` 保留原生 MCP `content`、`structuredContent` 和 `isError`，包括支持的媒体结果。Python 使用 `timeout_seconds=60`，TypeScript 使用第三个超时参数，Go 使用可选的最后一个超时参数；MCP `invoke_mcp_tool` 在 `tool_uri`、`arguments` 之外传入 `timeout_seconds`，其中 `tool_uri` 同时接受 Tool 和节点 URI。省略超时时优先使用节点值，其次使用服务端默认的 30 秒。直接调用 Tool 不推断节点设置，也不会根据旧节点的 `retry` 元数据自动重试。
 
 ### 删除挂载
 

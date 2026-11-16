@@ -130,15 +130,15 @@ pub(crate) enum McpCommands {
         #[arg(short = 'p', long = "uri", value_name = "uri")]
         target_uri: Option<String>,
     },
-    /// Invoke a registered MCP tool
+    /// Invoke a registered MCP tool or a Live Context node
     Invoke {
-        /// Tool URI under a user or shared tools root
+        /// Tool URI under a tools root, or Live Context node URI
         #[arg(value_name = "uri")]
         uri: String,
-        /// Tool arguments as a JSON object
-        #[arg(long = "args", default_value = "{}", value_name = "json")]
-        arguments: String,
-        /// Per-call timeout in seconds; use the Live Context node's value when present
+        /// Tool arguments or top-level overrides of node defaults as a JSON object
+        #[arg(long = "args", value_name = "json")]
+        arguments: Option<String>,
+        /// Per-call timeout override in seconds; omission uses the node's default
         #[arg(long, value_name = "seconds")]
         timeout_seconds: Option<f64>,
     },

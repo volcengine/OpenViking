@@ -1,8 +1,8 @@
 metadata:
   id: "semantic.live_context_summary"
   name: "Live Context Node Summary Generation"
-  description: "Summarize an MCP-backed live context node and preserve the information an agent needs to invoke its tool"
-  version: "1.0.0"
+  description: "Summarize a Live Context node for discovery and selection"
+  version: "2.0.0"
   language: "en"
   category: "semantic"
 
@@ -37,6 +37,11 @@ variables:
     description: "Language code for output"
     required: true
 
+  - name: "content"
+    type: "string"
+    description: "Stored node definition and node-specific guidance, possibly truncated"
+    required: true
+
 template: |
   Output Language: {{ output_language }}
 
@@ -48,17 +53,15 @@ template: |
   Description: {{ description }}
   MCP Tool URI: {{ tool_uri }}
   Mounted arguments: {{ arguments }}
+  Definition and node-specific guidance: {{ content }}
 
   Output requirements:
   - Write 80-180 words in {{ output_language }} as plain text.
   - State the title and description so the node's purpose is immediately clear.
-  - Preserve the exact MCP Tool URI `{{ tool_uri }}` without translating, shortening, or rewriting it.
-  - Preserve every mounted argument name and value from `{{ arguments }}`.
-  - Explain that the mounted arguments describe this node's default live-context call.
-  - Explicitly state that a complete read of this Live Context node executes the bound MCP Tool with the mounted arguments and returns the latest result, rather than cached content.
-  - Explicitly state that after a successful complete read, an agent must use that returned result and must not invoke the MCP Tool again with the same arguments.
-  - Guide an agent to read the Tool definition at `{{ tool_uri }}` and its inputSchema, then invoke the Tool directly only when the request requires different valid arguments.
-  - Do not claim that the mounted arguments are the only allowed arguments.
+  - Describe the monitored object, metrics, scope, and suitable use cases when supplied.
+  - Mention useful defaults only when they help select this node; do not reproduce the full argument object or Tool schema.
+  - Focus on business purpose and selection criteria; omit generic read/invocation instructions, tool names, and CLI commands.
+  - Do not claim that reading executes a Tool or describe invocation results as supplied live data.
   - Do not invent Tool capabilities, parameters, results, or constraints absent from the supplied node.
   - Do not use Markdown headings or tables.
 

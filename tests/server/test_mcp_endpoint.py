@@ -1167,7 +1167,6 @@ async def test_read_delegates_to_visible_read(monkeypatch):
         "get_service",
         lambda: SimpleNamespace(
             fs=SimpleNamespace(read_visible=read_visible),
-            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
         ),
     )
     uri = "viking://user/test_user/project/private.md"
@@ -1227,7 +1226,6 @@ async def test_read_accepts_uri_and_uris(monkeypatch, arguments):
         "get_service",
         lambda: SimpleNamespace(
             fs=SimpleNamespace(read_visible=read_visible),
-            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
         ),
     )
     requested = next(iter(arguments.values()))
@@ -1287,7 +1285,6 @@ async def test_read_image_returns_native_mcp_content(monkeypatch, uri, image_byt
                 read_visible=read_visible,
                 stat=stat,
             ),
-            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
         ),
     )
     result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
@@ -1316,7 +1313,6 @@ async def test_read_mixed_batch_preserves_source_order(monkeypatch):
                 read_visible=read_visible,
                 stat=stat,
             ),
-            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
         ),
     )
     text_uri = "viking://resources/notes.md"
@@ -1529,7 +1525,6 @@ async def test_read_svg_remains_text(monkeypatch):
                 read_file_bytes=read_file_bytes,
                 read_visible=read_visible,
             ),
-            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
         ),
     )
     uri = "viking://resources/diagram.svg"
@@ -2537,17 +2532,38 @@ async def test_write_and_live_context_read_roundtrip(service, monkeypatch):
         wait=True,
     )
 
-    assert json.loads(await read(uris=uri)) == {"temperature": 23}
-    assert upstream.call_tool.await_count == 1
-    assert upstream.call_tool.await_args.kwargs["arguments"] == {"city": "Beijing"}
+    definition = await read(uris=uri)
+    assert tool_uri in definition
+    assert "city: Beijing" in definition
+    assert "## Instruction" in definition
+    assert "invoking this node's URI" in definition
+    assert "retry:" not in definition
+    upstream.call_tool.assert_not_awaited()
     raw = await content_router.read(uri=uri, offset=0, limit=-1, raw=True, _ctx=DEFAULT_CTX)
     assert tool_uri in raw.result
     paged = await content_router.read(uri=uri, offset=1, limit=1, raw=False, _ctx=DEFAULT_CTX)
     assert paged.result == raw.result.splitlines(keepends=True)[1]
     assert await read(uris=uri, offset=1, limit=1) == paged.result
-    assert upstream.call_tool.await_count == 1
+    upstream.call_tool.assert_not_awaited()
     visible = await content_router.read(uri=uri, offset=0, limit=-1, raw=False, _ctx=DEFAULT_CTX)
-    assert json.loads(visible.result) == {"temperature": 23}
+    assert visible.result == definition == raw.result
+    batch = await read(uris=[uri, uri])
+    assert batch.count("city: Beijing") == 2
+    upstream.call_tool.assert_not_awaited()
+
+    invoked = await mcp_endpoint.invoke_mcp_tool(uri)
+    assert invoked.structuredContent == {"temperature": 23}
+    assert upstream.call_tool.await_count == 1
+    assert upstream.call_tool.await_args.kwargs["arguments"] == {"city": "Beijing"}
+    assert upstream.call_tool.await_args.kwargs["read_timeout_seconds"].total_seconds() == 60
+    invoked = await mcp_endpoint.invoke_mcp_tool(uri, {"city": "Shanghai"}, timeout_seconds=45)
+    assert invoked.structuredContent == {"temperature": 23}
+    assert upstream.call_tool.await_args.kwargs["arguments"] == {"city": "Shanghai"}
+    assert upstream.call_tool.await_args.kwargs["read_timeout_seconds"].total_seconds() == 45
+    invalid = await mcp_endpoint.invoke_mcp_tool(uri, {"city": 123})
+    assert "Invalid MCP tool arguments" in invalid
+    assert upstream.call_tool.await_count == 2
+    assert await read(uri=uri) == definition
 
     await service.fs.set_tags(uri, ["env=stg"], "replace", False, DEFAULT_CTX)
     mounts = await service.mcps.mounts("weather", None, DEFAULT_CTX, target_uri=tools_root)
@@ -2560,7 +2576,7 @@ async def test_write_and_live_context_read_roundtrip(service, monkeypatch):
 
     tool.annotations = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
     await service.mcps.sync("weather", DEFAULT_CTX, target_uri=tools_root, wait=True)
-    assert "Invoke the MCP tool explicitly" in await read(uris=uri)
+    assert await read(uris=uri) == definition
     assert upstream.call_tool.await_count == 2
     invoked = await mcp_endpoint.invoke_mcp_tool(tool_uri, {"city": "Beijing"})
     assert invoked.structuredContent == {"temperature": 23}

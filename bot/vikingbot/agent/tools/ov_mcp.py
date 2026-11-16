@@ -4,6 +4,7 @@ import base64
 import json
 from typing import Any
 
+from openviking.core.live_context import LIVE_CONTEXT_INVOKE_INSTRUCTION
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from vikingbot.agent.tools.base import MultimodalToolResult, ToolContext
 from vikingbot.agent.tools.ov_file import OVFileTool
@@ -157,11 +158,9 @@ class VikingInvokeMCPTool(OVFileTool):
     def description(self) -> str:
         return (
             "Invoke one tool from an external MCP Server registered in OpenViking and selected "
-            "by openviking_find_mcp_tools. This tool does not invoke VikingBot-connected "
-            "mcp_<server>_<tool> tools. Use the returned URI unchanged and provide only "
-            "arguments allowed by that candidate's inputSchema. Inspect its annotations before "
-            "invocation because the upstream tool may have external side effects. OpenViking "
-            "resolves credentials and validates arguments. Calls are not retried."
+            "by openviking_find_mcp_tools, or invoke a Live Context node URI. "
+            "This tool does not invoke VikingBot-connected mcp_<server>_<tool> tools. "
+            + LIVE_CONTEXT_INVOKE_INSTRUCTION
         )
 
     @property
@@ -172,14 +171,21 @@ class VikingInvokeMCPTool(OVFileTool):
                 "tool_uri": {
                     "type": "string",
                     "description": (
-                        "Exact viking://agent/tools/... URI returned by openviking_find_mcp_tools."
+                        "Exact Tool URI returned by discovery or a Live Context node URI."
                     ),
                     "minLength": 1,
                 },
                 "arguments": {
                     "type": "object",
-                    "description": "Arguments conforming to the discovered tool inputSchema.",
-                    "default": {},
+                    "description": (
+                        "Tool arguments or top-level overrides of node defaults, "
+                        "conforming to the referenced Tool inputSchema."
+                    ),
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Per-call timeout override; omission uses the node's default.",
                 },
             },
             "required": ["tool_uri"],
@@ -190,12 +196,15 @@ class VikingInvokeMCPTool(OVFileTool):
         tool_context: ToolContext,
         tool_uri: str,
         arguments: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
         **kwargs: Any,
     ) -> str | MultimodalToolResult:
         client = None
         try:
             client = await self._get_client(tool_context)
-            result = await client.invoke_mcp_tool(tool_uri, arguments=arguments or {})
+            result = await client.invoke_mcp_tool(
+                tool_uri, arguments=arguments, timeout_seconds=timeout_seconds
+            )
             if not isinstance(result, dict):
                 return json.dumps(result, ensure_ascii=False, indent=2)
             return self._model_result(result)

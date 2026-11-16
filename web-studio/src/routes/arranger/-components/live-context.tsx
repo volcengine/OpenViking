@@ -9,7 +9,7 @@ import {
   TagIcon,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '#/shared/ui/badge'
@@ -18,7 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/shared/ui/tabs'
 import { formatDateTime } from '#/i18n/format'
 import { cn } from '#/shared/lib/utils'
 
-import { parseLiveContextMetadata, readLiveContext } from '../-lib/api'
+import { invokeLiveContext, parseLiveContextMetadata } from '../-lib/api'
 import { formatLiveContextResult } from '../-lib/live-result'
 import type { LiveContextMount, McpCatalogTool } from '../-lib/model'
 
@@ -37,16 +37,17 @@ export function LiveContextInspector({
   const metadata = parseLiveContextMetadata(document)
   const nodeTitle = metadata?.title || mount.title
   const nodeDescription = metadata?.description || mount.description
-  const resultQuery = useQuery({
-    enabled: false,
-    queryKey: ['arranger-live-result', mount.node_uri],
-    queryFn: () => readLiveContext(mount.node_uri),
+  const resultMutation = useMutation({
+    mutationFn: async () => ({
+      value: await invokeLiveContext(mount.node_uri),
+      updatedAt: Date.now(),
+    }),
     retry: false,
   })
   const result =
-    resultQuery.data === undefined
+    resultMutation.data === undefined
       ? null
-      : formatLiveContextResult(resultQuery.data)
+      : formatLiveContextResult(resultMutation.data.value)
 
   return (
     <Tabs defaultValue="result" className="h-full min-h-0 gap-0">
@@ -64,10 +65,10 @@ export function LiveContextInspector({
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">{t('live.result')}</p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                {resultQuery.dataUpdatedAt
+                {resultMutation.data?.updatedAt
                   ? t('live.updatedAt', {
                       value: formatDateTime(
-                        new Date(resultQuery.dataUpdatedAt),
+                        new Date(resultMutation.data.updatedAt),
                         {
                           hour: 'numeric',
                           minute: '2-digit',
@@ -80,10 +81,10 @@ export function LiveContextInspector({
             </div>
             <Button
               size="sm"
-              disabled={resultQuery.isFetching}
-              onClick={() => void resultQuery.refetch()}
+              disabled={resultMutation.isPending}
+              onClick={() => resultMutation.mutate()}
             >
-              {resultQuery.isFetching ? (
+              {resultMutation.isPending ? (
                 <Loader2Icon className="animate-spin" />
               ) : (
                 <RefreshCwIcon />
@@ -91,11 +92,11 @@ export function LiveContextInspector({
               {result ? t('live.refreshResult') : t('live.loadResult')}
             </Button>
           </div>
-          {resultQuery.error ? (
+          {resultMutation.error ? (
             <div className="p-4 text-sm leading-6 text-destructive">
-              {resultQuery.error instanceof Error
-                ? resultQuery.error.message
-                : String(resultQuery.error)}
+              {resultMutation.error instanceof Error
+                ? resultMutation.error.message
+                : String(resultMutation.error)}
             </div>
           ) : result ? (
             <pre

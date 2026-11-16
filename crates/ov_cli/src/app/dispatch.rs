@@ -350,7 +350,7 @@ pub(super) async fn dispatch(
                     commands::mcps::invoke(
                         &client,
                         &uri,
-                        &arguments,
+                        arguments.as_deref(),
                         timeout_seconds,
                         ctx.output_format,
                         ctx.compact,
