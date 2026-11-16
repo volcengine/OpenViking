@@ -417,18 +417,17 @@ function FilesystemWorkbench() {
     setDataManagementMode(null)
     setResourceDialogOpen(false)
   }, [selectedUri])
-  const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
-  const isLocalResourceDirectory =
-    canUseLocalTools &&
-    selectedIsDirectory &&
-    /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
-      selectedUri,
-    )
   const importDirectoryUri = normalizeDirUri(transferUri)
+  const canTransferSelectedUri =
+    /^viking:\/\/(?:resources|user\/[^/]+\/resources)\//.test(
+      importDirectoryUri,
+    )
+  const isLocalResourceDirectory =
+    canUseLocalTools && selectedIsDirectory && canTransferSelectedUri
   const directoryStat = useQuery({
     queryKey: ['viking-fs-stat', identityScopeKey, importDirectoryUri],
     queryFn: () => fetchFsStat(importDirectoryUri, { throwOnError: true }),
-    enabled: canTransferSelectedUri || isLocalResourceDirectory,
+    enabled: canTransferSelectedUri,
     staleTime: 30_000,
     retry: false,
   })
