@@ -1,3 +1,8 @@
+import {
+  ErrorNotification,
+  errorMessage,
+} from '../../shared/feedback/error-notification.js';
+import type { Locale } from '../../shared/locale.js';
 import type { DashboardQuery } from './use-dashboard-query.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import { Button } from '../../shared/primitives/button/button.js';
@@ -25,19 +30,21 @@ export function PreviewQueryState<T>({
 }
 export function PreviewMutationError({
   error,
-  text,
+  title,
+  locale,
 }: {
   error?: unknown;
-  text: FileBrowserWorkflowLabels;
+  title: string;
+  locale?: Locale;
 }) {
   return error === undefined ? null : (
-    <p className="ov-file-browser-workflow__error" role="alert">
-      {text.failed}{' '}
-      {error instanceof Error
-        ? error.message
-        : typeof error === 'string'
-          ? error
-          : ''}
-    </p>
+    <ErrorNotification
+      title={title}
+      identity={error}
+      error={error}
+      locale={locale}
+    >
+      {errorMessage(error)}
+    </ErrorNotification>
   );
 }

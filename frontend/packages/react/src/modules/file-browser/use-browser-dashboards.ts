@@ -1,3 +1,4 @@
+import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
 import type { FileBrowserDashboardLabels } from './types.js';
 import { readCompileTargets } from './dashboard-data.js';
@@ -27,6 +28,7 @@ export function useBrowserDashboards({
   requestOptions,
   onOpenUri,
   dashboardKinds,
+  experienceDataSource,
   renderDashboard,
   dashboardLabels,
 }: {
@@ -37,6 +39,7 @@ export function useBrowserDashboards({
   generation: number;
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  experienceDataSource?: FileBrowserExperienceDataSource;
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   locale?: 'en-US' | 'zh-CN';
   requestOptions?: OvRequestOptions;
@@ -151,6 +154,7 @@ export function useBrowserDashboards({
             renderDashboard?.(current) ??
             (current.kind === 'experience'
               ? createElement(ExperienceDashboardPane, {
+                  dataSource: experienceDataSource,
                   uri,
                   locale,
                   requestOptions,

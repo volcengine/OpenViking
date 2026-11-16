@@ -1,3 +1,4 @@
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 
 export interface WikiConflict {
@@ -68,6 +69,8 @@ interface WikiDashboardCommonProps extends Omit<
   error?: Error | null;
   locale?: 'en-US' | 'zh-CN';
   onRetry?: () => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   labels?: Partial<WikiDashboardLabels>;
 }
 

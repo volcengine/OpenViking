@@ -6,7 +6,6 @@ import { isSummaryUri, isSystemUri } from './preview-policy.js';
 import { readFileContent } from './fs-read-content.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
-
 /** Load the full file before editing; the preview can contain only its first page. */
 export function createFileEditing(
   client: OvClient,

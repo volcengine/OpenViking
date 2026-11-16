@@ -27,6 +27,20 @@
   padding: 18px 56px 16px 24px;
   border-bottom: 1px solid var(--ov-ui-history-border);
 }
+.ov-file-history__snapshot {
+  flex: none;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--ov-ui-history-border);
+  font-size: 13px;
+}
+.ov-file-history__snapshot-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.ov-file-history__snapshot > p {
+  margin: 8px 0 0;
+}
 .ov-file-history__layout {
   display: grid;
   grid-template-columns: minmax(168px, 19.5%) minmax(0, 1fr);
@@ -88,7 +102,7 @@
   padding: 0;
   list-style: none;
 }
-.ov-file-history__entries p {
+.ov-file-history__entries > p {
   margin: 12px 18px;
 }
 .ov-file-history__entries li > :is(button, div) {

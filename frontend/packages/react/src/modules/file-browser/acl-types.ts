@@ -24,6 +24,10 @@ export interface FileBrowserAclPrincipalPage {
 export interface FileBrowserAclOptions {
   /** 禁止授权修改，仍可查看。Prevent mutations while retaining the grant list. */
   readOnly?: boolean;
+  /** 宿主确认拥有隐式管理权的用户。User known by the host to have implicit management access. */
+  administratorUserId?: string;
+  /** 能添加的主体类型，默认两种皆可。Types available for new grants; defaults to both. */
+  supportedPrincipalTypes?: readonly ('user' | 'group')[];
   /**
    * 自身有效权限；默认先读 fs/stat.access，缺失时仅探测管理权限。
    * Own effective level. Defaults to fs/stat.access, then a manage-only ACL probe.
@@ -62,6 +66,8 @@ export interface FileBrowserAclLabels {
   allUsers?: string;
   administrator?: string;
   administratorDescription?: string;
+  administratorBadge?: string;
+  currentUserBadge?: string;
   direct?: string;
   inherited?: string;
   remove?: string;

@@ -799,6 +799,91 @@ shared 模式的响应示例：
 
 ---
 
+### 复制共享资源
+
+复制文件或目录及其向量记录。源 URI 和目标 URI 都必须位于
+`viking://resources/` 子树下；不接受共享资源根本身或私有资源命名空间。
+这些操作沿用对应文件系统操作的访问权限检查。
+
+**HTTP**
+
+```http
+POST /api/v1/resources/cp
+```
+
+| 请求体参数 | 类型 | 必填 | 默认值 | 说明 |
+|------------|------|------|--------|------|
+| `from_uri` | string | 是 | - | 源共享资源 URI |
+| `to_uri` | string | 是 | - | 目标共享资源 URI |
+| `recursive` | boolean | 否 | `false` | 递归复制目录 |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/cp \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  --data '{"from_uri":"viking://resources/guide.md","to_uri":"viking://resources/guide-copy.md","recursive":false}'
+```
+
+成功响应的 `status` 为 `"ok"`，`result` 包含 `from`、`to` 和
+`recursive`。
+
+### 移动或重命名共享资源
+
+在共享资源子树内移动资源。源 URI 和目标 URI 都必须位于
+`viking://resources/` 子树下，命名空间限制与复制接口一致。
+
+**HTTP**
+
+```http
+POST /api/v1/resources/mv
+```
+
+| 请求体参数 | 类型 | 必填 | 说明 |
+|------------|------|------|------|
+| `from_uri` | string | 是 | 源共享资源 URI |
+| `to_uri` | string | 是 | 目标共享资源 URI |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/mv \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  --data '{"from_uri":"viking://resources/guide-copy.md","to_uri":"viking://resources/guide-renamed.md"}'
+```
+
+成功响应的 `status` 为 `"ok"`，`result` 包含 `from` 和 `to`。
+
+### 删除共享资源
+
+删除 `viking://resources/` 下的资源。此操作要求 MANAGE 权限，
+会删除关联向量记录、刷新父目录语义元数据，并同步受影响的 Watch。
+
+**HTTP**
+
+```http
+DELETE /api/v1/resources?uri={uri}
+```
+
+| 查询参数 | 类型 | 必填 | 默认值 | 说明 |
+|----------|------|------|--------|------|
+| `uri` | string | 是 | - | 要删除的共享资源 URI；不允许删除共享资源根 |
+| `recursive` | boolean | 否 | `false` | 递归删除目录 |
+| `wait` | boolean | 否 | `true` | 等待语义清理和刷新完成 |
+
+```bash
+curl -X DELETE "http://localhost:1933/api/v1/resources" \
+  -H "X-API-Key: your-key" \
+  --get \
+  --data-urlencode "uri=viking://resources/guide-renamed.md" \
+  --data-urlencode "recursive=false" \
+  --data-urlencode "wait=true"
+```
+
+成功响应的 `result` 包含被删除的 `uri`。设置 `wait=false` 时，
+语义处理异步执行；响应中若包含 `task_id`，可通过
+[Task API](17-tasks.md) 跟踪完成状态。
+
+---
+
 ## 相关文档
 
 - [文件系统](03-filesystem.md) - 文件和目录操作

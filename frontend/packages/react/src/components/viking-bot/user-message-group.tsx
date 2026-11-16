@@ -28,7 +28,9 @@ export function UserMessageGroup({
   if (!hasContent && attachments.length === 0) return null;
 
   return (
-    <div className="ov-viking-bot__user-message-group">
+    <div
+      className={`ov-viking-bot__user-message-group${message.answerSummary ? ' ov-viking-bot__user-message-group--answers' : ''}`}
+    >
       {attachments.length > 0 ? (
         <UserMessageFileList
           className="ov-viking-bot__user-message-attachments"
@@ -50,19 +52,28 @@ export function UserMessageGroup({
           placement="end"
           variant="filled"
           maxHeight="9999px"
-          footer={footer}
         >
           <div className="ov-viking-bot__user-message-content">
-            <MessageBody
-              message={{ ...message, parts }}
-              labels={labels}
-              onOpenUri={onOpenUri}
-            />
+            {message.answerSummary ? (
+              <dl className="ov-viking-bot__answer-summary">
+                {message.answerSummary.map((row, index) => (
+                  <Fragment key={index}>
+                    <dt>{row.label}</dt>
+                    <dd>{row.value}</dd>
+                  </Fragment>
+                ))}
+              </dl>
+            ) : (
+              <MessageBody
+                message={{ ...message, parts }}
+                labels={labels}
+                onOpenUri={onOpenUri}
+              />
+            )}
           </div>
         </Bubble>
-      ) : (
-        footer
-      )}
+      ) : null}
+      {footer}
     </div>
   );
 }

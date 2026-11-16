@@ -1,3 +1,7 @@
+import { bindingOf } from '../../shared/monitoring/client.js';
+import { readData, tagData } from '../../shared/monitoring/data.js';
+import { useCommandAnalytics } from './use-command-analytics.js';
+import { useTrack } from '../../shared/analytics/use-track.js';
 import { useTaskTracking } from '../../shared/task-tracking/context.js';
 import { projectConsoleTasks } from './task-records.js';
 import { useLocale } from '../../shared/locale-context.js';
@@ -21,9 +25,11 @@ export function useConsole({
   requestOptions = {},
   taskService,
 }: ConsoleOptions = {}): ConsoleResult {
+  const event = useTrack();
   const locale = useLocale(localeProp);
   const tracking = useTaskTracking({ requestOptions, scopeKey, taskService });
-  const inherited = useOvClient();
+  const analytics = useCommandAnalytics(tracking.tasks, tracking.source.key);
+  const inherited = useOvClient('local');
   const inheritedSignal = useOvSignal();
   const [fallback] = useState(() => createOvClient());
   const client = inherited ?? fallback;
@@ -49,6 +55,7 @@ export function useConsole({
         signal,
       },
       tracking.track,
+      analytics,
     );
   }, [
     client,
@@ -60,6 +67,7 @@ export function useConsole({
     signal,
     scopeKey,
     tracking.track,
+    analytics,
   ]);
   const commandEnabled = modes.includes('command');
   // Effect necessity: commands keep network requests alive after user events.
@@ -71,7 +79,6 @@ export function useConsole({
   );
   const state = useSyncExternalStore(
     controller.subscribe,
-    controller.getSnapshot,
     controller.getSnapshot,
   );
   const [internalMode, setInternalMode] = useState<ConsoleMode>(defaultMode);
@@ -98,6 +105,11 @@ export function useConsole({
         : state.error,
     [state.error, locale],
   );
+  tagData(
+    bindingOf(client),
+    records,
+    readData(bindingOf(client), [state.records]),
+  );
   return {
     ...state,
     records,
@@ -106,6 +118,11 @@ export function useConsole({
     commands: consoleCommands(locale),
     setMode(next: ConsoleMode) {
       if (next === mode || !modes.includes(next)) return;
+      event(
+        next === 'command'
+          ? 'console_command_mode_select'
+          : 'console_chat_mode_select',
+      );
       if (controlledMode === undefined) setInternalMode(next);
       onModeChange?.(next);
     },

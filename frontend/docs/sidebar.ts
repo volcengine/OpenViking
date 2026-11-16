@@ -24,7 +24,15 @@ const guide: Group[] = [
     en: 'Guide',
     pages: [
       { slug: 'getting-started', zh: '快速开始', en: 'Getting started' },
+      { slug: 'analytics', zh: '埋点', en: 'Analytics' },
+      { slug: 'monitoring', zh: '前端监控', en: 'Frontend monitoring' },
+      {
+        slug: 'monitoring-events',
+        zh: '监控事件目录',
+        en: 'Monitoring events',
+      },
       { slug: 'i18n', zh: '国际化', en: 'Internationalization' },
+      { slug: 'changelog', zh: '发布日志', en: 'Release notes' },
     ],
   },
 ];
@@ -42,6 +50,11 @@ const components: Group[] = [
     zh: '文件与目录',
     en: 'Files and directories',
     pages: [
+      {
+        slug: 'context-picker',
+        zh: 'ContextPicker 文件与目录选择',
+        en: 'ContextPicker',
+      },
       { slug: 'file-tree', zh: 'FileTree 文件树', en: 'FileTree' },
       { slug: 'file-preview', zh: 'FilePreview 文件预览', en: 'FilePreview' },
       {

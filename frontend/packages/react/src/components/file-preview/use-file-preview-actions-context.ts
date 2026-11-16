@@ -1,3 +1,4 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
 import { mediaKind } from './file-preview-media.js';
 import { useCallback } from 'react';
 
@@ -45,6 +46,16 @@ export function useFilePreviewActionsContext({
   editing: Editing;
   operations: Operations;
 }): FilePreviewActions {
+  const track = useTrack();
+  const selectView = (mode: FilePreviewViewMode) => {
+    if (mode !== viewMode)
+      track(
+        mode === 'source'
+          ? 'file_preview_source_view_select'
+          : 'file_preview_preview_view_select',
+      );
+    setViewMode(mode);
+  };
   const startEditing = useCallback(() => {
     if (!fileTab?.editing || mediaKind(fileTab.source) || editing.editing)
       return;
@@ -84,7 +95,7 @@ export function useFilePreviewActionsContext({
     source: currentSource,
     path: currentPath,
     viewMode,
-    setViewMode,
+    setViewMode: selectView,
     canSwitchView,
     editing: editing.editing,
     busy: editing.saving || editing.loadingEdit,

@@ -1,7 +1,10 @@
 import { useId } from 'react';
 
+import type { OvRequestOptions } from '../../client/types.js';
 import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import { Radio } from '../../shared/primitives/radio/radio.js';
+import { FileBrowserSearchScopePicker } from './file-browser-search-scope-picker.js';
+import { isSearchScopeAllowed } from './search-model.js';
 import type { ScopeOption, SearchFilters } from './search-types.js';
 import type { FilterAvailability } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
@@ -20,6 +23,7 @@ import type { ResolvedLabels } from './file-browser-labels.js';
  */
 export interface FileBrowserSearchScopesProps {
   scopes: ScopeOption[];
+  requestOptions?: OvRequestOptions;
   filters: SearchFilters;
   availability: FilterAvailability;
   text: ResolvedLabels;
@@ -28,6 +32,7 @@ export interface FileBrowserSearchScopesProps {
 
 export function FileBrowserSearchScopes({
   scopes,
+  requestOptions,
   filters,
   availability,
   text,
@@ -40,6 +45,7 @@ export function FileBrowserSearchScopes({
   const scopeName = useId();
 
   const toggle = (uri: string) => {
+    if (!isSearchScopeAllowed(scopes, uri)) return;
     const selected = filters.scopes.includes(uri);
     if (availability.scope === 'single') {
       onChange({ ...filters, scopes: selected ? [] : [uri] });
@@ -63,35 +69,44 @@ export function FileBrowserSearchScopes({
           {text.searchScopesUnsupported}
         </p>
       ) : (
-        <ul className="ov-file-browser-search__options">
-          {scopes.map((option) => {
-            const selected = filters.scopes.includes(option.uri);
-            return (
-              <li key={option.uri}>
-                {availability.scope === 'single' ? (
-                  <Radio
-                    name={scopeName}
-                    checked={selected}
-                    onChange={() => toggle(option.uri)}
-                  >
-                    <span className="ov-file-browser-search__option-uri">
-                      {option.uri}
-                    </span>
-                  </Radio>
-                ) : (
-                  <Checkbox
-                    checked={selected}
-                    onChange={() => toggle(option.uri)}
-                  >
-                    <span className="ov-file-browser-search__option-uri">
-                      {option.uri}
-                    </span>
-                  </Checkbox>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <ul className="ov-file-browser-search__options">
+            {scopes.map((option) => {
+              const selected = filters.scopes.includes(option.uri);
+              return (
+                <li key={option.uri}>
+                  {availability.scope === 'single' ? (
+                    <Radio
+                      name={scopeName}
+                      checked={selected}
+                      onChange={() => toggle(option.uri)}
+                    >
+                      <span className="ov-file-browser-search__option-uri">
+                        {option.uri}
+                      </span>
+                    </Radio>
+                  ) : (
+                    <Checkbox
+                      checked={selected}
+                      onChange={() => toggle(option.uri)}
+                    >
+                      <span className="ov-file-browser-search__option-uri">
+                        {option.uri}
+                      </span>
+                    </Checkbox>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          <FileBrowserSearchScopePicker
+            scopes={scopes}
+            value={filters.scopes}
+            text={text}
+            requestOptions={requestOptions}
+            onSelect={toggle}
+          />
+        </>
       )}
     </section>
   );

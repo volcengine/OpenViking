@@ -12,7 +12,7 @@
   );
   font-size: 13px;
 }
-.ov-dashboard-state p {
+.ov-dashboard-state > p {
   margin: 4px 0;
   overflow-wrap: anywhere;
 }

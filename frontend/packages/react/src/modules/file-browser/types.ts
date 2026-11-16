@@ -1,3 +1,5 @@
+import type { Workflow } from '../../shared/monitoring/workflow.js';
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
 export type {
@@ -18,6 +20,7 @@ export type {
 import type { Locale } from '../../shared/locale.js';
 import type { AgentConnectProps } from '../../components/agent-connect/index.js';
 import type { FileBrowserActionBarLabels } from '../../components/file-browser-action-bar/index.js';
+import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import type {
   FilePreviewLabels,
@@ -67,6 +70,10 @@ export interface FileBrowserLabels {
   acl?: FileBrowserAclLabels;
   /** 预览底部字符数。Character count in the preview footer. */
   formatCharacterCount?: (count: number) => string;
+  /** 预览底部更新时间的文案。Copy for the formatted update time. */
+  formatPreviewUpdatedAt?: (time: string) => string;
+  /** 资源预览的模型提示。空字符串可隐藏。Model notice for resources; pass an empty string to hide it. */
+  previewModelNotice?: string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
   empty?: string;
   /** 加载失败提示。Load failure message. */
@@ -121,7 +128,7 @@ export interface FileBrowserLabels {
   searchFilterUnsupported?: string;
   /** 检索结果数量，参数为条数。Result count; receives the number. */
   searchResultCount?: (count: number) => string;
-  /** 结果数量与模式之间的分隔说明。Copy between the count and the mode chip. */
+  /** 模式标签旁的说明。Description beside the mode chip. */
   searchVia?: string;
   /** 切换检索方式的入口。Entry that switches the retrieval mode. */
   searchSwitchMode?: string;
@@ -130,9 +137,6 @@ export interface FileBrowserLabels {
   /** 搜索进行中的提示。Message shown while a search runs. */
   searchLoading?: string;
   searchDismiss?: string;
-  searchPreview?: string;
-  searchPreviewEmpty?: string;
-  searchPreviewFailed?: string;
   /** 预览读取正文时的提示。Message shown while the preview reads a resource. */
   loading?: string;
   /** 分段器里的「预览」。The "preview" segment label. */
@@ -262,6 +266,8 @@ export interface FileBrowserProps extends Omit<
   agentConnectOpen?: boolean;
   /** Host capability filter. Omitted enables both; an empty array disables discovery. */
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  /** Overrides individual requests for the built-in experience dashboard. */
+  experienceDataSource?: FileBrowserExperienceDataSource;
   /**
    * 用户请求打开或关闭内置接入抽屉时触发；宿主改变属性时不触发。
    * Called when the user requests to open or close the built-in connection drawer.
@@ -308,6 +314,8 @@ export interface FileBrowserProps extends Omit<
    * Custom actions render their own extras and editing controls.
    */
   previewSlots?: FileBrowserPreviewSlots;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /**
    * 可替换文案，未提供的项使用当前 locale 的内置文案。
    * Replaceable copy; omitted fields follow locale.
@@ -329,6 +337,8 @@ export interface FileBrowserProps extends Omit<
  * own view from these without the composite one.
  */
 export interface FileBrowserApi {
+  treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
+  previewMonitoring?: Workflow<'file_browser_preview_load'>;
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
@@ -341,8 +351,10 @@ export interface FileBrowserApi {
   currentUri: string | null;
   /** 刷新是否进行中。Whether a refresh is running. */
   refreshing: boolean;
-  /** 预览底部元信息，例如字符数与更新时间；没有时为 `undefined`。 */
+  /** 预览字符数文案。Localized preview character count. */
   previewFooter?: string;
+  /** 当前资源的更新时间（ISO 8601）。Update time of the current resource (ISO 8601). */
+  previewUpdatedAt?: string;
   /** 首次加载是否已完成。Whether the first load has finished. */
   isReady: boolean;
   /** 整体加载失败的原因。Reason the whole tree failed to load. */
@@ -402,6 +414,8 @@ export interface UseFileBrowserOptions {
   locale?: Locale;
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  /** Overrides individual requests for the built-in experience dashboard. */
+  experienceDataSource?: FileBrowserExperienceDataSource;
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**
    * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时

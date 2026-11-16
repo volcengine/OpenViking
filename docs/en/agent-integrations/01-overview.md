@@ -11,6 +11,8 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Codex / TraeCode CLI 2.0** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall and incremental capture |
 | **Cursor** | [Cursor Memory Integration](./12-cursor.md) — one command installs lifecycle hooks, MCP tools, rules, and skills |
 | **TRAE / TRAE CN** | [TRAE Memory Integration](./13-trae.md) — one installer configures prompt-time recall, turn capture, and OpenViking tools |
+| **CodeBuddy Code** | [CodeBuddy Code Memory Integration](./20-codebuddy.md) — one installer adds lifecycle hooks, MCP tools, and skills as a native plugin |
+| **Qoder CLI** | [Qoder CLI Memory Integration](./21-qoder.md) — one installer adds lifecycle hooks, MCP tools, and skills as a native plugin |
 | **DeepSeek Harness (`dsh`) / DeepSeek Harness Desktop** | [DeepSeek Harness Memory Bundle](./17-dsh.md) — in-process Cordis plugin with pre-step recall, event capture, and the OpenViking MCP tools |
 | **Hermes Agent** | [Hermes Agent](./05-hermes.md). Memory plugin with automatic capture and recall. Older releases include a built-in provider. |
 | **OpenCode** | [OpenCode Plugin](./10-opencode.md) — MCP tools plus lifecycle hooks for repo context, auto-recall, and capture |
@@ -21,7 +23,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Any Agent Plugins 1.0 client** | [Agent Plugins 1.0 Package](./15-agent-plugins.md) — one portable package: `openviking-memory` skill plus the OpenViking MCP tools |
 | **Manus / Claude Desktop / ChatGPT / other MCP clients** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
 | **Chat clients / SDK and API apps / other clients without a plugin** | [OpenViking Gateway](../guides/15-gateway.md) — point any client that takes a base URL and an API key at the gateway; it recalls memory and saves conversations with nothing to install in the client |
-| **ZCode / CodeBuddy Code / AstrBot / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
+| **ZCode / Kimi Code / AstrBot / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
 
 Some agents, such as Claude Code, Codex, OpenCode, pi and DSH, can use either their plugin or OpenViking Gateway. To decide between them, see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin).
 

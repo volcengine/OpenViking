@@ -1,7 +1,10 @@
+import { withMonitoring } from '../../../shared/monitoring/with-monitoring.js';
+import { useTrack } from '../../../shared/analytics/use-track.js';
+import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { useAuthLabels } from '../../../shared/auth/use-auth-labels.js';
 import { Action } from '../../../shared/auth/fields.js';
 import type { InvitationConfirmationProps } from './types.js';
-export function InvitationConfirmation({
+function InvitationConfirmationView({
   details,
   loading,
   disabled,
@@ -15,9 +18,12 @@ export function InvitationConfirmation({
   locale,
   acceptLabel,
 }: InvitationConfirmationProps) {
+  const track = useTrack();
+  const exposure = useExposure('invitation_confirmation_show');
   const labels = useAuthLabels(locale);
   return (
     <section
+      ref={exposure}
       className={`ov-auth ${className ?? ''}`}
       aria-busy={loading || undefined}
     >
@@ -40,7 +46,10 @@ export function InvitationConfirmation({
         <button
           type="button"
           className="ov-auth__primary ov-auth__submit"
-          onClick={onAccept}
+          onClick={() => {
+            track('invitation_confirmation_accept_click');
+            onAccept?.();
+          }}
         >
           {acceptLabel ?? labels.acceptInvitation}
           {loading && ' …'}
@@ -51,3 +60,8 @@ export function InvitationConfirmation({
     </section>
   );
 }
+
+export const InvitationConfirmation = withMonitoring(
+  InvitationConfirmationView,
+  'InvitationConfirmation',
+);

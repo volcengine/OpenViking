@@ -276,6 +276,7 @@ export const HARNESS_KEYS = {
   dsh: "dsh",
   pi: "pi",
   openclaw: "openclaw",
+  qoder: "qoder",
 };
 
 export function harnessKey(harness) {

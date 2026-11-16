@@ -1,8 +1,11 @@
+import type { Workflow } from '../../shared/monitoring/workflow.js';
 import type { ExperienceTrajectory } from '../../components/experience-dashboard/types.js';
 import type { ExperienceTrajectoryPage } from './experience-data.js';
 
 /** 已加载的页与下一页的请求状态。 The loaded pages and the next page's request state. */
 export interface TrajectoryPages {
+  monitoring?: Workflow<'file_browser_experience_trajectory_load'>;
+  pageItemCount?: number;
   owner: unknown[];
   items: readonly ExperienceTrajectory[];
   total?: number;

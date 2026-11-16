@@ -1,3 +1,5 @@
+import { useRenderErrors } from './labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { ChatMessageList } from '@ark-design/ui/message-list';
 import type { Locale } from '../../shared/locale.js';
 
@@ -52,6 +54,7 @@ export function VikingBotMessageListView({
   labels: overrides,
 }: VikingBotMessageListProps & { locale: Locale }) {
   const labels = resolveVikingBotLabels(locale, overrides);
+  const errors = useRenderErrors(locale);
   // 同一轮的连续 assistant 消息先合并，列表才按轮次呈现而不是逐条堆叠。
   // 边界必须在原始消息序列上确定：先按 insertIndex 切分，两侧分别合并，
   // 否则先整体合并会让下标含义漂移，把边界两侧的助手消息并到一起。
@@ -102,26 +105,32 @@ export function VikingBotMessageListView({
         scrollerStyle={SCROLLER_STYLE}
         shortContentAlign="start"
         overscan={600}
-        renderItem={({ item }) =>
-          item.streaming ? (
-            <VikingBotStreamingRow
-              streaming={item.streaming}
-              labels={labels}
-              onOpenUri={onOpenUri}
-            />
-          ) : item.message ? (
-            <VikingBotMessageRow
-              message={item.message}
-              labels={labels}
-              onOpenUri={onOpenUri}
-              onCopy={onCopy}
-              onMessageAction={onMessageAction}
-              renderMessage={renderMessage}
-              showTime={timed.has(item.id)}
-              locale={locale}
-            />
-          ) : null
-        }
+        renderItem={({ item }) => (
+          <ErrorBoundary
+            message={errors.message}
+            locale={locale}
+            resetKeys={[listKey, item.id]}
+          >
+            {item.streaming ? (
+              <VikingBotStreamingRow
+                streaming={item.streaming}
+                labels={labels}
+                onOpenUri={onOpenUri}
+              />
+            ) : item.message ? (
+              <VikingBotMessageRow
+                message={item.message}
+                labels={labels}
+                onOpenUri={onOpenUri}
+                onCopy={onCopy}
+                onMessageAction={onMessageAction}
+                renderMessage={renderMessage}
+                showTime={timed.has(item.id)}
+                locale={locale}
+              />
+            ) : null}
+          </ErrorBoundary>
+        )}
       />
       {footer ? <div className="ov-viking-bot__footer">{footer}</div> : null}
     </div>

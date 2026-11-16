@@ -1,3 +1,5 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
 
@@ -62,7 +64,7 @@ function findRow(root: HTMLElement | null, id: string) {
  * component renders it, handles keyboard interaction and reports successful
  * operations.
  */
-export const FileTree: FileTreeComponent = forwardRef<
+const FileTreeView: FileTreeComponent = forwardRef<
   FileTreeHandle,
   FileTreeProps
 >(function FileTree(
@@ -72,6 +74,9 @@ export const FileTree: FileTreeComponent = forwardRef<
     locale: localeProp,
     operations,
     selectedId,
+    selectedIds,
+    renderRowLeading,
+    rowTrailingPosition = 'viewport-end',
     search = true,
     refresh = true,
     loading = false,
@@ -98,6 +103,7 @@ export const FileTree: FileTreeComponent = forwardRef<
   ref,
 ) {
   const locale = useLocale(localeProp);
+  const exposure = useExposure('file_tree_show');
   const rootRef = useRef<HTMLDivElement>(null);
   const visibleRows = useMemo(
     () => (rootOrder === 'context' ? orderContextRoots(rows) : rows),
@@ -133,6 +139,9 @@ export const FileTree: FileTreeComponent = forwardRef<
     text,
     infoLabels: text.info,
     selectedId,
+    selectedIds,
+    renderRowLeading,
+    rowTrailingPosition,
     getRowAttributes,
     renderRowTrailing,
     renderRowTooltip,
@@ -151,7 +160,10 @@ export const FileTree: FileTreeComponent = forwardRef<
   return (
     <div
       {...rest}
-      ref={rootRef}
+      ref={(node) => {
+        rootRef.current = node;
+        exposure?.(node);
+      }}
       className={['ov-file-tree', className].filter(Boolean).join(' ')}
     >
       {slots?.toolbar ? (
@@ -168,6 +180,7 @@ export const FileTree: FileTreeComponent = forwardRef<
       />
       <div
         role="tree"
+        aria-multiselectable={selectedIds ? true : undefined}
         aria-label={rest['aria-label']}
         className="ov-file-tree__body"
       >
@@ -184,3 +197,5 @@ export const FileTree: FileTreeComponent = forwardRef<
     </div>
   );
 });
+
+export const FileTree = withMonitoring(FileTreeView, 'FileTree');

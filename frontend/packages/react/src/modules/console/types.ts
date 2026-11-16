@@ -1,6 +1,7 @@
 import type { TaskService } from '../../shared/task-tracking/types.js';
 export type ConsoleTaskService = TaskService;
 export type { TaskSnapshot as ConsoleTaskSnapshot } from '../../shared/task-tracking/types.js';
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode, SetStateAction } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
@@ -28,6 +29,8 @@ export interface ConsoleCommandGuide {
 }
 
 export interface ConsoleSlots {
+  /** 渲染异常时替换失败区域。Replaces a section after a rendering failure. */
+  errorFallback?: ErrorFallback;
   toolbar?: ReactNode;
   conversationContext?: ReactNode;
   commandHelp?: ReactNode;
@@ -56,7 +59,10 @@ export interface ConsoleLabels {
 export type ConsoleChatOptions = Omit<
   UseVikingBotChatOptions,
   'enabled' | 'sessionId' | 'initialMessages'
-> & { service?: VikingBotChatService & VikingBotSessionService };
+> & {
+  service?: VikingBotChatService & VikingBotSessionService;
+  hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
+};
 
 /**
  * 命令模式的宿主覆盖项；记录、输入、提交和命令目录由 Console 管理。

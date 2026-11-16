@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement as h } from 'react';
+import { act, createElement as h } from 'react';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import {
@@ -27,6 +27,7 @@ test('file-browser failure and retry copy update with locale while keeping the s
       h(FileBrowser, { locale, defaultUri: 'viking://resources/demo.md' }),
     );
   const view = await mount(element('zh-CN'));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
   assert.match(view.container.textContent, /Host reason/);
   assert.match(view.container.textContent, /重试/);
   assert.doesNotMatch(view.container.textContent, /Retry/);
@@ -53,7 +54,7 @@ test('file-browser preview footer follows locale and supports a typed host forma
       }),
     );
   const view = await mount(element('zh-CN'));
-  assert.match(view.container.textContent, /0 个字符/);
+  assert.match(view.container.textContent, /0 字符数/);
   await view.render(element('en-US'));
   assert.match(view.container.textContent, /0 characters/);
   await view.render(

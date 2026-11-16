@@ -1,5 +1,6 @@
 import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 export type CommandConsoleTask = TaskSnapshot;
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 import type {
@@ -588,6 +589,8 @@ export interface CommandConsoleProps extends Omit<
    * Called after copying succeeds, with the copied text; not called on failure.
    */
   onCopy?: (text: string) => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /**
    * 统一的界面文案与引导提示；仅替换展示内容，不改变可用性。
    * Interface copy and guidance; replaces display content without changing

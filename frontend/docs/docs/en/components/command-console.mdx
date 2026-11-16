@@ -37,26 +37,35 @@ Quick commands appear while there are no records. Clicking one only fills the in
 
 Every quick command in the example fills a complete command except `compile`, which fills only `ov compile `, so you still need to add `--compile-name <name>`.
 
+### Rendering failure
+
+When host content fails to render, the component shows the default fallback: an illustration, a message and a Retry display button. Pass `slots.errorFallback` to replace it.
+
+```tsx file="../../_demos/command-console-crash.tsx" preview
+
+```
+
 ## API
 
 ### CommandConsole
 
-| Property         | Description                                                                                                                                                      | Type                                         | Default                        |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------ |
-| records          | Command records to display, in submission order                                                                                                                  | `readonly CommandConsoleRecord[]`            | Required                       |
-| value            | Text in the input area (controlled)                                                                                                                              | `string`                                     | Required                       |
-| disabled         | Disables input and submission, and shows `labels.unavailableMessage` below the input area                                                                        | `boolean`                                    | `false`                        |
-| emptyState       | Content shown when there are no records; replaces the built-in empty state, and `null` shows no empty state                                                      | `ReactNode`                                  | -                              |
-| quickCommands    | Shortcuts in the built-in empty state; the empty state shows nothing when none of them resolves to a command                                                     | `readonly CommandConsoleQuickCommand[]`      | -                              |
-| commands         | Command catalogue used for suggestions, parameter help and pending skeletons; without it you can still type and submit, but get no suggestions or parameter help | `readonly CommandConsoleCommandDefinition[]` | `[]`                           |
-| commandGroups    | Group names and order in the suggestion list; undeclared groups follow in order of appearance                                                                    | `readonly CommandConsoleCommandGroup[]`      | `[]`                           |
-| onValueChange    | Called when the input changes, including accepted suggestions and examples; the input is read-only when omitted                                                  | `(value: string) => void`                    | -                              |
-| onSubmit         | Called on Enter with the trimmed command text; submission is disabled when omitted                                                                               | `(command: string) => void`                  | -                              |
-| onOpenUri        | Called when a resource link is clicked, with the link target; links navigate natively through `href` when omitted                                                | `(uri: string) => void`                      | -                              |
-| onCopy           | Called after a successful copy, with the copied text                                                                                                             | `(text: string) => void`                     | -                              |
-| labels           | Overrides interface text, see [CommandConsoleLabels](#commandconsolelabels)                                                                                      | `CommandConsoleLabels`                       | -                              |
-| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                    | `'zh-CN' \| 'en-US'`                         | Inherited, otherwise `'en-US'` |
-| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                      | HTML attributes                              | -                              |
+| Property         | Description                                                                                                                                                      | Type                                                                  | Default                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------ |
+| records          | Command records to display, in submission order                                                                                                                  | `readonly CommandConsoleRecord[]`                                     | Required                       |
+| value            | Text in the input area (controlled)                                                                                                                              | `string`                                                              | Required                       |
+| disabled         | Disables input and submission, and shows `labels.unavailableMessage` below the input area                                                                        | `boolean`                                                             | `false`                        |
+| emptyState       | Content shown when there are no records; replaces the built-in empty state, and `null` shows no empty state                                                      | `ReactNode`                                                           | -                              |
+| quickCommands    | Shortcuts in the built-in empty state; the empty state shows nothing when none of them resolves to a command                                                     | `readonly CommandConsoleQuickCommand[]`                               | -                              |
+| commands         | Command catalogue used for suggestions, parameter help and pending skeletons; without it you can still type and submit, but get no suggestions or parameter help | `readonly CommandConsoleCommandDefinition[]`                          | `[]`                           |
+| commandGroups    | Group names and order in the suggestion list; undeclared groups follow in order of appearance                                                                    | `readonly CommandConsoleCommandGroup[]`                               | `[]`                           |
+| onValueChange    | Called when the input changes, including accepted suggestions and examples; the input is read-only when omitted                                                  | `(value: string) => void`                                             | -                              |
+| onSubmit         | Called on Enter with the trimmed command text; submission is disabled when omitted                                                                               | `(command: string) => void`                                           | -                              |
+| onOpenUri        | Called when a resource link is clicked, with the link target; links navigate natively through `href` when omitted                                                | `(uri: string) => void`                                               | -                              |
+| onCopy           | Called after a successful copy, with the copied text                                                                                                             | `(text: string) => void`                                              | -                              |
+| slots            | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                                       | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                              |
+| labels           | Overrides interface text, see [CommandConsoleLabels](#commandconsolelabels)                                                                                      | `CommandConsoleLabels`                                                | -                              |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                    | `'zh-CN' \| 'en-US'`                                                  | Inherited, otherwise `'en-US'` |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                      | HTML attributes                                                       | -                              |
 
 ### CommandConsoleRecord
 
@@ -68,7 +77,7 @@ Every quick command in the example fills a complete command except `compile`, wh
 | tasks       | Background task snapshots supplied by the host                                                                                                   | `readonly CommandConsoleTask[]`                    | -        |
 | content     | Execution result; records with background tasks can show it while pending, otherwise pending records show a skeleton                             | `CommandConsoleRecordContent`                      | -        |
 | createdAtMs | Submission time as a Unix timestamp in milliseconds, shown below the command                                                                     | `number`                                           | -        |
-| createdAt   | Text shown when there is no valid `createdAtMs`, also used for server rendering; it is never parsed as a date                                    | `string`                                           | -        |
+| createdAt   | Text shown when there is no valid `createdAtMs`; it is never parsed as a date                                                                    | `string`                                           | -        |
 
 `CommandConsoleTask` uses the [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) fields.
 
@@ -312,6 +321,10 @@ Defaults are the copy used when `locale` is `'en-US'`.
 - In Markdown text, `http(s)` links and addresses open in a new tab and do not call `onOpenUri`; `viking://` ones do.
 - JSON and Markdown code blocks have a copy button, and a successful copy calls `onCopy`. If the browser refuses the clipboard write, no success feedback is shown and `onCopy` is not called.
 - `createdAtMs` shows "Just now" under one minute, whole minutes under one hour, whole hours under 24 hours, then the local `YYYY-MM-DD HH:mm`; a future timestamp shows "Just now". Override the text with `labels.justNow`, `labels.formatMinutesAgo` and `labels.formatHoursAgo`.
-- Server rendering and the hydration pass use `createdAt` and show no time without it; the client switches to `createdAtMs` afterwards. The time is recalculated when the component renders and does not refresh on a timer.
+- Each render formats a valid `createdAtMs`, falling back to `createdAt` when missing or invalid. Time is recalculated on render without a refresh timer.
 - Colors come from the `--ov-ui-color-*` theme variables, and dark mode follows the `.dark` class on `<html>`; see [Getting started](../guide/getting-started).
 - Types are exported from `@openviking/react/components/command-console`; the package root exports only the component and `CommandConsoleProps`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.
