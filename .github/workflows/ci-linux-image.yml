@@ -1,6 +1,11 @@
 name: Build Linux CI Base Image
 
 on:
+  workflow_call:
+    inputs:
+      publish:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       publish:
