@@ -21,7 +21,7 @@ test/         node:test, no network
 
 ```bash
 node demo.mjs                      # dry run: cards, clicks, and the calls that would be made
-node --test test/*.test.mjs        # 36 tests, no credentials needed
+node --test test/*.test.mjs        # 37 tests, no credentials needed
 ```
 
 Against a real app (a chat the app is already in):

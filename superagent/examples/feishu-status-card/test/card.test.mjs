@@ -118,6 +118,24 @@ describe('size', () => {
     assert.ok(cardBytes(card) < 4_000, 'a rendered card is far below the 30 KiB limit');
   });
 
+  it('stays valid JSON under the limit for generated tasks', () => {
+    // Deterministic pseudo-random text, including the characters that used to
+    // be able to restyle the card.
+    let seed = 7;
+    const next = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    const pick = (chars, max) => Array.from({ length: Math.floor(next() * max) },
+      () => chars[Math.floor(next() * chars.length)]).join('');
+    const alphabet = '**__~~`<>[]()中文abc \n\t!';
+    for (const status of ['queued', 'running', 'waiting', 'blocked', 'done', 'failed', 'stopped', 'unknown']) {
+      const card = taskCard({ id: 't1', title: pick(alphabet, 400), status, requesterName: pick(alphabet, 80),
+        question: pick(alphabet, 400), progress: Array.from({ length: 20 }, () => pick(alphabet, 400)),
+        startedAt: NOW - 90_000 }, { now: NOW, note: pick(alphabet, 800), footer: pick(alphabet, 300) });
+      assert.ok(cardBytes(card) <= MAX_CARD_BYTES);
+      assert.doesNotThrow(() => JSON.parse(JSON.stringify(card)));
+      assert.equal(JSON.stringify(card).includes('lark_md'), false);
+    }
+  });
+
   it('never renders past the platform limit, whatever the task holds', () => {
     const worst = taskCard({ id: 't1', title: '标'.repeat(5000), status: 'waiting', requesterName: '名'.repeat(500),
       question: '问'.repeat(5000), progress: Array.from({ length: 100 }, () => '进'.repeat(2000)),
