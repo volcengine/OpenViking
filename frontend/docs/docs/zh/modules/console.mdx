@@ -42,11 +42,15 @@ import '@openviking/react/modules/console/style.css';
 
 请求、会话和流式状态由 Console 内部管理；可通过 `chatOptions.service` 适配其他后端，服务同时实现对话与会话契约。模块切换保留当前对话；新建或切换会话会取消旧连接。历史保存失败单独提示，不改变已成功的回答。
 
+点击「创建 Wiki」或「定时日报」可填入空白草稿或切换预设。发送后由配置的对话服务处理请求，编译相关的确认问题通过下方介绍的流程展示。用 `conversation.quickInputs` 提供自定义列表，传入 `[]` 可隐藏快捷入口。
+
 ```tsx file="../../_demos/console-chat.tsx" preview
 
 ```
 
 示例使用模拟服务，可切换原生能力与火山当前契约。原生适配器提供 `interrupt` 和 `steer`，支持停止及生成中追问；火山当前适配器省略这两个方法，生成中禁用发送且不显示停止。回答后的下一轮提问两者均支持。
+
+点击底部的 `@`，或在输入框中键入 `@`，可浏览、搜索并引用文件和目录。内置选择器使用当前请求作用域下的 `/api/v1/fs/ls` 和 `/api/v1/search/glob`，打开时才加载。提供 `conversation.references` 时改用宿主的目录与引用状态。自定义对话服务可通过发送参数中的 `references` 读取已选引用。
 
 ### 待确认交互
 

@@ -324,6 +324,9 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | selected      | 已选中的引用，受控                                                                                                 | `readonly VikingBotReference[]`                       | 必填    |
 | onChange      | 选择或移除引用时触发，参数为完整的新列表                                                                           | `(references: readonly VikingBotReference[]) => void` | 必填    |
 | onQueryChange | 搜索词变化时触发，宿主据此返回过滤后的 `rows`；省略时组件按名称和 URI 在 `rows` 内过滤                             | `(query: string) => void`                             | -       |
+| onOpenChange  | 底部或输入框内的引用浮层打开或关闭时触发，可用于按需加载候选                                                       | `(open: boolean) => void`                             | -       |
+| onLoadMore    | 点击加载更多时触发，参数为该行的父节点 ID                                                                          | `(parentId: string) => void`                          | -       |
+| onRetry       | 重试子目录时传父节点 ID，重试浮层整体加载时不传参数                                                                | `(parentId?: string) => void`                         | -       |
 | onExpand      | 展开或折叠目录时触发，参数为目录 URI，宿主据此更新 `rows`                                                          | `(uri: string) => void`                               | -       |
 | isLoading     | 候选是否正在加载                                                                                                   | `boolean`                                             | `false` |
 | error         | 候选的加载错误，设置后取代列表显示                                                                                 | `string`                                              | -       |

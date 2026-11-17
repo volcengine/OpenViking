@@ -27,6 +27,7 @@ export async function readFile(
   openParent?: (uri: string) => Promise<void>,
   onSave?: () => void,
   isWiki = false,
+  onWikiSaving?: (saving: boolean) => void,
 ): Promise<FilePreviewFileTab> {
   const name = nameFromUri(uri);
   const icon = fileTypeIcon(name);
@@ -56,6 +57,14 @@ export async function readFile(
   return {
     ...toFileTab({ uri }, content, MAX_LINES, icon, openParent, truncated),
     resolveImage: createPreviewImageResolver(client, uri, false, options),
-    editing: createFileEditing(client, uri, name, options, onSave, wiki),
+    editing: createFileEditing(
+      client,
+      uri,
+      name,
+      options,
+      onSave,
+      wiki,
+      onWikiSaving,
+    ),
   };
 }

@@ -32,6 +32,7 @@ export class DirectoryQueries {
   constructor(
     private request: QueryRequest,
     root: string,
+    private cacheScopeKey?: string,
   ) {
     this.observe(root);
   }
@@ -73,7 +74,7 @@ export class DirectoryQueries {
         ),
         observer: new InfiniteQueryObserver(
           this.request.queryClient,
-          directoryOptions(this.request, uri, () => {
+          directoryOptions(this.request, uri, this.cacheScopeKey, () => {
             const error = item?.retryCause?.deref();
             if (item) item.retryCause = undefined;
             return error;
@@ -144,7 +145,9 @@ export class DirectoryQueries {
           : refresh
             ? observer.refetch({ cancelRefetch: false })
             : this.request.queryClient
-                .fetchInfiniteQuery(directoryOptions(this.request, uri))
+                .fetchInfiniteQuery(
+                  directoryOptions(this.request, uri, this.cacheScopeKey),
+                )
                 .catch(() => undefined);
       await (signal ? Promise.race([pending, aborted]) : pending);
       signal?.throwIfAborted();
