@@ -9,7 +9,6 @@ from unittest.mock import ANY, AsyncMock, call
 
 import pytest
 
-from openviking.core.context import ContextLevel
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.resource.watch_manager import WatchManager, WatchPathLocks
 from openviking.resource.watch_store import WatchMoveResult
@@ -20,11 +19,7 @@ from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking.service import fs_service as fs_module
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.service.task_work_index import bind_task_context
-from openviking.storage.abstract_overview import (
-    body_for_preview,
-    freshness_metadata,
-    render_abstract_overview,
-)
+from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
@@ -2298,56 +2293,6 @@ async def test_fs_operation_reports_retryable_busy_while_watch_keeps_running(
 def local_fs_service(tmp_path):
     viking_fs = local_viking_fs(tmp_path / "agfs")
     return FSService(viking_fs=viking_fs), viking_fs
-
-
-@pytest.mark.asyncio
-async def test_concurrent_rm_with_busy_parent_sidecars_keeps_successful_deletes(
-    request_context, local_fs_service, monkeypatch
-):
-    service, viking_fs = local_fs_service
-    queue_manager = _FakeQueueManager()
-    monkeypatch.setattr(fs_module, "get_queue_manager", lambda: queue_manager)
-    vector_store = SimpleNamespace(count=AsyncMock(return_value=1), delete_uris=AsyncMock())
-    viking_fs.vector_store = vector_store
-    parent_uri = "viking://resources/docs"
-    uris = [f"{parent_uri}/doc-{index}.txt" for index in range(64)]
-    for uri in uris:
-        await viking_fs.write_file(uri, "content", ctx=request_context)
-    metadata = {"freshness": freshness_metadata(1000, 32)}
-    sidecars = []
-    for name, level in [
-        (".abstract.md", ContextLevel.ABSTRACT),
-        (".overview.md", ContextLevel.OVERVIEW),
-    ]:
-        uri = f"{parent_uri}/{name}"
-        await viking_fs.write_file(
-            uri,
-            render_abstract_overview(level, parent_uri, "summary", metadata),
-            ctx=request_context,
-        )
-        sidecars.append(viking_fs._uri_to_path(uri, ctx=request_context))
-
-    # Another writer owns the shared parent metadata; child deletion locks remain available.
-    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(sidecars)
-    semaphore = asyncio.Semaphore(32)
-
-    async def remove(uri):
-        async with semaphore:
-            return await service.rm(uri, ctx=request_context)
-
-    try:
-        results = await asyncio.gather(*(remove(uri) for uri in uris), return_exceptions=True)
-    finally:
-        await viking_fs._async_agfs.pathlock_release(lease)
-
-    for uri in uris:
-        assert not await viking_fs.exists(uri, ctx=request_context)
-    assert {call.args[1][0] for call in vector_store.delete_uris.await_args_list} == set(uris)
-    assert [result for result in results if isinstance(result, BaseException)] == []
-    assert all(result["semantic_status"] == "queued" for result in results)
-    assert len(queue_manager.messages) == 64
-    assert {msg.changes["deleted"][0] for msg in queue_manager.messages} == set(uris)
-    assert len({msg.coalesce_key for msg in queue_manager.messages}) == 1
 
 
 @pytest.mark.asyncio

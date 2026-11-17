@@ -8,12 +8,14 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from openviking.core.context import ContextLevel
+from openviking.core.context import Context, ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources
 from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
+from openviking.storage.vector_ids import vector_record_id
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 def _ctx() -> RequestContext:
@@ -170,6 +172,96 @@ async def test_delete_resource_http_succeeds_when_parent_summary_is_locked(
     assert response.status_code == 200, response.text
     assert response.json()["result"]["semantic_status"] == ("complete" if wait else "queued")
     assert not await viking_fs.exists(uri, ctx=ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait,slow_refresh", [(False, False), (True, False), (False, True)])
+async def test_concurrent_delete_distinct_siblings_removes_files_and_index(
+    client, service, monkeypatch, wait, slow_refresh
+):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    viking_fs = service.viking_fs
+    vector_store = viking_fs._get_vector_store()
+    vector_dim = (await vector_store._get_backend_for_context(ctx)).vector_dim
+    parent_uri = "viking://resources/concurrent-delete"
+    uris = [f"{parent_uri}/document-{index:04d}.txt" for index in range(64)]
+    priming_uris = [f"{parent_uri}/prime-{index}.txt" for index in range(8)] if slow_refresh else []
+    records = []
+    for uri in uris + priming_uris:
+        await viking_fs.write_file(uri, "content", ctx=ctx)
+        record = Context(
+            uri=uri,
+            parent_uri=parent_uri,
+            is_leaf=True,
+            level=ContextLevel.DETAIL,
+            user=service.user,
+            id=vector_record_id(ctx.account_id, uri),
+        )
+        record.vector = [0.1] * vector_dim
+        records.append(record.to_dict())
+    await vector_store.upsert_many(records, ctx=ctx)
+    ids = [record["id"] for record in records]
+    assert len(await vector_store.get(ids, ctx=ctx)) == len(records)
+    metadata = {"freshness": freshness_metadata(len(records), 32)}
+    for name, level in [
+        (".abstract.md", ContextLevel.ABSTRACT),
+        (".overview.md", ContextLevel.OVERVIEW),
+    ]:
+        await viking_fs.write_file(
+            f"{parent_uri}/{name}",
+            render_abstract_overview(level, parent_uri, "summary", metadata),
+            ctx=ctx,
+        )
+
+    model_started = asyncio.Event()
+    resume_model = asyncio.Event()
+    if slow_refresh:
+        complete = VLMConfig.get_completion_async
+
+        async def paused_completion(vlm, *args, **kwargs):
+            model_started.set()
+            await resume_model.wait()
+            return await complete(vlm, *args, **kwargs)
+
+        monkeypatch.setattr(VLMConfig, "get_completion_async", paused_completion)
+    semaphore = asyncio.Semaphore(32)
+
+    async def remove(uri):
+        async with semaphore:
+            return await client.delete("/api/v1/resources", params={"uri": uri, "wait": wait})
+
+    try:
+        # Eight setup deletes cross the normal freshness threshold for 72 files.
+        # The remaining 64 targets are then deleted while model work is in flight.
+        for uri in priming_uris:
+            response = await client.delete("/api/v1/resources", params={"uri": uri, "wait": False})
+            assert response.status_code == 200, response.text
+        if slow_refresh:
+            await asyncio.wait_for(model_started.wait(), timeout=10)
+        responses = await asyncio.wait_for(
+            asyncio.gather(*(remove(uri) for uri in uris)), timeout=60
+        )
+    finally:
+        resume_model.set()
+    await asyncio.wait_for(service._queue_manager.wait_complete(), timeout=60)
+    remaining_files = [uri for uri in uris if await viking_fs.exists(uri, ctx=ctx)]
+    remaining_records = await vector_store.get(ids, ctx=ctx)
+    statuses = [response.status_code for response in responses]
+    print(
+        {
+            "wait": wait,
+            "slow_refresh": slow_refresh,
+            "setup_deletes": len(priming_uris),
+            "HTTP": {status: statuses.count(status) for status in set(statuses)},
+            "remaining_files": len(remaining_files),
+            "remaining_L2": len(remaining_records),
+        }
+    )
+    assert remaining_files == []
+    assert remaining_records == []
+    assert all(response.status_code == 200 for response in responses), [
+        response.json() for response in responses if response.status_code != 200
+    ]
 
 
 @pytest.mark.asyncio
