@@ -5,6 +5,7 @@
 @import '../../shared/primitives/popover/popover.css';
 @import '../../shared/primitives/dropdown/dropdown.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
+@import '../../shared/primitives/tabs/tabs.css';
 @import './file-preview.css';
 @import './file-preview-editor.css';
 @import '@ark-design/ui/file-viewer/style/index.css';

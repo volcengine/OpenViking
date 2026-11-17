@@ -3,6 +3,7 @@
 """Tests for shared model retry helpers."""
 
 import asyncio
+import logging
 
 import httpx
 import openai
@@ -30,6 +31,59 @@ from openviking.utils.model_retry import (
     retry_async,
     retry_sync,
 )
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("exhausted", [False, True])
+async def test_retry_logs_only_attempts_without_sensitive_text(
+    monkeypatch, caplog, asynchronous, exhausted
+):
+    secret = "secret-key /private/sensitive/file.md private-peer private-body"
+    error = RuntimeError(secret)
+    capture_logger = logging.getLogger("test.model.retry")
+    caplog.set_level(logging.DEBUG, logger=capture_logger.name)
+    monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _: None)
+    calls = 0
+
+    async def no_sleep(_):
+        pass
+
+    def call():
+        nonlocal calls
+        calls += 1
+        if exhausted or calls == 1:
+            raise error
+        return "ok"
+
+    async def async_call():
+        return call()
+
+    async def run():
+        options = {
+            "max_retries": 2,
+            "is_retryable": lambda _: True,
+            "logger": capture_logger,
+            "operation_name": "embed",
+        }
+        if asynchronous:
+            return await retry_async(async_call, **options)
+        return retry_sync(call, **options)
+
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", no_sleep)
+    if exhausted:
+        with pytest.raises(RuntimeError) as caught:
+            await run()
+        assert caught.value is error
+    else:
+        assert await run() == "ok"
+    records = [record for record in caplog.records if record.name == capture_logger.name]
+    assert len(records) == (2 if exhausted else 1)
+    assert all(
+        record.levelno == logging.INFO and record.error_type == "RuntimeError" for record in records
+    )
+    assert all(record.operation == "embed" and record.exc_info is None for record in records)
+    assert secret not in caplog.text
+    assert all(secret not in str(record.__dict__) for record in records)
 
 
 @pytest.mark.parametrize("wrapped", [False, True])

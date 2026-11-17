@@ -32,7 +32,7 @@ const INDICATOR_WIDTH = 14;
  * and `levelCount` the last two. A callback ref also measures tabs mounted after
  * loading; replacing or unmounting the node disconnects the old subscription.
  */
-export function useLevelIndicator(
+export function useTabIndicator(
   activeSelector: string,
   activeKey: string | undefined,
   levelCount: number,

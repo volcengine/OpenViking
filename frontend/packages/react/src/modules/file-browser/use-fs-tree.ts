@@ -1,6 +1,7 @@
 import { tagData } from '../../shared/monitoring/data.js';
 import { useDirectoryMonitoring } from './use-directory-monitoring.js';
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -60,6 +61,10 @@ export function useFsTree({
   );
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+  const [initialized, setInitialized] = useState<{
+    session: typeof session;
+    uri?: string;
+  }>();
   const initialLoad = useRef<Promise<void> | undefined>(undefined);
   const scope = useRequestScope(
     request?.client ?? null,
@@ -101,28 +106,22 @@ export function useFsTree({
         if (!controller.signal.aborted)
           setExpanded((previous) => new Set(previous).add(uri));
       }
-    })().catch(() => undefined);
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        if (!controller.signal.aborted)
+          setInitialized({ session, uri: defaultExpandedUri });
+      });
     return () => controller.abort();
   }, [session, rootUri, defaultExpandedUri, setExpanded]);
-  const fetchPage = useMemo(
-    () =>
-      async (
-        uri: string,
-        offset: number,
-        signal?: AbortSignal,
-        refresh?: boolean,
-      ) => {
-        try {
-          return await activeSession.current?.load(
-            uri,
-            offset,
-            signal,
-            refresh,
-          );
-        } catch {
-          return undefined;
-        }
-      },
+  const fetchPage = useCallback(
+    async (...args: Parameters<DirectoryQueries['load']>) => {
+      try {
+        return await activeSession.current?.load(...args);
+      } catch {
+        return undefined;
+      }
+    },
     [],
   );
   const state = useMemo(
@@ -191,6 +190,11 @@ export function useFsTree({
   return {
     monitoring,
     rows,
+    isInitializing:
+      !identityError &&
+      (!session ||
+        initialized?.session !== session ||
+        initialized?.uri !== defaultExpandedUri),
     ...useTreeMetadata(rootUri, dirs, identity.identifyUri),
     isReady: dirs[rootUri]?.ready ?? false,
     error: identityError ?? dirs[rootUri]?.error ?? null,

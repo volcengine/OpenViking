@@ -14,12 +14,16 @@ const REGULAR = 'viking://resources/example';
 const summaryPath = /^\/api\/v1\/content\/(abstract|overview)$/;
 
 test('system directories show no content without summary tabs or requests', async () => {
+  const children = new Map([
+    ['viking://', [SYSTEM, REGULAR]],
+    [SYSTEM, [COMPILE]],
+    [COMPILE, [EXAMPLES]],
+  ]);
   const fetch = recordingFetch((call) => {
     if (call.path.endsWith('/fs/ls'))
-      return ok([
-        { uri: SYSTEM, isDir: true },
-        { uri: REGULAR, isDir: true },
-      ]);
+      return ok(
+        (children.get(call.uri) ?? []).map((uri) => ({ uri, isDir: true })),
+      );
     if (call.path.endsWith('/fs/stat')) return ok({ isDir: true });
     return ok('');
   });

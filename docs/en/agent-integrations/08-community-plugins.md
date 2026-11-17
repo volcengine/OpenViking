@@ -93,23 +93,24 @@ Antigravity hooks use their own `hooks.json` format: each top-level key names a 
 
 ### Install
 
-Prerequisites: Node.js 18+, a running OpenViking server, an OpenViking repository checkout, and the Antigravity app or `agy`. The installer does not configure Antigravity yet; from the checkout root, run:
+Prerequisites: Node.js 18+, a running OpenViking server, and the Antigravity app or `agy`.
 
 ```bash
-dest=~/.gemini/config/plugins/openviking-memory
-mkdir -p "$dest"
-cp examples/agent-hook-plugin/hosts/antigravity/plugin.json "$dest/"
-sed -e "s#__OPENVIKING_PLUGIN_ROOT__#$PWD/examples/agent-hook-plugin#g" \
-    -e "s#__OPENVIKING_CLIENT_ID__#antigravity#g" \
-    examples/agent-hook-plugin/hosts/antigravity/hooks.json > "$dest/hooks.json"
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
 ```
 
-Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. Add the OpenViking MCP server separately in `~/.gemini/config/mcp_config.json` if you want the agent to search memory itself.
+The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The installer does not add an MCP server; add the OpenViking MCP server in `~/.gemini/config/mcp_config.json` if you want the agent to search memory itself.
 
 Restart the Antigravity app or start a new `agy` session, then verify that:
 
 - the `agy` log under `~/.gemini/antigravity-cli/log/` reports `loaded 1 named hooks`;
 - after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastStep`.
+
+To uninstall:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
+```
 
 ## AstrBot plugin
 

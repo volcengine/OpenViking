@@ -1,5 +1,7 @@
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FilePreviewActionSource } from './action-types.js';
+import type { FilePreviewEditing } from './editing-types.js';
+export type * from './editing-types.js';
 export type {
   FilePreviewAction,
   FilePreviewActionItems,
@@ -242,6 +244,8 @@ export interface FilePreviewContentTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `content`.
    */
   kind: 'content';
+  /** 编辑文件时隐藏页签。Hide the tab while a file is being edited. */
+  hideWhileEditing?: boolean;
   /**
    * 页签行显示的内容。内容页签没有 `source.fileName` 可以回落，因此这里是必填。
    * What the tab row shows. A content tab has no `source.fileName` to fall back
@@ -382,51 +386,6 @@ export interface FilePreviewOperations {
 }
 
 /**
- * 文件编辑配置。省略时只读；可提供编辑所需的完整文本，并处理保存与取消操作。
- * File-editing options. Omit them for a read-only preview. Provide the full text
- * to edit and handle save and cancel actions as needed.
- */
-export interface FilePreviewEditing {
-  /**
-   * 进入编辑时读取完整文本，适用于截断预览或文件地址。
-   * 省略时使用 `content` 或 `file` 中的文本；仅提供 `url` 时需提供此读取函数。
-   * 返回 `undefined` 时放弃本次编辑，保持预览态。
-   * Provides the full text when editing is requested, for example for a truncated
-   * preview or a file URL. When omitted, text from `content` or `file` is used;
-   * URL-only sources require this loader. Returning `undefined` cancels the edit
-   * request and keeps the preview open.
-   */
-  loadContent?: (source: FilePreviewSource) => Promise<string | undefined>;
-  /**
-   * 为 true 时，保存前弹出版本备注，确认后将备注传给 save。
-   * When true, prompt for a version note before saving and pass it to save.
-   */
-  promptForVersionNote?: boolean;
-  /**
-   * 保存草稿。抛错或 reject 时保留草稿并显示失败提示；正文已保存但未创建版本时，
-   * 可返回 warning 让组件退出编辑并显示提示。
-   * Saves the draft. A thrown error or rejection keeps the draft and displays
-   * a failure message. Return a warning to leave editing and show that the
-   * file was saved without a new version.
-   */
-  save: (
-    value: string,
-    versionNote?: string,
-  ) => Promise<void | { warning: 'version-not-created' }>;
-  /**
-   * 保存成功后触发，参数为已保存的文本；失败时不触发。
-   * Called after saving succeeds, with the saved text; not called on failure.
-   */
-  onSave?: (value: string) => void;
-  /**
-   * 取消编辑或切换页签并丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发。
-   * Called after cancelling editing or switching tabs discards the draft;
-   * receives the discarded text and is not called after a successful save.
-   */
-  onCancel?: (value: string) => void;
-}
-
-/**
  * 交给宿主的动作上下文：组件持有的视图与编辑状态，以及改变它们的方法。
  *
  * 默认工具栏与宿主自定义的 `slots.actions` 共用此上下文。
@@ -452,6 +411,8 @@ export interface FilePreviewActions {
   canSwitchView: boolean;
   /** 是否处于编辑态。Whether the tab is being edited. */
   editing: boolean;
+  /** 当前编辑草稿，可为空字符串；未进入编辑态时省略。The current draft, which may be empty; omitted outside editing. */
+  draft?: string;
   /** 是否有保存或读取在进行中。Whether a save or load is in flight. */
   busy: boolean;
   /** 该页签是否可编辑，即可提供 `editing`。Whether the tab is editable. */

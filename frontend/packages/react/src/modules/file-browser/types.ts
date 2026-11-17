@@ -1,7 +1,5 @@
-import type { Workflow } from '../../shared/monitoring/workflow.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
-import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
 export type {
   FileBrowserComponent,
   FileBrowserHandle,
@@ -22,14 +20,10 @@ import type { AgentConnectProps } from '../../components/agent-connect/index.js'
 import type { FileBrowserActionBarLabels } from '../../components/file-browser-action-bar/index.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
-import type {
-  FilePreviewLabels,
-  FilePreviewTab,
-} from '../../components/file-preview/index.js';
+import type { FilePreviewLabels } from '../../components/file-preview/index.js';
 import type {
   FileTreeEntryRow,
   FileTreeLabels,
-  FileTreeRow,
 } from '../../components/file-tree/index.js';
 import type { OvRequestOptions } from '../../client/index.js';
 import type {
@@ -222,14 +216,14 @@ export interface FileBrowserProps extends Omit<
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
-   * 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。
+   * 受控的当前资源 URI。挂载后由宿主切换 URI 时，模块打开预览并定位目录树。
    *
    * 用 `uri !== undefined` 判断是否受控，而不是真假值：空字符串也算宿主接管。
    * 模块不会主动清空选中——点目录行与点面包屑祖先都带具体 URI，没有「取消选中」
    * 的交互——因此这里不接受 `null`。
    *
-   * The controlled current resource URI. When given, the host owns the current
-   * resource and the module only reports switch intent.
+   * The controlled current resource URI. Host-driven changes after mount open
+   * the preview and reveal the resource in the tree.
    *
    * Control is detected with `uri !== undefined` rather than truthiness: even an empty
    * string counts as the host taking over. The module never clears the selection —
@@ -288,6 +282,8 @@ export interface FileBrowserProps extends Omit<
    * pane.
    */
   onUriChange?: (uri: string | null) => void;
+  /** 用户选中目录树条目时触发，包含重复选中。Reports a tree entry selection, including reselecting the same row. */
+  onSelect?: (row: FileTreeEntryRow) => void;
   /** Host gateway/view override; nullish values retain the native dashboard. */
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**
@@ -327,126 +323,4 @@ export interface FileBrowserProps extends Omit<
    * Provider.
    */
   requestOptions?: OvRequestOptions;
-}
-
-/**
- * 模块 Hook 返回的视图数据与操作。宿主可以只用它自行组装视图，不需要组合
- * 视图。
- *
- * The view data and operations the module Hook returns. A host may assemble its
- * own view from these without the composite one.
- */
-export interface FileBrowserApi {
-  treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
-  previewMonitoring?: Workflow<'file_browser_preview_load'>;
-  identifyUri: (uri: string) => string;
-  dashboards: ReadonlyMap<string, FileBrowserDashboard>;
-  previewDashboard?: FileBrowserDashboard;
-  dashboardError: Error | null;
-  /** 按渲染顺序排列的可见行。Visible rows in render order. */
-  rows: readonly FileTreeRow[];
-  /** 当前选中的行 id。Selected row id. */
-  selectedId: string | null;
-  /** 当前资源 URI。Current resource URI. */
-  currentUri: string | null;
-  /** 刷新是否进行中。Whether a refresh is running. */
-  refreshing: boolean;
-  /** 预览字符数文案。Localized preview character count. */
-  previewFooter?: string;
-  /** 当前资源的更新时间（ISO 8601）。Update time of the current resource (ISO 8601). */
-  previewUpdatedAt?: string;
-  /** 首次加载是否已完成。Whether the first load has finished. */
-  isReady: boolean;
-  /** 整体加载失败的原因。Reason the whole tree failed to load. */
-  error: Error | null;
-  /**
-   * 目录列表本身的失败原因。与 {@link error} 的区别是来源单一：宿主据此在树的
-   * 位置渲染失败态并给出重试，而不是把 403 显示成「没有文件」。
-   *
-   * Why the directory listing itself failed. It differs from {@link error} by having
-   * a single source: a host renders a failure state with a retry in the tree's place
-   * instead of showing a 403 as "no files".
-   */
-  treeError: Error | null;
-  /**
-   * 当前资源预览的失败原因。选中了资源但读不出来时用它区分「读失败」与「什么
-   * 都没选」。
-   *
-   * Why the preview of the current resource failed. It separates "could not read"
-   * from "nothing selected" when a resource is selected.
-   */
-  previewError: Error | null;
-  /** 当前资源的预览页签，没有选中时为 `null`。Preview tabs of the current resource, `null` when nothing is selected. */
-  previewTabs: readonly FilePreviewTab[] | null;
-  /** 当前预览页签 key。Active preview tab key. */
-  previewKey: string | null;
-  /** 树与预览的操作。Operations of the tree and the preview. */
-  actions: FileBrowserActions;
-}
-
-/** 模块 Hook 暴露的操作。Operations the module Hook exposes. */
-export interface FileBrowserActions {
-  openResource: (
-    uri: string,
-    options?: FileBrowserOpenResourceOptions,
-  ) => Promise<boolean>;
-  openUri: (uri: string) => Promise<void>;
-  openDashboard: (uri: string) => void;
-  /** 选中条目。Selects an entry. */
-  select: (row: FileTreeEntryRow) => Promise<void>;
-  /** 展开或折叠目录。Expands or collapses a directory. */
-  toggleExpand: (row: FileTreeEntryRow) => Promise<void>;
-  /** 加载下一页子节点。Loads the next page of children. */
-  loadMore: (row: FileTreeRow) => Promise<void>;
-  /** 重新加载失败的子节点。Retries a failed children load. */
-  retry: (row: FileTreeRow) => Promise<void>;
-  /** 重新加载整棵树并保留选中。Reloads the whole tree, keeping the selection. */
-  refresh: () => Promise<void>;
-  /** 切换预览页签。Switches the preview tab. */
-  setPreviewKey: (key: string) => void;
-}
-
-/** Internal options for the composed FileBrowser loader. */
-export interface UseFileBrowserOptions {
-  rootUri: string;
-  accessLabels?: Pick<FileBrowserLabels, 'accessDenied' | 'traverseOnly'>;
-  /** Built-in copy; inherits the Provider locale, otherwise en-US. */
-  locale?: Locale;
-  dashboardLabels?: FileBrowserDashboardLabels;
-  dashboardKinds?: readonly FileBrowserDashboard['kind'][];
-  /** Overrides individual requests for the built-in experience dashboard. */
-  experienceDataSource?: FileBrowserExperienceDataSource;
-  renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
-  /**
-   * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时
-   * `currentUri` 只是初始值，之后的选中由模块自己记在 `pendingUri` 里。
-   *
-   * 两者的区别只在「谁拥有选中」：非受控模块在初始没有选中时 `currentUri` 也是
-   * `null`，因此不能靠值来区分，必须显式声明。
-   *
-   * Whether the host owns the current resource. While controlled, `currentUri` is the
-   * single source of truth; while uncontrolled it is only the initial value and later
-   * selections live in the module's own `pendingUri`.
-   *
-   * The distinction is only about who owns the selection: an uncontrolled module also
-   * has a `null` `currentUri` when nothing is selected initially, so the value itself
-   * cannot tell the two apart and the mode has to be declared.
-   */
-  controlled?: boolean;
-  /**
-   * 目录两级摘要的标题与失败兜底文案。两级摘要各自可能请求失败，失败且服务端没给
-   * 消息时用 `failure` 显示——它必须可替换，否则宿主无法本地化。
-   *
-   * Titles of the two summary levels and the fallback copy for a failure. Either level
-   * can fail; when it fails without a server message, `failure` is shown — it has to be
-   * replaceable, or a host cannot localise it.
-   */
-  summaryLabels?: { l0: string; l1: string; failure: string };
-  /** 字符数文案；省略时跟随语言。Character count copy; follows the resolved locale. */
-  formatCharacterCount?: (count: number) => string;
-  /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
-  defaultExpandedUri?: string;
-  currentUri: string | null;
-  requestOptions?: OvRequestOptions;
-  onUriChange: (uri: string | null) => void;
 }

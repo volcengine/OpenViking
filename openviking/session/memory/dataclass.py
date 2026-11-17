@@ -256,6 +256,20 @@ class MemoryTypeSchema(BaseModel):
         None, description="Overview template for auto-generating .overview.md files"
     )
 
+    def requires_messages(self) -> bool:
+        """Whether rendering this type uses original conversation messages."""
+        return any(
+            TemplateUtils.requires_messages(template)
+            for template in (
+                self.directory,
+                self.filename_template,
+                self.content_template,
+                self.embedding_template,
+                self.overview_template,
+            )
+            if template
+        )
+
     def filename_has_variables(self):
         return "{{" in self.filename_template and "}}" in self.filename_template
 

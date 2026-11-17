@@ -14,7 +14,7 @@ import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { createNativeTaskService } from './native-service.js';
 import { createTaskTracker, type TaskTracker } from './tracker.js';
-import type { TaskService, TaskReference } from './types.js';
+import type { TaskService, TaskReference, TrackedTask } from './types.js';
 
 const Context = createContext<
   { tracker: TaskTracker; service?: TaskService; client: OvClient } | undefined
@@ -47,10 +47,12 @@ export function useTaskTracking({
   requestOptions = {},
   scopeKey,
   taskService,
+  origin: taskOrigin,
 }: {
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
   taskService?: TaskService;
+  origin?: TrackedTask['origin'];
 }) {
   const inherited = useContext(Context);
   const monitoring = useMonitoringBinding();
@@ -128,11 +130,11 @@ export function useTaskTracking({
   }, [tracker, source, signal]);
   const tasks = useSyncExternalStore(tracker.subscribe, tracker.getSnapshot);
   const track = useMemo(
-    () => (reference: TaskReference, origin?: MonitoringSpan) =>
+    () => (reference: TaskReference, monitoringOrigin?: MonitoringSpan) =>
       signal?.aborted
         ? `${source.key}:${reference.id}`
-        : tracker.track(reference, source, origin),
-    [tracker, source, signal],
+        : tracker.track(reference, source, monitoringOrigin, taskOrigin),
+    [tracker, source, signal, taskOrigin],
   );
   return { tracker, source, tasks, track };
 }

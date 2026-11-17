@@ -1,6 +1,9 @@
 import { useId, useState } from 'react';
-import { WikiWarningIcon, WikiSuccessIcon } from '../../icons/index.js';
-import { WikiFileIcon } from './wiki-file-icon.js';
+import {
+  WikiEditIcon,
+  WikiWarningIcon,
+  WikiSuccessIcon,
+} from '../../icons/index.js';
 import { WikiActionButton } from './wiki-action-button.js';
 import type {
   WikiConflict,
@@ -14,24 +17,31 @@ export function WikiConflictCard({
   labels: t,
   actions = [],
   onOpenUri,
+  onEditConflict,
 }: {
   conflict: WikiConflict;
   path?: string;
-  labels: WikiDashboardLabels;
+  labels: Required<WikiDashboardLabels>;
   actions?: readonly WikiDashboardAction[];
   onOpenUri?: () => void;
+  onEditConflict?: ((conflict: WikiConflict) => void) | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
   const fixed = conflict.state === 'fixed';
   const StatusIcon = fixed ? WikiSuccessIcon : WikiWarningIcon;
+  const isEditAction = onEditConflict !== undefined;
+  const hasFileAction = isEditAction ? !fixed : Boolean(path);
+  const hasActions = hasFileAction || actions.length > 0;
+  const fileAction = isEditAction
+    ? onEditConflict && (() => onEditConflict(conflict))
+    : onOpenUri;
   return (
     <article className="ov-wiki-dashboard__conflict">
       <div
         className={[
           'ov-wiki-dashboard__conflict-row',
-          !path && 'ov-wiki-dashboard__conflict-row--without-path',
-          actions.length > 0 && 'ov-wiki-dashboard__conflict-row--with-actions',
+          hasActions && 'ov-wiki-dashboard__conflict-row--with-actions',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -59,27 +69,24 @@ export function WikiConflictCard({
             </span>
           ) : null}
         </div>
-        {path ? (
-          <div className="ov-wiki-dashboard__path">
-            <WikiFileIcon name={path} />
-            <button
-              type="button"
-              className="ov-wiki-dashboard__link"
-              title={path}
-              disabled={!onOpenUri}
-              onClick={() => onOpenUri?.()}
-            >
-              {path}
-            </button>
-          </div>
-        ) : null}
         <span
           className={`ov-wiki-dashboard__severity ov-wiki-dashboard__severity--${conflict.severity}`}
         >
           {t[conflict.severity]}
         </span>
-        {actions.length > 0 ? (
+        {hasActions ? (
           <div className="ov-wiki-dashboard__actions">
+            {hasFileAction ? (
+              <WikiActionButton
+                icon={<WikiEditIcon width={14} height={14} />}
+                tooltip={
+                  isEditAction
+                    ? t.editConflict(conflict.description || conflict.id)
+                    : t.open
+                }
+                onClick={fileAction ?? undefined}
+              />
+            ) : null}
             {actions.map(({ key, ...action }) => (
               <WikiActionButton key={key} {...action} />
             ))}

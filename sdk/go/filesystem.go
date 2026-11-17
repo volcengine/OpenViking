@@ -284,6 +284,12 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
+	if opts.ResolveConflicts {
+		payload["resolve_conflicts"] = true
+	}
+	if opts.DeferProcessing {
+		payload["defer_processing"] = true
+	}
 	if opts.ACL != nil {
 		payload["acl"] = opts.ACL
 	}
@@ -331,6 +337,9 @@ func (c *Client) BatchWrite(
 		setAny(payload, "defer_processing", opts.DeferProcessing)
 		setAny(payload, "telemetry", opts.Telemetry)
 		setString(payload, "processing_mode", opts.ProcessingMode)
+		if opts.SkipConflicts {
+			payload["skip_conflicts"] = true
+		}
 		if err := mergeExtraProtected(payload, opts.Extra, "wait"); err != nil {
 			return nil, err
 		}
