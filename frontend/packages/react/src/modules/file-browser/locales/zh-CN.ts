@@ -70,6 +70,8 @@ const messages = {
   resizeTree: '调整目录树宽度',
   l0Summary: 'L0 摘要',
   l1Overview: 'L1 总览',
+  emptyL0Summary: '暂无 L0 摘要',
+  emptyL1Overview: '暂无 L1 总览',
   summaryEmpty: '暂无生成内容',
   summaryFailed: '摘要加载失败。',
 } satisfies Required<ShellLabels>;

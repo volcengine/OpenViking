@@ -1,10 +1,11 @@
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  toDirectoryTab,
-  toFileTab,
-} from '../src/modules/file-browser/fs-model.ts';
+const { toDirectoryTab, toFileTab } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'browser-preview-model.js'))
+);
 
 test('a file tab shows the file name, not the whole URI', () => {
   const tab = toFileTab(

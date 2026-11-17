@@ -1,10 +1,10 @@
-import { bindingOf } from '../../shared/monitoring/client.js';
-import { QueryObservation } from './query-observation.js';
+import { bindingOf } from '../monitoring/client.js';
+import { QueryObservation } from '../monitoring/query-observation.js';
 import { InfiniteQueryObserver, type InfiniteData } from '@tanstack/query-core';
-import type { DirState } from './fs-model.js';
-import { toError } from './fs-errors.js';
+import type { DirState } from './types.js';
+import { toError } from '../request/fs-errors.js';
 import { directoryOptions, type DirectoryPage } from './directory-query.js';
-import type { QueryRequest } from './use-query-scope.js';
+import type { QueryRequest } from '../request/use-query-scope.js';
 
 type Observer = InfiniteQueryObserver<
   DirectoryPage,
@@ -32,6 +32,7 @@ export class DirectoryQueries {
   constructor(
     private request: QueryRequest,
     root: string,
+    private cacheScopeKey?: string,
   ) {
     this.observe(root);
   }
@@ -73,7 +74,7 @@ export class DirectoryQueries {
         ),
         observer: new InfiniteQueryObserver(
           this.request.queryClient,
-          directoryOptions(this.request, uri, () => {
+          directoryOptions(this.request, uri, this.cacheScopeKey, () => {
             const error = item?.retryCause?.deref();
             if (item) item.retryCause = undefined;
             return error;
@@ -144,7 +145,9 @@ export class DirectoryQueries {
           : refresh
             ? observer.refetch({ cancelRefetch: false })
             : this.request.queryClient
-                .fetchInfiniteQuery(directoryOptions(this.request, uri))
+                .fetchInfiniteQuery(
+                  directoryOptions(this.request, uri, this.cacheScopeKey),
+                )
                 .catch(() => undefined);
       await (signal ? Promise.race([pending, aborted]) : pending);
       signal?.throwIfAborted();

@@ -42,11 +42,15 @@ Omit `conversation.messages`, `conversation.onSend`, and `conversation.composer`
 
 Console manages requests, sessions and streaming state internally. Adapt another backend with a stable `chatOptions.service` implementing both chat and session contracts. Changing panel mode preserves the conversation; selecting or starting a session cancels the old connection. Persistence errors appear separately and do not turn a successful answer into a failed send.
 
+Select **Create Wiki** or **Schedule daily report** to fill an empty draft or switch presets. When you send the prompt, the configured conversation service handles the request. Console shows any compilation questions the service returns through the same confirmation flow described below. Set `conversation.quickInputs` to supply your own list, or pass `[]` to hide the shortcuts.
+
 ```tsx file="../../_demos/console-chat.tsx" preview
 
 ```
 
 This example uses simulated services, including native capabilities and the current commercial contract. The native adapter implements `interrupt` and `steer` for stopping and in-flight follow-ups. The current commercial adapter omits both: sending is disabled during generation and stop is hidden. Both support another question after completion.
+
+Click the toolbar `@` or type `@` in the draft to browse, search and reference files or directories. The built-in picker uses `/api/v1/fs/ls` and `/api/v1/search/glob` in the current request scope and loads only when opened. Set `conversation.references` to supply your own candidates and selection. Custom chat services receive the chosen items in the `references` field.
 
 ### Human input
 

@@ -1,8 +1,8 @@
 import { tagData } from '../../shared/monitoring/data.js';
 import { useCallback, useMemo } from 'react';
 
-import { toEntryRow } from './fs-model.js';
-import type { DirState } from './fs-model.js';
+import { toEntryRow } from '../../shared/directory-tree/rows.js';
+import type { DirState } from '../../shared/directory-tree/types.js';
 /**
  * 树已知的目录 URI 集合：根目录，加上每一层已加载条目里标记为目录的那些。
  *

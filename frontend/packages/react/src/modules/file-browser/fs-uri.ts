@@ -1,8 +1,6 @@
 import type { FileTreeRow } from '../../components/file-tree/index.js';
 
-/** Normalize trailing slashes without changing the scheme root or home alias. */
-export const normalizeResourceUri = (uri: string) =>
-  uri === 'viking://' ? uri : uri.replace(/\/+$/, '');
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
 
 const HOME_URI = 'viking://~';
 export const isHomeResourceUri = (uri: string) =>

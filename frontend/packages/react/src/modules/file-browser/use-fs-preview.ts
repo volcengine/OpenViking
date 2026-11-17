@@ -12,9 +12,9 @@ import type {
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
-import { isAbort } from './fs-errors.js';
+import { isAbort } from '../../shared/request/fs-errors.js';
 import { toDirectoryTab, type DirectorySummary } from './fs-model.js';
-import { isSystemUri } from './preview-policy.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
 import { readDirectory } from './fs-read-directory.js';
 import { loadingTab } from './fs-preview-loading-tab.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
@@ -22,17 +22,6 @@ import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { loadVideoDetails } from './fs-video-details.js';
 import { abortError, readPreviewStat } from './fs-stat.js';
-
-export interface PreviewState {
-  monitoring?: Workflow<'file_browser_preview_load'>;
-  tabs: readonly FilePreviewTab[] | null;
-  activeKey: string | null;
-  error: Error | null;
-  /** 底部元信息，例如字符数。Footer metadata such as the character count. */
-  footer?: string;
-  updatedAt?: string;
-  setActiveKey: (key: string) => void;
-}
 
 export interface UseFsPreviewOptions {
   client: OvClient | null;
@@ -100,7 +89,7 @@ export function useFsPreview({
   openParent,
   generation = 0,
   requestOptions,
-}: UseFsPreviewOptions): PreviewState {
+}: UseFsPreviewOptions) {
   const [monitoring, setMonitoring] =
     useState<Workflow<'file_browser_preview_load'>>();
   const [directory, setDirectory] = useState<{
@@ -113,6 +102,7 @@ export function useFsPreview({
   const [error, setError] = useState<Error | null>(null);
   const [stat, setStat] = useState<{ uri: string; updatedAt: string }>();
   const [saveGeneration, setSaveGeneration] = useState(0);
+  const [wikiSaving, setWikiSaving] = useState(false);
 
   // useEffect 必要性：按 URI、资源类型与请求配置同步远端正文和目录摘要。
   // URI 也会由宿主属性改变，点击事件无法覆盖这些变化，渲染本身不能发请求。
@@ -120,6 +110,7 @@ export function useFsPreview({
   useEffect(() => {
     setDirectory(null);
     setStat(undefined);
+    setWikiSaving(false);
     if (!client || !uri) {
       setTabs(null);
       setActiveKey(null);
@@ -183,6 +174,9 @@ export function useFsPreview({
               setSaveGeneration((value) => value + 1);
           },
           contentKind === 'wiki',
+          (saving) => {
+            if (!controller.signal.aborted) setWikiSaving(saving);
+          },
         ),
       };
     })();
@@ -272,6 +266,7 @@ export function useFsPreview({
     tabs: directoryTab ? [directoryTab] : tabs,
     activeKey,
     error,
+    wikiSaving,
     footer: count === undefined ? undefined : formatCharacterCount(count),
     updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
     setActiveKey,

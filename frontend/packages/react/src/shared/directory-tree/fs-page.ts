@@ -1,12 +1,9 @@
-import {
-  beginWorkflow,
-  type Workflow,
-} from '../../shared/monitoring/workflow.js';
-import { bindingOf } from '../../shared/monitoring/client.js';
+import { beginWorkflow, type Workflow } from '../monitoring/workflow.js';
+import { bindingOf } from '../monitoring/client.js';
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import type { FsEntry } from './fs-model.js';
-import { isSystemUri } from './preview-policy.js';
+import type { FsEntry } from './types.js';
+import { isSystemUri } from '../resource-uri.js';
 
 /** 一次取多少个子节点。One page of children. */
 export const PAGE_SIZE = 200;

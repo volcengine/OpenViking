@@ -30,6 +30,16 @@ const messages: typeof enUS = {
     resource: '资源添加任务已完成，可点击查看结果。',
     viewResult: '查看结果',
   },
+  compileQuickInputs: {
+    createWiki: {
+      label: '创建 Wiki',
+      prompt: '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联',
+    },
+    dailyReport: {
+      label: '定时日报',
+      prompt: '基于选中的目录生成日报，并设置定时更新',
+    },
+  },
   commands: {
     'add-resource': '添加路径或 URL 到资源',
     'add-skill': '添加 Skill 到技能目录',

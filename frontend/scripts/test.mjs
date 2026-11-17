@@ -41,6 +41,7 @@ try {
               'browser-search-results':
                 './src/modules/file-browser/file-browser-search-results.tsx',
               'fs-tree': './src/modules/file-browser/use-fs-tree.ts',
+              'browser-preview-model': './src/modules/file-browser/fs-model.ts',
               'scope-page':
                 './src/modules/file-browser/use-search-scope-page.ts',
               'query-runtime': './src/client/query-client.tsx',
@@ -92,6 +93,8 @@ try {
               'error-feedback': './src/shared/feedback/error-notification.tsx',
               'notification-scope':
                 './src/shared/feedback/notification-scope.tsx',
+              'reference-picker':
+                './src/components/viking-bot/reference-picker.tsx',
               'reference-tags':
                 './src/components/viking-bot/composer-reference-tags.tsx',
               'wiki-pane': './src/modules/file-browser/wiki-dashboard-pane.tsx',

@@ -4,9 +4,10 @@ import type {
   FilePreviewFileTab,
   FilePreviewTab,
 } from '../../components/file-preview/index.js';
+import { PAGE_SIZE } from '../../shared/directory-tree/fs-page.js';
+import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import type { FsEntry } from '../../shared/directory-tree/types.js';
 import { mimeTypeOf } from './fs-file-kind.js';
-import { nameFromUri, type FsEntry } from './fs-model.js';
-import { PAGE_SIZE } from './fs-page.js';
 import { readPreviewImage } from './fs-preview-images.js';
 
 type VideoDetails = NonNullable<FilePreviewFileTab['videoDetails']>;
