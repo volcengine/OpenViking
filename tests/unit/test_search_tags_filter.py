@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from openviking.server.routers.search import _resolve_search_filter
+from openviking.server.routers.search import resolve_search_filter
 from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
     build_search_tags_filter,
@@ -133,7 +133,7 @@ def test_preserve_memory_type_tag_does_not_reapply_tag_operations():
 
 
 def test_find_tags_filter_requires_all_tags():
-    result = _resolve_search_filter(
+    result = resolve_search_filter(
         request_filter=None,
         context_type=None,
         since=None,
@@ -154,7 +154,7 @@ def test_find_tags_filter_requires_all_tags():
 def test_find_tags_filter_ands_all_tags_with_existing_filter():
     existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
 
-    result = _resolve_search_filter(
+    result = resolve_search_filter(
         request_filter=existing_filter,
         context_type=None,
         since=None,

@@ -84,7 +84,7 @@ from openviking.server.local_input_guard import (
     looks_like_local_path,
 )
 from openviking.server.resource_ingest import ingest_temp_upload
-from openviking.server.routers.search import context_only_fields_error
+from openviking.server.routers.search import context_only_fields_error, resolve_search_filter
 from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
@@ -92,13 +92,9 @@ from openviking.service.rule_service import RuleSearchRequest
 from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.storage.acl import AclSpec
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
-from openviking.utils.search_filters import (
-    SearchContextTypeInput,
-    merge_search_filter,
-    resolve_context_types,
-)
+from openviking.utils.search_filters import resolve_context_types
 from openviking.utils.skill_processor import SkillProcessor
-from openviking.utils.tags import build_search_tags_filter, normalize_search_tags
+from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_decay import validate_event_time_decay_request
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -589,24 +585,6 @@ async def invoke_mcp_tool(
 # -- find / search ---------------------------------------------------------
 
 
-def _resolve_mcp_search_filter(
-    context_type: Optional[SearchContextTypeInput],
-    tags: Optional[List[str]] = None,
-) -> Optional[Dict[str, Any]]:
-    try:
-        merged = merge_search_filter(None, context_type=context_type)
-        tag_filter = build_search_tags_filter(tags)
-        if not tag_filter:
-            return merged
-        if not merged:
-            return tag_filter
-        if tag_filter.get("op") == "and" and isinstance(tag_filter.get("conds"), list):
-            return {"op": "and", "conds": [merged, *tag_filter["conds"]]}
-        return {"op": "and", "conds": [merged, tag_filter]}
-    except ValueError as exc:
-        raise InvalidArgumentError(str(exc)) from exc
-
-
 def _format_tags(tags: Optional[List[str]]) -> str:
     normalized = normalize_search_tags(tags, discard_invalid=True)
     return f" tags={json.dumps(normalized, ensure_ascii=False)}"
@@ -632,7 +610,14 @@ async def find(
         raise InvalidArgumentError(str(exc)) from exc
     service = get_service()
     ctx = _get_ctx()
-    context_filter = _resolve_mcp_search_filter(context_type, tags)
+    context_filter = resolve_search_filter(
+        request_filter=None,
+        context_type=context_type,
+        since=None,
+        until=None,
+        time_field=None,
+        tags=tags,
+    )
     skill_only = resolve_context_types(context_type) == [ContextType.SKILL.value]
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
@@ -729,7 +714,14 @@ async def search(
     ctx = _get_ctx()
     if search_type == "keywords" and not query.strip():
         raise InvalidArgumentError("query must not be empty when search_type='keywords'")
-    context_filter = _resolve_mcp_search_filter(context_type, tags)
+    context_filter = resolve_search_filter(
+        request_filter=None,
+        context_type=context_type,
+        since=None,
+        until=None,
+        time_field=None,
+        tags=tags,
+    )
     if mode == "context":
         if read_content:
             raise InvalidArgumentError("read_content is only supported in mode='list'")
