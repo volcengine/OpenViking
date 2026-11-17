@@ -31,6 +31,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_updater import (
     MemoryReadError,
+    MemoryUpdateError,
     MemoryUpdateResult,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -726,11 +727,12 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
         strict_extract_errors=True,
     )
-    contexts = await extraction
     if apply_error:
-        assert contexts == []
+        with pytest.raises(MemoryUpdateError):
+            await extraction
         assert trained_cases == []
         return
+    contexts = await extraction
 
     assert len(applied_operations) == 1
     assert applied_operations[0].upsert_operations[0].memory_type == "cases"

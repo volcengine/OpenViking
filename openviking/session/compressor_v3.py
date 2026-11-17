@@ -194,8 +194,7 @@ def _report_extraction_telemetry(result: Any, operations: ResolvedOperations) ->
         add(memory_type_for_telemetry(uri), "deleted")
     for operation in result.skipped_operations:
         add(getattr(operation, "memory_type", None), "skipped")
-    for uri, error in result.errors:
-        logger.warning("Memory operation failed for %s: %s", uri, error)
+    for uri, _error in result.errors:
         add(memory_type_for_telemetry(uri), "failed")
 
     for memory_type, actions in actions_by_type.items():
@@ -796,7 +795,7 @@ class SessionCompressorV3:
         result = update_result.apply_result
         patch_operations = update_result.operations
         _report_extraction_telemetry(result, patch_operations)
-        if strict_extract_errors and result.errors and patch_operations.has_errors():
+        if strict_extract_errors and result.errors:
             raise MemoryUpdateError(result)
 
         memory_diff = None
@@ -1084,7 +1083,6 @@ class SessionCompressorV3:
 
             reported_trajectory_uris: set[str] = set()
             training_failures = MemoryUpdateResult()
-            invalid_trajectory_plan = False
             for rollouts in extraction_groups.values():
                 rollout = rollouts[0]
                 candidates = [candidates_by_name[item.case.name] for item in rollouts]
@@ -1092,7 +1090,6 @@ class SessionCompressorV3:
                 try:
                     analysis = await self.rollout_analyzer.analyze(rollout, case_context)
                 except MemoryUpdateError as exc:
-                    invalid_trajectory_plan = True
                     training_failures.errors.extend(exc.result.errors)
                     training_failures.written_uris.extend(exc.result.written_uris)
                     training_failures.edited_uris.extend(exc.result.edited_uris)
@@ -1200,7 +1197,7 @@ class SessionCompressorV3:
                                 if uri:
                                     skill_uris.append(str(uri))
 
-            if strict_extract_errors and invalid_trajectory_plan:
+            if training_failures.errors and strict_extract_errors:
                 raise MemoryUpdateError(training_failures)
             tracer.info(
                 "Submitted commit case memories to streaming train: "
@@ -1218,7 +1215,6 @@ class SessionCompressorV3:
             }
             if training_failures.errors:
                 response["error"] = str(MemoryUpdateError(training_failures))
-                logger.warning("%s", response["error"])
             if collect_memory_diff:
                 response["memory_diff"] = _merge_memory_diffs(
                     memory_diffs,

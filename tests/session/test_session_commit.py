@@ -5,7 +5,6 @@
 
 import asyncio
 import json
-import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -72,15 +71,12 @@ class TestCommit:
         assert await _marker_exists(session, result["archive_uri"], ".done")
         assert not await _marker_exists(session, result["archive_uri"], ".failed.json")
 
-    async def test_commit_completes_after_one_memory_write_fails(
-        self, session_with_messages, monkeypatch, caplog
+    async def test_failed_commit_preserves_successful_memory_writes(
+        self, session_with_messages, monkeypatch
     ):
         session = session_with_messages
         fs = session._viking_fs
         compressor = session._session_compressor
-        monkeypatch.setattr(
-            logging.getLogger("openviking.session.compressor_v3"), "handlers", [caplog.handler]
-        )
         # Index workers are outside the file-only commit fixture.
         monkeypatch.setattr(compressor, "vikingdb", None)
         monkeypatch.setattr(
@@ -93,10 +89,9 @@ class TestCommit:
             upsert_operations=[
                 ResolvedOperation(
                     memory_type="events",
-                    uris=uris,
+                    uris=[a, b, c],
                     memory_fields={"event_name": "meeting", "summary": "Review", "ranges": "0"},
                 )
-                for uris in ([a, b], [c])
             ],
             delete_file_contents=[],
             errors=[],
@@ -114,13 +109,10 @@ class TestCommit:
         monkeypatch.setattr(fs, "write_file", write_except_b)
         commit = await session.commit_async()
         task = await _wait_for_task(commit["task_id"])
-        assert task["status"] == "completed", task
-        assert task["result"]["memories_extracted"]["memory_write"] == 2
-        diff = json.loads(await fs.read_file(task["result"]["memory_diff_uri"], ctx=session.ctx))
-        assert {item["uri"] for item in diff["operations"]["adds"]} == {a, c}
+        assert task["status"] == "failed", task
+        assert f"{b}: injected write failure" in task["error"]
         assert await fs.exists(a, ctx=session.ctx) and await fs.exists(c, ctx=session.ctx)
         assert not await fs.exists(b, ctx=session.ctx)
-        assert f"{b}: injected write failure" in caplog.text
         run.assert_awaited_once()
 
     async def test_memory_apply_failure_does_not_reextract(
