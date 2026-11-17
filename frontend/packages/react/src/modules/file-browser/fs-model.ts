@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
 import type { FsEntry } from '../../shared/directory-tree/types.js';
+import type { DirectorySummaryLabels } from './file-browser-labels.js';
 
 /**
  * 一个文件的预览页签。行数达到上限时按截断处理——接口不返回总行数，只能由
@@ -85,7 +86,7 @@ export interface DirectorySummary {
 export function toDirectoryTab(
   uri: string,
   summary: DirectorySummary,
-  labels: { l0: string; l1: string; failure: string },
+  labels: DirectorySummaryLabels,
   openParent?: (uri: string) => Promise<void>,
   icon?: ReactNode,
 ): FilePreviewDirectoryTab {
@@ -120,6 +121,7 @@ export function toDirectoryTab(
       {
         key: 'l0',
         label: labels.l0,
+        emptyLabel: labels.l0Empty,
         source: {
           content: levelBody(summary.abstract, summary.abstractError),
           fileName: `${name}.md`,
@@ -130,6 +132,7 @@ export function toDirectoryTab(
       {
         key: 'l1',
         label: labels.l1,
+        emptyLabel: labels.l1Empty,
         source: {
           content: levelBody(summary.overview, summary.overviewError),
           fileName: `${name}.md`,

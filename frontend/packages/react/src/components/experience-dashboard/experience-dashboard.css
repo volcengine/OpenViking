@@ -772,8 +772,17 @@
 }
 
 /* 来源追溯：一组可折叠的时间线，标题带旋转的折叠箭头。 */
-.ov-experience-dashboard__source-group {
-  padding: 24px 0 16px;
+.ov-experience-dashboard__source-group:first-child {
+  padding-top: 24px;
+}
+
+.ov-experience-dashboard__source-group:last-child {
+  padding-bottom: 16px;
+}
+
+.ov-experience-dashboard__source-group
+  + .ov-experience-dashboard__source-group {
+  margin-top: 32px;
 }
 
 .ov-experience-dashboard__source-group summary {
@@ -841,7 +850,7 @@
   border: 1px solid
     var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
   border-radius: 8px;
-  background: var(--ov-ui-experience-card);
+  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
 }
 
 .ov-experience-dashboard__test-card > header {
@@ -869,6 +878,13 @@
   line-height: 22px;
 }
 
+.ov-experience-dashboard__test-meta-rows {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .ov-experience-dashboard__test-meta {
   display: flex;
   min-width: 0;
@@ -878,11 +894,6 @@
   color: var(--ov-ui-experience-muted);
   font-size: 12px;
   line-height: 20px;
-}
-
-.ov-experience-dashboard__test-meta > svg {
-  flex: none;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
 }
 
 .ov-experience-dashboard__test-meta code {
@@ -960,9 +971,10 @@
   overflow: auto;
   min-height: 0;
   padding: 16px;
-  /* 与卡片同底：火山版的内容区只比卡片略浅，这里不再另设一层色。 */
-  /* The card's own surface: the console's body is a hair lighter, not a new tone. */
-  background: var(--ov-ui-experience-card);
+  background: var(
+    --ov-ui-color-test-message-surface,
+    var(--ov-ui-test-message-surface-default)
+  );
   color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
   font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
   font-size: 13px;
@@ -974,7 +986,7 @@
 
 .ov-experience-dashboard__test-heading {
   color: var(--ov-ui-experience-muted);
-  font-family: inherit;
+  font-family: system-ui, sans-serif;
   font-size: 12px;
 }
 
@@ -1164,6 +1176,12 @@
 
 .ov-experience-dashboard button:disabled {
   cursor: not-allowed;
+}
+
+@media (max-width: 560px) {
+  .ov-experience-dashboard__test-card {
+    max-height: min(560px, 70dvh);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

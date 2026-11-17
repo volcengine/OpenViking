@@ -100,7 +100,7 @@ export function PreviewHistoryPath({
       <Tooltip content={path}>
         <span>{path}</span>
       </Tooltip>
-      <Tooltip content={text.copyPath}>
+      <Tooltip content={text.copyPath} focusVisibleOnly>
         <Button
           size="small"
           type="text"

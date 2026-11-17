@@ -81,6 +81,11 @@ const messages = {
 
 export default messages;
 
+export const emptySummaries = {
+  l0: 'No L0 summary available',
+  l1: 'No L1 overview available',
+};
+
 export const stackedEmpty = 'Select a file above to preview it';
 
 export const renderErrors = {

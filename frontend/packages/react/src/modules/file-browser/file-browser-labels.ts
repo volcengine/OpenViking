@@ -5,9 +5,14 @@ import workflowEn from './locales/preview-workflow.en-US.js';
 import workflowZh from './locales/preview-workflow.zh-CN.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import { resolveLocale, type Locale } from '../../shared/locale.js';
-import enUS, { stackedEmpty as stackedEmptyEn } from './locales/en-US.js';
-import zhCN, { stackedEmpty as stackedEmptyZh } from './locales/zh-CN.js';
-import { isSystemUri } from '../../shared/resource-uri.js';
+import enUS, {
+  stackedEmpty as stackedEmptyEn,
+  emptySummaries as emptySummariesEn,
+} from './locales/en-US.js';
+import zhCN, {
+  stackedEmpty as stackedEmptyZh,
+  emptySummaries as emptySummariesZh,
+} from './locales/zh-CN.js';
 
 const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
 const STACKED_EMPTY = { 'en-US': stackedEmptyEn, 'zh-CN': stackedEmptyZh };
@@ -16,6 +21,7 @@ import type {
   FilePreviewLabels,
   FilePreviewTab,
 } from '../../components/file-preview/index.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
 import type { FileTreeLabels } from '../../components/file-tree/index.js';
 import type { FileBrowserLabels } from './types.js';
 
@@ -75,15 +81,20 @@ export function withDirectoryEmptyLabel(
   labels: FilePreviewLabels | undefined,
   text: ResolvedLabels,
 ): FilePreviewLabels | undefined {
-  if (tab?.kind !== 'directory') return labels;
-  if (isSystemUri(tab.key))
+  if (tab?.kind === 'directory' && isSystemUri(tab.key))
     return { ...labels, fileEmpty: text.systemDirectory };
-  const empty =
-    tab.activeLevelKey === 'l1' ? text.emptyL1Overview : text.emptyL0Summary;
-  return { ...labels, fileEmpty: labels?.fileEmpty ?? empty };
+  return labels;
 }
 
 export const DEFAULT_LABELS: Required<ShellLabels> = enUS;
+
+export interface DirectorySummaryLabels {
+  l0: string;
+  l1: string;
+  failure: string;
+  l0Empty?: string;
+  l1Empty?: string;
+}
 
 /** Summary titles are derived from the module resource, including host overrides. */
 export function resolveSummaryLabels(
@@ -91,10 +102,14 @@ export function resolveSummaryLabels(
   labels?: FileBrowserLabels,
 ) {
   const text = resolveLabels(labels, locale);
+  const empty = locale === 'zh-CN' ? emptySummariesZh : emptySummariesEn;
+  const sharedEmpty = labels?.summaryEmpty ?? labels?.preview?.fileEmpty;
   return {
     l0: text.l0Summary,
     l1: text.l1Overview,
     failure: text.summaryFailed,
+    l0Empty: labels?.emptyL0Summary ?? sharedEmpty ?? empty.l0,
+    l1Empty: labels?.emptyL1Overview ?? sharedEmpty ?? empty.l1,
   };
 }
 
