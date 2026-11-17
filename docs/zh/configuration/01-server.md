@@ -556,7 +556,7 @@ SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](h
     "host": "127.0.0.1",
     "port": 1933,
     "workers": 1,
-    "executor_threads": 0,
+    "executor_threads": 64,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -574,7 +574,7 @@ SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](h
 | `host` | IP / hostname | `"127.0.0.1"` | HTTP 监听地址 |
 | `port` | integer | `1933` | HTTP 监听端口 |
 | `workers` | integer | `1` | 服务进程数量 |
-| `executor_threads` | 非负整数 | `0` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
+| `executor_threads` | 非负整数 | `64` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
 | `timeout_keep_alive` | integer（秒） | `5` | 空闲 HTTP keep-alive 超时；应调大到超过上游空闲连接寿命 |
 | `auth_mode` | `dev`、`api_key`、`trusted` / `null` | `null` | 鉴权模式；空值根据 `root_api_key` 自动判断 |
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |
