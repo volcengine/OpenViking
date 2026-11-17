@@ -641,10 +641,15 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `eager_prefetch` | boolean | `true` | 是否在抽取前预取并读取记忆内容 |
 | `prefetch_search_topn` | integer，`>= 1` | `5` | 预取时读取的检索结果数量 |
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
+| `archive_source_index_enabled` | boolean | `false` | session commit 时为归档消息的文本摘录建立检索索引 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
 
 自动提交还需要单独设置策略：记忆抽取开关不会让会话自动提交。详见[配置指南](../guides/01-configuration.md)的 `memory.session_auto_commit` 和[会话 API](../api/05-sessions.md)。模板目录的加载顺序和生效方式见 [Prompt 指南](../guides/10-prompt-guide.md)。
+
+开启 `memory.archive_source_index_enabled` 后，Session Commit 会为用户和助手的文本摘录建立索引。用 `find` 在 `viking://~/memories/archive_sources` 下检索，再用 `read` 查看条目中的归档 URI、消息 ID 和从 1 开始计数的 JSONL 行号。读取归档时指定 `offset = 行号 - 1`、`limit = 1` 即可获取对应原始消息。
+
+这个索引使用已配置的 embedding 模型，可独立于长期记忆抽取运行。只运行来源索引时，将 `memory.extraction_enabled` 设为 `false`，并在会话的记忆策略中启用自我记忆、关闭工作记忆。索引从开启后的 Commit 开始建立。
 
 ## 解析器配置
 

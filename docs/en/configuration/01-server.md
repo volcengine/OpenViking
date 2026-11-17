@@ -668,10 +668,15 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `eager_prefetch` | boolean | `true` | Search and read memories before extraction |
 | `prefetch_search_topn` | integer, `>= 1` | `5` | Results read during prefetch |
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
+| `archive_source_index_enabled` | boolean | `false` | Index excerpts of committed session messages for retrieval |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
 
 Automatic commits require a separate policy; enabling memory extraction does not make sessions commit automatically. See `memory.session_auto_commit` in [Configuration](../guides/01-configuration.md) and the [Sessions API](../api/05-sessions.md). For template loading order and when changes take effect, see the [Prompt Guide](../guides/10-prompt-guide.md).
+
+Enable `memory.archive_source_index_enabled` to make bounded excerpts of user and assistant text searchable after commit. Search under `viking://~/memories/archive_sources` with `find`, then read the entry to get the original archive URI, message ID, and one-based JSONL line number. Read the archive at `offset = line - 1`, `limit = 1` to obtain the exact message.
+
+The index uses the configured embedding model and runs independently of `memory.extraction_enabled`. To run with source indexing alone, set `memory.extraction_enabled` to `false` and use a session memory policy with self memory enabled and working memory disabled. Only subsequent commits are indexed.
 
 ## Parser Settings
 

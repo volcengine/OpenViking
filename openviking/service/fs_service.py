@@ -666,6 +666,10 @@ class FSService:
             await self._sync_watch_after_rm(
                 uri, account_id=ctx.account_id, context_type=context_type
             )
+        if is_session_uri(uri):
+            from openviking.session.archive_source_index import remove_archive_sources
+
+            await remove_archive_sources(viking_fs, uri, delete_ctx)
         # A refresh on a parent that no longer exists would lock its sidecar
         # paths and thereby recreate the deleted directory. Nothing to
         # summarize there; skip it.
@@ -1562,7 +1566,13 @@ class FSService:
 
         if offset == 0 and limit == -1:
             return content
-        lines = content.splitlines(keepends=True)
+        if is_session_uri(resolved_uri) and resolved_uri.endswith("/messages.jsonl"):
+            from io import StringIO
+
+            # JSONL records use LF. Unicode separators may occur inside a message.
+            lines = StringIO(content).readlines()
+        else:
+            lines = content.splitlines(keepends=True)
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
 

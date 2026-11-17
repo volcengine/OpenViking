@@ -406,6 +406,9 @@ class SessionService:
             raise NotFoundError(session_id, "session")
 
         await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx, no_vector=True)
+        from openviking.session.archive_source_index import remove_archive_sources
+
+        await remove_archive_sources(self._viking_fs, session_uri, ctx)
         if self._session_expiry_adapter is not None:
             from openviking.scheduling.expiry import SESSION_ITEM_TYPE, ItemIdentity
 
