@@ -121,7 +121,7 @@ Rule Search 是执行受约束的操作或回复前，由模型按需调用的�
 
 | 集成 | 注册的工具名 |
 |---|---|
-| Claude Code、Codex、TraeCode CLI、Cursor、TRAE/CN、ZCode、Kimi Code、CodeBuddy、Qoder CLI、Agent Plugins、其他 MCP 客户端 | 服务端 `rule_search`，带宿主的 MCP 命名空间 |
+| Claude Code、Codex、TraeCode CLI、Cursor、TRAE/CN、ZCode、Kimi Code、CodeBuddy、Qoder CLI、Antigravity、Agent Plugins、其他 MCP 客户端 | 服务端 `rule_search`，带宿主的 MCP 命名空间 |
 | DSH / Desktop | `mcp__openviking__rule_search` |
 | OpenCode、pi、VikingBot | `openviking_rule_search` |
 | VikingBot 通过 MCP | `mcp_<server_name>_rule_search` |
@@ -132,8 +132,8 @@ Rule Search 是执行受约束的操作或回复前，由模型按需调用的�
 
 先升级到会发布 `rule_search` 的服务端版本，再重连 MCP 客户端。
 使用独立 REST 工具的接入端需要升级插件。共享 `openviking-rule-search` skill 随
-Claude Code、Codex/TraeCode CLI、Cursor、CodeBuddy、Qoder CLI、OpenCode、DSH、pi、
-OpenClaw 和 Agent Plugins 分发；没有附带 skill 的宿主仍可发现工具。
+Claude Code、Codex/TraeCode CLI、Cursor、CodeBuddy、Qoder CLI、Antigravity、OpenCode、DSH、
+pi、OpenClaw 和 Agent Plugins 分发；没有附带 skill 的宿主仍可发现工具。
 沿用现有 MCP 开关与工具白名单。新增的是按需查询入口，没有增加每轮自动检查或强制拦截 hook。
 
 Hermes 的 catalog 安装固定在指定 commit，需要更新 catalog pin 才能收到新插件；

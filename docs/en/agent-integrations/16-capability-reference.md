@@ -122,7 +122,7 @@ applicable Rule. A failed or unavailable check is not an empty set of Rules.
 
 | Integration | Registered tool |
 |---|---|
-| Claude Code, Codex, TraeCode CLI, Cursor, TRAE/CN, ZCode, Kimi Code, CodeBuddy, Qoder CLI, Agent Plugins, other MCP clients | Server `rule_search`, with the host's MCP namespace |
+| Claude Code, Codex, TraeCode CLI, Cursor, TRAE/CN, ZCode, Kimi Code, CodeBuddy, Qoder CLI, Antigravity, Agent Plugins, other MCP clients | Server `rule_search`, with the host's MCP namespace |
 | DSH / Desktop | `mcp__openviking__rule_search` |
 | OpenCode, pi, VikingBot | `openviking_rule_search` |
 | VikingBot through MCP | `mcp_<server_name>_rule_search` |
@@ -133,8 +133,8 @@ applicable Rule. A failed or unavailable check is not an empty set of Rules.
 
 Upgrade the server to a build that advertises `rule_search`, then reconnect MCP clients.
 Native REST adapters require the updated plugin. The shared `openviking-rule-search`
-skill ships with Claude Code, Codex/TraeCode CLI, Cursor, CodeBuddy, Qoder CLI, OpenCode, DSH,
-pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
+skill ships with Claude Code, Codex/TraeCode CLI, Cursor, CodeBuddy, Qoder CLI, Antigravity, OpenCode,
+DSH, pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
 Keep existing MCP opt-in and tool allowlist settings enabled. This adds a query entrypoint;
 it does not install an automatic per-turn check or enforcement hook.
 
