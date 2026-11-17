@@ -55,6 +55,8 @@ class SQLUsageAuditStore:
 
     async def initialize(self) -> None:
         async with self._lock:
+            if self._conn is not None:
+                return
             try:
                 await self._run_sync(self._initialize_sync)
             except BaseException:
@@ -62,6 +64,9 @@ class SQLUsageAuditStore:
                 # completed connection must not outlive that failed startup.
                 await self._run_sync(self._close_sync)
                 raise
+
+    def _initialize_sync(self) -> None:
+        raise NotImplementedError("SQL usage/audit backend must own connection initialization")
 
     async def _run_sync(self, function, *args):
         # Cancellation must not release the connection lock while its thread is
