@@ -893,10 +893,10 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
     assert binding["service_name"] == "runtime-cache"
     assert binding["pathlock"] == {
         "provider": "filesystem",
-        "instance": "default",
         "lock_expire_secs": 30.0,
         "lock_timeout_secs": 0.0,
     }
+    assert binding["coordination"] == {"provider": "memory"}
 
 
 def test_ragfs_binding_enables_runtime_for_queuefs_cache_backend(tmp_path):
@@ -1602,6 +1602,16 @@ def test_cache_shared_redis_backend_detection():
         cache,
         {"cachefs": {"backend": "cache"}},
         {"redis": {"endpoints": ["redis://127.0.0.1:6380"]}},
+    )
+
+
+def test_cache_shared_redis_backend_uses_default_cache_endpoint():
+    cache = {"instances": {"default": {"provider": "redis", "params": {}}}}
+
+    assert _cache_shares_redis_backend(
+        cache,
+        {"cachefs": {"backend": "cache"}, "queuefs": {"backend": "cache"}},
+        None,
     )
 
 

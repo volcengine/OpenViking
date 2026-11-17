@@ -70,7 +70,11 @@ class RagfsBindingConfig:
             database.parent.mkdir(parents=True, exist_ok=True)
             pathlock["sqlite_path"] = str(database)
         pathlock_uses_cache = pathlock.get("provider") == "cache"
+        if not pathlock_uses_cache:
+            pathlock.pop("instance", None)
         coordination = self.agfs.coordination.model_dump(mode="json", exclude_none=True)
+        if coordination["provider"] != "cache":
+            coordination.pop("instance", None)
         backups = getattr(self.agfs, "backups", None)
         uses_runtime = (
             cachefs_backend == "cache"
@@ -235,7 +239,7 @@ def _run_coro_blocking(coro: Any) -> Any:
     return result[0] if result else None
 
 
-def _redis_service_keys(endpoints: Any, *, tls: bool = False) -> set[str]:
+def _redis_service_keys(endpoints: Any, tls: bool = False) -> set[str]:
     """Normalize Redis endpoints into comparable service keys.
 
     Endpoints may be full URLs (``redis://host:port``) or bare ``host:port``
@@ -268,6 +272,15 @@ def _redis_service_keys(endpoints: Any, *, tls: bool = False) -> set[str]:
     return keys
 
 
+def _cache_redis_service_keys(instance: Any) -> set[str]:
+    """Return Redis service keys after applying cache instance defaults."""
+    from openviking_cli.utils.config.agfs_config import RedisCacheConfig
+
+    params = dict(_get_config_value(instance, "params", {}))
+    redis = RedisCacheConfig.model_validate(params)
+    return _redis_service_keys(redis.endpoints)
+
+
 def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_config: Any) -> bool:
     """Whether the CacheFS-selected Redis service is shared with stateful users."""
     if cache_config is None:
@@ -279,9 +292,7 @@ def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_conf
     cachefs_config = _require_cache_instance(cache_config, cachefs_instance, "CacheFS")
     if _get_config_value(cachefs_config, "provider") != "redis":
         return False
-    cache_keys = _redis_service_keys(
-        _get_config_value(_get_config_value(cachefs_config, "params"), "endpoints")
-    )
+    cache_keys = _cache_redis_service_keys(cachefs_config)
     if not cache_keys:
         return False
 
@@ -291,9 +302,7 @@ def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_conf
         selected = _require_cache_instance(cache_config, instance, consumer_name)
         if _get_config_value(selected, "provider") != "redis":
             return False
-        selected_keys = _redis_service_keys(
-            _get_config_value(_get_config_value(selected, "params"), "endpoints")
-        )
+        selected_keys = _cache_redis_service_keys(selected)
         return bool(cache_keys & selected_keys)
 
     queuefs = _get_config_value(agfs_config, "queuefs")

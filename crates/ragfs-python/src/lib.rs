@@ -979,11 +979,13 @@ fn parse_canonical_cache_instances(
                 ));
             }
             let provider = provider_kind(string_field(value, "provider", "")?)?;
-            let params = value
-                .get("params")
-                .ok_or_else(|| format!("cache.instances.{name}.params is required"))?
-                .as_object()
-                .ok_or_else(|| format!("cache.instances.{name}.params must be an object"))?;
+            let empty_params = serde_json::Map::new();
+            let params = match value.get("params") {
+                Some(params) => params.as_object().ok_or_else(|| {
+                    format!("cache.instances.{name}.params must be an object")
+                })?,
+                None => &empty_params,
+            };
             parse_cache_instance(provider, params, &format!("cache.instances.{name}.params"))
                 .map(|instance| (name.clone(), instance))
         })
@@ -4038,9 +4040,19 @@ mod tests {
             redis.set_item("command_timeout_ms", 1_000).unwrap();
             let cache = PyDict::new(py);
             cache.set_item("enabled", false).unwrap();
-            cache.set_item("runtime_enabled", false).unwrap();
-            cache.set_item("provider", "redis").unwrap();
-            cache.set_item("redis", redis).unwrap();
+            cache.set_item("runtime_enabled", true).unwrap();
+            let instances = PyDict::new(py);
+            let default = PyDict::new(py);
+            default.set_item("provider", "redis").unwrap();
+            default.set_item("redis", redis).unwrap();
+            instances.set_item("default", default).unwrap();
+            cache.set_item("instances", instances).unwrap();
+            let cachefs = PyDict::new(py);
+            cachefs.set_item("enabled", false).unwrap();
+            cachefs.set_item("instance", "default").unwrap();
+            cachefs.set_item("service_name", "inline-prod").unwrap();
+            cachefs.set_item("shared_redis_ttl_seconds", 0).unwrap();
+            cache.set_item("cachefs", cachefs).unwrap();
             let pathlock = PyDict::new(py);
             pathlock.set_item("provider", "cache").unwrap();
             pathlock.set_item("lock_expire_secs", 3.0).unwrap();
@@ -4443,6 +4455,23 @@ mod tests {
         assert_eq!(
             stack_config.cachefs.shared_redis_ttl,
             Some(Duration::from_secs(600))
+        );
+    }
+
+    #[test]
+    fn canonical_cache_instances_accept_omitted_params() {
+        let cache = serde_json::json!({
+            "instances": {
+                "default": {
+                    "provider": "redis"
+                }
+            }
+        });
+
+        let instances = parse_canonical_cache_instances(cache.as_object().unwrap()).unwrap();
+        assert_eq!(
+            instances["default"].redis.endpoints,
+            RedisCacheConfig::default().endpoints
         );
     }
 
