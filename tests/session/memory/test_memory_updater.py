@@ -1457,14 +1457,12 @@ class TestMemoryUpdater:
         read_errors = {
             uri: error for uri, error in result.errors if isinstance(error, MemoryReadError)
         }
-        assert set(read_errors) == {
-            target_uri,
-            *operations.upsert_operations[1].uris,
-        }
+        failed_update = update_uri + ".second" if write_first else update_uri
+        assert set(read_errors) == {target_uri, failed_update}
         assert all(error.__cause__ is read_error for error in read_errors.values())
-        assert read_errors[update_uri].retryable is retryable
+        assert read_errors[failed_update].retryable is retryable
         assert mock_viking_fs.read_file.await_count == len(reads)
-        assert result.written_uris == []
+        assert result.written_uris == ([update_uri] if write_first else [])
         assert result.edited_uris == []
         assert mock_viking_fs.write_file.await_count == int(write_first)
         assert result.deleted_uris == []
