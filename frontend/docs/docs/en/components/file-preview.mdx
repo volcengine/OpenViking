@@ -222,7 +222,7 @@ The component calls these methods to carry out an operation, and fires the match
 | onSave               | Called after saving succeeds, with the saved text                                                                                                                                | `(value: string) => void`                                                                      | -        |
 | onCancel             | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                      | `(value: string) => void`                                                                      | -        |
 
-`FilePreviewEditorDocument` contains `content` and optional `annotations`. Each annotation has `matchText`, `description`, and an optional `reason`. The Markdown editor highlights lines with a unique body match and shows the explanation without adding it to the saved text.
+`FilePreviewEditorDocument` contains `content` and optional `annotations` and `readOnlySuffix`. The editor displays the suffix after the draft as read-only text. The save callback receives `content` with the user's edits. Each annotation has `matchText`, `description`, and an optional `reason`. The Markdown editor highlights lines with a unique body match and displays the explanation on hover.
 
 ### FilePreviewAction
 

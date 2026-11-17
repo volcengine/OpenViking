@@ -222,7 +222,7 @@ import '@openviking/react/components/file-preview/style.css';
 | onSave               | 保存成功后触发，参数为已保存的文本                                                                                                      | `(value: string) => void`                                                                      | -       |
 | onCancel             | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                                          | `(value: string) => void`                                                                      | -       |
 
-`FilePreviewEditorDocument` 包含 `content` 和可选的 `annotations`。每条标注包含 `matchText`、`description` 和可选的 `reason`。Markdown 编辑器会高亮正文中有唯一匹配的行，并显示说明；说明不写入保存的正文。
+`FilePreviewEditorDocument` 包含 `content` 和可选的 `annotations`、`readOnlySuffix`。编辑器在草稿末尾以只读方式显示尾段，保存回调接收用户编辑后的 `content`。每条标注包含 `matchText`、`description` 和可选的 `reason`。Markdown 编辑器高亮正文中有唯一匹配的行，并在悬停时显示说明。
 
 ### FilePreviewAction
 

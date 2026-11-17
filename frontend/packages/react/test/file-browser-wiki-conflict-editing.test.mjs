@@ -15,7 +15,12 @@ import {
   pending,
 } from './helpers/wiki-conflict-editor-dom.mjs';
 
-test('the FileBrowser editor highlights pending Wiki anchors without including metadata in the draft', async () => {
+const editableBody = (editor) =>
+  [...editor.querySelectorAll('.cm-line')]
+    .map((line) => line.textContent)
+    .join('\n');
+
+test('the FileBrowser editor shows Wiki metadata as a read-only suffix outside the draft', async () => {
   const { view, fetch } = await mountWikiFile();
   const dashboard = () =>
     view.container.querySelector('[role="tab"][data-key^="dashboard:"]');
@@ -29,12 +34,12 @@ test('the FileBrowser editor highlights pending Wiki anchors without including m
     ];
     const highlighted = () => markedLines().map((line) => line.textContent);
     assert.deepEqual(highlighted(), [body]);
+    assert.equal(editableBody(editor).trimEnd(), documentBody);
+    const suffix = editor.querySelector('.ov-file-preview__editor-suffix');
+    assert.equal(suffix?.contentEditable, 'false');
     assert.equal(
-      [...editor.querySelectorAll('.cm-line')]
-        .map((line) => line.textContent)
-        .join('\n')
-        .trimEnd(),
-      documentBody,
+      suffix?.textContent,
+      `<!-- CONFLICTS_CONTENT\n${JSON.stringify(pending)},\n${JSON.stringify(fixed)}\n-->`,
     );
     await act(async () =>
       markedLines()[0].dispatchEvent(
@@ -58,6 +63,8 @@ test('the FileBrowser editor highlights pending Wiki anchors without including m
     assert.deepEqual(highlighted(), []);
     await setEditor(editor, 'The process requires three approvals.');
     assert.deepEqual(highlighted(), []);
+    assert.equal(editableBody(editor), 'The process requires three approvals.');
+    assert.equal(editor.lastElementChild, suffix);
     await click(button('Save', view.container));
     const write = fetch.calls.find(({ path }) =>
       path.endsWith('/content/write'),
@@ -88,7 +95,7 @@ test('the FileBrowser Wiki conflict pencil opens the matching file directly in t
       const editor = await waitForEditor(view.container);
       assert.equal(activeTab(), file);
       assert.equal(dashboard(), null);
-      assert.equal(editor.textContent, body + fixedSentence);
+      assert.equal(editableBody(editor).trimEnd(), documentBody);
       await click(button('Cancel', view.container));
       assert.equal(view.container.querySelector('.cm-content'), null);
       assert.equal(activeTab(), file);
@@ -113,8 +120,8 @@ test('the FileBrowser Wiki conflict pencil waits for the selected file preview',
     assert.equal(view.container.querySelector('.cm-content'), null);
     await act(async () => preview.resolve());
     assert.equal(
-      (await waitForEditor(view.container)).textContent,
-      body + fixedSentence,
+      editableBody(await waitForEditor(view.container)).trimEnd(),
+      documentBody,
     );
   } finally {
     await view.unmount();
