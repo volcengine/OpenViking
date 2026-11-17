@@ -131,6 +131,8 @@ To verify the published Ubuntu 20.04 image on the dedicated pool, dispatch
 `build_sdist=false`, `os_json=["ubuntu-24.04"]` and `python_json=["3.10"]`.
 Confirm the x86_64 job's runner labels, configured digest pull, apt skip,
 GCC/G++ 10, glibc 2.31, wheel smoke test and uploaded artifact.
+This runs the complete wheel build instead of the stock-container apt diagnostic;
+the latter runs only with `build_wheels=false`.
 
 Package sources use HTTPS. Minimal Ubuntu images bootstrap TLS verification with
 the host's `/etc/ssl/certs/ca-certificates.crt`, mounted read-only at a temporary

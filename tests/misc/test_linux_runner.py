@@ -360,6 +360,7 @@ def test_runner_diagnostic_is_explicit_and_does_not_checkout_code():
     assert diagnostic["timeout-minutes"] == 5
     assert "workflow_dispatch" in diagnostic["if"]
     assert "inputs.check_linux_runner" in diagnostic["if"]
+    assert "!inputs.build_wheels" in diagnostic["if"]
     assert all("uses" not in step for step in diagnostic["steps"])
 
 

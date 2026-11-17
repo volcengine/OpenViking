@@ -52,7 +52,7 @@ on:
 jobs:
   check-linux-runner:
     name: Check dedicated Linux runner
-    if: github.event_name == 'workflow_dispatch' && inputs.check_linux_runner && github.repository == 'volcengine/OpenViking'
+    if: github.event_name == 'workflow_dispatch' && inputs.check_linux_runner && !inputs.build_wheels && github.repository == 'volcengine/OpenViking'
     runs-on: [self-hosted, Linux, X64, ci-linux-builds]
     permissions: {}
     timeout-minutes: 5
