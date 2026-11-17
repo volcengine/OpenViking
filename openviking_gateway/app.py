@@ -21,7 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .capture import DELIVERY_SECONDS, CaptureWorker
+from .capture import SWEEP_SECONDS
 from .client import CALL, CallContext, VikingClient, VikingError
 from .config import PUBLIC_OPENVIKING_URLS, GatewayConfig, normalize_url
 from .kernel import MemoryKernel
@@ -36,7 +36,6 @@ from .protocols import configure_rules
 from .proxy import ProxyRequest, filtered_headers, resolve_binding
 from .sinks import FileSink, Stats, snapshot_loop
 from .storage import (
-    STORE_ERRORS,
     AsyncCodec,
     CachedManagement,
     SQLiteKernelStore,
@@ -46,7 +45,6 @@ from .storage import (
 )
 
 logger = logging.getLogger(__name__)
-CAPTURE_DRAIN_SECONDS = DELIVERY_SECONDS
 
 
 async def stdout_log(account, value, user_id=None):
@@ -86,26 +84,13 @@ async def health_loop(app, interval, sleep=asyncio.sleep):
             await sleep(1)
 
 
-async def capture_loop(app, stopped):
-    # While the store keeps failing the wait doubles up to 30 s, so the workers neither
-    # flood the log nor hold the store's connection path that requests need.
-    backoff = 1
-    while not stopped.is_set():
-        wait = 1
+async def commit_loop(app, management):
+    while True:
         try:
-            busy = await app.state.worker.once()
-            backoff = 1
-            if busy:
-                continue
-        except STORE_ERRORS as error:
-            logger.warning("OpenViking Gateway capture store failed: %s", type(error).__name__)
-            wait, backoff = backoff, min(backoff * 2, 30)
+            await app.state.kernel.capture.sweep(management)
         except Exception:
-            logger.exception("OpenViking Gateway capture failed")
-        try:
-            await asyncio.wait_for(stopped.wait(), timeout=wait)
-        except asyncio.TimeoutError:
-            pass
+            logger.exception("OpenViking Gateway could not look for overdue commits")
+        await asyncio.sleep(SWEEP_SECONDS)
 
 
 def open_stores(config: GatewayConfig, encryptor, stats=None):
@@ -175,43 +160,27 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                     config.openviking_breaker_failures,
                     config.openviking_breaker_seconds,
                 )
-                app.state.kernel = MemoryKernel(store, app.state.viking)
-                app.state.worker = CaptureWorker(
-                    store,
-                    management,
-                    app.state.viking,
-                    config.session_ttl_seconds,
-                    config.capture_delivery_records,
-                    stats=stats,
+                app.state.kernel = MemoryKernel(
+                    store, app.state.viking, config.openviking_auto_commit
                 )
-                # Bookkeeping retries that outlive their request.
-                app.state.background = background = set()
                 # The first probe runs in the background: an embedded server is not listening yet.
                 app.state.health = {"status": "starting"}
-                stopped = asyncio.Event()
                 maintenance = [
                     asyncio.create_task(health_loop(app, config.health_interval_seconds)),
                     asyncio.create_task(cleanup_loop()),
+                    asyncio.create_task(commit_loop(app, management)),
                 ]
                 if config.snapshot_interval_seconds:
                     maintenance.append(
                         asyncio.create_task(snapshot_loop(app, config.snapshot_interval_seconds))
                     )
-                app.state.captures = captures = [
-                    asyncio.create_task(capture_loop(app, stopped))
-                    for _ in range(config.capture_concurrency)
-                ]
                 try:
                     yield
                 finally:
-                    stopped.set()
                     for task in maintenance:
                         task.cancel()
-                    draining = [*captures, *background]
-                    _, pending = await asyncio.wait(draining, timeout=CAPTURE_DRAIN_SECONDS)
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.gather(*maintenance, *draining, return_exceptions=True)
+                    await app.state.kernel.capture.close()
+                    await asyncio.gather(*maintenance, return_exceptions=True)
         finally:
             await close()
 

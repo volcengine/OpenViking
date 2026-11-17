@@ -11,7 +11,6 @@ import pytest
 from aiohttp import web
 from conftest import serve_gateway
 
-from openviking_gateway.capture_store import Document
 from openviking_gateway.sinks import write_snapshot
 
 CHAT = "/v1/chat/completions"
@@ -83,10 +82,8 @@ async def test_snapshot_line_has_the_documented_fields(tmp_path, gateway_backend
         assert line["records_failed"] == line["records_dropped"] == line["store_errors"] == 0
         assert line["openviking"]["state"] in {"ok", "starting"}
         assert line["openviking"]["open_circuits"] == 0
-        assert line["capture"]["workers"] == 1
-        assert {"due", "scheduled", "oldest_due_age_s", "delivered", "failed"} <= set(
-            line["capture"]
-        )
+        assert set(line["capture"]) == {"delivered", "failed"}
+        assert line["capture"]["failed"] == 0
         stats = app.state.stats
         assert stats.inflight_requests == stats.inflight_streams == 0
 
@@ -164,28 +161,10 @@ async def test_no_snapshot_by_default(tmp_path, gateway_backend, capsys):
     assert snapshot_lines(capsys.readouterr().out) == []
 
 
-async def test_capture_backlog(kernel_store):
-    now = time.time()
-    assert await kernel_store.capture.backlog(now) == {
-        "due": 0,
-        "scheduled": 0,
-        "oldest_due_age_s": 0,
-    }
-    # Due at once, due for ten seconds, due in a minute, and nothing scheduled.
-    for session, ready in [("now", 0), ("late", now - 10), ("later", now + 60), ("idle", None)]:
-        assert await kernel_store.capture.swap("scope", session, Document(), {"n": 1}, ready)
-    backlog = await kernel_store.capture.backlog(now)
-    assert backlog["due"] == 2 and backlog["scheduled"] == 3
-    assert backlog["oldest_due_age_s"] == pytest.approx(10, abs=0.01)
-
-
-async def queue_turn(gateway, session):
-    from conftest import make_due
-
-    app, client, _, issued, _, _ = gateway
+async def save_turn(gateway, session):
+    _, client, _, issued, _, _ = gateway
     headers = {**auth(issued["key"]), "X-OpenViking-Session": session}
     assert (await client.post(CHAT, headers=headers, json=BODY)).status_code == 200
-    await make_due(app.state.store)
 
 
 async def counted(stats, name):
@@ -197,7 +176,7 @@ async def counted(stats, name):
 async def test_snapshot_counts_deliveries_and_failed_attempts(tmp_path, gateway_backend):
     async with serve_gateway(tmp_path, gateway_backend, {}) as gateway:
         app, stats = gateway[0], gateway[0].state.stats
-        await queue_turn(gateway, "saved")
+        await save_turn(gateway, "saved")
         await counted(stats, "capture_delivered")
         delivered = await stats.snapshot(app)
         after = await stats.snapshot(app)
@@ -208,7 +187,7 @@ async def test_snapshot_counts_deliveries_and_failed_attempts(tmp_path, gateway_
             return None
 
         app.state.test_backend["handler"] = unavailable
-        await queue_turn(gateway, "stuck")
+        await save_turn(gateway, "stuck")
         await counted(stats, "capture_failed")
         failed = await stats.snapshot(app)
     assert delivered["capture"]["delivered"] == 1 and delivered["capture"]["failed"] == 0

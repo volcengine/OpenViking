@@ -6,7 +6,6 @@ import time
 
 import pytest
 from aiohttp import web
-from conftest import make_due
 
 
 @pytest.fixture(params=["store", "stdout"])
@@ -97,30 +96,30 @@ async def test_failure_records_carry_no_secrets(running_gateway, capsys):
         assert secret not in output + json.dumps(stored)
 
 
-async def test_capture_events_use_selected_sink(running_gateway, capsys):
+async def test_capture_outcomes_use_selected_sink(running_gateway, capsys):
     app, client, _, issued, _, writes = running_gateway
-    response = await client.post(
-        "/v1/chat/completions",
-        headers={"Authorization": "Bearer " + issued["key"], "X-OpenViking-Session": "capture"},
-        json={"model": "model", "messages": [{"role": "user", "content": "Remember this"}]},
-    )
-    assert response.status_code == 200, response.text
-    capsys.readouterr()
+    stdout = app.state.config.request_log_sink == "stdout"
 
     async def unavailable(request):
         if request.path.startswith("/api/v1/sessions"):
             return web.Response(status=503)
 
-    for handler, status, reason in [
-        (unavailable, "retrying", "openviking_http_503"),
-        (None, "active", "delivery_recovered"),
+    messages = [{"role": "user", "content": "Remember this"}]
+    for handler, expected in [
+        (unavailable, {"capture_status": "failed", "capture_reason": "openviking_http_503"}),
+        (None, {"capture_status": "active", "capture_messages": 4}),
     ]:
         app.state.test_backend["handler"] = handler
-        await make_due(app.state.store)
-        assert await app.state.worker.once()
+        capsys.readouterr()
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer " + issued["key"], "X-OpenViking-Session": "capture"},
+            json={"model": "model", "messages": messages},
+        )
+        assert response.status_code == 200, response.text
         output = capsys.readouterr().out
         stored = await app.state.management.logs("tenant")
-        if app.state.config.request_log_sink == "stdout":
+        if stdout:
             assert len(output.splitlines()) == 1
             record = json.loads(output)
             assert record["account"] == "tenant" and record["user_id"] == "alice"
@@ -128,10 +127,14 @@ async def test_capture_events_use_selected_sink(running_gateway, capsys):
         else:
             assert output == ""
             record = stored[0]
-        assert record["kind"] == "capture"
-        assert record["capture_status"] == status and record["capture_reason"] == reason
+        assert record["kind"] == "user"
+        assert expected.items() <= record.items()
         for secret in (issued["key"], "user-key", "model-secret", "Remember this"):
             assert secret not in output + json.dumps(stored)
+        messages += [
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "And this"},
+        ]
     assert writes
 
 
@@ -145,12 +148,12 @@ async def test_stdout_flushes_each_line(monkeypatch):
         write=lambda data: calls.append(data), flush=lambda: calls.append("flush")
     )
     monkeypatch.setattr(sys, "stdout", SimpleNamespace(buffer=buffer))
-    await stdout_log("tenant\n你好", {"kind": "capture"})
+    await stdout_log("tenant\n你好", {"kind": "user"})
     line, flushed = calls
     assert line.endswith(b"\n") and line.count(b"\n") == 1
     record = json.loads(line)
     assert record["account"] == "tenant\n你好" and record["user_id"] is None
-    assert record["kind"] == "capture" and record["time"] <= time.time()
+    assert record["kind"] == "user" and record["time"] <= time.time()
     assert flushed == "flush"
 
 
