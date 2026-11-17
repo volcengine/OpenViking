@@ -251,7 +251,9 @@ export class WorkerExecutor {
         child.stderr.setEncoding('utf8');
         child.stderr.on('data', (chunk) => { stderr = tail(stderr + chunk, 4_000); });
         child.once('error', (error) => resolve({ ...reader.state, error: safeError(error), transient: false }));
-        child.once('exit', (code, signal) => {
+        // exit can precede the last stdout/stderr data. Wait for both pipes
+        // to close so the final result or model error is included.
+        child.once('close', (code, signal) => {
           const failed = stopped ? 'stopped' : reader.state.error ?? (code === 0 ? null : `exit ${code ?? signal}: ${tail(stderr, 600)}`);
           resolve({ ...reader.state, error: failed, transient: Boolean(failed && !stopped && TRANSIENT.test(failed)) });
         });

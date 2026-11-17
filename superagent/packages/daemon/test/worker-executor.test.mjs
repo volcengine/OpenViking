@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { FORK_MAX_BYTES, WorkerExecutor } from '../src/worker-executor.mjs';
 import { PI_MCP_EXTENSION } from '../src/pi-runtime.mjs';
 
@@ -43,6 +45,29 @@ function setup(t) {
 }
 
 describe('WorkerExecutor', () => {
+  it('reads the remaining CLI output after process exit before completing a turn', async (t) => {
+    const { config, task } = setup(t);
+    config.piBin = 'fake-pi';
+    const spawn = () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      setImmediate(() => {
+        child.emit('exit', 0, null);
+        // Node may observe exit before the stdout pipe has drained.
+        child.stdout.end(JSON.stringify({ type: 'message_end', message: {
+          role: 'assistant', content: [], stopReason: 'error', errorMessage: 'HTTP 429',
+        } }) + '\n');
+        child.stderr.end();
+        child.emit('close', 0, null);
+      });
+      return child;
+    };
+    const result = await new WorkerExecutor({ config, spawn }).start({ task: task(), prompt: 'p', authority: 'x' }).done;
+    assert.equal(result.error, 'HTTP 429');
+    assert.equal(result.transient, true);
+  });
+
   it('runs a Pi worker turn in json print mode in its own session, with the worker authority and policy', async (t) => {
     const { dir, config, task } = setup(t);
     config.piBin = fakeCli(dir, 'pi', [
