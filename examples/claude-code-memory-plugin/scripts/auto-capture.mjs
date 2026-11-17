@@ -266,9 +266,10 @@ async function main({ cfg, input, cwd }) {
   if (finalAnswer && !holdsAnswer(allTurns, finalAnswer)) {
     newTurns.push({ role: "assistant", text: finalAnswer, parts: [{ type: "text", text: finalAnswer }] });
   }
-  const captureTurns = cfg.captureAssistantTurns
-    ? newTurns
-    : newTurns.filter(turn => turn.role === "user");
+  // The cursor counts host-authored turns; only the conversation is sent.
+  const captureTurns = newTurns.filter(
+    (turn) => !turn.hostAuthored && (cfg.captureAssistantTurns || turn.role === "user"),
+  );
   log("transcript_parse", {
     totalTurns: allTurns.length,
     previouslyCaptured: state.capturedTurnCount,
