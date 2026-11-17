@@ -36,12 +36,8 @@ execution time. Conditional skips can change the observed share.
 The old ECS runner does not receive these jobs.
 
 Only official repository PRs from the same repository and branch pushes are
-eligible. Release/tag events, schedules, ordinary manual builds, fork PRs and other
-repositories use GitHub-hosted. An official-repository manual distribution build
-with `check_linux_runner=true` explicitly routes requested x86_64 wheels to the
-dedicated pool, regardless of run-number parity, when `CI_LINUX_BUILDS_ENABLED=true`
-and `CI_DISABLE_SELF_HOSTED` is not `true`. ARM remains hosted.
-The native producer publishes its selected labels
+eligible. Release/tag events, schedules, manual builds, fork PRs and other
+repositories use GitHub-hosted. The native producer publishes its selected labels
 and container image for its consumers; no extra selector job or token is needed.
 Studio, both musl CLI targets, other tests/checks and source packaging stay hosted. Native ARM,
 macOS and Windows assignments are unchanged.
@@ -126,13 +122,17 @@ package installation in both container images without checking out repository
 code. Enable `CI_LINUX_BUILDS_ENABLED` only after it passes. The runner user must
 be able to access Docker without interactive sudo.
 
-To verify the published Ubuntu 20.04 image on the dedicated pool, dispatch
-`_build.yml` with `check_linux_runner=true`, `build_wheels=true`,
-`build_sdist=false`, `os_json=["ubuntu-24.04"]` and `python_json=["3.10"]`.
+To verify the published Ubuntu 20.04 image on the dedicated pool, use an eligible
+PR/push build with an even workflow run number.
 Confirm the x86_64 job's runner labels, configured digest pull, apt skip,
 GCC/G++ 10, glibc 2.31, wheel smoke test and uploaded artifact.
-This runs the complete wheel build instead of the stock-container apt diagnostic;
-the latter runs only with `build_wheels=false`.
+The stock-container apt diagnostic runs only with `build_wheels=false`;
+`check_linux_runner` does not change wheel routing.
+
+CLI `find`/`search` integration tests retry explicit upstream model TPM/RPM
+limits at most twice, with roughly 30- and 60-second backoff and jitter.
+Persistent rate limits still fail; billing/quota exhaustion and other errors are
+not retried by this helper. Production queries retain their existing retry policy.
 
 Package sources use HTTPS. Minimal Ubuntu images bootstrap TLS verification with
 the host's `/etc/ssl/certs/ca-certificates.crt`, mounted read-only at a temporary

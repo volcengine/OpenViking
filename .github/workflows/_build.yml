@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       check_linux_runner:
-        description: 'Check the dedicated Linux runner; also route requested x64 wheels there when enabled'
+        description: 'Check Docker and HTTPS package downloads on the dedicated Linux build runner'
         required: false
         type: boolean
         default: false
@@ -210,13 +210,11 @@ jobs:
     runs-on: >-
       ${{ fromJSON(matrix.arch == 'aarch64' && '["ubuntu-24.04-arm"]' ||
           github.repository == 'volcengine/OpenViking' &&
-          (github.event_name == 'pull_request' || github.event_name == 'push' ||
-           (github.event_name == 'workflow_dispatch' && inputs.check_linux_runner)) &&
+          (github.event_name == 'pull_request' || github.event_name == 'push') &&
           !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
           vars.CI_LINUX_BUILDS_ENABLED == 'true' &&
           (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
-          ((github.event_name == 'workflow_dispatch' && inputs.check_linux_runner) ||
-           endsWith(github.run_number, '0') || endsWith(github.run_number, '2') ||
+          (endsWith(github.run_number, '0') || endsWith(github.run_number, '2') ||
            endsWith(github.run_number, '4') || endsWith(github.run_number, '6') ||
            endsWith(github.run_number, '8')) &&
           '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
