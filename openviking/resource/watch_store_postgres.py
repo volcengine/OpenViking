@@ -5,13 +5,14 @@
 import logging
 from typing import Any, Sequence
 
-from sqlalchemy import JSON, func, literal_column, text
+from sqlalchemy import JSON, func, inspect, literal_column, text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from openviking.resource.watch_store_postgres_schema import (
     POSTGRES_WATCH_INDEX_KEYS,
     POSTGRES_WATCH_TARGET_PREFIX_CHARS,
+    postgres_watch_type_name,
 )
 from openviking.resource.watch_store_sql import SQLWatchStore
 
@@ -41,6 +42,14 @@ class PostgresWatchStore(SQLWatchStore):
             literal_column(str(POSTGRES_WATCH_TARGET_PREFIX_CHARS)),
         )
 
+    def _schema_error(self, problem: str) -> RuntimeError:
+        return RuntimeError(
+            f"PostgreSQL Watch table {self._tasks.name!r} {problem}. "
+            f"Please have an administrator provision or migrate it using {_SCHEMA_SCRIPT}; "
+            "replace table and index names for storage.watch_store.params.table. "
+            "Initialization does not create or migrate the schema."
+        )
+
     async def _validate_schema(self, session: Any) -> None:
         try:
             await super()._validate_schema(session)
@@ -49,12 +58,47 @@ class PostgresWatchStore(SQLWatchStore):
             if state not in {"42P01", "42703"}:
                 raise
             problem = "does not exist" if state == "42P01" else "is missing required columns"
-            raise RuntimeError(
-                f"PostgreSQL Watch table {self._tasks.name!r} {problem}. "
-                f"Please have an administrator provision or migrate it using {_SCHEMA_SCRIPT}; "
-                "replace table and index names for storage.watch_store.params.table. "
-                "Initialization does not create or migrate the schema."
-            ) from exc
+            raise self._schema_error(problem) from exc
+
+        connection = await session.connection()
+
+        def read_schema(sync_connection):
+            inspector = inspect(sync_connection)
+            return (
+                inspector.get_columns(self._tasks.name),
+                inspector.get_pk_constraint(self._tasks.name)["constrained_columns"],
+            )
+
+        columns, primary_key = await connection.run_sync(read_schema)
+        actual = {column["name"]: column for column in columns}
+        mismatches = []
+        for column in self._tasks.c:
+            expected_type = column.type.dialect_impl(connection.dialect)
+            found = actual[column.name]
+            # Driver adaptation can turn Text into a String implementation;
+            # compile the declared type, as CREATE TABLE does.
+            expected_name = postgres_watch_type_name(column.type.compile(connection.dialect))
+            found_name = postgres_watch_type_name(found["type"].compile(connection.dialect))
+            if expected_name != found_name:
+                mismatches.append(
+                    f"{column.name} type: expected {expected_name}, found {found_name}"
+                )
+            if column.nullable != found["nullable"]:
+                mismatches.append(
+                    f"{column.name} nullable: expected {column.nullable}, found {found['nullable']}"
+                )
+            expected_collation = getattr(expected_type, "collation", None)
+            found_collation = getattr(found["type"], "collation", None)
+            if expected_collation is not None and expected_collation != found_collation:
+                mismatches.append(
+                    f"{column.name} collation: expected {expected_collation!r}, "
+                    f"found {found_collation!r}"
+                )
+        expected_pk = [column.name for column in self._tasks.primary_key]
+        if primary_key != expected_pk:
+            mismatches.append(f"primary key: expected {expected_pk}, found {primary_key}")
+        if mismatches:
+            raise self._schema_error("has incompatible schema: " + "; ".join(mismatches))
 
         # Resolve the same quoted relation as the column probe, including search_path.
         result = await session.execute(

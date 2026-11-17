@@ -15,7 +15,10 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 from openviking.resource.watch_store_postgres import PostgresWatchStore
-from openviking.resource.watch_store_postgres_schema import POSTGRES_WATCH_INDEX_KEYS
+from openviking.resource.watch_store_postgres_schema import (
+    POSTGRES_WATCH_INDEX_KEYS,
+    postgres_watch_type_name,
+)
 from openviking.resource.watch_store_sql import db_now, watch_tables
 from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchRunResult
 from openviking_cli.utils.config.storage_config import StorageConfig, WatchStoreConfig
@@ -33,6 +36,66 @@ from tests.resource.test_watch_store import (
 make_store = _make_store
 
 PARAMS = {"user": "u", "database": "d", "credential_encryption_key": ENCRYPTION_KEY}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "created_att",
+        "md5(account_typo::text)",
+        "substr(target_typo::text, 1, 128)",
+        "unsupported(account_id)",
+    ],
+)
+def test_postgres_metadata_rejects_unknown_columns_and_expressions(monkeypatch, key):
+    from openviking.resource import watch_store_sql
+
+    monkeypatch.setattr(
+        watch_store_sql,
+        "POSTGRES_WATCH_INDEX_KEYS",
+        {**POSTGRES_WATCH_INDEX_KEYS, "invalid": ("service_name", key)},
+    )
+    with pytest.raises(ValueError, match="unknown PostgreSQL Watch index key"):
+        watch_tables("ov_watch_tasks", dialect="postgresql")
+
+
+def _postgres_table_definition(statement):
+    """Compare the column contract, ignoring SQL/Python default differences."""
+    normalized = " ".join(str(statement).split()).rstrip(";")
+    match = re.fullmatch(r"CREATE TABLE (\w+) \((.*)\)", normalized)
+    assert match, normalized
+    table_name, body = match.groups()
+    columns = {}
+    primary_key = ()
+    # Split only commas outside parentheses (VARCHAR sizes / primary-key lists).
+    for entry in re.split(r",\s*(?![^()]*\))", body):
+        entry = entry.strip()
+        if entry.startswith("PRIMARY KEY"):
+            primary_key = tuple(
+                name.strip() for name in re.fullmatch(r"PRIMARY KEY \((.*)\)", entry)[1].split(",")
+            )
+            continue
+        name, rest = entry.split(" ", 1)
+        sql_type = re.split(r"\s+(?:COLLATE|DEFAULT|NOT NULL|NULL)\b", rest, maxsplit=1)[0]
+        collation = re.search(r'COLLATE "([^"]+)"', rest)
+        columns[name] = (
+            postgres_watch_type_name(sql_type),
+            "NOT NULL" not in rest,
+            collation[1] if collation else None,
+        )
+    return table_name, columns, primary_key
+
+
+@pytest.mark.parametrize("table_name", ["ov_watch_tasks", "custom_watch_tasks"])
+def test_postgres_metadata_and_deployment_ddl_share_column_contract(table_name):
+    ddl = POSTGRES_SCHEMA.read_text().replace("ov_watch_tasks", table_name)
+    ddl = "\n".join(line for line in ddl.splitlines() if not line.lstrip().startswith("--"))
+    deployed = next(
+        statement for statement in ddl.split(";") if statement.strip().startswith("CREATE TABLE")
+    )
+    table = watch_tables(table_name, dialect="postgresql")
+    metadata = CreateTable(table).compile(dialect=postgresql.dialect())
+    assert _postgres_table_definition(metadata) == _postgres_table_definition(deployed)
 
 
 @pytest.mark.parametrize("table_name", ["ov_watch_tasks", "custom_watch_tasks"])
@@ -554,6 +617,47 @@ async def test_postgres_missing_column_reports_migration_and_can_retry(make_stor
     await asyncio.to_thread(repair)
     await store.initialize()
     assert (await store.list_tasks_page(OWNER)).total == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("alteration", "message"),
+    [
+        ("ALTER COLUMN payload TYPE TEXT USING payload::text", "payload type"),
+        ("ALTER COLUMN next_run_at TYPE NUMERIC", "next_run_at type"),
+        ("ALTER COLUMN enabled DROP NOT NULL", "enabled nullable"),
+        ('DROP CONSTRAINT "{table}_pkey"', "primary key"),
+        ('ALTER COLUMN user_id TYPE VARCHAR(255) COLLATE "POSIX"', "user_id collation"),
+        ("ALTER COLUMN account_id TYPE VARCHAR(32)", "account_id type"),
+    ],
+)
+async def test_postgres_schema_drift_is_rejected_before_reading_tasks(
+    make_store, alteration, message
+):
+    from sqlalchemy import text
+
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL column structure initialization contract")
+    await create(store)
+
+    async def alter():
+        async with store._transaction() as session:
+            await session.execute(
+                text(
+                    f'ALTER TABLE "{store._table_name}" '
+                    + alteration.format(table=store._table_name)
+                )
+            )
+
+    await store._sql_runtime.run(alter)
+    await store.close()
+    with pytest.raises(RuntimeError, match=message) as error:
+        await store.initialize()
+    assert "001_watch_tasks_postgres.sql" in str(error.value)
+    assert store._engine is None
+    assert store._sessions is None
+    assert not store._runtime_lease
 
 
 @pytest.mark.asyncio

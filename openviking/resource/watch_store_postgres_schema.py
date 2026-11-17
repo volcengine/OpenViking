@@ -8,6 +8,14 @@ The deployment DDL is checked against these keys in the schema consistency test.
 
 from types import MappingProxyType
 
+
+def postgres_watch_type_name(sql_type: str) -> str:
+    """Normalize PostgreSQL aliases; collation is checked separately."""
+    name = sql_type.upper().split(" COLLATE ", 1)[0].replace("CHARACTER VARYING", "VARCHAR")
+    # PostgreSQL FLOAT without a precision argument is double precision.
+    return "DOUBLE PRECISION" if name == "FLOAT" else name
+
+
 POSTGRES_WATCH_TARGET_PREFIX_CHARS = 128
 
 POSTGRES_WATCH_INDEX_KEYS = MappingProxyType(

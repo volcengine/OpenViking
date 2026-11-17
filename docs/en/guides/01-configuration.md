@@ -1575,7 +1575,8 @@ ALTER TABLE ov_watch_tasks
 
 For PostgreSQL, install `openviking[postgres]` and provision
 `openviking/service/sql/001_watch_tasks_postgres.sql` (PostgreSQL 14+).
-Initialization reports missing tables or columns with a provisioning hint and warns
+Initialization validates required column types, nullability, collations, and the composite
+primary key. It reports missing or incompatible schema with a provisioning hint and warns
 about missing, invalid, or incompatible indexes. It does not create or migrate tables or indexes.
 For a custom `params.table`, replace the table and index names in that script.
 

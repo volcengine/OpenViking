@@ -16,6 +16,7 @@ import binascii
 import hashlib
 import json
 import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -39,9 +40,9 @@ from sqlalchemy import (
     func,
     insert,
     literal,
+    literal_column,
     or_,
     select,
-    text,
     tuple_,
     update,
 )
@@ -204,6 +205,19 @@ class _SecretCipher:
         return value if isinstance(value, dict) else None
 
 
+def _pg_index_element(tasks: Table, key: str) -> Any:
+    """Resolve only declared columns and supported, column-checked expressions."""
+    if key in tasks.c:
+        return tasks.c[key]
+    md5 = re.fullmatch(r"md5\(([a-z_][a-z0-9_]*)::text\)", key)
+    if md5 and md5[1] in tasks.c:
+        return func.md5(tasks.c[md5[1]])
+    prefix = re.fullmatch(r"substr\(([a-z_][a-z0-9_]*)::text, 1, ([1-9][0-9]*)\)", key)
+    if prefix and prefix[1] in tasks.c:
+        return func.substr(tasks.c[prefix[1]], literal_column("1"), literal_column(prefix[2]))
+    raise ValueError(f"unknown PostgreSQL Watch index key: {key}")
+
+
 def watch_tables(
     table: str, metadata: Optional[MetaData] = None, *, dialect: str = "mysql"
 ) -> Table:
@@ -252,7 +266,7 @@ def watch_tables(
         for suffix, keys in POSTGRES_WATCH_INDEX_KEYS.items():
             Index(
                 f"ix_{table}_{suffix}",
-                *(tasks.c[key] if key in tasks.c else text(key) for key in keys),
+                *(_pg_index_element(tasks, key) for key in keys),
             )
     else:
         Index(f"ix_{table}_due", tasks.c.service_name, tasks.c.enabled, tasks.c.next_run_at)

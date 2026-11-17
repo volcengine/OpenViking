@@ -3,7 +3,7 @@
 -- For a custom params.table, replace ov_watch_tasks in table and index names.
 -- This is independent of the Task/Work, Account and vector storage schemas.
 -- Keep indexes aligned with resource/watch_store_postgres_schema.py;
--- tests/resource/test_watch_store_postgres.py checks metadata/DDL consistency.
+-- tests/resource/test_watch_store_postgres.py checks table/index metadata against this DDL.
 
 CREATE TABLE ov_watch_tasks (
     service_name VARCHAR(255) COLLATE "C" NOT NULL,
