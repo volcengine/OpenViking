@@ -78,6 +78,18 @@ export class LarkCli {
     if (result.code !== 0) throw new Error(`lark-cli config init failed: ${failure(result)}`);
   }
 
+  // Removes a previous owner login before a profile becomes bot-only. Run it
+  // before config init: when the profile is being repointed to another app,
+  // its old app credentials are still available to revoke the user token.
+  // A profile that does not exist yet has nothing to clear.
+  async logoutUser({ profile }) {
+    const result = await this.run(['--profile', profile, 'auth', 'logout', '--json'], { timeoutMs: 30_000 });
+    const body = parseJson(result.stdout);
+    if (result.code === 0) return true;
+    if (body?.error?.subtype === 'not_configured') return false;
+    throw new Error(`lark-cli auth logout failed: ${failure(result)}`);
+  }
+
   async beginUserLogin({ profile, scopes }) {
     const result = await this.run(['--profile', profile, 'auth', 'login', '--scope', scopes.join(' '), '--no-wait', '--json']);
     const started = parseJson(result.stdout);

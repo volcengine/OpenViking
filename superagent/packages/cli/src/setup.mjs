@@ -1103,12 +1103,21 @@ export async function connectLark({
         'Add what is missing in the developer console; if you own or administer the app, ov-superagent setup can add it with a scan later')
       : t('之后运行 ov-superagent setup 可以扫码补齐', 'ov-superagent setup can add it with a scan later'));
   }
-  await larkCli.configureProfile({ profile, ...app });
   if (scopes.user.length === 0) {
-    if (access === 'bot') await warnOwnerReads(prompter, larkCli, profile);
+    // Skipping a new OAuth flow is not enough when setup reuses a profile:
+    // remove its old local login (and revoke the user token) while the old app
+    // credentials are still configured. Do not report bot-only if this fails.
+    const oldUserScopes = await larkCli.userScopes({ profile }).catch(() => null);
+    await larkCli.logoutUser({ profile });
+    await larkCli.configureProfile({ profile, ...app });
+    if (oldUserScopes?.length) {
+      prompter.success(t(`已清除 ${profile} 原有的用户登录和 user token`,
+        `Removed the previous user login and user token from ${profile}`));
+    }
     prompter.success(t('飞书已接好（仅机器人权限）', 'Feishu/Lark is connected (bot only)'));
     return { profile, ownerOpenId: app.ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null };
   }
+  await larkCli.configureProfile({ profile, ...app });
   const login = await larkCli.beginUserLogin({ profile, scopes: grantedUserScopes(scopes, inspected) });
   const what = t('授权 OpenViking SuperAgent 使用你的完整用户权限', 'let OpenViking SuperAgent use your full user access');
   const scan = showScan(prompter, {
@@ -1128,17 +1137,6 @@ export async function connectLark({
   }
   prompter.success(t('飞书已接好', 'Feishu/Lark is connected'));
   return { profile, ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null };
-}
-
-// An app the owner once let read their messages keeps that grant, whatever
-// it asks for now: OpenViking SuperAgent itself reads as the bot, but the grant stays usable.
-async function warnOwnerReads(prompter, larkCli, profile) {
-  let granted = null;
-  try { granted = await larkCli.userScopes({ profile }); } catch {}
-  const kept = (granted ?? []).filter((scope) => OWNER_MESSAGE_SCOPES.includes(scope));
-  if (!kept.length) return;
-  prompter.warn(t(`你以前允许过这个应用以你的身份读消息（${list(kept)}），飞书不会收回：OpenViking SuperAgent 的工具只用机器人身份读消息，但机器人在命令行里用 lark-cli 仍能以你的身份搜到消息。要彻底隔开，换一个新建的机器人。`,
-    `You once let this app read messages as you (${list(kept)}), and Feishu/Lark keeps that grant: OpenViking SuperAgent's tools read only as the bot, but with lark-cli in its shell the bot can still search messages as you. To keep them apart for sure, use a newly created bot.`));
 }
 
 // The app as its bot reads it, through the instance's profile.

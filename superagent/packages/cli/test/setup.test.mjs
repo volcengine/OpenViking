@@ -1420,9 +1420,11 @@ function fakeLarkCli(profiles = []) {
     calls,
     profiles: async () => profiles,
     configureProfile: async ({ profile, appId }) => { calls.push(['profile', profile, appId]); },
+    logoutUser: async ({ profile }) => { calls.push(['logout', profile]); },
     beginUserLogin: async ({ scopes }) => { calls.push(['login', scopes]); return { url: 'https://accounts.feishu.cn/x', deviceCode: 'd' }; },
     finishUserLogin: async () => {},
     userOpenId: async () => 'ou_owner',
+    userScopes: async () => null,
   };
 }
 
@@ -1448,7 +1450,7 @@ function pipePrompter(answers) {
   return { prompter: new Prompter({ input, output }), written: () => written };
 }
 
-test('connecting a bot-only app skips user authorization, and an old grant is named', async () => {
+test('reconnecting a full-user profile as bot-only clears its old login before reconfiguring it', async () => {
   const scopes = larkScopes('bot');
   const granted = [...scopes.tenant.map((scope) => ({ scope, token_types: ['tenant'] })),
     ...larkScopes().user.map((scope) => ({ scope, token_types: ['user'] }))];
@@ -1457,28 +1459,24 @@ test('connecting a bot-only app skips user authorization, and an old grant is na
     addons = options.addons;
     return { client_id: 'cli_old', client_secret: 's', user_info: { open_id: 'ou_owner' } };
   };
-  const larkCli = { ...fakeLarkCli(), userScopes: async () => [] };
+  let login = larkScopes().user;
+  const larkCli = {
+    ...fakeLarkCli(),
+    userScopes: async () => login,
+    logoutUser: async ({ profile }) => { larkCli.calls.push(['logout', profile]); login = null; },
+  };
   const { prompter, written } = pipePrompter([]);
   await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
-    profile: 'superagent-new', source: 'create', access: 'bot', register });
+    profile: 'superagent-asd', source: 'select', access: 'bot', register });
   assert.deepEqual(addons.scopes, scopes);
-  // The app may still carry old user scopes, but setup does not start user OAuth.
-  assert.deepEqual(larkCli.calls, [['profile', 'superagent-new', 'cli_old']]);
+  // The app may still carry old user scopes, but setup revokes and removes the
+  // reusable user token before writing the selected app to the profile.
+  assert.deepEqual(larkCli.calls, [['logout', 'superagent-asd'], ['profile', 'superagent-asd', 'cli_old']]);
+  assert.equal(login, null);
   assert.doesNotMatch(written(), /第 2 次扫码|等待授权/);
+  assert.match(written(), /已清除 superagent-asd 原有的用户登录和 user token/);
   assert.match(written(), /飞书已接好（仅机器人权限）/);
-  assert.doesNotMatch(written(), /用于搜索和读历史|以前允许过/);
-
-  // The owner once let this app read their messages: Feishu keeps that, so they are told.
-  const once = { ...fakeLarkCli(), userScopes: async () => ['docx:document:readonly', 'search:message', 'im:message.group_msg:get_as_user'] };
-  const told = pipePrompter([]);
-  await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: told.prompter, larkCli: once, fetchImpl: pickedApp(granted),
-    profile: 'superagent-new', source: 'select', access: 'bot', register });
-  assert.match(told.written(), /你以前允许过这个应用以你的身份读消息（search:message、im:message\.group_msg:get_as_user），飞书不会收回[\s\S]*换一个新建的机器人/);
-
-  // Reading as the owner never looks for an old grant.
-  const owner = { ...fakeLarkCli(), userScopes: async () => { throw new Error('not asked'); } };
-  await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: pipePrompter([]).prompter, larkCli: owner, fetchImpl: pickedApp(granted),
-    profile: 'superagent-new', source: 'create', register });
+  assert.doesNotMatch(written(), /用于搜索和读历史/);
 });
 
 test('connecting a picked app: another instance on it is a warning, what it lacks is named, and only its user scopes are asked for', async () => {
