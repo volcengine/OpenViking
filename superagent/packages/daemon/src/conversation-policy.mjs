@@ -4,8 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentCliCommands, cliCommandCode } from './agent-clis.mjs';
+import { agentCliCommands, cliCommandCode, ripgrepCommand } from './agent-clis.mjs';
 import { safeError } from './logger.mjs';
+import { PI_SHELL_DEFAULT_S, PI_SHELL_MAX_S } from './pi-runtime.mjs';
 
 // The conversation policy is the Core's markdown under agent/ (how inputs,
 // decisions and deliveries work, one section per connector the instance
@@ -206,12 +207,25 @@ function workersSection(config = {}) {
 
 // A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
 // keeps the instance's Role, for the domain and the voice of its drafts.
-export function assembleWorkerPolicy(config = {}) {
+export function assembleWorkerPolicy(config = {}, { runtime = null } = {}) {
   return joinSections([
     renderPrompt(config, 'worker.md'),
+    shellSection(config, { runtime, worker: true }),
     roleSection(config),
     naturalWritingSection(config),
   ]);
+}
+
+// How a session uses its shell. Every runtime searches with the bundled rg.
+// On Pi a command without a timeout of its own is stopped after
+// PI_SHELL_DEFAULT_S (pi-mcp-extension.mjs), so the model must know to give
+// longer work its own; a workers router is capped shorter instead (workers.md).
+function shellSection(config, { runtime = null, worker = false } = {}) {
+  const lines = [`- Search file contents with ${cliCommandCode(ripgrepCommand(config))} rather than \`grep -r\`: it skips what .gitignore excludes, hidden files and binaries (\`-uu\` adds ignored and hidden files), and is much faster in a large tree.`];
+  if (runtime === 'pi' && (worker || config.scheduler !== 'workers')) {
+    lines.push(`- A shell command without a \`timeout\` of its own is stopped after ${PI_SHELL_DEFAULT_S / 60} minutes, and none runs longer than ${PI_SHELL_MAX_S / 60}: give a build, test run or install that needs more its own \`timeout\` (in seconds).`);
+  }
+  return ['## Shell', '', ...lines].join('\n');
 }
 
 // How a decision is delivered: one final delivery, or (agents[].stagedReplies)
@@ -232,13 +246,15 @@ function bundledCliSection(config) {
 }
 
 // Codex, TraeX, Claude, Pi, Durable, OpenCode and Antigravity: the whole policy, delivered
-// through the Core tools.
-export function assembleConversationPolicy(config = {}) {
+// through the Core tools. `runtime` names the runtime when its shell has rules
+// of its own (Pi).
+export function assembleConversationPolicy(config = {}, { runtime = null } = {}) {
   return joinSections([
     renderPrompt(config, 'core.md').replace('{{DELIVERY_RULES}}', () => deliveryRules(config)),
     renderPrompt(config, 'events.md'),
     ...connectorSections(config),
     bundledCliSection(config),
+    shellSection(config, { runtime }),
     renderPrompt(config, 'openviking.md'),
     config.meetingNotes ? renderPrompt(config, 'meeting-notes.md') : '',
     roleSection(config),

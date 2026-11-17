@@ -344,6 +344,17 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.deepEqual(failures[0].receiptIds, ['receipt-stop']);
   });
 
+  it('caps a workers router\'s own shell instead of giving it the default timeout', async () => {
+    const { agent, calls } = harness({ config: { ...baseConfig, scheduler: 'workers' } });
+    await agent.start();
+    const { args, options: { env } } = calls.at(-1);
+    assert.deepEqual([env.PERSONAL_AGENT_SHELL_LIMIT_S, env.PERSONAL_AGENT_WORK_TOOL_BUDGET, env.PERSONAL_AGENT_SHELL_DEFAULT_S, env.PERSONAL_AGENT_SHELL_MAX_S],
+      ['30', '6', undefined, undefined]);
+    const runtimePrompt = fs.readFileSync(args[args.indexOf('--append-system-prompt') + 1], 'utf8');
+    assert.match(runtimePrompt, /a command is cut off after 30 seconds/);
+    assert.doesNotMatch(runtimePrompt, /stopped after 5 minutes/);
+  });
+
   it('preflights, starts pi --mode rpc, and prefixes the first real turn', async () => {
     const { agent, calls, persistent, store } = harness();
     await agent.start();
@@ -364,7 +375,12 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.equal(env.PI_LARK_TOOLS_CONFIG, undefined);
     const promptPath = args[args.indexOf('--append-system-prompt') + 1];
     const runtimePrompt = fs.readFileSync(promptPath, 'utf8');
-    assert.equal(runtimePrompt, assembleConversationPolicy(baseConfig));
+    assert.equal(runtimePrompt, assembleConversationPolicy(baseConfig, { runtime: 'pi' }));
+    // A router that does the work itself: a command without a timeout cannot
+    // hold every chat, and the model knows to give longer work its own.
+    assert.match(runtimePrompt, /stopped after 5 minutes, and none runs longer than 60/);
+    assert.deepEqual([env.PERSONAL_AGENT_SHELL_DEFAULT_S, env.PERSONAL_AGENT_SHELL_MAX_S, env.PERSONAL_AGENT_SHELL_LIMIT_S],
+      ['300', '3600', undefined]);
     assert.doesNotMatch(runtimePrompt, /Agent tools from bash|actions\/cli\.mjs/);
     assert.doesNotMatch(runtimePrompt, /lark-cli im \+messages-reply/);
     assert.equal(args[args.lastIndexOf('--extension') + 1], PI_MCP_EXTENSION);

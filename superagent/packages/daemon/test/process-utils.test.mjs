@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { bundledLarkCli } from '../src/lark-cli-bin.mjs';
+import { bundledRipgrep, RIPGREP_VERSION } from '../src/ripgrep-bin.mjs';
 import { bundledSlackCli, SLACK_CLI_VERSION } from '../src/slack/cli.mjs';
 import { agentCliCommands } from '../src/agent-clis.mjs';
 import { sanitizeCodexEnv } from '../src/codex.mjs';
@@ -157,6 +158,17 @@ test('the installed Slack CLI runs version in an agent shell', {
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.startsWith(`${bundledSlackCli()}\n`));
   assert.ok(result.stdout.includes(SLACK_CLI_VERSION), result.stdout);
+});
+
+test('the installed ripgrep is the rg of an agent shell', {
+  skip: posixShell.skip || (!fs.existsSync(bundledRipgrep()) && 'run scripts/install-ripgrep.mjs to install the pinned binary'),
+}, (t) => {
+  const { root, workspace, systemBin } = fixture(t);
+  executable(path.join(systemBin, 'rg'), 'global');
+  const env = sanitizeAgentChildEnv({ HOME: root, PATH: systemBin });
+  const result = shell('command -v rg && rg --version', env, workspace);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.startsWith(`${bundledRipgrep()}\nripgrep ${RIPGREP_VERSION} `), result.stdout);
 });
 
 test('Windows runtime PATH preserves inherited mixed-case Path before adding CLI prefixes', { skip: process.platform !== 'win32' }, () => {

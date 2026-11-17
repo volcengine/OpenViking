@@ -12,6 +12,20 @@ export const PI_VERSION = manifest.dependencies['@earendil-works/pi-coding-agent
 export const PI_MCP_EXTENSION = fileURLToPath(new URL('./pi-mcp-extension.mjs', import.meta.url));
 export const PI_MCP_STATUS = 'personal-agent-mcp';
 
+// Pi's bash has no default timeout: a command that never ends (a search over
+// a whole home directory, a server started in the foreground) holds the turn,
+// and a worker's task, until someone stops it. A Pi session that does the work
+// itself (a worker, or a router of the legacy or inbox scheduler) gives a
+// command without a timeout PI_SHELL_DEFAULT_S, and lets none ask for more than
+// PI_SHELL_MAX_S (pi-mcp-extension.mjs). Builds and test runs can take longer
+// than the default; the policy tells the model to give them their own.
+export const PI_SHELL_DEFAULT_S = 300;
+export const PI_SHELL_MAX_S = 3_600;
+
+export function piShellTimeoutEnv() {
+  return { PERSONAL_AGENT_SHELL_DEFAULT_S: String(PI_SHELL_DEFAULT_S), PERSONAL_AGENT_SHELL_MAX_S: String(PI_SHELL_MAX_S) };
+}
+
 export function managedPiBin() {
   const entry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
   return path.join(path.dirname(entry), 'bundle', 'cli.js');

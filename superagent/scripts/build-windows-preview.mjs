@@ -43,6 +43,7 @@ try {
   run(node, [path.join(root, 'runtime', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
     'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], root);
   run(node, [path.join(root, 'scripts', 'install-lark-cli.mjs')], root);
+  run(node, [path.join(root, 'scripts', 'install-ripgrep.mjs')], root);
   // npm workspace junctions point at the staging directory. Materialize only
   // these known links before ZIP creation, so the extracted tree is portable.
   for (const workspace of pkg.workspaces) {

@@ -53,7 +53,42 @@ describe('Pi router shell guard', () => {
   });
 
   it('leaves the shell alone otherwise', () => {
-    assert.equal(load({ PERSONAL_AGENT_SHELL_LIMIT_S: undefined }).has('tool_call'), false);
+    assert.equal(load({ PERSONAL_AGENT_SHELL_LIMIT_S: undefined, PERSONAL_AGENT_SHELL_DEFAULT_S: undefined }).has('tool_call'), false);
+  });
+});
+
+describe('Pi shell timeout', () => {
+  const env = { PERSONAL_AGENT_SHELL_LIMIT_S: undefined, PERSONAL_AGENT_SHELL_DEFAULT_S: '300', PERSONAL_AGENT_SHELL_MAX_S: '3600' };
+
+  it('gives a command without a timeout the default, keeps one the model chose, and caps it at the most', () => {
+    const toolCall = load(env).get('tool_call');
+    const timeout = (input) => {
+      const event = { toolName: 'bash', input: { command: 'npm test', ...input } };
+      assert.equal(toolCall(event), undefined, 'never refused');
+      return event.input.timeout;
+    };
+    assert.equal(timeout({}), 300);
+    assert.equal(timeout({ timeout: 0 }), 300);
+    assert.equal(timeout({ timeout: 1_200 }), 1_200, 'a long build keeps the timeout it asked for');
+    assert.equal(timeout({ timeout: 5 }), 5);
+    assert.equal(timeout({ timeout: 86_400 }), 3_600);
+    assert.equal(toolCall({ toolName: 'bash', input: { command: 'sleep 60 && gh run view 1' } }), undefined, 'a worker may wait');
+    const read = { toolName: 'read', input: { path: 'x' } };
+    assert.equal(toolCall(read), undefined);
+    assert.deepEqual(read.input, { path: 'x' });
+  });
+
+  it('has no most unless one is given', () => {
+    const event = { toolName: 'bash', input: { command: 'make', timeout: 86_400 } };
+    load({ ...env, PERSONAL_AGENT_SHELL_MAX_S: undefined }).get('tool_call')(event);
+    assert.equal(event.input.timeout, 86_400);
+  });
+
+  it('leaves a workers router to its own, shorter cap', () => {
+    const handlers = load({ ...env, PERSONAL_AGENT_SHELL_LIMIT_S: '30' });
+    const event = { toolName: 'bash', input: { command: 'npm test', timeout: 600 } };
+    handlers.get('tool_call')(event);
+    assert.equal(event.input.timeout, 30);
   });
 });
 

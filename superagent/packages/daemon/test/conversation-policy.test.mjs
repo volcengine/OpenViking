@@ -190,7 +190,31 @@ describe('conversation policy assemble', () => {
     const text = assembleConversationPolicy({ connectors: ['weixin'] });
     assert.match(text, /## Bundled command-line tools/);
     for (const { name, bin } of agentCliCommands()) assert.ok(text.includes(`- ${name}: ${cliCommandCode(bin)}`));
+    assert.ok(agentCliCommands().some(({ name }) => name === 'rg'));
     assert.match(text, /messages still go through the Core tools/);
+  });
+
+  it('tells every session to search with the bundled rg, and a Pi session that does the work itself its timeout', () => {
+    const rule = /A shell command without a `timeout` of its own is stopped after 5 minutes, and none runs longer than 60: give a build, test run or install that needs more its own `timeout` \(in seconds\)\./;
+    const rg = cliCommandCode(agentCliCommands().find(({ name }) => name === 'rg').bin);
+    for (const scheduler of ['legacy', 'inbox', 'workers']) {
+      const config = { connectors: ['lark'], scheduler };
+      const text = assembleConversationPolicy(config);
+      assert.ok(text.includes(`\n## Shell\n\n- Search file contents with ${rg} rather than \`grep -r\``), scheduler);
+      assert.ok(text.indexOf('## Bundled command-line tools') < text.indexOf('## Shell'), 'with the CLIs, before the Role');
+      assert.doesNotMatch(text, rule, `${scheduler}: only Pi's shell has no timeout of its own`);
+      const pi = assembleConversationPolicy(config, { runtime: 'pi' });
+      if (scheduler === 'workers') assert.doesNotMatch(pi, rule, 'a workers router keeps its 30-second cap');
+      else assert.match(pi, rule, scheduler);
+      assert.match(assembleWorkerPolicy(config, { runtime: 'pi' }), rule, `${scheduler} worker`);
+      for (const runtime of ['codex', 'claude']) {
+        const worker = assembleWorkerPolicy(config, { runtime });
+        assert.ok(worker.includes(`- Search file contents with ${rg}`), runtime);
+        assert.doesNotMatch(worker, rule, runtime);
+      }
+    }
+    const spaced = assembleWorkerPolicy({ ripgrepBin: '/opt/my tools/rg' }, { runtime: 'pi' });
+    assert.ok(spaced.includes("- Search file contents with `'/opt/my tools/rg'` rather than"));
   });
 
   it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
