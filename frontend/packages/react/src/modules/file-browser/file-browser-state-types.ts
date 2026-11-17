@@ -16,6 +16,7 @@ import type { FileBrowserDashboardLabels, FileBrowserLabels } from './types.js';
 export interface FileBrowserApi {
   treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
   previewMonitoring?: Workflow<'file_browser_preview_load'>;
+  wikiSaving: boolean;
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;

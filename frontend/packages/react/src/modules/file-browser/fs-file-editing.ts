@@ -15,6 +15,7 @@ export function createFileEditing(
   options: OvRequestOptions,
   onSave?: () => void,
   isWiki = false,
+  onWikiSaving?: (saving: boolean) => void,
 ): FilePreviewEditing | undefined {
   if (
     !EDITABLE_TEXT.test(name) ||
@@ -52,18 +53,24 @@ export function createFileEditing(
       };
     },
     save: async (content) => {
-      await client.request({
-        method: 'POST',
-        path: OV_PATHS.contentWrite,
-        body: {
-          uri,
-          content,
-          mode: 'replace',
-          // The native write contract preserves and updates Wiki conflict history.
-          ...(wiki ? { resolve_conflicts: true, use_snapshot: true } : {}),
-        },
-        options,
-      });
+      const notify = wiki ? onWikiSaving : undefined;
+      notify?.(true);
+      try {
+        await client.request({
+          method: 'POST',
+          path: OV_PATHS.contentWrite,
+          body: {
+            uri,
+            content,
+            mode: 'replace',
+            // The native write contract preserves and updates Wiki conflict history.
+            ...(wiki ? { resolve_conflicts: true, use_snapshot: true } : {}),
+          },
+          options,
+        });
+      } finally {
+        notify?.(false);
+      }
     },
     onSave,
   };

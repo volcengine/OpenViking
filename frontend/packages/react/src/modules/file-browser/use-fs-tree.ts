@@ -23,10 +23,12 @@ const empty: Record<string, DirState> = {};
 const subscribeEmpty = () => () => {};
 const emptySnapshot = () => empty;
 const emptyDirectoryRef = { current: empty };
+const DIRECTORY_LOAD = 'file_browser_directory_load';
 
 export function useFsTree({
   client,
   rootUri,
+  cacheScopeKey,
   defaultExpandedUri,
   requestOptions,
 }: UseFsTreeOptions): FsTreeState {
@@ -35,10 +37,10 @@ export function useFsTree({
     aborted,
     error: identityError,
     retry: retryScope,
-  } = useQueryScope(client, requestOptions, 'file_browser_directory_load');
+  } = useQueryScope(client, requestOptions, DIRECTORY_LOAD, cacheScopeKey);
   const session = useMemo(
-    () => (request ? new DirectoryQueries(request, rootUri) : undefined),
-    [request, rootUri],
+    () => request && new DirectoryQueries(request, rootUri, cacheScopeKey),
+    [request, rootUri, cacheScopeKey],
   );
   const dirs = useSyncExternalStore(
     aborted ? subscribeEmpty : (session?.subscribe ?? subscribeEmpty),

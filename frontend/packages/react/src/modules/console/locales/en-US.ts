@@ -57,6 +57,18 @@ const messages = {
     resource: 'The resource import is complete. Click to view the result.',
     viewResult: 'View result',
   },
+  compileQuickInputs: {
+    createWiki: {
+      label: 'Create Wiki',
+      prompt:
+        'Organize the files in the selected directory into a Wiki, preserving sources and the relationships between documents',
+    },
+    dailyReport: {
+      label: 'Schedule daily report',
+      prompt:
+        'Generate a daily report from the selected directory and schedule updates',
+    },
+  },
   commands,
   commandGuides: {
     'add-resource': {

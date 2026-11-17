@@ -18,6 +18,7 @@ import {
 import { FileBrowserFailure } from './file-browser-failure.js';
 import type { useFileBrowserAcl } from './use-file-browser-acl.js';
 import { useFileBrowserPreviewActions } from './use-file-browser-preview-actions.js';
+import { WikiSaveNotification } from './wiki-save-notification.js';
 import type { FileBrowserApi } from './file-browser-state-types.js';
 import type {
   FileBrowserLabels,
@@ -50,19 +51,16 @@ function FileBrowserPreviewPaneContent({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const canWrite = !readOnly && permissions.canEdit;
-  const { previewTabs, previewKey } = browser;
+  const { currentUri: uri, previewTabs, previewKey } = browser;
   const tab =
     previewTabs?.find(({ key }) => key === previewKey) ?? previewTabs?.[0];
   const systemDirectory = tab?.kind === 'directory' && isSystemUri(tab.key);
-  const modelNotice = previewModelNotice(
-    browser.currentUri,
-    text.previewModelNotice,
-  );
+  const modelNotice = previewModelNotice(uri, text.previewModelNotice);
   const previewFooter =
     tab &&
     tab.kind !== 'content' &&
     !tab.loading &&
-    tab.key === browser.currentUri &&
+    tab.key === uri &&
     (browser.previewFooter || browser.previewUpdatedAt || modelNotice) ? (
       <FileBrowserPreviewFooter
         count={browser.previewFooter}
@@ -73,7 +71,7 @@ function FileBrowserPreviewPaneContent({
       />
     ) : undefined;
   const controls = useFileBrowserPreviewActions({
-    uri: browser.currentUri,
+    uri,
     rootUri,
     isFile: tab?.kind === 'file',
     enabled: Boolean(tab && tab.kind !== 'content' && !tab.loading),
@@ -182,14 +180,16 @@ function FileBrowserPreviewPaneContent({
 export function FileBrowserPreviewPane(
   props: Parameters<typeof FileBrowserPreviewPaneContent>[0],
 ) {
+  const { browser, locale, requestOptions, rootUri } = props;
   const client = useOvClient();
   const key = scopeKeyOf(
     client,
-    props.requestOptions,
-    JSON.stringify([props.rootUri, props.browser.currentUri]),
+    requestOptions,
+    JSON.stringify([rootUri, browser.currentUri]),
   );
   return (
-    <MonitoringFlow operation={props.browser.previewMonitoring}>
+    <MonitoringFlow operation={browser.previewMonitoring}>
+      <WikiSaveNotification saving={browser.wikiSaving} locale={locale} />
       <ErrorBoundary
         monitoringRegion="preview"
         message={useRenderErrors(props.locale).preview}

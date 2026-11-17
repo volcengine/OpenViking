@@ -62,6 +62,11 @@ export function PreviewHistoryControls({
           .map((entry) => (
             <SelectOption key={entry.id} value={entry.id}>
               {historyVersionLabel(entry, locale)}
+              {entry.restored ? (
+                <span className="ov-file-history__version-badge">
+                  {text.rollbackBadge}
+                </span>
+              ) : null}
             </SelectOption>
           ))}
       </Select>

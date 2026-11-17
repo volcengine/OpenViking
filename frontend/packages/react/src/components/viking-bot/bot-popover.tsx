@@ -10,6 +10,7 @@ export function BotPopover({
   trigger: renderTrigger,
   children,
   placement = 'bottom',
+  alignment = 'end',
   onOpen,
   hover = false,
 }: {
@@ -17,6 +18,7 @@ export function BotPopover({
   trigger: (props: ButtonHTMLAttributes<HTMLButtonElement>) => ReactNode;
   children: (close: () => void) => ReactNode;
   placement?: 'top' | 'bottom';
+  alignment?: 'start' | 'end';
   onOpen?: () => void;
   hover?: boolean;
 }) {
@@ -27,7 +29,13 @@ export function BotPopover({
   const dismissTimer = useRef<number | undefined>(undefined);
   const skipFocus = useRef(false);
   const id = useId();
-  const position = useOverlayPosition(open, anchor, surface, placement, 'end');
+  const position = useOverlayPosition(
+    open,
+    anchor,
+    surface,
+    placement,
+    alignment,
+  );
   const cancelDismiss = () => window.clearTimeout(dismissTimer.current);
   const hide = () => {
     cancelDismiss();

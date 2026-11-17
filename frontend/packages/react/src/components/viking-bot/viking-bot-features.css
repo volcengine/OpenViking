@@ -224,16 +224,27 @@
   justify-content: center;
 }
 .ov-viking-bot__reference-picker {
+  display: flex;
   min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+.ov-viking-bot__popover--top:has(> .ov-viking-bot__reference-picker) {
+  display: flex;
+  flex-direction: column;
+  width: min(280px, calc(100vw - 16px));
+  max-height: min(368px, calc(100dvh - 16px));
+  overflow: hidden;
+  padding: 8px 12px;
 }
 .ov-viking-bot__reference-picker--mention {
+  position: fixed;
   box-sizing: border-box;
-  width: min(288px, calc(100vw - 16px));
-  max-height: min(368px, calc(100vh - 32px));
-  overflow: auto;
+  width: min(280px, calc(100vw - 16px));
+  overflow: hidden;
   border: 1px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
   border-radius: 12px;
-  padding: 12px;
+  padding: 8px 12px;
   background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   box-shadow: 0 8px 24px
@@ -243,25 +254,34 @@
       transparent
     );
 }
-.ov-viking-bot__reference-picker label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.ov-viking-bot__reference-search {
+  flex: none;
   margin-bottom: 8px;
 }
-.ov-viking-bot__reference-picker input:not(.ov-input__element) {
-  box-sizing: border-box;
-  width: 100%;
-  border: 1px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
-  border-radius: 6px;
-  padding: 6px 8px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
-  color: inherit;
-  font: inherit;
+.ov-viking-bot__reference-results {
+  height: auto;
 }
-.ov-viking-bot__reference-picker input:not(.ov-input__element):focus {
-  border-color: var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline: none;
+.ov-viking-bot__reference-results .ov-file-tree__body {
+  overscroll-behavior: contain;
+}
+.ov-viking-bot__reference-results .ov-file-tree__row,
+.ov-viking-bot__reference-active {
+  line-height: 22px;
+  letter-spacing: 0.3px;
+}
+.ov-viking-bot__reference-active {
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+}
+.ov-viking-bot__reference-error {
+  display: flex;
+  min-height: 96px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
 }
 .ov-viking-bot__quick-inputs button:not(.ov-button):focus-visible,
 .ov-viking-bot__session-history button:not(.ov-button):focus-visible {

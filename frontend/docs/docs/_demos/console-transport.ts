@@ -20,7 +20,10 @@ export function consoleTransport(): typeof fetch {
         : input instanceof URL
           ? input.href
           : input.url;
-    const path = new URL(url, 'https://demo.invalid').pathname;
+    const { pathname: path, searchParams } = new URL(
+      url,
+      'https://demo.invalid',
+    );
     const resource = {
       uri: 'viking://resources/demo/notes.md',
       name: 'notes.md',
@@ -30,6 +33,18 @@ export function consoleTransport(): typeof fetch {
       path === '/api/v1/compile/create' && typeof init?.body === 'string'
         ? (JSON.parse(init.body) as { compile_name: string }).compile_name
         : undefined;
+    const uri = searchParams.get('uri');
+    const menuEntries =
+      uri === 'viking://'
+        ? [{ uri: 'viking://resources', isDir: true }]
+        : uri === 'viking://resources'
+          ? [{ uri: 'viking://resources/demo', isDir: true }]
+          : [resource];
+    const pattern =
+      path === '/api/v1/search/glob' && typeof init?.body === 'string'
+        ? (JSON.parse(init.body) as { pattern: string }).pattern
+        : undefined;
+    const keyword = pattern?.slice(4, -1).replace(/\[([a-z])[A-Z]\]/g, '$1');
     const writes: Record<string, unknown> = {
       '/api/v1/resources': { task_id: 'demo-resource', root_uri: resource.uri },
       '/api/v1/skills': { root_uri: 'viking://agent/skills/llm-wiki' },
@@ -43,6 +58,9 @@ export function consoleTransport(): typeof fetch {
         task_id: 'demo-compile',
         status: 'completed',
       },
+      '/api/v1/search/glob': {
+        matches: resource.uri.includes(keyword ?? '') ? [resource.uri] : [],
+      },
     };
     const writeResult =
       writes[path] ??
@@ -53,7 +71,7 @@ export function consoleTransport(): typeof fetch {
     const result =
       writeResult ??
       (path.endsWith('/ls') || path.endsWith('/tree')
-        ? [resource]
+        ? menuEntries
         : ['/read', '/abstract', '/overview'].some((suffix) =>
               path.endsWith(suffix),
             )

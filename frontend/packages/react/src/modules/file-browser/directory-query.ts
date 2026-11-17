@@ -13,24 +13,30 @@ import type { QueryRequest } from './use-query-scope.js';
 export type DirectoryPage = Awaited<ReturnType<typeof loadPage>> & {
   nextOffset: number;
 };
+type DirectoryKey = ReturnType<typeof queryKeys.directory>;
 export type DirectoryOptions = InfiniteQueryObserverOptions<
   DirectoryPage,
   Error,
   InfiniteData<DirectoryPage>,
-  ReturnType<typeof queryKeys.directory>,
+  DirectoryKey | readonly [...DirectoryKey, string],
   number
 >;
 export function directoryOptions(
   request: QueryRequest,
   uri: string,
+  cacheScopeKey?: string,
   retryError?: () => unknown,
 ): DirectoryOptions {
-  const queryKey = queryKeys.directory(request.scope, {
+  const baseKey = queryKeys.directory(request.scope, {
     uri,
     output: 'agent',
     include_tags: isSystemUri(uri) ? undefined : true,
     node_limit: PAGE_SIZE,
   });
+  const queryKey =
+    cacheScopeKey === undefined
+      ? baseKey
+      : ([...baseKey, cacheScopeKey] as const);
   let seen: Set<string> | undefined;
   return {
     queryKey,

@@ -25,6 +25,8 @@ export interface FsTreeState extends ReturnType<typeof useTreeMetadata> {
 export interface UseFsTreeOptions {
   client: OvClient | null;
   rootUri: string;
+  /** Isolates cached rows when the host changes an opaque identity. */
+  cacheScopeKey?: string;
   /**
    * 首次加载后自动展开到的路径，逐级展开并加载子节点。省略时只展开根。
    * Path to expand to after the first load, opening and loading each level.
