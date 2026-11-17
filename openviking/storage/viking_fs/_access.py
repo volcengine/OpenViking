@@ -782,7 +782,6 @@ class _AccessMixin:
 
         if node_limit == 0:
             return
-        raw_offset = 0
         raw_limit = None if node_limit is None else max(node_limit, 256)
         remaining_offset = offset
         yielded = 0
@@ -790,17 +789,16 @@ class _AccessMixin:
         expose_resource_names = acl_enabled and is_acl_uri(uri)
         denied_directories: set[str] = set()
 
-        while True:
-            raw_entries = await self._async_agfs.tree_directory(
-                path,
-                show_hidden=show_all_hidden,
-                node_limit=raw_limit,
-                level_limit=level_limit,
-                offset=raw_offset,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                directories_only=directories_only,
-            )
+        pages = await self._async_agfs.tree_directory_pages(
+            path,
+            show_hidden=show_all_hidden,
+            page_size=raw_limit,
+            level_limit=level_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            directories_only=directories_only,
+        )
+        async for raw_entries in pages:
             if not raw_entries:
                 return
 
@@ -887,7 +885,6 @@ class _AccessMixin:
 
             if raw_limit is None or len(raw_entries) < raw_limit:
                 return
-            raw_offset += len(raw_entries)
 
     # ========== URI Conversion ==========
 
@@ -954,32 +951,14 @@ class _AccessMixin:
                 return False
             raise
 
-    async def _list_read_path_items(
+    def _map_read_path_items(
         self,
         uri: str,
-        raw_offset: int = 0,
-        raw_limit: Optional[int] = None,
-        sort_by: Optional[str] = None,
-        sort_order: str = "asc",
+        raw_entries: List[Dict[str, Any]],
         ctx: Optional[RequestContext] = None,
-    ) -> tuple[List[tuple[Dict[str, Any], str]], int, bool]:
-        """Return one mapped RagFS page, consumed count, and exhaustion state."""
+    ) -> List[tuple[Dict[str, Any], str]]:
+        """Apply namespace filtering and URI aliases to a raw RagFS batch."""
         path = self._uri_to_path(uri, ctx=ctx)
-        try:
-            raw_entries = await self._ls_entries(
-                path,
-                offset=raw_offset,
-                limit=raw_limit,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                filter_internal=False,
-                ctx=ctx,
-            )
-        except Exception as exc:
-            if is_not_found_error(exc):
-                raise NotFoundError(uri, "directory") from exc
-            raise
-
         entries = self._filter_ls_entries(path, raw_entries)
         items = [
             (
@@ -993,8 +972,7 @@ class _AccessMixin:
             )
             for entry in entries
         ]
-        exhausted = raw_limit is None or len(raw_entries) < raw_limit
-        return items, len(raw_entries), exhausted
+        return items
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
         """/local/{account}/... -> viking://...

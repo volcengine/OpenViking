@@ -12,6 +12,7 @@ from openviking.storage import viking_fs as viking_fs_module
 from openviking.storage.acl import AclLevel
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -248,9 +249,26 @@ def patch_tree_env(
     else:
 
         async def fake_tree(path, **_kwargs):
-            return _with_query_relative_paths(entries_or_fn, path)
+            offset = _kwargs.get("offset", 0)
+            limit = _kwargs.get("node_limit")
+            end = None if limit is None else offset + limit
+            return _with_query_relative_paths(entries_or_fn[offset:end], path)
 
-    monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree)
+    async def fake_tree_pages(path, page_size=None, **kwargs):
+        async def pages():
+            offset = 0
+            while True:
+                entries = await fake_tree(path, offset=offset, node_limit=page_size, **kwargs)
+                if not entries:
+                    return
+                yield entries
+                if page_size is None or len(entries) < page_size:
+                    return
+                offset += len(entries)
+
+        return pages()
+
+    monkeypatch.setattr(fs._async_agfs, "tree_directory_pages", fake_tree_pages)
     monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: uri_to_path)
     monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
     patch_visibility(monkeypatch, fs, is_accessible=is_accessible)
@@ -590,6 +608,47 @@ async def test_iter_visible_tree_entries_show_hidden_passthrough(monkeypatch, fs
     assert captured["show_hidden"] is True
 
 
+@pytest.mark.asyncio
+async def test_tree_denied_ancestor_stays_hidden_across_batches(monkeypatch, fs):
+    root = "/local/test_account/resources"
+    entries = [make_entry(f"{root}/restricted")]
+    entries += [make_entry(f"{root}/restricted/file-{index}", is_dir=False) for index in range(256)]
+    entries.append(make_entry(f"{root}/visible.md", is_dir=False))
+    patch_tree_env(monkeypatch, fs, entries)
+    monkeypatch.setattr(fs, "_acl_enabled", AsyncMock(return_value=True))
+    batches = []
+
+    async def can_access_many(uris, _ctx):
+        batches.append(len(uris))
+        # Even an allowed descendant must not expose the denied directory's tree.
+        return {uri: not uri.endswith("/restricted") for uri in uris}
+
+    monkeypatch.setattr(fs, "_can_access_many", can_access_many)
+    result = [
+        entry
+        async for entry, _ in fs._iter_visible_tree_entries(
+            "viking://resources", node_limit=2, ctx=_default_ctx()
+        )
+    ]
+    assert batches == [256, 2]
+    assert [entry["info"]["name"] for entry in result] == ["restricted", "visible.md"]
+    assert result[0]["access"] == "denied"
+
+
+@pytest.mark.asyncio
+async def test_ls_maps_missing_directory_on_later_batch(monkeypatch, fs):
+    async def ls_pages(*args, **kwargs):
+        async def pages():
+            yield []
+            raise FileNotFoundError("removed during pagination")
+
+        return pages()
+
+    monkeypatch.setattr(fs._async_agfs, "ls_pages", ls_pages)
+    with pytest.raises(NotFoundError):
+        await fs.ls("viking://resources", node_limit=1, ctx=_default_ctx())
+
+
 # ── _tree_original tests ──
 
 
@@ -820,7 +879,14 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
         ]
 
     monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
-    monkeypatch.setattr(fs, "_ls_entries", fake_ls_entries)
+
+    async def fake_ls_pages(path, **kwargs):
+        async def pages():
+            yield await fake_ls_entries(path, **kwargs)
+
+        return pages()
+
+    monkeypatch.setattr(fs._async_agfs, "ls_pages", fake_ls_pages)
     monkeypatch.setattr(fs, "_path_to_uri", _std_path_to_uri)
     monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(viking_fs_module, "datetime", _FixedDatetime)
@@ -872,6 +938,7 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
     assert "overview" not in result[1]
     assert result[2]["overview"] == "L1 overview"
     summary.assert_awaited_once_with("viking://resources/docs", "overview", ctx=_default_ctx())
+
 
 @pytest.mark.asyncio
 async def test_tree_filters_and_paginates_before_summary_reads(monkeypatch, fs):
