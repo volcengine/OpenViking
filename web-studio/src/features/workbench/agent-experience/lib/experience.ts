@@ -43,7 +43,7 @@ export function normalizeExperienceFiles(value: unknown): ExperienceFileItem[] {
     if (!entry || entry.isDir === true) return []
     const name = readString(entry.name)
     const uri = readString(entry.uri)
-    if (!name || !uri) return []
+    if (!name || !uri || !/\.md$/i.test(name) || name.startsWith('.')) return []
     return [
       {
         name,
@@ -61,9 +61,21 @@ export function normalizeTrajectoryPage(
   experienceUri: string,
 ): TrajectoryPage | null {
   const result = isRecord(value) ? value : null
-  if (!result) return null
+  if (
+    !result ||
+    !Array.isArray(result.items) ||
+    !Number.isSafeInteger(result.total) ||
+    (result.total as number) < 0 ||
+    (result.limit !== undefined &&
+      (!Number.isSafeInteger(result.limit) || (result.limit as number) < 1)) ||
+    (result.offset !== undefined &&
+      (!Number.isSafeInteger(result.offset) ||
+        (result.offset as number) < 0)) ||
+    (result.has_more !== undefined && typeof result.has_more !== 'boolean')
+  )
+    return null
 
-  const rawItems = Array.isArray(result.items) ? result.items : []
+  const rawItems = result.items
   const items = rawItems.flatMap((raw) => {
     const item = isRecord(raw) ? raw : null
     const uri = item ? readString(item.uri) : undefined
@@ -83,8 +95,11 @@ export function normalizeTrajectoryPage(
     ]
   })
 
-  const total = typeof result.total === 'number' ? result.total : items.length
-  const limit = typeof result.limit === 'number' ? result.limit : items.length
+  const total = result.total as number
+  const limit =
+    typeof result.limit === 'number'
+      ? result.limit
+      : DEFAULT_TRAJECTORY_PAGE_SIZE
   const offset = typeof result.offset === 'number' ? result.offset : 0
 
   return {
@@ -104,18 +119,21 @@ export function normalizeTrajectoryPage(
 export function normalizeOutcomeDistribution(
   value: unknown,
   experienceUri: string,
-): OutcomeDistribution {
+): OutcomeDistribution | null {
   const result = isRecord(value) ? value : null
-  const rawDistribution = Array.isArray(result?.outcome_distribution)
-    ? result.outcome_distribution
-    : []
+  if (!result || !Array.isArray(result.outcome_distribution)) return null
   const byOutcome = new Map<string, number>()
 
-  for (const raw of rawDistribution) {
-    const entry = isRecord(raw) ? raw : null
-    const outcome = entry ? readString(entry.outcome) : undefined
-    if (!entry || !outcome) continue
-    byOutcome.set(outcome, Number(entry.count) || 0)
+  for (const raw of result.outcome_distribution) {
+    if (
+      !isRecord(raw) ||
+      !TRAJECTORY_OUTCOMES.includes(raw.outcome as TrajectoryOutcome) ||
+      !Number.isSafeInteger(raw.count) ||
+      (raw.count as number) < 0 ||
+      byOutcome.has(raw.outcome as string)
+    )
+      return null
+    byOutcome.set(raw.outcome as string, raw.count as number)
   }
 
   // The server always returns the five fixed buckets; fall back to zero for
@@ -126,7 +144,7 @@ export function normalizeOutcomeDistribution(
   }))
 
   return {
-    experienceUri: readString(result?.experience_uri) ?? experienceUri,
+    experienceUri: readString(result.experience_uri) ?? experienceUri,
     distribution,
   }
 }

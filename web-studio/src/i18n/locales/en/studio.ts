@@ -78,6 +78,7 @@ const studio = {
     modelResponseUnavailable: 'Model configuration response is unavailable',
     invalidTaskResponse: 'Invalid task response',
     invalidDirectoryResponse: 'Invalid fs/ls response',
+    invalidExperienceResponse: 'Invalid experience analysis response',
     emptyBlob: 'empty blob',
     invalidSvg: 'Mermaid returned invalid SVG markup.',
     invalidConfigObject: 'ov.conf must contain a JSON object',

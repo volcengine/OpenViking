@@ -20,7 +20,7 @@ import type {
   TrajectoryPage,
 } from '#/features/workbench/agent-experience/lib/types'
 
-/** Fetch one page; the extra raw entry determines whether another page exists. */
+/** Preserve the native listing envelope's pagination before normalizing entries. */
 export async function fetchExperiences(options: {
   experiencesUri: string
   page: number
@@ -29,25 +29,29 @@ export async function fetchExperiences(options: {
 }): Promise<ExperiencePage> {
   const { experiencesUri, page, pageSize, signal } = options
   try {
-    const result = await getOvResult<unknown>(
-      ovClient.client.get({
-        query: {
-          limit: pageSize + 1,
-          offset: (page - 1) * pageSize,
-          output: 'original',
-          sort_by: 'mtime',
-          sort_order: 'desc',
-          uri: experiencesUri,
-        },
-        signal,
-        url: '/api/v1/fs/ls',
-      }),
-    )
-    if (!Array.isArray(result))
+    const request = ovClient.client.get({
+      query: {
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+        output: 'original',
+        sort_by: 'mtime',
+        sort_order: 'desc',
+        uri: experiencesUri,
+      },
+      signal,
+      url: '/api/v1/fs/ls',
+    })
+    const result = await getOvResult<unknown>(request)
+    const envelope = (await request).data as { has_more?: unknown } | undefined
+    if (!Array.isArray(result) || typeof envelope?.has_more !== 'boolean')
       throw new Error(i18n.t('studio:errors.invalidDirectoryResponse'))
+    const prefix = `${experiencesUri.replace(/\/+$/, '')}/`
     return {
-      items: normalizeExperienceFiles(result.slice(0, pageSize)),
-      hasMore: result.length > pageSize,
+      items: normalizeExperienceFiles(result).filter(
+        ({ uri }) =>
+          uri.startsWith(prefix) && !uri.slice(prefix.length).includes('/'),
+      ),
+      hasMore: envelope.has_more,
       page,
       pageSize,
     }
@@ -129,16 +133,9 @@ export async function fetchTrajectories(options: {
       url: '/api/v1/agent-evolution/experiences/trajectories',
     }),
   )
-  return (
-    normalizeTrajectoryPage(result, experienceUri) ?? {
-      experienceUri,
-      items: [],
-      total: 0,
-      limit,
-      offset,
-      hasMore: false,
-    }
-  )
+  const page = normalizeTrajectoryPage(result, experienceUri)
+  if (!page) throw new Error(i18n.t('studio:errors.invalidExperienceResponse'))
+  return page
 }
 
 export async function fetchOutcomeDistribution(options: {
@@ -158,7 +155,10 @@ export async function fetchOutcomeDistribution(options: {
       url: '/api/v1/agent-evolution/experiences/outcomes',
     }),
   )
-  return normalizeOutcomeDistribution(result, experienceUri)
+  const distribution = normalizeOutcomeDistribution(result, experienceUri)
+  if (!distribution)
+    throw new Error(i18n.t('studio:errors.invalidExperienceResponse'))
+  return distribution
 }
 
 export async function fetchSourceTrajectories(

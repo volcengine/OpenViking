@@ -67,6 +67,7 @@ const studio = {
     modelResponseUnavailable: '未能获取模型配置响应',
     invalidTaskResponse: '任务响应无效',
     invalidDirectoryResponse: '目录列表响应无效',
+    invalidExperienceResponse: '经验分析响应无效',
     emptyBlob: '文件内容为空',
     invalidSvg: 'Mermaid 返回了无效的 SVG 内容。',
     invalidConfigObject: 'ov.conf 必须包含 JSON 对象',
