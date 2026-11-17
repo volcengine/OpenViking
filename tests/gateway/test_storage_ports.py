@@ -447,6 +447,91 @@ async def test_redis_commands_beyond_pool_size_wait_for_a_connection(provider):
         await handle.close()
 
 
+def fake_redis_handle(monkeypatch, execute_command, **settings):
+    from types import SimpleNamespace
+
+    from openviking_gateway import redis_store
+
+    client = SimpleNamespace(execute_command=execute_command)
+    monkeypatch.setattr(
+        redis_store, "create_redis_client", lambda *a, **k: SimpleNamespace(client=client)
+    )
+    return redis_store.connect({"mode": "standalone", "pool_size": 1, **settings})
+
+
+async def test_waiting_for_a_connection_slot_times_out(monkeypatch):
+    pytest.importorskip("redis")
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    release = asyncio.Event()
+
+    async def execute_command(*args, **kwargs):
+        if args[1] == "held":
+            # A command stuck in the client that does not give way to its deadline either.
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+        return True
+
+    handle = fake_redis_handle(
+        monkeypatch, execute_command, connect_timeout_ms=1, command_timeout_ms=50
+    )
+    # The only slot is held by a command the store does not answer.
+    held = asyncio.create_task(handle.client.execute_command("GET", "held"))
+    await asyncio.sleep(0)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RedisTimeoutError, match="store command timed out"):
+            await asyncio.wait_for(handle.client.execute_command("GET", "queued"), 2)
+        assert time.monotonic() - started < 1
+    finally:
+        release.set()
+    assert await held is True
+    # The slot was given back: the next command runs.
+    assert await handle.client.execute_command("GET", "next") is True
+
+
+async def test_one_deadline_covers_the_whole_store_command(monkeypatch):
+    pytest.importorskip("redis")
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    async def execute_command(*args, **kwargs):
+        if args[1] == "stuck":
+            await asyncio.Event().wait()
+        return True
+
+    handle = fake_redis_handle(
+        monkeypatch, execute_command, connect_timeout_ms=100, command_timeout_ms=100
+    )
+    started = time.monotonic()
+    with pytest.raises(RedisTimeoutError, match="store command timed out"):
+        await asyncio.wait_for(handle.client.execute_command("GET", "stuck"), 2)
+    assert 0.15 < time.monotonic() - started < 0.6
+    # The slot is free again.
+    assert await asyncio.wait_for(handle.client.execute_command("GET", "fast"), 1) is True
+
+
+async def test_no_command_timeout_sets_no_store_deadline(monkeypatch):
+    pytest.importorskip("redis")
+    from openviking_gateway import redis_store
+
+    limits = []
+    real = redis_store.async_timeout.timeout
+    monkeypatch.setattr(
+        redis_store.async_timeout, "timeout", lambda delay: limits.append(delay) or real(delay)
+    )
+
+    async def execute_command(*args, **kwargs):
+        return True
+
+    handle = fake_redis_handle(
+        monkeypatch, execute_command, connect_timeout_ms=100, command_timeout_ms=0
+    )
+    assert await handle.client.execute_command("GET", "key") is True
+    assert limits == [None]
+
+
 async def test_async_codec_reads_sqlite_ciphertext_and_plaintext(tmp_path):
     from conftest import local_encryptor
 
@@ -890,7 +975,7 @@ async def test_open_stores_shares_redis_and_reads_across_instances(provider, tmp
                 "redis": redis_settings(provider),
             },
         )
-        store, management, close = open_stores(config, None)
+        store, management, close, _ = open_stores(config, None)
         try:
             await store.initialize()
             await management.initialize()

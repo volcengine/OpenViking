@@ -46,7 +46,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 
 **请求日志**标签页按时间倒序列出日志中最新的 1,000 条记录，停留在第一页时每 30 秒刷新一次。筛选和搜索也只覆盖这 1,000 条。
 
-只有到达模型服务商的请求才会记录。被网关先行拒绝的请求不记录，例如密钥无效、模型不在密钥允许的范围内、没有匹配的上游、请求体超限，这些情况下客户端直接收到错误，见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
+每个模型请求都会记录，包括网关自己拒绝的请求（例如模型不在密钥允许的范围内、没有匹配的上游、请求体超限），以及在服务商处失败、或因客户端离开而结束的请求。密钥确认之前就被拒绝的请求（例如网关密钥无效）不属于任何账户，不会列出。在准备记忆之前就被拒绝的请求显示为**直接转发**。见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
 
 ### 筛选和搜索 {#filter-and-search}
 
@@ -55,7 +55,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | **全部** | 所有记录 |
 | **新消息** | 以一条新用户消息开启一轮的请求 |
 | **工具步骤** | 延续同一轮的请求，例如带着工具结果继续 |
-| **异常** | 降级请求、对话保存处于**重试中**或**已暂停**的请求，以及服务商返回 HTTP 400 及以上状态码的请求（见[上游返回错误](12-troubleshooting.md#the-upstream-returned-an-error)） |
+| **异常** | 降级请求、对话保存处于**重试中**或**已暂停**的请求，以及状态码为 HTTP 400 及以上的请求，无论来自服务商（见[上游返回错误](12-troubleshooting.md#the-upstream-returned-an-error)）还是网关（见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)） |
 | **请求类型** | 某一种[请求类型](#request-types) |
 
 搜索范围包括模型、对话 ID、请求 ID、密钥名称或前缀，以及上游名称。日志只保存对话 ID 的哈希，所以 Studio 会先在浏览器里对粘贴的对话 ID 求哈希再匹配。这要求 Studio 通过 HTTPS 或 localhost 打开；用普通 HTTP 打开时，按对话 ID 搜索什么也找不到。
@@ -67,7 +67,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | **时间** | 请求到达的时间 |
 | **类型** | [请求类型](#request-types) |
 | **模型** | 客户端发送的模型名称 |
-| **状态** | 服务商返回的 HTTP 状态码 |
+| **状态** | 客户端收到的 HTTP 状态码：服务商的状态码，或者网关拒绝或处理失败时网关自己的状态码 |
 | **Token** | 输入 token、其中命中缓存的比例，以及输出 token |
 | **记忆** | 这次请求中[召回](../guides/15-gateway.md#key-terms)做了什么（见下表） |
 | **保存** | 所在对话的[保存状态](#saving-status)；鼠标悬停可以看到原因 |
@@ -117,18 +117,24 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | --- | --- | --- |
 | **正常** | 保存正常进行。 | — |
 | **已关闭** | 这段对话的[上下文配置](08-context-profiles.md#save-conversations)不保存对话。 | 不保存任何内容。 |
-| **重试中** | OpenViking 拒绝了保存或无法访问。 | 在 10、20、40、80 秒后依次重试。 |
+| **重试中** | OpenViking 拒绝了保存或无法访问。 | 在 10、20、40、80 秒后依次重试；OpenViking 返回 `429` 时至少隔一分钟，返回 `402` 时隔一小时。 |
 | **已暂停** | 连续失败 5 次。 | 之后每 5 分钟重试一次，直到成功；未保存的轮次一直保留，直到保存成功或对话过期。 |
-| **已暂停**，原因为 `gateway_key_revoked` | 这段对话的网关密钥已被吊销或删除。 | 不再重试。用户之后用有效密钥在这段对话里发请求时，保存自动恢复。 |
+| **重试中**，原因为 `gateway_key_missing` | 这段对话所用 OpenViking 密钥的记录过期或被驱逐，但 OpenViking 从未拒绝这个密钥。 | 每 5 分钟重试一次，最多持续 `session_ttl_seconds`，之后以 `gateway_key_revoked` 暂停。用这个密钥发出的任何请求都会重新写入记录；这段对话里的请求会立即恢复保存。 |
+| **已暂停**，原因为 `gateway_key_revoked` | 这段对话的网关密钥已被吊销或删除，OpenViking 拒绝了用户的 OpenViking 密钥，或者 OpenViking 密钥的记录缺失已达 `session_ttl_seconds`。 | 不再重试。用户之后用有效密钥在这段对话里发请求时，保存自动恢复。 |
+| **已丢失**，原因为 `stage_failed` | 一轮已完成的对话没能排入保存队列，1、5、25 秒后的重试也都失败；网关会记录一条错误日志。 | 这段对话的下一个请求会重新发送历史，这一轮随之排入队列。如果之后没有请求，这一轮不会被保存。 |
 
 展开的行和**保存**标记的悬停提示会显示最近一次变化的原因：
 
 | 显示的原因 | 代码 | 含义 |
 | --- | --- | --- |
 | OpenViking 拒绝了这个密钥，它可能填错了或已被吊销。 | `openviking_http_401` | 用户的 OpenViking 密钥已失效。 |
-| OpenViking 无法访问或响应超时 | `openviking_unavailable` | OpenViking 没有运行、连不上或响应太慢。 |
+| OpenViking 无法访问或响应超时 | `openviking_unavailable` | OpenViking 没有运行或连不上。 |
+| OpenViking 响应超时 | `openviking_timeout` | OpenViking 响应太慢。 |
 | 保存到 OpenViking 失败 | `delivery_failed` | 其他原因导致保存失败，网关按上表重试。 |
 | 保存已恢复正常 | `delivery_recovered` | 失败之后又保存成功了。 |
+| 密钥记录缺失，保存会一直重试，直到用户下次发请求 | `gateway_key_missing` | 见上表。 |
+| 一轮已完成的对话没能排入保存队列 | `stage_failed` | 见上表。 |
+| 已保存到 OpenViking、已在 OpenViking 中提交 | `delivered`、`committed` | 仅在 `capture_delivery_records: true` 时出现：每次保存、每次提交各写一条记录。 |
 | 对话历史有改动，后续内容改存到新的 OpenViking 会话 | `history_changed` | 正常现象：客户端编辑、重新生成或压缩了对话，网关用当前历史在新的 OpenViking 会话中继续保存。 |
 | 保存过程中对话历史有改动，后续内容改存到新的 OpenViking 会话 | `history_changed_during_delivery` | 正常现象：同上，只是发生在保存进行中。 |
 | 已保存的一轮对话在停顿后又继续了，后续内容改存到新的 OpenViking 会话 | `continued_after_idle` | 正常现象：已在**最新回复等待时长**之后保存的一轮又继续了。 |

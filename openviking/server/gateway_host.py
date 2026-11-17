@@ -45,6 +45,9 @@ def create_embedded_gateway(openviking_config, server_config, service_source):
     config = openviking_config.gateway
     if not config.enabled:
         return None
+    # Each worker would rotate the same file under the others.
+    if config.request_log_sink == "file" and server_config.workers > 1:
+        raise ValueError("gateway.request_log_sink 'file' requires server workers: 1")
     from openviking.crypto.config import bootstrap_encryption
     from openviking.utils.agfs_utils import _run_coro_blocking
     from openviking_gateway.app import create_app

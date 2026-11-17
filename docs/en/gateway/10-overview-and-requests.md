@@ -46,7 +46,7 @@ When an upstream has not reported any cache hit lately, you see a note instead: 
 
 The **Requests** tab lists the latest 1,000 records of the request log, newest first, and refreshes every 30 seconds while you are on the first page. Filters and search cover those 1,000 records.
 
-Only requests that reached a model provider are logged. Requests the gateway rejects first are not, such as an invalid key, a model the key does not allow, no matching upstream or a body over the size limit; the client receives the error directly. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
+Every model request is logged, including the ones the gateway refuses itself, such as a model the key does not allow, no matching upstream or a body over the size limit, and the ones that fail at the provider or end because the client went away. A request refused before its key was confirmed, such as an invalid gateway key, is not listed: it belongs to no account. A request refused before memory preparation shows as **Forwarded**. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
 
 ### Filter and search {#filter-and-search}
 
@@ -55,7 +55,7 @@ Only requests that reached a model provider are logged. Requests the gateway rej
 | **All** | Every record |
 | **New messages** | Requests that start a turn with a new user message |
 | **Tool steps** | Requests that continue a turn, for example with tool results |
-| **Issues** | Degraded requests, requests whose conversation saving is **Retrying** or **Paused**, and requests where the provider returned HTTP 400 or above (see [The upstream returned an error](12-troubleshooting.md#the-upstream-returned-an-error)) |
+| **Issues** | Degraded requests, requests whose conversation saving is **Retrying** or **Paused**, and requests with HTTP 400 or above, from the provider (see [The upstream returned an error](12-troubleshooting.md#the-upstream-returned-an-error)) or from the gateway (see [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway)) |
 | **Request type** | One of the [request types](#request-types) |
 
 Search matches the model, conversation ID, request ID, key name or prefix, and upstream name. The log stores only a hash of the conversation ID, so Studio hashes a pasted conversation ID in the browser before matching. This works only when Studio is opened over HTTPS or on localhost; over plain HTTP, searching by conversation ID finds nothing.
@@ -67,7 +67,7 @@ Search matches the model, conversation ID, request ID, key name or prefix, and u
 | **Time** | When the request arrived |
 | **Type** | The [request type](#request-types) |
 | **Model** | The model name the client sent |
-| **Status** | The HTTP status the provider returned |
+| **Status** | The HTTP status the client received: the provider's, or the gateway's own when the gateway refused or failed the request |
 | **Tokens** | Input tokens, the cached share and output tokens |
 | **Memory** | What [recall](../guides/15-gateway.md#key-terms) did in this request (see below) |
 | **Saving** | The conversation's [saving status](#saving-status); hover for the reason |
@@ -117,18 +117,24 @@ The **Saving** column shows whether the gateway is [saving](../guides/15-gateway
 | --- | --- | --- |
 | **On** | Saving works normally. | — |
 | **Off** | The conversation's [context profile](08-context-profiles.md#save-conversations) does not save. | Nothing is saved. |
-| **Retrying** | OpenViking rejected a save or could not be reached. | Retries after 10, 20, 40 and 80 seconds. |
+| **Retrying** | OpenViking rejected a save or could not be reached. | Retries after 10, 20, 40 and 80 seconds; after at least a minute when OpenViking answered `429`, and after an hour when it answered `402`. |
 | **Paused** | Five attempts in a row failed. | Retries every 5 minutes until it succeeds. Unsaved turns are kept until they are saved or the conversation expires. |
-| **Paused** with the reason `gateway_key_revoked` | The conversation's gateway key was revoked or deleted. | Stops retrying. Saving resumes when the user next sends a request in this conversation with a valid key. |
+| **Retrying** with the reason `gateway_key_missing` | The record of the OpenViking key behind the conversation expired or was evicted, but OpenViking never rejected the key. | Retries every 5 minutes, for at most `session_ttl_seconds`, then pauses with `gateway_key_revoked`. Any request with that key writes the record again; one in this conversation resumes saving at once. |
+| **Paused** with the reason `gateway_key_revoked` | The conversation's gateway key was revoked or deleted, OpenViking rejected the user's OpenViking key, or an OpenViking key's record stayed missing for `session_ttl_seconds`. | Stops retrying. Saving resumes when the user next sends a request in this conversation with a valid key. |
+| **Lost** with the reason `stage_failed` | A finished turn could not be queued for saving, also when tried again 1, 5 and 25 seconds later; the gateway logs an error. | The conversation's next request sends the history again and queues the turn with it. If none follows, the turn is not saved. |
 
 The expanded row and the **Saving** badge's tooltip show the reason for the latest change:
 
 | Reason shown | Code | Meaning |
 | --- | --- | --- |
 | OpenViking rejected the key. It may be wrong or revoked. | `openviking_http_401` | The user's OpenViking key is no longer valid. |
-| OpenViking is unreachable or didn't answer in time | `openviking_unavailable` | OpenViking is down, unreachable or too slow. |
+| OpenViking is unreachable or didn't answer in time | `openviking_unavailable` | OpenViking is down or unreachable. |
+| OpenViking didn't answer in time | `openviking_timeout` | OpenViking is too slow. |
 | Saving to OpenViking failed | `delivery_failed` | A save failed for another reason; the gateway retries as above. |
 | Saving works again | `delivery_recovered` | A save succeeded after failures. |
+| The key's record is missing; saving retries until the user's next request | `gateway_key_missing` | See the table above. |
+| A finished turn couldn't be queued for saving | `stage_failed` | See the table above. |
+| Saved to OpenViking, Committed in OpenViking | `delivered`, `committed` | Only with `capture_delivery_records: true`: a record for each save and each commit. |
 | The conversation history changed, so saving continues in a new OpenViking session | `history_changed` | Normal: the client edited, regenerated or compacted the conversation, and the gateway continues saving the current history in a new OpenViking session. |
 | The history changed while saving, so saving continues in a new OpenViking session | `history_changed_during_delivery` | Normal: the same, while a save was in progress. |
 | A saved turn continued after a pause, so saving continues in a new OpenViking session | `continued_after_idle` | Normal: a turn already saved after **Save the latest reply after** continued. |

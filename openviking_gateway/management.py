@@ -3,6 +3,7 @@
 """Gateway management: OV identity and independent object-write authorization."""
 
 import asyncio
+import contextlib
 import copy
 import hmac
 import json
@@ -201,6 +202,20 @@ async def register_user(app, account_id, user_id, ttl=None):
     await app.state.management.save(account_id, "users", user_id, {"user_id": user_id}, ttl=ttl)
 
 
+async def refresh_key_record(app, identifier, credential):
+    """Keep the record of an OpenViking key in use, so saving its conversations goes on."""
+    ttl = app.state.config.session_ttl_seconds
+    if credential.get("expires_at", float("inf")) - time.time() >= ttl / 2:
+        return
+    stored = {
+        k: v for k, v in credential.items() if k not in {"account", "id", "expires_at", "revision"}
+    }
+    # The record still holds when this fails; the next request tries again.
+    with contextlib.suppress(Exception):
+        await app.state.management.save(credential["account"], "keys", identifier, stored, ttl=ttl)
+        await register_user(app, credential["account"], credential["user_id"], ttl=ttl)
+
+
 async def openviking_credential(app, key):
     """Confirm and cache an OpenViking key with its deployment's tenant partition."""
     identifier = digest("openviking\0" + key)
@@ -208,6 +223,7 @@ async def openviking_credential(app, key):
     if credential := await app.state.management.credential(identifier):
         # A tenancy change moves the key to another partition: confirm it again.
         if (credential["account"] == "k_" + identifier) == partitioned:
+            await refresh_key_record(app, identifier, credential)
             return credential
         await app.state.management.delete(credential["account"], "keys", identifier)
     identity = await app.state.viking.health(key)

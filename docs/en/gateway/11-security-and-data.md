@@ -43,7 +43,7 @@ The gateway writes no HTTP access log, and its error messages never repeat submi
 
 Every [upstream](../guides/15-gateway.md#key-terms) receives the full model input, including memory the gateway added and OpenViking tool results. Only add providers you trust with that data.
 
-Some things never leave the gateway: `X-OpenViking-*` headers, client credentials and cookies are never forwarded to upstreams. When an upstream takes each client's own provider key, that key reaches the provider only as the upstream's credential.
+Some things never leave the gateway: `X-OpenViking-*` headers, client credentials and cookies are never forwarded to upstreams, and `X-OpenViking-*` headers in a provider's response are never passed to the client. When an upstream takes each client's own provider key, that key reaches the provider only as the upstream's credential.
 
 ## Access control {#access-control}
 
@@ -63,6 +63,10 @@ Two of these need care:
 
 The full rules, including the management API, are in the [access matrix](../api/25-gateway.md#credentials-and-account-scope). What each role can do in Studio is in [Who can change what](06-manage-in-studio.md#who-can-change-what).
 
+### Headers from a host {#headers-from-a-host}
+
+With `trusted_host_headers: true`, request records take `resource_id` and `request_source` from the `X-OpenViking-Resource-Id` and `X-OpenViking-Request-Source` request headers. The gateway cannot tell who set them, so a client that reaches the gateway directly could write any value into its own records. Turn the setting on only when a network policy admits nothing but the host in front of the gateway, and have the host replace these headers rather than pass the client's through. `X-OpenViking-Request-Id` is adopted from any caller; it only names the request and grants nothing.
+
 ## Retention {#retention}
 
 Gateway data expires on its own. SQLite runs an hourly cleanup job; Redis uses key TTLs:
@@ -75,7 +79,7 @@ Gateway data expires on its own. SQLite runs an hourly cleanup job; Redis uses k
 | Which upstream created each Responses response | 30 days | `response_ttl_seconds` |
 | Sessions and memories in OpenViking | OpenViking's own rules | — |
 
-When an OpenViking key record expires, or is evicted by a Redis backend using `volatile-lru`, capture pauses with `gateway_key_revoked` because it cannot read the stored credential. The user's next request recreates the record and resumes capture in the same scope. If the user never returns, the last pending turn is not saved to OpenViking. This state is a cache and can be lost. The existing short process-local cache can delay visibility of expiry, like revocation.
+An OpenViking key record is extended while the key is in use: a request made when less than half of `session_ttl_seconds` is left saves it again for the full period. When the record expires anyway, or is evicted by a Redis backend using `volatile-lru`, capture cannot read the stored credential and retries every 5 minutes with `gateway_key_missing`, for at most `session_ttl_seconds`, then pauses with `gateway_key_revoked`. The user's next request recreates the record and resumes capture in the same scope. If the user never returns, the last pending turn is not saved to OpenViking. This state is a cache and can be lost. The existing short process-local cache can delay visibility of expiry, like revocation.
 
 Redis keeps at most 10,000 request-log entries per account. Reads skip entries older than `log_retention_days`; those entries stay stored until newer ones push them past the cap, or until the account logs nothing for `log_retention_days`. Redis needs no hourly cleanup. Redis Responses routing objects expire by TTL and are not scanned during user deletion; revoked keys cannot access them.
 

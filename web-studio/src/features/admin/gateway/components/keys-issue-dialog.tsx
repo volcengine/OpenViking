@@ -107,6 +107,7 @@ const ISSUE_REASONS: Partial<Record<string, [string, boolean]>> = {
   openviking_identity_missing: ['enums.openviking.identityMissing', true],
   openviking_unavailable: ['keys.errors.unavailable', false],
   openviking_unreachable: ['keys.errors.unavailable', false],
+  openviking_timeout: ['keys.errors.unavailable', false],
   openviking_version_mismatch: ['keys.errors.versionMismatch', false],
 }
 

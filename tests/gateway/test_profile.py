@@ -137,6 +137,14 @@ async def test_profile_part_failure_preserves_other_concurrent_parts(failure):
     assert len(started) == 4 and bool(cancelled) == (failure == "timeout")
 
 
+async def test_profile_is_skipped_while_openviking_is_marked_unavailable():
+    viking = populated_viking()
+    viking.unavailable_reason = "openviking_unavailable"
+    result = await build_profile(viking, "key", Policy(), tools("read", "list"))
+    assert result == {"text": "", "reason": "openviking_unavailable", "parts": []}
+    assert not viking.profile_requests
+
+
 @pytest.mark.parametrize(
     "status,spaces,expected",
     [
