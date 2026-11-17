@@ -346,6 +346,36 @@ describe('TaskManager', () => {
     assert.doesNotMatch(relayed[0].item.text, /全量的结论/);
   });
 
+  it('past the catch-up turns relays the result so far, deliverable while its worker goes on', async (t) => {
+    const { tasks, executor, relayed, db } = setup(t);
+    tasks.create({ rows: [row({ content: '写周报' })], title: '周报', runtime: 'pi' });
+    // The requester adds a line during every turn: three catch-up turns, then
+    // the fourth report goes out anyway.
+    for (const [index, line] of ['加上项目 B', '再加个图表', '标题改一下', '检查下错别字'].entries()) {
+      tasks.route('t1', [row({ content: line })], 'owner');
+      tasks.report('t1', { state: 'done', draft: `第 ${index + 1} 版` });
+      executor.turns[index].finish({ text: '' });
+      await settle();
+    }
+    assert.equal(relayed.length, 1);
+    assert.match(relayed[0].item.text, /^\[task report\] task=t1 state=done title="周报" requester=unknown working=1\n.*\nThe requester kept adding to t1 while its worker wrote this, and the worker is on their latest input now: relay this as the result so far with task_ids=\["t1"\]/);
+    assert.match(relayed[0].item.text, /\| 第 4 版/);
+    assert.equal(executor.turns.length, 5, 'the worker goes on with the last line');
+    assert.match(executor.turns[4].prompt, /检查下错别字/);
+    assert.equal(tasks.get('t1').status, 'running');
+    assert.deepEqual(tasks.working(['t1']), [], 'the router may deliver this report while the task works');
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], by: 'reply_message' }), 1);
+    assert.deepEqual(tasks.working(['t1']), ['t1'], 'once it is settled, a delivery naming the task waits for the next report');
+
+    tasks.report('t1', { state: 'done', draft: '第 5 版' });
+    executor.turns[4].finish({ text: '' });
+    await settle();
+    assert.equal(relayed.length, 2);
+    assert.match(relayed[1].item.text, /^\[task report\] task=t1 state=done title="周报" requester=unknown\n/);
+    assert.equal(tasks.get('t1').status, 'done');
+    assert.deepEqual(db.prepare('SELECT while_working FROM task_report_deliveries ORDER BY report_id').all().map((r) => r.while_working), [1, 0]);
+  });
+
   it('starts the turns a previous daemon was running again, with a recovery note', async (t) => {
     const { tasks, executor, db, workspace, inbox } = setup(t);
     tasks.create({ rows: [row({ content: 'original request: never publish' })], title: 'X', runtime: 'pi' });
@@ -375,6 +405,48 @@ describe('TaskManager', () => {
     assert.match(executor.turns[1].prompt, /original request: never publish/);
     assert.match(executor.turns[1].prompt, /keep the evidence/);
     assert.equal(executor.turns[1].task.native_session, null);
+  });
+
+  it('keeps a final report its worker filed before a passing failure, and does not run the turn again', async (t) => {
+    const { tasks, executor, relayed, db } = setup(t);
+    tasks.create({ rows: [row({ content: '修一下这个 bug 并提 PR' })], title: 'X', runtime: 'pi' });
+    tasks.report('t1', { state: 'progress', summary: '定位到了' });
+    tasks.report('t1', { state: 'done', draft: 'PR #42 已开好', artifacts: ['https://example.com/pr/42'] });
+    // Its closing words hit a rate limit after the report.
+    executor.turns[0].finish({ text: '', error: 'exit 1: 529 overloaded', transient: true });
+    await settle();
+    assert.equal(executor.turns.length, 1, 'no retry: it would open the PR again');
+    assert.equal(relayed.length, 1);
+    assert.match(relayed[0].item.text, /^\[task report\] task=t1 state=done title="X" requester=unknown\n[\s\S]*\| PR #42 已开好/);
+    assert.equal(tasks.get('t1').status, 'done');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM task_inputs WHERE delivered_at_ms IS NULL').get().n, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM task_reports WHERE task_id = ?').get('t1').n, 2, 'no failure report added');
+  });
+
+  it('after a passing failure past its report, catches up only on what the worker took after that report', async (t) => {
+    const { tasks, executor, relayed, db } = setup(t);
+    tasks.create({ rows: [row({ content: '查 X' })], title: 'X', runtime: 'pi' });
+    tasks.route('t1', [row({ content: '只看上周' })], 'owner');
+    assert.equal(tasks.check('t1').length, 1);
+    tasks.report('t1', { state: 'done', draft: '上周的结论' });
+    // A hook hands it one more line after the report; then the model call fails.
+    tasks.route('t1', [row({ content: '也看下前一周' })], 'owner');
+    assert.equal(tasks.check('t1').length, 1);
+    executor.turns[0].finish({ text: '', error: 'HTTP 429', transient: true });
+    await settle();
+    const pending = db.prepare('SELECT text FROM task_inputs WHERE delivered_at_ms IS NULL').all().map((input) => input.text);
+    assert.equal(pending.length, 1);
+    assert.match(pending[0], /也看下前一周/);
+    assert.equal(relayed.length, 0, 'held for the line it never acted on');
+    assert.equal(executor.turns.length, 2);
+    assert.match(executor.turns[1].prompt, /^The previous worker session could not be safely resumed\./);
+    assert.match(executor.turns[1].prompt, /也看下前一周/);
+    assert.match(executor.turns[1].prompt, /Previous draft \(may be incomplete\):\n\| 上周的结论/);
+    tasks.report('t1', { state: 'done', draft: '两周的结论' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+    assert.equal(relayed.length, 1);
+    assert.match(relayed[0].item.text, /\| 两周的结论/);
   });
 
   it('acknowledges inputs only after success, including inputs read through task_check', async (t) => {

@@ -122,7 +122,9 @@ const RUNTIMES = {
           if (message?.role !== 'assistant') return;
           const text = (message.content ?? []).filter((part) => part.type === 'text').map((part) => part.text).join('').trim();
           if (text) state.text = text;
-          if (message.stopReason === 'error' && message.errorMessage) state.error = String(message.errorMessage);
+          // Pi retries a failed model call itself (auto_retry_start), so an
+          // error is the turn's only if no assistant message got past it.
+          state.error = message.stopReason === 'error' ? String(message.errorMessage || 'pi turn failed') : null;
           state.usage.inputTokens += Number(message.usage?.input ?? 0);
           state.usage.cachedInputTokens += Number(message.usage?.cacheRead ?? 0);
           state.usage.outputTokens += Number(message.usage?.output ?? 0);

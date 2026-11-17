@@ -96,6 +96,34 @@ describe('WorkerExecutor', () => {
     assert.equal(result.transient, true);
   });
 
+  it('does not fail a Pi turn on a model error Pi retried past, only on one it ended with', async (t) => {
+    const { dir, config, task } = setup(t);
+    const limited = { role: 'assistant', content: [], stopReason: 'error', errorMessage: '429: {"code":"ModelAccountTpmRateLimitExceeded"}' };
+    const reported = { role: 'assistant', content: [{ type: 'text', text: '已提交报告' }], stopReason: 'stop', usage: { input: 10, output: 2 } };
+    // As Pi's json mode prints an automatic retry (agent-session _prepareRetry).
+    config.piBin = fakeCli(dir, 'pi', [
+      { type: 'message_end', message: limited },
+      { type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: limited.errorMessage },
+      { type: 'message_end', message: reported },
+      { type: 'auto_retry_end', success: true, attempt: 1 },
+      { type: 'agent_settled' },
+    ]);
+    const executor = new WorkerExecutor({ config });
+    const recovered = await executor.start({ task: task(), prompt: 'p', authority: 'x' }).done;
+    assert.equal(recovered.error, null);
+    assert.equal(recovered.transient, false);
+    assert.equal(recovered.text, '已提交报告');
+
+    config.piBin = fakeCli(dir, 'pi-exhausted', [
+      { type: 'message_end', message: reported },
+      { type: 'message_end', message: limited },
+      { type: 'auto_retry_end', success: false, attempt: 3, finalError: limited.errorMessage },
+    ]);
+    const exhausted = await executor.start({ task: task(), prompt: 'p', authority: 'x' }).done;
+    assert.match(exhausted.error, /^429: /);
+    assert.equal(exhausted.transient, true);
+  });
+
   it('runs Codex with exec --json, resuming the thread it named on the first turn', async (t) => {
     const { dir, config, task } = setup(t);
     config.codexBin = fakeCli(dir, 'codex', [

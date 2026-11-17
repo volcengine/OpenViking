@@ -210,9 +210,13 @@ A turn ends with the latest final `task_report` (`done` with a ready-to-send
 draft, `needs_user` with one question, `blocked`, `dropped`, `failed`), or,
 without one, the worker's last words as an `unstructured=1` result. Before a
 report is relayed, inputs the requester added during the turn must be in it:
-if any were not read, the worker runs again (up to three times). A turn that
-failed for a passing reason (429, 5xx, a reset connection) runs again, twice at
-most.
+if any were not read, the worker runs again (up to three times). Past that the
+report goes out as the result so far, marked `working=1`, while the worker goes
+on with the newest input. A turn that failed for a passing reason (429, 5xx, a
+reset connection) runs again, twice at most, unless its worker had already
+filed its final report: that report stands, the inputs the worker had taken by
+then are acknowledged, and only lines it took after the report make a catch-up
+turn. A model error Pi retried past by itself does not fail the turn.
 
 A successful turn records a session checkpoint. A failed or interrupted turn
 starts a new session with the persisted request history, routing note, previous
@@ -257,7 +261,8 @@ runtimes return when a router turn ends:
   times), and so does a restart after a turn that held it;
 - a delivery naming a task whose worker is working again (new input from the
   requester's side came in after that report) is refused: its next report
-  replaces the old one.
+  replaces the old one. A `working=1` report is the exception until it is
+  settled: it went out on purpose, past the catch-up turns.
 
 So a report is neither lost to a failed router turn nor relayed twice after one.
 The settlement records how (`settled_by`: the tool, or `unrelayed`) and, for a

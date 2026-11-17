@@ -2101,6 +2101,26 @@ describe('workers scheduler', () => {
       (error) => error.code === 'invalid_input', 'task_ids only with the workers scheduler');
   });
 
+  it('delivers a report relayed past the catch-up turns although its worker is working again', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_capOrigin12345', chatType: 'group', content: '写周报' }));
+    await call('task_create', { trigger_ids: ['message:om_capOrigin12345'], title: '周报' });
+    for (let index = 0; index < 4; index += 1) {
+      store.ingest(chatEvent({ messageId: `om_capMore${index}123456`, chatType: 'group', content: `再加一点 ${index}` }));
+      await call('task_route', { task_id: 't1', trigger_ids: [`message:om_capMore${index}123456`], role: 'owner' });
+      tasks.report('t1', { state: 'done', draft: `第 ${index + 1} 版` });
+      turns[index].finish({ text: '' });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(turns.length, 5);
+    assert.equal(tasks.get('t1').status, 'running');
+    await call('reply_message', { message_id: 'om_capOrigin12345', markdown: '第 4 版，剩下的随后补上', decision_id: 'message:om_capMore3123456', task_ids: ['t1'] });
+    assert.equal(store.db.prepare('SELECT settled_by FROM task_report_deliveries').get().settled_by, 'reply_message');
+    await assert.rejects(call('reply_message', { message_id: 'om_capOrigin12345', markdown: '第 4 版', decision_id: 'message:om_capMore3123456', task_ids: ['t1'] }),
+      (error) => error.code === 'task_working', 'once relayed, the next delivery naming it waits for the next report');
+  });
+
   it('lets a worker hand back a routed line that is not its task, never the request it was created with', async (t) => {
     const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
     const { tasks, turns } = attachTasks(service, store, workspace);

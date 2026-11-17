@@ -43,7 +43,7 @@ export const RECENT_ENDED = 32;
 // Tasks task_list shows for one person (for_event), newest first.
 export const ASKER_TASKS = 10;
 // Worker turns in a row that may run to catch up with inputs that arrived
-// during the previous one before its report is relayed anyway.
+// during the previous one before its report is relayed anyway (while_working).
 const CATCH_UP_TURNS = 3;
 // Times a report the router was shown and did not settle is offered again:
 // once after a finished router turn (marked undelivered), and up to this many
@@ -118,7 +118,8 @@ const SCHEMA = `
   );
   -- Durable intent to deliver a selected final report, never a progress or
   -- superseded report. inbox_id: the router has it in its inbox (or was shown
-  -- it); settled_at_ms: the router answered for its task.
+  -- it); settled_at_ms: the router answered for its task; while_working: it
+  -- went out past the catch-up turns, with its worker on newer input.
   CREATE TABLE IF NOT EXISTS task_report_deliveries (
     report_id INTEGER PRIMARY KEY,
     inbox_id INTEGER,
@@ -137,6 +138,9 @@ const COLUMNS = [
   // and the message a delivery sent.
   ['task_report_deliveries', 'settled_by', 'TEXT'],
   ['task_report_deliveries', 'outbox_id', 'INTEGER'],
+  ['task_report_deliveries', 'while_working', 'INTEGER NOT NULL DEFAULT 0'],
+  // A claim its worker had taken when it filed a final report this turn.
+  ['task_input_claims', 'reported', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 const RECEIPT = /^task-report:([0-9]+)$/;
@@ -571,11 +575,14 @@ export class TaskManager {
     }
   }
 
-  settleInputs(task, result) {
+  // A turn that failed after its final report acknowledges what the worker
+  // had taken when it filed that report, and nothing it took after.
+  settleInputs(task, result, { reported = false } = {}) {
     this.transaction(() => {
-      if (!result.error) {
+      if (!result.error || reported) {
         this.db.prepare(`UPDATE task_inputs SET delivered_at_ms = ? WHERE id IN
-          (SELECT input_id FROM task_input_claims WHERE task_id = ? AND turn = ?)`).run(this.now(), task.id, task.turns);
+          (SELECT input_id FROM task_input_claims WHERE task_id = ? AND turn = ?${result.error ? ' AND reported = 1' : ''})`)
+          .run(this.now(), task.id, task.turns);
       }
       this.db.prepare('DELETE FROM task_input_claims WHERE task_id = ?').run(task.id);
       // Only a successful turn is a checkpoint we can resume. After an
@@ -596,6 +603,7 @@ export class TaskManager {
     this.db.prepare(`UPDATE tasks SET summary = ?, question = ?, draft = ?, artifacts_json = ?, updated_at_ms = ? WHERE id = ?`)
       .run(clip(summary || task.summary, 4_000), state === 'needs_user' ? clip(question, 2_000) : '',
         clip(draft || task.draft, 20_000), JSON.stringify(merged), this.now(), taskId);
+    if (state !== 'progress') this.db.prepare('UPDATE task_input_claims SET reported = 1 WHERE task_id = ?').run(taskId);
     return this.get(taskId);
   }
 
@@ -730,22 +738,27 @@ export class TaskManager {
   afterTurn(taskId, result, reportsBefore, slot) {
     const task = this.get(taskId);
     if (!task || task.status === 'stopped') return;
-    this.settleInputs(task, result);
+    const structured = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? AND id > ? ORDER BY id DESC LIMIT 1')
+      .get(taskId, reportsBefore);
+    const final = structured && structured.state !== 'progress' ? structured : null;
+    // A turn whose worker filed its final report is complete however its CLI
+    // exited after that (often a rate limit on its closing words): the report
+    // stands, and running the turn again could repeat what it did outside.
+    const failed = Boolean(result.error) && !final;
+    this.settleInputs(task, result, { reported: Boolean(final) });
     this.recordActivity('task.turn_completed', {
-      summary: `${taskId} ${result.error ? `failed: ${result.error}` : 'turn ended'}`,
+      summary: `${taskId} ${result.error ? `failed${final ? ' after its report' : ''}: ${result.error}` : 'turn ended'}`,
       status: result.error ? 'failed' : 'completed',
       metadata: { task: taskId, durationMs: this.now() - slot.startedAt, ...(result.usage ?? {}) },
     });
-    if (result.error && result.transient && (this.retries.get(taskId) ?? 0) < TRANSIENT_RETRIES) {
+    if (failed && result.transient && (this.retries.get(taskId) ?? 0) < TRANSIENT_RETRIES) {
       this.retries.set(taskId, (this.retries.get(taskId) ?? 0) + 1);
       this.setStatus(taskId, 'queued');
       this.request(taskId);
       return;
     }
     this.retries.delete(taskId);
-    const structured = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? AND id > ? ORDER BY id DESC LIMIT 1')
-      .get(taskId, reportsBefore);
-    let report = structured && structured.state !== 'progress' ? structured : null;
+    let report = final;
     if (!report) {
       // No final report: the worker's last words are its answer, marked as
       // such; a failed turn reports the failure.
@@ -760,21 +773,26 @@ export class TaskManager {
     // in the result before it is relayed.
     const fresh = this.undelivered(taskId).filter((row) => row.role === 'owner');
     const caught = this.catchUp.get(taskId) ?? 0;
-    if (!result.error && fresh.length > 0 && caught < CATCH_UP_TURNS) {
+    if (!failed && fresh.length > 0 && caught < CATCH_UP_TURNS) {
       this.catchUp.set(taskId, caught + 1);
       this.setStatus(taskId, 'queued');
       this.request(taskId);
       return;
     }
     this.catchUp.delete(taskId);
+    // Past the catch-up turns the report goes out without the requester's
+    // latest input, and the worker goes on with that input: a delivery naming
+    // the task stays allowed until this report is settled (working()).
+    const ahead = !failed && fresh.length > 0;
     // Ending the task and recording the obligation to deliver its report are
     // atomic. A failed inbox write leaves this durable outbox available to retry.
     this.transaction(() => {
       this.setStatus(taskId, STATUS_FOR[report.state] ?? 'done');
-      this.db.prepare('INSERT OR IGNORE INTO task_report_deliveries(report_id, created_at_ms) VALUES (?, ?)').run(report.id, this.now());
+      this.db.prepare('INSERT OR IGNORE INTO task_report_deliveries(report_id, created_at_ms, while_working) VALUES (?, ?, ?)')
+        .run(report.id, this.now(), ahead ? 1 : 0);
     });
     this.flushReports();
-    if (!result.error && this.undelivered(taskId).some((row) => row.role === 'owner')) {
+    if (ahead) {
       this.setStatus(taskId, 'queued');
       this.request(taskId);
     } else if (ENDED.has(this.get(taskId)?.status)) {
@@ -782,10 +800,11 @@ export class TaskManager {
     }
   }
 
-  reportText(task, report, { again = false } = {}) {
+  reportText(task, report, { again = false, working = false } = {}) {
     return [
-      `[task report] task=${task.id} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}${again ? ' undelivered=1' : ''}`,
+      `[task report] task=${task.id} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}${working ? ' working=1' : ''}${again ? ' undelivered=1' : ''}`,
       `origin: ${task.origin_chat ? `chat=${chatTag(metadataTag(task.origin_chat), task.origin_thread)} ` : ''}source=${task.origin_source} msg=${metadataTag(task.origin_message ?? '')} event=${metadataTag(task.origin_event ?? '')}`,
+      ...(working ? [`The requester kept adding to ${task.id} while its worker wrote this, and the worker is on their latest input now: relay this as the result so far with task_ids=["${task.id}"], and say the rest follows in a later [task report].`] : []),
       ...(again ? [`You were shown this report before and have not answered for ${task.id}: relay it now with task_ids=["${task.id}"], or, if a reply you already sent covers it, call stay_silent on its origin event= with task_ids=["${task.id}"].`] : []),
       ...(report.summary ? ['summary:', quoted(clip(report.summary, SUMMARY_CHARS))] : []),
       ...(report.draft ? ['draft:', quoted(report.draft)] : []),
@@ -810,7 +829,7 @@ export class TaskManager {
     const entry = this.transaction(() => {
       const delivery = this.db.prepare('SELECT * FROM task_report_deliveries WHERE report_id = ?').get(report.id);
       if (!delivery || delivery.inbox_id != null || delivery.settled_at_ms != null) return null;
-      item.text = this.reportText(task, report, { again: delivery.offers > 0 });
+      item.text = this.reportText(task, report, { again: delivery.offers > 0, working: Boolean(delivery.while_working) });
       const entry = this.inbox.persist(item, meta);
       this.db.prepare('UPDATE task_reports SET relayed_at_ms = ? WHERE id = ?').run(this.now(), report.id);
       this.db.prepare('UPDATE task_report_deliveries SET inbox_id = ? WHERE report_id = ?').run(entry.id, report.id);
@@ -840,9 +859,12 @@ export class TaskManager {
   }
 
   // Tasks among these whose last report is out of date: new input from the
-  // requester's side came in and their worker is on it again.
+  // requester's side came in and their worker is on it again. Not one whose
+  // report went out past the catch-up turns: that one is the result so far.
   working(taskIds = []) {
-    return taskIds.filter((id) => ['queued', 'running'].includes(this.get(id)?.status));
+    const ahead = this.db.prepare(`SELECT 1 FROM task_report_deliveries d JOIN task_reports r ON r.id = d.report_id
+      WHERE r.task_id = ? AND d.while_working = 1 AND d.settled_at_ms IS NULL LIMIT 1`);
+    return taskIds.filter((id) => ['queued', 'running'].includes(this.get(id)?.status) && !ahead.get(id));
   }
 
   // A router turn ended. A report it was shown and did not settle is offered
