@@ -96,7 +96,7 @@ Antigravity 的 `hooks.json` 格式与 Claude Code 不同：顶层 key 是 Hook 
 curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
 ```
 
-安装脚本把插件写到 `~/.gemini/config/plugins/openviking-memory`，运行时写到 `~/.openviking/agent-integrations/antigravity`。如果同名目录已存在且不是 OpenViking 写入的，安装脚本会保留它并停止。连接配置与其他集成一样读取 `~/.openviking/ovcli.conf`。安装脚本不添加 MCP 服务；如果希望 Agent 主动检索记忆，另外在 `~/.gemini/config/mcp_config.json` 中添加 OpenViking MCP 服务。
+安装脚本把插件写到 `~/.gemini/config/plugins/openviking-memory`，运行时写到 `~/.openviking/agent-integrations/antigravity`。如果同名目录已存在且不是 OpenViking 写入的，安装脚本会保留它并停止。连接配置与其他集成一样读取 `~/.openviking/ovcli.conf`。插件还自带 OpenViking MCP 服务（`mcp_config.json`，插件启用时生效）以及 `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` 四个 skill，Agent 可以自己检索、读取和写入记忆。安装脚本不会改写全局的 `~/.gemini/config/mcp_config.json`。如果其中已经有 `openviking` 服务，安装脚本沿用它，插件不再另加一份。
 
 重启 Antigravity app 或开启新的 `agy` 会话后，确认：
 
