@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Shared-resource deletion boundary tests."""
 
+import asyncio
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources
+from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -114,6 +117,59 @@ async def test_delete_resource_http_removes_real_shared_directory(
     assert response.json()["result"]["uri"] == uri
     with pytest.raises(NotFoundError):
         await service.fs.stat(uri, ctx=ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait", [False, True])
+async def test_delete_resource_http_succeeds_when_parent_summary_is_locked(
+    client, service, monkeypatch, wait
+):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    viking_fs = service.viking_fs
+    parent_uri = "viking://resources/docs"
+    uri = f"{parent_uri}/delete-me.txt"
+    await viking_fs.write_file(uri, "content", ctx=ctx)
+    metadata = {"freshness": freshness_metadata(1000, 32)}
+    sidecars = []
+    for name, level in [
+        (".abstract.md", ContextLevel.ABSTRACT),
+        (".overview.md", ContextLevel.OVERVIEW),
+    ]:
+        sidecar_uri = f"{parent_uri}/{name}"
+        await viking_fs.write_file(
+            sidecar_uri,
+            render_abstract_overview(level, parent_uri, "summary", metadata),
+            ctx=ctx,
+        )
+        sidecars.append(viking_fs._uri_to_path(sidecar_uri, ctx=ctx))
+
+    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(sidecars)
+    if wait:
+        queue = service._queue_manager.get_queue(service._queue_manager.SEMANTIC, allow_create=True)
+        enqueue = queue.enqueue
+
+        async def enqueue_after_unlock(msg, **kwargs):
+            nonlocal lease
+            # Release the competing writer once the fallback reaches enqueue,
+            # so wait=True can observe the actual queued refresh completing.
+            if lease is not None:
+                await viking_fs._async_agfs.pathlock_release(lease)
+                lease = None
+            return await enqueue(msg, **kwargs)
+
+        monkeypatch.setattr(queue, "enqueue", enqueue_after_unlock)
+    try:
+        response = await asyncio.wait_for(
+            client.delete("/api/v1/resources", params={"uri": uri, "wait": wait}),
+            timeout=10,
+        )
+    finally:
+        if lease is not None:
+            await viking_fs._async_agfs.pathlock_release(lease)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["semantic_status"] == ("complete" if wait else "queued")
+    assert not await viking_fs.exists(uri, ctx=ctx)
 
 
 @pytest.mark.asyncio

@@ -810,17 +810,27 @@ class FSService:
         force_refresh: bool = False,
     ) -> FreshnessAction:
         semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
-            viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=1,
-            ctx=ctx,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-            force_refresh=force_refresh,
-        )
-        if decision.action is not FreshnessAction.REFRESH_NOW:
-            return decision.action
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=self._viking_fs,
+                dir_uri=root_uri,
+                changed_entries=1,
+                ctx=ctx,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                force_refresh=force_refresh,
+            )
+        except LockAcquisitionError:
+            # Content is already deleted. A busy parent counter must not turn
+            # that deletion into a conflict response or drop its refresh.
+            # The coalesced task rebuilds from the current directory contents.
+            logger.info(
+                "Delete freshness lock busy; queuing parent refresh",
+                extra={"uri": safe_uri_for_log(root_uri), "degraded": True},
+            )
+        else:
+            if decision.action is not FreshnessAction.REFRESH_NOW:
+                return decision.action
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
@@ -828,7 +838,7 @@ class FSService:
                 "QueueManager not available; skipping delete refresh",
                 extra={"error_type": type(exc).__name__, "degraded": True},
             )
-            return decision.action
+            return FreshnessAction.REFRESH_NOW
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
         msg = SemanticMsg(
@@ -853,7 +863,7 @@ class FSService:
             generation_trigger="content_delete",
         )
         await semantic_queue.enqueue(msg)
-        return decision.action
+        return FreshnessAction.REFRESH_NOW
 
     async def _enqueue_copy_refresh(
         self,
