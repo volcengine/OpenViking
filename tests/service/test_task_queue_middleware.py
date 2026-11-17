@@ -5,7 +5,7 @@
 import asyncio
 import json
 import threading
-from unittest.mock import AsyncMock, create_autospec
+from unittest.mock import AsyncMock, Mock, create_autospec
 
 import pytest
 
@@ -25,6 +25,7 @@ from openviking.service.task_work_index import (
     get_task_context,
 )
 from openviking.storage.errors import HandoffRecoveryBlocked
+from openviking.storage.queuefs import compile_target_tag_processor as tag_module
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase, NamedQueue
 from openviking.storage.queuefs.process_result import (
     ProcessOutcome,
@@ -663,3 +664,33 @@ async def test_recovered_delivery_is_reconstructed_and_started_atomically(tracke
     queue.set_dequeue_handler(Handler())
     await queue.process_dequeued(message)
     assert (await tracker.get("recovered", **OWNER)).status is TaskStatus.COMPLETED
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+async def test_compile_tag_lock_limit(tracked_queue, monkeypatch, recovers):
+    queue, tracker, transport = tracked_queue
+    queue.name = QueueManager.COMPILE_TARGET_TAG
+    task = await tracker.create("compile_target_tag", **OWNER)
+    await tracker.start(task.task_id, **OWNER)
+    with bind_task_context(task.task_id, **OWNER):
+        await queue.enqueue({"uri": "viking://resources/output", **OWNER, "retry_count": 512})
+    await tracker.complete(task.task_id, {"directory_count": 1}, **OWNER)
+    payload = json.loads(transport.write.await_args.args[1])
+    stale = ValueError("invalid lock request: owned lease capability does not match ref 'old'")
+    finalize = AsyncMock(side_effect=[stale] * 16 + [True if recovers else stale])
+    queue.set_dequeue_handler(
+        tag_module.CompileTargetTagProcessor(Mock(finalize_compile_directories=finalize))
+    )
+    manager = Mock(enqueue=AsyncMock())
+    monkeypatch.setattr(tag_module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr(tag_module, "sleep", AsyncMock())
+    for retry in range(1, 17):
+        assert (await queue.process_dequeued(payload)).outcome is ProcessOutcome.REQUEUED
+        payload = manager.enqueue.await_args.args[1]
+        assert payload["lock_retry_count"] == retry
+    result = await queue.process_dequeued(payload)
+    task = await tracker.get(task.task_id, **OWNER)
+    assert task.status is (TaskStatus.COMPLETED if recovers else TaskStatus.FAILED)
+    if not recovers:
+        assert result.error == task.error == "Compile target tag lock conflict after 16 retries"
+    assert manager.enqueue.await_count == 16

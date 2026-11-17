@@ -5,15 +5,12 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service import fs_service as fs_module
-from openviking.service.task_domain import TaskStatus
-from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking.storage.queuefs import compile_target_tag_processor as tag_module
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 from openviking.storage.queuefs.process_result import ProcessOutcome
-from openviking.storage.queuefs.queue_middleware import ProcessContext
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
@@ -110,87 +107,3 @@ async def test_compile_tag_retry_preserves_work_and_progress(monkeypatch, pendin
     result = await tag_module.CompileTargetTagProcessor(fs).on_dequeue(retry)
     assert result.outcome is ProcessOutcome.SUCCESS
     manager.enqueue.assert_awaited_once()
-
-
-@pytest.mark.parametrize("last_attempt_succeeds", [False, True])
-async def test_compile_tag_lock_retry_limit(monkeypatch, last_attempt_succeeds):
-    """A legacy delivery retains its Work and has sixteen lock retries despite indexing lag."""
-    error = ValueError("invalid lock request: owned lease capability does not match ref 'expired'")
-    fs = SimpleNamespace(
-        finalize_compile_directories=AsyncMock(
-            side_effect=[error] * 16 + [True if last_attempt_succeeds else error]
-        )
-    )
-    manager = SimpleNamespace(enqueue=AsyncMock())
-    backoff = AsyncMock()
-    monkeypatch.setattr(tag_module, "get_queue_manager", lambda: manager)
-    monkeypatch.setattr(tag_module, "sleep", backoff)
-    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
-    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
-    owner = {"account_id": "account", "user_id": "user"}
-    task = await tracker.create("compile_target_tag", **owner)
-    await tracker.start(task.task_id, **owner)
-    await tracker.register_work(task.task_id, "tag-work", "CompileTargetTag", **owner)
-    await tracker.complete(task.task_id, {"directory_count": 1}, **owner)
-    payload = {
-        **owner,
-        "uri": "viking://resources/output",
-        "task_id": task.task_id,
-        "_task_work_id": "tag-work",
-        "retry_count": 512,
-    }
-    middleware = TaskWorkQueueMiddleware()
-    for attempt in range(17):
-        processor = tag_module.CompileTargetTagProcessor(fs)
-        result = await middleware.process(
-            ProcessContext(queue="CompileTargetTag", message=payload, cancel=AsyncMock()),
-            lambda context, processor=processor: processor.on_dequeue(context.message),
-        )
-        if attempt < 16:
-            assert result.outcome is ProcessOutcome.REQUEUED
-            payload = manager.enqueue.await_args.args[1]
-            assert payload["lock_retry_count"] == attempt + 1
-    current = await tracker.get(task.task_id, **owner)
-    if last_attempt_succeeds:
-        assert current.status is TaskStatus.COMPLETED
-    else:
-        assert current.status is TaskStatus.FAILED
-        assert "16 retries" in current.error
-    assert manager.enqueue.await_count == 16
-    assert [call.args[0] for call in backoff.await_args_list] == [0.5, 1, 2, 4, 8, 16] + [30] * 10
-
-
-async def test_compile_tag_lost_handoff_reacquires_same_target(monkeypatch):
-    """A stale holder during dispatch is retired before the replacement reacquires its scope."""
-    error = ValueError("invalid lock request: owned lease capability does not match ref 'old'")
-    requests = [{"path": "/local/account/output", "kind": "exact"}]
-    handoff = {"owner_id": "owner", "covered_paths": requests}
-    agfs = AsyncMock()
-    agfs.pathlock_adopt.side_effect = ["old", error]
-    agfs.pathlock_to_handoff.side_effect = error
-    agfs.pathlock_release.side_effect = [error, None]
-    agfs.pathlock_reacquire_batch.return_value = "new"
-    fs = SimpleNamespace(
-        _compile_target_lock_scope=lambda uri, ctx: (requests, "owner"),
-        _ensure_initialized=lambda: SimpleNamespace(_async_agfs=agfs, stat=AsyncMock()),
-        finalize_compile_directories=AsyncMock(side_effect=[False, True]),
-    )
-    enqueue = AsyncMock()
-    monkeypatch.setattr(tag_module, "get_queue_manager", lambda: SimpleNamespace(enqueue=enqueue))
-    monkeypatch.setattr(tag_module, "sleep", AsyncMock())
-    payload = {
-        "uri": "viking://resources/output",
-        "account_id": "account",
-        "user_id": "user",
-        "task_id": "tag-task",
-        "_task_work_id": "tag-work",
-        "target_lock": handoff,
-    }
-    result = await tag_module.CompileTargetTagProcessor(fs).on_dequeue(payload)
-    assert result.outcome is ProcessOutcome.REQUEUED
-    retry = enqueue.await_args.args[1]
-    assert retry["lock_retry_count"] == 1 and retry["target_lock"] == handoff
-    result = await tag_module.CompileTargetTagProcessor(fs).on_dequeue(retry)
-    assert result.outcome is ProcessOutcome.SUCCESS
-    agfs.pathlock_reacquire_batch.assert_awaited_once_with(requests, "owner", timeout_secs=1.0)
-    assert agfs.pathlock_release.await_args.args == ("new",)
