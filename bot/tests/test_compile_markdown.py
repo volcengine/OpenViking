@@ -15,6 +15,7 @@ from vikingbot.bus.queue import MessageBus
 from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.models import CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
+from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import TargetReader, agent_runner
@@ -465,3 +466,41 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
     )
     assert outputs == [] and pipeline.status["input"] == "failed"
     assert pipeline.failures
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ["topic/Retry.md", "TOPIC/retry.md"],
+        ["topic/Caf\u00e9.md", "topic/Cafe\u0301.md"],
+    ],
+)
+async def test_portable_path_aliases_are_merged_before_publication(pipeline, paths):
+    docs = [
+        Document(path, f"candidate-{index}.md", [f"source-{index}"])
+        for index, path in enumerate(paths)
+    ]
+    for doc in docs:
+        await pipeline.files.sandbox.write_file(
+            doc.workspace_path, "# Facts\n\nUnique contribution."
+        )
+    with pytest.raises(ValueError, match="Multiple output writers"):
+        await finalize.run(pipeline, docs)
+
+    merged = Document("topic/Merged.md", "merged.md", ["source-0", "source-1"])
+    pipeline.generate = AsyncMock(return_value=[merged])
+    assert await reduce_op.resolve_files(pipeline, docs) == [merged]
+    assert pipeline.generate.await_args.args[2]["documents"] == [vars(doc) for doc in docs]
+    assert pipeline.generate.await_args.args[3] == ["source-0", "source-1"]
+
+
+async def test_renamed_paths_are_reserved_across_collision_workers(pipeline):
+    paths = ["a.md", "a.md", "b.md", "b.md"]
+    docs = [Document(path, f"candidate-{index}.md") for index, path in enumerate(paths)]
+    first = Document("renamed/Title.md", "first.md")
+    alias = Document("RENAMED/title.md", "alias.md")
+    second = Document("b.md", "second.md")
+    pipeline.generate = AsyncMock(side_effect=[[first], [alias], [second]])
+    assert await reduce_op.resolve_files(pipeline, docs) == [first, second]
+    assert pipeline.generate.await_count == 3
+    assert "renamed/Title.md" in pipeline.generate.await_args.args[2]["reserved_paths"]

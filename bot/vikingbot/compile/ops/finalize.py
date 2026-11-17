@@ -3,7 +3,7 @@
 from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
-from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
+from vikingbot.compile.renderer import RenderedBundle, output_path_key, validate_relative_file_path
 
 
 async def run(runtime, documents):
@@ -14,10 +14,13 @@ async def run(runtime, documents):
     """
     bundle = RenderedBundle()
     contents, outputs = {}, {}
+    paths = set()
     for document in documents:
         path = validate_relative_file_path(document.path)
-        if path in contents:
+        key = output_path_key(path)
+        if key in paths:
             raise ValueError(f"Multiple output writers claim {path}")
+        paths.add(key)
         content = (await runtime.files.sandbox.read_file_bytes(document.workspace_path)).decode(
             "utf-8"
         )
