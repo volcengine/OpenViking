@@ -19,6 +19,18 @@ from openviking.server.account_stores.models import (
 class AccountStore(ABC):
     """Nominal contract implemented by every complete account store provider."""
 
+    supports_admin_delegation = False
+
+    async def get_admin_delegation(
+        self, api_key: str, *, account_id: str, admin_user_id: str, target_user_id: str
+    ) -> AuthSnapshot | None:
+        """Fresh credential/authority and target lookup; opt-in per provider.
+
+        No default composition of cached reads: custom providers must explicitly
+        implement the authorization read before advertising this capability.
+        """
+        raise NotImplementedError("Account provider does not support Admin delegation")
+
     @property
     def read_only(self) -> bool:
         """Whether management writes must be rejected before acquiring locks."""

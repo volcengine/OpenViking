@@ -171,6 +171,29 @@ async def pg_manager(pg_database):
         await manager.close()
 
 
+async def test_pg_admin_delegation_fresh_authority_target_and_groups(pg_manager):
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    manager = pg_manager
+    key = await manager.create_account("delegation", "admin")
+    await manager.register_user("delegation", "alice")
+    await manager.register_user("delegation", "second-admin", role="admin")
+    await manager.create_group("delegation", "editors")
+    await manager.add_group_members("delegation", "editors", ["alice"])
+    identity = await manager.resolve_identity(key)
+    delegated = await manager.resolve_admin_delegation(key, identity, "alice")
+    assert delegated.role == Role.USER
+    assert delegated.delegated_by_user_id == "admin"
+    assert delegated.group_ids == ("editors",)
+    await manager._store.revoke_active_api_keys("delegation", "alice")
+    assert (await manager.resolve_admin_delegation(key, identity, "alice")).role == Role.USER
+    await manager.remove_group_members("delegation", "editors", ["alice"])
+    assert (await manager.resolve_admin_delegation(key, identity, "alice")).group_ids == ()
+    await manager.regenerate_key("delegation", "admin")
+    with pytest.raises(PermissionDeniedError):
+        await manager.resolve_admin_delegation(key, identity, "alice")
+
+
 async def test_pg_startup_on_simulated_windows_private_loop(pg_database, monkeypatch):
     params, _, _, _ = pg_database
     monkeypatch.setattr(sql_runtime, "sys", SimpleNamespace(platform="win32"))

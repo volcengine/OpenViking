@@ -778,3 +778,66 @@ Provider-, parser-, storage-, and encryption-specific fields are documented in [
   }
 }
 ```
+
+## Explicit Admin user views
+
+Native API-key authentication can optionally let an account Admin open an
+ordinary user view without obtaining that user's key:
+
+```json
+{"server": {"auth_mode": "api_key", "api_key_admin_delegation_enabled": true}}
+```
+
+The default is `false`. `/health` advertises
+`capabilities.admin_user_delegation` only when the server setting and the account
+provider both support the protocol. Studio Connection settings then offer **Open
+a user view**. It verifies the effective USER identity before saving a separate
+local profile, keeps the Admin credential in the management credential field,
+and never copies a target user's key. The original profile remains available.
+Requests are blocked until the currently selected server has verified the view;
+old servers which ignore the new header cannot silently become an Admin fallback.
+
+An explicit request pairs the `OpenViking-Delegate` Authorization scheme with
+`X-OpenViking-Delegate-User`. It must not send `X-API-Key` or ordinary Bearer
+authorization. Older servers do not recognize the scheme and cannot accidentally
+execute the request with full Admin authority, including during rolling changes:
+
+```bash
+curl -H "Authorization: OpenViking-Delegate $OV_ACCOUNT_ADMIN_KEY" \
+  -H 'X-OpenViking-Delegate-User: alice' \
+  'http://localhost:1933/api/v1/fs/ls?uri=viking://user/alice'
+```
+
+Only a native account Admin key can delegate. ROOT, ordinary-user keys, OAuth,
+trusted, OIDC and LDAP credentials are not accepted by this protocol. The target
+must be an active USER or ADMIN member in the same account; execution is always
+USER, even when the target is an Admin. GLOBAL users are not delegation targets.
+An optional `X-OpenViking-Account` must match that account. Combining delegation
+with `X-OpenViking-User` or `X-OpenViking-Role` is rejected. Group assertions never
+override server-resolved target memberships. No header changes meaning when the
+explicit delegation header is absent.
+
+File, PostgreSQL, MySQL and Redis/MySQL account providers support this read.
+Explicit delegation rechecks the Admin credential/role and target membership,
+deletion state and groups at the provider. FileStore reads the persisted registry
+instead of its watcher/group caches (underlying filesystem read consistency still
+applies; this adds no NAS invalidation protocol); Redis/MySQL bypasses its read-through cache
+and consults MySQL. File registry reads span separate files; SQL checks the Admin
+credential then reads target membership/groups. This is a request authorization
+check, not an atomic cross-principal transaction or revocation of requests already
+in flight. Custom providers are unsupported until they explicitly implement the
+fresh authorization read and advertise the capability. This feature neither
+migrates accounts nor changes ordinary authentication cache behavior.
+
+Successful delegated request audit rows store the target in `user_id` and the
+native Admin actor in the additive `delegated_by_user_id` field. Usage remains
+attributed to the effective user. SQLite schema v4/v5 upgrades add nullable columns
+transactionally, preserving retained data; unsupported newer layouts fail safely.
+The existing best-effort audit collection and retention settings still apply.
+
+The Admin secret is removed from the delegated RequestContext and request headers
+before ordinary handlers execute. Compile forwarding/scheduled credentials, Bot
+forwarding, Connector watch credential storage and new OAuth grants reject this
+view because their transport does not preserve the delegation binding. Self-service
+key exposure/rotation also requires a personal key. Use a target-user credential
+for those integrations; do not pass the Admin key as an unbound target credential.

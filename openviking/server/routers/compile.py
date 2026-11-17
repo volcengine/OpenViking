@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.auth import get_request_context
+from openviking.server.auth.delegation import require_unbound_credential_export
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
@@ -49,6 +50,7 @@ async def create_compile(
     x_request_id: str | None = Header(None),
 ):
     """Queue a saved configuration or a full request with the caller's forwarding identity."""
+    require_unbound_credential_export(ctx, "Compile forwarding")
     connection = {"api_key": ctx.api_key} if ctx.api_key else {}
     connection.update(account_id=ctx.account_id, user_id=ctx.user.user_id)
     if ctx.actor_peer_id:

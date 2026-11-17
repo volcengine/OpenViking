@@ -746,3 +746,49 @@ Parser 或 Understanding API 后端自身的限制和上传行为。
   }
 }
 ```
+
+## 显式 Admin 用户视图
+
+原生 API Key 认证可选择允许账户 Admin 打开普通用户视图，无需取得目标用户的 Key：
+
+```json
+{"server": {"auth_mode": "api_key", "api_key_admin_delegation_enabled": true}}
+```
+
+默认关闭。只有服务端配置和账户 provider 均支持时，`/health` 才声明
+`capabilities.admin_user_delegation`。Studio 的连接设置随之显示“打开用户视图”。
+操作先核验服务端有效身份为 USER，再保存独立本地连接；Admin 凭据保留在管理凭据字段，
+不复制目标用户 Key，原连接仍可选择。当前服务端尚未核验用户视图时会阻止数据请求，
+旧服务端忽略新请求头时不会静默退回 Admin 权限。
+
+显式请求将 `OpenViking-Delegate` Authorization 方案与
+`X-OpenViking-Delegate-User` 配套使用，不传普通 `X-API-Key` 或 Bearer 授权。
+旧服务端不认识此授权方案，因此即使滚动变更时也不会把请求作为完整 Admin 执行：
+
+```bash
+curl -H "Authorization: OpenViking-Delegate $OV_ACCOUNT_ADMIN_KEY" \
+  -H 'X-OpenViking-Delegate-User: alice' \
+  'http://localhost:1933/api/v1/fs/ls?uri=viking://user/alice'
+```
+
+仅原生账户 Admin Key 可代理；ROOT、普通用户 Key、OAuth、trusted、OIDC 和 LDAP
+凭据不支持此协议。目标必须是同账户内有效的 USER 或 ADMIN 成员；即使目标是 Admin，
+执行权限也固定为 USER，GLOBAL 用户不能成为目标。可选的 `X-OpenViking-Account`
+必须与凭据账户一致；同时传 `X-OpenViking-User` 或 `X-OpenViking-Role` 会被拒绝。
+组信息由服务端解析，客户端断言不能覆盖。未传显式代理头时，已有请求头语义不变。
+
+File、PostgreSQL、MySQL 和 Redis/MySQL 账户 provider 支持此读取。显式代理会重新核验
+Admin 凭据／角色、目标成员、删除状态及组信息。FileStore 读取持久化注册表而不依赖
+watcher 或组缓存，仍依赖底层文件系统读取一致性，不新增 NAS 失效协议；Redis/MySQL 绕过读取缓存查询 MySQL。File 注册表跨多个文件读取，
+SQL 先检查 Admin 凭据，再读取目标成员及组信息；这是请求准入校验，不是跨主体原子事务，
+也不撤销已在执行的请求。自定义 provider 需实现新鲜授权读取并显式声明能力后才支持。
+此功能不迁移账户，也不修改普通认证的缓存规则。
+
+成功的代理请求审计在 `user_id` 中保留目标，在新增的 `delegated_by_user_id` 中保留
+原生 Admin 操作者；用量仍归有效用户。SQLite v4/v5 会在事务中增加可空列并保留已有数据，
+未知的新版本布局会安全报错。审计仍受现有尽力采集及保留配置约束。
+
+普通 handler 执行前会从 RequestContext 和请求头移除 Admin 密钥。Compile 转发／定时凭据、
+Bot 转发、Connector watch 凭据保存和新 OAuth 授权因无法保留代理绑定而明确拒绝该视图；
+自助密钥查看／轮换也需要个人 Key。这些集成请使用目标用户凭据，不要将 Admin Key
+作为不带代理绑定的目标凭据转发。

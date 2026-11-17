@@ -58,6 +58,14 @@ async def health_check(request: Request):
         if config is not None and hasattr(config, "get_effective_auth_mode"):
             effective_auth_mode = config.get_effective_auth_mode()
         result["auth_mode"] = effective_auth_mode
+        manager = getattr(request.app.state, "api_key_manager", None)
+        result["capabilities"] = {
+            "admin_user_delegation": bool(
+                effective_auth_mode == AuthMode.API_KEY.value
+                and getattr(config, "api_key_admin_delegation_enabled", False)
+                and getattr(manager, "supports_admin_delegation", False)
+            )
+        }
         if effective_auth_mode == AuthMode.TRUSTED.value:
             result["root_api_key_required"] = True
 
@@ -81,6 +89,8 @@ async def health_check(request: Request):
                 result["account_id"] = str(identity.account_id)
                 result["user_id"] = str(identity.user_id)
                 result["role"] = str(identity.role)
+                if identity.delegated_by_user_id is not None:
+                    result["delegated_by_user_id"] = identity.delegated_by_user_id
             except UnauthenticatedError:
                 raise
             except Exception as e:

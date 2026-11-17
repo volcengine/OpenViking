@@ -1342,6 +1342,62 @@ class SQLAccountStore(AccountStore):
             snapshot["group_ids"] = tuple(sorted(groups))
         return snapshot
 
+    supports_admin_delegation = True
+
+    async def get_admin_delegation(
+        self, api_key: str, *, account_id: str, admin_user_id: str, target_user_id: str
+    ) -> AuthSnapshot | None:
+        authority = await self.get_auth_snapshot(
+            api_key, account_id_hint=account_id, user_id_hint=admin_user_id
+        )
+        if authority is None or authority["role"] != Role.ADMIN:
+            return None
+        # Target membership, deletion state and groups share one SQL read.
+        statement = (
+            select(User.user_id, Group.group_id)
+            .select_from(User)
+            .join(
+                Account,
+                and_(
+                    Account.service_name == User.service_name, Account.account_pk == User.account_pk
+                ),
+            )
+            .outerjoin(
+                GroupMember,
+                and_(
+                    GroupMember.service_name == User.service_name,
+                    GroupMember.account_pk == User.account_pk,
+                    GroupMember.user_pk == User.user_pk,
+                ),
+            )
+            .outerjoin(
+                Group,
+                and_(
+                    Group.service_name == GroupMember.service_name,
+                    Group.account_pk == GroupMember.account_pk,
+                    Group.group_pk == GroupMember.group_pk,
+                ),
+            )
+            .where(
+                User.service_name == self._service_name,
+                Account.account_id == account_id,
+                User.user_id == target_user_id,
+                Account.deletion_task_id.is_(None),
+                User.deletion_task_id.is_(None),
+                User.role.in_([Role.USER, Role.ADMIN]),
+            )
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        if not rows:
+            return None
+        return AuthSnapshot(
+            account_id=account_id,
+            user_id=target_user_id,
+            role=Role.USER,
+            group_ids=tuple(sorted({group for _, group in rows if group is not None})),
+        )
+
     async def verify_api_key(
         self,
         api_key: str,

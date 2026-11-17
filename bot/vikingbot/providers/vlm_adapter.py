@@ -63,7 +63,7 @@ _SENSITIVE_ERROR_KV_RE = re.compile(
     r"(?i)((?:api[_-]?key|authorization|credential|password|secret|token)"
     r"[\"']?\s*[:=]\s*[\"']?)[^\s,;\]\}\"']+"
 )
-_BEARER_TOKEN_RE = re.compile(r"(?i)(bearer\s+)[^\s,;\]\}\"']+")
+_BEARER_TOKEN_RE = re.compile(r"(?i)((?:bearer|OpenViking-Delegate)\s+)[^\s,;\]\}\"']+")
 _API_KEY_TOKEN_RE = re.compile(r"\bsk-[a-zA-Z0-9._-]{8,}")
 _SERVER_REQUEST_ID_HEADERS = ("x-request-id",)
 _SERVER_TRACE_ID_HEADERS = (

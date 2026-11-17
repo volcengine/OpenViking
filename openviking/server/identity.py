@@ -155,8 +155,15 @@ class ResolvedIdentity:
     # account/user.
     from_oauth: bool = False
 
+    # Explicit Admin delegation keeps the authenticated actor separate from USER.
+    delegated_by_user_id: Optional[str] = None
+
     def __post_init__(self) -> None:
         self.role = Role.parse(self.role)
+        if self.delegated_by_user_id is not None and (self.role != Role.USER or self.from_oauth):
+            raise ValueError(
+                "Admin delegation requires fixed USER authority and native authentication"
+            )
 
 
 class AccessDecision(str, Enum):
@@ -311,6 +318,7 @@ class RequestContext:
     # Raw API key from the request — used by Connector to call back into OV
     # on behalf of the original user
     api_key: Optional[str] = field(default=None, repr=False)
+    delegated_by_user_id: Optional[str] = None
     # Trusted background workers may maintain derived content without replaying
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
@@ -318,6 +326,12 @@ class RequestContext:
 
     def __post_init__(self) -> None:
         self.role = Role.parse(self.role)
+        if self.delegated_by_user_id is not None:
+            if self.role != Role.USER or self.from_oauth:
+                raise ValueError(
+                    "Admin delegation requires fixed USER authority and native authentication"
+                )
+            self.api_key = None
         if self.data_access is not None:
             from openviking.storage.acl import AclAction
 

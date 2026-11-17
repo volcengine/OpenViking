@@ -48,7 +48,7 @@ _SENSITIVE_ASSIGNMENT_RE = re.compile(
     r"(\s*[:=]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\r\n,}\]]+)"
 )
 _TOKEN_RE = re.compile(
-    r"(?i)\b(?P<scheme>Bearer|Basic)\s+[a-zA-Z0-9._~+/=-]+|"
+    r"(?i)\b(?P<scheme>Bearer|Basic|OpenViking-Delegate)\s+[a-zA-Z0-9._~+/=-]+|"
     r"\b(?:sk-|cr_|ghp_|ntn_|xox[baprs]-)[a-zA-Z0-9._-]+"
 )
 
