@@ -3960,7 +3960,8 @@ EOF
     next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "" "$uninstall kimicode"
   fi
   if contains_harness antigravity; then
-    next_steps Antigravity "$(t 'start a new conversation in the Antigravity app or agy' '在 Antigravity app 或 agy 中新开一个对话')" "$rerun" "" "$uninstall antigravity"
+    doctor="node $(short_path "$OV_HOME/agent-integrations/antigravity/scripts/ov-memory-doctor.mjs")"
+    next_steps Antigravity "$(t 'start a new conversation in the Antigravity app or agy' '在 Antigravity app 或 agy 中新开一个对话')" "$rerun" "$doctor" "$uninstall antigravity"
   fi
   if contains_harness codebuddy; then
     next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "" "$uninstall codebuddy"

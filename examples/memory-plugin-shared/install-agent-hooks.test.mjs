@@ -66,6 +66,7 @@ function runInstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
     "--yes",
   ]);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  return result;
 }
 
 function runUninstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
@@ -898,7 +899,14 @@ test("Antigravity installs its plugin directory, replaces a hand-made copy and u
     writeJson(join(pluginDir, "hooks.json"), {
       "openviking-memory": { Stop: [{ type: "command", command: "node /checkout/examples/agent-hook-plugin/scripts/hook.mjs stop antigravity" }] },
     });
-    runInstall(home, "cursor,antigravity");
+    const install = runInstall(home, "cursor,antigravity");
+    assert.match(install.stdout, /Verify: node \S*agent-integrations\/antigravity\/scripts\/ov-memory-doctor\.mjs/);
+    const doctor = spawnSync(
+      process.execPath,
+      [join(runtime, "scripts", "ov-memory-doctor.mjs"), "--offline", "--no-color"],
+      { env: { ...process.env, HOME: home }, encoding: "utf8" },
+    );
+    assert.match(doctor.stdout, /client antigravity\)/);
 
     const hooks = JSON.parse(readFileSync(join(pluginDir, "hooks.json"), "utf8"));
     assert.deepEqual(Object.keys(hooks), ["openviking-memory"]);
