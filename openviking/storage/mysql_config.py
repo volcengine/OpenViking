@@ -21,10 +21,10 @@ def mysql_connection_options(values: dict[str, object]) -> tuple[URL, dict[str, 
     }
     unknown = values.keys() - allowed
     if unknown:
-        raise ValueError(f"Unknown MySQL task store parameters: {', '.join(sorted(unknown))}")
+        raise ValueError(f"Unknown MySQL connection parameters: {', '.join(sorted(unknown))}")
     missing = [name for name in ("user", "password", "database") if name not in values]
     if missing:
-        raise ValueError(f"MySQL task store requires: {', '.join(missing)}")
+        raise ValueError(f"MySQL connection requires: {', '.join(missing)}")
     connect_args: dict[str, object] = {
         "connect_timeout": values.get("connect_timeout", 10),
     }

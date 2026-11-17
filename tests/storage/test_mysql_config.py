@@ -80,7 +80,7 @@ def test_mysql_tls_mapping_loads_ca_and_client_certificate(monkeypatch):
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ({"unknown": True}, "Unknown MySQL task store parameters"),
+        ({"unknown": True}, "Unknown MySQL connection parameters"),
         ({"ssl": {"unknown": True}}, "Unknown MySQL TLS options"),
         ({"ssl": "invalid"}, "ssl must be"),
     ],

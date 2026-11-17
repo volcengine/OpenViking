@@ -3,6 +3,7 @@
 """PostgreSQL configuration, indexing and lifecycle regression coverage."""
 
 import asyncio
+import logging
 import threading
 from contextlib import suppress
 from datetime import datetime, timedelta
@@ -468,8 +469,10 @@ async def test_postgres_requires_schema_and_recovers_after_initialize_failure(ma
     original = store._tasks
     store._tasks = watch_tables(store._table_name + "_missing", dialect="postgresql")
     try:
-        with pytest.raises(ProgrammingError):
+        with pytest.raises(RuntimeError, match="001_watch_tasks_postgres.sql") as error:
             await store.initialize()
+        assert isinstance(error.value.__cause__, ProgrammingError)
+        assert error.value.__cause__.orig.sqlstate == "42P01"
         assert store._engine is None
         assert store._sessions is None
         assert not store._runtime_lease
@@ -478,6 +481,154 @@ async def test_postgres_requires_schema_and_recovers_after_initialize_failure(ma
     await store.initialize()
     task = await create(store)
     assert (await store.get_task(task.task_id)).task_id == task.task_id
+
+
+@pytest.mark.asyncio
+async def test_postgres_missing_column_reports_migration_and_can_retry(make_store):
+    from sqlalchemy import text
+    from sqlalchemy.exc import ProgrammingError
+
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL schema initialization contract")
+
+    async def alter_column(action):
+        async with store._transaction() as session:
+            await session.execute(text(f'ALTER TABLE "{store._table_name}" {action}'))
+
+    await store._sql_runtime.run(lambda: alter_column("DROP COLUMN last_error"))
+    await store.close()
+    with pytest.raises(RuntimeError, match="missing required columns") as error:
+        await store.initialize()
+    assert "001_watch_tasks_postgres.sql" in str(error.value)
+    assert isinstance(error.value.__cause__, ProgrammingError)
+    assert error.value.__cause__.orig.sqlstate == "42703"
+    assert store._engine is None
+    assert store._sessions is None
+    assert not store._runtime_lease
+
+    # Repair externally; failed startup must not migrate.
+    import psycopg
+
+    def repair():
+        params = store._url.translate_connect_args(username="user", database="dbname")
+        with psycopg.connect(**params, **store._engine_options["connect_args"]) as connection:
+            connection.execute(f'ALTER TABLE "{store._table_name}" ADD COLUMN last_error TEXT')
+
+    await asyncio.to_thread(repair)
+    await store.initialize()
+    assert (await store.list_tasks_page(OWNER)).total == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["missing", "wrong_definition", "partial", "invalid", "renamed"])
+async def test_postgres_initialization_checks_usable_index_definitions(
+    make_store, caplog, monkeypatch, state
+):
+    import psycopg
+    from sqlalchemy import text
+
+    from openviking.resource.watch_store_postgres import logger
+
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL schema index initialization contract")
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
+    caplog.set_level(logging.WARNING, logger=logger.name)
+    await store.close()
+    await store.initialize()
+    assert not [record for record in caplog.records if record.name == logger.name]
+    prefix_index = f"ix_{store._table_name}_target_prefix"
+    list_index = f"ix_{store._table_name}_list"
+    if state == "invalid":
+        # An unsuccessful concurrent unique build leaves the correct expression
+        # definition present, but indisvalid=false. Startup must detect that state.
+        prefix = "viking://resources/" + "p" * 150
+        await create(store, prefix + "/a")
+        await create(store, prefix + "/b")
+
+    async def alter_indexes():
+        async with store._transaction() as session:
+            if state == "renamed":
+                await session.execute(
+                    text(f'ALTER INDEX "{prefix_index}" RENAME TO "{prefix_index}_renamed"')
+                )
+                return
+            await session.execute(text(f'DROP INDEX "{prefix_index}"'))
+            if state == "missing":
+                await session.execute(text(f'DROP INDEX "{list_index}"'))
+            elif state == "wrong_definition":
+                await session.execute(
+                    text(
+                        f'CREATE INDEX "{prefix_index}" ON "{store._table_name}" '
+                        "(service_name, account_id, deleted, substr(target_uri_key, 1, 64))"
+                    )
+                )
+            elif state == "partial":
+                await session.execute(
+                    text(
+                        f'CREATE INDEX "{prefix_index}" ON "{store._table_name}" '
+                        "(service_name, account_id, deleted, substr(target_uri_key, 1, 128)) "
+                        "WHERE enabled"
+                    )
+                )
+
+    await store._sql_runtime.run(alter_indexes)
+    await store.close()
+    if state == "invalid":
+
+        def failed_build():
+            params = store._url.translate_connect_args(username="user", database="dbname")
+            with psycopg.connect(
+                **params, **store._engine_options["connect_args"], autocommit=True
+            ) as connection:
+                with pytest.raises(psycopg.errors.UniqueViolation):
+                    connection.execute(
+                        f'CREATE UNIQUE INDEX CONCURRENTLY "{prefix_index}" '
+                        f'ON "{store._table_name}" '
+                        "(service_name, account_id, deleted, substr(target_uri_key, 1, 128))"
+                    )
+                valid, _ = connection.execute(
+                    "SELECT indisvalid, indisready FROM pg_index WHERE indexrelid = %s::regclass",
+                    (prefix_index,),
+                ).fetchone()
+                assert not valid
+
+        await asyncio.to_thread(failed_build)
+    caplog.clear()
+    await store.initialize()
+    warnings = [record.getMessage() for record in caplog.records if record.name == logger.name]
+    if state == "renamed":
+        assert warnings == []
+    else:
+        assert len(warnings) == 1
+        assert prefix_index in warnings[0]
+        assert "001_watch_tasks_postgres.sql" in warnings[0]
+        if state == "missing":
+            assert list_index in warnings[0]
+    assert store._engine is not None
+    assert (await store.list_tasks_page(OWNER)).total == (2 if state == "invalid" else 0)
+
+
+@pytest.mark.asyncio
+async def test_postgres_initialization_preserves_non_schema_database_errors(monkeypatch):
+    from sqlalchemy.exc import ProgrammingError
+
+    from openviking.resource.watch_store_sql import SQLWatchStore
+
+    class PermissionError(Exception):
+        sqlstate = "42501"
+
+    error = ProgrammingError("SELECT", {}, PermissionError("permission denied"))
+
+    async def fail(self, session):
+        raise error
+
+    monkeypatch.setattr(SQLWatchStore, "_validate_schema", fail)
+    store = PostgresWatchStore(service_name="deployment", params=PARAMS)
+    with pytest.raises(ProgrammingError) as caught:
+        await store._validate_schema(None)
+    assert caught.value is error
 
 
 @pytest.mark.asyncio

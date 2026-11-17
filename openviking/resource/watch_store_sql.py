@@ -335,6 +335,9 @@ class SQLWatchStore(WatchStore):
     def _target_key_expression(self) -> Any:
         return self._tasks.c.target_uri_key
 
+    async def _validate_schema(self, session: Any) -> None:
+        await session.execute(select(*self._tasks.c).limit(1))
+
     async def initialize(self) -> None:
         if self._engine is not None:
             return
@@ -349,7 +352,7 @@ class SQLWatchStore(WatchStore):
             engine = create_async_engine(self._url, **self._engine_options)
             sessions = async_sessionmaker(engine, class_=SQLAsyncSession, expire_on_commit=False)
             async with sessions() as session:
-                await session.execute(select(*self._tasks.c).limit(1))
+                await self._validate_schema(session)
         except BaseException:
 
             async def cleanup() -> None:

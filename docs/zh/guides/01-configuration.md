@@ -1563,7 +1563,8 @@ ALTER TABLE ov_watch_tasks
 
 使用 PostgreSQL 时，安装 `openviking[postgres]` 并执行
 `openviking/service/sql/001_watch_tasks_postgres.sql`（PostgreSQL 14+）。
-初始化会检查已有表的列，不会自动建表或迁移；自定义 `params.table` 时同步替换脚本中的表名和索引名。
+初始化会在缺表或缺列时给出建表/迁移提示，并在索引缺失、无效或定义不匹配时发出警告，
+不会自动创建或迁移表及索引；自定义 `params.table` 时同步替换脚本中的表名和索引名。
 
 已有 PostgreSQL Watch 表若缺少账号/用户分页索引，需要由管理员执行以下迁移（不能放在事务中）：
 

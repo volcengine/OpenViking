@@ -2,13 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0
 """PostgreSQL Watch metadata, occupancy and encrypted source credentials."""
 
+import logging
 from typing import Any, Sequence
 
-from sqlalchemy import JSON, func, literal_column
+from sqlalchemy import JSON, func, literal_column, text
 from sqlalchemy.engine import URL
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from openviking.resource.watch_store_sql import SQLWatchStore
+
+logger = logging.getLogger(__name__)
+
+_SCHEMA_SCRIPT = "openviking/service/sql/001_watch_tasks_postgres.sql"
 
 
 class PostgresWatchStore(SQLWatchStore):
@@ -27,6 +32,79 @@ class PostgresWatchStore(SQLWatchStore):
     def _target_key_expression(self) -> Any:
         # Keep index constants literal so prepared generic plans can match the DDL.
         return func.substr(self._tasks.c.target_uri_key, literal_column("1"), literal_column("128"))
+
+    async def _validate_schema(self, session: Any) -> None:
+        try:
+            await super()._validate_schema(session)
+        except DBAPIError as exc:
+            state = getattr(exc.orig, "sqlstate", None)
+            if state not in {"42P01", "42703"}:
+                raise
+            problem = "does not exist" if state == "42P01" else "is missing required columns"
+            raise RuntimeError(
+                f"PostgreSQL Watch table {self._tasks.name!r} {problem}. "
+                f"Please have an administrator provision or migrate it using {_SCHEMA_SCRIPT}; "
+                "replace table and index names for storage.watch_store.params.table. "
+                "Initialization does not create or migrate the schema."
+            ) from exc
+
+        # Resolve the same quoted relation as the column probe, including search_path.
+        result = await session.execute(
+            text(
+                """
+                SELECT i.indisvalid AND i.indisready AND i.indpred IS NULL
+                       AND am.amname = 'btree' AS usable,
+                       ARRAY(
+                           SELECT pg_catalog.pg_get_indexdef(i.indexrelid, k, true)
+                           FROM generate_series(1, i.indnkeyatts) AS k
+                       ) AS keys
+                FROM pg_catalog.pg_index AS i
+                JOIN pg_catalog.pg_class AS x ON x.oid = i.indexrelid
+                JOIN pg_catalog.pg_am AS am ON am.oid = x.relam
+                WHERE i.indrelid = pg_catalog.to_regclass(:table)
+                """
+            ),
+            {"table": '"' + self._tasks.name.replace('"', '""') + '"'},
+        )
+        usable = {tuple(row["keys"]) for row in result.mappings() if row["usable"]}
+        # pg_get_indexdef includes PostgreSQL's implicit varchar-to-text casts.
+        # Compare definitions rather than names so equivalent renamed indexes work.
+        expected = {
+            "due": ("service_name", "enabled", "next_run_at"),
+            "run": ("service_name", "run_started_at"),
+            "target": ("service_name", "account_id", "target_uri_hash"),
+            "target_prefix": (
+                "service_name",
+                "account_id",
+                "deleted",
+                "substr(target_uri_key::text, 1, 128)",
+            ),
+            "list_all": ("service_name", "deleted", "created_at", "task_id"),
+            "list": (
+                "service_name",
+                "md5(account_id::text)",
+                "md5(user_id::text)",
+                "deleted",
+                "created_at",
+                "task_id",
+            ),
+        }
+        missing = [
+            f"ix_{self._tasks.name}_{suffix}"
+            for suffix, keys in expected.items()
+            if keys not in usable
+        ]
+        if missing:
+            logger.warning(
+                "PostgreSQL Watch table %r is missing usable indexes "
+                "(absent, invalid, or incompatible): %s. Queries may be slower. "
+                "Have an administrator apply the index definitions from %s to this existing "
+                "table, replacing table/index names and repairing or replacing incompatible "
+                "or invalid indexes first. Initialization does not create or migrate indexes.",
+                self._tasks.name,
+                ", ".join(missing),
+                _SCHEMA_SCRIPT,
+            )
 
     @staticmethod
     def _connection_options(values: dict[str, Any]) -> tuple[URL, dict[str, Any]]:
