@@ -13,11 +13,12 @@ from typing import TYPE_CHECKING, Any
 
 from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
 from openviking.utils.model_retry import retry_async
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from .volcengine_vlm import VolcEngineVLM
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 MEDIA_EXTENSIONS = {
     "audio": frozenset({".mp3", ".wav", ".aac", ".m4a"}),
@@ -166,17 +167,6 @@ def _is_retryable_media_error(error: Exception) -> bool:
         return False
 
 
-def _first_structured_value(error: BaseException, name: str) -> str:
-    for item in _exception_chain(error):
-        value = _safe_attribute(item, name)
-        if value is not None and not isinstance(value, (dict, list, tuple, set)):
-            try:
-                return str(value)[:128]
-            except BaseException:
-                continue
-    return "-"
-
-
 def _log_sanitized_exception(stage: str, error: BaseException, level: int) -> None:
     status = next(
         (
@@ -188,12 +178,11 @@ def _log_sanitized_exception(stage: str, error: BaseException, level: int) -> No
     )
     logger.log(
         level,
-        "Ark media operation exception: stage=%s error_type=%s status=%s code=%s request_id=%s",
+        "media side channel unavailable; continuing operation=%s error_type=%s http_status_code=%s degraded=true",
         stage,
         type(error).__name__,
         status if status is not None else "-",
-        _first_structured_value(error, "code"),
-        _first_structured_value(error, "request_id"),
+        extra={"operation": stage, "error_type": type(error).__name__, "degraded": True},
     )
 
 
@@ -220,23 +209,20 @@ async def understand_media(
     ):
         raise ValueError(f"Unsupported or oversized {media_type} input: {filename}")
 
-    async def attempt_with_sanitized_logging() -> str:
-        try:
-            return await _attempt(
-                vlm,
-                prompt=prompt,
-                media_path=media_path,
-                media_type=media_type,
-            )
-        except Exception as error:
-            _log_sanitized_exception("request", error, logging.WARNING)
-            raise
+    async def attempt() -> str:
+        return await _attempt(
+            vlm,
+            prompt=prompt,
+            media_path=media_path,
+            media_type=media_type,
+        )
 
     return await retry_async(
-        attempt_with_sanitized_logging,
+        attempt,
         max_retries=vlm.max_retries,
         is_retryable=_is_retryable_media_error,
-        logger=None,
+        logger=logger,
+        operation_name="media",
     )
 
 
@@ -334,13 +320,13 @@ async def _delete_remote_file(vlm: VolcEngineVLM, file_id: str) -> None:
                 _log_sanitized_exception(
                     "remote_cleanup",
                     cleanup_error,
-                    logging.WARNING,
+                    logging.INFO,
                 )
             raise
     except asyncio.CancelledError:
         raise
     except Exception as cleanup_error:
-        _log_sanitized_exception("remote_cleanup", cleanup_error, logging.WARNING)
+        _log_sanitized_exception("remote_cleanup", cleanup_error, logging.INFO)
 
 
 def _extract_response_text(response: Any) -> str:
@@ -375,4 +361,4 @@ def _record_usage(
             completion_reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
         )
     except Exception as error:
-        _log_sanitized_exception("usage", error, logging.DEBUG)
+        _log_sanitized_exception("usage", error, logging.INFO)

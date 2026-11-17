@@ -7,6 +7,40 @@ Changes in stable releases of `@openviking/react`.
 <details className="ov-release-notes__group" name="ov-release-minors" open>
 <summary>0.1.x</summary>
 
+### 0.1.13
+
+**Patch Changes**
+
+- ae0ce7a: Add the named compile workflow and its CLI guide. FileBrowser now reports selected tree entries so hosts can add directory references to VikingBot, whose send button uses a rounded square.
+
+- 62d5cd5: Support switching named compilation configurations through directory-style tabs, native Git snapshot history, and Wiki edits with explicit snapshots.
+
+  Propagate pending Wiki conflicts from deeply nested files to every ancestor directory, including collapsed subtrees, and refresh cleared markers. Preserve conflict tags loaded after an older empty index, and let refreshed conflict results override historical compilation counts. Skip inaccessible directory placeholders while traversing containers with readable descendants. Respect write-permission changes in open configuration editors, compare the first version against an empty baseline, and refresh the current version after a restore conflict before allowing another confirmation.
+
+  Align compilation settings with directory and Skill pickers, full-path tooltips, frequency radio cards and time selection. Add file selection, historical comparison and file restore to Wiki history in a full-width document panel with the FileViewer diff renderer, hide history for ordinary resource files and while editing, improve pack upload, and keep model names and dashboard tooltips readable.
+
+  Keep history loading indicators centred, show initial picker loading immediately, reuse an Arco-derived Switch, keep target paths on one line and hide view switching while editing. Fix the selected background of the history Preview / Markdown tabs.
+
+  Complete theme fallbacks on migrated workflow roots, align dark surfaces, schedule selection borders, history badges and diff legends, and apply the console theme to Switch sizes and unavailable states. Preserve the FileViewer's native diff colours. Show the empty state when a selected directory file has no historical versions, including after retrying a failed request.
+
+- a08cec9: Fix Console showing a command-unavailable warning during execution. CommandConsole now accepts `busy` to lock input and submission while pending result cards show progress; `disabled` retains its unavailable message.
+
+- 63da276: Align the typography and colors of CommandConsole and VikingBot with the console design. Simplify completed resource import cards and add a result action to CLI completion notifications.
+
+- 63da276: Updating a mounted `FileBrowser`'s controlled `uri` opens the preview and reveals the resource in the directory tree. Hosts that need a preview-only update can call `openResource(uri, { reveal: false })`. Use `defaultExpandedUri` to set the initial tree expansion.
+
+- a4c0257: Allow FileBrowser hosts to override individual experience dashboard requests while retaining the built-in UI, pagination, retries, and cancellation.
+
+- 0a7197c: After saving an editable ordinary file in FileBrowser, choose whether to keep a snapshot, then enter a description and save it. Snapshot failures retain the description for retry and do not undo the file save. Wiki compile files retain their automatic version history.
+
+- 41108b0: Hide the Preview / Source switch during editing. FileBrowser keeps version history available and copies the current editor draft.
+
+- 62d5cd5: Use the same theme background for the file tree panel, FileBrowser directory pane and sticky trailing actions. Keep normal, hover and selected surfaces consistent in light and dark themes without host-specific overrides, while preserving text masking during horizontal scrolling.
+
+- 41108b0: Replace the file path in Wiki conflict rows with a compact pencil button. File Browser opens the editor directly for pending conflicts when editing is allowed.
+
+- 41108b0: Use tagged data-plane search to list Wiki conflicts and mark directories with pending conflicts, even when the matching files are collapsed. Refresh conflict status after saving a Wiki file. Accept the current and legacy Compile registry response fields.
+
 ### 0.1.12
 
 **Patch Changes**

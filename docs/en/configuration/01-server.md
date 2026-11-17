@@ -196,7 +196,7 @@ filtering and Rule applicability. It does not configure retrieval reranking.
 | `model` | string / `null` | provider default | Model name or endpoint ID; required for `custom` |
 | `timeout` | number | `30` | HTTP request timeout in seconds |
 | `extra_headers` | object / `null` | `null` | Additional HTTP request headers |
-| `log_payloads` | boolean | `false` | Log complete requests and responses; these may contain task and Rule content |
+| `log_payloads` | boolean | `false` | Log safe request and response summaries when `log.level=DEBUG`; task, Rule and response content are omitted |
 
 | Provider | Default request URL | Default model | Notes |
 |---|---|---|---|
@@ -248,7 +248,7 @@ discard source restrictions. Empty does not mean unknown or inapplicable.
 | `mode` | `noul`, `choice`, or `null` | `noul` | Jev rerank mode; `null` also uses `noul` |
 | `threshold` | number | `0.1` | Minimum rerank score considered relevant; filters only model rerank scores, never vector scores, and a request `score_threshold` overrides it |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
-| `log_payloads` | boolean | `false` | Log complete rerank request and response payloads; may expose query and document content |
+| `log_payloads` | boolean | `false` | Jev only: log safe request and response summaries when `log.level=DEBUG`; query, document and response content are omitted |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
@@ -528,6 +528,42 @@ This setting limits independent asynchronous reindex requests. URI-overlapping r
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `10` | Number of external asynchronous tasks consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+## Logging configuration
+
+`log` controls Python, Rust, and C++ output in the standalone server. The default
+level is `INFO` so fallbacks and retries remain visible; business progress uses
+`DEBUG`. Third-party logs retain their original level semantics. Bootstrap startup
+results and failure diagnostics print directly to stdout/stderr and remain visible
+even with a high log threshold or file output.
+
+| Field | Type / values | Default | Purpose |
+| --- | --- | --- | --- |
+| `level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` | Output threshold; case-insensitive, with `WARN` and `FATAL` aliases |
+| `format` | Common format string | See below | The same header across Python, Rust, and C++ |
+| `output` | `stdout`, `stderr`, `file`, or a file path | `stdout` | `file` writes to `storage.workspace/log/openviking.log` |
+| `rotation` | boolean | `true` | Rotate Python file output and ask Rust to reopen the file |
+| `rotation_days` | integer | `3` | Number of rotated files retained by Python |
+| `rotation_interval` | `midnight`, `H`, `D`, `W0`–`W6` | `midnight` | Python rotation interval; the C++ file sink does not participate in rotation |
+
+The exact common `format` value is:
+
+```text
+%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s
+```
+
+Timestamps use UTC milliseconds. Messages and appended strings use JSON escaping,
+one event occupies one line, and output has no terminal colors. Missing correlation
+fields appear as `-`. The former built-in format,
+`%(asctime)s - %(name)s - %(levelname)s - %(message)s`, is normalized on load;
+other custom formats and unknown levels fail configuration validation.
+
+Native output changes require a server restart; reconfiguring Python does not update
+native components. Rust has no `CRITICAL` level, so that threshold still maps to
+`ERROR` and emitted events remain `ERROR`. The existing
+`server.observability.usage_audit` settings manage usage and HTTP request records;
+security-operation audit persistence remains a separate feature backlog. SDK imports do not take ownership of
+the host root logger. See the [logging policy](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md) for content rules.
 
 ## Compile API Settings
 

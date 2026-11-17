@@ -10,6 +10,7 @@ export interface FsTreeState extends ReturnType<typeof useTreeMetadata> {
   monitoring: readonly Workflow<'file_browser_directory_load'>[];
   rows: readonly FileTreeRow[];
   isReady: boolean;
+  isInitializing: boolean;
   error: Error | null;
   toggleExpand: (row: FileTreeEntryRow) => Promise<void>;
   open: (uri: string) => Promise<void>;

@@ -34,6 +34,9 @@ async def test_first_import_and_trigger_allow_http_connector_data_callback(monke
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     monkeypatch.setattr(connector_delegate_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(external_task_module, "get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.external_task_processor.get_task_tracker", lambda: tracker
+    )
     ctx = RequestContext(
         user=UserIdentifier("default", "default"), role=Role.ROOT, api_key="test-key"
     )
@@ -98,6 +101,8 @@ async def test_first_import_and_trigger_allow_http_connector_data_callback(monke
             recovered.register(resources._connector)
             queue.set_dequeue_handler(ExternalTaskProcessor(recovered))
             await asyncio.wait_for(queue.dequeue(), 5)
+            completed = await tracker.get(task_id, **OWNER)
+            assert completed.is_terminal(), completed
             return receipt
         finally:
             if not submission.done():

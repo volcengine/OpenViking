@@ -21,3 +21,32 @@ export function projectConsoleTasks(
     return { ...record, status, tasks: snapshots };
   });
 }
+
+/** Completed imports already show success in the header and ID in the result. */
+export function formatConsoleTaskResult(record: ConsoleRecord): ConsoleRecord {
+  const { tasks, content } = record;
+  const task = tasks?.[0];
+  if (
+    record.status !== 'success' ||
+    tasks?.length !== 1 ||
+    task?.kind !== 'resource' ||
+    task.status !== 'completed' ||
+    (task.stage && task.stage !== 'completed') ||
+    task.error ||
+    task.queryError ||
+    content?.variant !== 'write-result' ||
+    !content.lines.includes(`Task id: ${task.id}`)
+  ) {
+    return record;
+  }
+  return {
+    ...record,
+    tasks: undefined,
+    content: {
+      ...content,
+      lines: content.lines.filter(
+        (line) => line !== 'Submission status: success',
+      ),
+    },
+  };
+}

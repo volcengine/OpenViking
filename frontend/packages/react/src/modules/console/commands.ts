@@ -21,11 +21,11 @@ const COMMAND_GROUPS = {
     'add-resource',
     'add-skill',
     'compile',
+    'compile create',
     'find',
     'read',
     'write',
     'add-memory',
-    'compile create',
   ],
   filesystem: ['ls', 'tree', 'mkdir', 'rm', 'mv', 'stat', 'cp'],
   search: ['find', 'search', 'grep', 'glob', 'abstract', 'overview', 'read'],
@@ -77,6 +77,7 @@ export function consoleCommands(
   const catalog = new Map(
     COMMAND_SPECS.map((spec) => {
       const guide = guides[spec.name];
+      const flags = spec.preferredFlags ?? spec.flags;
       return [
         spec.name,
         {
@@ -85,17 +86,21 @@ export function consoleCommands(
           description: guide?.description ?? text.commands[spec.name],
           summary: text.commands[spec.name],
           examples: guide?.examples,
+          quickStart: guide?.quickStart,
           usage: [
             'ov',
             spec.name,
             ...(spec.positional ?? []).map((arg) =>
               arg.optional ? `[${arg.name}]` : `<${arg.name}>`,
             ),
-            ...(spec.flags ?? []).map((flag) =>
-              flag.required
-                ? `--${flag.name} <${flag.name}>`
-                : `[--${flag.name}${flag.kind === 'boolean' ? '' : ` <${flag.name}>`}]`,
-            ),
+            ...(flags ?? []).map((flag) => {
+              const value =
+                flag.kind === 'boolean'
+                  ? ''
+                  : ` <${flag.placeholder ?? flag.name}>`;
+              const token = `--${flag.name}${value}`;
+              return flag.required ? token : `[${token}]`;
+            }),
           ].join(' '),
           params: spec.positional?.map((arg) => ({
             label: arg.name,
@@ -104,14 +109,14 @@ export function consoleCommands(
               (arg.kind === 'uri' ? 'viking://…' : arg.name),
             required: !arg.optional,
           })),
-          options: spec.flags?.map((flag) => ({
-            token: flag.alias
-              ? `${flag.alias}, --${flag.name}`
-              : `--${flag.name}`,
+          options: flags?.map((flag) => ({
+            token: `${flag.alias ? `${flag.alias}, ` : ''}--${flag.name}${flag.placeholder ? ` <${flag.placeholder}>` : ''}`,
             required: flag.required,
             defaultValue: flag.defaultValue,
             description:
-              descriptions[flag.name] ?? flag.choices?.join(' | ') ?? flag.name,
+              descriptions[flag.descriptionKey ?? flag.name] ??
+              flag.choices?.join(' | ') ??
+              flag.name,
           })),
           skeleton: spec.skeleton,
         },

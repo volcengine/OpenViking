@@ -1112,9 +1112,10 @@ class TestMemoryUpdater:
         }
 
     @pytest.mark.asyncio
-    async def test_apply_operations_migrates_uri_and_preserves_unmodified_fields(self):
+    @pytest.mark.parametrize("rename", [False, True], ids=["update", "rename"])
+    async def test_apply_operations_preserves_unmodified_fields_on_update_or_rename(self, rename):
         source_uri = "viking://user/u/memories/entities/person/阿珍.md"
-        target_uri = "viking://user/u/memories/entities/person/陈静娴.md"
+        target_uri = "viking://user/u/memories/entities/person/陈静娴.md" if rename else source_uri
         profile_uri = "viking://user/u/memories/profile.md"
         schema = MemoryTypeSchema(
             memory_type="entities",
@@ -1148,6 +1149,8 @@ class TestMemoryUpdater:
                 "category": "person",
                 "name": "阿珍",
                 "custom_metadata": "keep",
+                "source_extraction_id": "old_extraction",
+                "last_update_trace_id": "old_trace",
                 "version": 3,
             },
             links=[
@@ -1196,9 +1199,12 @@ class TestMemoryUpdater:
             upsert_operations=[
                 ResolvedOperation(
                     old_memory_file_content=old_file,
-                    memory_fields={"category": "person", "name": "陈静娴"},
+                    memory_fields={"name": "陈静娴"} if rename else {"content": "近况更新。"},
                     memory_type="entities",
                     uris=[target_uri],
+                    source=MemoryOperationSource(
+                        extraction_id="new_extraction", trace_id="new_trace"
+                    ),
                 )
             ],
             delete_file_contents=[],
@@ -1208,19 +1214,21 @@ class TestMemoryUpdater:
         ctx = MagicMock()
         result = await updater.apply_operations(operations, ctx)
 
-        assert result.written_uris == [target_uri]
-        assert result.deleted_uris == [source_uri]
-        assert source_uri not in store
+        assert result.written_uris == ([target_uri] if rename else [])
+        assert result.deleted_uris == ([source_uri] if rename else [])
+        assert (source_uri not in store) == rename
         migrated = MemoryFileUtils.read(store[target_uri], uri=target_uri)
-        assert migrated.plain_content() == "大学室友，仗义借钱。"
+        assert migrated.plain_content() == ("大学室友，仗义借钱。" if rename else "近况更新。")
         assert migrated.extra_fields["category"] == "person"
-        assert migrated.extra_fields["name"] == "陈静娴"
+        assert migrated.extra_fields["name"] == ("陈静娴" if rename else "阿珍")
         assert migrated.extra_fields["custom_metadata"] == "keep"
+        assert migrated.extra_fields["source_extraction_id"] == "new_extraction"
+        assert migrated.extra_fields["last_update_trace_id"] == "new_trace"
         assert migrated.extra_fields["version"] == 4
         assert migrated.links[0]["from_uri"] == target_uri
         profile = MemoryFileUtils.read(store[profile_uri], uri=profile_uri)
         assert profile.backlinks[0]["from_uri"] == target_uri
-        assert operations.delete_replacements == {source_uri: target_uri}
+        assert operations.delete_replacements == ({source_uri: target_uri} if rename else {})
 
     @pytest.mark.asyncio
     async def test_apply_operations_rename_reads_latest_source_under_lock(self):

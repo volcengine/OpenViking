@@ -888,3 +888,19 @@ test("without Node.js, a Mac with Desktop is told how to install from its Plugin
   assert.match(result.stdout, /ovcli\.conf: \{"url": "<server-url>", "api_key": "<api-key>"\}/);
   assert.equal(log(), "");
 });
+
+test("the TUI menu lists every fixed harness once, ending with the CLI", () => {
+  const result = runInstallerPrelude(`
+TUI_CLAUDE_BINS=""
+TUI_CODEX_BINS=""
+DSH_DESKTOP_OFFERED=0
+idx=0
+while [ "$idx" -lt "$(tui_selectable_count)" ]; do printf '%s\\n' "$(tui_item_at "$idx")"; idx=$((idx + 1)); done
+`);
+
+  assert.equal(result.status, 0, result.stderr);
+  const kinds = result.stdout.trim().split("\n").map((row) => row.split("|")[0]);
+  assert.deepEqual(kinds, [
+    "opencode", "pi", "dsh", "cursor", "trae", "trae-cn", "zcode", "kimicode", "codebuddy", "qoder", "antigravity", "cli",
+  ]);
+});

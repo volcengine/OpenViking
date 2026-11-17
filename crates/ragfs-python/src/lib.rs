@@ -13,14 +13,20 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::field::{Field, Visit};
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
+use tracing_subscriber::registry::LookupSpan;
 
 /// Cached reference to the Python `openviking.storage.errors.LockAcquisitionError` class,
 /// imported at module init so that native and Python code share the same exception type.
 static LOCK_ACQUISITION_ERROR_TYPE: OnceLock<Py<PyType>> = OnceLock::new();
 static HANDOFF_RECOVERY_ERROR_TYPE: OnceLock<Py<PyType>> = OnceLock::new();
+static RUST_TRACING_CONFIG: OnceLock<(String, String)> = OnceLock::new();
 static RUST_TRACING_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 static RUST_TRACING_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 static RUST_TRACING_FILE_STATE: OnceLock<TracingFileState> = OnceLock::new();
@@ -130,17 +136,159 @@ fn reopen_tracing_file() -> PyResult<()> {
     reopen_tracing_file_impl().map_err(PyRuntimeError::new_err)
 }
 
+fn log_timestamp(time: SystemTime) -> String {
+    let elapsed = time.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let seconds = format_rfc3339(elapsed.as_secs());
+    format!(
+        "{}.{:03}Z",
+        seconds.trim_end_matches('Z'),
+        elapsed.subsec_millis()
+    )
+}
+
+#[derive(Default)]
+struct SafeLogFields {
+    message: String,
+    fields: serde_json::Map<String, serde_json::Value>,
+}
+
+impl SafeLogFields {
+    fn allowed(name: &str) -> bool {
+        matches!(
+            name,
+            "request_id"
+                | "trace_id"
+                | "span_id"
+                | "account_id"
+                | "user_id"
+                | "operation"
+                | "error_type"
+                | "error_code"
+                | "task_id"
+                | "task_type"
+                | "task_status"
+                | "task_stage"
+                | "total"
+                | "failed"
+                | "skipped"
+                | "duration_ms"
+                | "attempt"
+                | "retry_limit"
+                | "delay"
+                | "queue_depth"
+                | "degraded"
+                | "truncated"
+                | "payload"
+        )
+    }
+}
+
+impl Visit for SafeLogFields {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.message = format!("{value:?}");
+        }
+    }
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "message" {
+            self.message = value.to_string();
+        } else if Self::allowed(field.name())
+            && value.len() <= 256
+            && !value.contains("peers/")
+            && !value.contains("://")
+            && !value.starts_with('/')
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || "._:-/{}".contains(ch))
+        {
+            self.fields.insert(field.name().into(), value.into());
+        }
+    }
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        if Self::allowed(field.name()) {
+            self.fields.insert(field.name().into(), value.into());
+        }
+    }
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        if value >= 0 && Self::allowed(field.name()) {
+            self.fields.insert(field.name().into(), value.into());
+        }
+    }
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        if Self::allowed(field.name()) {
+            self.fields.insert(field.name().into(), value.into());
+        }
+    }
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        if value.is_finite() && value >= 0.0 && Self::allowed(field.name()) {
+            self.fields.insert(field.name().into(), value.into());
+        }
+    }
+}
+
+struct CommonLogFormat;
+impl<S, N> FormatEvent<S, N> for CommonLogFormat
+where
+    S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+{
+    fn format_event(
+        &self,
+        _ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        let timestamp = log_timestamp(SystemTime::now());
+        let mut values = SafeLogFields::default();
+        event.record(&mut values);
+        if values.message.len() > 2048 {
+            let original_length = values.message.len();
+            let mut end = 2048;
+            while !values.message.is_char_boundary(end) {
+                end -= 1;
+            }
+            values.message.truncate(end);
+            values.fields.insert("truncated".into(), true.into());
+            values
+                .fields
+                .insert("original_length".into(), original_length.into());
+        }
+        let level = match *event.metadata().level() {
+            Level::TRACE | Level::DEBUG => "DEBUG",
+            Level::INFO => "INFO",
+            Level::WARN => "WARNING",
+            Level::ERROR => "ERROR",
+        };
+        let request_id = values.fields.remove("request_id");
+        let trace_id = values.fields.remove("trace_id");
+        write!(
+            writer,
+            "{} {} {} pid={} request_id={} trace_id={} message={}",
+            timestamp,
+            level,
+            event.metadata().target(),
+            std::process::id(),
+            request_id.as_ref().and_then(|v| v.as_str()).unwrap_or("-"),
+            trace_id.as_ref().and_then(|v| v.as_str()).unwrap_or("-"),
+            serde_json::to_string(&values.message).map_err(|_| std::fmt::Error)?
+        )?;
+        for (name, value) in values.fields {
+            write!(writer, " {name}={value}")?;
+        }
+        writeln!(writer)
+    }
+}
+
 /// Initialize Rust tracing once for the embedded ragfs binding process.
 fn init_tracing(log_level: &str, log_output: &str) -> PyResult<()> {
+    let max_level = parse_tracing_level(log_level).map_err(PyValueError::new_err)?;
+    let configuration = (max_level.to_string(), log_output.to_owned());
     let result = RUST_TRACING_INIT_RESULT.get_or_init(|| {
-        let max_level = parse_tracing_level(log_level)?;
         let (writer, guard) = build_tracing_writer(log_output)?;
         let subscriber = tracing_subscriber::fmt()
             .with_max_level(max_level)
-            .with_target(true)
-            .with_file(true)
-            .with_line_number(true)
             .with_ansi(false)
+            .event_format(CommonLogFormat)
             .with_writer(writer)
             .finish();
         tracing::subscriber::set_global_default(subscriber)
@@ -148,12 +296,18 @@ fn init_tracing(log_level: &str, log_output: &str) -> PyResult<()> {
         RUST_TRACING_GUARD
             .set(guard)
             .map_err(|_| "failed to retain Rust tracing worker guard".to_string())?;
+        let _ = RUST_TRACING_CONFIG.set(configuration.clone());
         Ok(())
     });
     result
         .as_ref()
-        .map(|_| ())
-        .map_err(|err| PyRuntimeError::new_err(err.clone()))
+        .map_err(|err| PyRuntimeError::new_err(err.clone()))?;
+    if RUST_TRACING_CONFIG.get() != Some(&configuration) {
+        return Err(PyRuntimeError::new_err(
+            "Rust logging configuration changes require a process restart",
+        ));
+    }
+    Ok(())
 }
 
 /// Map a PathLockError to the appropriate Python exception.
@@ -176,7 +330,17 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
                 let ty = LOCK_ACQUISITION_ERROR_TYPE
                     .get()
                     .expect("LockAcquisitionError not initialized");
-                PyErr::from_type(ty.bind(py).clone(), err.to_string())
+                let exception = PyErr::from_type(ty.bind(py).clone(), err.to_string());
+                if let PathLockError::Timeout {
+                    conflicting_owner: Some(owner),
+                    ..
+                } = &err
+                {
+                    if let Err(error) = exception.value(py).setattr("conflicting_owner", owner) {
+                        return error;
+                    }
+                }
+                exception
             })
         }
         PathLockError::InvalidRequest(_) => PyValueError::new_err(err.to_string()),
@@ -188,7 +352,7 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
 use std::fmt;
 use std::fs;
 use std::future::Future;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 /// Validate and convert a wait timeout from Python.
 ///
@@ -814,7 +978,8 @@ fn parse_redis_config(
     config.db = i64_field(redis, "db", config.db)?;
     config.pool_size = usize_field(redis, "pool_size", config.pool_size)?;
     config.connect_timeout_ms = u64_field(redis, "connect_timeout_ms", config.connect_timeout_ms)?;
-    config.command_timeout_ms = u64_field_allow_zero(redis, "command_timeout_ms", config.command_timeout_ms)?;
+    config.command_timeout_ms =
+        u64_field_allow_zero(redis, "command_timeout_ms", config.command_timeout_ms)?;
     config.default_ttl_seconds =
         u64_field_allow_zero(redis, "default_ttl_seconds", config.default_ttl_seconds)?;
     config.tls_insecure_skip_verify = bool_field(
@@ -1668,7 +1833,8 @@ impl RAGFSBindingClient {
         }
         let coordination_config: CoordinationConfig = serde_json::from_value(coordination_value)
             .map_err(|e| PyValueError::new_err(format!("Invalid coordination config: {e}")))?;
-        let coordination_uses_cache = matches!(coordination_config, CoordinationConfig::Cache { .. });
+        let coordination_uses_cache =
+            matches!(coordination_config, CoordinationConfig::Cache { .. });
         let inline_pathlock_configured = config
             .as_ref()
             .is_some_and(|config| config.contains_key("pathlock"));
@@ -1701,6 +1867,12 @@ impl RAGFSBindingClient {
                     .map(|value| value.extract::<String>(py))
                     .transpose()?
                     .unwrap_or_else(|| "stderr".to_string());
+                if let Some(format) = log_cfg.get("format") {
+                    let format: String = format.extract(py)?;
+                    if format != "%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s" {
+                        return Err(PyValueError::new_err("Rust logging requires the common cross-runtime format"));
+                    }
+                }
                 init_tracing(&log_level, &log_output)?;
             }
             if let Some(enc_obj) = cfg.get("encryption") {
@@ -1848,9 +2020,7 @@ impl RAGFSBindingClient {
                 let coordination_result = coordination.close().await;
                 let mount_result = mountable.shutdown().await;
                 let cache_result = match cache_runtime {
-                    Some(runtime) => {
-                        runtime.close().await.map_err(|error| error.to_string())
-                    }
+                    Some(runtime) => runtime.close().await.map_err(|error| error.to_string()),
                     None => Ok(()),
                 };
                 mount_result.map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
@@ -2696,9 +2866,9 @@ impl RAGFSBindingClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let ttl = validate_leader_ttl_secs(ttl_secs)?;
         let coordination = self.coordination.clone();
-        let task = self.rt.spawn(async move {
-            coordination.try_acquire(&key, &holder_id, ttl).await
-        });
+        let task = self
+            .rt
+            .spawn(async move { coordination.try_acquire(&key, &holder_id, ttl).await });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             task.await
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
@@ -2716,9 +2886,9 @@ impl RAGFSBindingClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let ttl = validate_leader_ttl_secs(ttl_secs)?;
         let coordination = self.coordination.clone();
-        let task = self.rt.spawn(async move {
-            coordination.renew(&lease_ref, ttl).await
-        });
+        let task = self
+            .rt
+            .spawn(async move { coordination.renew(&lease_ref, ttl).await });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             task.await
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
@@ -2734,9 +2904,9 @@ impl RAGFSBindingClient {
         lease_ref: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let coordination = self.coordination.clone();
-        let task = self.rt.spawn(async move {
-            coordination.release(&lease_ref).await
-        });
+        let task = self
+            .rt
+            .spawn(async move { coordination.release(&lease_ref).await });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             task.await
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
@@ -2751,7 +2921,9 @@ impl RAGFSBindingClient {
         key: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let coordination = self.coordination.clone();
-        let task = self.rt.spawn(async move { coordination.allocate_revision(&key).await });
+        let task = self
+            .rt
+            .spawn(async move { coordination.allocate_revision(&key).await });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             task.await
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
@@ -2784,7 +2956,9 @@ impl RAGFSBindingClient {
         key: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let coordination = self.coordination.clone();
-        let task = self.rt.spawn(async move { coordination.latest_revision(&key).await });
+        let task = self
+            .rt
+            .spawn(async move { coordination.latest_revision(&key).await });
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             task.await
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
@@ -3481,6 +3655,53 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn logging_timestamp_uses_utc_milliseconds() {
+        assert_eq!(
+            log_timestamp(UNIX_EPOCH + std::time::Duration::from_millis(12)),
+            "1970-01-01T00:00:00.012Z"
+        );
+    }
+
+    #[test]
+    fn logging_output_is_single_line_and_omits_unknown_fields() {
+        let path = std::env::temp_dir().join(format!("ragfs-log-{}.txt", uuid::Uuid::new_v4()));
+        let writer = SharedFileWriter {
+            file: Arc::new(Mutex::new(
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .unwrap(),
+            )),
+        };
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(Level::TRACE)
+            .event_format(CommonLogFormat)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(target: "ragfs.logging.test", total = 2u64, peer_id = "private-peer", "line1\nline2");
+            tracing::debug!(target: "ragfs.logging.test", "debug event");
+            tracing::info!(target: "ragfs.logging.test", "info event");
+            tracing::error!(target: "ragfs.logging.test", "error event");
+            tracing::trace!(target: "ragfs.logging.test", "trace event");
+            tracing::warn!(target: "ragfs.logging.test", "{}", "x".repeat(3000));
+        });
+        let content = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(content.lines().count(), 6);
+        assert!(content.contains(" WARNING ragfs.logging.test pid="));
+        assert!(content.contains("request_id=- trace_id=-"));
+        assert!(content.contains("message=\"line1\\nline2\" total=2"));
+        assert!(!content.contains("private-peer"));
+        assert!(!content.contains('\u{1b}'));
+        assert_eq!(content.matches(" DEBUG ragfs.logging.test").count(), 2);
+        assert_eq!(content.matches(" INFO ragfs.logging.test").count(), 1);
+        assert_eq!(content.matches(" ERROR ragfs.logging.test").count(), 1);
+        assert!(content.contains("original_length=3000 truncated=true"));
+    }
+
+    #[test]
     fn detach_blocking_helper_runs_without_python_objects() {
         Python::attach(|py| {
             let value: i32 = py_detach_blocking(py, || 40 + 2);
@@ -3535,7 +3756,10 @@ mod tests {
                         lock_path: "/data/.path.ovlock".to_string(),
                         operation: "remove".to_string(),
                     },
-                    PathLockError::Timeout { elapsed_ms: 1000 },
+                    PathLockError::Timeout {
+                        elapsed_ms: 1000,
+                        conflicting_owner: None,
+                    },
                 ] {
                     let error = if wrapped {
                         to_py_err(contention.into())

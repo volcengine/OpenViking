@@ -234,6 +234,8 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 
 调度器每 3 秒查询一次活跃任务，同一作用域和任务 ID 只保留一个查询，最多并发 4 个请求。查询失败指数退避至最多 30 秒，到达终态后停止。进行中的任务通知使用内置 loading 图标，到达终态后替换为结果图标；查询异常显示警告，不改变任务状态。
 
+任务快照优先使用完成结果里的资源 URI，并以提交任务时的 URI 兜底。自定义任务服务可以在 `uri` 中直接提供最终资源地址。终端任务完成且有资源 URI 时，「查看结果」会通过 `command.onOpenUri` 或 `Console.onOpenUri` 打开资源。通知会保留到点击按钮或关闭。
+
 切换模式或聊天会话、清空终端记录、关闭通知均不取消后台任务。关闭通知后仍更新关联记录；切换身份或卸载 Console 会中止查询并忽略旧响应。通知与任务状态不跨页面刷新持久化。
 
 其他后端通过 `taskService` 适配请求和状态字段。该对象及 `chatOptions.taskService` 应保持引用稳定；后者可覆盖对话任务的查询方式。不同服务、身份或 `scopeKey` 的任务分别跟踪。宿主完全控制 `conversation` 时，任务状态也由宿主提供。
@@ -280,26 +282,26 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 - 含空格的参数用单引号或双引号包住，也可以用反斜线转义。
 - 以 `--` 开头的值要加引号，例如 `ov write viking://resources/a.md "--heading"`；也可以用 `--` 结束选项解析，例如 `ov write viking://resources/a.md -- --heading`。选项值同理，例如 `--description "--example"`。
 - 参数按数据解析，不执行 Shell。未加引号的 `| ; & < > $` 和反引号会被拒绝，含 `&` 的 URL 要加引号。
-- 未知选项、重复选项、缺少参数、不以 `viking://` 开头的 URI 和未闭合的引号都会生成失败记录，不发送请求。
+- 未知选项、重复的单值选项、缺少参数、不以 `viking://` 开头的 URI 和未闭合的引号都会生成失败记录，不发送请求。
 
 ### 支持的命令
 
-| 能力       | 命令                                                                                                                                                                     |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 添加与编译 | `add-resource <path>`、`add-skill <path>`、`add-memory <content> --session-id <session-id>`、`compile --from <from> --to <to>`、`compile create --from <from> --to <to>` |
-| 本地       | `help`、`clear`                                                                                                                                                          |
-| 服务       | `health`、`status`                                                                                                                                                       |
-| 浏览       | `ls [uri]`、`tree [uri]`、`stat <uri>`                                                                                                                                   |
-| 内容       | `read <uri>`、`abstract <uri>`、`overview <uri>`                                                                                                                         |
-| 检索       | `find <query>`、`search <query>`、`grep <pattern>`、`glob <pattern>`                                                                                                     |
-| 写入       | `mkdir <uri>`、`write <uri> <content>`、`cp <from_uri> <to_uri>`、`mv <from_uri> <to_uri>`、`rm <uri>`                                                                   |
-| 任务       | `task list`、`task status <id>`、`task cancel <id>`                                                                                                                      |
+| 能力       | 命令                                                                                                                                                                                                                           |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 添加与编译 | `add-resource <path>`、`add-skill <path>`、`add-memory <content> --session-id <session-id>`、`compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>`、`compile --compile-name <name>` |
+| 本地       | `help`、`clear`                                                                                                                                                                                                                |
+| 服务       | `health`、`status`                                                                                                                                                                                                             |
+| 浏览       | `ls [uri]`、`tree [uri]`、`stat <uri>`                                                                                                                                                                                         |
+| 内容       | `read <uri>`、`abstract <uri>`、`overview <uri>`                                                                                                                                                                               |
+| 检索       | `find <query>`、`search <query>`、`grep <pattern>`、`glob <pattern>`                                                                                                                                                           |
+| 写入       | `mkdir <uri>`、`write <uri> <content>`、`cp <from_uri> <to_uri>`、`mv <from_uri> <to_uri>`、`rm <uri>`                                                                                                                         |
+| 任务       | `task list`、`task status <id>`、`task cancel <id>`                                                                                                                                                                            |
 
 - `ls` 和 `tree` 默认从 `viking://` 开始，最多返回 100 条；用 `--limit` 和 `--offset` 分页，`tree` 另有 `--level_limit`。
 - `write` 默认覆盖已有内容；`--mode create` 表示创建，`--mode append` 表示追加。
 - `add-resource` 和 `add-skill` 接受远程地址，不接受本地文件路径。
 - `add-memory` 把内容作为用户消息追加到 `--session-id` 指定的会话，再提交该会话。
-- `compile` 默认使用内置的 llm-wiki Skill，用 `--skill` 指定其他 Skill；`compile create` 只保存编译配置，不启动编译。
+- 用 `compile create` 保存命名配置，再用 `compile --compile-name <name>` 执行。可以重复传入 `--from`，也可以用英文逗号分隔多个来源目录 URI。通过 `--instruction` 补充指令，或用 `--args` 传入模型、定时计划等 JSON 参数。用 `task status <id>` 查询返回的任务 ID。
 - `task cancel` 向服务端请求协作取消，任务可能不会立即停止。
 - 选项名的写法因命令而异，例如 `add-skill` 用 `--target-uri`，`find` 用 `--target_uri`，以 `ov help` 为准。
 - 导入、编译与记忆提交返回任务 ID 后自动跟踪；任务状态独立于提交结果，终端输入在提交请求返回后恢复可用。

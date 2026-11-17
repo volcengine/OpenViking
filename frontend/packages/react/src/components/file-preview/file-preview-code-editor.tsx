@@ -12,11 +12,17 @@ import {
   prismLanguage,
 } from '../../shared/prism-language.js';
 import { prismHighlight } from './prism-highlight.js';
-import type { FilePreviewLabels, FilePreviewSource } from './types.js';
+import { editorAnnotations } from './editor-annotations.js';
+import type {
+  FilePreviewEditorAnnotation,
+  FilePreviewLabels,
+  FilePreviewSource,
+} from './types.js';
 
 export interface FilePreviewCodeEditorProps {
   draft: string;
   source: FilePreviewSource;
+  annotations?: readonly FilePreviewEditorAnnotation[];
   saving: boolean;
   text: Required<FilePreviewLabels>;
   onChange: (value: string) => void;
@@ -29,6 +35,7 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   latest.current = props;
   const access = useRef(new Compartment());
   const highlighting = useRef(new Compartment());
+  const annotations = useRef(new Compartment());
   const [highlightFailure, setHighlightFailure] = useState<{
     reason: unknown;
   }>();
@@ -50,6 +57,7 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
           keymap.of([...defaultKeymap, ...historyKeymap]),
           access.current.of([]),
           highlighting.current.of([]),
+          annotations.current.of([]),
           EditorView.updateListener.of((update) => {
             if (
               update.docChanged &&
@@ -97,6 +105,17 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
         annotations: Transaction.addToHistory.of(false),
       });
   }, [props.draft]);
+
+  // useEffect 必要性：标注随 props 同步到命令式 CodeMirror 实例，React 渲染无法更新编辑器扩展。
+  // Compartment 重配置和编辑器销毁时都会卸载旧扩展，由扩展释放悬浮事件监听及定时器。
+  useEffect(() => {
+    const extension = props.annotations?.length
+      ? editorAnnotations(props.annotations)
+      : [];
+    editor.current!.dispatch({
+      effects: annotations.current.reconfigure(extension),
+    });
+  }, [props.annotations]);
 
   // useEffect 必要性：按语言和重试次数加载 Prism 语法并配置 CodeMirror 插件；
   // 异步模块加载与命令式插件安装不能在 React 渲染中执行。

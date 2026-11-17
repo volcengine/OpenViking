@@ -45,11 +45,12 @@ pub async fn write(
     content: &str,
     mode: &str,
     wait: bool,
+    use_snapshot: bool,
     processing_mode: &str,
+    defer_processing: bool,
     tags: Vec<String>,
     tag_mode: &str,
     acl: Option<serde_json::Value>,
-    edit_source: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -59,11 +60,12 @@ pub async fn write(
             content,
             mode,
             wait,
+            use_snapshot,
             processing_mode,
+            defer_processing,
             tags,
             tag_mode,
             acl,
-            edit_source,
         )
         .await?;
     crate::output::output_success(result, output_format, compact);

@@ -11,6 +11,7 @@ import pytest
 from openviking.connector.delegate import ConnectorDelegate
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_types import WatchPatch, WatchRunResult, WatchTask
+from openviking.utils.network_guard import ensure_public_remote_target
 from tests.resource.test_watch_store import (
     CONNECTOR_AUTH,
     OWNER,
@@ -261,7 +262,11 @@ async def test_git_gate(store, watch_vfs, watch_tracker, monkeypatch, scenario):
     if scenario == "non_git":
         probe.assert_not_awaited()
     elif scenario == "token":
-        probe.assert_awaited_once_with(REPO, auth_config={"token": "account-token"})
+        probe.assert_awaited_once_with(
+            REPO,
+            request_validator=ensure_public_remote_target,
+            auth_config={"token": "account-token"},
+        )
         assert "auth_config" not in state.task.processor_kwargs
     assert "source_checkpoint" not in state.task.to_dict()
 

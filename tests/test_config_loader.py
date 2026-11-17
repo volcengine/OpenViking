@@ -704,7 +704,7 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
             "{"
             '"storage": {"workspace": "%s"}, '
             '"log": {"output": "file", "level": "INFO", '
-            '"format": "%%(message)s", "rotation": false, "rotation_days": 7, '
+            '"rotation": false, "rotation_days": 7, '
             '"rotation_interval": "midnight"}'
             "}"
         )
@@ -726,13 +726,13 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
         assert openviking_root.handlers == uvicorn_root.handlers
 
         refreshed_logger.info("child-line")
-        uvicorn_access.info("access-line")
+        logging.getLogger("uvicorn.error").info("uvicorn-line")
         for handler in openviking_root.handlers:
             handler.flush()
 
         content = (tmp_path / "log" / "openviking.log").read_text(encoding="utf-8")
         assert content.count("child-line") == 1
-        assert content.count("access-line") == 1
+        assert content.count("uvicorn-line") == 1
     finally:
         for name in ("openviking", "uvicorn", "uvicorn.error", "uvicorn.access", logger_name):
             logger = logging.getLogger(name)

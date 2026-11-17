@@ -316,6 +316,8 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 
 ### VikingBotReferences
 
+To link a directory tree to the composer, write its selected directory to `references.selected` as `{ uri, name, type: 'directory' }`. The directory appears above the input. Use `onChange` to receive the updated list when a tag is removed and `onOpenUri` to locate a directory when its tag is clicked.
+
 | Property      | Description                                                                                                                                                                                         | Type                                                  | Default  |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | -------- |
 | rows          | Files and directories that can be selected, using the row structure of [FileTree](./file-tree); your app handles expansion, paging and permission filtering, and `disabled` rows cannot be selected | `readonly FileTreeRow[]`                              | Required |

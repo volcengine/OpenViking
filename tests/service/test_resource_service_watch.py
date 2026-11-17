@@ -78,6 +78,12 @@ class MockSkillProcessor:
 class MockVikingFS:
     """Mock VikingFS for testing."""
 
+    async def _ensure_access(self, *_args, **_kwargs):
+        pass
+
+    def _get_vector_store(self):
+        return None
+
     async def read_file(self, uri, **kwargs):
         raise FileNotFoundError(uri)
 

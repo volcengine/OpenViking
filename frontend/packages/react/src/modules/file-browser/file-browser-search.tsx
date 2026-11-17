@@ -13,7 +13,6 @@ import type { Locale } from '../../shared/locale.js';
 import { FileBrowserSearchAdvanced } from './file-browser-search-advanced.js';
 import { FileBrowserSearchHeader } from './file-browser-search-header.js';
 import { useSearchHighlight } from './use-search-highlight.js';
-import type { FileBrowserHandle } from './types.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
 import {
   buildScopeOptions,
@@ -38,8 +37,8 @@ interface FileBrowserSearchProps {
   /** 高级面板是否展开；由宿主组件持有，左栏漏斗与弹窗内开关共用。 */
   advancedOpen: boolean;
   onToggleAdvanced: (open: boolean) => void;
-  /** 打开结果：定位到树并加载预览。Opens a result: locates it in the tree and previews it. */
-  onOpenResource: FileBrowserHandle['openResource'];
+  /** 打开搜索结果的 URI。Requests opening the search result URI. */
+  onOpenResource: (uri: string) => void;
   onClose: () => void;
 }
 
@@ -148,7 +147,7 @@ export function FileBrowserSearch({
   const openResult = (uri: string) => {
     track('file_browser_search_result_select');
     onClose();
-    void onOpenResource(uri).catch(() => {});
+    onOpenResource(uri);
   };
   const retry = () => {
     inputRef.current?.focus();

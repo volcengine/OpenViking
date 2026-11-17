@@ -13,6 +13,7 @@ import type { FilePreviewCodeEditorProps } from './file-preview-code-editor.js';
 
 export interface FilePreviewEditorProps {
   draft: string;
+  annotations?: FilePreviewCodeEditorProps['annotations'];
   source: FilePreviewSource;
   text: Required<FilePreviewLabels>;
   loading: boolean;
@@ -38,6 +39,7 @@ const loadCodeEditor = async () => {
 /** Load CodeMirror only when editing; retain the draft if loading fails. */
 export function FilePreviewEditor({
   draft,
+  annotations,
   source,
   text,
   loading,
@@ -130,6 +132,7 @@ export function FilePreviewEditor({
       {Editor ? (
         <Editor
           draft={draft}
+          annotations={annotations}
           source={source}
           saving={saving}
           text={text}
