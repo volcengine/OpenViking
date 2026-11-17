@@ -66,10 +66,10 @@ class AddResourceMsg:
     parse_mode: str = "default"
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
-    as_item: bool = False
-    item_attrs: Optional[Dict[str, str]] = None
     acl: Optional[Dict[str, Any]] = None
     internal_task: bool = False
+    as_item: bool = False
+    item_attrs: Optional[Dict[str, str]] = None
 
     def __post_init__(self) -> None:
         inferred = (

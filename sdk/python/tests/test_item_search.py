@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from openviking_sdk import AsyncHTTPClient
+from openviking_sdk.errors import FailedPreconditionError
 
 
 @pytest.mark.asyncio
@@ -12,26 +13,29 @@ async def test_search_as_item_and_declaration_payloads():
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._request = AsyncMock(return_value=object())
     item = {
+        "context_type": "resource",
         "item_uuid": "uuid-a",
         "uri": "viking://resources/A",
-        "item_score": 0.8,
+        "score": 0.8,
         "item_attrs": {},
         "item_extra_info": {
             "candidate_members_count": 1,
             "candidate_members_uri": ["viking://resources/A/a.md"],
         },
     }
-    client._handle_response_data = lambda response: {"result": {"items": [item], "total": 1}}
+    client._handle_response_data = lambda response: {
+        "result": {"memories": [], "resources": [item], "skills": [], "total": 1}
+    }
 
     result = await client.search("beach", options={"search_as_item": {}})
     payload = client._request.await_args.kwargs["json"]
     assert payload["search_as_item"] == {}
-    assert result["items"] == [item]
+    assert result["resources"] == [item]
 
     await client.find("beach", options={"search_as_item": {"aggregation": "sum"}})
     assert client._request.await_args.kwargs["json"]["search_as_item"] == {"aggregation": "sum"}
 
-    client._handle_response = lambda response: {}
+    client._handle_response = lambda response: {"item_uuid": "uuid-a", "item_attrs": {}}
     await client.mkdir("viking://resources/A", as_item=True, item_attrs={})
     assert client._request.await_args.kwargs["json"] == {
         "uri": "viking://resources/A",
@@ -45,6 +49,19 @@ async def test_search_as_item_and_declaration_payloads():
     )
     assert client._request.await_args.kwargs["json"]["as_item"] is True
     assert client._request.await_args.kwargs["json"]["item_attrs"] == {"asset_id": "V1"}
+
+
+@pytest.mark.asyncio
+async def test_item_mkdir_rejects_a_legacy_server_success_without_a_declaration():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda response: {"uri": "viking://resources/A"}
+    with pytest.raises(FailedPreconditionError, match="ordinary directory") as exc:
+        await client.mkdir("viking://resources/A", as_item=True)
+    assert exc.value.details["uri"] == "viking://resources/A"
+    assert client._request.await_count == 1
+    # The same legacy response remains valid for an ordinary mkdir.
+    assert await client.mkdir("viking://resources/A") is None
 
 
 @pytest.mark.asyncio

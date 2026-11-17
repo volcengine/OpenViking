@@ -58,6 +58,16 @@ client.add_resource(
 
 The MCP `add_resource` tool exposes the same `as_item` and `item_attrs` arguments. Omitting `as_item` is equivalent to `false`; when it is false, `item_attrs` must also be omitted (even an empty object is rejected). `item_uuid` is generated and maintained by OpenViking and cannot be supplied by callers. Attributes belong only to the declared root and are not inherited or merged. Moving an Item preserves its UUID and attributes, copying it does not copy the declaration, and removing it deletes the declaration.
 
+Item imports reuse the existing resource parsing, storage, temporary-source cleanup, and update lifecycle. They add no original-input supplementation directory, ownership marker, or special maintenance rules. Reimport replaces the resource snapshot while preserving the root UUID; independent child Items and immutable attribute conflicts are checked before committing content.
+
+Existing ordinary directories and resource roots cannot be promoted to Items; import their original inputs into a new Item root. Existing Items support same-root updates and retries. New Skill packages declare Items automatically; updates preserve an existing declaration or its absence for legacy packages.
+
+An explicit `mkdir` retry on an existing Item resumes initialization: it creates a missing abstract, preserves an existing abstract verbatim, and retries the existing directory L0 indexing enqueue. Failures remain errors. The UUID, attributes, and member files are preserved; other Items are not scanned or backfilled.
+
+The HTTP success result for `mkdir(as_item=true)` includes `uri`, `item_uuid`, and `item_attrs` to confirm the declaration. Ordinary `mkdir` still returns only `uri`, and the Python SDK still returns `None`. The SDK and CLI raise `FAILED_PRECONDITION` if an older server returns no UUID. That server may already have created an ordinary directory; check the target URI and upgrade the server. The client does not delete it automatically. Confirmation reuses the declaration result without another probe or storage read. Ordinary `mkdir` retains its existing behavior of ignoring unrelated extra fields, while rejecting caller-supplied `item_uuid` or `item_uuids`.
+
+Upgrade the open-source Python code and native engine together. Mixed binaries and rollback with draft Item data have not been independently validated.
+
 Enable Item Search by passing an empty `search_as_item` object. Set `aggregation` to `sum` only when needed; the default is `max`:
 
 ```bash
@@ -66,7 +76,7 @@ ov find "boy on the beach" --uri viking://resources/videos --search-as-item
 ov search "boy on the beach" --uri viking://resources/videos \
   --search-as-item --aggregation sum
 
-# Filter-only Item lookup (item_score is 0.0)
+# Filter-only Item lookup (score is 0.0)
 ov find --search-as-item \
   --filter '{"op":"must","field":"item_attrs","conds":["asset_id=V1"]}'
 ```
@@ -94,7 +104,7 @@ items = client.find(
 )
 ```
 
-For MCP, pass `search_as_item: {}` to either the `find` or `search` tool; the optional object accepts `{"aggregation":"sum"}`. The MCP result is the same Item result object serialized as JSON.
+For MCP, pass `search_as_item: {}` to either the `find` or `search` tool; the optional object accepts `{"aggregation":"sum"}`. MCP keeps its existing classified text format, showing Item roots, aggregate scores, and optional Item metadata without reading summaries or content.
 
 One `must` node follows the existing list-string filter semantics: multiple values in its `conds` array are alternatives. To require multiple attributes, combine single-value predicates with `and`:
 
@@ -108,9 +118,17 @@ One `must` node follows the existing list-string filter semantics: multiple valu
 }
 ```
 
-The response has `items` and `total`. Each Item contains `item_uuid`, root `uri`, `item_score`, `item_attrs`, and `item_extra_info` with only this request's `candidate_members_count` and `candidate_members_uri`.
+HTTP/SDK responses keep `memories`, `resources`, `skills`, and `total`, without a separate `items` array. Each Item uses its declaration root's `context_type`, root `uri`, aggregate `score`, and root `level=0`. Optional extensions are `item_uuid`, `item_attrs`, and `item_extra_info` with only this request's `candidate_members_count` and `candidate_members_uri`. Each array preserves engine order; `limit` bounds the total Items before classification and `total` is the sum of the three array lengths. Empty results have three empty arrays. Ordinary hits do not gain Item fields.
 
-Item mode supports list results only. It rejects `read_content`, `include_provenance`, event-time decay, and `mode="context"`; it supports only `max` and `sum` aggregation and does not run custom/JEV reranking. A configured storage backend without Catalog and Item grouping support returns `501 UNIMPLEMENTED` rather than emulating grouping in OpenViking.
+When member evidence is truncated, `item_extra_info.candidate_members_truncated` is `true`; the count still includes every candidate used in aggregation and may exceed the URI list length. Returning a root URI does not grant access to its contents. The local engine defaults to shadow inheritance. With union configured, it filters members before scoring all effective ancestor Items, each with its own attributes. Internal `item_uuids` and `item_attrs` are both `list<string>`; the OV API continues to expose `item_attrs` as a string map.
+
+The inheritance mode is configured once for the `item_uuids` field within a collection and applies to every account in that collection; declarations and attributes remain account scoped. Aggregation counts and scores each candidate input row without deduplicating member IDs. Evidence selection and ordering depend on the backend and are not guaranteed to match across backends.
+
+The local union implementation currently expands each `item_attrs` predicate to member ranges before combining AND/OR, so different ancestor Items can satisfy different predicates. Matching members still contribute to every effective ancestor UUID, and each group returns its own attributes.
+
+Local filter-only Item queries cover all matching members and return a `score` of `0.0`. Semantic queries use a 1000-candidate recall budget independent of `limit`. The limit controls returned Item groups, with at most 1000 evidence members per group; truncating evidence does not change complete counts or `max`/`sum` aggregation scores.
+
+Item mode supports list results only. It rejects `read_content`, `include_provenance`, event-time decay, and `mode="context"`; it supports only `max` and `sum` aggregation and does not run custom/JEV reranking. `VikingDBCollection` does not yet implement the Catalog and Item grouping adapters. A configured storage backend without these interfaces returns `501 UNIMPLEMENTED` rather than emulating grouping in OpenViking.
 
 ## Retrieval Pipeline
 

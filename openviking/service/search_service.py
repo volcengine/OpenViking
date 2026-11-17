@@ -201,8 +201,13 @@ class SearchService:
         viking_fs = self._ensure_initialized()
 
         session_info = None
-        # Intent off: session_info is unused by VikingFS — skip the archive/message scan.
-        if session is not None and self.is_intent_enabled() and not resolved_image_url:
+        # Item mode and intent-off searches do not use session context.
+        if (
+            search_as_item is None
+            and session is not None
+            and self.is_intent_enabled()
+            and not resolved_image_url
+        ):
             session_info = await session.get_context_for_search(query)
 
         result = await viking_fs.search(

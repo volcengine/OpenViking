@@ -464,6 +464,24 @@ BitmapPtr IndexManagerImpl::calculate_filter_bitmap(const SearchContext& ctx,
   return bitmap;
 }
 
+void IndexManagerImpl::visit_filtered_labels(
+    const std::string& dsl, const std::function<void(uint64_t)>& visitor) {
+  SearchContext ctx;
+  if (parse_dsl_query(dsl, ctx) != 0 || !ctx.filter_op || ctx.sorter_op) {
+    throw std::invalid_argument("Item filter scan requires a valid scalar filter");
+  }
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  const auto bitmap = calculate_filter_bitmap(ctx, dsl);
+  if (!bitmap) throw std::runtime_error("Failed to evaluate Item scalar filter");
+  bitmap->for_each([&](uint32_t offset) {
+    const auto label = vector_index_->get_label_by_offset(offset);
+    // Skip stale scalar offsets, including a missing offset's zero label.
+    if (vector_index_->get_offset_by_label(label) == static_cast<int>(offset)) {
+      visitor(label);
+    }
+  });
+}
+
 int IndexManagerImpl::handle_sorter_query(const SearchContext& ctx,
                                           const BitmapPtr& bitmap,
                                           SearchResult& result,

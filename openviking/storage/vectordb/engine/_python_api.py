@@ -600,6 +600,22 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
                 )
             )
 
+        def aggregate_filter(
+            self, index: IndexEngine, store: Any, row: BytesRow, request: dict[str, Any]
+        ) -> dict[str, Any]:
+            aggregate = getattr(backend, "_catalog_engine_aggregate_filter", None)
+            if aggregate is None:
+                raise NotImplementedError("Rebuild the local C++ engine for Item filter scans")
+            return json.loads(
+                aggregate(
+                    self._handle,
+                    index._handle,
+                    store._handle,
+                    row._handle,
+                    json.dumps(request, ensure_ascii=False, allow_nan=False),
+                )
+            )
+
     class _StoreBase:
         def __init__(self, handle: Any):
             self._backend = backend

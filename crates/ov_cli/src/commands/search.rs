@@ -774,9 +774,6 @@ fn search_card_text_width() -> usize {
 }
 
 fn search_result_kind(object: Option<&serde_json::Map<String, Value>>) -> &str {
-    if object.is_some_and(|object| object.contains_key("item_uuid")) {
-        return "item";
-    }
     object
         .and_then(|object| object.get("context_type").or_else(|| object.get("type")))
         .and_then(Value::as_str)
@@ -818,9 +815,6 @@ fn search_result_scores(object: Option<&serde_json::Map<String, Value>>) -> Vec<
     let Some(object) = object else {
         return Vec::new();
     };
-    if let Some(score) = object.get("item_score").and_then(parse_score) {
-        return vec![format!("item_score {score:.3}")];
-    }
     if !object.contains_key("origin_score") && !object.contains_key("time_score") {
         return search_result_score(Some(object)).into_iter().collect();
     }
@@ -1452,10 +1446,14 @@ mod tests {
     #[test]
     fn item_search_cards_show_protocol_fields_without_fake_abstract() {
         let results = json!({
-            "items": [{
+            "memories": [],
+            "skills": [],
+            "resources": [{
+                "context_type": "resource",
+                "level": 0,
                 "item_uuid": "019a-item-a",
                 "uri": "viking://resources/A",
-                "item_score": 0.625,
+                "score": 0.625,
                 "item_attrs": {"kind": "video", "asset_id": "V1"},
                 "item_extra_info": {
                     "candidate_members_count": 2,
@@ -1469,7 +1467,7 @@ mod tests {
         });
 
         let rendered = strip_ansi(&render_search_results_for_table(&results).expect("cards"));
-        assert!(rendered.contains("1. item · item_score 0.625"));
+        assert!(rendered.contains("1. resource · Level 0 · score 0.625"));
         assert!(rendered.contains("viking://resources/A"));
         assert!(rendered.contains("item_uuid: 019a-item-a"));
         assert!(rendered.contains("item_attrs: asset_id=V1, kind=video"));

@@ -34,7 +34,9 @@ from openviking.storage.acl import AclAction, AclSpec, AclUpdate
 from openviking.storage.catalog import (
     ITEM_ATTRS_OMITTED,
     declare_item,
+    require_existing_item_root,
     validate_item_declaration,
+    validate_resource_item_update,
 )
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
@@ -432,6 +434,7 @@ class ResourceProcessor:
         """Resolve and commit one artifact through the canonical update plan."""
         from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
         from openviking.storage.context_update_plan import (
+            ContentTreeOperation,
             build_context_update_plan_from_snapshot,
             execute_content_tree_actions,
         )
@@ -601,6 +604,19 @@ class ResourceProcessor:
         content_commit_started_at = time.perf_counter()
         try:
             with telemetry.measure("resource.content_commit"):
+                if any(
+                    action.operation
+                    in {ContentTreeOperation.DELETE, ContentTreeOperation.REPLACE_KIND}
+                    for action in context_plan.content_tree_actions
+                ):
+                    from openviking.storage.catalog import delete_catalog_subtree
+
+                    # One reconciliation per resource, under the existing tree
+                    # lease. Ordinary nodes can be registered again from vectors;
+                    # the root declaration must retain its UUID and attributes.
+                    await delete_catalog_subtree(
+                        get_viking_fs(), root_uri, ctx, preserve_item_root=True
+                    )
                 await execute_content_tree_actions(
                     context_plan.content_tree_actions,
                     store=commit_store,
@@ -1153,6 +1169,19 @@ class ResourceProcessor:
                         artifact_ref, output_store=output_store, viking_fs=viking_fs, ctx=ctx
                     )
                     local_artifact_doc_rel = self._artifact_doc_rel(artifact_ref, temp_uri)
+                    if as_item and target_preexisting:
+                        await require_existing_item_root(self.vikingdb, root_uri, ctx)
+                    # Validate under the same tree lease as the content commit.
+                    # Rejected declarations must never overwrite existing bytes,
+                    # and a parent snapshot must not delete independent Items.
+                    await validate_resource_item_update(
+                        self.vikingdb,
+                        root_uri,
+                        ctx,
+                        as_item=as_item,
+                        item_attrs=item_attrs,
+                        is_dir=not root_is_file,
+                    )
                     context_update_plan = await self._commit_directory_artifact_with_plan(
                         output_store=artifact_store,
                         artifact_ref=artifact_ref,

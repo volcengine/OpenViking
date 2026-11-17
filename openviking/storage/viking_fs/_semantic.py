@@ -8,10 +8,10 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.item_search import (
-    ItemSearchResult,
     SearchAsItemOptions,
     validate_item_search_request,
 )
+from openviking.core.namespace import context_type_for_uri
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
 from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log
@@ -38,7 +38,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     UnimplementedError,
 )
-from openviking_cli.retrieve import ContextType
+from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 
@@ -155,7 +155,7 @@ class _SemanticMixin:
         search_type: SearchType,
         options: SearchAsItemOptions,
         filter_only: bool = False,
-    ) -> ItemSearchResult:
+    ) -> FindResult:
         """Ask the storage engine for ordered groups, then attach Item roots."""
         from openviking.models.embedder.base import embed_compat, embedder_supports_multimodal
         from openviking.storage.catalog import decode_item_attrs
@@ -205,44 +205,86 @@ class _SemanticMixin:
         )
         groups = grouped.get("groups", [])
         if not isinstance(groups, list) or not groups:
-            return ItemSearchResult([])
+            return FindResult(memories=[], resources=[], skills=[])
 
         item_uuids = [str(group["entity_id"]) for group in groups]
-        declarations = await proxy.catalog_execute({"op": "query_items", "item_uuids": item_uuids})
-        rows = declarations.get("data", [])
-        by_uuid = {str(row.get("item_uuid")): row for row in rows}
-        missing = [item_uuid for item_uuid in item_uuids if item_uuid not in by_uuid]
+        # New engines return each group's own root and attributes. Only legacy
+        # responses need a UUID lookup; never read or merge ancestor attributes.
+        legacy_uuids = [
+            item_uuid
+            for group, item_uuid in zip(groups, item_uuids, strict=True)
+            if not group.get("entity_uri") or "entity_attrs" not in group
+        ]
+        by_uuid = {}
+        if legacy_uuids:
+            declarations = await proxy.catalog_execute(
+                {"op": "query_items", "item_uuids": legacy_uuids}
+            )
+            by_uuid = {str(row.get("item_uuid")): row for row in declarations.get("data", [])}
+        missing = [item_uuid for item_uuid in legacy_uuids if item_uuid not in by_uuid]
         if missing:
             raise RuntimeError(f"Item declaration roots are missing for {len(missing)} groups")
 
-        root_uris = [str(by_uuid[item_uuid]["uri"]) for item_uuid in item_uuids]
+        root_uris = []
+        for group, item_uuid in zip(groups, item_uuids, strict=True):
+            root_uri = str(group.get("entity_uri") or by_uuid[item_uuid]["uri"])
+            if root_uri.startswith("/"):
+                root_uri = "viking://" + root_uri.lstrip("/")
+            root_uris.append(root_uri)
         access = (
             await self._can_access_many(root_uris, ctx) if ctx.data_access is not None else None
         )
-        items: list[dict[str, Any]] = []
+        buckets: dict[ContextType, list[MatchedContext]] = {
+            ContextType.MEMORY: [],
+            ContextType.RESOURCE: [],
+            ContextType.SKILL: [],
+        }
         for group, item_uuid, root_uri in zip(groups, item_uuids, root_uris, strict=True):
             if access is not None and not access.get(root_uri, False):
                 continue
             candidate_uris = [
                 str(uri) for uri in group.get("candidate_members_uri", []) if isinstance(uri, str)
             ]
-            count = int(group.get("count", len(candidate_uris)))
-            if count != len(candidate_uris):
-                raise RuntimeError("Item group candidate count does not match its URI list")
-            items.append(
-                {
-                    "item_uuid": item_uuid,
-                    "uri": root_uri,
-                    "item_score": float(group["entity_score"]),
-                    "item_attrs": decode_item_attrs(by_uuid[item_uuid].get("item_attrs")),
-                    "item_extra_info": {
-                        "candidate_members_count": count,
-                        "candidate_members_uri": candidate_uris,
-                    },
-                }
+            count = int(
+                group.get("candidate_members_count", group.get("count", len(candidate_uris)))
             )
-        get_current_telemetry().set("vector.returned", len(items))
-        return ItemSearchResult(items)
+            truncated = bool(
+                group.get("candidate_members_truncated", group.get("labels_truncated", False))
+            )
+            if count < len(candidate_uris) or (not truncated and count != len(candidate_uris)):
+                raise RuntimeError("Item group candidate count does not match its URI list")
+            extra_info = {
+                "candidate_members_count": count,
+                "candidate_members_uri": candidate_uris,
+            }
+            if truncated:
+                extra_info["candidate_members_truncated"] = True
+            attrs = (
+                group["entity_attrs"]
+                if "entity_attrs" in group
+                else by_uuid[item_uuid].get("item_attrs")
+            )
+            # Classify the declaration root, never a representative member.
+            # Root metadata needs no summary/content read or model invocation.
+            context_type = ContextType(context_type_for_uri(root_uri))
+            buckets[context_type].append(
+                MatchedContext(
+                    uri=root_uri,
+                    context_type=context_type,
+                    level=ContextLevel.ABSTRACT,
+                    score=float(group["entity_score"]),
+                    item_uuid=item_uuid,
+                    item_attrs=decode_item_attrs(attrs),
+                    item_extra_info=extra_info,
+                )
+            )
+        result = FindResult(
+            memories=buckets[ContextType.MEMORY],
+            resources=buckets[ContextType.RESOURCE],
+            skills=buckets[ContextType.SKILL],
+        )
+        get_current_telemetry().set("vector.returned", result.total)
+        return result
 
     async def find(
         self,
@@ -570,7 +612,7 @@ class _SemanticMixin:
 
         # When target_uri exists, read its abstract as optional query-planning context.
         target_abstract = ""
-        if primary_target_uri:
+        if primary_target_uri and search_as_item is None:
             try:
                 with telemetry.measure("search.target_abstract"):
                     target_abstract = await self.abstract(primary_target_uri, ctx=real_ctx)

@@ -428,7 +428,6 @@ class VikingDBManagerProxy:
         offset: int = 0,
         events_time_decay_protection: Optional[str] = None,
         request_now: Optional[datetime] = None,
-        output_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         kwargs: Dict[str, Any] = {
             "query_vector": query_vector,
@@ -445,8 +444,6 @@ class VikingDBManagerProxy:
                 events_time_decay_protection=events_time_decay_protection,
                 request_now=request_now,
             )
-        if output_fields is not None:
-            kwargs["output_fields"] = output_fields
         return await self._manager.search_in_tenant(self._ctx, **kwargs)
 
     async def search_by_keywords_in_tenant(
@@ -459,7 +456,6 @@ class VikingDBManagerProxy:
         limit: int = 10,
         offset: int = 0,
         keywords_args: Optional[Dict[str, Any]] = None,
-        output_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         return await self._manager.search_by_keywords_in_tenant(
             self._ctx,
@@ -471,7 +467,6 @@ class VikingDBManagerProxy:
             limit=limit,
             offset=offset,
             keywords_args=keywords_args,
-            **({"output_fields": output_fields} if output_fields is not None else {}),
         )
 
     async def filter_in_tenant(

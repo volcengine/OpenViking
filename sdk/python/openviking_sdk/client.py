@@ -1538,7 +1538,17 @@ class AsyncHTTPClient:
         if item_attrs is not None:
             payload["item_attrs"] = item_attrs
         response = await self._request("POST", "/api/v1/fs/mkdir", json=payload)
-        self._handle_response(response)
+        result = self._handle_response(response)
+        if as_item and (
+            not isinstance(result, dict)
+            or not isinstance(result.get("item_uuid"), str)
+            or not result["item_uuid"].strip()
+        ):
+            raise FailedPreconditionError(
+                "Server did not confirm the Item declaration. Upgrade the server and check "
+                "the target URI; an ordinary directory may already have been created.",
+                details={"uri": payload["uri"], "stage": "item_declaration_confirmation"},
+            )
 
     async def rm(
         self,

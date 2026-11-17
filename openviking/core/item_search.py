@@ -1,10 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Public Item Search request and response models."""
+"""Public Item Search request options."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -39,17 +38,3 @@ def validate_item_search_request(
     if events_time_decay_protection is not None:
         raise ValueError("Item Search does not support event time decay")
     return normalized
-
-
-@dataclass
-class ItemSearchResult:
-    """Public Item Search response with engine-ranked Item root records."""
-
-    items: list[dict[str, Any]]
-
-    @property
-    def total(self) -> int:
-        return len(self.items)
-
-    def to_dict(self, **_: Any) -> dict[str, Any]:
-        return {"items": self.items, "total": self.total}

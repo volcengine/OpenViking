@@ -7,12 +7,20 @@
 
 namespace vectordb {
 
+class IndexEngine;
+class KVStore;
+class BytesRow;
+
 // Collection-owned explicit declarations; effective values are resolved in C++.
 class CatalogEngine {
  public:
   explicit CatalogEngine(const std::string& path);
   ~CatalogEngine();
   std::string execute(const std::string& request_json);
+  // Caller holds a collection Store/index snapshot for the duration of this scan.
+  std::string aggregate_filter(IndexEngine& index, KVStore& candidates,
+                                const BytesRow& row,
+                                const std::string& request_json);
 
  private:
   class Impl;

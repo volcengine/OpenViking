@@ -115,6 +115,12 @@ class _IndexMutationBarrier:
                 with self._condition:
                     self._generation += 1
 
+    @contextmanager
+    def read_snapshot(self) -> Iterator[None]:
+        """Freeze Store/index writes and replacement without changing generation."""
+        with self._exclusive():
+            yield
+
     def snapshot_generation(self) -> int:
         """Return a boundary ordered after any exclusive collection mutation."""
 
@@ -301,6 +307,8 @@ class LocalCollection(ICollection):
                 }
             if not self._catalog_enabled and request["op"] == "query_items":
                 return {"data": [], "revision": "0"}
+            if not self._catalog_enabled and request["op"] == "validate_resource_update":
+                return {"valid": True, "has_item": False, "revision": "0"}
             if not self._catalog_enabled and request["op"] in (
                 "delete_subtree",
                 "move_subtree",
@@ -752,91 +760,75 @@ class LocalCollection(ICollection):
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
     ) -> Dict[str, Any]:
-        """Recall candidates and delegate shadow grouping to the native Catalog."""
+        """Recall semantic candidates or stream scalar matches into native Item grouping."""
         scope = self._catalog_scope(filters)
         if scope is None:
             raise ValueError("Item grouping requires a mandatory account scope")
+        request: Dict[str, Any] = {
+            "op": "group_candidates",
+            "scope": scope,
+            "aggregation": aggregation,
+            "max_groups": max_groups,
+        }
+        if score_threshold is not None:
+            request["score_threshold"] = score_threshold
+        if filter_only:
+            # Acquire the collection barrier BEFORE the Catalog lock, matching
+            # writes/activation. It freezes Store + index publication/writes
+            # while native filtering, field projection and grouping run.
+            with self._index_mutation_barrier.read_snapshot():
+                with self._catalog_lock:
+                    catalog = self._open_catalog()
+                    index = self.indexes.get(index_name)
+                    if not index:
+                        return {
+                            "group_field": "item_uuids",
+                            "aggregation": aggregation,
+                            "group_count": 0,
+                            "groups_truncated": False,
+                            "groups": [],
+                        }
+                    if not self.store_mgr:
+                        raise RuntimeError("Store manager is not initialized")
+                    request.update(
+                        filter=filters or {},
+                        candidate_table=StoreManager.CandsTable,
+                        primary_key=self.meta.primary_key,
+                    )
+                    return index.aggregate_items(catalog, self.store_mgr.storage, request)
+
         with self._catalog_lock:
             self._open_catalog()
-        candidate_limit = min(1000, max(100, max_groups * 20))
-        if filter_only:
-            index = self.indexes.get(index_name)
-            if not index:
-                return {
-                    "group_field": "item_uuid",
-                    "aggregation": aggregation,
-                    "group_count": 0,
-                    "groups_truncated": False,
-                    "groups": [],
-                }
-
+        # Group TopK must not change the semantic scoring population (especially sum).
+        candidate_limit = 1000
         for attempt in range(3):
-            if filter_only:
-                # A zero-vector ANN query has no meaningful ordering and can
-                # drop matching Items beyond an arbitrary recall window. Count
-                # the fully compiled filter first, then ask the scalar sorter
-                # for every matching record. Do not use get_data_count(): the
-                # persisted index state can lag in-process writes and report 0.
-                # Holding the Catalog lock keeps the compiled path scopes and
-                # the revision attached to the recall in the same snapshot.
-                with self._catalog_lock:
-                    compiled = self._open_catalog().execute(
-                        {
-                            "op": "compile_filter",
-                            "scope": scope,
-                            "filter": filters or {},
-                        }
-                    )
-                    count_data = index.aggregate(
-                        {
-                            "sorter": {"op": "count"},
-                            "filter": compiled["filter"],
-                        }
-                    )
-                    matched_count = count_data.get(AggregateKeys.TOTAL_COUNT_INTERNAL.value)
-                    if not isinstance(matched_count, int) or matched_count < 0:
-                        raise RuntimeError("Failed to count Item filter candidates")
-                    recalled = self.search_by_scalar(
-                        index_name=index_name,
-                        field="updated_at",
-                        order="asc",
-                        limit=max(1, matched_count),
-                        filters=compiled["filter"],
-                        output_fields=["uri"],
-                    )
-            else:
-                recalled = self.search_by_vector(
-                    index_name=index_name,
-                    dense_vector=dense_vector,
-                    sparse_vector=sparse_vector,
-                    limit=candidate_limit,
-                    filters=filters,
-                    output_fields=["uri"],
-                )
+            generation = self._index_mutation_barrier.snapshot_generation()
+            recalled = self.search_by_vector(
+                index_name=index_name,
+                dense_vector=dense_vector,
+                sparse_vector=sparse_vector,
+                limit=candidate_limit,
+                filters=filters,
+                output_fields=["uri"],
+            )
             candidates = [
                 {
                     "label": str(item.id),
                     "uri": item.fields.get("uri") if item.fields else "",
-                    "score": 0.0 if filter_only else float(item.score or 0.0),
+                    "score": float(item.score or 0.0),
                 }
                 for item in recalled.data
                 if item.fields and item.fields.get("uri")
             ]
-            request: Dict[str, Any] = {
-                "op": "group_candidates",
-                "scope": scope,
-                "candidates": candidates,
-                "aggregation": aggregation,
-                "max_groups": max_groups,
-            }
-            if score_threshold is not None:
-                request["score_threshold"] = score_threshold
+            request["candidates"] = candidates
             grouped = self.catalog_execute(request)
-            if grouped.get("revision") == recalled.catalog_revision:
+            if grouped.get("revision") == recalled.catalog_revision and (
+                self._index_mutation_barrier.is_current(generation)
+            ):
                 return grouped
             if attempt == 2:
                 raise RuntimeError(
-                    "Catalog changed repeatedly during Item recall; retry the request"
+                    "Collection changed repeatedly during Item recall; retry the request"
                 )
         raise AssertionError("unreachable")
 
