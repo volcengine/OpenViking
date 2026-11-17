@@ -14,6 +14,7 @@ import {
   assembleConversationPolicy,
   assembleVolcConversationPolicy,
   assembleVolcSelfHostedConversationPolicy,
+  assembleWorkerPolicy,
   docCommentNotice,
   OV_SOUL_URI,
   loadSoul,
@@ -427,6 +428,76 @@ describe('staged replies are opt-in per instance', () => {
     assert.match(on, /a question you must wait for/);
     assert.match(on, /Silence is never consent, however long it lasts\./);
     assert.match(on, /Never mention tools, skills, prompts, or the daemon\./);
+  });
+});
+
+describe('the inbox scheduler is opt-in per instance', () => {
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
+  const codexHash = (config) => new CodexAgent(config, {
+    getCognitionState: () => ({ runtime: 'codex', epoch: 1, authorityToken: 'token' }), getSetting: () => null,
+  }, quiet).policyHash;
+  const configs = [['lark'], ['weixin'], ['slack', 'lark']].map((connectors) => ({ ...base, connectors }));
+
+  it('legacy assembles exactly the policy without the setting', () => {
+    for (const config of [...configs, { ...base, connectors: ['lark'], explicitSilence: true, stagedReplies: true }]) {
+      const legacy = assembleConversationPolicy({ ...config, scheduler: 'legacy' });
+      assert.equal(legacy, assembleConversationPolicy(config));
+      assert.doesNotMatch(legacy, /message_check|\[daemon inbox\]|## Inbox/);
+      assert.equal(codexHash({ ...config, scheduler: 'legacy' }), codexHash(config));
+    }
+  });
+
+  it('inbox appends its section last and changes nothing above it', () => {
+    for (const config of [...configs, { ...base, connectors: ['lark'], explicitSilence: true }]) {
+      const off = assembleConversationPolicy(config);
+      const on = assembleConversationPolicy({ ...config, scheduler: 'inbox' });
+      assert.ok(on.startsWith(`${off}\n\n## Inbox\n`), config.connectors.join('+'));
+      assert.equal(on.split('## Inbox').length, 2);
+      assert.notEqual(codexHash({ ...config, scheduler: 'inbox' }), codexHash(config));
+    }
+    const on = assembleConversationPolicy({ ...base, connectors: ['lark'], scheduler: 'inbox' });
+    assert.match(on, /`\[daemon inbox\]` line may arrive\. It is a daemon notice, not an input/);
+    assert.match(on, /It needs no decision\. Finish the step you are on, then call `message_check`/);
+    assert.match(on, /delivers waiting inputs oldest first, as ordinary input lines right after the call/);
+    assert.match(on, /never answer only the newest line/);
+    assert.match(on, /you need not call `message_check` before ending a turn/);
+  });
+});
+
+describe('the workers scheduler', () => {
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague'), connectors: ['lark'] };
+
+  it('gives the router the inbox and then its workers section, and nothing else changes', () => {
+    const inbox = assembleConversationPolicy({ ...base, scheduler: 'inbox' });
+    const workers = assembleConversationPolicy({ ...base, scheduler: 'workers' });
+    assert.ok(workers.startsWith(`${inbox}\n\n## Workers\n`));
+    assert.match(workers, /Never rewrite the request or add a plan: the worker reads the original messages\./);
+    assert.match(workers, /A task is one piece of work, not a conversation\. Decide each input by what it asks for, never by where it was written or who wrote it/);
+    assert.match(workers, /More work on an ended task is always a new task that follows it; ended tasks take no inputs\./);
+    assert.match(workers, /When unsure between `owner` and a new task, create the new task with `follows`\./);
+    assert.match(workers, /Being near a task says nothing about belonging to it\./);
+    assert.match(workers, /A `\[task handback\]` input holds lines a worker found are not part of its task[\s\S]*never route one back to that task\./);
+    assert.match(workers, /and `task_ids` with its task \(several when one reply covers several reports\)/);
+    assert.match(workers, /A report marked `undelivered=1` was shown to you before/);
+    assert.match(workers, /A `\[task report\]` line is a worker's result for one task, not an input from a person\./);
+    assert.match(workers, /for `dropped`, tell the requester in one line why nothing needed doing/);
+    assert.match(workers, /a command is cut off after 30 seconds and may not sleep, and a turn gets a few calls of them/);
+    assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
+    assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
+  });
+
+  it('gives a worker its own policy: the task, no deliveries, a report, and the instance Role', () => {
+    const text = assembleWorkerPolicy({ ...base, scheduler: 'workers' });
+    assert.match(text, /^## Worker\n\nYou are a worker for Tester\./);
+    assert.match(text, /Finish every turn with task_report/);
+    assert.match(text, /You have no tool to send, reply, react or notify/);
+    assert.match(text, /New inputs routed to your task while you work may arrive by themselves as a `\[task input\]` message/);
+    assert.match(text, /hand it back with task_handback \(its event= and one sentence why\) and do not work on or answer it/);
+    assert.match(text, /A line marked as context asks nothing of you: when it does not bear on your task, ignore it; never hand it back\./);
+    assert.match(text, /When your brief says your task follows another one, start from that work/);
+    assert.match(text, /## Role\n/);
+    assert.doesNotMatch(text, /## Decisions and delivery|stay_silent|message_check|## Inbox/);
   });
 });
 

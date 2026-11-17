@@ -266,7 +266,7 @@ DSH 的回归用例是新增的扁平文件，不重组上游既有测试：`pac
 
 已知限制（都已按现状核对，不是待办清单）：
 
-- 没有 `/compact` 和 `/goal`：DSH 的 `sdk` profile 本身带这两个命令，但 OpenViking SuperAgent 的本机命令集只处理 `/new`、`/help`、`/status`、`/primary`、`/runtime`、`/model`、`/effort`，不转发未知命令，所以从聊天里用不了。这是 OpenViking SuperAgent 的转发面没覆盖，不是 DSH 缺能力。
+- 没有 `/compact` 和 `/goal`：DSH 的 `sdk` profile 本身带这两个命令，但 OpenViking SuperAgent 的本机命令集只处理 `/new`、`/help`、`/status`、`/primary`、`/runtime`、`/model`、`/effort`、`/tasks`，不转发未知命令，所以从聊天里用不了。这是 OpenViking SuperAgent 的转发面没覆盖，不是 DSH 缺能力。
 - 没有 `session/close`：不只是 OpenViking SuperAgent 没转发——上游 DSH 的 SDK 协议里没有这个方法（请求表只有 `initialize`、`session/prompt`、`session/query`、`session/resume`、`session/wait`、`session/working-directory/get|set`、`shutdown`）。`/new` 之后旧会话在进程存活期间保留。
 - 子 agent 的细粒度活动不投影为根会话活动。子 agent 仍能调用 `personal_agent`（同一个 MCP server），这是一个未决的设计问题，本期没有封堵。
 - 子 agent 只能用 `subagent`（spawn）；`subagent_fork` 在 patch 里被禁用。

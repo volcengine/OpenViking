@@ -205,11 +205,40 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
     const BEHAVIOR = ${JSON.stringify(behavior)};
     const FAIL_BLOB = ${JSON.stringify(failBlob)};
     fs.appendFileSync(SPAWN_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
+    // 'codex exec' is a worker turn (workers scheduler): it reports the
+    // request's text back as its draft, then ends the turn.
+    if (process.argv[2] === 'exec') {
+      const prompt = process.argv.at(-1);
+      fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'exec', text: prompt }) + '\\n');
+      const request = /\\] (TASK[^\\n]*)/.exec(prompt)?.[1] ?? 'no request';
+      const emit = (payload) => process.stdout.write(JSON.stringify(payload) + '\\n');
+      callTool(actionEndpoint('fake-codex-worker'), 'task_report', { state: 'done', summary: 'checked', draft: 'worker result for: ' + request })
+        .catch((error) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n'))
+        .finally(() => {
+          emit({ type: 'thread.started', thread_id: 'th-worker' });
+          emit({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } });
+          emit({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } });
+          process.exit(0);
+        });
+    }
     const send = (payload) => process.stdout.write(JSON.stringify(payload) + '\\n');
     const rl = readline.createInterface({ input: process.stdin });
     let turnSeq = 0;
     const interrupted = new Set();
     const steered = new Set();
+    // 'inbox': a turn whose input says LONG stays open; an inbox notice makes
+    // it call message_check, and the lines that follow get one reply that
+    // ends the turn. Any other turn replies to its newest line at once.
+    let heldTurn = null;
+    const logError = (error) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n');
+    const replyToNewest = (text) => {
+      const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
+      const target = [...text.matchAll(/ msg=(\\S+)/g)].at(-1)?.[1];
+      if (!decision) return Promise.resolve();
+      return callTool(actionEndpoint('fake-codex'), 'reply_message', { decision_id: decision, message_id: target, markdown: 'mock reply' })
+        .catch(logError);
+    };
+    const complete = (turnId) => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
     rl.on('line', (line) => {
       let msg;
       try { msg = JSON.parse(line); } catch { return; }
@@ -268,6 +297,23 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
             silence('loop wording ' + calls).then(() => setTimeout(loop, 10));
           };
           loop();
+        } else if (BEHAVIOR === 'workers') {
+          // The router: a TASK line becomes a task; a task report is relayed
+          // where the request was made.
+          const endpoint = actionEndpoint('fake-codex');
+          let work = Promise.resolve();
+          if (text.includes('[task report]')) {
+            const [, msg, event] = /origin: .*msg=(\\S+) event=(\\S+)/.exec(text) ?? [];
+            const draft = text.split('\\n').filter((line) => line.startsWith('| ')).map((line) => line.slice(2)).join('\\n');
+            work = callTool(endpoint, 'reply_message', { message_id: msg, decision_id: event, markdown: draft });
+          } else if (/TASK/.test(text)) {
+            const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
+            work = callTool(endpoint, 'task_create', { trigger_ids: [decision], title: 'mock task' });
+          }
+          work.catch(logError).then(() => complete(turnId));
+        } else if (BEHAVIOR === 'inbox') {
+          if (/LONG/.test(text)) heldTurn = turnId;
+          else replyToNewest(text).then(() => complete(turnId));
         } else if (BEHAVIOR === 'fail') {
           send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'failed', error: { message: FAIL_BLOB } } } });
         }
@@ -278,6 +324,16 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/steer', text }) + '\\n');
         steered.add(msg.params.expectedTurnId);
         send({ id: msg.id, result: {} });
+        if (BEHAVIOR === 'inbox' && heldTurn) {
+          if (text.startsWith('[daemon inbox]')) {
+            callTool(actionEndpoint('fake-codex'), 'message_check', {})
+              .then((result) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-result', text: result.text }) + '\\n'), logError);
+          } else if (/ event=/.test(text)) {
+            const turnId = heldTurn;
+            heldTurn = null;
+            replyToNewest(text).then(() => complete(turnId));
+          }
+        }
         return;
       }
       if (msg.method === 'turn/interrupt') {

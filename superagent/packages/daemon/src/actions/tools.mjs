@@ -16,7 +16,12 @@ import { CONTENT_PROPERTIES } from './content.mjs';
 // with `identityInput` reads only as the bot, and `botOnlyDescription` is
 // what it says instead (see toolDefinition); `openviking` marks the
 // OpenViking memory tools, offered when the instance has an OpenViking
-// connection.
+// connection; `inbox` marks message_check, offered only with the inbox
+// scheduler (agents[].scheduler); `router` marks the task tools the main
+// session gets with the workers scheduler, and `worker` the tools only a
+// worker's authority sees (ActionService.workerTools); `workersInput` holds
+// the fields a delivery gains with the workers scheduler (the tasks it
+// answers for).
 
 const ID = '^[A-Za-z0-9_.:@=+-]{1,256}$';
 const SOURCE = {
@@ -86,6 +91,12 @@ function schema(properties, required = []) {
   return { type: 'object', additionalProperties: false, properties, required };
 }
 
+const TASK_ID = { type: 'string', pattern: '^t[0-9]{1,6}$' };
+const TASK_IDS = {
+  task_ids: { type: 'array', maxItems: 10, items: TASK_ID,
+    description: 'The tasks whose [task report] this delivery relays or settles (task= values). Only for reports; leave it out otherwise.' },
+};
+
 export const TOOLS = [
   {
     name: 'send_message',
@@ -99,6 +110,7 @@ export const TOOLS = [
       ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
     }, ['chat_id', 'decision_id']),
     stagedInput: INTERIM,
+    workersInput: TASK_IDS,
     annotations: WRITE,
   },
   {
@@ -114,6 +126,7 @@ export const TOOLS = [
       ...CONTENT_PROPERTIES,
       ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
     }, ['decision_id']),
+    workersInput: TASK_IDS,
     annotations: WRITE,
   },
   {
@@ -129,6 +142,7 @@ export const TOOLS = [
       ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
     }, ['message_id', 'decision_id']),
     stagedInput: INTERIM,
+    workersInput: TASK_IDS,
     annotations: WRITE,
   },
   {
@@ -166,6 +180,7 @@ export const TOOLS = [
     // but only on an instance with explicitSilence on (OV_SUPERAGENT_EXPLICIT_SILENCE).
     name: 'stay_silent',
     explicitSilence: true,
+    workersInput: TASK_IDS,
     title: 'Decide not to respond',
     description: 'Record that you read an input and deliberately deliver nothing for it: no message, reply, reaction or owner notice. Call it instead of a delivery tool whenever the policy says to stay silent, once per chat/thread (or non-chat subject), with the event= of the newest input you have seen there; that covers the earlier inputs there. It sends nothing, notifies no one, and removes your temporary OnIt in that chat/thread. Repeating it changes nothing: never call it twice for the same input.',
     inputSchema: schema({
@@ -174,6 +189,108 @@ export const TOOLS = [
       reason: { type: 'string', maxLength: 120, description: 'Optional short private reason, e.g. "chatter between others", "waiting for another bot", "newsletter". Kept only in the local Activity log; never sent.' },
     }, ['decision_id']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    // The inbox scheduler's read: offered only with agents[].scheduler inbox.
+    name: 'message_check',
+    inbox: true,
+    title: 'Read waiting inputs',
+    description: 'Deliver inputs that are waiting in your inbox, oldest first. They arrive as your next input lines, in the usual format, right after this call returns; decide on each like any other input. Call it at a checkpoint in your current work when a [daemon inbox] notice says inputs are waiting. Without chat_id it delivers the oldest waiting inputs from every chat; with chat_id (and thread_id) only that chat or thread.',
+    inputSchema: schema({
+      chat_id: { type: 'string', pattern: ID, description: 'Optional: only inputs from this chat, as in the chat= tag of the notice.' },
+      thread_id: { type: 'string', pattern: ID, description: 'Optional, with chat_id: only inputs from this thread, as in the thread= tag.' },
+      source: SOURCE,
+      limit: LIMIT(50, 20),
+    }),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    // The workers scheduler: the router hands a request to a worker.
+    name: 'task_create',
+    router: true,
+    title: 'Hand a request to a worker',
+    description: 'Start a task: a worker in its own session works on the request and reports back to you as a [task report] input; you relay the result. Use it for requests that need more than a few lookups, and for every new piece of work, also when it builds on a task: then pass follows. Pass the event= of the request line(s), the request itself first. The worker reads the original messages; do not restate the request.',
+    inputSchema: schema({
+      trigger_ids: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', pattern: REF },
+        description: 'event= values of the input lines that make up the request, oldest first; the first is the one the result answers.' },
+      title: { type: 'string', minLength: 1, maxLength: 120, description: 'A short title, in the request\'s language.' },
+      note: { type: 'string', maxLength: 400, description: 'Optional, at most 30 words: routing facts only (who asked, constraints the person stated). Never a plan.' },
+      follows: { ...TASK_ID, description: 'The task this work builds on (its result, files or pull request): the new worker starts from what that task produced. Ended tasks take no inputs, so this is how more work on one starts.' },
+      decision_instance: DECISION_INSTANCE,
+    }, ['trigger_ids', 'title']),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    name: 'task_route',
+    router: true,
+    title: 'Route input to a task',
+    description: 'Give input lines to a task that is still working or waiting. role owner: it changes, narrows, corrects or answers the work that task is doing; its worker sees it while it works. role context: background that bears on that work. A request for another result (another question, fix, review or document), even in the same thread or about the same subject, is a new task: task_create, with follows when it builds on this one. Ended tasks take nothing.',
+    inputSchema: schema({
+      task_id: { type: 'string', pattern: '^t[0-9]{1,6}$', description: 'The task, as task_list or a [daemon tasks] line names it.' },
+      trigger_ids: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', pattern: REF }, description: 'event= values of the input lines.' },
+      role: { type: 'string', enum: ['owner', 'context'] },
+      decision_instance: DECISION_INSTANCE,
+    }, ['task_id', 'trigger_ids', 'role']),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    name: 'task_stop',
+    router: true,
+    title: 'Stop a task',
+    description: 'Stop a task and its worker. Only when the requester or the owner asks for it.',
+    inputSchema: schema({
+      task_id: { type: 'string', pattern: '^t[0-9]{1,6}$' },
+      reason: { type: 'string', maxLength: 200, description: 'Who asked to stop, briefly.' },
+    }, ['task_id']),
+    annotations: { ...LOCAL_WRITE, destructiveHint: true },
+  },
+  {
+    name: 'task_list',
+    router: true,
+    title: 'List tasks',
+    description: 'The open tasks and the most recently ended ones, one line each: id, status, title, requester, where, how long it has been working, and whether its latest result was sent (how long ago, as which msg=). With task_id, that task in detail (latest summary, waiting question, artifacts, the reply sent or a draft never sent). With for_event, the tasks the sender of that message asked for. With query, tasks with similar titles, ended ones included. Use it to answer questions about progress without starting work.',
+    inputSchema: schema({
+      task_id: { type: 'string', pattern: '^t[0-9]{1,6}$' },
+      for_event: { type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH, description: 'event= of a message: the tasks its sender asked for, newest first, ended ones included. In a group only those asked in that chat; in a direct chat all of theirs.' },
+      query: { type: 'string', maxLength: 200 },
+      include_ended: { type: 'boolean', default: false, description: 'List every task, not only the working set.' },
+    }),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    // Only a worker's authority sees these two.
+    name: 'task_check',
+    worker: true,
+    title: 'Read new inputs for this task',
+    description: 'New input lines routed to your task since you last saw any: the requester\'s follow-ups, and context lines. Call it at checkpoints in longer work; on some runtimes they also arrive by themselves as [task input] messages.',
+    inputSchema: schema({}),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    name: 'task_handback',
+    worker: true,
+    title: 'Hand inputs back to the agent',
+    description: 'Return input lines routed to your task as part of its request that are not part of it (a different request, or a question for someone else): the agent decides on them. Do not work on or answer them yourself. Not for the request your task was created with, and not for [context] lines, which ask nothing of you.',
+    inputSchema: schema({
+      trigger_ids: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', pattern: REF }, description: 'event= values of those input lines.' },
+      reason: { type: 'string', minLength: 1, maxLength: 200, description: 'One sentence: why they are not part of your task.' },
+    }, ['trigger_ids', 'reason']),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    name: 'task_report',
+    worker: true,
+    title: 'Report on this task',
+    description: 'Report your task\'s outcome to the agent, which relays it to the requester. Finish every turn with it. done: draft is the reply, ready to send. needs_user: question is the one thing a person must decide. blocked, dropped, failed: why, in summary. progress: an interim note that does not end the task.',
+    inputSchema: schema({
+      state: { type: 'string', enum: ['progress', 'done', 'needs_user', 'blocked', 'dropped', 'failed'] },
+      summary: { type: 'string', maxLength: 4_000, description: 'What you did and found, with evidence. For the agent, not the requester.' },
+      draft: { type: 'string', maxLength: 20_000, description: 'The reply for the requester, in their language, ready to send as is.' },
+      question: { type: 'string', maxLength: 2_000, description: 'With needs_user: one concrete question for the requester.' },
+      artifacts: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 300 },
+        description: 'What you created or changed: pull request or issue URLs, branch names, file paths, document links.' },
+    }, ['state']),
+    annotations: LOCAL_WRITE,
   },
   {
     name: 'list_chats',
@@ -476,11 +593,12 @@ export const TOOLS = [
 // A tool as this instance offers it. With explicit silence on, its
 // `silenceInput` fields join the schema as optional properties; off, the
 // definition is exactly the one without the feature.
-export function toolDefinition(tool, { explicitSilence = false, stagedReplies = false, larkMessageAccess = 'owner' } = {}) {
+export function toolDefinition(tool, { explicitSilence = false, stagedReplies = false, larkMessageAccess = 'owner', workers = false } = {}) {
   const botOnly = larkMessageAccess === 'bot';
   const extra = {
     ...(explicitSilence ? tool.silenceInput : {}),
     ...(stagedReplies ? tool.stagedInput : {}),
+    ...(workers ? tool.workersInput : {}),
     ...(botOnly && tool.identityInput ? { as: BOT_IDENTITY } : {}),
   };
   const description = (botOnly && tool.botOnlyDescription) || (stagedReplies && tool.stagedDescription) || tool.description;

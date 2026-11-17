@@ -18,6 +18,8 @@ import { formatCognitionJournalLine } from '../src/cognition.mjs';
 import { eventMessage } from '../src/connectors/protocol.mjs';
 import { normalizeEvent } from '../src/event.mjs';
 import { Harness } from '../src/harness.mjs';
+import { MessageInbox } from '../src/inbox.mjs';
+import { TaskManager } from '../src/tasks.mjs';
 import { formatInboundLine } from '../src/runtime-input.mjs';
 import { personDirectory, personId } from '../src/ov-person.mjs';
 import { localSocketPath, supportsFileModes } from '../src/platform/index.mjs';
@@ -34,7 +36,8 @@ const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url)
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
   ovTools = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
-  larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null } = {}) {
+  larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null, serverFence = false,
+  scheduler = undefined } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -45,7 +48,8 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
-      larkMessageAccess, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
+      larkMessageAccess, serverFence, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}),
+      ...(scheduler !== undefined ? { scheduler } : {}) },
     store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
@@ -1866,5 +1870,283 @@ describe('staged replies', () => {
     finish();
     await closing;
     assert.equal(service.reactionRemovals.size, 0);
+  });
+});
+
+describe('inbox scheduler', () => {
+  // A working runtime that takes every submit, as a steer would.
+  function workingRuntime() {
+    return {
+      submissions: [],
+      snapshot: () => ({ session: { connected: true }, work: { turnInProgress: true } }),
+      submit(items, options) { this.submissions.push({ items, ...options }); return { accepted: true }; },
+    };
+  }
+  function attach(store, service) {
+    const runtime = workingRuntime();
+    const inbox = new MessageInbox({ db: store.db, runtime, capabilities: () => ({ agentTools: 'core', activeInput: 'steer' }) });
+    service.attachInbox(inbox);
+    return { runtime, inbox };
+  }
+  const wait = (event) => [{ seq: event.seq, text: `line ${event.seq}`, scopeKey: event.scopeKey, chatType: 'group' },
+    { chatId: event.chatId, threadId: null, source: 'lark', chatType: 'group', from: 'Bob' }];
+
+  it('offers message_check only with the inbox scheduler, and leaves every other tool as it was', (t) => {
+    const legacy = setup(t).service.tools();
+    assert.deepEqual(setup(t, { scheduler: 'legacy' }).service.tools(), legacy);
+    assert.ok(!legacy.some((tool) => tool.name === 'message_check'));
+    const inbox = setup(t, { scheduler: 'inbox' }).service.tools();
+    assert.deepEqual(inbox.filter((tool) => tool.name !== 'message_check'), legacy);
+    const check = inbox.find((tool) => tool.name === 'message_check');
+    assert.deepEqual(Object.keys(check.inputSchema.properties), ['chat_id', 'thread_id', 'source', 'limit']);
+    assert.match(check.description, /oldest first/);
+  });
+
+  it('message_check delivers waiting inputs as the next input and reports what still waits', async (t) => {
+    const { store, service, call } = setup(t, { scheduler: 'inbox' });
+    const { runtime, inbox } = attach(store, service);
+    const a = store.ingest(chatEvent({ messageId: 'om_waitingA12345', chatId: 'oc_chatA123456789', chatType: 'group' })).inbound;
+    const b = store.ingest(chatEvent({ messageId: 'om_waitingB12345', chatId: 'oc_chatB123456789', chatType: 'group' })).inbound;
+    inbox.add(...wait({ ...a, chatId: 'oc_chatA123456789' }));
+    inbox.add(...wait({ ...b, chatId: 'oc_chatB123456789' }));
+
+    const one = await call('message_check', { chat_id: 'oc_chatB123456789' });
+    assert.match(one.text, /^Delivered 1 waiting input\(s\) in that chat, oldest first\. They follow as your next input/);
+    assert.deepEqual(one.data, { delivered: 1, waiting: 1 });
+    assert.deepEqual(runtime.submissions.at(-1).items.map((item) => item.seq), [b.seq]);
+    assert.equal((await call('message_check', {})).data.delivered, 1);
+    assert.match((await call('message_check', {})).text, /^No inputs are waiting\. 0 waiting elsewhere\./);
+    await assert.rejects(call('message_check', {}, 'retired-token'), (error) => error.code === 'authority_revoked');
+  });
+
+  it('a delivery held by newer input that was still waiting delivers that input, and says so', async (t) => {
+    const { store, service, call, connectors } = setup(t, { scheduler: 'inbox', explicitSilence: true });
+    const { runtime, inbox } = attach(store, service);
+    const chatId = 'oc_heldChat12345678';
+    const older = store.ingest(chatEvent({ messageId: 'om_heldOlder12345', chatId, chatType: 'group' })).inbound;
+    const newer = store.ingest(chatEvent({ messageId: 'om_heldNewer12345', chatId, chatType: 'group' })).inbound;
+    inbox.add(...wait({ ...newer, chatId }));
+
+    await assert.rejects(call('send_message', { chat_id: chatId, markdown: 'stale answer', decision_id: 'message:om_heldOlder12345' }),
+      (error) => error.code === 'stale_decision' && /1 newer input\(s\) .* were waiting in your inbox; they follow as your next input/.test(error.message));
+    assert.deepEqual(runtime.submissions.at(-1).items.map((item) => item.seq), [newer.seq]);
+    assert.equal(inbox.size, 0);
+    assert.equal(connectors.calls.length, 0);
+    // Seen now: the plain refusal, as on the legacy scheduler.
+    await assert.rejects(call('send_message', { chat_id: chatId, markdown: 'stale again', decision_id: 'message:om_heldOlder12345' }),
+      /a newer authenticated input arrived/);
+
+    const third = store.ingest(chatEvent({ messageId: 'om_heldThird12345', chatId, chatType: 'group' })).inbound;
+    inbox.add(...wait({ ...third, chatId }));
+    const silent = await call('stay_silent', { decision_id: 'message:om_heldOlder12345' });
+    assert.match(silent.text, /1 newer input\(s\) there were waiting in your inbox and follow as your next input/);
+    assert.equal(older.seq < newer.seq, true);
+  });
+
+  it('message_check is refused where no inbox is attached', async (t) => {
+    const { call } = setup(t, { scheduler: 'inbox' });
+    await assert.rejects(call('message_check', {}), (error) => error.code === 'unsupported');
+  });
+});
+
+describe('workers scheduler', () => {
+  function attachTasks(service, store, workspace, runtime = 'pi') {
+    const turns = [];
+    const executor = {
+      start({ task, prompt, authority }) {
+        let finish;
+        const turn = { task, prompt, authority, done: new Promise((resolve) => { finish = resolve; }) };
+        turn.finish = finish;
+        turns.push(turn);
+        return { done: turn.done, stop: () => finish({ text: '', error: 'stopped' }) };
+      },
+    };
+    const inbox = new MessageInbox({ db: store.db, runtime: { snapshot: () => ({ work: { turnInProgress: true } }) } });
+    const tasks = new TaskManager({ db: store.db, config: { workspace }, executor, inbox, lineFor: (row) => `line ${row.seq}` });
+    service.attachTasks(tasks, { runtime: () => runtime, supports: (id) => ['pi', 'codex', 'claude'].includes(id) });
+    return { tasks, turns };
+  }
+
+  it('offers the router its task tools only with the workers scheduler; workers see only their own set', (t) => {
+    const legacy = setup(t).service.tools().map((tool) => tool.name);
+    assert.ok(!legacy.some((name) => name.startsWith('task_')));
+    const { service, store, workspace } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const router = service.tools().map((tool) => tool.name);
+    assert.deepEqual(router.filter((name) => name.startsWith('task_') || name === 'message_check'),
+      ['message_check', 'task_create', 'task_route', 'task_stop', 'task_list']);
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    tasks.create({ rows: [store.ingest(chatEvent({ messageId: 'om_workerTool1234', chatType: 'group' })).inbound]
+      .map((inbound) => store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(inbound.seq)), title: 'x', runtime: 'pi' });
+    const worker = service.tools({ authority: turns[0].authority }).map((tool) => tool.name);
+    assert.ok(worker.includes('task_report') && worker.includes('task_check') && worker.includes('list_chat_messages'));
+    for (const name of ['send_message', 'reply_message', 'react_to_message', 'notify_owner', 'stay_silent', 'message_check', 'task_create', 'create_timer']) {
+      assert.ok(!worker.includes(name), name);
+    }
+  });
+
+  it('a worker reports and reads under its own authority, and can deliver nothing', async (t) => {
+    const { service, store, workspace, call, connectors } = setup(t, { scheduler: 'workers' });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    const inbound = store.ingest(chatEvent({ messageId: 'om_workerAuth1234', chatType: 'group' })).inbound;
+    tasks.create({ rows: [store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(inbound.seq)], title: 'x', runtime: 'pi' });
+    const token = turns[0].authority;
+    assert.match((await call('task_check', {}, token)).text, /^No new inputs for your task\./);
+    const reported = await call('task_report', { state: 'done', draft: 'answer', artifacts: ['https://x/pr/1'] }, token);
+    assert.match(reported.text, /^Recorded\. End your turn now/);
+    assert.equal(tasks.get('t1').draft, 'answer');
+    await assert.rejects(call('send_message', { chat_id: 'oc-chat', markdown: 'hi', decision_id: 'message:om_workerAuth1234' }, token),
+      (error) => error.code === 'unknown_tool');
+    await assert.rejects(call('task_report', { state: 'done' }), (error) => error.code === 'unknown_tool', 'not for the router');
+    turns[0].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    await assert.rejects(call('task_check', {}, token), (error) => error.code === 'unknown_tool', 'the authority ends with the turn');
+    assert.equal(connectors.calls.length, 0);
+  });
+
+  it('task_create hands the named inputs to a worker and counts as the decision on them', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { turns } = attachTasks(service, store, workspace);
+    const first = store.ingest(chatEvent({ messageId: 'om_taskOrigin1234', chatType: 'group', content: '帮我查下 X' })).inbound;
+    const second = store.ingest(chatEvent({ messageId: 'om_taskMore123456', chatType: 'group', content: '只看上周' })).inbound;
+    const created = await call('task_create', { trigger_ids: ['message:om_taskMore123456', 'message:om_taskOrigin1234'], title: '查 X', note: 'Alice asked' });
+    assert.match(created.text, /^Created t1: a worker is on it\./);
+    assert.match(turns[0].prompt, new RegExp(`line ${first.seq}\nline ${second.seq}`), 'oldest first; the origin answers');
+    assert.equal(store.coveringDecision(first.scopeKey, first.seq), 'silent');
+    assert.match((await call('task_list', {})).text, /^t1 \[running\] "查 X"/);
+    await assert.rejects(call('task_route', { task_id: 't9', trigger_ids: ['message:om_taskMore123456'], role: 'owner' }),
+      (error) => error.code === 'unknown_task');
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_neverSeen12345'], title: 'x' }), (error) => error.code === 'unknown_decision');
+  });
+
+  it('starts more work on an ended task as a task that follows it, and keeps one request in one live task', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_followOrigin12', chatType: 'group', content: '查一下 X 为什么慢' }));
+    await call('task_create', { trigger_ids: ['message:om_followOrigin12'], title: '查 X' });
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_followOrigin12'], title: '查 X 2' }),
+      (error) => error.code === 'task_exists' && /already part of t1, which is still working on it/.test(error.message));
+    tasks.report('t1', { state: 'done', summary: 'X 慢在索引', draft: 'X 慢是因为缺索引' });
+    turns[0].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    store.ingest(chatEvent({ messageId: 'om_followMore1234', chatType: 'group', content: '那你提个 PR 修一下' }));
+    await assert.rejects(call('task_route', { task_id: 't1', trigger_ids: ['message:om_followMore1234'], role: 'owner' }),
+      (error) => error.code === 'task_ended' && /task_create with follows=t1/.test(error.message));
+    const created = await call('task_create', { trigger_ids: ['message:om_followMore1234'], title: '修 X', follows: 't1' });
+    assert.match(created.text, /^Created t2, following t1: a worker is on it\./);
+    assert.match(turns[1].prompt, /This task follows t1 "查 X" \(done\)[\s\S]*What that work found:\n\| X 慢在索引[\s\S]*Its last answer to the requester:\n\| X 慢是因为缺索引/);
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_followMore1234'], title: 'x', follows: 't9' }),
+      (error) => ['task_exists', 'unknown_task'].includes(error.code));
+  });
+
+  it('routes lines from another chat to a task only when the owner wrote them', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_chatOrigin1234', chatType: 'group', chatId: 'oc_first12345678' }));
+    await call('task_create', { trigger_ids: ['message:om_chatOrigin1234'], title: 'X' });
+    store.ingest(chatEvent({ messageId: 'om_chatStranger12', chatType: 'group', chatId: 'oc_second1234567', senderId: 'ou_stranger12345' }));
+    await assert.rejects(call('task_route', { task_id: 't1', trigger_ids: ['message:om_chatStranger12'], role: 'owner' }),
+      (error) => error.code === 'other_chat');
+    store.ingest(chatEvent({ messageId: 'om_chatOwner12345', chatType: 'p2p', chatId: 'oc_ownerDm123456', senderId: OWNER.id }));
+    assert.match((await call('task_route', { task_id: 't1', trigger_ids: ['message:om_chatOwner12345'], role: 'owner' })).text, /^Routed 1 input/);
+  });
+
+  it('answers a progress question from what its sender asked for, and where the result went', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_progOrigin1234', chatType: 'group', chatId: 'oc_group12345678', content: '查一下 X 为什么慢' }));
+    await call('task_create', { trigger_ids: ['message:om_progOrigin1234'], title: '查 X' });
+    tasks.report('t1', { state: 'done', summary: 'X 慢在索引', draft: 'X 慢是因为缺索引' });
+    turns[0].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    await call('reply_message', { message_id: 'om_progOrigin1234', markdown: 'X 慢是因为缺索引', reply_in_thread: true,
+      decision_id: 'message:om_progOrigin1234', task_ids: ['t1'] });
+    const settled = store.db.prepare('SELECT settled_by, outbox_id FROM task_report_deliveries').get();
+    assert.equal(settled.settled_by, 'reply_message');
+    assert.ok(settled.outbox_id, 'the delivery is recorded with its outbox row');
+
+    store.ingest(chatEvent({ messageId: 'om_progAsk123456', chatType: 'group', chatId: 'oc_group12345678', content: '我那个问题怎么样了' }));
+    assert.match((await call('task_list', { for_event: 'message:om_progAsk123456' })).text, /^t1 \[done\] "查 X" .* · result sent 0m ago/);
+    assert.match((await call('task_list', { task_id: 't1' })).text, /\nsent \S+Z as msg=\S*: X 慢是因为缺索引\n/);
+    store.ingest(chatEvent({ messageId: 'om_progOther1234', chatType: 'group', chatId: 'oc_group12345678', senderId: 'ou_someoneElse12' }));
+    assert.equal((await call('task_list', { for_event: 'message:om_progOther1234' })).text, 'No tasks asked for by that person in this chat.');
+    store.ingest(chatEvent({ messageId: 'om_progElse12345', chatType: 'group', chatId: 'oc_otherGroup1234' }));
+    assert.equal((await call('task_list', { for_event: 'message:om_progElse12345' })).text, 'No tasks asked for by that person in this chat.',
+      'another group does not hear about it');
+    store.ingest(chatEvent({ messageId: 'om_progDirect1234', chatType: 'p2p', chatId: 'oc_aliceDm1234567' }));
+    assert.match((await call('task_list', { for_event: 'message:om_progDirect1234' })).text, /^t1 \[done\]/, 'a direct chat sees all of theirs');
+    await assert.rejects(call('task_list', { for_event: 'message:om_neverSeen12345' }), (error) => error.code === 'unknown_decision');
+  });
+
+  it('settles a report on the delivery that names its task, and refuses one whose worker is working again', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_settleOrigin12', chatType: 'group', content: '查 X' }));
+    await call('task_create', { trigger_ids: ['message:om_settleOrigin12'], title: '查 X' });
+    tasks.report('t1', { state: 'needs_user', question: '查哪个环境？' });
+    turns[0].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    const delivery = () => store.db.prepare('SELECT inbox_id, settled_at_ms FROM task_report_deliveries').get();
+    assert.ok(delivery().inbox_id);
+    assert.equal(delivery().settled_at_ms, null);
+    await call('reply_message', { message_id: 'om_settleOrigin12', markdown: '查哪个环境？', decision_id: 'message:om_settleOrigin12', task_ids: ['t1'] });
+    assert.ok(delivery().settled_at_ms, 'the relay settles it');
+    store.ingest(chatEvent({ messageId: 'om_settleAnswer12', chatType: 'group', content: '线上环境' }));
+    await call('task_route', { task_id: 't1', trigger_ids: ['message:om_settleAnswer12'], role: 'owner' });
+    assert.equal(tasks.get('t1').status, 'running');
+    await assert.rejects(call('reply_message', { message_id: 'om_settleAnswer12', markdown: '旧结论', decision_id: 'message:om_settleAnswer12', task_ids: ['t1'] }),
+      (error) => error.code === 'task_working' && /its next \[task report\] replaces this one/.test(error.message));
+    const legacy = setup(t, { explicitSilence: true });
+    legacy.store.ingest(chatEvent({ messageId: 'om_legacyTaskIds1', chatType: 'group' }));
+    await assert.rejects(legacy.call('reply_message', { message_id: 'om_legacyTaskIds1', markdown: 'x', decision_id: 'message:om_legacyTaskIds1', task_ids: ['t1'] }),
+      (error) => error.code === 'invalid_input', 'task_ids only with the workers scheduler');
+  });
+
+  it('delivers a report relayed past the catch-up turns although its worker is working again', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_capOrigin12345', chatType: 'group', content: '写周报' }));
+    await call('task_create', { trigger_ids: ['message:om_capOrigin12345'], title: '周报' });
+    for (let index = 0; index < 4; index += 1) {
+      store.ingest(chatEvent({ messageId: `om_capMore${index}123456`, chatType: 'group', content: `再加一点 ${index}` }));
+      await call('task_route', { task_id: 't1', trigger_ids: [`message:om_capMore${index}123456`], role: 'owner' });
+      tasks.report('t1', { state: 'done', draft: `第 ${index + 1} 版` });
+      turns[index].finish({ text: '' });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(turns.length, 5);
+    assert.equal(tasks.get('t1').status, 'running');
+    await call('reply_message', { message_id: 'om_capOrigin12345', markdown: '第 4 版，剩下的随后补上', decision_id: 'message:om_capMore3123456', task_ids: ['t1'] });
+    assert.equal(store.db.prepare('SELECT settled_by FROM task_report_deliveries').get().settled_by, 'reply_message');
+    await assert.rejects(call('reply_message', { message_id: 'om_capOrigin12345', markdown: '第 4 版', decision_id: 'message:om_capMore3123456', task_ids: ['t1'] }),
+      (error) => error.code === 'task_working', 'once relayed, the next delivery naming it waits for the next report');
+  });
+
+  it('lets a worker hand back a routed line that is not its task, never the request it was created with', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_handOrigin1234', chatType: 'group', content: '查 X' }));
+    await call('task_create', { trigger_ids: ['message:om_handOrigin1234'], title: '查 X' });
+    store.ingest(chatEvent({ messageId: 'om_handOther12345', chatType: 'group', content: '帮我订个会议室' }));
+    await call('task_route', { task_id: 't1', trigger_ids: ['message:om_handOther12345'], role: 'owner' });
+    const token = turns[0].authority;
+    await assert.rejects(call('task_handback', { trigger_ids: ['message:om_handOrigin1234'], reason: 'x' }, token),
+      (error) => error.code === 'invalid_input');
+    assert.match((await call('task_handback', { trigger_ids: ['message:om_handOther12345'], reason: '订会议室不是查 X' }, token)).text, /^Handed back 1 input/);
+    const [entry] = tasks.inbox.entries;
+    assert.match(entry.item.text, /^\[task handback\] task=t1 title="查 X" reason="订会议室不是查 X"\n[\s\S]*Never route them back to that task\.\nline \d+$/);
+    assert.equal(tasks.undelivered('t1').length, 0, 'it is no longer the task\'s');
+    await assert.rejects(call('task_handback', { trigger_ids: ['message:om_handOther12345'], reason: 'x' }), (error) => error.code === 'unknown_tool', 'not for the router');
+    store.ingest(chatEvent({ messageId: 'om_handContext123', chatType: 'group', content: '你们那边也慢吗' }));
+    await call('task_route', { task_id: 't1', trigger_ids: ['message:om_handContext123'], role: 'context' });
+    await assert.rejects(call('task_handback', { trigger_ids: ['message:om_handContext123'], reason: 'x' }, token),
+      (error) => error.code === 'invalid_input' && /A \[context\] line asks nothing of you/.test(error.message), 'context is ignored, not handed back');
+  });
+
+  it('refuses a task on a runtime workers do not run on', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers' });
+    attachTasks(service, store, workspace, 'durable');
+    store.ingest(chatEvent({ messageId: 'om_durableTask123', chatType: 'group' }));
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_durableTask123'], title: 'x' }),
+      (error) => error.code === 'unsupported' && /Workers run on pi, codex or claude; this runtime is durable/.test(error.message));
   });
 });
