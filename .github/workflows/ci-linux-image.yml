@@ -57,10 +57,14 @@ jobs:
           docker run --rm --network none --env UBUNTU_VERSION "$IMAGE" bash -euc '
             . /etc/os-release
             test "$VERSION_ID" = "$UBUNTU_VERSION"
+            cc=gcc
+            cxx=g++
             if [ "$UBUNTU_VERSION" = 20.04 ]; then
+              cc=gcc-10
+              cxx=g++-10
               test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.31"
               packages=(
-                git ca-certificates cmake build-essential ccache tzdata curl
+                git ca-certificates cmake build-essential gcc-10 g++-10 ccache tzdata curl
                 pkg-config unzip xz-utils python3 libicu66
                 libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
                 libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev
@@ -71,18 +75,23 @@ jobs:
               done
             fi
             git --version
-            gcc --version
-            g++ --version
+            "$cc" --version
+            "$cxx" --version
             cmake --version
             ccache --version
             python3 --version
             pkg-config --modversion openssl
             printf "#include <openssl/ssl.h>\nint main(void) { return OPENSSL_init_ssl(0, 0) != 1; }\n" \
-              | gcc -x c - -lssl -lcrypto -o /tmp/openssl-smoke
+              | "$cc" -x c - -lssl -lcrypto -o /tmp/openssl-smoke
             /tmp/openssl-smoke
             printf "#include <filesystem>\nint main() { return std::filesystem::path(\"/tmp\").empty(); }\n" \
-              | g++ -std=c++17 -x c++ - -o /tmp/cpp-smoke
+              | "$cxx" -std=c++17 -x c++ - -o /tmp/cpp-smoke
             /tmp/cpp-smoke
+            # Match the optimized memcmp probe used by AWS-LC (GCC bug 95189).
+            printf "%s\n" "#include <string.h>" \
+              "int main(void) { char a[] = \"\\0abc\"; return memcmp(a, \"\\0\\0\\0\\0\", 4) == 0; }" \
+              | "$cc" -O3 -x c - -o /tmp/memcmp-smoke
+            /tmp/memcmp-smoke
             command -v curl unzip xz
             if [ "$UBUNTU_VERSION" = 24.04 ]; then
               ffmpeg -version

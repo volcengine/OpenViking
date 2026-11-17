@@ -18,7 +18,7 @@ RUN sed -i 's|http://|https://|g' /etc/apt/sources.list \
     && apt-get -o Acquire::https::CaInfo=/tmp/bootstrap-ca-certificates.crt \
         -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
         install -y --no-install-recommends \
-        git ca-certificates cmake build-essential ccache tzdata curl \
+        git ca-certificates cmake build-essential gcc-10 g++-10 ccache tzdata curl \
         pkg-config unzip xz-utils python3 libicu66 \
         libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
         libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \

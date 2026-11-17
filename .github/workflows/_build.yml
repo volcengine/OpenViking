@@ -230,7 +230,6 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
-      WHEEL_ARCH: ${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
@@ -243,16 +242,12 @@ jobs:
         UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
       run: |
         packages=(
-          git ca-certificates cmake build-essential ccache tzdata curl
+          git ca-certificates cmake build-essential gcc-10 g++-10 ccache tzdata curl
           pkg-config unzip xz-utils python3 libicu66
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
           libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev
           libncursesw5-dev tk-dev uuid-dev libexpat1-dev
         )
-        # GCC 9 miscompiles memcmp on ARM and is rejected by aws-lc-sys.
-        if [ "$WHEEL_ARCH" = aarch64 ]; then
-          packages+=(gcc-10 g++-10)
-        fi
         ready=true
         for package in "${packages[@]}"; do
           if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
@@ -286,17 +281,12 @@ jobs:
           echo "::error::Linux wheels require an Ubuntu 20.04 image with glibc 2.31."
           exit 1
         fi
-        cc=gcc
-        cxx=g++
-        if [ "$WHEEL_ARCH" = aarch64 ]; then
-          cc=gcc-10
-          cxx=g++-10
-        fi
-        echo "CC=$cc" >> "$GITHUB_ENV"
-        echo "CXX=$cxx" >> "$GITHUB_ENV"
+        # GCC 9 triggers the aws-lc-sys memcmp check on both architectures.
+        echo "CC=gcc-10" >> "$GITHUB_ENV"
+        echo "CXX=g++-10" >> "$GITHUB_ENV"
         echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
-        "$cc" --version
-        "$cxx" --version
+        gcc-10 --version
+        g++-10 --version
 
     - uses: actions/checkout@v6
       with:

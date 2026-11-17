@@ -1,6 +1,6 @@
 # Linux CI base images
 
-`ubuntu20-ci.Dockerfile` provides GCC/G++, ccache and the OS development
+`ubuntu20-ci.Dockerfile` provides GCC/G++ 10, ccache and the OS development
 libraries needed by Linux wheels while keeping the Ubuntu 20.04 / glibc 2.31
 baseline. `ubuntu24-ci.Dockerfile` provides the API test environment.
 Python versions, Rust and project dependencies are installed by the existing
