@@ -198,7 +198,8 @@ def test_wheels_keep_glibc_baseline_and_native_arm_runner():
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux compiler selection uses bash")
 @pytest.mark.parametrize("glibc,expected_status", [("glibc 2.31", 0), ("glibc 2.39", 1)])
-def test_wheel_toolchain_rejects_newer_glibc(tmp_path, glibc, expected_status):
+@pytest.mark.parametrize("arch", ["x86_64", "aarch64"])
+def test_wheel_toolchain_rejects_newer_glibc(tmp_path, glibc, expected_status, arch):
     step = next(
         step
         for step in jobs("_build.yml")["build-linux"]["steps"]
@@ -206,7 +207,13 @@ def test_wheel_toolchain_rejects_newer_glibc(tmp_path, glibc, expected_status):
     )
     command_dir = tmp_path / "bin"
     command_dir.mkdir()
-    for name, output in [("getconf", glibc), ("gcc", "gcc 9"), ("g++", "g++ 9")]:
+    for name, output in [
+        ("getconf", glibc),
+        ("gcc", "gcc 9"),
+        ("g++", "g++ 9"),
+        ("gcc-10", "gcc 10"),
+        ("g++-10", "g++ 10"),
+    ]:
         executable = command_dir / name
         executable.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\n")
         executable.chmod(0o755)
@@ -217,6 +224,7 @@ def test_wheel_toolchain_rejects_newer_glibc(tmp_path, glibc, expected_status):
             **environ,
             "PATH": f"{command_dir}{pathsep}{environ['PATH']}",
             "GITHUB_ENV": str(env_file),
+            "WHEEL_ARCH": arch,
         },
         capture_output=True,
         text=True,
@@ -224,8 +232,8 @@ def test_wheel_toolchain_rejects_newer_glibc(tmp_path, glibc, expected_status):
     assert result.returncode == expected_status
     if expected_status == 0:
         assert env_file.read_text().splitlines() == [
-            "CC=gcc",
-            "CXX=g++",
+            "CC=gcc-10" if arch == "aarch64" else "CC=gcc",
+            "CXX=g++-10" if arch == "aarch64" else "CXX=g++",
             "OV_REQUIRE_RAGFS_BUILD=1",
         ]
     else:
@@ -449,7 +457,10 @@ def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
     ],
 )
 @pytest.mark.parametrize("installed", [True, False])
-def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, file, name, installed):
+@pytest.mark.parametrize("arch", ["x86_64", "aarch64"])
+def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(
+    tmp_path, file, name, installed, arch
+):
     job = jobs(file)[name]
     step = next(step for step in job["steps"] if "packages=(" in step.get("run", ""))
     shell = step.get("shell", job.get("defaults", {}).get("run", {}).get("shell"))
@@ -482,8 +493,15 @@ def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, fil
             **environ,
             "PATH": f"{command_dir}{pathsep}{environ['PATH']}",
             "APT_LOG": str(apt_log),
-            "MISSING_PACKAGE": "" if installed else "git",
+            "MISSING_PACKAGE": (
+                ""
+                if installed
+                else "gcc-10"
+                if file == "_build.yml" and arch == "aarch64"
+                else "git"
+            ),
             "UBUNTU_MIRROR": "",
+            "WHEEL_ARCH": arch,
         },
         capture_output=True,
         text=True,
@@ -498,6 +516,8 @@ def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, fil
         assert calls[0].endswith(" update")
         assert "install -y --no-install-recommends" in calls[1]
         assert "git" in calls[1].split()
+        if file == "_build.yml" and arch == "aarch64":
+            assert {"gcc-10", "g++-10"} <= set(calls[1].split())
 
 
 @pytest.mark.parametrize("container", ["", "ubuntu:24.04"])
