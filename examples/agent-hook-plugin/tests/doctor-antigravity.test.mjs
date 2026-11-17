@@ -51,7 +51,9 @@ function setupInstalledAntigravity(home) {
   const agPluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
   mkdirSync(agPluginDir, { recursive: true });
   const hookScript = join(pluginRoot, "scripts", "hook.mjs");
-  const cmd = (event) => `OPENVIKING_INTEGRATION_ID='openviking-memory' OPENVIKING_HOOK_SOURCE='antigravity' '${process.execPath}' '${hookScript}' ${event} antigravity # openviking-memory`;
+  // Quoted the way install.sh renders the command, apostrophes included.
+  const quote = (value) => `'${String(value).replace(/'/g, `'"'"'`)}'`;
+  const cmd = (event) => `OPENVIKING_INTEGRATION_ID='openviking-memory' OPENVIKING_HOOK_SOURCE='antigravity' ${quote(process.execPath)} ${quote(hookScript)} ${event} antigravity # openviking-memory`;
   writeFileSync(
     join(agPluginDir, "hooks.json"),
     JSON.stringify({
@@ -190,6 +192,51 @@ test("ov-memory-doctor validates OpenViking hook scripts, ignores foreign relati
       cursorInstall.findings.some((f) => f.title.includes("not on disk")),
       false,
     );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("ov-memory-doctor reads a hook script path with an apostrophe the way the shell does", () => {
+  const base = mkdtempSync(join(tmpdir(), "ov-doctor-ag-quote-"));
+  const home = join(base, "o'brien");
+  try {
+    mkdirSync(home, { recursive: true });
+    const { pluginRoot } = setupInstalledAntigravity(home);
+    const run = runDoctor(pluginRoot, home, ["antigravity"]);
+    assert.equal(run.status, 0, run.stdout + run.stderr);
+    const install = JSON.parse(run.stdout).sections.find((s) => s.title === "Plugin install");
+    assert.equal(install.findings.some((f) => f.title.includes("not on disk")), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("ov-memory-doctor takes the plugin's own mcp_config.json and warns about a global duplicate", () => {
+  const home = mkdtempSync(join(tmpdir(), "ov-doctor-ag-plugin-mcp-"));
+  try {
+    const { pluginRoot, agPluginDir } = setupInstalledAntigravity(home);
+    writeFileSync(join(agPluginDir, "mcp_config.json"), JSON.stringify({
+      mcpServers: {
+        openviking: {
+          command: process.execPath,
+          args: [join(pluginRoot, "servers", "mcp-proxy.mjs")],
+          env: { OPENVIKING_HOOK_SOURCE: "antigravity" },
+        },
+      },
+    }));
+    const pluginRun = runDoctor(pluginRoot, home, ["antigravity"]);
+    assert.equal(pluginRun.status, 0, pluginRun.stdout + pluginRun.stderr);
+    const pluginInstall = JSON.parse(pluginRun.stdout).sections.find((s) => s.title === "Plugin install");
+    assert.ok(pluginInstall.findings.some((f) => f.level === "ok" && f.title.includes("plugins/openviking-memory/mcp_config.json")));
+    assert.equal(pluginInstall.findings.some((f) => f.title.includes("not found")), false);
+
+    writeFileSync(join(home, ".gemini", "config", "mcp_config.json"), JSON.stringify({
+      mcpServers: { openviking: { serverUrl: "http://127.0.0.1:1933/mcp" } },
+    }));
+    const bothRun = runDoctor(pluginRoot, home, ["antigravity"]);
+    const bothInstall = JSON.parse(bothRun.stdout).sections.find((s) => s.title === "Plugin install");
+    assert.ok(bothInstall.findings.some((f) => f.level === "warn" && f.title.includes("configured in both")));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

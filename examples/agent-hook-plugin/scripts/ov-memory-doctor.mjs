@@ -60,6 +60,9 @@ const CLIENTS = {
     launcherHint: "Antigravity",
     hooks: () => join(homedir(), ".gemini", "config", "plugins", "openviking-memory", "hooks.json"),
     mcp: () => join(homedir(), ".gemini", "config", "mcp_config.json"),
+    // Antigravity also loads an mcp_config.json shipped inside the plugin,
+    // active while the plugin is enabled.
+    pluginMcp: () => join(homedir(), ".gemini", "config", "plugins", "openviking-memory", "mcp_config.json"),
     mcpOptional: true,
     extras: () => [
       join(homedir(), ".gemini", "config", "plugins", "openviking-memory", "plugin.json"),
@@ -122,12 +125,55 @@ function hookStateDir() {
   return join(root, CLIENT);
 }
 
+/**
+ * The words `sh` reads from a command line, with quoting undone and nothing
+ * expanded. The installer quotes a path that contains an apostrophe as
+ * 'a'"'"'b', so only reading the line the way the shell does gets it back
+ * whole. A word that starts with `#` ends the line; an unclosed quote drops
+ * the word it opened.
+ */
+function shellWords(line) {
+  const words = [];
+  let word = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "'") {
+      const end = line.indexOf("'", i + 1);
+      if (end < 0) return words;
+      word = (word ?? "") + line.slice(i + 1, end);
+      i = end;
+    } else if (ch === "\"") {
+      let text = "";
+      let j = i + 1;
+      for (; j < line.length && line[j] !== "\""; j += 1) {
+        if (line[j] === "\\" && "\"\\$`".includes(line[j + 1] ?? "")) j += 1;
+        text += line[j];
+      }
+      if (j >= line.length) return words;
+      word = (word ?? "") + text;
+      i = j;
+    } else if (ch === "\\" && i + 1 < line.length) {
+      word = (word ?? "") + line[i + 1];
+      i += 1;
+    } else if (/\s/u.test(ch)) {
+      if (word !== null) words.push(word);
+      word = null;
+    } else if (ch === "#" && word === null) {
+      break;
+    } else {
+      word = (word ?? "") + ch;
+    }
+  }
+  if (word !== null) words.push(word);
+  return words;
+}
+
 function extractHookScripts(value, found = new Set()) {
   if (typeof value === "string") {
     if (!value.includes("OPENVIKING_INTEGRATION_ID") && !value.includes("# openviking-memory")) return found;
-    for (const match of value.matchAll(/'([^']*\.mjs)'|"([^"]*\.mjs)"|(?:^|\s)([^\s'"]+\.mjs)(?=\s|$)/gu)) {
-      const script = match[1] || match[2] || match[3];
-      if (script) found.add(script);
+    for (const word of shellWords(value)) {
+      // `NAME=value` words before the command are environment assignments.
+      if (word.endsWith(".mjs") && !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(word)) found.add(word);
     }
     return found;
   }
@@ -183,19 +229,33 @@ function checkInstall(report) {
     }
   }
 
-  const mcpPath = SPEC.mcp();
-  const mcp = inspectJsonFile(mcpPath);
-  const server = mcp.ok ? (mcp.data.mcpServers?.openviking || mcp.data.mcp?.servers?.openviking) : null;
-  const mcpFix = SPEC.mcpOptional
+  const openvikingServer = (file) => (file.ok ? (file.data.mcpServers?.openviking || file.data.mcp?.servers?.openviking) : null);
+  // An MCP server shipped in the plugin is the one this install provides, and
+  // a global entry beside it is a duplicate. Without one, the global file is
+  // where the server has to come from.
+  const pluginMcpPath = SPEC.pluginMcp?.();
+  const pluginMcp = pluginMcpPath ? inspectJsonFile(pluginMcpPath) : null;
+  const fromPlugin = Boolean(pluginMcp?.exists);
+  const mcpPath = fromPlugin ? pluginMcpPath : SPEC.mcp();
+  const mcp = fromPlugin ? pluginMcp : inspectJsonFile(mcpPath);
+  const server = openvikingServer(mcp);
+  const mcpFix = SPEC.mcpOptional && !fromPlugin
     ? `configure the 'openviking' MCP server manually in ${homeShort(mcpPath)} if you want the agent to search memory directly`
     : `re-run the installer with --harness ${CLIENT}`;
+  if (fromPlugin && server && openvikingServer(inspectJsonFile(SPEC.mcp()))) {
+    report.warn(
+      `an 'openviking' MCP server is configured in both ${homeShort(pluginMcpPath)} and ${homeShort(SPEC.mcp())}`,
+      "Antigravity loads both, so every OpenViking tool is listed twice",
+      `remove the 'openviking' entry from ${homeShort(SPEC.mcp())}; the plugin ships its own`,
+    );
+  }
   if (!mcp.exists) {
     if (SPEC.mcpOptional) report.info(`${homeShort(mcpPath)} not found`, `the MCP memory tools are not wired up (${mcpFix})`);
     else report.warn(`${homeShort(mcpPath)} not found`, "the MCP memory tools are not wired up", mcpFix);
   } else if (!mcp.ok) {
     report.fail(`${homeShort(mcpPath)} cannot be parsed`, mcp.error, "fix the JSON");
   } else if (!server) {
-    if (SPEC.mcpOptional) report.info(`no 'openviking' MCP server in ${homeShort(mcpPath)}`, `the installer leaves Antigravity MCP configuration manual (${mcpFix})`);
+    if (SPEC.mcpOptional && !fromPlugin) report.info(`no 'openviking' MCP server in ${homeShort(mcpPath)}`, `the installer leaves Antigravity MCP configuration manual (${mcpFix})`);
     else report.fail(`no 'openviking' MCP server in ${homeShort(mcpPath)}`, "", mcpFix);
   } else {
     report.ok(`MCP server 'openviking' in ${homeShort(mcpPath)}`);
