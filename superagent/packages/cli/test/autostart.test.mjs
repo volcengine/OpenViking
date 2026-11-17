@@ -17,30 +17,74 @@ function home(t) {
   return directory;
 }
 
-function run(homeDir, platform, action) {
+function run(homeDir, platform, action, exec = async () => ({ stdout: '' })) {
   const calls = [];
   let output = '';
   return autostartCommand([action], {
     env: { PATH: '/opt/agents/bin:/usr/bin' }, homeDir, platform, uid: 501,
-    execFileImpl: async (command, args) => { calls.push([command, ...args]); return { stdout: '' }; },
+    execFileImpl: async (command, args) => { calls.push([command, ...args]); return exec(command, args); },
     output: { write: (text) => { output += text; } },
   }).then((code) => ({ code, calls, output }));
 }
 
 test('Linux: a systemd user unit that runs ov-superagent start with the enabling shell PATH', async (t) => {
   const directory = home(t);
-  const enabled = await run(directory, { ...posix, loginService: 'systemd' }, 'enable');
+  let lingers = false;
+  const enabled = await run(directory, { ...posix, loginService: 'systemd' }, 'enable', async (command, args) => {
+    if (command === 'loginctl' && args[0] === 'show-user') return { stdout: lingers ? 'yes\n' : 'no\n' };
+    if (command === 'loginctl' && args[0] === 'enable-linger') lingers = true;
+    return { stdout: '' };
+  });
   assert.equal(enabled.code, 0);
   const unit = fs.readFileSync(path.join(directory, '.config', 'systemd', 'user', 'superagent.service'), 'utf8');
   assert.match(unit, new RegExp(`ExecStart=${directory}/\\.ov-superagent/bin/ov-superagent start`));
   assert.match(unit, /Environment=PATH=\/opt\/agents\/bin:\/usr\/bin/);
   assert.match(unit, new RegExp(`PIDFile=${directory}/\\.ov-superagent/pm2/pm2\\.pid`));
-  assert.deepEqual(enabled.calls, [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', 'superagent.service']]);
-  assert.match(enabled.output, /enable-linger/);
+  assert.deepEqual(enabled.calls, [
+    ['systemctl', '--user', 'daemon-reload'],
+    ['systemctl', '--user', 'enable', 'superagent.service'],
+    ['loginctl', 'show-user', '501', '--property=Linger', '--value'],
+    ['loginctl', 'enable-linger', '501'],
+    ['loginctl', 'show-user', '501', '--property=Linger', '--value'],
+  ]);
+  assert.match(enabled.output, /开机自启已开启|Autostart is on/);
 
   const disabled = await run(directory, { ...posix, loginService: 'systemd' }, 'disable');
   assert.equal(disabled.code, 0);
   assert.equal(fs.existsSync(path.join(directory, '.config', 'systemd', 'user', 'superagent.service')), false);
+});
+
+test('Linux: an already lingering user needs no enable-linger call', async (t) => {
+  const directory = home(t);
+  const enabled = await run(directory, { ...posix, loginService: 'systemd' }, 'enable', async (command) => (
+    command === 'loginctl' ? { stdout: 'yes\n' } : { stdout: '' }
+  ));
+  assert.equal(enabled.code, 0);
+  assert.deepEqual(enabled.calls.filter(([command]) => command === 'loginctl'), [
+    ['loginctl', 'show-user', '501', '--property=Linger', '--value'],
+  ]);
+});
+
+test('Linux: autostart stays incomplete when enable-linger lacks permission', async (t) => {
+  const directory = home(t);
+  const enabled = await run(directory, { ...posix, loginService: 'systemd' }, 'enable', async (command, args) => {
+    if (command === 'loginctl' && args[0] === 'show-user') return { stdout: 'no\n' };
+    if (command === 'loginctl') throw new Error('Access denied');
+    return { stdout: '' };
+  });
+  assert.equal(enabled.code, 1);
+  assert.match(enabled.output, /sudo loginctl enable-linger "\$USER"/);
+  assert.doesNotMatch(enabled.output, /开机自启已开启|Autostart is on/);
+  assert.equal(fs.existsSync(path.join(directory, '.config', 'systemd', 'user', 'superagent.service')), true);
+});
+
+test('Linux: enable-linger is only successful after Linger becomes yes', async (t) => {
+  const directory = home(t);
+  const enabled = await run(directory, { ...posix, loginService: 'systemd' }, 'enable', async (command) => (
+    command === 'loginctl' ? { stdout: 'no\n' } : { stdout: '' }
+  ));
+  assert.equal(enabled.code, 1);
+  assert.match(enabled.output, /sudo loginctl enable-linger/);
 });
 
 test('macOS: a LaunchAgent bootstrapped into the user GUI domain', async (t) => {

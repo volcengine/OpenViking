@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { GoBack, Prompter } from '../src/prompt.mjs';
-import { OWNER_MESSAGE_SCOPES, connectLark, expandHome, larkMessageListener, larkScopes, registerApp, setupCommand } from '../src/setup.mjs';
+import { OWNER_MESSAGE_SCOPES, connectLark, expandHome, larkMessageListener, larkScopes, offerAutostart, registerApp, setupCommand } from '../src/setup.mjs';
 import { superagentCommand } from '../src/manifest.mjs';
 import { stripAnsi } from '../src/ui.mjs';
 import { connectTelegram } from '../src/telegram.mjs';
@@ -25,6 +25,32 @@ const RUNTIMES = [
   { id: 'claude', label: 'Claude Code', model: 'claude:', bin: null, binEnv: 'CLAUDE_BIN', available: false, note: '未安装' },
   { id: 'pi', label: 'Pi（内置）', model: 'pi', bin: null, binEnv: null, available: true, note: 'ok' },
 ];
+
+test('setup reports autostart success only when the command completes it', async () => {
+  const reports = [];
+  const prompter = {
+    confirm: async () => true,
+    success: (text) => reports.push(['success', text]),
+    warn: (text) => reports.push(['warn', text]),
+  };
+  await offerAutostart({
+    prompter, env: {}, homeDir: '/tmp/home', cli: 'ov-superagent',
+    control: { autostart: async (args, { output }) => {
+      assert.deepEqual(args, ['enable']);
+      output.write('run sudo loginctl enable-linger "$USER"');
+      return 1;
+    } },
+  });
+  assert.deepEqual(reports, [['warn', 'run sudo loginctl enable-linger "$USER"']]);
+
+  reports.length = 0;
+  await offerAutostart({
+    prompter, env: {}, homeDir: '/tmp/home', cli: 'ov-superagent',
+    control: { autostart: async () => 0 },
+  });
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0][0], 'success');
+});
 
 function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1933', usable: true }, runtimes = RUNTIMES, failStart = false, soulText = '' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-'));

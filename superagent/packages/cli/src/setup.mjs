@@ -2233,20 +2233,16 @@ async function setupFlow({
 
 // Starting at login is one question at the end of a first setup. A machine
 // without a user service manager says so, and setup still succeeds.
-async function offerAutostart({ prompter, env, homeDir, control, cli }) {
+export async function offerAutostart({ prompter, env, homeDir, control, cli }) {
   if (!await prompter.confirm(t('开机后自动启动 OpenViking SuperAgent？', 'Start OpenViking SuperAgent when this computer starts?'), true)) {
     prompter.info(t(`之后想开：${cli} autostart enable`, `To turn it on later: ${cli} autostart enable`));
     return;
   }
   let said = '';
   await control.autostart(['enable'], { env, homeDir, output: { write: (text) => { said += text; } } }).then(
-    () => {
-      prompter.success(t('开机自启已开启', 'Autostart is on'));
-      if (/loginctl/.test(said)) {
-        prompter.info(t('Linux 服务器上还要运行一次 loginctl enable-linger，否则退出登录后 OpenViking SuperAgent 会停。',
-          'On a Linux server, also run loginctl enable-linger once, or OpenViking SuperAgent stops when you log out.'));
-      }
-    },
+    (code) => code === 0
+      ? prompter.success(t('开机自启已开启', 'Autostart is on'))
+      : prompter.warn(said.trim() || t('开机自启没有完整开启', 'Autostart was not fully enabled')),
     (error) => prompter.warn(t(`这台机器开不了开机自启：${String(error.message).split('\n')[0]}`, `Autostart is not available here: ${String(error.message).split('\n')[0]}`)),
   );
 }

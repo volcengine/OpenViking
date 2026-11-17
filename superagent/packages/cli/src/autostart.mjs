@@ -150,9 +150,24 @@ export async function autostartCommand([action, ...extra], {
   fs.writeFileSync(file, systemdUnit({ homeDir, pathValue }));
   await execFileImpl('systemctl', ['--user', 'daemon-reload']);
   await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
+  const loginctlUser = String(uid ?? env.USER ?? '');
+  const lingerArgs = loginctlUser ? ['show-user', loginctlUser, '--property=Linger', '--value'] : [];
+  const lingerEnabled = async () => {
+    if (!lingerArgs.length) return false;
+    const { stdout } = await execFileImpl('loginctl', lingerArgs);
+    return String(stdout).trim().toLowerCase() === 'yes';
+  };
+  let lingers = await lingerEnabled().catch(() => false);
+  if (!lingers) {
+    await execFileImpl('loginctl', ['enable-linger', ...(loginctlUser ? [loginctlUser] : [])]).catch(() => {});
+    lingers = await lingerEnabled().catch(() => false);
+  }
+  if (!lingers) {
+    output.write(t('systemd 用户服务已启用，但开机自启还未完整开启。请运行 sudo loginctl enable-linger "$USER"，然后重试。\n',
+      'The systemd user service is enabled, but autostart is not fully on. Run sudo loginctl enable-linger "$USER", then retry.\n'));
+    return 1;
+  }
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
-  output.write(t('服务器上还要执行一次 loginctl enable-linger，否则退出登录后 OpenViking SuperAgent 会停。\n',
-    'On a server, also run loginctl enable-linger once, or OpenViking SuperAgent stops when you log out.\n'));
   return 0;
 }
 
