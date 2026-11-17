@@ -45,7 +45,6 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.core.item_search import (
-    ItemSearchResult,
     SearchAsItemOptions,
     validate_item_search_request,
 )
@@ -685,16 +684,6 @@ def _strict_tag_filter(tags: Optional[List[str]]) -> Optional[List[str]]:
     return normalize_search_tags(tags) or None
 
 
-def _resolve_context_type_filter(
-    filter: Optional[Dict[str, Any]],
-    context_type: Optional[SearchContextTypeInput],
-) -> Optional[Dict[str, Any]]:
-    try:
-        return merge_search_filter(filter, context_type=context_type)
-    except ValueError as exc:
-        raise InvalidArgumentError(str(exc)) from exc
-
-
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def find(
@@ -714,13 +703,13 @@ async def find(
         Optional[List[str]],
         Field(description=_TAG_FILTER_DESCRIPTION),
     ] = None,
-    filter: Optional[Dict[str, Any]] = None,
     read_content: bool = False,
     events_time_decay_protection: Annotated[
         Optional[str],
         Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
     ] = None,
     search_as_item: Optional[SearchAsItemOptions] = None,
+    filter: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. Pass search_as_item={} to return declared Item roots instead of chunks; aggregation supports max and sum. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
     try:
@@ -809,7 +798,6 @@ async def search(
         Optional[List[str]],
         Field(description=_TAG_FILTER_DESCRIPTION),
     ] = None,
-    filter: Optional[Dict[str, Any]] = None,
     mode: Literal["list", "context"] = "list",
     query_expansion: Annotated[
         Literal["off", "auto"],
@@ -869,6 +857,7 @@ async def search(
         Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
     ] = None,
     search_as_item: Optional[SearchAsItemOptions] = None,
+    filter: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 
@@ -1066,6 +1055,8 @@ async def _describe_skills_by_package(items: List[Dict[str, Any]], *, service, c
 
     pending = {}
     for item in items:
+        if "item_uuid" in item:
+            continue
         if item["type"] != "skill" or not item["uri"].endswith("/SKILL.md"):
             continue
         root = item["uri"][: -len("/SKILL.md")]
@@ -1088,8 +1079,6 @@ async def _describe_skills_by_package(items: List[Dict[str, Any]], *, service, c
 
 
 async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
-    if isinstance(result, ItemSearchResult):
-        return json.dumps(result.to_dict(), ensure_ascii=False)
     items: List[Dict[str, Any]] = []
     seen: dict[str, int] = {}
     for ctx_type, contexts in [
@@ -1098,7 +1087,8 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         ("skill", result.skills),
     ]:
         for m in contexts:
-            uri = _hit_uri(ctx_type, m.uri)
+            item_uuid = getattr(m, "item_uuid", None)
+            uri = m.uri if item_uuid is not None else _hit_uri(ctx_type, m.uri)
             item = {
                 "type": ctx_type,
                 "uri": uri,
@@ -1109,6 +1099,12 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
                 "origin_score": getattr(m, "origin_score", None),
                 "time_score": getattr(m, "time_score", None),
             }
+            if item_uuid is not None:
+                item.update(
+                    item_uuid=item_uuid,
+                    item_attrs=m.item_attrs or {},
+                    item_extra_info=m.item_extra_info or {},
+                )
             # Several files of one skill package can match; keep the best-scored hit.
             previous = seen.get(uri)
             if previous is not None:
@@ -1143,7 +1139,11 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         abstract = (item["abstract"] or "(no abstract)").strip()
         uri = item["uri"]
         tag_suffix = _format_tags(item["tags"])
-        line = f"- [{item['type']} {item['score'] * 100:.0f}%] {uri}{tag_suffix}\n    {abstract}"
+        score = f"score {item['score']:g}" if "item_uuid" in item else f"{item['score'] * 100:.0f}%"
+        line = f"- [{item['type']} {score}] {uri}{tag_suffix}\n    {abstract}"
+        if "item_uuid" in item:
+            metadata = {key: item[key] for key in ("item_uuid", "item_attrs", "item_extra_info")}
+            line += "\n    " + json.dumps(metadata, ensure_ascii=False)
         origin_score = item["origin_score"]
         time_score = item["time_score"]
         if origin_score is not None or time_score is not None:

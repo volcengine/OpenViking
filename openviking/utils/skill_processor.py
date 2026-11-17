@@ -77,6 +77,7 @@ class SkillProcessingPreparation:
     base_path: Optional[Path]
     cleanup_path: Optional[Path]
     privacy: SkillPrivacyPreparation | None
+    is_update: bool = False
 
 
 def validate_skill_name(name: Any) -> str:
@@ -253,6 +254,7 @@ class SkillProcessor:
                 before_hash = (previous_history or {}).get("current_revision")
                 if before_hash is None and skill_exists:
                     before_hash = await skill_package_hash(viking_fs, ctx, skill_dir_uri)
+            new_package = not preparation.is_update and not skill_exists
             # Privacy changes finish under the package lease even if installation is cancelled.
             if apply_privacy:
                 skill_dict = await run_to_completion(
@@ -265,6 +267,21 @@ class SkillProcessor:
                 )
             skill_abstract = self._build_skill_abstract(skill_dict)
 
+            if new_package:
+                from openviking.storage.catalog import declare_item
+                from openviking_cli.exceptions import UnimplementedError
+
+                try:
+                    # A failed declaration must remain retryable as a new
+                    # package, without persisting an apparently legacy SKILL.md.
+                    await run_to_completion(
+                        lambda: declare_item(
+                            viking_fs, skill_dir_uri, ctx, as_item=True, is_dir=True
+                        )
+                    )
+                except UnimplementedError:
+                    # Existing backends keep their legacy package entrypoint.
+                    pass
             write_start = time.perf_counter()
             await run_to_completion(
                 lambda: self._write_skill_content(

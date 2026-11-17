@@ -3,12 +3,15 @@
 """Native Catalog and local Item grouping contract tests."""
 
 import gc
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.expr import And, Eq
-from openviking.storage.vectordb.engine import CatalogEngine
+from openviking.storage.expr import And, Eq, TimeRange
+from openviking.storage.vectordb.engine import CatalogEngine, PersistStore
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 
 
@@ -90,6 +93,230 @@ def test_declaration_retries_reuse_uuid_and_attributes_are_immutable():
         declare(engine, "/resources/A", "ignored", [])
     with pytest.raises(ValueError, match="cannot change"):
         declare(engine, "/resources/A", "ignored", ["asset_id=V2"])
+
+
+def test_list_identity_protocol_and_persisted_union_mode(tmp_path):
+    path = str(tmp_path / "union-catalog")
+    engine = CatalogEngine(path)
+    nodes(engine, "/resources/A/B", "/resources/elsewhere")
+    call(
+        engine, "declare_item", uri="/resources/A", item_uuids=["uuid-a"], item_attrs=["project=A"]
+    )
+    declared = call(
+        engine, "declare_item", uri="/resources/A/B", item_uuids=["uuid-b"], item_attrs=["asset=B"]
+    )
+    assert declared["item_uuids"] == ["uuid-b"]
+    with pytest.raises(ValueError, match="one item_uuids"):
+        call(engine, "declare_item", uri="/resources/elsewhere", item_uuids=["x", "y"])
+    assert call(engine, "resolve", uris=["/resources/A/B/hit"])["data"][0]["item_uuids"] == [
+        "uuid-b"
+    ]
+    call(engine, "configure", item_identity_mode="union")
+    del engine
+    gc.collect()
+    engine = CatalogEngine(path)
+    assert call(engine, "capabilities")["item_identity_mode"] == "union"
+    resolved = call(engine, "resolve", uris=["/resources/A/B/hit"])["data"][0]
+    assert resolved["item_uuids"] == ["uuid-b", "uuid-a"]
+    result = call(
+        engine,
+        "group_candidates",
+        candidates=[{"label": "hit", "uri": "/resources/A/B/hit", "score": 0.8}],
+        aggregation="sum",
+        max_groups=10,
+    )
+    assert result["group_field"] == "item_uuids"
+    assert [(g["entity_id"], g["entity_uri"], g["entity_attrs"]) for g in result["groups"]] == [
+        ("uuid-a", "/resources/A", ["project=A"]),
+        ("uuid-b", "/resources/A/B", ["asset=B"]),
+    ]
+    assert all(g["entity_score"] == pytest.approx(0.8) for g in result["groups"])
+    call(engine, "move_subtree", from_uri="/resources/A/B", to_uri="/resources/elsewhere/B")
+    assert call(engine, "resolve", uris=["/resources/elsewhere/B/hit"])["data"][0][
+        "item_uuids"
+    ] == ["uuid-b"]
+
+
+def test_shadow_filter_frontier_handles_prefix_siblings_and_deep_items():
+    engine = CatalogEngine()
+    nodes(engine, "/resources/A/B/C", "/resources/A-sibling")
+    declare(engine, "/resources/A", "a", ["kind=asset"])
+    declare(engine, "/resources/A-sibling", "sibling", ["kind=other"])
+    declare(engine, "/resources/A/B", "b", ["kind=other"])
+    declare(engine, "/resources/A/B/C", "c", ["kind=other"])
+    compiled = call(
+        engine,
+        "compile_filter",
+        filter={"op": "must", "field": "item_attrs", "conds": ["kind=asset"]},
+    )["filter"]
+    assert compiled["conds"][1]["conds"] == ["/resources/A/B"]
+    assert len(compiled["conds"]) == 2  # The nearest child already hides C.
+
+
+def test_identity_mode_is_collection_wide_but_declarations_and_revisions_are_scoped(tmp_path):
+    path = str(tmp_path / "collection-mode")
+    engine = CatalogEngine(path)
+    for scope in ("a", "b"):
+        nodes(engine, "/resources/A/B", scope=scope)
+        declare(engine, "/resources/A", "parent", [f"account={scope}"], scope=scope)
+        declare(engine, "/resources/A/B", "child", [f"account={scope}"], scope=scope)
+
+    def resolve(scope):
+        return call(engine, "resolve", scope=scope, uris=["/resources/A/B/hit"])
+
+    scopes = ("a", "b", "new-account")
+    before = {scope: resolve(scope)["revision"] for scope in scopes}
+    call(engine, "configure", scope="config-account", item_identity_mode="union")
+    changed = {scope: resolve(scope)["revision"] for scope in scopes}
+    assert all(changed[scope] != before[scope] for scope in scopes)
+    for scope in scopes:
+        assert call(engine, "capabilities", scope=scope)["item_identity_mode"] == "union"
+    for scope in ("a", "b"):
+        assert resolve(scope)["data"][0]["item_uuids"] == ["child", "parent"]
+        assert call(engine, "query_items", scope=scope, item_uuids=["parent"])["data"][0][
+            "item_attrs"
+        ] == [f"account={scope}"]
+    assert resolve("new-account")["data"][0]["item_uuids"] == []
+
+    # Equivalent or omitted settings do not invalidate any account's recall.
+    call(engine, "configure", scope="b", item_identity_mode="union")
+    call(engine, "configure", scope="new-account")
+    assert {scope: resolve(scope)["revision"] for scope in scopes} == changed
+    nodes(engine, "/resources/new", scope="a")
+    declare(engine, "/resources/new", "only-a", scope="a")
+    assert resolve("a")["revision"] != changed["a"]
+    assert resolve("b")["revision"] == changed["b"]
+    assert call(engine, "query_items", scope="b", item_uuids=["only-a"])["data"] == []
+    before = {scope: resolve(scope)["revision"] for scope in scopes}
+    with pytest.raises(ValueError, match="shadow or union"):
+        call(engine, "configure", scope="b", item_identity_mode="invalid")
+    assert {scope: resolve(scope)["revision"] for scope in scopes} == before
+    call(engine, "configure", scope="b", item_identity_mode="shadow")
+    assert all(resolve(scope)["revision"] != before[scope] for scope in scopes)
+    del engine
+    gc.collect()
+    engine = CatalogEngine(path)
+    for scope in ("a", "b"):
+        assert call(engine, "capabilities", scope=scope)["item_identity_mode"] == "shadow"
+        assert resolve(scope)["data"][0]["item_uuids"] == ["child"]
+
+
+@pytest.mark.parametrize("second_mode", ["union", "shadow", None])
+def test_legacy_modes_require_explicit_resolution_only_when_in_conflict(tmp_path, second_mode):
+    path = str(tmp_path / "legacy-mode")
+    rows = {"@catalog": {}, "@mode\0a": {"item_identity_mode": "union"}}
+    for scope in ("a", "b"):
+        rows[f"{scope}\0/resources/A"] = {
+            "uri": "/resources/A",
+            "node_type": "dir",
+            "item_uuids": [f"{scope}-parent"],
+            "item_attrs": [],
+        }
+    if second_mode is not None:
+        rows["@mode\0b"] = {"item_identity_mode": second_mode}
+    store = PersistStore(path)
+    assert store.put_data(list(rows), [json.dumps(row).encode() for row in rows.values()]) == 0
+    del store
+    gc.collect()
+
+    engine = CatalogEngine(path)
+    if second_mode == "union":
+        for scope in ("a", "b", "new-account"):
+            assert call(engine, "capabilities", scope=scope)["item_identity_mode"] == "union"
+        revision = call(engine, "resolve", uris=["/resources/A/hit"])["revision"]
+        call(engine, "configure")  # Persist the shared mode without changing semantics.
+        assert call(engine, "resolve", uris=["/resources/A/hit"])["revision"] == revision
+    else:
+        assert call(engine, "capabilities")["configuration_required"] is True
+        for op, kwargs in [
+            ("resolve", {"uris": ["/resources/A/hit"]}),
+            ("compile_filter", {"filter": {"op": "and", "conds": []}}),
+            ("upsert_nodes", {"nodes": [{"uri": "/new", "node_type": "dir"}]}),
+            ("configure", {}),
+        ]:
+            with pytest.raises(ValueError, match="explicit collection-wide configure"):
+                call(engine, op, **kwargs)
+        call(engine, "configure", scope="b", item_identity_mode="union")
+    del engine
+    gc.collect()
+    engine = CatalogEngine(path)
+    for scope in ("a", "b", "new-account"):
+        assert call(engine, "capabilities", scope=scope)["item_identity_mode"] == "union"
+    for scope in ("a", "b"):
+        assert call(engine, "resolve", scope=scope, uris=["/resources/A/hit"])["data"][0][
+            "item_uuids"
+        ] == [f"{scope}-parent"]
+    del engine
+    gc.collect()
+    store = PersistStore(path)
+    assert store.get_data(["@mode\0a", "@mode\0b"]) == [b"", b""]
+
+
+@pytest.mark.parametrize("mode", ["shadow", "union"])
+@pytest.mark.parametrize("aggregation", ["max", "sum"])
+@pytest.mark.parametrize("sign", [1, -1])
+@pytest.mark.parametrize("max_members", [1, 10])
+def test_duplicate_labels_contribute_each_input_row(mode, aggregation, sign, max_members):
+    engine = CatalogEngine()
+    nodes(engine, "/resources/A/B")
+    declare(engine, "/resources/A", "parent")
+    declare(engine, "/resources/A/B", "child")
+    call(engine, "configure", item_identity_mode=mode)
+    rows = [
+        {"label": "same", "uri": "/resources/A/B/first", "score": sign * 0.5},
+        {"label": "same", "uri": "/resources/A/B/second", "score": sign * 0.75},
+        {"label": "same", "uri": "/resources/A/third", "score": sign * 0.25},
+    ]
+    result = call(
+        engine,
+        "group_candidates",
+        candidates=rows,
+        aggregation=aggregation,
+        max_groups=10,
+        max_members_per_group=max_members,
+    )
+    groups = {g["entity_id"]: g for g in result["groups"]}
+    for uuid, inputs in [("child", rows[:2]), ("parent", rows if mode == "union" else rows[2:])]:
+        group = groups[uuid]
+        scores = [row["score"] for row in inputs]
+        assert group["candidate_members_count"] == len(inputs)
+        assert group["entity_score"] == pytest.approx(
+            max(scores) if aggregation == "max" else sum(scores)
+        )
+        assert group["candidate_members"] == ["same"] * min(len(inputs), max_members)
+        assert group["candidate_members_truncated"] is (len(inputs) > max_members)
+        assert set(group["candidate_members_uri"]).issubset({row["uri"] for row in inputs})
+
+
+def test_noop_registrations_do_not_advance_identity_revision():
+    engine = CatalogEngine()
+    nodes(engine, "/resources/A")
+    declare(engine, "/resources/A", "a")
+    before = call(engine, "resolve", uris=["/resources/A/hit"])["revision"]
+    nodes(engine, "/resources/A", "/resources/unrelated/new")
+    assert call(engine, "resolve", uris=["/resources/A/hit"])["revision"] == before
+
+
+def test_group_evidence_budget_does_not_truncate_scores_or_counts():
+    engine = CatalogEngine()
+    nodes(engine, "/resources/A")
+    declare(engine, "/resources/A", "a", ["kind=asset"])
+    result = call(
+        engine,
+        "group_candidates",
+        candidates=[
+            {"label": str(i), "uri": f"/resources/A/{i}", "score": float(i)} for i in range(12)
+        ],
+        aggregation="sum",
+        max_groups=1,
+        max_members_per_group=3,
+    )
+    group = result["groups"][0]
+    assert group["entity_score"] == 66
+    assert group["candidate_members_count"] == 12
+    assert group["candidate_members"] == ["11", "10", "9"]
+    assert group["candidate_members_truncated"] is True
+    assert len(group["candidate_members_uri"]) == 3
 
 
 def test_item_attrs_filter_uses_each_item_roots_own_values():
@@ -220,15 +447,17 @@ def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
         "resolve",
         uris=["/resources/A/frame", "/resources/B/frame", "/resources/B/shot/frame"],
     )["data"] == [
-        {"uri": "/resources/A/frame"},
+        {"uri": "/resources/A/frame", "item_uuids": []},
         {
             "uri": "/resources/B/frame",
             "item_uuid": "uuid-a",
+            "item_uuids": ["uuid-a"],
             "item_root_uri": "/resources/B",
         },
         {
             "uri": "/resources/B/shot/frame",
             "item_uuid": "uuid-shot",
+            "item_uuids": ["uuid-shot"],
             "item_root_uri": "/resources/B/shot",
         },
     ]
@@ -265,15 +494,17 @@ def test_move_subtree_merges_and_undo_restores_both_trees():
         "resolve",
         uris=["/resources/source/a", "/resources/target/a", "/resources/target/kept"],
     )["data"] == [
-        {"uri": "/resources/source/a"},
+        {"uri": "/resources/source/a", "item_uuids": []},
         {
             "uri": "/resources/target/a",
             "item_uuid": "uuid-source",
+            "item_uuids": ["uuid-source"],
             "item_root_uri": "/resources/target",
         },
         {
             "uri": "/resources/target/kept",
             "item_uuid": "uuid-source",
+            "item_uuids": ["uuid-source"],
             "item_root_uri": "/resources/target",
         },
     ]
@@ -287,16 +518,19 @@ def test_move_subtree_merges_and_undo_restores_both_trees():
         {
             "uri": "/resources/source/a",
             "item_uuid": "uuid-source",
+            "item_uuids": ["uuid-source"],
             "item_root_uri": "/resources/source",
         },
         {
             "uri": "/resources/target/a",
             "item_uuid": "uuid-target",
+            "item_uuids": ["uuid-target"],
             "item_root_uri": "/resources/target",
         },
         {
             "uri": "/resources/target/kept",
             "item_uuid": "uuid-target",
+            "item_uuids": ["uuid-target"],
             "item_root_uri": "/resources/target",
         },
     ]
@@ -472,3 +706,361 @@ def test_filter_only_item_groups_are_not_capped_by_ann_recall_window(adapter):
         ("uuid-a", 0.0),
         ("uuid-b", 0.0),
     ]
+
+
+@pytest.mark.parametrize("mode", ["shadow", "union"])
+@pytest.mark.parametrize("aggregation", ["max", "sum"])
+def test_filter_scan_keeps_complete_counts_without_python_members(
+    adapter, monkeypatch, mode, aggregation
+):
+    root = "viking://resources/items"
+    declare_adapter_item(adapter, f"{root}/A", "z-parent", ["project=parent"])
+    declare_adapter_item(adapter, f"{root}/A/B", "z-nested", ["kind=asset"])
+    declare_adapter_item(adapter, f"{root}/late", "a-late", ["kind=asset"])
+    adapter.catalog_execute({"op": "configure", "scope": "a", "item_identity_mode": mode})
+    total = 1307  # Cross both the native batch boundary and the evidence budget.
+    records = [
+        {
+            "id": f"成员-{i:04d}",
+            "account_id": "a",
+            "uri": f"{root}/A/B/{i}",
+            "vector": [1, 0, 0, 0],
+            "level": 2,
+        }
+        for i in range(total)
+    ]
+    records.extend(
+        [
+            {**records[0], "id": "last", "uri": f"{root}/late/member"},
+            {**records[0], "id": "other-account", "account_id": "b"},
+            {**records[0], "id": "unmatched-parent", "uri": f"{root}/A/member"},
+        ]
+    )
+    adapter.upsert(records)
+    local = adapter.get_collection()._Collection__collection
+
+    def no_python_members(*_args, **_kwargs):
+        pytest.fail("Pure filtering must not recall, count or decode members through Python")
+
+    monkeypatch.setattr(local, "search_by_scalar", no_python_members)
+    monkeypatch.setattr(local, "search_by_vector", no_python_members)
+    for name in ("fetch_cands_data", "fetch_cands_fields", "iter_all_cands_fields"):
+        monkeypatch.setattr(local.store_mgr, name, no_python_members)
+    monkeypatch.setattr(local.indexes.get("default"), "aggregate", no_python_members)
+    options = {
+        "filter": And([Eq("account_id", "a"), Eq("item_attrs", "kind=asset")]),
+        "aggregation": aggregation,
+        "filter_only": True,
+    }
+    top = adapter.search_item_groups(**options, max_groups=1)
+    assert top["group_count"] == (3 if mode == "union" else 2)
+    assert top["groups_truncated"] is True
+    assert top["groups"][0]["entity_id"] == "a-late"  # Last input wins the UUID tie.
+    result = adapter.search_item_groups(**options, max_groups=10)
+    groups = {g["entity_id"]: g for g in result["groups"]}
+    assert groups["a-late"]["candidate_members_count"] == 1
+    for uuid in ["z-nested", "z-parent"] if mode == "union" else ["z-nested"]:
+        group = groups[uuid]
+        assert group["entity_score"] == 0.0
+        assert group["candidate_members_count"] == total
+        assert group["candidate_members_truncated"] is True
+        assert group["candidate_members"] == [f"成员-{i:04d}" for i in range(1000)]
+        assert group["candidate_members_uri"] == [f"{root}/A/B/{i}" for i in range(1000)]
+    if mode == "union":
+        assert groups["z-parent"]["entity_attrs"] == ["project=parent"]
+    assert adapter.search_item_groups(**options, score_threshold=0.1)["group_count"] == 0
+
+
+@pytest.mark.parametrize("aggregation", ["max", "sum"])
+def test_filter_scan_projects_live_fields_after_update_delete_and_reopen(adapter, aggregation):
+    root = "viking://resources/items"
+    declare_adapter_item(adapter, f"{root}/A", "a", ["kind=asset"])
+    declare_adapter_item(adapter, f"{root}/B", "b", ["kind=asset"])
+    adapter.upsert(
+        [
+            {
+                "id": name,
+                "account_id": "a",
+                "uri": f"{root}/A/{name}",
+                "updated_at": timestamp,
+                "vector": [1, 0, 0, 0],
+                "level": 2,
+            }
+            for name, timestamp in [
+                ("old", "2026-11-01T00:00:00Z"),
+                ("move", "2026-11-12T00:00:00Z"),
+                ("delete", "2026-11-13T00:00:00Z"),
+            ]
+        ]
+    )
+    options = {
+        "filter": And(
+            [
+                Eq("account_id", "a"),
+                Eq("item_attrs", "kind=asset"),
+                TimeRange("updated_at", start="2026-11-10T00:00:00Z"),
+            ]
+        ),
+        "aggregation": aggregation,
+        "filter_only": True,
+    }
+    assert adapter.search_item_groups(**options)["groups"][0]["candidate_members_count"] == 2
+    adapter.upsert(
+        [
+            {
+                "id": "move",
+                "account_id": "a",
+                "uri": f"{root}/B/moved",
+                "updated_at": "2026-11-12T00:00:00Z",
+                "vector": [1, 0, 0, 0],
+                "level": 2,
+            }
+        ]
+    )
+    adapter.delete(ids=["delete"])
+    result = adapter.search_item_groups(**options)
+    assert result["group_count"] == 1
+    group = result["groups"][0]
+    assert (group["entity_id"], group["entity_score"], group["candidate_members_count"]) == (
+        "b",
+        0.0,
+        1,
+    )
+    assert group["candidate_members"] == ["move"]
+    assert group["candidate_members_uri"] == [f"{root}/B/moved"]
+    adapter.close()
+    reopened = adapter.search_item_groups(**options)
+    # The in-process revision token restarts on Catalog reopen.
+    assert {k: v for k, v in reopened.items() if k != "revision"} == {
+        k: v for k, v in result.items() if k != "revision"
+    }
+
+
+@pytest.mark.parametrize("key_type", ["int64", "auto"])
+def test_filter_scan_preserves_integer_and_auto_primary_keys(tmp_path, key_type):
+    adapter = LocalCollectionAdapter("keys", str(tmp_path), "default")
+    schema = CollectionSchemas.context_collection("keys", 4)
+    id_field = next(f for f in schema["Fields"] if f["FieldName"] == "id")
+    if key_type == "auto":
+        id_field.pop("IsPrimaryKey")
+    else:
+        id_field["FieldType"] = key_type
+    try:
+        adapter.create_collection(
+            "keys", schema, distance="cosine", sparse_weight=0, index_name="default"
+        )
+        root = "viking://resources/items/A"
+        declare_adapter_item(adapter, root, "a", ["kind=asset"])
+        record = {"account_id": "a", "uri": f"{root}/member", "vector": [1, 0, 0, 0], "level": 2}
+        if key_type != "auto":
+            record["id"] = -9
+        ids = (
+            adapter.get_collection().upsert_data([record]).ids
+            if key_type == "auto"
+            else adapter.upsert([record])
+        )
+        group = adapter.search_item_groups(filter=Eq("account_id", "a"), filter_only=True)[
+            "groups"
+        ][0]
+        assert group["candidate_members"] == [str(ids[0])]
+        assert group["candidate_members_count"] == 1
+    finally:
+        adapter.close()
+
+
+def test_filter_scan_waits_for_store_and_index_to_share_a_snapshot(adapter, monkeypatch):
+    root = "viking://resources/items"
+    for name in ("A", "B"):
+        declare_adapter_item(adapter, f"{root}/{name}", name, ["kind=asset"])
+    record = {
+        "id": "move",
+        "account_id": "a",
+        "uri": f"{root}/A/member",
+        "vector": [1, 0, 0, 0],
+        "level": 2,
+    }
+    adapter.upsert([record])
+    local = adapter.get_collection()._Collection__collection
+    index = local.indexes.get("default")
+    store_committed, release_writer, query_started, scan_started = (
+        threading.Event() for _ in range(4)
+    )
+    original_upsert, original_aggregate = index.upsert_data, index.aggregate_items
+
+    def pause_after_store_commit(*args, **kwargs):
+        store_committed.set()
+        assert release_writer.wait(5)
+        return original_upsert(*args, **kwargs)
+
+    def aggregate(*args, **kwargs):
+        scan_started.set()
+        return original_aggregate(*args, **kwargs)
+
+    def query():
+        query_started.set()
+        return adapter.search_item_groups(filter=Eq("account_id", "a"), filter_only=True)
+
+    monkeypatch.setattr(index, "upsert_data", pause_after_store_commit)
+    monkeypatch.setattr(index, "aggregate_items", aggregate)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer = pool.submit(adapter.upsert, [{**record, "uri": f"{root}/B/moved"}])
+        try:
+            assert store_committed.wait(5)
+            reader = pool.submit(query)
+            assert query_started.wait(5)
+            assert not scan_started.wait(0.1)
+        finally:
+            release_writer.set()
+        writer.result(timeout=5)
+        groups = reader.result(timeout=5)["groups"]
+    assert [(g["entity_id"], g["candidate_members_count"]) for g in groups] == [("B", 1)]
+
+
+def test_semantic_item_scan_retries_if_store_fields_change_after_recall(adapter, monkeypatch):
+    root = "viking://resources/items"
+    for name in ("A", "B"):
+        declare_adapter_item(adapter, f"{root}/{name}", name, [f"kind={name}"])
+    record = {
+        "id": "move",
+        "account_id": "a",
+        "uri": f"{root}/A/member",
+        "vector": [1, 0, 0, 0],
+        "level": 2,
+    }
+    adapter.upsert([record])
+    local = adapter.get_collection()._Collection__collection
+    index = local.indexes.get("default")
+    native_search = index.search
+    recalled, updated = threading.Event(), threading.Event()
+    calls = 0
+
+    def pause_after_recall(*args, **kwargs):
+        nonlocal calls
+        result = native_search(*args, **kwargs)
+        calls += 1
+        if calls == 1:
+            recalled.set()
+            assert updated.wait(5)
+        return result
+
+    monkeypatch.setattr(index, "search", pause_after_recall)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        reader = pool.submit(
+            adapter.search_item_groups,
+            query_vector=[1, 0, 0, 0],
+            filter=And([Eq("account_id", "a"), Eq("item_attrs", "kind=A")]),
+        )
+        try:
+            assert recalled.wait(5)
+            adapter.upsert([{**record, "uri": f"{root}/B/member"}])
+        finally:
+            updated.set()
+        assert reader.result(timeout=5)["groups"] == []
+    assert calls == 2
+
+
+def test_item_root_type_is_validated_before_a_resource_replacement():
+    engine = CatalogEngine()
+    nodes(engine, "/resources/A")
+    declare(engine, "/resources/A", "stable")
+    with pytest.raises(ValueError, match="Cannot change an Item root node type"):
+        call(engine, "validate_resource_update", uri="/resources/A", node_type="file")
+    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuids"] == [
+        "stable"
+    ]
+
+
+def test_resource_catalog_reset_preserves_declaration_and_rejects_independent_children():
+    engine = CatalogEngine()
+    nodes(engine, "/resources/A")
+    declared = declare(engine, "/resources/A", "stable", ["kind=asset"])
+    call(
+        engine, "upsert_nodes", nodes=[{"uri": "/resources/A/swap", "node_type": "file"}]
+    )
+    reset = call(engine, "delete_subtree", uri="/resources/A", preserve_item_root=True)
+    assert reset["revision"] == declared["revision"]
+    nodes(engine, "/resources/A/swap/inner")  # The old file type no longer conflicts.
+    assert call(engine, "query_items", item_uuids=["stable"])["data"] == [
+        {"item_uuid": "stable", "uri": "/resources/A", "item_attrs": ["kind=asset"]}
+    ]
+    declare(engine, "/resources/A/swap", "independent")
+    with pytest.raises(ValueError, match="independent child Items"):
+        call(engine, "delete_subtree", uri="/resources/A", preserve_item_root=True)
+    assert call(engine, "resolve", uris=["/resources/A/swap/inner"])["data"][0][
+        "item_uuids"
+    ] == ["independent"]
+
+
+def test_resource_catalog_reset_checks_backend_capability_before_deletion(adapter, monkeypatch):
+    root = "viking://resources/item"
+    declare_adapter_item(adapter, root, "stable", [])
+    collection = adapter.get_collection()
+    execute = collection.catalog_execute
+
+    def old_capabilities(request):
+        response = execute(request)
+        if request["op"] == "capabilities":
+            response.pop("preserve_item_root", None)
+        return response
+
+    monkeypatch.setattr(collection, "catalog_execute", old_capabilities)
+    with pytest.raises(ValueError, match="engine upgrade required"):
+        adapter.catalog_execute(
+            {"op": "delete_subtree", "scope": "a", "uri": root, "preserve_item_root": True}
+        )
+    assert adapter.catalog_execute({"op": "query_items", "scope": "a", "item_uuids": ["stable"]})[
+        "data"
+    ][0]["uri"] == root
+
+
+def test_uuid_collision_and_concurrent_declaration_replays_are_atomic(tmp_path):
+    path = str(tmp_path / "uuid-catalog")
+    engine = CatalogEngine(path)
+    nodes(engine, "/resources/A", "/resources/B")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(lambda uuid: declare(engine, "/resources/A", uuid), ["first", "second"])
+        )
+    winner = results[0]["item_uuid"]
+    assert results[1]["item_uuid"] == winner
+    with pytest.raises(ValueError, match="already belongs to another root"):
+        declare(engine, "/resources/B", winner)
+    del engine
+    gc.collect()
+    engine = CatalogEngine(path)
+    assert call(engine, "query_items", item_uuids=[winner])["data"][0]["uri"] == "/resources/A"
+
+
+def test_filter_scan_errors_release_snapshot_and_do_not_return_partial_counts(adapter):
+    from openviking.storage.vectordb.store.store_manager import StoreManager
+    from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
+
+    root = "viking://resources/items/A"
+    declare_adapter_item(adapter, root, "a", ["kind=asset"])
+    record = {
+        "id": "missing",
+        "account_id": "a",
+        "uri": f"{root}/member",
+        "vector": [1, 0, 0, 0],
+        "level": 2,
+    }
+    adapter.upsert([record])
+    local = adapter.get_collection()._Collection__collection
+    # Simulate a Store/index inconsistency; returning an incomplete count hides it.
+    local.store_mgr.storage.delete([str(str_to_uint64("missing"))], StoreManager.CandsTable)
+    with pytest.raises(RuntimeError, match="missing from Store snapshot"):
+        adapter.search_item_groups(filter=Eq("account_id", "a"), filter_only=True)
+    adapter.upsert([record])
+    group = adapter.search_item_groups(filter=Eq("account_id", "a"), filter_only=True)["groups"][0]
+    assert group["candidate_members_count"] == 1
+
+
+@pytest.mark.parametrize("label", ["", "bad\0label"])
+def test_filter_scan_keeps_the_semantic_candidate_label_contract(adapter, label):
+    root = "viking://resources/items/A"
+    declare_adapter_item(adapter, root, "a", [])
+    adapter.get_collection().upsert_data(
+        [{"id": label, "account_id": "a", "uri": f"{root}/member", "vector": [1, 0, 0, 0]}]
+    )
+    with pytest.raises(ValueError, match="candidate label"):
+        adapter.search_item_groups(filter=Eq("account_id", "a"), filter_only=True)

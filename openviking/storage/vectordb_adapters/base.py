@@ -484,6 +484,13 @@ class CollectionAdapter(ABC):
     def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Translate URI encoding only; Catalog semantics belong to the backend."""
         request = dict(request)
+        collection = self.get_collection()
+        if request.get("preserve_item_root"):
+            capabilities = collection.catalog_execute({"op": "capabilities", "scope": request["scope"]})
+            if not capabilities.get("enabled"):
+                return {}
+            if not capabilities.get("preserve_item_root"):
+                raise ValueError("Catalog engine upgrade required to preserve the Item root")
         for field in ("uri",):
             if field in request:
                 request[field] = self._encode_uri_field_value(request[field])
@@ -491,7 +498,7 @@ class CollectionAdapter(ABC):
             request["uris"] = [self._encode_uri_field_value(uri) for uri in request["uris"]]
         if "nodes" in request:
             request["nodes"] = [self._normalize_record_for_write(node) for node in request["nodes"]]
-        result = self.get_collection().catalog_execute(request)
+        result = collection.catalog_execute(request)
 
         def decode(row):
             row = self._normalize_record_for_read(row)
@@ -528,6 +535,8 @@ class CollectionAdapter(ABC):
             filter_only=filter_only,
         )
         for group in result.get("groups", []):
+            if isinstance(group.get("entity_uri"), str):
+                group["entity_uri"] = self._decode_uri_field_value(group["entity_uri"])
             group["candidate_members_uri"] = [
                 self._decode_uri_field_value(uri) for uri in group.get("candidate_members_uri", [])
             ]

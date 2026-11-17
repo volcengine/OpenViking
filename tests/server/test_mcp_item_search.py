@@ -1,12 +1,46 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import json
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import openviking.server.mcp_endpoint as endpoint
-from openviking.core.item_search import ItemSearchResult, SearchAsItemOptions
+from openviking.core.item_search import SearchAsItemOptions
+from openviking_cli.retrieve import FindResult
+
+
+async def test_mcp_skill_find_forwards_explicit_filter(request_context, monkeypatch):
+    find_skills = AsyncMock(return_value=FindResult(memories=[], resources=[], skills=[]))
+    service = SimpleNamespace(search=SimpleNamespace(find_skills=find_skills))
+    monkeypatch.setattr(endpoint, "get_service", lambda: service)
+    metadata_filter = {"op": "must", "field": "item_attrs", "conds": ["project=P1"]}
+    token = endpoint._mcp_ctx.set(request_context)
+    try:
+        await endpoint.find(query="tool", context_type="skill", filter=metadata_filter)
+    finally:
+        endpoint._mcp_ctx.reset(token)
+    forwarded = find_skills.await_args.kwargs["filter"]
+    assert metadata_filter in forwarded["conds"]
+    assert {"op": "must", "field": "context_type", "conds": ["skill"]} in forwarded["conds"]
+
+
+def test_mcp_find_and_search_keep_legacy_positional_arguments():
+    find_arguments = list(inspect.signature(endpoint.find).parameters)
+    assert find_arguments[:9] == [
+        "query",
+        "target_uri",
+        "limit",
+        "min_score",
+        "level",
+        "context_type",
+        "read_content",
+        "events_time_decay_protection",
+        "search_as_item",
+    ]
+    search_arguments = list(inspect.signature(endpoint.search).parameters)
+    assert search_arguments[8:11] == ["mode", "query_expansion", "max_tokens"]
+    assert search_arguments[-1] == "filter"
 
 
 async def test_mcp_search_keeps_empty_item_options_and_no_default_threshold(
@@ -15,14 +49,15 @@ async def test_mcp_search_keeps_empty_item_options_and_no_default_threshold(
     item = {
         "item_uuid": "uuid-a",
         "uri": "viking://resources/A",
-        "item_score": 0.8,
+        "context_type": "resource",
+        "score": 1.79,
         "item_attrs": {},
         "item_extra_info": {
             "candidate_members_count": 1,
             "candidate_members_uri": ["viking://resources/A/a.md"],
         },
     }
-    search = AsyncMock(return_value=ItemSearchResult([item]))
+    search = AsyncMock(return_value=FindResult.from_dict({"resources": [item]}))
     service = SimpleNamespace(
         search=SimpleNamespace(search=search, is_intent_enabled=lambda: False)
     )
@@ -32,7 +67,10 @@ async def test_mcp_search_keeps_empty_item_options_and_no_default_threshold(
         result = await endpoint.search(query="beach", search_as_item=SearchAsItemOptions())
     finally:
         endpoint._mcp_ctx.reset(token)
-    assert json.loads(result) == {"items": [item], "total": 1}
+    assert "- [resource score 1.79] viking://resources/A" in result
+    assert '"item_uuid": "uuid-a"' in result
+    assert '"item_attrs": {}' in result
+    assert '"items"' not in result
     assert search.await_args.kwargs["search_as_item"].aggregation == "max"
     assert search.await_args.kwargs["score_threshold"] is None
 
@@ -41,14 +79,15 @@ async def test_mcp_find_forwards_item_filter_without_legacy_threshold(request_co
     item = {
         "item_uuid": "uuid-a",
         "uri": "viking://resources/A",
-        "item_score": 0.0,
+        "context_type": "resource",
+        "score": 0.0,
         "item_attrs": {"asset_id": "V1"},
         "item_extra_info": {
             "candidate_members_count": 1,
             "candidate_members_uri": ["viking://resources/A/a.md"],
         },
     }
-    find = AsyncMock(return_value=ItemSearchResult([item]))
+    find = AsyncMock(return_value=FindResult.from_dict({"resources": [item]}))
     service = SimpleNamespace(search=SimpleNamespace(find=find))
     monkeypatch.setattr(endpoint, "get_service", lambda: service)
     token = endpoint._mcp_ctx.set(request_context)
@@ -60,7 +99,10 @@ async def test_mcp_find_forwards_item_filter_without_legacy_threshold(request_co
         )
     finally:
         endpoint._mcp_ctx.reset(token)
-    assert json.loads(result) == {"items": [item], "total": 1}
+    assert "- [resource score 0] viking://resources/A" in result
+    assert '"item_attrs": {"asset_id": "V1"}' in result
+    assert '"candidate_members_count": 1' in result
+    assert '"items"' not in result
     assert find.await_args.kwargs["filter"] == {
         "op": "must",
         "field": "item_attrs",
@@ -92,6 +134,32 @@ async def test_mcp_item_search_rejects_time_decay(request_context, monkeypatch):
     assert result.structuredContent["error"]["code"] == "INVALID_ARGUMENT"
     assert "time decay" in result.structuredContent["error"]["message"]
     search.assert_not_awaited()
+
+
+async def test_mcp_item_skill_keeps_root_and_existing_output_without_summary_reads(
+    request_context, monkeypatch
+):
+    root = "viking://user/owner/skills/S"
+    result = FindResult.from_dict(
+        {
+            "skills": [
+                {
+                    "uri": root,
+                    "context_type": "skill",
+                    "score": 0.9,
+                    "item_uuid": "uuid-skill",
+                    "item_attrs": {},
+                    "item_extra_info": {},
+                }
+            ]
+        }
+    )
+    service = SimpleNamespace(fs=SimpleNamespace(abstract=AsyncMock()))
+    rendered = await endpoint._format_search_result(result, service=service, ctx=request_context)
+    assert f"- [skill score 0.9] {root}" in rendered
+    assert "/SKILL.md" not in rendered
+    assert '"item_uuid": "uuid-skill"' in rendered
+    service.fs.abstract.assert_not_awaited()
 
 
 async def test_mcp_add_resource_forwards_item_declaration(request_context, monkeypatch):

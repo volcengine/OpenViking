@@ -23,7 +23,10 @@ class ICollection(ABC):
         pass
 
     def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute an account-scoped Catalog operation in the storage engine."""
+        """Execute Catalog operations; declarations are scoped to an account.
+
+        Inheritance mode configuration applies to the field in the collection.
+        """
         raise NotImplementedError("Catalog is not supported by this collection")
 
     def search_item_groups(

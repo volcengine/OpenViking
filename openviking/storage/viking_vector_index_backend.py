@@ -2082,7 +2082,6 @@ class VikingVectorIndexBackend:
         offset: int = 0,
         events_time_decay_protection: Optional[str] = None,
         request_now: Optional[datetime] = None,
-        output_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
@@ -2100,7 +2099,7 @@ class VikingVectorIndexBackend:
                 filter=scope_filter,
                 limit=limit,
                 offset=offset,
-                output_fields=output_fields or RETRIEVAL_OUTPUT_FIELDS,
+                output_fields=RETRIEVAL_OUTPUT_FIELDS,
                 ctx=ctx,
             )
 
@@ -2128,7 +2127,6 @@ class VikingVectorIndexBackend:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
-        output_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
@@ -2147,7 +2145,7 @@ class VikingVectorIndexBackend:
             filter=scope_filter,
             limit=limit,
             offset=offset,
-            output_fields=output_fields or RETRIEVAL_OUTPUT_FIELDS,
+            output_fields=RETRIEVAL_OUTPUT_FIELDS,
         )
 
     async def filter_in_tenant(

@@ -58,6 +58,16 @@ client.add_resource(
 
 MCP 的 `add_resource` 工具暴露相同的 `as_item` 和 `item_attrs` 参数。省略 `as_item` 等价于 `false`；为 false 时必须同时省略 `item_attrs`（空对象也会被拒绝）。`item_uuid` 由 OpenViking 生成和维护，调用方不能指定。属性只属于声明根，不继承、不合并。移动 Item 会保留 UUID 和属性，复制不会复制 Item 声明，删除会移除声明。
 
+Item 导入沿用既有资源解析、保存、临时源清理和更新链路，不新增原文补齐目录、归属标记或专项维护规则。整根重导入按新快照替换并保留根 UUID；包含独立子 Item 时拒绝覆盖，不可变属性冲突在正文提交前拒绝。
+
+存量普通目录／资源根不支持补声明为 Item，需要用原输入导入新的 Item 根。已有 Item 可同根更新和幂等重试。新增 Skill 包自动声明 Item；旧普通 Skill 包更新时不补声明，已有 Item 包更新保留身份。
+
+已有 Item 的显式 `mkdir` 重试会继续初始化：补写缺失摘要，已有摘要原文保持不变，并重新提交现有目录 L0 索引入队；失败仍返回错误。UUID、属性及成员文件保持不变，不会扫描或回刷其他 Item。
+
+`mkdir(as_item=true)` 的 HTTP 成功结果包含 `uri`、`item_uuid` 和 `item_attrs`，用于确认声明成功；普通 `mkdir` 仍只返回 `uri`，Python SDK 的返回值仍为 `None`。SDK／CLI 收到缺少 UUID 的旧服务端响应时会报 `FAILED_PRECONDITION`；旧服务端可能已创建普通目录，需核对目标 URI 后升级服务端，不会自动清理。确认复用已有声明结果，不增加探测请求或存储读取。普通 `mkdir` 保留忽略无关额外字段的既有行为，但拒绝外部指定 `item_uuid`／`item_uuids`。
+
+开源 Python 与原生引擎需配套升级。旧草稿 Item 数据的二进制混用和回滚尚未完成独立版本验证。
+
 传入空的 `search_as_item` 对象即可开启 Item Search。只有需要求和时才设置 `aggregation=sum`；默认聚合为 `max`：
 
 ```bash
@@ -66,7 +76,7 @@ ov find "海滩上的男孩" --uri viking://resources/videos --search-as-item
 ov search "海滩上的男孩" --uri viking://resources/videos \
   --search-as-item --aggregation sum
 
-# 仅过滤 Item（item_score 固定为 0.0）
+# 仅过滤 Item（score 固定为 0.0）
 ov find --search-as-item \
   --filter '{"op":"must","field":"item_attrs","conds":["asset_id=V1"]}'
 ```
@@ -94,7 +104,7 @@ items = client.find(
 )
 ```
 
-MCP 的 `find` 和 `search` 工具都通过 `search_as_item: {}` 开启；可选对象支持 `{"aggregation":"sum"}`。MCP 会把同一个 Item 结果对象序列化成 JSON 返回。
+MCP 的 `find` 和 `search` 工具都通过 `search_as_item: {}` 开启；可选对象支持 `{"aggregation":"sum"}`。MCP 沿用原有分类文本展示，返回 Item 根 URI、聚合分及可选的 Item 元数据，不额外读取概述或内容。
 
 单个 `must` 节点沿用现有 `list<string>` 过滤语义：`conds` 中的多个值是“任选其一”。如果需要同时满足多个属性，应使用 `and` 组合多个单值条件：
 
@@ -108,9 +118,17 @@ MCP 的 `find` 和 `search` 工具都通过 `search_as_item: {}` 开启；可选
 }
 ```
 
-响应包含 `items` 和 `total`。每个 Item 包含 `item_uuid`、根 `uri`、`item_score`、`item_attrs`，以及只描述本次候选的 `item_extra_info.candidate_members_count` 和 `item_extra_info.candidate_members_uri`。
+HTTP／SDK 响应沿用 `memories`、`resources`、`skills` 和 `total`，不新增 `items`。各 Item 按声明根的 `context_type` 归类，`uri` 指向根，`score` 为聚合分，根层级为 `level=0`。条目可选扩展 `item_uuid`、`item_attrs`，以及只描述本次候选的 `item_extra_info.candidate_members_count` 和 `item_extra_info.candidate_members_uri`。各数组保留引擎顺序，`limit` 限制分类前的总 Item 数，`total` 等于三个数组的长度之和；空结果三个数组均为 `[]`。普通检索不增加 Item 字段。
 
-Item 模式只支持 list 结果，不支持 `read_content`、`include_provenance`、事件时间衰减和 `mode="context"`；聚合只支持 `max`、`sum`，也不执行 custom/JEV rerank。配置的存储后端如果尚未支持 Catalog 和 Item 分组，会返回 `501 UNIMPLEMENTED`，OpenViking 不会在服务层模拟聚合结果。
+候选证据列表被截断时，`item_extra_info.candidate_members_truncated` 为 `true`，计数仍是本次参与聚合的候选总数，可以大于 URI 列表长度。返回根 URI 不授予根内容的读取权限。开源引擎默认使用 shadow；配置为 union 后，先过滤成员，再分别向全部有效祖先 Item 计分，每组仍返回自身属性。引擎内部的 `item_uuids` 和 `item_attrs` 均为 `list<string>`，OV API 的 `item_attrs` 仍为字符串 KV 对象。
+
+继承模式是 collection 内 `item_uuids` 字段的统一配置，适用于该 collection 的全部 account；声明和属性继续按 account 隔离。聚合按每条候选输入计数和计算 `max`／`sum`，不按成员 ID 去重。成员证据的选取和顺序由后端决定，不保证跨后端相同。
+
+开源 union 当前将每个 `item_attrs` 条件分别展开成成员范围后组合 AND／OR，因此不同条件可以由不同祖先 Item 分别满足；匹配成员仍向全部有效祖先 UUID 聚合，各组返回自身属性。
+
+开源引擎的纯过滤 Item 查询覆盖全部匹配成员，`score` 为 `0.0`；语义检索使用独立于 `limit` 的 1000 条候选召回预算。`limit` 只控制返回的 Item 组数，每组最多返回 1000 条候选证据；证据截断不影响完整计数及 `max`／`sum` 聚合分。
+
+Item 模式只支持 list 结果，不支持 `read_content`、`include_provenance`、事件时间衰减和 `mode="context"`；聚合只支持 `max`、`sum`，也不执行 custom/JEV rerank。当前 `VikingDBCollection` 尚未实现 Catalog 和 Item 分组适配。配置的存储后端如果尚未支持这些接口，会返回 `501 UNIMPLEMENTED`，OpenViking 不会在服务层模拟聚合结果。
 
 ## 检索流程
 

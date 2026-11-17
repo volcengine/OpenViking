@@ -96,7 +96,7 @@ async def declare_item(
             "uri": uri,
             # The native operation keeps an existing value and uses this only
             # for the first declaration under its collection lock.
-            "item_uuid": str(uuid.uuid4()),
+            "item_uuids": [str(uuid.uuid4())],
         }
         if normalized_attrs is not None:
             request["item_attrs"] = encode_item_attrs(normalized_attrs)
@@ -117,7 +117,57 @@ async def declare_item(
         ) from exc
 
 
-async def delete_catalog_subtree(fs, uri: str, ctx) -> None:
+async def validate_resource_item_update(
+    storage,
+    uri: str,
+    ctx,
+    *,
+    as_item: bool,
+    item_attrs: Any = ITEM_ATTRS_OMITTED,
+    is_dir: bool | None = None,
+) -> dict[str, Any]:
+    """Check a replacement before committing bytes under its resource lease."""
+    from openviking_cli.exceptions import UnimplementedError
+
+    attrs = validate_item_declaration(as_item, item_attrs)
+    execute = getattr(storage, "catalog_execute", None)
+    if execute is None:
+        if as_item:
+            raise UnimplementedError("Item declarations require Catalog support")
+        return {"valid": True, "has_item": False}
+    request: dict[str, Any] = {"op": "validate_resource_update", "uri": uri}
+    if is_dir is not None:
+        request["node_type"] = "dir" if is_dir else "file"
+    if attrs is not None:
+        request["item_attrs"] = encode_item_attrs(attrs)
+    try:
+        return await execute(request, ctx=ctx)
+    except UnimplementedError:
+        if as_item:
+            raise
+        return {"valid": True, "has_item": False}
+
+
+async def require_existing_item_root(storage, uri: str, ctx) -> None:
+    """Allow an existing Item retry, without promoting an ordinary resource."""
+    from openviking_cli.exceptions import FailedPreconditionError, UnimplementedError
+
+    execute = getattr(storage, "catalog_execute", None)
+    if execute is None:
+        raise UnimplementedError("Item declarations require Catalog support")
+    resolved = await execute({"op": "resolve", "uris": [uri]}, ctx=ctx)
+    normalized = uri.removeprefix("viking://").strip("/")
+    if any(
+        str(row.get("item_root_uri", "")).removeprefix("viking://").strip("/") == normalized
+        for row in resolved.get("data", [])
+    ):
+        return
+    raise FailedPreconditionError(
+        "Existing ordinary resources cannot be promoted to Items; import into a new Item root"
+    )
+
+
+async def delete_catalog_subtree(fs, uri: str, ctx, *, preserve_item_root: bool = False) -> None:
     from openviking.core.namespace_policy import is_system_uri
     from openviking_cli.exceptions import UnimplementedError
 
@@ -128,7 +178,10 @@ async def delete_catalog_subtree(fs, uri: str, ctx) -> None:
     if execute is None:
         return
     try:
-        await execute({"op": "delete_subtree", "uri": uri}, ctx=ctx)
+        request: dict[str, Any] = {"op": "delete_subtree", "uri": uri}
+        if preserve_item_root:
+            request["preserve_item_root"] = True
+        await execute(request, ctx=ctx)
     except UnimplementedError:
         return
 

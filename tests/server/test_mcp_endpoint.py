@@ -423,7 +423,7 @@ async def test_search_respects_min_score(service):
     assert isinstance(result, str)
 
 
-async def test_search_tools_expose_only_context_type_parameter():
+async def test_search_tools_expose_context_type_and_item_filter():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
     for tool_name in ("find", "search"):
@@ -434,7 +434,8 @@ async def test_search_tools_expose_only_context_type_parameter():
         )
         assert properties["tags"]["type"] == "array"
         assert "include_tags" not in properties
-        assert "filter" not in properties
+        assert "filter" in properties
+        assert "search_as_item" in properties
 
 
 async def test_retrieval_tools_expose_tag_parameters_with_compatible_defaults():

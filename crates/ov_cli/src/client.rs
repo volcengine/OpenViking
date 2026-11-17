@@ -779,7 +779,21 @@ impl HttpClient {
         if let Some(item_attrs) = item_attrs {
             body["item_attrs"] = item_attrs;
         }
-        self.post("/api/v1/fs/mkdir", &body).await
+        let result: Value = self.post("/api/v1/fs/mkdir", &body).await?;
+        if as_item
+            && result
+                .get("item_uuid")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(Error::Api {
+                code: Some("FAILED_PRECONDITION".to_string()),
+                message: "Server did not confirm the Item declaration. Upgrade the server and check the target URI; an ordinary directory may already have been created.".to_string(),
+                details: Some(serde_json::json!({"uri": uri, "stage": "item_declaration_confirmation"})),
+                status: None,
+            });
+        }
+        Ok(result)
     }
 
     pub async fn rm(&self, uri: &str, recursive: bool, wait: bool) -> Result<serde_json::Value> {
@@ -2733,19 +2747,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn item_declaration_requests_preserve_empty_attrs() {
+    async fn item_declaration_keeps_empty_attrs_and_requires_confirmation() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        client
+        let error = client
             .mkdir("viking://resources/A", None, true, Some(json!({})), None)
             .await
-            .expect("Item mkdir should succeed");
+            .expect_err("a legacy success without a declaration must not confirm an Item");
+        assert_eq!(error.code(), "FAILED_PRECONDITION");
 
         let request = request_rx.await.expect("request should be captured");
         let (_, body) = request.split_once("\r\n\r\n").expect("request body");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(body).unwrap(),
             json!({"uri": "viking://resources/A", "as_item": true, "item_attrs": {}})
+        );
+    }
+
+    #[tokio::test]
+    async fn item_mkdir_accepts_a_declaration_receipt() {
+        let base_url = spawn_test_response(
+            "200 OK",
+            r#"{"status":"ok","result":{"uri":"viking://resources/A","item_uuid":"uuid-a","item_attrs":{}}}"#,
+        ).await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let result = client
+            .mkdir("viking://resources/A", None, true, None, None)
+            .await
+            .expect("the server confirmed the declaration");
+        assert_eq!(result["item_uuid"], "uuid-a");
+    }
+
+    #[tokio::test]
+    async fn ordinary_mkdir_omits_item_fields_and_accepts_a_legacy_response() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .mkdir("viking://resources/plain", None, false, None, None)
+            .await
+            .expect("ordinary mkdir remains compatible");
+        let request = request_rx.await.expect("request captured");
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({"uri": "viking://resources/plain"})
         );
     }
 
