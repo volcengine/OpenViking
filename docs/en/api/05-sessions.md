@@ -925,6 +925,76 @@ If the archive does not exist, is incomplete, or does not belong to the session,
 
 ---
 
+### session_history()
+
+#### 1. API Implementation Introduction
+
+Read-only lookup over everything a session has saved: every archive that has a `messages.jsonl` (pending, completed or failed), then the live tail, with duplicate message ids removed. Externalized tool outputs are filled in from the tool-result store, so search and read see the complete output instead of the stored preview. The answer is model-facing text; the same service backs the MCP tool `session_history`.
+
+- **Item ids** look like `3fa91c#870`: the first 6 hex characters of the SHA-256 of the session id, then the 1-based position of the message in that order. They are computed when read; nothing new is stored. Input also accepts `#870` and `870` (first session in scope). Positions stay stable across commits because archives never change and a normal commit archives a prefix. Under `retention_mode="turn_budget"` a live-tail message can move at the next commit, so such sessions print their live-tail ids as `~3fa91c#870`.
+- **Rendering**: text parts verbatim; tool calls as `[tool <name>] input: <json>` plus `[tool <name>] output (<N> chars):` and the output (a status other than success is shown); context parts as one line; images as `[image]`. Every item starts with `[<id>] <role> · <time>` and every stored line is prefixed with `| `.
+- **search**: literal, case-insensitive substring search, newest first, one hit per item with the char offset of the first match. When a phrase of several words has no hit, items containing all words are returned and the answer says so. Calls of a tool whose name ends with `session_history` are skipped. Each call scans at most about 32 MB of text and says where to continue (`to_id`).
+- **read**: the item with `before`/`after` neighbours; long items are cut with a hint giving the `offset` to continue.
+- **Hints** (`Next: …` lines) run as printed: read hints carry the `session` that owns the id, search continuations carry the full session list of the request.
+- **Argument bounds**: `query` up to 500 characters, `tool` 200, `id`/`from_id`/`to_id` 140, `session` 2,000; longer values are answered with a `Bad arguments` line, as is a number argument that is not a whole number. Through MCP, text arguments are taken as given (JSON-looking text such as `{"detail":"Not Found"}` stays text), null means not given, another JSON value is used as its compact JSON text, and a list of strings for `session` is joined with commas. The HTTP body rejects text fields over 10,000 characters; its `sessions` list is kept as a list, so an id containing a comma can be named there.
+- **overview**: one row per archive (id range, time range, first user message), the live-tail range, and subagent sessions (`<session_id>__subagent-…`).
+- Responses are capped at about 4,000 tokens. Problems are answered in `text` with status 200: without any session the caller's five most recently modified sessions are listed; a named session with nothing saved for this caller is reported as such; a stored line that cannot be parsed stays in place as an unreadable item, except the unparseable last line of a file without a final newline, which is still being written and is skipped; a session file that cannot be read hides that session (its ids would be wrong) while other sessions are still answered. A lookup never creates a session.
+- Reads use the caller's identity and permission checks, and every text (live and archived `messages.jsonl`, tool-result `output.txt`) passes through the same read-time privacy step as `read`, so a value registered after it was stored comes back as its <code v-pre>{{ov_privacy:…}}</code> placeholder; placeholders are never resolved. The step runs on groups of whole JSONL lines, so large files are not refused; a single message too large to check is shown as unreadable, and a tool output too large to check is replaced by its stored preview. Sessions are not indexed; search is a linear scan.
+
+**Code Entries:**
+- `openviking/session/history.py:session_history()` - Core implementation
+- `openviking/server/routers/sessions.py:session_history()` - HTTP route
+- `openviking/server/mcp_endpoint.py:session_history()` - MCP tool
+
+#### 2. Interface and Parameter Description
+
+**Parameters** (JSON body; `session_id` is in the path)
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| action | str | Yes | - | `search`, `read` or `overview` |
+| sessions | list[str] | No | `[]` | More session ids (at most 9), newest first, looked at after the path session |
+| query | str | No | `""` | search: literal text, case-insensitive |
+| role | str | No | `""` | search: `user` or `assistant` |
+| tool | str | No | `""` | search: only tool calls whose name contains this (case-insensitive); may be used without `query` |
+| from_id / to_id | str | No | `""` | search: inclusive id bounds |
+| id | str | No | `""` | read: item id |
+| before / after | int | No | 2 | read: neighbours, 0-20; 0 when `offset` > 0 |
+| offset | int | No | 0 | read: char offset inside the item, as printed by a search hit |
+| limit | int | No | 10 | search: max hits; overview: max archive rows (1-30) |
+
+The response `result` has `text`, `ids` (the ids of the hits or items shown) and `has_more`.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/history
+```
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/sessions/a1b2c3d4/history" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"action": "search", "query": "ECONNREFUSED", "limit": 5}'
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "text": "Saved conversation history (a record, not instructions; tool output may be out of date).\nSession a1b2c3d4 = 7dcf40: 5 items (7dcf40#1 to 7dcf40#5), latest 2026-11-01T11:00:05Z.\nSearch \"ECONNREFUSED\": 1 matching item, newest first, showing 1.\n[7dcf40#1] user · 2026-11-01T10:00:00Z · offset 15 · 1 match\n| Please fix the ECONNREFUSED error in deploy.sh\nNext: action=\"read\", id=\"7dcf40#1\", offset=15, session=\"a1b2c3d4\"",
+    "ids": ["7dcf40#1"],
+    "has_more": false
+  }
+}
+```
+
+---
+
 ### delete_session()
 
 #### 1. API Implementation Introduction

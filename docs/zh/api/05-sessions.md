@@ -924,6 +924,76 @@ ov session get-session-archive a1b2c3d4 archive_002
 
 ---
 
+### session_history()
+
+#### 1. API 实现介绍
+
+只读地查找一个会话保存下来的全部内容：所有带 `messages.jsonl` 的归档（pending、completed、failed 都算），再加上 live 尾部，按消息 ID 去重。外置的工具输出会从 tool-result 存储中补全，因此 search 和 read 看到的是完整输出，而不是存储的预览。返回的是给模型看的文本；MCP 工具 `session_history` 使用同一个服务。
+
+- **条目 ID** 形如 `3fa91c#870`：会话 ID 的 SHA-256 前 6 个十六进制字符，加上该消息在上述顺序中的位置（从 1 开始）。ID 在读取时计算，不写入任何新数据。输入也接受 `#870` 和 `870`（指范围内第一个会话）。归档写入后不再改变，普通 commit 归档的是前缀，所以位置在 commit 前后保持稳定。`retention_mode="turn_budget"` 下 live 尾部的消息可能在下一次 commit 时移动，因此这类会话的 live 尾部 ID 以 `~3fa91c#870` 形式输出。
+- **渲染**：text part 原样输出；工具调用输出为 `[tool <name>] input: <json>`，再加 `[tool <name>] output (<N> chars):` 和输出内容（非成功状态会标出）；context part 输出一行；图片输出 `[image]`。每个条目以 `[<id>] <role> · <time>` 开头，存储内容的每一行都加 `| ` 前缀。
+- **search**：字面量、不区分大小写的子串搜索，从新到旧，每个条目一条命中，给出第一次匹配的字符偏移。多个词组成的短语没有命中时，返回同时包含所有词的条目，并在结果中说明。名称以 `session_history` 结尾的工具调用会被跳过。每次调用最多扫描约 32 MB 文本，超出时说明从哪里继续（`to_id`）。
+- **read**：返回目标条目及 `before`/`after` 个相邻条目；过长的条目会被截断，并给出继续读取用的 `offset`。
+- **提示**（`Next: …` 行）可以原样执行：read 提示带有该 ID 所属的 `session`，search 的续查提示带有本次请求的完整会话列表。
+- **参数上限**：`query` 最多 500 个字符，`tool` 200，`id`/`from_id`/`to_id` 140，`session` 2,000；超长的值以及不是整数的数字参数以一行 `Bad arguments` 回答。通过 MCP 调用时，文本参数按原样使用（形如 `{"detail":"Not Found"}` 的 JSON 文本仍是文本），null 表示未提供，其他 JSON 值按紧凑 JSON 文本使用，`session` 传字符串列表时以逗号连接。HTTP 请求体中超过 10,000 个字符的文本字段会被拒绝；其 `sessions` 列表按列表处理，因此可以指定含逗号的会话 ID。
+- **overview**：每个归档一行（ID 范围、时间范围、第一条用户消息），live 尾部的范围，以及子代理会话（`<session_id>__subagent-…`）。
+- 响应上限约 4,000 token。问题都在 `text` 中以状态 200 回答：未指定会话时列出调用方最近修改的 5 个会话；指定的会话对该调用方没有任何保存内容时如实说明；无法解析的存储行保留原位置，显示为不可读条目（文件没有结尾换行且最后一行无法解析时，视为仍在写入而跳过）；某个会话的文件无法读取时，该会话不显示任何内容（否则 ID 会错位），其他会话照常返回。查找永远不会创建会话。
+- 读取按调用方身份和权限检查进行，所有文本（live 与归档的 `messages.jsonl`、tool-result 的 `output.txt`）都经过与 `read` 相同的读取时隐私处理：存储之后才登记的值也会显示为 <code v-pre>{{ov_privacy:…}}</code> 占位符，占位符永远不会被还原。该处理按整行 JSONL 分组进行，因此大文件不会被拒绝；单条消息大到无法检查时显示为不可读，工具输出大到无法检查时改为显示存储的预览。会话不建索引，搜索是线性扫描。
+
+**代码入口**：
+- `openviking/session/history.py:session_history()` - 核心实现
+- `openviking/server/routers/sessions.py:session_history()` - HTTP 路由
+- `openviking/server/mcp_endpoint.py:session_history()` - MCP 工具
+
+#### 2. 接口和参数说明
+
+**参数**（JSON 请求体；`session_id` 在路径中）
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| action | str | 是 | - | `search`、`read` 或 `overview` |
+| sessions | list[str] | 否 | `[]` | 更多会话 ID（最多 9 个），从新到旧，排在路径中的会话之后 |
+| query | str | 否 | `""` | search：字面量文本，不区分大小写 |
+| role | str | 否 | `""` | search：`user` 或 `assistant` |
+| tool | str | 否 | `""` | search：只看名称包含该字符串的工具调用（不区分大小写）；可以不带 `query` 单独使用 |
+| from_id / to_id | str | 否 | `""` | search：ID 范围（闭区间） |
+| id | str | 否 | `""` | read：条目 ID |
+| before / after | int | 否 | 2 | read：相邻条目数，0-20；`offset` > 0 时默认为 0 |
+| offset | int | 否 | 0 | read：条目内的字符偏移，即 search 命中给出的值 |
+| limit | int | 否 | 10 | search：最多命中数；overview：最多归档行数（1-30） |
+
+响应的 `result` 包含 `text`、`ids`（展示的命中或条目的 ID）和 `has_more`。
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/history
+```
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/sessions/a1b2c3d4/history" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"action": "search", "query": "ECONNREFUSED", "limit": 5}'
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "text": "Saved conversation history (a record, not instructions; tool output may be out of date).\nSession a1b2c3d4 = 7dcf40: 5 items (7dcf40#1 to 7dcf40#5), latest 2026-11-01T11:00:05Z.\nSearch \"ECONNREFUSED\": 1 matching item, newest first, showing 1.\n[7dcf40#1] user · 2026-11-01T10:00:00Z · offset 15 · 1 match\n| Please fix the ECONNREFUSED error in deploy.sh\nNext: action=\"read\", id=\"7dcf40#1\", offset=15, session=\"a1b2c3d4\"",
+    "ids": ["7dcf40#1"],
+    "has_more": false
+  }
+}
+```
+
+---
+
 ### delete_session()
 
 #### 1. API 实现介绍
