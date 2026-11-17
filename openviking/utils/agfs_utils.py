@@ -117,6 +117,7 @@ class RagfsBindingConfig:
                 cachefs_backend == "cache",
                 cachefs_instance,
                 self.service_name,
+                uses_runtime,
             )
             shared_redis_ttl = int(getattr(cachefs, "shared_redis_ttl_seconds", 0))
             cache_config["cachefs"]["shared_redis_ttl_seconds"] = (
@@ -184,6 +185,7 @@ def _build_named_cache_config(
     cachefs_enabled: bool,
     cachefs_instance: str,
     service_name: str,
+    runtime_enabled: bool,
 ) -> Dict[str, Any]:
     """Build named cache provider configs that share the top-level service name."""
     instances = {}
@@ -201,7 +203,7 @@ def _build_named_cache_config(
     cache_config = _disabled_cache_config(service_name)
     cache_config.update({
         "enabled": cachefs_enabled,
-        "runtime_enabled": True,
+        "runtime_enabled": runtime_enabled,
         "instances": instances,
     })
     cache_config["cachefs"]["enabled"] = cachefs_enabled

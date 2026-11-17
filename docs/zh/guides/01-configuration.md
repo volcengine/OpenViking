@@ -1778,6 +1778,8 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 ```
 
 标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时，会从 `cache.instances` 初始化 CacheRuntime。Cache PathLock 选择的实例必须使用 `redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
+Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
+只配置 `cache.instances` 不会建立独立的 Provider 连接。
 
 请把 Provider 参数迁移到 `cache.instances.<name>`，用顶层 `service_name` 生成共享 Redis 名称，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 
@@ -2387,7 +2389,7 @@ Task、Work 和 Watch 的存储配置分别独立。
 `standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
 
 MySQL 是数据来源，Redis 缓存鉴权结果、用户信息、组和删除状态。缓存未命中或
-Redis 读取失败时会查询 MySQL。通过 `cache.instances.default.params.ttl_seconds` 配置缓存有效期，
+Redis 读取失败时会查询 MySQL。通过 `server.account_store.params.cache.params.ttl_seconds` 配置缓存有效期，
 默认 60 秒；命中不会延长有效期。
 
 凭据、权限和删除状态变更会失效相关缓存。如果失效操作失败，缓存可能保持旧值
@@ -2395,9 +2397,9 @@ Redis 读取失败时会查询 MySQL。通过 `cache.instances.default.params.tt
 缓存版本元数据不会自动过期，需要计入 Redis 容量规划。旧的 `lock_ttl_seconds`
 和 `lock_wait_seconds` 配置兼容接受，但不再使用。
 
-Redis 连接和命令超时分别通过 `cache.instances.default.params.connect_timeout_ms` 和
-`cache.instances.default.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
-总超时。`cache.instances.default.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
+Redis 连接和命令超时分别通过 `server.account_store.params.cache.params.connect_timeout_ms` 和
+`server.account_store.params.cache.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
+总超时。`server.account_store.params.cache.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
 使用 100；连接池耗尽会触发连接错误并转为查询 MySQL。
 
 ```json

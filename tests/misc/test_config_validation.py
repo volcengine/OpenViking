@@ -410,7 +410,7 @@ def test_cache_instance_repr_hides_provider_params():
     assert "top-secret" not in repr(config)
 
 
-def test_unused_dynamic_cache_instance_is_serialized():
+def test_unused_dynamic_cache_instance_does_not_enable_runtime():
     config = OpenVikingConfig.model_validate({
         "cache": {
             "instances": {
@@ -428,7 +428,7 @@ def test_unused_dynamic_cache_instance_is_serialized():
     ).to_binding_dict()
 
     assert binding["cache"]["enabled"] is False
-    assert binding["cache"]["runtime_enabled"] is True
+    assert binding["cache"]["runtime_enabled"] is False
     assert binding["cache"]["instances"]["default"]["dynamic"] == {"provider_owned": True}
 
 

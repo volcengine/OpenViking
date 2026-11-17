@@ -183,6 +183,7 @@ impl CacheRuntime {
 
     /// Register one named script with owned identifier and Redis Lua source.
     pub fn register_script(&self, script_id: String, redis_lua: String) -> CacheResult<()> {
+        self.ensure_open()?;
         self.scripts.register(script_id, redis_lua)
     }
 

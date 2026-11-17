@@ -51,6 +51,16 @@ async def exercise(handle):
     assert await handle.set('key', b'value', if_not_exists=True)
     assert not await handle.set('key', b'replacement', if_not_exists=True)
     assert await handle.get('key') == b'value'
+    for operation in (
+        lambda: handle.set('ttl', b'value', ttl_seconds=1e300),
+        lambda: handle.expire('ttl', 1e300),
+    ):
+        try:
+            await operation()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('unrepresentable TTL was accepted')
     assert await handle.hset('hash', 'field', b'value') == 1
     assert await handle.hget('hash', 'field') == b'value'
     assert await handle.sismember('members', b'member')
@@ -85,8 +95,14 @@ async def close_and_validate(handle):
     try:
         await handle.get('key')
     except RuntimeError:
+        pass
+    else:
+        raise AssertionError('closed Runtime accepted get')
+    try:
+        handle.register_script('closed.script.v1', 'return 1')
+    except RuntimeError:
         return
-    raise AssertionError('closed Runtime accepted get')
+    raise AssertionError('closed Runtime accepted script registration')
 
 asyncio.run(close_and_validate(handle))
 ",

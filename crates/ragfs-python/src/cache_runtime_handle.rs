@@ -25,7 +25,9 @@ fn cache_error_to_py(instance: &str, error: CacheError) -> PyErr {
 /// Parse a strictly positive duration expressed as fractional seconds.
 fn positive_duration(seconds: f64, name: &str) -> PyResult<Duration> {
     if seconds.is_finite() && seconds > 0.0 {
-        Ok(Duration::from_secs_f64(seconds))
+        Duration::try_from_secs_f64(seconds).map_err(|_| {
+            PyValueError::new_err(format!("{name} exceeds the supported duration range"))
+        })
     } else {
         Err(PyValueError::new_err(format!(
             "{name} must be a finite positive number"

@@ -1802,6 +1802,9 @@ coordination, keeping SQLite state off EFS.
 ```
 
 The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized from `cache.instances` when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires its selected instance to use `redis`; DynamicProvider is not supported for PathLock. When none of these modules selects a cache provider, no CacheRuntime connection is opened, including when PathLock uses PostgreSQL.
+Python `cache_runtime()` handles are available only for a Runtime created by one
+of these consumers; configuring `cache.instances` alone does not open a
+standalone provider connection.
 
 Move Provider settings to `cache.instances.<name>`, set top-level `service_name` for shared Redis names, select `cachefs.backend="cache"`, `queuefs.backend="cache"`, or `backups.provider="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
 
@@ -2424,9 +2427,9 @@ same parameters as the MySQL provider; its `cache` block follows the top-level
 cache `provider/params` structure and supports `standalone`, `cluster`, and
 `sentinel` Redis deployments.
 
-MySQL remains the source of truth. Redis caches authentication results, user
+MySQL is the source of truth. Redis caches authentication results, user
 information, groups, and deletion status. Cache misses and Redis read failures
-fall back to MySQL. Configure `cache.instances.default.params.ttl_seconds` to control cache lifetime;
+fall back to MySQL. Configure `server.account_store.params.cache.params.ttl_seconds` to control cache lifetime;
 the default is 60 seconds. Hits do not extend the TTL.
 
 Credential, permission, and deletion changes invalidate the affected cache.
@@ -2436,9 +2439,9 @@ do not invalidate each other. Cache-version metadata does not expire automatical
 and should be included in Redis capacity planning. Legacy `lock_ttl_seconds` and
 `lock_wait_seconds` settings are accepted but no longer used.
 
-Redis connection and command timeouts use `cache.instances.default.params.connect_timeout_ms` and
-`cache.instances.default.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
-are socket timeouts, not an overall request deadline. Set `cache.instances.default.params.pool_size`
+Redis connection and command timeouts use `server.account_store.params.cache.params.connect_timeout_ms` and
+`server.account_store.params.cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
+are socket timeouts, not an overall request deadline. Set `server.account_store.params.cache.params.pool_size`
 for the expected concurrent Redis requests; the default is 32, and the example
 below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
 
