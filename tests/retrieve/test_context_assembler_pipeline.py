@@ -617,6 +617,23 @@ def test_restored_abstracts_do_not_duplicate_the_same_body():
     assert [e.text for e in plan.entries if e.text] == ["摘" * 256]
 
 
+def test_spare_summaries_do_not_displace_existing_full_upgrades():
+    uri = f"{USER_ROOT}/memories/events/a.md"
+    event = _resource_candidate("event", category="events", uri=uri)
+    resources = [
+        _resource_candidate(str(i) + "摘" * 255, uri=f"{USER_ROOT}/resources/{i}.md")
+        for i in range(9)
+    ]
+    body = "# Summary\nEvent gist\n\n# Detail\n" + "x" * 5000
+
+    plan = plan_entries([event, *resources], {uri: body}, max_tokens=1600)
+
+    assert len(plan.entries) == 10
+    assert (plan.entries[0].detail, plan.entries[0].text) == ("full", body)
+    assert all(entry.detail == "uri" for entry in plan.entries[1:])
+    assert estimate_text_tokens(render_context(plan.entries)) <= plan.stats["used_tokens"] <= 1600
+
+
 def test_built_in_memory_types_report_one_declared_category():
     """Types outside MEMORY_CATEGORIES own no bucket but stay inside the contract."""
     resolved = {

@@ -172,9 +172,11 @@ def plan_entries(
     # observed 0.38-0.50 score band cannot support anyway.
     overview_upgrades = upgrade_pass("overview", respect_cap=True)
     full_upgrades = upgrade_pass("full", respect_cap=True)
-    # The cap guides the first pass, not the final result. Recover whole
-    # summaries too: resources/skills cannot reach the full tier.
-    spare_upgrades = sum(upgrade_pass(tier, respect_cap=False) for tier in TIER_ORDER[1:])
+    # Preserve the existing full-tier pass before backfilling whole summaries.
+    spare_upgrades = upgrade_pass("full", respect_cap=False)
+    # Resources/skills cannot reach full; use only the budget left afterwards.
+    spare_upgrades += upgrade_pass("abstract", respect_cap=False)
+    spare_upgrades += upgrade_pass("overview", respect_cap=False)
 
     entries = [slot.entry for slot in slots]
     tier_counts: Dict[str, int] = {}
