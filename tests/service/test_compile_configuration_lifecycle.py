@@ -307,7 +307,7 @@ async def test_output_metrics_preserve_identity_and_commit_time_on_recovery(
 
 
 @pytest.mark.parametrize(
-    "name", ["", " wiki", "wiki ", "wiki\n", "../wiki", "a/b", "a\\b", "文档", "a" * 65, None, 1]
+    "name", ["", " wiki", "wiki ", "wiki\n", "../wiki", "a/b", "a\\b", "文。", "a" * 65, None, 1]
 )
 async def test_invalid_names_are_rejected_without_storage_side_effects(setup, name):
     with pytest.raises(InvalidArgumentError):
@@ -328,7 +328,7 @@ async def test_valid_name_boundaries_are_preserved(setup, name):
 async def test_case_insensitive_storage_preserves_names_and_run_histories():
     files = CaseInsensitiveFiles()
     store = make_store(files)
-    names = ["Research", "Wiki", "research"]
+    names = ["Research", "Wiki", "research", "研发-A", "研发-a", "𠀀" * 32]
     for index, name in enumerate(names):
         record = new_record({**PARAMS, "instruction": name})
         await store.create("acme", "alice", record, compile_name=name)
@@ -352,6 +352,7 @@ async def test_case_insensitive_storage_preserves_names_and_run_histories():
         "2F",
         "61 62",
         "name_77696b69",
+        "u-00000000",
     ],
 )
 async def test_configuration_discovery_ignores_noncanonical_directories(setup, segment):

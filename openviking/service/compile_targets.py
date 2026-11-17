@@ -10,6 +10,7 @@ The external task queue groups Compile runs by account and output target for ser
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import heapq
 import json
@@ -35,7 +36,7 @@ from typing import (
 )
 from urllib.parse import quote
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, WithJsonSchema, with_config
 from typing_extensions import NotRequired, TypedDict
 
 from openviking.core.identifiers import validate_user_id
@@ -71,7 +72,32 @@ logger = get_logger(__name__)
 LOCK_TIMEOUT_SECONDS = 30.0
 ROLLBACK_LOCK_MAX_RETRIES = 60
 _ROLLBACK_LOCK_EXHAUSTED = "COMPILE_ROLLBACK_LOCK_EXHAUSTED"
-COMPILE_NAME_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$"
+# Pin the supported Unified_Ideograph ranges and 〇 so schema consumers need no Unicode property tables.
+_HAN = (
+    "〇\u3400-\u4dbf\u4e00-\u9fff\ufa0e-\ufa0f\ufa11\ufa13-\ufa14\ufa1f\ufa21\ufa23-\ufa24\ufa27-\ufa29"
+    "\U00020000-\U0002a6df\U0002a700-\U0002b739\U0002b740-\U0002b81d\U0002b820-\U0002cea1"
+    "\U0002ceb0-\U0002ebe0\U0002ebf0-\U0002ee5d\U00030000-\U0003134a\U00031350-\U000323af"
+)
+_NAME_PATTERN = (
+    r"^(?:[A-Za-z0-9_][A-Za-z0-9_-]{0,63}|"
+    rf"[A-Za-z0-9_{_HAN}][A-Za-z0-9_{_HAN}-]{{0,31}})$"
+)
+# Swagger UI applies top-level query patterns without Unicode mode. Some schema validators
+# also let $ match before a final newline, which is invalid in a configuration name.
+CompileName = Annotated[
+    str,
+    Field(strict=True, pattern=_NAME_PATTERN),
+    WithJsonSchema(
+        {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "allOf": [{"pattern": _NAME_PATTERN}],
+            "not": {"pattern": r"\n"},
+        }
+    ),
+]
+_COMPILE_NAME = TypeAdapter(CompileName)
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 GIT_RETRIES = 3
 SNAPSHOT_BUSY_SECONDS = 30.0
@@ -96,10 +122,11 @@ STATE_FIELDS = frozenset(
 
 
 def validate_compile_name(compile_name: str) -> str:
-    """Return an unchanged safe name, rejecting invalid account-scoped path segments."""
-    if not isinstance(compile_name, str) or not re.fullmatch(COMPILE_NAME_PATTERN, compile_name):
-        raise InvalidArgumentError("Invalid compile_name")
-    return compile_name
+    """Return the name unchanged or raise InvalidArgumentError."""
+    try:
+        return _COMPILE_NAME.validate_python(compile_name)
+    except ValidationError as exc:
+        raise InvalidArgumentError("Invalid compile_name") from exc
 
 
 def validate_task_id(task_id: str) -> str:
@@ -237,13 +264,21 @@ class CompileStateStore:
     def _name_segment(compile_name: str) -> str:
         """Encode case-sensitive names as lowercase filesystem path segments."""
         validate_compile_name(compile_name)
-        return compile_name.encode("ascii").hex()
+        if compile_name.isascii():
+            return compile_name.encode("ascii").hex()
+        encoded = base64.b32encode(compile_name.encode("utf-8")).decode("ascii")
+        return "u-" + encoded.rstrip("=").lower()
 
     @staticmethod
     def _segment_name(segment: str) -> Optional[str]:
         """Return the name of a canonical storage directory, or None for unrelated entries."""
         try:
-            name = bytes.fromhex(segment).decode("ascii")
+            if segment.startswith("u-"):
+                encoded = segment[2:]
+                padded = encoded + "=" * (-len(encoded) % 8)
+                name = base64.b32decode(padded, casefold=True).decode("utf-8")
+            else:
+                name = bytes.fromhex(segment).decode("ascii")
             return name if CompileStateStore._name_segment(name) == segment else None
         except (ValueError, InvalidArgumentError):
             return None
