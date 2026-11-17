@@ -8,4 +8,6 @@ export type {
   ExperienceItem,
   ExperienceOutcome,
   ExperienceTrajectory,
+  ExperienceSourceGroup,
+  ExperienceTrajectoryMessages,
 } from './types.js';

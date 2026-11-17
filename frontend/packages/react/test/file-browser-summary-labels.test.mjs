@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 
 import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
 import { useFileBrowser } from './helpers/internal-hooks.mjs';
-import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
+import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
 
 const ROOT = 'viking://';
 const DIR = 'viking://dir';
@@ -109,4 +109,38 @@ test('a non-empty server message still wins over the fallback', async () => {
 
   assert.match(api.current.previewTabs[0].levels[1].source.content, /权限不足/);
   await tree.unmount();
+});
+
+test('directory placeholders become empty summaries without removing real Markdown', async () => {
+  const placeholder =
+    '# viking://resources/team-docs [Directory abstract is not ready]';
+  let overview =
+    '# viking://resources/team-docs\n\n[Directory overview is not ready]';
+  const fetch = recordingFetch(({ path }) => {
+    if (path === '/api/v1/fs/ls') return ok([{ uri: DIR, isDir: true }]);
+    if (path === '/api/v1/content/abstract') return ok(placeholder);
+    if (path === '/api/v1/content/overview') return ok(overview);
+    return ok('');
+  });
+
+  const api = { current: undefined };
+  const Probe = probe(api);
+  const tree = await mount(
+    createElement(OpenVikingProvider, { fetch }, createElement(Probe)),
+  );
+
+  try {
+    const contents = () =>
+      api.current.previewTabs[0].levels.map(({ source }) => source.content);
+    assert.deepEqual(contents(), ['', '']);
+    overview =
+      '# viking://resources/team-docs\n\nAn upstream placeholder follows.\n\n[Directory overview is not ready]';
+    await act(async () => {
+      await api.current.actions.refresh();
+    });
+    await settle();
+    assert.deepEqual(contents(), ['', overview]);
+  } finally {
+    await tree.unmount();
+  }
 });

@@ -1,7 +1,10 @@
+import { useRef, useState } from 'react';
 import {
   ExperienceDashboard,
   type ExperienceDashboardProps,
+  type ExperienceTrajectory,
 } from '../../components/experience-dashboard/index.js';
+import { ExperienceTrajectoryDetailPane } from './experience-trajectory-detail-pane.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useExperienceDashboard } from './use-experience-dashboard.js';
@@ -24,6 +27,12 @@ export function ExperienceDashboardPane({
   refreshGeneration,
   onOpenUri,
 }: Props) {
+  const [selection, setSelection] = useState<{
+    experienceUri: string;
+    trajectory: ExperienceTrajectory;
+  }>();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const loadMessages = dataSource?.trajectoryMessages;
   const browser = useExperienceDashboard({
     uri,
     dataSource,
@@ -49,42 +58,78 @@ export function ExperienceDashboardPane({
     retry: () => void;
   }) => ({ loading: query.loading, error: query.error, onRetry: query.retry });
   return (
-    <ExperienceDashboard
-      uri={uri}
-      kind={directory ? 'directory' : 'file'}
-      locale={locale}
-      onOpenUri={onOpenUri}
-      data={{
-        experiences: browser.list.data?.items,
-        total: browser.list.data?.total,
-        outcomes: browser.outcomes.data,
-        trajectories: trajectories.data?.items,
-        trajectoryTotal: trajectories.data?.total,
-        sources: browser.sources.data,
-      }}
-      tab={browser.tab}
-      days={browser.days}
-      page={browser.page}
-      pageSize={EXPERIENCE_PAGE_SIZE}
-      startIndex={browser.page * EXPERIENCE_PAGE_SIZE}
-      hasMore={Boolean(
-        directory ? browser.list.data?.hasMore : trajectories.hasMore,
-      )}
-      loadingMore={trajectories.loadingMore}
-      states={{
-        list: status(browser.list),
-        sources: status(browser.sources),
-        outcomes: status(browser.outcomes),
-        trajectories: {
-          loading: trajectories.loading,
-          error: trajectories.error,
-          onRetry: trajectories.retry,
-        },
-      }}
-      onTabChange={browser.setTab}
-      onDaysChange={browser.setDays}
-      onPageChange={browser.setPage}
-      onLoadMore={trajectories.loadMore}
-    />
+    <>
+      <ExperienceDashboard
+        uri={uri}
+        kind={directory ? 'directory' : 'file'}
+        locale={locale}
+        onOpenUri={onOpenUri}
+        onOpenTrajectory={
+          loadMessages
+            ? (trajectory, trigger) => {
+                triggerRef.current = trigger;
+                trigger.focus({ preventScroll: true });
+                setSelection({ experienceUri: uri, trajectory });
+              }
+            : undefined
+        }
+        data={{
+          experiences: browser.list.data?.items,
+          total: directory
+            ? browser.list.data?.total
+            : browser.tests.data?.total,
+          outcomes: browser.outcomes.data,
+          trajectories: trajectories.data?.items,
+          trajectoryTotal: trajectories.data?.total,
+          sources: browser.sources.data?.items,
+          sourceGroups: browser.sources.data?.groups,
+          testMaterials:
+            !directory && dataSource?.tests
+              ? (browser.tests.data?.items ?? [])
+              : undefined,
+        }}
+        tab={browser.tab}
+        days={browser.days}
+        page={browser.page}
+        pageSize={EXPERIENCE_PAGE_SIZE}
+        startIndex={browser.page * EXPERIENCE_PAGE_SIZE}
+        hasMore={Boolean(
+          directory ? browser.list.data?.hasMore : trajectories.hasMore,
+        )}
+        loadingMore={trajectories.loadingMore}
+        states={{
+          list: status(browser.list),
+          sources: status(browser.sources),
+          tests: status(browser.tests),
+          outcomes: status(browser.outcomes),
+          trajectories: {
+            loading: trajectories.loading,
+            error: trajectories.error,
+            onRetry: trajectories.retry,
+          },
+        }}
+        onTabChange={(tab) => {
+          setSelection(undefined);
+          browser.setTab(tab);
+        }}
+        onDaysChange={browser.setDays}
+        onPageChange={browser.setPage}
+        onLoadMore={trajectories.loadMore}
+      />
+      {loadMessages &&
+      selection?.experienceUri === uri &&
+      browser.tab === 'source' ? (
+        <ExperienceTrajectoryDetailPane
+          key={selection.trajectory.uri}
+          trajectory={selection.trajectory}
+          triggerRef={triggerRef}
+          requestOptions={requestOptions}
+          loadMessages={loadMessages}
+          locale={locale}
+          onClose={() => setSelection(undefined)}
+          onOpenUri={onOpenUri}
+        />
+      ) : null}
+    </>
   );
 }

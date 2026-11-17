@@ -1,3 +1,4 @@
+import type { DirectorySummaryLabels } from './file-browser-labels.js';
 import {
   beginWorkflow,
   type Workflow,
@@ -54,7 +55,7 @@ export interface UseFsPreviewOptions {
   activeLevelKey?: string;
   onActiveLevelChange?: (key: string) => void;
   /** 目录两级摘要的标题。Titles of the two summary levels. */
-  labels?: { l0: string; l1: string; failure: string };
+  labels?: DirectorySummaryLabels;
   /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
   formatCharacterCount?: (count: number) => string;
   /**

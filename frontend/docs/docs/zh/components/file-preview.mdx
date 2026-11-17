@@ -123,6 +123,7 @@ import '@openviking/react/components/file-preview/style.css';
 | -------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ------- |
 | kind           | 页签类型，固定为 `'file'`                                                            | `'file'`                                                      | 必填    |
 | source         | 要预览的内容与文件信息，有可用的 `levels` 时渲染当前层级的 `source`                  | `FilePreviewSource`                                           | 必填    |
+| emptyLabel     | 覆盖正文为空时的默认提示。                                                           | `string`                                                      | -       |
 | loading        | 正文还在读取：正文区显示加载态，页签行和路径行照常显示，此时 `source` 可以没有内容   | `boolean`                                                     | `false` |
 | operations     | 异步执行能力，省略的方法对应的入口不可用                                             | `FilePreviewOperations`                                       | -       |
 | resources      | 伴随资源，按 `key` 匹配 Markdown 里的图片地址，可以是相对路径或 `viking://` URI      | `readonly FileViewerResource[]`                               | -       |
@@ -195,12 +196,13 @@ import '@openviking/react/components/file-preview/style.css';
 
 目录页签 `levels` 的一级摘要。
 
-| 参数      | 说明                                           | 类型                            | 默认值 |
-| --------- | ---------------------------------------------- | ------------------------------- | ------ |
-| key       | 层级的唯一标识，用于切换与受控状态             | `string`                        | 必填   |
-| label     | 层级切换页签显示的内容，例如「L0 摘要」        | `ReactNode`                     | 必填   |
-| source    | 该层级的正文来源，与文件页签的 `source` 相同   | `FilePreviewSource`             | 必填   |
-| resources | 该层级的伴随资源，省略时使用页签的 `resources` | `readonly FileViewerResource[]` | -      |
+| 参数       | 说明                                           | 类型                            | 默认值 |
+| ---------- | ---------------------------------------------- | ------------------------------- | ------ |
+| key        | 层级的唯一标识，用于切换与受控状态             | `string`                        | 必填   |
+| label      | 层级切换页签显示的内容，例如「L0 摘要」        | `ReactNode`                     | 必填   |
+| source     | 该层级的正文来源，与文件页签的 `source` 相同   | `FilePreviewSource`             | 必填   |
+| emptyLabel | 覆盖正文为空时的默认提示。                     | `string`                        | -      |
+| resources  | 该层级的伴随资源，省略时使用页签的 `resources` | `readonly FileViewerResource[]` | -      |
 
 ### FilePreviewOperations
 
