@@ -113,25 +113,40 @@ def _body(error: BaseException) -> dict[str, Any]:
         except Exception:
             value = None
     if isinstance(value, dict):
-        nested = value.get("error")
-        if isinstance(nested, dict):
-            return {**value, **nested}
         return value
     return {}
 
 
-def _error_code(error: BaseException) -> str | None:
-    body = _body(error)
-    for value in (
+def _error_codes(error: BaseException) -> list[str]:
+    values = [
         getattr(error, "error_code", None),
         getattr(error, "code", None),
-        body.get("error_code"),
-        body.get("code"),
-        body.get("type"),
-    ):
-        if isinstance(value, str) and value:
-            return value
-    return None
+        getattr(error, "type", None),
+    ]
+
+    def collect(body: object) -> None:
+        if not isinstance(body, dict):
+            return
+        # SDKs may retain the error envelope or unwrap it. Inspect both without
+        # flattening away codes, and only descend into known error containers.
+        collect(body.get("error"))
+        values.extend(body.get(field) for field in ("error_code", "code", "type"))
+        # Azure OpenAI exposes the specific policy code in innererror.code.
+        collect(body.get("innererror"))
+
+    collect(_body(error))
+    # OpenAI's SDK unwraps `error` into .body; the response retains outer codes.
+    response = getattr(error, "response", None)
+    if response is not None:
+        try:
+            collect(response.json())
+        except Exception:
+            pass
+    return [value for value in values if isinstance(value, str) and value]
+
+
+def _error_code(error: BaseException) -> str | None:
+    return next(iter(_error_codes(error)), None)
 
 
 def _status_code(error: BaseException) -> int | None:
@@ -163,9 +178,10 @@ def _structured_reasons(value: object) -> set[str]:
 
 
 def _kind_from_code(error: BaseException) -> ModelErrorKind | None:
-    normalized = _normalized_code(_error_code(error))
-    if normalized in _CODE_KINDS:
-        return _CODE_KINDS[normalized]
+    for code in _error_codes(error):
+        normalized = _normalized_code(code)
+        if normalized in _CODE_KINDS:
+            return _CODE_KINDS[normalized]
 
     details = getattr(error, "details", None)
     reasons = _structured_reasons(details)
@@ -224,7 +240,11 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
         if kind is None and _status_code(error) == 500:
             # llama.cpp reports inputs above its physical batch capacity as
             # HTTP 500 without a business code. Retrying the same input cannot help.
-            message = _body(error).get("message")
+            body = _body(error)
+            nested = body.get("error")
+            message = body.get("message")
+            if isinstance(nested, dict):
+                message = nested.get("message", message)
             if isinstance(message, str) and re.fullmatch(
                 r"input \(\d+ tokens\) is too large to process\. "
                 r"increase the physical batch size \(current batch size: \d+\)",
