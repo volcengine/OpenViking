@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
 
-from openviking.models.model_error import model_error_kind
+from openviking.models.model_error import ModelError, ModelErrorKind, model_error_kind
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
@@ -69,6 +69,9 @@ class VLMResponse:
     def __str__(self) -> str:
         """String representation for backward compatibility - returns content."""
         return self.content or ""
+
+
+_CONTENT_FILTER_FINISH_REASONS = frozenset({"content_filter", "sensitive"})
 
 
 class VLMBase(ABC):
@@ -348,9 +351,39 @@ class VLMBase(ABC):
     def close(self) -> None:
         """Release provider resources, if any."""
 
+    def _raise_if_content_rejected(self, response) -> None:
+        """Raise when a provider delivers a moderation block as a successful completion.
+
+        OpenAI-compatible APIs end a blocked completion with finish_reason
+        "content_filter" (OpenAI, Azure, Gemini) or "sensitive" (Zhipu GLM), or
+        return message.refusal instead of content. Partial output is kept.
+        """
+        choices = getattr(response, "choices", None)
+        if not choices:
+            return
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        if getattr(message, "content", None) or getattr(message, "tool_calls", None):
+            return
+        refusal = getattr(message, "refusal", None)
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason in _CONTENT_FILTER_FINISH_REASONS:
+            message_text, code = (
+                f"model output blocked (finish_reason={finish_reason})",
+                finish_reason,
+            )
+        elif refusal:
+            message_text, code = refusal, "refusal"
+        else:
+            return
+        raise ModelError(
+            ModelErrorKind.CONTENT_SAFETY, message_text, provider=self.provider, code=code
+        )
+
     def _extract_content_from_response(self, response) -> str:
         if isinstance(response, str):
             return response
+        self._raise_if_content_rejected(response)
         return response.choices[0].message.content or ""
 
 
@@ -432,6 +465,45 @@ def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
         pass
 
 
+class _ContentSafetyDetour:
+    """Per-request state for routing around a content-safety rejection.
+
+    Moderation verdicts belong to a provider route (provider, endpoint, model),
+    not to the request: another vendor or model may accept the same input.
+    After a rejection, only credentials on routes that have not rejected the
+    request are tried, the active credential is left unchanged, and the first
+    rejection is re-raised when no other route serves the request.
+    """
+
+    def __init__(self) -> None:
+        self.error: BaseException | None = None
+        self._rejected_routes: set[tuple[Any, ...]] = set()
+
+    @staticmethod
+    def route(vlm: VLMBase) -> tuple[Any, ...]:
+        return (vlm.provider, vlm.api_base, vlm.model)
+
+    @property
+    def active(self) -> bool:
+        return self.error is not None
+
+    def skips(self, vlm: VLMBase) -> bool:
+        return self.active and self.route(vlm) in self._rejected_routes
+
+    def absorb(self, error: BaseException, kind: ModelErrorKind | None, vlm: VLMBase) -> bool:
+        """Return True when the failure is handled by continuing the detour."""
+        if kind is ModelErrorKind.CONTENT_SAFETY:
+            self._rejected_routes.add(self.route(vlm))
+            if self.error is None:
+                self.error = error
+            return True
+        return self.active
+
+    def raise_if_active(self) -> None:
+        if self.error is not None:
+            raise self.error
+
+
 class FailoverVLM(VLMBase):
     """VLM wrapper that provides failover to a backup VLM instance.
 
@@ -473,6 +545,15 @@ class FailoverVLM(VLMBase):
     def tool_result_media_mode(self) -> ToolResultMediaMode | None:
         return _common_tool_result_media_mode([self.primary, self.backup])
 
+    def _detours_to_backup(self, error: BaseException) -> bool:
+        """Whether a primary content-safety rejection should be retried on the backup.
+
+        The detour serves one request and does not switch the active backend.
+        """
+        return model_error_kind(error) is ModelErrorKind.CONTENT_SAFETY and (
+            _ContentSafetyDetour.route(self.primary) != _ContentSafetyDetour.route(self.backup)
+        )
+
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
 
@@ -487,7 +568,7 @@ class FailoverVLM(VLMBase):
         Raises:
             The last exception encountered if both primary and backup fail
         """
-        last_error = None
+        rejection = None
 
         # Try primary if we should
         if self._switcher.should_try_primary():
@@ -498,10 +579,11 @@ class FailoverVLM(VLMBase):
                 return result
             except Exception as e:
                 _annotate_vlm_error(e, self.primary)
-                last_error = e
                 if self._switcher.record_primary_failure(e):
                     # Switched to backup, continue to try backup
                     pass
+                elif self._detours_to_backup(e):
+                    rejection = e
                 else:
                     # Not a failover-worthy error, re-raise
                     raise
@@ -513,8 +595,9 @@ class FailoverVLM(VLMBase):
             return method(*args, **kwargs)
         except Exception as e:
             _annotate_vlm_error(e, self.backup)
-            last_error = e
-            raise last_error
+            if rejection is None:
+                raise
+        raise rejection
 
     async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
         """Execute an async VLM method with failover support.
@@ -530,7 +613,7 @@ class FailoverVLM(VLMBase):
         Raises:
             The last exception encountered if both primary and backup fail
         """
-        last_error = None
+        rejection = None
 
         # Try primary if we should
         if self._switcher.should_try_primary():
@@ -541,10 +624,11 @@ class FailoverVLM(VLMBase):
                 return result
             except Exception as e:
                 _annotate_vlm_error(e, self.primary)
-                last_error = e
                 if self._switcher.record_primary_failure(e):
                     # Switched to backup, continue to try backup
                     pass
+                elif self._detours_to_backup(e):
+                    rejection = e
                 else:
                     # Not a failover-worthy error, re-raise
                     raise
@@ -556,8 +640,9 @@ class FailoverVLM(VLMBase):
             return await method(*args, **kwargs)
         except Exception as e:
             _annotate_vlm_error(e, self.backup)
-            last_error = e
-            raise last_error
+            if rejection is None:
+                raise
+        raise rejection
 
     async def stream_with_failover(
         self,
@@ -569,7 +654,7 @@ class FailoverVLM(VLMBase):
         backend would duplicate visible output.  Errors after that point are
         therefore propagated to the caller instead of triggering failover.
         """
-        last_error = None
+        rejection = None
 
         if self._switcher.should_try_primary():
             emitted = False
@@ -581,9 +666,12 @@ class FailoverVLM(VLMBase):
                 return
             except Exception as exc:
                 _annotate_vlm_error(exc, self.primary)
-                last_error = exc
-                if emitted or not self._switcher.record_primary_failure(exc):
+                if emitted:
                     raise
+                if not self._switcher.record_primary_failure(exc):
+                    if not self._detours_to_backup(exc):
+                        raise
+                    rejection = exc
 
         emitted = False
         try:
@@ -594,8 +682,9 @@ class FailoverVLM(VLMBase):
             return
         except Exception as exc:
             _annotate_vlm_error(exc, self.backup)
-            last_error = exc
-            raise last_error
+            if emitted or rejection is None:
+                raise
+        raise rejection
 
     def get_completion(
         self,
@@ -719,6 +808,7 @@ class FailoverVLM(VLMBase):
             size_bytes=size_bytes,
         )
         last_error = None
+        rejection = None
 
         if primary_supported and (not backup_supported or self._switcher.should_try_primary()):
             try:
@@ -728,8 +818,12 @@ class FailoverVLM(VLMBase):
             except Exception as error:
                 _annotate_vlm_error(error, self.primary)
                 last_error = error
-                if not backup_supported or not self._switcher.record_primary_failure(error):
+                if not backup_supported:
                     raise
+                if not self._switcher.record_primary_failure(error):
+                    if not self._detours_to_backup(error):
+                        raise
+                    rejection = error
 
         if backup_supported:
             try:
@@ -737,7 +831,9 @@ class FailoverVLM(VLMBase):
                 return await self.backup.get_media_completion_async(**kwargs)
             except Exception as error:
                 _annotate_vlm_error(error, self.backup)
-                raise
+                if rejection is None:
+                    raise
+            raise rejection
 
         if last_error is not None:
             raise last_error
@@ -856,6 +952,15 @@ class MultiCredentialVLM(VLMBase):
     def tool_result_media_mode(self) -> ToolResultMediaMode | None:
         return _common_tool_result_media_mode(self._vlm_instances)
 
+    def _log_detour(self, idx: int, kind: ModelErrorKind | None) -> None:
+        self._logger.info(
+            "vlm credential rejected the request; trying a different model route "
+            "credential_index=%d error_code=%s",
+            idx,
+            kind.value if kind else "none",
+            extra={"error_code": kind.value if kind else None},
+        )
+
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with multi-credential failover support.
 
@@ -871,6 +976,7 @@ class MultiCredentialVLM(VLMBase):
             AllCredentialsFailedError if all credentials fail
         """
         aggregated_errors = []
+        detour = _ContentSafetyDetour()
 
         # Start from the current (possibly failed-back) active credential, then
         # cycle through the whole ring once. This means an unavailable active
@@ -886,19 +992,25 @@ class MultiCredentialVLM(VLMBase):
             credential_id = self._credential_ids[idx]
             vlm_instance = self._vlm_instances[idx]
 
+            if detour.skips(vlm_instance):
+                continue
             try:
                 method = getattr(vlm_instance, method_name)
                 result = method(*args, **kwargs)
-                self._switcher.commit_success(idx)
+                if not detour.active:
+                    self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
                 kind = model_error_kind(exc)
+                if detour.absorb(exc, kind, vlm_instance):
+                    self._log_detour(idx, kind)
+                    continue
 
                 if self._switcher.is_fail_fast(kind):
-                    # Request-level failure (400 / input too large / content
-                    # safety): re-raise the original exception so callers can
-                    # react to its type; trying other credentials is useless.
+                    # Request-level failure (400 / input too large): re-raise
+                    # the original exception so callers can react to its type;
+                    # trying other credentials is useless.
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
 
@@ -911,6 +1023,7 @@ class MultiCredentialVLM(VLMBase):
                     extra={"error_code": kind.value},
                 )
 
+        detour.raise_if_active()
         raise AllCredentialsFailedError(aggregated_errors)
 
     async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
@@ -928,6 +1041,7 @@ class MultiCredentialVLM(VLMBase):
             AllCredentialsFailedError if all credentials fail
         """
         aggregated_errors = []
+        detour = _ContentSafetyDetour()
 
         # See the sync variant for the ring-traversal rationale.
         start = self._switcher.maybe_failback()
@@ -938,14 +1052,20 @@ class MultiCredentialVLM(VLMBase):
             credential_id = self._credential_ids[idx]
             vlm_instance = self._vlm_instances[idx]
 
+            if detour.skips(vlm_instance):
+                continue
             try:
                 method = getattr(vlm_instance, method_name)
                 result = await method(*args, **kwargs)
-                self._switcher.commit_success(idx)
+                if not detour.active:
+                    self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
                 kind = model_error_kind(exc)
+                if detour.absorb(exc, kind, vlm_instance):
+                    self._log_detour(idx, kind)
+                    continue
 
                 if self._switcher.is_fail_fast(kind):
                     # Request-level failure: re-raise the original exception;
@@ -962,6 +1082,7 @@ class MultiCredentialVLM(VLMBase):
                     extra={"error_code": kind.value},
                 )
 
+        detour.raise_if_active()
         raise AllCredentialsFailedError(aggregated_errors)
 
     async def stream_with_failover(
@@ -975,6 +1096,7 @@ class MultiCredentialVLM(VLMBase):
         already delivered output, so subsequent errors fail the request.
         """
         aggregated_errors = []
+        detour = _ContentSafetyDetour()
         start = self._switcher.maybe_failback()
         n = self._switcher.n
 
@@ -983,12 +1105,15 @@ class MultiCredentialVLM(VLMBase):
             credential_id = self._credential_ids[idx]
             vlm_instance = self._vlm_instances[idx]
             emitted = False
+            if detour.skips(vlm_instance):
+                continue
 
             try:
                 async for item in stream_factory(vlm_instance):
                     emitted = True
                     yield item
-                self._switcher.commit_success(idx)
+                if not detour.active:
+                    self._switcher.commit_success(idx)
                 return
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
@@ -996,6 +1121,9 @@ class MultiCredentialVLM(VLMBase):
                     raise
 
                 kind = model_error_kind(exc)
+                if detour.absorb(exc, kind, vlm_instance):
+                    self._log_detour(idx, kind)
+                    continue
                 if self._switcher.is_fail_fast(kind):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
@@ -1008,6 +1136,7 @@ class MultiCredentialVLM(VLMBase):
                     extra={"error_code": kind.value},
                 )
 
+        detour.raise_if_active()
         raise AllCredentialsFailedError(aggregated_errors)
 
     def get_completion(
@@ -1119,6 +1248,7 @@ class MultiCredentialVLM(VLMBase):
         errors = []
         attempted = False
         active_credential_failed = False
+        detour = _ContentSafetyDetour()
 
         for offset in range(self._switcher.n):
             idx = (start + offset) % self._switcher.n
@@ -1130,6 +1260,8 @@ class MultiCredentialVLM(VLMBase):
             ):
                 continue
 
+            if detour.skips(vlm):
+                continue
             attempted = True
             credential_id = self._credential_ids[idx]
             try:
@@ -1141,7 +1273,7 @@ class MultiCredentialVLM(VLMBase):
                 )
                 # Capability routing alone must not change the credential used
                 # by text and vision calls.
-                if idx == start or active_credential_failed:
+                if (idx == start or active_credential_failed) and not detour.active:
                     self._switcher.commit_success(idx)
                 return result
             except Exception as error:
@@ -1149,6 +1281,9 @@ class MultiCredentialVLM(VLMBase):
                 kind = model_error_kind(error)
                 if idx == start:
                     active_credential_failed = True
+                if detour.absorb(error, kind, vlm):
+                    self._log_detour(idx, kind)
+                    continue
                 if self._switcher.is_fail_fast(kind):
                     raise
                 errors.append((credential_id, kind, error, idx))
@@ -1159,6 +1294,7 @@ class MultiCredentialVLM(VLMBase):
                     extra={"error_code": kind.value},
                 )
 
+        detour.raise_if_active()
         if attempted:
             raise AllCredentialsFailedError(errors)
         raise UnsupportedMediaInputError(

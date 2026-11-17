@@ -451,6 +451,7 @@ class LiteLLMVLMProvider(VLMBase):
         if isinstance(response, str):
             return VLMResponse(content=response) if has_tools else response
 
+        self._raise_if_content_rejected(response)
         choice = response.choices[0]
         message = choice.message
 

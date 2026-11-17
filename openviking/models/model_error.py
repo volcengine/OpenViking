@@ -76,6 +76,10 @@ _CODE_KINDS = {
     "CONTENTFILTER": ModelErrorKind.CONTENT_SAFETY,
     "CONTENTPOLICYVIOLATION": ModelErrorKind.CONTENT_SAFETY,
     "SAFETY": ModelErrorKind.CONTENT_SAFETY,
+    # OpenAI moderation block, Azure inner code, Alibaba Model Studio moderation.
+    "INVALIDPROMPT": ModelErrorKind.CONTENT_SAFETY,
+    "RESPONSIBLEAIPOLICYVIOLATION": ModelErrorKind.CONTENT_SAFETY,
+    "DATAINSPECTIONFAILED": ModelErrorKind.CONTENT_SAFETY,
     "MODELNOTFOUND": ModelErrorKind.MODEL_NOT_FOUND,
     "INVALIDMODEL": ModelErrorKind.MODEL_NOT_FOUND,
     "INVALIDENDPOINTORMODELNOTFOUND": ModelErrorKind.MODEL_NOT_FOUND,
@@ -120,18 +124,51 @@ def _body(error: BaseException) -> dict[str, Any]:
     return {}
 
 
-def _error_code(error: BaseException) -> str | None:
+def _error_codes(error: BaseException) -> list[str]:
     body = _body(error)
-    for value in (
-        getattr(error, "error_code", None),
-        getattr(error, "code", None),
-        body.get("error_code"),
-        body.get("code"),
-        body.get("type"),
+    inner = body.get("innererror")
+    return [
+        value
+        for value in (
+            getattr(error, "error_code", None),
+            getattr(error, "code", None),
+            body.get("error_code"),
+            body.get("code"),
+            body.get("type"),
+            inner.get("code") if isinstance(inner, dict) else None,
+        )
+        if isinstance(value, str) and value
+    ]
+
+
+def _error_code(error: BaseException) -> str | None:
+    codes = _error_codes(error)
+    return codes[0] if codes else None
+
+
+def _is_content_safety_rejection(error: BaseException, normalized_codes: list[str]) -> bool:
+    # Volcengine Ark: SensitiveContentDetected[.<Reason>] and
+    # {Input,Output}{Text,Image,Video,Audio}SensitiveContentDetected[.<Reason>].
+    if any("SENSITIVECONTENTDETECTED" in code for code in normalized_codes):
+        return True
+    body = _body(error)
+    # Zhipu GLM attaches a top-level contentFilter list to moderation rejections
+    # (business code 1301); the numeric code alone is not unique across vendors.
+    # SDKs such as openai keep only the nested "error" object in error.body.
+    response = getattr(error, "response", None)
+    try:
+        raw = response.json() if response is not None else None
+    except Exception:
+        raw = None
+    if any(
+        isinstance(item, dict) and isinstance(item.get("contentFilter"), list)
+        for item in (body, raw)
     ):
-        if isinstance(value, str) and value:
-            return value
-    return None
+        return True
+    # DeepSeek reports moderation as a generic invalid_request_error whose only
+    # distinguishing field is this exact message.
+    message = body.get("message")
+    return isinstance(message, str) and message.strip() == "Content Exists Risk"
 
 
 def _status_code(error: BaseException) -> int | None:
@@ -163,9 +200,14 @@ def _structured_reasons(value: object) -> set[str]:
 
 
 def _kind_from_code(error: BaseException) -> ModelErrorKind | None:
-    normalized = _normalized_code(_error_code(error))
-    if normalized in _CODE_KINDS:
-        return _CODE_KINDS[normalized]
+    normalized_codes = [
+        code for code in map(_normalized_code, _error_codes(error)) if code is not None
+    ]
+    for normalized in normalized_codes:
+        if normalized in _CODE_KINDS:
+            return _CODE_KINDS[normalized]
+    if _is_content_safety_rejection(error, normalized_codes):
+        return ModelErrorKind.CONTENT_SAFETY
 
     details = getattr(error, "details", None)
     reasons = _structured_reasons(details)
