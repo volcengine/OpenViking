@@ -3,12 +3,13 @@
 /**
  * Client-side diagnostics for the config-driven hook hosts.
  *
- * Cursor, TRAE, TRAE CN and ZCode are installed by writing into the host's own
- * configuration files rather than through a plugin marketplace, so what can go
- * wrong is different from Claude Code's and Codex's: the host config may have
- * lost the OpenViking entries, the assembled runtime beside the integration may
- * be missing or stale, or the client may simply never have been installed. The
- * configuration and connection sections are the ones every harness shares.
+ * Antigravity, Cursor, TRAE, TRAE CN and ZCode are installed by writing into
+ * the host's own configuration files or plugin directory rather than through a
+ * marketplace, so what can go wrong is different from Claude Code's and
+ * Codex's: the host config may have lost the OpenViking entries, the assembled
+ * runtime beside the integration may be missing or stale, or the client may
+ * simply never have been installed. The configuration and connection sections
+ * are the ones every harness shares.
  *
  * Usage:
  *   node ov-memory-doctor.mjs [<client>] [--json] [--offline] [--timeout <ms>] [--no-color]
@@ -54,6 +55,20 @@ const REQUIRED_PLUGIN_FILES = ["plugin.json", "scripts/hook.mjs", "scripts/uri-g
  * it.
  */
 const CLIENTS = {
+  antigravity: {
+    cliName: "agy",
+    launcherHint: "Antigravity",
+    hooks: () => join(homedir(), ".gemini", "config", "plugins", "openviking-memory", "hooks.json"),
+    mcp: () => join(homedir(), ".gemini", "config", "mcp_config.json"),
+    mcpOptional: true,
+    extras: () => [
+      join(homedir(), ".gemini", "config", "plugins", "openviking-memory", "plugin.json"),
+    ],
+    extractHookEvents: (data) => {
+      const group = data?.["openviking-memory"];
+      return group && typeof group === "object" && !Array.isArray(group) ? Object.keys(group) : [];
+    },
+  },
   cursor: {
     cliName: "cursor",
     launcherHint: "Cursor",
@@ -107,6 +122,22 @@ function hookStateDir() {
   return join(root, CLIENT);
 }
 
+function extractHookScripts(value, found = new Set()) {
+  if (typeof value === "string") {
+    for (const match of value.matchAll(/'([^']*\.mjs)'|"([^"]*\.mjs)"|(?:^|\s)([^\s'"]+\.mjs)(?=\s|$)/gu)) {
+      const script = match[1] || match[2] || match[3];
+      if (script) found.add(script);
+    }
+    return found;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) extractHookScripts(item, found);
+  } else if (value && typeof value === "object") {
+    for (const item of Object.values(value)) extractHookScripts(item, found);
+  }
+  return found;
+}
+
 function checkInstall(report) {
   report.section("Plugin install");
   const manifest = tryJson(join(PLUGIN_ROOT, "plugin.json"));
@@ -137,15 +168,17 @@ function checkInstall(report) {
   else if (!hooks.ok) report.fail(`${homeShort(hooksPath)} cannot be parsed`, hooks.error, "fix the JSON; the installer refuses to overwrite a file it cannot read");
   else {
     const text = JSON.stringify(hooks.data);
-    const events = Object.keys(hooks.data.hooks?.events || hooks.data.hooks || {});
-    if (!text.includes("OPENVIKING_INTEGRATION_ID")) report.fail(`${homeShort(hooksPath)} has no OpenViking hooks`, `events present: ${events.join(", ") || "(none)"}`, `re-run the installer with --harness ${CLIENT}`);
+    const events = SPEC.extractHookEvents
+      ? SPEC.extractHookEvents(hooks.data)
+      : Object.keys(hooks.data.hooks?.events || hooks.data.hooks || {});
+    const hasHookMarker = text.includes("OPENVIKING_INTEGRATION_ID") || text.includes("scripts/hook.mjs");
+    if (!hasHookMarker) report.fail(`${homeShort(hooksPath)} has no OpenViking hooks`, `events present: ${events.join(", ") || "(none)"}`, `re-run the installer with --harness ${CLIENT}`);
     else {
-      report.ok(`hooks in ${homeShort(hooksPath)}: ${events.join(", ")}`);
+      report.ok(`hooks in ${homeShort(hooksPath)}: ${events.join(", ") || "(none)"}`);
       if (!text.includes("scripts/hook.mjs")) report.warn("the installed hook commands do not name scripts/hook.mjs", "they were written by an older installer", "re-run the installer");
       if (CLIENT === "zcode" && hooks.data.hooks?.enabled !== true) report.fail("ZCode's hook runner is off", "config.json has hooks.enabled != true, so no hook fires", "re-run the installer, or set hooks.enabled = true");
     }
-    for (const command of String(text).match(/'([^']*\.mjs)'/gu) || []) {
-      const script = command.slice(1, -1);
+    for (const script of extractHookScripts(hooks.data)) {
       if (!existsPath(script)) report.fail("an installed hook names a script that is not on disk", script, "re-run the installer");
     }
   }
@@ -153,15 +186,25 @@ function checkInstall(report) {
   const mcpPath = SPEC.mcp();
   const mcp = inspectJsonFile(mcpPath);
   const server = mcp.ok ? (mcp.data.mcpServers?.openviking || mcp.data.mcp?.servers?.openviking) : null;
-  if (!mcp.exists) report.warn(`${homeShort(mcpPath)} not found`, "the MCP memory tools are not wired up", `re-run the installer with --harness ${CLIENT}`);
-  else if (!mcp.ok) report.fail(`${homeShort(mcpPath)} cannot be parsed`, mcp.error, "fix the JSON");
-  else if (!server) report.fail(`no 'openviking' MCP server in ${homeShort(mcpPath)}`, "", `re-run the installer with --harness ${CLIENT}`);
-  else {
+  const mcpFix = SPEC.mcpOptional
+    ? `configure the 'openviking' MCP server manually in ${homeShort(mcpPath)} if you want the agent to search memory directly`
+    : `re-run the installer with --harness ${CLIENT}`;
+  if (!mcp.exists) {
+    report[SPEC.mcpOptional ? "info" : "warn"](`${homeShort(mcpPath)} not found`, "the MCP memory tools are not wired up", mcpFix);
+  } else if (!mcp.ok) {
+    report.fail(`${homeShort(mcpPath)} cannot be parsed`, mcp.error, "fix the JSON");
+  } else if (!server) {
+    report[SPEC.mcpOptional ? "info" : "fail"](
+      `no 'openviking' MCP server in ${homeShort(mcpPath)}`,
+      SPEC.mcpOptional ? "the installer leaves Antigravity MCP configuration manual" : "",
+      mcpFix,
+    );
+  } else {
     report.ok(`MCP server 'openviking' in ${homeShort(mcpPath)}`);
     const proxy = Array.isArray(server.args) ? server.args.find((arg) => String(arg).endsWith("mcp-proxy.mjs")) : "";
-    if (proxy && !existsPath(proxy)) report.fail("the MCP server points at a proxy that is not on disk", proxy, "re-run the installer");
+    if (proxy && !existsPath(proxy)) report.fail("the MCP server points at a proxy that is not on disk", proxy, mcpFix);
     if (server.env?.OPENVIKING_HOOK_SOURCE && server.env.OPENVIKING_HOOK_SOURCE !== CLIENT) {
-      report.warn(`the MCP server is tagged for ${server.env.OPENVIKING_HOOK_SOURCE}`, `this copy serves ${CLIENT}; the proxy reads its configuration under the tagged client`, "re-run the installer");
+      report.warn(`the MCP server is tagged for ${server.env.OPENVIKING_HOOK_SOURCE}`, `this copy serves ${CLIENT}; the proxy reads its configuration under the tagged client`, mcpFix);
     }
   }
 
@@ -208,7 +251,10 @@ function checkActivity(report, cfg, connection) {
   if (states.length) {
     const newest = states[0];
     report.info(`${states.length} session state file(s) in ${homeShort(dir)}; newest ${fmtAge(newest.mtimeMs)}`);
-    const captured = states.filter((state) => (state.data?.capturedHashes?.length || state.data?.capturedTurnIds?.length || 0) > 0);
+    const captured = states.filter((state) => (
+      (state.data?.capturedHashes?.length || state.data?.capturedTurnIds?.length || 0) > 0
+      || (Number.isInteger(state.data?.lastStep) && state.data.lastStep >= 0)
+    ));
     if (states.length > 3 && !captured.length) {
       report.warn("no session has ever captured a turn", "the Stop hook runs but never appends messages", "check the Connection section; set OPENVIKING_DEBUG=1 and read the hook log");
     }
