@@ -28,15 +28,14 @@ def test_store_and_delegate_share_watch_credential_classification(auth_state, ex
 
 
 def test_watch_auth_classification_does_not_import_connector_service():
+    script = """
+import sys
+from openviking.connector.watch_auth import is_watch_auth_state
+assert is_watch_auth_state({'provider': 'connector_encrypted'})
+assert 'openviking.connector.delegate' not in sys.modules
+"""
     result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; "
-            "from openviking.connector.watch_auth import is_watch_auth_state; "
-            "assert is_watch_auth_state({'provider': 'connector_encrypted'}); "
-            "assert 'openviking.connector.delegate' not in sys.modules",
-        ],
+        [sys.executable, "-c", script],
         capture_output=True,
         text=True,
         timeout=20,
