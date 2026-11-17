@@ -15,6 +15,7 @@ const config = defineConfig({
   resolve: {
     // Ark's file viewer is loaded from the sibling frontend workspace.
     // Keep its optimized dependencies on the same React runtime as Studio.
+    dedupe: ['react', 'react-dom'],
     alias: {
       react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
       'react-dom': fileURLToPath(
