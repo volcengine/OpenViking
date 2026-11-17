@@ -376,10 +376,10 @@ async def _rollback_account_creation(
         try:
             await deletion_service.delete_now(account_id, actor=actor)
             return
-        except Exception:
-            logger.exception(
-                "Synchronous account cleanup failed for %s; durable deletion remains queued",
-                account_id,
+        except Exception as exc:
+            logger.info(
+                "Synchronous account cleanup failed; durable deletion remains queued",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
             )
             return
 
@@ -388,13 +388,19 @@ async def _rollback_account_creation(
         await service.release_account_vector_resources(account_id)
     except Exception as exc:
         rollback_errors.append(exc)
-        logger.exception("Failed to release vector resources for account %s", account_id)
+        logger.debug(
+            "Account rollback vector resource release failed",
+            extra={"account_id": account_id, "error_type": type(exc).__name__},
+        )
     if runtime_config is not None:
         try:
             await runtime_config.delete_account(account_id)
         except Exception as exc:
             rollback_errors.append(exc)
-            logger.exception("Failed to roll back runtime config for account %s", account_id)
+            logger.debug(
+                "Account rollback runtime config cleanup failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     viking_fs = getattr(service, "viking_fs", None)
     agfs = getattr(viking_fs, "_async_agfs", None)
@@ -403,19 +409,28 @@ async def _rollback_account_creation(
             await agfs.rm(f"/local/{account_id}", recursive=True)
         except Exception as exc:
             rollback_errors.append(exc)
-            logger.exception("Failed to roll back workspace for account %s", account_id)
+            logger.debug(
+                "Account rollback workspace cleanup failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     try:
         await manager.delete_account(account_id)
     except Exception as exc:
         rollback_errors.append(exc)
-        logger.exception("Failed to roll back account registry entry for %s", account_id)
+        logger.debug(
+            "Account rollback registry cleanup failed",
+            extra={"account_id": account_id, "error_type": type(exc).__name__},
+        )
 
     if rollback_errors:
         logger.error(
-            "Account creation rollback for %s completed with %d error(s)",
-            account_id,
-            len(rollback_errors),
+            "Account creation rollback incomplete",
+            extra={
+                "account_id": account_id,
+                "failed": len(rollback_errors),
+                "error_type": type(rollback_errors[0]).__name__,
+            },
         )
 
 

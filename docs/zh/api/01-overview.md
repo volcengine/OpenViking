@@ -408,6 +408,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/skills/find` | 搜索技能 |
 | POST | `/api/v1/skills/validate` | 校验技能数据 |
 | GET | `/api/v1/skills/{skill_name}` | 获取技能 |
+| GET | `/api/v1/skills/{skill_name}/audit` | 查询技能归属和修改历史 |
 | PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
 | DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
 

@@ -9,23 +9,24 @@ and mapping claims to OpenViking identities.
 from __future__ import annotations
 
 import asyncio
-import logging
 import sys
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import Request
 
 from openviking.core.identifiers import validate_account_id, validate_user_id
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.auth.identity_mapping import IdentityMapper
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import UnauthenticatedError
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from jose.backends.base import Key
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _check_jwt_available() -> bool:
@@ -40,7 +41,7 @@ def _check_jwt_available() -> bool:
             from jose.exceptions import ExpiredSignatureError, JWTClaimsError  # noqa: F401
             _check_jwt_available._cached = True
         except ImportError:
-            logger.warning(
+            logger.error(
                 "JWT libraries not available. OIDC authentication will not work. "
                 "Install with: uv pip install python-jose[cryptography] httpx"
             )
@@ -103,15 +104,12 @@ class OIDCAuthPlugin(AuthPlugin):
         # Validate token and get claims
         try:
             claims = await self._validate_token(token)
-            # Log available claims (safely - don't log sensitive values)
-            logger.debug("Available claims from token: %s", list(claims.keys()))
-            # Log a safe subset of claims for debugging
-            safe_claims = ["iss", "sub", "aud", "exp", "iat", "azp", "kid"]
-            for claim in safe_claims:
-                if claim in claims:
-                    logger.debug("Claim '%s': %s", claim, claims[claim])
+            logger.debug("OIDC token validated", extra={"total": len(claims)})
         except (JWTError, UnauthenticatedError) as e:
-            logger.debug("Token validation failed: %s", e)
+            logger.info(
+                "OIDC token rejected",
+                extra={"error_type": type(e).__name__, "error_code": "UNAUTHENTICATED"},
+            )
             raise UnauthenticatedError(f"Invalid OIDC token: {e}") from e
 
         # Map claims to OpenViking identity.
@@ -127,7 +125,10 @@ class OIDCAuthPlugin(AuthPlugin):
             if validation_error:
                 raise ValueError(validation_error)
         except ValueError as e:
-            logger.error("Failed to map claims: %s", e)
+            logger.info(
+                "OIDC identity mapping rejected",
+                extra={"error_type": type(e).__name__, "error_code": "UNAUTHENTICATED"},
+            )
             raise UnauthenticatedError(
                 f"Failed to map OIDC identity: {e} "
                 "Configure identity claims that produce valid OpenViking IDs; "
@@ -135,10 +136,8 @@ class OIDCAuthPlugin(AuthPlugin):
             ) from e
 
         logger.debug(
-            "Successfully authenticated OIDC user: account=%s, user=%s, role=%s",
-            account_id,
-            user_id,
-            Role.USER,
+            "OIDC identity authenticated",
+            extra={"account_id": account_id, "user_id": user_id, "role": Role.USER},
         )
 
         return ResolvedIdentity(role=Role.USER, account_id=account_id, user_id=user_id)
@@ -243,14 +242,22 @@ class OIDCAuthPlugin(AuthPlugin):
                 return self._jwks_uri
 
             discovery_url = f"{self._config.issuer.rstrip('/')}{_DISCOVERY_PATH}"
-            logger.info("Performing OIDC discovery at %s", discovery_url)
+            logger.info(
+                "OIDC discovery started", extra={"target_id": safe_uri_for_log(discovery_url)}
+            )
             try:
                 async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:
                     response = await client.get(discovery_url)
                     response.raise_for_status()
                     metadata = response.json()
             except (httpx.HTTPError, ValueError) as e:
-                logger.error("OIDC discovery failed for %s: %s", discovery_url, e)
+                logger.error(
+                    "OIDC discovery failed",
+                    extra={
+                        "target_id": safe_uri_for_log(discovery_url),
+                        "error_type": type(e).__name__,
+                    },
+                )
                 raise UnauthenticatedError(
                     f"Failed to fetch OIDC discovery document from {discovery_url}: {e}"
                 ) from e
@@ -258,14 +265,14 @@ class OIDCAuthPlugin(AuthPlugin):
             jwks_uri = metadata.get("jwks_uri")
             if not jwks_uri or not isinstance(jwks_uri, str):
                 logger.error(
-                    "OIDC discovery document at %s did not contain a jwks_uri",
-                    discovery_url,
+                    "OIDC discovery document is missing jwks_uri",
+                    extra={"target_id": safe_uri_for_log(discovery_url)},
                 )
                 raise UnauthenticatedError(
                     "OIDC discovery document is missing 'jwks_uri'"
                 )
 
-            logger.info("OIDC discovery resolved jwks_uri=%s", jwks_uri)
+            logger.info("OIDC discovery completed", extra={"target_id": safe_uri_for_log(jwks_uri)})
             self._jwks_uri = jwks_uri
             return jwks_uri
 
@@ -286,19 +293,28 @@ class OIDCAuthPlugin(AuthPlugin):
                 response.raise_for_status()
                 jwks = response.json()
         except (httpx.HTTPError, ValueError) as e:
-            logger.error("Failed to fetch JWKS from %s: %s", jwks_uri, e)
+            logger.error(
+                "OIDC signing key fetch failed",
+                extra={"target_id": safe_uri_for_log(jwks_uri), "error_type": type(e).__name__},
+            )
             raise UnauthenticatedError("Failed to fetch JWKS") from e
 
         # Process keys and cache them
+        failed_keys = 0
         for key_dict in jwks.get("keys", []):
             key_kid = key_dict.get("kid")
             if key_kid:
                 try:
                     self._jwks[key_kid] = jwk.construct(key_dict)
                 except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "Failed to construct key for kid=%s: %s", key_kid, e
+                    failed_keys += 1
+                    logger.debug(
+                        "OIDC signing key skipped",
+                        extra={"error_type": type(e).__name__},
                     )
+
+        if failed_keys:
+            logger.info("OIDC invalid signing keys skipped", extra={"skipped": failed_keys})
 
         if kid not in self._jwks:
             raise UnauthenticatedError(f"Unknown key ID: {kid}")
@@ -312,21 +328,25 @@ class OIDCAuthPlugin(AuthPlugin):
         ``client_id``) so that tokens issued for other clients are rejected.
         """
         if config.oidc is None:
-            logger.error(
+            print(
                 "auth_mode=oidc but 'oidc' section missing in config. "
-                "Please configure the OIDC provider settings."
+                "Please configure the OIDC provider settings.",
+                file=sys.stderr,
+                flush=True,
             )
             sys.exit(1)
 
         if not config.oidc.issuer:
-            logger.error("OIDC config missing 'issuer'")
+            print("OIDC config missing 'issuer'", file=sys.stderr, flush=True)
             sys.exit(1)
 
         if not config.oidc.audience and not config.oidc.client_id:
-            logger.error(
+            print(
                 "OIDC config requires either 'audience' or 'client_id' to "
                 "validate the token's 'aud' claim. Refusing to start without "
-                "audience validation."
+                "audience validation.",
+                file=sys.stderr,
+                flush=True,
             )
             sys.exit(1)
 
@@ -347,9 +367,8 @@ class OIDCAuthPlugin(AuthPlugin):
         )
 
         logger.info(
-            "OIDC auth plugin initialized with issuer=%s, audience=%s",
-            self._config.issuer,
-            self._effective_audience,
+            "OIDC auth plugin initialized",
+            extra={"target_id": safe_uri_for_log(self._config.issuer)},
         )
 
     def can_skip_api_key_for_bot_proxy(self) -> bool:
