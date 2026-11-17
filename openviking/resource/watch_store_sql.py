@@ -41,6 +41,7 @@ from sqlalchemy import (
     literal,
     or_,
     select,
+    tuple_,
     update,
 )
 from sqlalchemy.exc import IntegrityError
@@ -250,6 +251,16 @@ def watch_tables(
         Index(f"ix_{table}_list_all", "service_name", "deleted", "created_at", "task_id"),
     )
     if dialect == "postgresql":
+        # Hash equality keys keep full-width identities below the B-tree entry limit.
+        Index(
+            f"ix_{table}_list",
+            tasks.c.service_name,
+            func.md5(tasks.c.account_id),
+            func.md5(tasks.c.user_id),
+            tasks.c.deleted,
+            tasks.c.created_at,
+            tasks.c.task_id,
+        )
         # Bound the UTF-8 index key even for maximum-width identity strings.
         Index(
             f"ix_{table}_target_prefix",
@@ -530,6 +541,14 @@ class SQLWatchStore(WatchStore):
         )
         c = self._tasks.c
         clauses = [self._scope, c.deleted.is_(False), self._authority(authority)]
+        if self.dialect_name == "postgresql" and not authority.root:
+            # Retain full identity predicates above: hashes only narrow the index scan.
+            clauses.extend(
+                [
+                    func.md5(c.account_id) == func.md5(authority.account_id),
+                    func.md5(c.user_id) == func.md5(authority.user_id),
+                ]
+            )
         if active_only:
             clauses.append(c.enabled.is_(True))
         # Extract only public JSON fields, excluding potentially large checkpoints.
@@ -564,12 +583,17 @@ class SQLWatchStore(WatchStore):
         ).where(*clauses)
         if query.after is not None:
             timestamp, task_id = query.after
-            statement = statement.where(
-                or_(
-                    c.created_at < timestamp,
-                    and_(c.created_at == timestamp, c.task_id < task_id),
+            if self.dialect_name == "postgresql":
+                statement = statement.where(
+                    tuple_(c.created_at, c.task_id) < tuple_(timestamp, task_id)
                 )
-            )
+            else:
+                statement = statement.where(
+                    or_(
+                        c.created_at < timestamp,
+                        and_(c.created_at == timestamp, c.task_id < task_id),
+                    )
+                )
         async with self._transaction() as session:
             total = int(
                 (

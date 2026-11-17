@@ -1578,6 +1578,18 @@ For PostgreSQL, install `openviking[postgres]` and provision
 Initialization validates the existing columns; it does not create or migrate tables.
 For a custom `params.table`, replace the table and index names in that script.
 
+Existing PostgreSQL Watch tables provisioned without the account/user pagination
+index need the following administrator-run migration (outside a transaction):
+
+```sql
+CREATE INDEX CONCURRENTLY ix_ov_watch_tasks_list
+    ON ov_watch_tasks (service_name, md5(account_id), md5(user_id), deleted, created_at, task_id);
+```
+
+Use your configured table and index names. The hashes bound B-tree key width;
+queries retain full account/user equality checks and scan cursor ranges by
+`(created_at, task_id)`. Pagination still returns an exact `total`.
+
 ```json
 {
   "storage": {

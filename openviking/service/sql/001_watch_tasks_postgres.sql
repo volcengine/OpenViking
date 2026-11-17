@@ -41,6 +41,8 @@ CREATE INDEX ix_ov_watch_tasks_target
 -- Bound UTF-8 B-tree entry size; longer paths still use the full URI predicate.
 CREATE INDEX ix_ov_watch_tasks_target_prefix
     ON ov_watch_tasks (service_name, account_id, deleted, substr(target_uri_key, 1, 128));
--- Account/user visibility is filtered separately; avoid an oversized UTF-8 key.
 CREATE INDEX ix_ov_watch_tasks_list_all
     ON ov_watch_tasks (service_name, deleted, created_at, task_id);
+-- Hash equality keys bound UTF-8 width; queries also check the full identities.
+CREATE INDEX ix_ov_watch_tasks_list
+    ON ov_watch_tasks (service_name, md5(account_id), md5(user_id), deleted, created_at, task_id);

@@ -179,6 +179,133 @@ async def test_postgres_long_unicode_paths_and_maximum_identity_width(make_store
 
 
 @pytest.mark.asyncio
+async def test_postgres_user_pagination_scans_hash_and_cursor_index_range(make_store):
+    from sqlalchemy import event, text
+
+    from openviking.resource.watch_pagination import WatchPageQuery
+
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL user pagination index contract")
+    seed_task = await create(store)
+    c = store._tasks.c
+    epoch = 1700000000.0
+    columns = ", ".join(f'"{name}"' for name in c.keys())
+    overrides = {
+        "task_id": "g.prefix || lpad(n::text, 6, '0')",
+        "account_id": "g.account_id",
+        "user_id": "g.user_id",
+        "service_name": "g.service_name",
+        "deleted": "g.deleted",
+        "created_at": ":epoch + (n / 2)",
+    }
+    values = ", ".join(overrides.get(name, f'w."{name}"') for name in c.keys())
+
+    async def seed():
+        async with store._transaction() as session:
+            await session.execute(
+                text(
+                    f'INSERT INTO "{store._table_name}" ({columns}) '
+                    f'SELECT {values} FROM "{store._table_name}" AS w '
+                    "CROSS JOIN generate_series(0, 999) AS n "
+                    "CROSS JOIN (VALUES "
+                    "('page-', :account, :owner, :service, false), "
+                    "('z-user-', :account, 'other-user', :service, false), "
+                    "('z-account-', 'other-account', :owner, :service, false), "
+                    "('z-service-', :account, :owner, 'other-service', false), "
+                    "('z-deleted-', :account, :owner, :service, true)"
+                    ") AS g(prefix, account_id, user_id, service_name, deleted) "
+                    "WHERE w.task_id = :task_id AND w.service_name = :service"
+                ),
+                {
+                    "epoch": epoch,
+                    "account": OWNER.account_id,
+                    "owner": OWNER.user_id,
+                    "service": store._service_name,
+                    "task_id": seed_task.task_id,
+                },
+            )
+            await session.execute(
+                text(
+                    f'DELETE FROM "{store._table_name}" '
+                    "WHERE task_id = :task_id AND service_name = :service"
+                ),
+                {"task_id": seed_task.task_id, "service": store._service_name},
+            )
+            await session.execute(text(f'ANALYZE "{store._table_name}"'))
+
+    await store._sql_runtime.run(seed)
+    query = WatchPageQuery(
+        OWNER,
+        active_only=False,
+        limit=10,
+        cursor=None,
+        store_scope=f"{store.provider}:{store._service_name}:{store._table_name}",
+    )
+    cursor = query.next_cursor((epoch + 10, "page-000021"))
+    statements = []
+
+    def capture(connection, db_cursor, statement, parameters, context, executemany):
+        if statement.startswith("SELECT"):
+            statements.append((statement, parameters))
+
+    event.listen(store._engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        page = await store.list_tasks_page(OWNER, limit=10, cursor=cursor)
+    finally:
+        event.remove(store._engine.sync_engine, "before_cursor_execute", capture)
+    assert page.total == 1000
+    assert [task["task_id"] for task in page.tasks] == [
+        f"page-{index:06d}" for index in range(20, 10, -1)
+    ]
+    assert page.next_cursor
+    following = await store.list_tasks_page(OWNER, limit=10, cursor=page.next_cursor)
+    assert following.total == 1000
+    assert [task["task_id"] for task in following.tasks] == [
+        f"page-{index:06d}" for index in range(10, 0, -1)
+    ]
+    final = await store.list_tasks_page(OWNER, limit=10, cursor=following.next_cursor)
+    assert [task["task_id"] for task in final.tasks] == ["page-000000"]
+    assert final.next_cursor is None
+    assert (await store.list_tasks_page(WatchAuthority("", "", "root"))).total == 3000
+    assert len(statements) == 2
+    for statement, _ in statements:
+        # Full IDs must remain authorization filters alongside hash scan keys.
+        assert ".account_id =" in statement
+        assert ".user_id =" in statement
+        assert "md5(" in statement
+
+    async def explain():
+        async with store._transaction() as session:
+            connection = await session.connection()
+            statement, parameters = statements[-1]
+            result = await connection.exec_driver_sql(
+                "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + statement, parameters
+            )
+            return result.scalar_one()[0]["Plan"]
+
+    plan = await store._sql_runtime.run(explain)
+
+    def nodes(node):
+        yield node
+        for child in node.get("Plans", []):
+            yield from nodes(child)
+
+    scans = [
+        node for node in nodes(plan) if node.get("Index Name") == f"ix_{store._table_name}_list"
+    ]
+    assert scans, plan
+    condition = scans[0].get("Index Cond", "")
+    assert "md5((account_id)" in condition, plan
+    assert "md5((user_id)" in condition, plan
+    assert "ROW(created_at, (task_id)::text)" in condition, plan
+    assert " < ROW(" in condition, plan
+    assert scans[0].get("Rows Removed by Filter", 0) == 0, plan
+    assert scans[0]["Actual Rows"] == 11, plan
+    assert not any(node["Node Type"] == "Sort" for node in nodes(plan)), plan
+
+
+@pytest.mark.asyncio
 async def test_postgres_operations_work_across_event_loops(make_store):
     store = await make_store()
     if store.provider != "postgres":

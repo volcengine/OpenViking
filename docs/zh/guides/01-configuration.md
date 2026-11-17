@@ -1565,6 +1565,16 @@ ALTER TABLE ov_watch_tasks
 `openviking/service/sql/001_watch_tasks_postgres.sql`（PostgreSQL 14+）。
 初始化会检查已有表的列，不会自动建表或迁移；自定义 `params.table` 时同步替换脚本中的表名和索引名。
 
+已有 PostgreSQL Watch 表若缺少账号/用户分页索引，需要由管理员执行以下迁移（不能放在事务中）：
+
+```sql
+CREATE INDEX CONCURRENTLY ix_ov_watch_tasks_list
+    ON ov_watch_tasks (service_name, md5(account_id), md5(user_id), deleted, created_at, task_id);
+```
+
+请使用配置中的表名和对应索引名。哈希用于限制 B-tree 索引键宽度；查询仍保留完整账号/用户等值校验，
+并按 `(created_at, task_id)` 扫描游标范围。分页继续返回精确的 `total`。
+
 ```json
 {
   "storage": {
