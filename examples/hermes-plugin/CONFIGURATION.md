@@ -283,9 +283,11 @@ means the commit completed. A non-empty live `messages.jsonl` with no archive
 means the message was accepted but still needs a commit. An empty live file
 without an archive is ambiguous and must not trigger an automatic resubmission.
 Use the same OpenViking profile and credentials as Hermes for manual recovery.
-OpenViking server auto-commit is disabled by default, so an accepted message
-whose explicit commit fails normally remains live without extracted memories
-until it is manually committed.
+OpenViking server auto-commit is enabled by default, but its built-in policy
+only commits after 100 messages, more than 150,000 pending tokens, or 24 hours
+idle. An accepted message whose explicit commit fails can therefore remain live
+without extracted memories until one of those triggers fires or it is manually
+committed.
 
 Successful changes through Hermes's built-in `memory` tool are copied to
 OpenViking in order. The active profile records each copied entry's exact URI in

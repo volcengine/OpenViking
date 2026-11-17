@@ -2124,7 +2124,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 {
   "memory": {
     "session_auto_commit": {
-      "enabled": false,
+      "enabled": true,
       "idle_backend": "local",
       "check_interval_seconds": 600.0,
       "scan_rate_limit_files_per_second": 2.0
@@ -2135,7 +2135,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `enabled` | bool | Master switch for automatic session commits. When enabled, newly created sessions without an explicit `auto_commit_policy` get a default policy, and the idle-timeout background scheduler is started. When disabled, neither happens | `false` |
+| `enabled` | bool | Master switch for automatic session commits. When enabled, newly created sessions without an explicit `auto_commit_policy` get a default policy, and the idle-timeout background scheduler is started. When disabled, neither happens | `true` |
 | `idle_backend` | string | Idle-timeout discovery backend: `local` scans session metadata; `redis` uses distributed expiry scheduling | `local` |
 | `check_interval_seconds` | float | Minimum interval between two idle scan rounds in seconds. Must be greater than `0` | `600.0` |
 | `scan_rate_limit_files_per_second` | float | Maximum number of session `.meta.json` files read per second during an idle scan. Must be greater than `0`. Bounds background storage IO when the sessions tree is very large | `2.0` |

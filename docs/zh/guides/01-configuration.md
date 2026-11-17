@@ -2098,7 +2098,7 @@ openviking-server --config /path/to/ov.conf
 {
   "memory": {
     "session_auto_commit": {
-      "enabled": false,
+      "enabled": true,
       "idle_backend": "local",
       "check_interval_seconds": 600.0,
       "scan_rate_limit_files_per_second": 2.0
@@ -2109,7 +2109,7 @@ openviking-server --config /path/to/ov.conf
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `enabled` | bool | 自动 commit 总开关。开启后：未显式传入 `auto_commit_policy` 的新 session 会套用默认 policy，同时启动后台 idle 扫描器；关闭后两者都不发生 | `false` |
+| `enabled` | bool | 自动 commit 总开关。开启后：未显式传入 `auto_commit_policy` 的新 session 会套用默认 policy，同时启动后台 idle 扫描器；关闭后两者都不发生 | `true` |
 | `idle_backend` | string | idle 超时发现后端：`local` 扫描 session 元数据；`redis` 使用分布式 expiry 调度 | `local` |
 | `check_interval_seconds` | float | 两轮 idle 扫描之间的最小间隔，单位秒，必须大于 `0` | `600.0` |
 | `scan_rate_limit_files_per_second` | float | idle 扫描时每秒最多读取的 session `.meta.json` 文件数，必须大于 `0`，用于限制大量 session 扫描时的存储 IO 压力 | `2.0` |

@@ -13,7 +13,7 @@ class SessionAutoCommitConfig(BaseModel):
     """Server-wide controls for automatic session commits."""
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for automatic session commits. When enabled, newly "
             "created sessions without an explicit auto_commit_policy get a "

@@ -708,23 +708,23 @@ async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClie
     assert resp.json()["result"]["message_count"] == 1
 
 
-async def test_create_session_defaults_auto_commit_policy_to_disabled(
+async def test_create_session_defaults_to_builtin_auto_commit_policy(
     client: httpx.AsyncClient,
 ):
-    resp = await client.post("/api/v1/sessions", json={})
-    assert resp.status_code == 200
-    assert resp.json()["result"]["auto_commit_policy"] is None
-
-
-async def test_create_session_uses_default_policy_when_server_default_enabled(
-    client: httpx.AsyncClient,
-    service,
-):
-    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=True))
-
     resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
     assert resp.json()["result"]["auto_commit_policy"] == AutoCommitPolicy.default().to_dict()
+
+
+async def test_create_session_has_no_policy_when_server_auto_commit_disabled(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=False))
+
+    resp = await client.post("/api/v1/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["auto_commit_policy"] is None
 
 
 async def test_create_session_can_disable_server_default_auto_commit(
@@ -815,7 +815,7 @@ async def test_session_idle_policy_validates_writes_and_preserves_stored_values(
     assert rejected.status_code == 400
     assert "must be 0 or at least 300" in rejected.json()["error"]["message"]
 
-    create_resp = await client.post("/api/v1/sessions", json={})
+    create_resp = await client.post("/api/v1/sessions", json={"auto_commit_policy": None})
     session_id = create_resp.json()["result"]["session_id"]
 
     resp = await client.get(f"/api/v1/sessions/{session_id}")
