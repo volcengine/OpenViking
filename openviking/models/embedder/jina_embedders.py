@@ -150,7 +150,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             task = self.document_param
 
         if task is not None:
-            extra_body["task"] = task
+            extra_body["task"] = task.lower()
         if self.late_chunking is not None:
             extra_body["late_chunking"] = self.late_chunking
         return extra_body if extra_body else None

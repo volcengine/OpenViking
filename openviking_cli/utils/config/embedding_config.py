@@ -56,6 +56,8 @@ class EmbeddingModelConfig(BaseModel):
             "Parameter value for query-side embeddings when calling embed(is_query=True). "
             "For OpenAI-compatible models, this maps to 'input_type' (e.g., 'query', 'search_query'). "
             "For Jina models, this maps to 'task' (e.g., 'retrieval.query'). "
+            "For Volcengine dense multimodal models, this maps to 'instructions': "
+            "unset uses the supported model's query default, and an empty string disables it. "
             "Setting this or document_param activates non-symmetric mode. "
             "Leave both unset for symmetric models."
         ),
@@ -66,6 +68,7 @@ class EmbeddingModelConfig(BaseModel):
             "Parameter value for document-side embeddings when calling embed(is_query=False). "
             "For OpenAI-compatible models, this maps to 'input_type' (e.g., 'passage', 'document'). "
             "For Jina models, this maps to 'task' (e.g., 'retrieval.passage'). "
+            "For Volcengine dense multimodal models, this maps to 'instructions'. "
             "Setting this or query_param activates non-symmetric mode. "
             "Leave both unset for symmetric models."
         ),
@@ -162,10 +165,6 @@ class EmbeddingModelConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
-            for key in ("query_param", "document_param"):
-                value = data.get(key)
-                if isinstance(value, str):
-                    data[key] = value.lower()
         return data
 
     _VALID_PROVIDERS: ClassVar[Tuple[str, ...]] = (
@@ -329,6 +328,8 @@ class EmbeddingModelConfig(BaseModel):
                         f"{label}: invalid {field_name} '{value}' for Gemini. "
                         f"Valid task_types: {', '.join(sorted(_GEMINI_TASK_TYPES))}"
                     )
+                if value:
+                    setattr(self, field_name, value.lower())
 
         elif provider == "dashscope":
             if self.input == "text" and (
@@ -827,6 +828,12 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    **({"query_param": cfg.query_param} if cfg.query_param is not None else {}),
+                    **(
+                        {"document_param": cfg.document_param}
+                        if cfg.document_param is not None
+                        else {}
+                    ),
                     "config": dict(runtime_config),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },

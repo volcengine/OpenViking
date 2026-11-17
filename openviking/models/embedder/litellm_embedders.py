@@ -133,7 +133,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
                 if extra_body:
                     kwargs["extra_body"] = extra_body
             else:
-                kwargs["input_type"] = active_param
+                kwargs["input_type"] = active_param.lower()
 
         return kwargs
 
