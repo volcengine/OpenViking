@@ -659,8 +659,9 @@ _OTHER_PEER_PENALTIES_DESCRIPTION = (
     "their defaults; do not combine with other_peer_penalty."
 )
 _REWRITE_DESCRIPTION = (
-    "In mode='context', use 'auto' to ask the account model for a cited bullet digest; "
-    "on failure the assembled context is returned unchanged, while 'off' skips rewriting."
+    "In mode='context', use 'auto' to get a cited bullet digest from the account's query "
+    "planner model; without one configured, or on failure, the assembled context is "
+    "returned unchanged, while 'off' skips rewriting."
 )
 
 
@@ -905,7 +906,9 @@ async def search(
                 exclude_uris=resolved_exclude_uris,
                 peer_scope=peer_scope,
                 other_peer_penalty=other_peer_penalties or other_peer_penalty,
-                rewrite=rewrite == "auto",
+                # The assembler resolves "auto" per account, as it does for the REST API;
+                # True would force a rewrite on accounts with no planner model.
+                rewrite="auto" if rewrite == "auto" else False,
                 rewrite_max_bullets=rewrite_max_bullets,
             ),
         )

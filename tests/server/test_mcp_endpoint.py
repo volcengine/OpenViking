@@ -1105,7 +1105,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
             {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
         ],
     }
-    assert params.rewrite is True
+    assert params.rewrite == "auto"
     assert params.rewrite_max_bullets == 4
 
 
@@ -1204,8 +1204,9 @@ async def test_retrieval_tools_describe_advanced_parameters_without_changing_con
         "their defaults; do not combine with other_peer_penalty."
     )
     assert search_properties["rewrite"]["description"] == (
-        "In mode='context', use 'auto' to ask the account model for a cited bullet digest; "
-        "on failure the assembled context is returned unchanged, while 'off' skips rewriting."
+        "In mode='context', use 'auto' to get a cited bullet digest from the account's query "
+        "planner model; without one configured, or on failure, the assembled context is "
+        "returned unchanged, while 'off' skips rewriting."
     )
 
     decay_description = (
