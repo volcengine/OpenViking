@@ -38,11 +38,12 @@ ov skills list
 ## Step 3: Run compile
 
 ```bash
-ov compile \
+ov compile create --compile-name research-graph \
   --from viking://resources/journal \
   --to viking://resources/journal-kg \
   --skill viking://agent/skills/knowledge-graph \
   --instruction "Extract characters, places, artifacts and their relationships into a traversable graph"
+ov compile --compile-name research-graph
 ```
 
 The command returns a `task_id` immediately. Then:

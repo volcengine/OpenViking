@@ -1303,7 +1303,7 @@ using Choice through MCP.
 | `candidates_visible` | bool | Jev Noul only. Default: `false`, isolating each candidate in its own question. Explicit `true` shares candidates in state. Choice ignores this option. |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
-| `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
+| `log_payloads` | bool | Jev only: log safe request and response summaries when `log.level=DEBUG`; query, document and response content are omitted. Default: `false` |
 | `threshold` | float | Rerank score threshold between `0.0` and `1.0`; reranked results below this are filtered out. It never filters vector scores (rerank not used, or failed), and a request `score_threshold` overrides it. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
@@ -1461,6 +1461,49 @@ the change scripts in order; existing TaskStore tables created before
 `openviking/service/sql/changes/0001_task_store_service_name.sql` before
 upgrading. Do not use the FileStore tables and MySQL tables as active writers
 for the same deployment.
+
+PostgreSQL is also supported with `"provider": "postgres"`. Install
+`openviking[postgres]`, then run
+`openviking/service/sql/task_store_postgres_init.sql` using `psql` before starting
+the server. This script includes `service_name`; do not apply the MySQL change
+scripts to PostgreSQL. No Redis or pgvector extension is required:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "task_store": {
+      "provider": "postgres",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "table": "ov_tasks",
+        "sslmode": "prefer"
+      }
+    }
+  }
+}
+```
+
+PostgreSQL requires `user` and `database`; `password` is optional when the
+database authentication method permits it. Defaults are `host=127.0.0.1`,
+`port=5432`, `maxsize=10`, `connect_timeout=10`, and `sslmode=prefer`.
+`sslmode` accepts libpq's `disable`, `allow`, `prefer`, `require`, `verify-ca`,
+and `verify-full`; configure `sslrootcert`, `sslcert`, and `sslkey` as needed.
+For verified TLS, use `verify-full` with the server hostname and trusted CA.
+The runtime database role needs SELECT/INSERT/UPDATE/DELETE on all three tables.
+
+The PostgreSQL prefix follows the same character rules, with a maximum of
+37 characters to fit its 63-byte identifier limit. Quote identifiers in the
+DDL if the custom prefix contains uppercase letters. Task/Work/Event changes
+use READ COMMITTED transactions and lock the Task row before changing Work
+state. PostgreSQL preserves the same durable recovery, event history, active-task
+deduplication, and service/owner isolation as MySQL. Keep `service_name` stable
+across processes sharing tasks. Changing providers does not migrate existing
+tasks; plan the data migration before switching a deployed store.
 
 #### watch_store
 

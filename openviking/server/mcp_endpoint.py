@@ -1529,6 +1529,8 @@ async def write(
     ] = None,
     acl: Optional[AclSpec] = None,
     resolve_conflicts: bool = False,
+    use_snapshot: bool = False,
+    defer_processing: bool = False,
 ) -> str:
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
 
@@ -1538,6 +1540,8 @@ async def write(
     - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
     - resolve_conflicts: mark this edit as conflict resolution for an existing resource
       Markdown file in replace mode (including its create alias); defaults to false.
+    - defer_processing: save content without semantic or vector processing. Run reindex
+      for this URI before relying on search; defaults to false.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve
@@ -1556,8 +1560,9 @@ async def write(
         mode=mode,
         wait=wait,
         acl=acl,
-        edit_source="agent",
         resolve_conflicts=resolve_conflicts,
+        use_snapshot=use_snapshot,
+        defer_processing=defer_processing,
     )
     written = result.get("written_bytes", 0)
     message = (
@@ -1621,7 +1626,6 @@ async def edit(
         ctx=ctx,
         mode="replace",
         wait=wait,
-        edit_source="agent",
     )
     written = result.get("written_bytes", 0)
     message = f"Edited {result.get('uri', uri)} ({written} bytes written)."
@@ -1637,6 +1641,8 @@ def _indexing_hint(result: Dict[str, Any]) -> str:
     hint = f"\nIndexing: {', '.join(parts)}."
     if "queued" in (semantic, vector):
         hint += " Search indexes update in the background; pass wait=true if a follow-up search must see this change immediately."
+    elif "deferred" in (semantic, vector):
+        hint += " Content was saved without indexing; run reindex for this URI before relying on search."
     return hint
 
 

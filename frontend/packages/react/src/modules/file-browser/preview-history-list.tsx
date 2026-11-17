@@ -1,3 +1,6 @@
+import { Switch } from '../../shared/primitives/switch/switch.js';
+import { Fragment, type ReactNode } from 'react';
+import { historyVersionLabel } from './preview-history-controls.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { PreviewQueryState } from './preview-query-state.js';
@@ -13,6 +16,8 @@ export function PreviewHistoryList({
   showContent,
   selectedId,
   compare,
+  canCompare,
+  comparison,
   text,
   locale,
   onCompare,
@@ -22,6 +27,8 @@ export function PreviewHistoryList({
   showContent: boolean;
   selectedId?: string;
   compare: boolean;
+  canCompare: boolean;
+  comparison?: ReactNode;
   text: FileBrowserWorkflowLabels & { loading: string; retry: string };
   locale: PreviewWorkflowProps['locale'];
   onCompare: () => void;
@@ -29,59 +36,57 @@ export function PreviewHistoryList({
 }) {
   const track = useTrack();
   const entries = query.data;
-  const dates = new Intl.DateTimeFormat(locale, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
   const statusText = text;
   return (
     <aside className="ov-file-history__sidebar">
       {showContent ? (
-        <div className="ov-file-history__compare">
+        <div className="ov-file-history__switch-row">
           {text.compareChanges}
-          <button
-            type="button"
-            role="switch"
+          <Switch
+            size="small"
             aria-label={text.compareChanges}
-            aria-checked={compare}
-            disabled={!selectedId}
-            onClick={onCompare}
+            checked={compare}
+            disabled={!selectedId || !canCompare}
+            onChange={onCompare}
           />
         </div>
       ) : null}
-      <div className="ov-file-history__entries">
+      {comparison}
+      <div className="ov-file-history__commit-list">
         <PreviewQueryState query={query} text={statusText} />
         {entries?.length === 0 ? (
           <Empty size="compact" illustration="tray" title={text.historyEmpty} />
         ) : null}
-        <ol>
-          {entries?.map((entry) => {
+        <>
+          {entries?.map((entry, index) => {
             const title = entry.numbered
               ? `${text.version} ${entry.title}`
               : entry.title;
-            const time =
-              entry.timestamp && Number.isFinite(entry.timestamp)
-                ? new Date(entry.timestamp * 1000)
-                : undefined;
             const label = (
               <>
-                {time ? (
-                  <time dateTime={time.toISOString()}>
-                    {dates.format(time)}
-                  </time>
-                ) : null}
-                {entry.numbered ? <strong>{title}</strong> : null}
-                {entry.note ? <span>{entry.note}</span> : null}
-                {!time && !entry.numbered && !entry.note
-                  ? entry.id.slice(0, 12)
-                  : null}
+                <time
+                  className="ov-file-history__version-name"
+                  dateTime={
+                    entry.timestamp
+                      ? new Date(entry.timestamp * 1000).toISOString()
+                      : undefined
+                  }
+                >
+                  {historyVersionLabel(entry, locale)}
+                </time>
+                {index === 0 ? <i>{text.latest}</i> : null}
               </>
             );
             return (
-              <li key={entry.id}>
+              <Fragment key={entry.id}>
                 {showContent ? (
                   <button
                     type="button"
+                    className={
+                      selectedId === entry.id
+                        ? 'ov-file-history__commit-active'
+                        : undefined
+                    }
                     aria-label={entry.numbered ? title : undefined}
                     aria-pressed={selectedId === entry.id}
                     onClick={() => {
@@ -94,11 +99,13 @@ export function PreviewHistoryList({
                 ) : (
                   <div>{label}</div>
                 )}
-              </li>
+              </Fragment>
             );
           })}
-        </ol>
-        {entries?.length === 500 ? <p>{text.historyLimit}</p> : null}
+        </>
+        {entries?.length === 500 && !entries[0]?.numbered ? (
+          <p>{text.historyLimit}</p>
+        ) : null}
       </div>
     </aside>
   );

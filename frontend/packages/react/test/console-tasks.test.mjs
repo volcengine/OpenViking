@@ -83,6 +83,75 @@ test('Console custom task adapter is isolated and aborts on identity switch', as
   }
 });
 
+test('a completed resource import shows its ID once and opens the final resource from the notice', async () => {
+  const rootUri = 'viking://resources/demo';
+  const finalUri = 'viking://resources/demo-2';
+  const opened = [];
+  let finish;
+  const host = await mount(
+    async (url) =>
+      url.endsWith('/tasks/resource-task')
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : ok({
+            task_id: 'resource-task',
+            root_uri: rootUri,
+            status: 'success',
+          }),
+    {
+      locale: 'zh-CN',
+      onOpenUri: () => assert.fail('The command callback takes precedence'),
+      command: { onOpenUri: (uri) => opened.push(uri) },
+    },
+  );
+  try {
+    await host.execute('ov add-resource https://example.com/resource');
+    await tick();
+    assert.equal(host.records[0].dataset.status, 'pending');
+    await act(() =>
+      finish(
+        ok({
+          task_id: 'resource-task',
+          status: 'completed',
+          stage: 'completed',
+          result: { root_uri: finalUri },
+        }),
+      ),
+    );
+    const record = host.records[0];
+    assert.equal(record.dataset.status, 'success');
+    assert.equal(record.querySelector('.ov-task-status'), null);
+    assert.deepEqual(
+      [...record.querySelectorAll('.ov-command-console__write-line')].map(
+        (line) => line.textContent,
+      ),
+      ['Task id: resource-task', `Root uri: ${rootUri}`],
+    );
+    assert.equal(
+      record.querySelector(`a[href="${rootUri}"]`).textContent,
+      rootUri,
+    );
+    const notice = document.querySelector('.ov-notification--success');
+    assert.equal(
+      notice.querySelector('.ov-notification__title').textContent,
+      '任务完成',
+    );
+    assert.equal(
+      notice.querySelector('.ov-notification__content').textContent,
+      '资源添加任务已完成，可点击查看结果。',
+    );
+    const view = notice.querySelector('.ov-notification__actions button');
+    assert.equal(view.textContent, '查看结果');
+    await act(() => view.click());
+    assert.deepEqual(opened, [finalUri]);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 240)));
+    assert.equal(document.querySelector('.ov-notification--success'), null);
+  } finally {
+    await host.dispose();
+  }
+});
+
 test('dismissing a task stays hidden when its pending query fails during the exit animation', async () => {
   let resolveTask;
   let taskSignal;

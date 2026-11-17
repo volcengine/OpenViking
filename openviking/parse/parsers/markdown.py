@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
 import yaml
 
@@ -600,7 +601,6 @@ class MarkdownParser(BaseParser):
             return content, None
 
         frontmatter_text = match.group(1)
-        content_without_frontmatter = content[match.end() :]
 
         try:
             # Keep scalar values as strings, matching the previous parser and keeping
@@ -608,12 +608,12 @@ class MarkdownParser(BaseParser):
             frontmatter = yaml.load(frontmatter_text, Loader=yaml.BaseLoader)
         except yaml.YAMLError:
             logger.warning("Ignoring malformed YAML frontmatter")
-            return content_without_frontmatter, None
+            return content, None
 
         if not isinstance(frontmatter, dict):
-            return content_without_frontmatter, None
+            return content, None
 
-        return content_without_frontmatter, frontmatter
+        return content[match.end() :], frontmatter
 
     def _find_headings(self, content: str) -> List[Tuple[int, int, str, int]]:
         """
@@ -821,6 +821,7 @@ class MarkdownParser(BaseParser):
 
         # mapping: rel_md_path -> {original_path_str -> unique_filename}
         mappings: Dict[str, Dict[str, str]] = {}
+        names_by_directory: Dict[str, set[str]] = {}
 
         for md_uri, content in markdown_files:
             # Collect all image references in this markdown file: markdown
@@ -861,7 +862,7 @@ class MarkdownParser(BaseParser):
             md_dir = md_uri.rsplit("/", 1)[0]
 
             # Copy each local image next to the markdown file, deduplicating names
-            used_names: set[str] = set()
+            used_names = names_by_directory.setdefault(md_dir, set())
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
             for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
                 try:
@@ -931,7 +932,7 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(self._unwrap_link_destination(path_str))
+            path = Path(unquote(self._unwrap_link_destination(path_str), errors="strict"))
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
@@ -1105,6 +1106,8 @@ class MarkdownParser(BaseParser):
             return link
 
         m = _MD_FRAGMENT_RE.match(raw)
+        if m is None:
+            return link
         path_part = m.group(1)
         suffix = m.group(2) or ""
         if not path_part:

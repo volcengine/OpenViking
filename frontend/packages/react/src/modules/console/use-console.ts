@@ -27,7 +27,12 @@ export function useConsole({
 }: ConsoleOptions = {}): ConsoleResult {
   const event = useTrack();
   const locale = useLocale(localeProp);
-  const tracking = useTaskTracking({ requestOptions, scopeKey, taskService });
+  const tracking = useTaskTracking({
+    requestOptions,
+    scopeKey,
+    taskService,
+    origin: 'command',
+  });
   const analytics = useCommandAnalytics(tracking.tasks, tracking.source.key);
   const inherited = useOvClient('local');
   const inheritedSignal = useOvSignal();

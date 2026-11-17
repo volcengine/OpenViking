@@ -73,13 +73,13 @@
   margin: 0;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font: inherit;
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 400;
-  line-height: 32px;
+  line-height: 24px;
 }
 .ov-viking-bot__home-text p {
   margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-conversation-meta-default));
   font-size: 13px;
   font-weight: 400;
   letter-spacing: 0.039px;
@@ -102,9 +102,11 @@
   border-radius: 20px;
   background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
   padding: 4px 12px;
-  color: inherit;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-conversation-meta-default));
   font: inherit;
   font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.04px;
   cursor: pointer;
 }
 .ov-viking-bot__quick-inputs svg {
@@ -122,6 +124,7 @@
 
 .ov-viking-bot__quick-inputs button:not(.ov-button):hover:not(:disabled) {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }
 .ov-viking-bot__header-action.ov-button {
   width: 24px;
@@ -208,7 +211,7 @@
   white-space: nowrap;
 }
 .ov-viking-bot__session-history time {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-conversation-meta-default));
   font-size: 12px;
   line-height: 18px;
   font-variant-numeric: tabular-nums;

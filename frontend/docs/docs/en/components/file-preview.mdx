@@ -57,6 +57,8 @@ Demo commands wait 2 seconds; switch tabs or tick "Custom toolbar" while one run
 
 ### Code editing
 
+Editing hides the preview/source switch and keeps the editor in source mode. Saving or cancelling restores the normal preview actions.
+
 Choose a code file to try 44 grammars in CodeMirror 6, with line numbers, undo and Prism syntax highlighting.
 
 ```tsx file="../../_demos/file-preview-editing.tsx" preview
@@ -155,11 +157,12 @@ A directory's summary levels, for example an L0 abstract and an L1 overview. It 
 
 Shows content of your own, such as a dashboard or a graph. It includes every field of `FilePreviewTabBase`.
 
-| Property | Description                                                                          | Type        | Default  |
-| -------- | ------------------------------------------------------------------------------------ | ----------- | -------- |
-| kind     | Tab kind, always `'content'`                                                         | `'content'` | Required |
-| title    | What the tab row shows; a content tab has no file name to fall back to               | `ReactNode` | Required |
-| content  | The tab body, filling everything below the tab row; you own its layout and scrolling | `ReactNode` | Required |
+| Property         | Description                                                                          | Type        | Default  |
+| ---------------- | ------------------------------------------------------------------------------------ | ----------- | -------- |
+| kind             | Tab kind, always `'content'`                                                         | `'content'` | Required |
+| title            | What the tab row shows; a content tab has no file name to fall back to               | `ReactNode` | Required |
+| content          | The tab body, filling everything below the tab row; you own its layout and scrolling | `ReactNode` | Required |
+| hideWhileEditing | Hides this tab while a file is being edited                                          | `boolean`   | `false`  |
 
 ### FilePreviewSource
 
@@ -210,13 +213,16 @@ The component calls these methods to carry out an operation, and fires the match
 
 ### FilePreviewEditing
 
-| Property             | Description                                                                                                                                                                 | Type                                                                                           | Default  |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- |
-| save                 | Saves the draft with the optional note. Rejection keeps the draft; returning `{ warning: 'version-not-created' }` shows a warning and still calls `onSave`.                 | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | Required |
-| promptForVersionNote | Prompts for a version note before calling `save`; cancelling keeps the draft.                                                                                               | `boolean`                                                                                      | `false`  |
-| loadContent          | Reads the full text when editing starts; returning `undefined` abandons the edit. Without it, text from `content` or `file` is used, and a `url`-only source must supply it | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -        |
-| onSave               | Called after saving succeeds, with the saved text                                                                                                                           | `(value: string) => void`                                                                      | -        |
-| onCancel             | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                 | `(value: string) => void`                                                                      | -        |
+| Property             | Description                                                                                                                                                                      | Type                                                                                           | Default  |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- |
+| save                 | Saves the draft with the optional note. Rejection keeps the draft; returning `{ warning: 'version-not-created' }` shows a warning and still calls `onSave`.                      | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | Required |
+| promptForVersionNote | Prompts for a version note before calling `save`; cancelling keeps the draft.                                                                                                    | `boolean`                                                                                      | `false`  |
+| loadContent          | Reads the full text when editing starts; returning `undefined` abandons the edit. With neither loader, text from `content` or `file` is used. A `url`-only source needs a loader | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -        |
+| loadDocument         | Takes precedence over `loadContent` and supplies the full text with optional editor annotations; returning `undefined` abandons the edit                                         | `(source: FilePreviewSource) => Promise<FilePreviewEditorDocument \| undefined>`               | -        |
+| onSave               | Called after saving succeeds, with the saved text                                                                                                                                | `(value: string) => void`                                                                      | -        |
+| onCancel             | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                      | `(value: string) => void`                                                                      | -        |
+
+`FilePreviewEditorDocument` contains `content` and optional `annotations`. Each annotation has `matchText`, `description`, and an optional `reason`. The Markdown editor highlights lines with a unique body match and shows the explanation without adding it to the saved text.
 
 ### FilePreviewAction
 
@@ -233,11 +239,11 @@ The component calls these methods to carry out an operation, and fires the match
 
 A control set to `false` stays hidden even when a tab supplies the capability; a tab's `toolbar` can only hide controls the top level allows.
 
-| Property   | Description                                                              | Type      | Default |
-| ---------- | ------------------------------------------------------------------------ | --------- | ------- |
-| copyPath   | Copy-path button beside the path; shown when a path exists               | `boolean` | `true`  |
-| viewSwitch | Preview/source switch; shown when the current format supports both views | `boolean` | `true`  |
-| edit       | Edit button; shown when the current file or level supplies `editing`     | `boolean` | `true`  |
+| Property   | Description                                                                      | Type      | Default |
+| ---------- | -------------------------------------------------------------------------------- | --------- | ------- |
+| copyPath   | Copy-path button beside the path; shown when a path exists                       | `boolean` | `true`  |
+| viewSwitch | Preview/source switch, shown outside editing when the format supports both views | `boolean` | `true`  |
+| edit       | Edit button; shown when the current file or level supplies `editing`             | `boolean` | `true`  |
 
 ### FilePreviewHeaderSlots
 
@@ -274,6 +280,7 @@ The context the component passes to an `actions` function and a `slots.actions` 
 | setViewMode   | Switches the view mode                                                                                                       | `(mode: FilePreviewViewMode) => void` | -       |
 | canSwitchView | Whether the format supports both preview and source; render no switch when `false`                                           | `boolean`                             | -       |
 | editing       | Whether the tab is being edited                                                                                              | `boolean`                             | -       |
+| draft         | Current draft while editing, including an empty string                                                                       | `string`                              | -       |
 | busy          | Whether a save or a read is in progress                                                                                      | `boolean`                             | -       |
 | canEdit       | Whether editing can start: `editing` is supplied, the file is not an image or video, and the tab is not already being edited | `boolean`                             | -       |
 | startEditing  | Enters editing, reading the full text first                                                                                  | `() => void`                          | -       |

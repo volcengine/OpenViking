@@ -25,7 +25,7 @@ export interface WikiDirectoryData {
 }
 export interface WikiFileData {
   conflicts: readonly WikiConflict[];
-  /** Document path to display; omitted paths hide the path column. */
+  /** Identifies the document and enables its open-file action when no editor is configured. */
   path?: string;
 }
 export type WikiDashboardData = WikiDirectoryData | WikiFileData;
@@ -55,6 +55,7 @@ export interface WikiDashboardLabels {
   failed: string;
   retry: string;
   open: string;
+  editConflict?: (title: string) => string;
   solution: string;
   occurred: string;
   fixedAt: string;
@@ -81,6 +82,7 @@ export type WikiDashboardProps = WikiDashboardCommonProps &
         data?: WikiDirectoryData;
         onOpenUri?: (uri: string) => void;
         onOpenDashboard?: (uri: string) => void;
+        onEditConflict?: never;
         /** Omitted or empty actions hide the row's action area. */
         defineActions?: (uri: string) => readonly WikiDashboardAction[];
       }
@@ -89,6 +91,8 @@ export type WikiDashboardProps = WikiDashboardCommonProps &
         data?: WikiFileData;
         onOpenUri?: () => void;
         onOpenDashboard?: never;
+        /** Edits pending conflicts. Pass null to disable editing, or omit for file navigation. */
+        onEditConflict?: ((conflict: WikiConflict) => void) | null;
         /** Hosts choose actions, including how they vary by conflict state. */
         defineActions?: (
           conflict: WikiConflict,

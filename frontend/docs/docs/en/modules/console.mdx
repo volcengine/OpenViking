@@ -234,6 +234,8 @@ Declare tasks started by a tool in `tool-result.tasks`, with a required `id` and
 
 Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Active task notifications use the built-in loading icon; terminal states replace it with their result icon. Query failures display a warning without changing the task status.
 
+The task snapshot uses the completed result's resource URI when available and retains the submission URI as a fallback. A custom task service can provide the final resource directly in `uri`. When a terminal task completes with a resource URI, **View result** opens it through `command.onOpenUri` or `Console.onOpenUri`. The notification remains until the user opens the result or dismisses it.
+
 Changing modes or chat sessions, clearing terminal history and dismissing notifications do not cancel backend tasks. Dismissing a notification leaves its records updating. Identity changes and Console unmount abort queries and discard stale responses. Task state and notifications are not persisted across page reloads.
 
 Adapt other backends through a stable `taskService`; `chatOptions.taskService` can override chat task queries. Different services, identities and `scopeKey` values are tracked separately. A host that fully controls `conversation` also supplies its task presentation state.
@@ -280,26 +282,26 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 - Wrap arguments that contain spaces in single or double quotes; a backslash also escapes a character.
 - Quote values that start with `--`, for example `ov write viking://resources/a.md "--heading"`, or end option parsing with `--`, for example `ov write viking://resources/a.md -- --heading`. Option values work the same way, for example `--description "--example"`.
 - Arguments are parsed as data and no shell runs. Unquoted `| ; & < > $` and backticks are rejected, so quote URLs that contain `&`.
-- Unknown or duplicate options, missing arguments, URIs that do not start with `viking://` and unclosed quotes produce a failed record without sending a request.
+- Unknown options, repeated single-value options, missing arguments, URIs that do not start with `viking://` and unclosed quotes produce a failed record without sending a request.
 
 ### Supported commands
 
-| Capability      | Commands                                                                                                                                                                 |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Add and compile | `add-resource <path>`, `add-skill <path>`, `add-memory <content> --session-id <session-id>`, `compile --from <from> --to <to>`, `compile create --from <from> --to <to>` |
-| Local           | `help`, `clear`                                                                                                                                                          |
-| Service         | `health`, `status`                                                                                                                                                       |
-| Browse          | `ls [uri]`, `tree [uri]`, `stat <uri>`                                                                                                                                   |
-| Content         | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                                                                                         |
-| Search          | `find <query>`, `search <query>`, `grep <pattern>`, `glob <pattern>`                                                                                                     |
-| Write           | `mkdir <uri>`, `write <uri> <content>`, `cp <from_uri> <to_uri>`, `mv <from_uri> <to_uri>`, `rm <uri>`                                                                   |
-| Tasks           | `task list`, `task status <id>`, `task cancel <id>`                                                                                                                      |
+| Capability      | Commands                                                                                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Add and compile | `add-resource <path>`, `add-skill <path>`, `add-memory <content> --session-id <session-id>`, `compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>`, `compile --compile-name <name>` |
+| Local           | `help`, `clear`                                                                                                                                                                                                                |
+| Service         | `health`, `status`                                                                                                                                                                                                             |
+| Browse          | `ls [uri]`, `tree [uri]`, `stat <uri>`                                                                                                                                                                                         |
+| Content         | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                                                                                                                                               |
+| Search          | `find <query>`, `search <query>`, `grep <pattern>`, `glob <pattern>`                                                                                                                                                           |
+| Write           | `mkdir <uri>`, `write <uri> <content>`, `cp <from_uri> <to_uri>`, `mv <from_uri> <to_uri>`, `rm <uri>`                                                                                                                         |
+| Tasks           | `task list`, `task status <id>`, `task cancel <id>`                                                                                                                                                                            |
 
 - `ls` and `tree` start from `viking://` by default and return at most 100 entries; page with `--limit` and `--offset`, and `tree` also accepts `--level_limit`.
 - `write` replaces existing content by default; `--mode create` creates a file and `--mode append` appends.
 - `add-resource` and `add-skill` accept remote addresses, not local file paths.
 - `add-memory` appends the content to the session given by `--session-id` as a user message, then commits that session.
-- `compile` uses the built-in llm-wiki Skill by default, and `--skill` selects another one; `compile create` only saves the compile configuration without starting a compile.
+- Save a named configuration with `compile create`, then run it with `compile --compile-name <name>`. Repeat `--from` or separate source directory URIs with commas. Use `--instruction` for extra instructions and `--args` for model and scheduling options as a JSON object. `task status <id>` checks the returned task ID.
 - `task cancel` asks the server for cooperative cancellation, so a task may not stop immediately.
 - Option spelling differs by command: `add-skill` uses `--target-uri` while `find` uses `--target_uri`. Check `ov help` for the exact names.
 - Imports, compiles and memory commits returning task IDs are tracked automatically. Task state is separate from submission results, and the terminal unlocks when submission returns.

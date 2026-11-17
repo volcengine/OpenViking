@@ -287,6 +287,7 @@ fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
         }
         GitError::TooManyFiles { .. }
         | GitError::TooManyLogPaths { .. }
+        | GitError::InvalidLogOffset(_)
         | GitError::LogPathTooDeep { .. }
         | GitError::LogScanLimitExceeded { .. }
         | GitError::IgnoreFileTooLarge { .. }
@@ -496,9 +497,9 @@ fn optional_bool(kwargs: &Bound<PyDict>, key: &str, default: bool) -> PyResult<b
 
 fn optional_usize(kwargs: &Bound<PyDict>, key: &str, default: usize) -> PyResult<usize> {
     match kwargs.get_item(key)? {
-        Some(v) if !v.is_none() => v
-            .extract::<usize>()
-            .map_err(|_| PyValueError::new_err(format!("kwarg {} must be a non-negative integer", key))),
+        Some(v) if !v.is_none() => v.extract::<usize>().map_err(|_| {
+            PyValueError::new_err(format!("kwarg {} must be a non-negative integer", key))
+        }),
         _ => Ok(default),
     }
 }
@@ -550,6 +551,7 @@ pub fn parse_restore_request(kwargs: &Bound<PyDict>) -> PyResult<RestoreRequest>
         branch: require_str(kwargs, "branch")?,
         project_dir: optional_str(kwargs, "project_dir")?,
         source_commit: require_str(kwargs, "source_commit")?,
+        allow_missing_source: optional_bool(kwargs, "allow_missing_source", false)?,
         dry_run: optional_bool(kwargs, "dry_run", false)?,
         message: optional_str(kwargs, "message")?,
         author_name: require_str(kwargs, "author_name")?,
@@ -595,6 +597,7 @@ pub fn parse_log_request(kwargs: &Bound<PyDict>) -> PyResult<LogRequest> {
         account: require_str(kwargs, "account")?,
         branch: require_str(kwargs, "branch")?,
         limit: optional_usize(kwargs, "limit", 20)?,
+        offset: optional_usize(kwargs, "offset", 0)?,
         paths: optional_string_list(kwargs, "paths")?,
     })
 }
@@ -916,15 +919,9 @@ mod tests {
             .map(|i| format!("after-{i}\n"))
             .collect::<String>();
 
-        let output = build_bounded_unified_diff(
-            &before,
-            &after,
-            "file@old",
-            "file@new",
-            5,
-            2 * 1024 * 1024,
-        )
-        .expect("deadline should produce an approximate diff");
+        let output =
+            build_bounded_unified_diff(&before, &after, "file@old", "file@new", 5, 2 * 1024 * 1024)
+                .expect("deadline should produce an approximate diff");
 
         assert!(output.starts_with("--- file@old\n+++ file@new\n"));
         assert!(output.contains("-before-0\n"));
@@ -951,10 +948,7 @@ mod tests {
         )
         .expect("small text diff should succeed");
 
-        assert_eq!(
-            output.matches("\\ No newline at end of file").count(),
-            2
-        );
+        assert_eq!(output.matches("\\ No newline at end of file").count(), 2);
     }
 
     #[test]
@@ -1229,10 +1223,38 @@ mod tests {
             };
             let obj = commit_response_to_pydict(py, resp).expect("converts");
             let d = obj.bind(py).downcast::<PyDict>().unwrap();
-            assert_eq!(d.get_item("result").unwrap().unwrap().extract::<String>().unwrap(), "created");
-            assert_eq!(d.get_item("commit_oid").unwrap().unwrap().extract::<String>().unwrap(), oid.to_hex().to_string());
-            assert_eq!(d.get_item("changed").unwrap().unwrap().extract::<usize>().unwrap(), 2);
-            assert_eq!(d.get_item("ignored").unwrap().unwrap().extract::<usize>().unwrap(), 3);
+            assert_eq!(
+                d.get_item("result")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "created"
+            );
+            assert_eq!(
+                d.get_item("commit_oid")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                oid.to_hex().to_string()
+            );
+            assert_eq!(
+                d.get_item("changed")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                d.get_item("ignored")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                3
+            );
         });
     }
 
@@ -1247,9 +1269,30 @@ mod tests {
             };
             let obj = commit_response_to_pydict(py, resp).expect("converts");
             let d = obj.bind(py).downcast::<PyDict>().unwrap();
-            assert_eq!(d.get_item("result").unwrap().unwrap().extract::<String>().unwrap(), "noop");
-            assert_eq!(d.get_item("commit_oid").unwrap().unwrap().extract::<String>().unwrap(), oid.to_hex().to_string());
-            assert_eq!(d.get_item("ignored").unwrap().unwrap().extract::<usize>().unwrap(), 4);
+            assert_eq!(
+                d.get_item("result")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "noop"
+            );
+            assert_eq!(
+                d.get_item("commit_oid")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                oid.to_hex().to_string()
+            );
+            assert_eq!(
+                d.get_item("ignored")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                4
+            );
         });
     }
 
@@ -1278,11 +1321,19 @@ mod tests {
             let first = list.get_item(0).unwrap();
             let d = first.downcast::<PyDict>().unwrap();
             assert_eq!(
-                d.get_item("oid").unwrap().unwrap().extract::<String>().unwrap(),
+                d.get_item("oid")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
                 oid.to_hex().to_string()
             );
             assert_eq!(
-                d.get_item("message").unwrap().unwrap().extract::<String>().unwrap(),
+                d.get_item("message")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
                 "subject\n\nbody"
             );
             let parents = d.get_item("parents").unwrap().unwrap();
@@ -1374,6 +1425,7 @@ mod tests {
             branch: "main".into(),
             project_dir: Some("resources/x".into()),
             source_commit: "deadbeef".into(),
+            allow_missing_source: false,
             dry_run: false,
             message: None,
             author_name: "n".into(),

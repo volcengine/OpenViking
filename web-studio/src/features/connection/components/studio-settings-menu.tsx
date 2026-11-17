@@ -1,5 +1,6 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
+import { StudioVersion } from '#/features/connection/components/studio-version'
 import { validateFilesystemSearch } from '#/features/workbench/filesystem/lib/types'
 import { cn } from '#/shared/lib/utils'
 import { Link } from '@tanstack/react-router'
@@ -70,7 +71,7 @@ export function StudioSettingsMenu({
 }) {
   const { t, i18n } = useTranslation('appShell')
   const { setTheme, resolvedTheme } = useTheme()
-  const { provider } = useStudioService()
+  const { provider, version } = useStudioService()
   const {
     connection,
     serverMode,
@@ -343,6 +344,11 @@ export function StudioSettingsMenu({
             {t('studioSettings.manageConnections')}
           </Link>
         </div>
+        {!managementMode && version ? (
+          <div className="border-t border-border/70 px-3 py-2">
+            <StudioVersion />
+          </div>
+        ) : null}
       </PopoverContent>
     </Popover>
   )

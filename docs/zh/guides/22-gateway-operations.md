@@ -367,7 +367,7 @@ Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`�
 
 所有探针都不带凭证访问 `/health`，只返回本地状态，不调用 OpenViking 或 Redis。startupProbe 预算为 300 秒（`2 × 150`）。启动完成后，OpenViking 故障不会使 Pod 摘流。
 
-停机预算是 `15s preStop + upstream_timeout_seconds + 最多 100s capture 排空`。chart 默认的 `terminationGracePeriodSeconds: 660` 覆盖 preStop 和一条持续到默认 600 秒上游超时的流；capture 尚未排空就被 Kubernetes 终止时，其他副本会在 lease 到期后接手。要让 capture 在 Pod 被终止前排空，把它调到 `15 + upstream_timeout_seconds + 100`（默认超时下为 715）。
+停机预算是 `15s preStop + 仍在进行的最长请求 + 最多 100s capture 排空`。`upstream_timeout_seconds` 限制的是请求等待一个不发数据的服务商的时长，而不是持续有数据的回复能持续多久，所以除非设置了 OpenViking 工具的**总时长**，网关不限制请求能持续多久。客户端不断开连接但停止读取时，请求同样会一直保持，需要靠 ingress 或负载均衡的空闲超时来关闭。chart 默认的 `terminationGracePeriodSeconds: 660` 在 preStop 之后给进行中的请求留 645 秒；宽限期结束时仍在流式输出的回复会在 Pod 被终止时切断，客户端看到连接关闭。capture 尚未排空就被 Kubernetes 终止时，其他副本会在 lease 到期后接手。要让最长 N 秒的请求完成、capture 在 Pod 被终止前排空，把它调到 `15 + N + 100`（N = 600 时为 715）。
 
 ### 宿主集成约定 {#host-integration-contract}
 

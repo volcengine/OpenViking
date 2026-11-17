@@ -26,6 +26,7 @@ async fn test_snapshot_log_commit_indexes_file_and_directory_paths() {
             account: "acct_snapshot_log".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["resources/a.md".into()]),
         })
         .await
@@ -38,6 +39,7 @@ async fn test_snapshot_log_commit_indexes_file_and_directory_paths() {
             account: "acct_snapshot_log".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["resources".into()]),
         })
         .await
@@ -77,6 +79,7 @@ async fn test_snapshot_log_file_replacing_directory_indexes_descendant_deletes()
             account: "acct_snapshot_replace".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["docs/old.md".into()]),
         })
         .await
@@ -85,50 +88,55 @@ async fn test_snapshot_log_file_replacing_directory_indexes_descendant_deletes()
     assert_eq!(oids, vec![c2, c1]);
 }
 
+/// Verify filtered pages across a fixed SQLite boundary and reject unrepresentable offsets.
 #[tokio::test]
 async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
     let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_snapshot_tail");
+    let store = make_snapshot_log_store().await;
+    let mut svc = svc.with_snapshot_log(Some(store.clone()));
     vfs.put("resources/a.md", b"v1");
     let c1 = make_commit(&svc, "acct_snapshot_tail", "main", "first").await;
     vfs.put("resources/a.md", b"v2");
     let c2 = make_commit(&svc, "acct_snapshot_tail", "main", "second").await;
 
-    let store = make_snapshot_log_store().await;
-    store
-        .append_rows_if_latest(
-            "acct_snapshot_tail",
-            "main",
-            None,
-            &[
-                SnapshotLogRow {
-                    path: "/".into(),
-                    commit_oid: c1.to_hex().to_string(),
-                },
-                SnapshotLogRow {
-                    path: "resources".into(),
-                    commit_oid: c1.to_hex().to_string(),
-                },
-                SnapshotLogRow {
-                    path: "resources/a.md".into(),
-                    commit_oid: c1.to_hex().to_string(),
-                },
-            ],
-        )
-        .await
-        .unwrap();
+    svc.snapshot_log_store = None;
+    vfs.put("resources/other.md", b"other-v1");
+    make_commit(&svc, "acct_snapshot_tail", "main", "unrelated").await;
+    vfs.put("resources/a.md", b"v3");
+    let c3 = make_commit(&svc, "acct_snapshot_tail", "main", "third").await;
+    vfs.put("resources/other.md", b"other-v2");
+    make_commit(&svc, "acct_snapshot_tail", "main", "unrelated again").await;
+    vfs.put("resources/a.md", b"v4");
+    let c4 = make_commit(&svc, "acct_snapshot_tail", "main", "fourth").await;
+    svc.snapshot_log_store = Some(store);
+    // Keep the indexed boundary at c2 while verifying each page.
+    svc.snapshot_log_backfills.lock().unwrap()
+        .insert(("acct_snapshot_tail".into(), "main".into()));
 
-    let svc = svc.with_snapshot_log(Some(store));
-    let log = svc
-        .log(LogRequest {
-            account: "acct_snapshot_tail".into(),
-            branch: "main".into(),
-            limit: 10,
-            paths: Some(vec!["resources/a.md".into()]),
-        })
-        .await
-        .unwrap();
-    let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
-    assert_eq!(oids, vec![c2, c1]);
+    let request = LogRequest {
+        account: "acct_snapshot_tail".into(),
+        branch: "main".into(),
+        limit: 2,
+        offset: 0,
+        paths: Some(vec!["resources/a.md".into()]),
+    };
+    for (offset, expected) in [
+        (0, vec![c4, c3]),
+        (1, vec![c3, c2]),
+        (2, vec![c2, c1]),
+        (3, vec![c1]),
+        (4, vec![]),
+    ] {
+        let log = svc.log(LogRequest { offset, ..request.clone() }).await.unwrap();
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, expected, "offset={offset}");
+    }
+    #[cfg(target_pointer_width = "64")]
+    {
+        let err = svc.log(LogRequest { offset: i64::MAX as usize + 1, ..request })
+            .await.unwrap_err();
+        assert!(matches!(err, GitError::InvalidLogOffset(_)));
+    }
 }
 
 #[tokio::test]
@@ -148,6 +156,7 @@ async fn test_snapshot_log_restore_indexes_project_dir_relative_paths() {
             branch: "main".into(),
             project_dir: Some("proj".into()),
             source_commit: c1.to_hex().to_string(),
+            allow_missing_source: false,
             dry_run: false,
             message: None,
             author_name: "tester".into(),
@@ -165,6 +174,7 @@ async fn test_snapshot_log_restore_indexes_project_dir_relative_paths() {
             account: "acct_snapshot_restore".into(),
             branch: "main".into(),
             limit: 10,
+            offset: 0,
             paths: Some(vec!["proj/a.md".into()]),
         })
         .await
@@ -190,11 +200,9 @@ async fn test_snapshot_log_store_rejects_non_root_commit_when_empty() {
         .unwrap_err();
 
     assert!(err.is_stale_latest());
-    assert!(
-        store
-            .load_latest_indexed_commit("acct_snapshot_empty", "main")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(store
+        .load_latest_indexed_commit("acct_snapshot_empty", "main")
+        .await
+        .unwrap()
+        .is_none());
 }

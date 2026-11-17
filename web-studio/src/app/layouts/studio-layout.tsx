@@ -4,6 +4,7 @@ import { StudioHeader } from '#/app/layouts/studio-header'
 import { StudioManagementNavigation } from '#/app/navigation/studio-management-navigation'
 import { shouldShowGatewayNavigation } from '#/app/navigation/visibility'
 import { GeneratedCredentialDialog } from '#/features/connection/components/generated-credential-dialog'
+import { StudioVersion } from '#/features/connection/components/studio-version'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioMode } from '#/features/connection/hooks/use-studio-mode'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
@@ -17,6 +18,7 @@ import { ScrollArea } from '#/shared/ui/scroll-area'
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarInset,
   SidebarProvider,
   useSidebar,
@@ -124,6 +126,11 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
                   developmentMode={serverMode === 'dev'}
                 />
               </SidebarContent>
+              {service.version ? (
+                <SidebarFooter className="border-t border-sidebar-border/70 px-3">
+                  <StudioVersion />
+                </SidebarFooter>
+              ) : null}
             </Sidebar>
           ) : null}
 

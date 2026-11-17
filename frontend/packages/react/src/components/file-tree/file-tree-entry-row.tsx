@@ -5,11 +5,7 @@ import {
   FileTreeFileIcon,
   FileTreeFolderIcon,
 } from './file-tree-icons.js';
-import {
-  resolveFileTreeInfoKey,
-  showsInlineDescription,
-} from './file-tree-info.js';
-import { resolveInfoCopy } from './file-tree-info-labels.js';
+import { FileTreeEntryLabel } from './file-tree-entry-label.js';
 import { Popover } from '../../shared/primitives/popover/index.js';
 import { resolveFileTreeInfoCopy } from './file-tree-info-tooltip.js';
 import { FileTreeTooltipContent } from './file-tree-tooltip-surface.js';
@@ -59,13 +55,6 @@ export function FileTreeRowView({
     ...extraAttributes
   } = extra;
   const trailing = renderRowTrailing?.(row) ?? null;
-  // 宿主给了 description 就用它（含显式空串）；否则按 uri 取内置说明。
-  const infoKey = resolveFileTreeInfoKey(row.uri);
-  const description =
-    row.description ??
-    (infoKey && showsInlineDescription(infoKey)
-      ? resolveInfoCopy(infoKey, ctx.infoLabels).description
-      : undefined);
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     // 点展开箭头时不再冒泡触发选中。The chevron handles its own click.
@@ -139,15 +128,11 @@ export function FileTreeRowView({
         )}
       </span>
 
-      <span
-        className="ov-file-tree__label-group"
-        data-description={Boolean(description) || undefined}
-      >
-        <span className="ov-file-tree__label">{row.name}</span>
-        {description ? (
-          <span className="ov-file-tree__description">{description}</span>
-        ) : null}
-      </span>
+      <FileTreeEntryLabel
+        row={row}
+        infoLabels={ctx.infoLabels}
+        sharedLabel={text.shared}
+      />
 
       {row.busy && !canExpand ? (
         <span className="ov-file-tree__spinner" />

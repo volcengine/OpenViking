@@ -187,7 +187,7 @@ When a single OpenViking call fails, the model receives an error result and can 
 
 - The provider rejects a follow-up model request.
 - The model calls an OpenViking tool that is not available in this conversation, or keeps calling OpenViking tools after they were refused.
-- **Hidden tool request timed out**: the OpenViking tool rounds took longer than the profile's tool **Total time**; or, with no total time set, one model request during the rounds took longer than `upstream_timeout_seconds`.
+- **Hidden tool request timed out**: the OpenViking tool rounds took longer than the profile's tool **Total time**; or, during the rounds, the provider took longer than `upstream_timeout_seconds` to start a reply or sent nothing for that long in the middle of one. A model reply that keeps arriving is limited only by **Total time**.
 
 The client then receives an error, and the request log shows **OpenViking tools failed** (`hidden_tool_loop_failed`). What the error looks like depends on the request:
 

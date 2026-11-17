@@ -27,6 +27,11 @@ for (const name of [
   globalThis[name] = name === 'window' ? dom.window : dom.window[name];
 }
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);
+// jsdom omits scrolling and CSS.escape. FileTree uses it in a quoted selector.
+HTMLElement.prototype.scrollIntoView = () => {};
+globalThis.CSS = {
+  escape: (value) => value.replaceAll('\\', '\\\\').replaceAll('"', '\\"'),
+};
 Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
   value: dom.window.navigator,

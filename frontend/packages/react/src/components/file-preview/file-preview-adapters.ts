@@ -1,4 +1,4 @@
-import { fenceMarkdownFrontmatter } from './file-preview-frontmatter.js';
+import { fenceMarkdownFrontmatter } from '../../shared/markdown/preview-frontmatter.js';
 import { code } from '@ark-design/ui/file-viewer/adapters/code';
 import { diff } from '@ark-design/ui/file-viewer/adapters/diff';
 import { html } from '@ark-design/ui/file-viewer/adapters/html';

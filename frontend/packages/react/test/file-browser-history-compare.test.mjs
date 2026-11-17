@@ -1,3 +1,4 @@
+import './helpers/history-viewer-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -6,12 +7,11 @@ import {
   fixture,
   mount,
   ok,
-  rootUri,
   tree,
   workflow,
 } from './helpers/preview-native-dom.mjs';
 
-const uri = `${rootUri}/notes.md`;
+const uri = 'viking://user/alice/skills/notes.md';
 const original = '# Notes\nBefore\n';
 const latest = '# Notes\nAfter\n';
 const oldOid = 'a'.repeat(40);
@@ -48,12 +48,14 @@ test('history previews, compares, and copies a revision without writing', async 
       },
     },
   });
-  const view = await mount(tree(fetch, uri));
+  const view = await mount(tree(fetch, uri, { rootUri: 'viking://' }));
   try {
     await click(view.container.querySelector('[aria-label="Version history"]'));
-    const versions = workflow().querySelectorAll('aside li button');
+    const versions = workflow().querySelectorAll(
+      'aside .ov-file-history__commit-list button',
+    );
     assert.equal(versions.length, 2);
-    assert.match(versions[1].textContent, /Earlier note/);
+    assert.match(versions[1].textContent, /2026-11-10/);
     await click(versions[1]);
     assert.equal(
       fetch.calls.some(
@@ -63,14 +65,19 @@ test('history previews, compares, and copies a revision without writing', async 
       false,
     );
     await click(workflow().querySelector('[role="switch"]'));
-    assert.match(
-      workflow().querySelector('li[data-change="removed"]').textContent,
-      /Before/,
-    );
-    assert.match(
-      workflow().querySelector('li[data-change="added"]').textContent,
-      /After/,
-    );
+    const added = workflow().querySelector(
+      '[data-testid="history-viewer-source"]',
+    ).textContent;
+    assert.match(added, /--- \/dev\/null/);
+    assert.match(added, /\+Before/);
+    assert.doesNotMatch(added, /-After/);
+    await click(workflow().querySelector('[aria-label="Compare with"]'));
+    await click(document.querySelector('[role="option"]'));
+    const patch = workflow().querySelector(
+      '[data-testid="history-viewer-source"]',
+    ).textContent;
+    assert.match(patch, /-After/);
+    assert.match(patch, /\+Before/);
     assert.equal(fetch.countOf('/api/v1/snapshot/diff'), 0);
     await click(button('Copy source', workflow()));
     assert.deepEqual(writes, [original]);

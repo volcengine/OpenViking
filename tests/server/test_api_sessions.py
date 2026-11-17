@@ -642,6 +642,55 @@ async def test_session_initialization_preserves_concurrent_message(
     assert meta["last_message_at"]
 
 
+async def test_concurrent_create_with_explicit_id_has_single_winner(
+    client: httpx.AsyncClient,
+    monkeypatch,
+):
+    session_id = "concurrent-explicit-create"
+    request_count = 8
+    ready_count = 0
+    ready_lock = asyncio.Lock()
+    all_ready = asyncio.Event()
+    original_ensure_exists = Session.ensure_exists
+
+    async def synchronize_before_create(session):
+        nonlocal ready_count
+        if session.session_id == session_id:
+            async with ready_lock:
+                ready_count += 1
+                if ready_count == request_count:
+                    all_ready.set()
+            await asyncio.wait_for(all_ready.wait(), timeout=5)
+        return await original_ensure_exists(session)
+
+    monkeypatch.setattr(Session, "ensure_exists", synchronize_before_create)
+    requests = [
+        {
+            "session_id": session_id,
+            "auto_commit_policy": {"message_count_threshold": threshold},
+        }
+        for threshold in range(10, 10 + request_count)
+    ]
+
+    responses = await asyncio.wait_for(
+        asyncio.gather(*(client.post("/api/v1/sessions", json=request) for request in requests)),
+        timeout=10,
+    )
+
+    winners = [response for response in responses if response.status_code == 200]
+    conflicts = [response for response in responses if response.status_code == 409]
+    assert len(winners) == 1
+    assert len(conflicts) == request_count - 1
+    assert all(response.json()["error"]["code"] == "ALREADY_EXISTS" for response in conflicts)
+
+    persisted = await client.get(f"/api/v1/sessions/{session_id}")
+    assert persisted.status_code == 200
+    assert (
+        persisted.json()["result"]["auto_commit_policy"]
+        == winners[0].json()["result"]["auto_commit_policy"]
+    )
+
+
 async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]

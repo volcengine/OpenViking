@@ -4,7 +4,13 @@ import { mount, ok, recordingFetch } from './module-dom.mjs';
 const root = 'viking://user/alice';
 const wiki = `${root}/resources/handbook`;
 
-export async function metadataFixture({ uri, content, kinds, registry }) {
+export async function metadataFixture({
+  uri,
+  content,
+  kinds,
+  registry,
+  taggedTarget,
+}) {
   let browser;
   let document = content;
   const history = [];
@@ -13,7 +19,12 @@ export async function metadataFixture({ uri, content, kinds, registry }) {
     if (path.endsWith('/configs'))
       return registry ?? ok({ targets: [{ to: wiki }] });
     if (path.endsWith('/attrs'))
-      return ok({ uri: canonical, attrs: { tags: [] } });
+      return ok({
+        uri: canonical,
+        attrs: {
+          tags: query.uri === taggedTarget ? ['compile_target=true'] : [],
+        },
+      });
     if (path.endsWith('/stat')) return ok({ uri: canonical, isDir: false });
     if (path.endsWith('/ls')) return ok([{ uri: canonical, isDir: false }]);
     if (path.endsWith('/read')) {
