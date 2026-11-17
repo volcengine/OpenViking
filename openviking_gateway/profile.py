@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Session-start profile and catalogs, matching the shared memory plugin."""
+"""Session-start soul, profile and catalogs; the last two match the shared memory plugin."""
 
 import asyncio
 import html
@@ -86,7 +86,7 @@ def format_listing(uri, entries, budget, more_hint):
 def sanitize_inline(text):
     text = neutralize(re.sub(r"\s+", " ", text).strip())
     return re.sub(
-        r"</?(?:available-skills|available-memories|user-profile|memory)\b[^>]*>",
+        r"</?(?:agent-soul|available-skills|available-memories|user-profile|memory)\b[^>]*>",
         lambda match: html.escape(match[0], quote=False),
         text,
         flags=re.I,
@@ -178,9 +178,17 @@ async def resolve_user_space(fetch):
     return spaces[0] if len(spaces) == 1 else fallback
 
 
-async def read_profile(fetch, uri):
+async def read_file(fetch, uri):
     result = await fetch("/api/v1/content/read", {"uri": uri}, "")
     return neutralize(result.strip()) if isinstance(result, str) else ""
+
+
+def framed(tag, uri, content, budget, shorten):
+    """``content`` in a ``<tag uri=…>`` element of at most ``budget`` tokens, or ""."""
+    opening = f'<{tag} uri="{html.escape(uri, quote=True)}">'
+    limit = max(0, budget - estimate_tokens(f"{opening}\n\n</{tag}>"))
+    content = content and shorten(content, limit)
+    return f"{opening}\n{content}\n</{tag}>" if content else ""
 
 
 async def ls_dir(fetch, uri):
@@ -213,7 +221,7 @@ async def build_profile(viking, key, policy, tools):
     names = {tool["function"]["name"] for tool in tools}
     catalog = "openviking_read" in names
     budget = policy.profile_max_tokens
-    if not budget or not (policy.profile or catalog):
+    if not budget or not (policy.profile or policy.soul or catalog):
         return {"text": "", "reason": "disabled", "parts": []}
     if viking.unavailable_reason:
         # Like recall, skip the profile while OV is down instead of waiting for its timeout.
@@ -239,6 +247,9 @@ async def build_profile(viking, key, policy, tools):
                     raise ValueError("invalid profile response")
                 return result
         except (VikingError, asyncio.TimeoutError, ValueError) as error:
+            if isinstance(error, VikingError) and error.status == 404:
+                # Nothing is saved there yet, such as a new user's profile.md.
+                return default
             reason = (
                 "profile_timeout"
                 if isinstance(error, asyncio.TimeoutError)
@@ -251,9 +262,10 @@ async def build_profile(viking, key, policy, tools):
         space = await resolve_user_space(fetch)
         root = f"viking://user/{space}/memories"
         paths, requests = [], []
-        if policy.profile:
-            paths.append("profile.md")
-            requests.append(read_profile(fetch, root + "/profile.md"))
+        for path, wanted in (("soul.md", policy.soul), ("profile.md", policy.profile)):
+            if wanted:
+                paths.append(path)
+                requests.append(read_file(fetch, root + "/" + path))
         if catalog:
             for path in ("preferences", "entities"):
                 paths.append(path)
@@ -263,20 +275,28 @@ async def build_profile(viking, key, policy, tools):
 
     async def skills():
         if not catalog or budget < 4:
-            return ""
-        result = await fetch("/api/v1/skills", {"node_limit": 200}, {})
-        return format_skill_catalog(skill_groups(result), budget // 4)
+            return []
+        return skill_groups(await fetch("/api/v1/skills", {"node_limit": 200}, {}))
 
-    (root, values), skill_text = await asyncio.gather(memories(), skills())
-    remaining = budget - estimate_tokens(skill_text) - bool(skill_text)
-    profile = values.get("profile.md", "")
-    profile_text = ""
-    if profile:
-        opening = f'<user-profile uri="{html.escape(root + "/profile.md", quote=True)}">'
-        frame_cost = estimate_tokens(opening + "\n\n</user-profile>")
-        content = elide_profile(profile, max(0, remaining // 2 - frame_cost))
-        if content:
-            profile_text = f"{opening}\n{content}\n</user-profile>"
+    (root, values), groups = await asyncio.gather(memories(), skills())
+    # The soul is instructions, so it takes the budget first and is cut only past all of it.
+    soul_text = framed(
+        "agent-soul",
+        root + "/soul.md",
+        values.get("soul.md", ""),
+        budget,
+        lambda text, limit: truncate(text, limit, "\n... [soul truncated]"),
+    )
+    remaining = budget - estimate_tokens(soul_text) - bool(soul_text)
+    skill_text = format_skill_catalog(groups, remaining // 4)
+    remaining -= estimate_tokens(skill_text) + bool(skill_text)
+    profile_text = framed(
+        "user-profile",
+        root + "/profile.md",
+        values.get("profile.md", ""),
+        remaining // 2,
+        elide_profile,
+    )
     remaining -= estimate_tokens(profile_text) + bool(profile_text)
     frame_cost = estimate_tokens("<available-memories>\n\n</available-memories>")
     listing_budget = max(0, remaining - frame_cost)
@@ -295,7 +315,12 @@ async def build_profile(viking, key, policy, tools):
         if pref or ent
         else ""
     )
-    produced = {"profile": profile_text, "memories": memory_text, "skills": skill_text}
+    produced = {
+        "soul": soul_text,
+        "profile": profile_text,
+        "memories": memory_text,
+        "skills": skill_text,
+    }
     text = "\n".join(part for part in produced.values() if part)
     reason = "injected" if text else "empty"
     if failures:

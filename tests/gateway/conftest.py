@@ -72,6 +72,7 @@ class FakeViking:
         self.rendered = None
         self.profile_requests = []
         self.profile = ""
+        self.soul = ""
         self.preferences = []
         self.entities = []
         self.skills = []
@@ -103,7 +104,7 @@ class FakeViking:
         if parsed.path == "/api/v1/skills":
             return {"skills": self.skills}
         if parsed.path == "/api/v1/content/read":
-            return self.profile
+            return self.soul if uri.endswith("/soul.md") else self.profile
         if uri == "viking://user":
             return [{"name": "alice", "isDir": True}]
         return self.preferences if uri.endswith("/preferences") else self.entities
