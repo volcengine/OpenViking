@@ -65,6 +65,9 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     OPENVIKING_HOOK_STATE_DIR: join(root, "state"),
     OPENVIKING_MEMORY_ENABLED: "1",
     OPENVIKING_WRITE_PATH_ASYNC: "0",
+    // This test checks recall and cursor semantics; a threshold of 1 keeps its
+    // commit assertions independent of the threshold batching tested below.
+    OPENVIKING_COMMIT_TURN_THRESHOLD: "1",
   };
   try {
     const base = { conversationId: "conv-1", cwd: "/workspace", transcriptPath };
@@ -218,6 +221,79 @@ test("Antigravity reads transcript_full.jsonl in place of the truncated transcri
     assert.equal(antigravityTranscriptPath(other), other);
     assert.equal(antigravityTranscriptPath(undefined), "");
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity commits once captured messages reach commitTurnThreshold", async () => {
+  const messages = [];
+  const commits = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      if (request.url === "/api/v1/search/search" || request.url === "/api/v1/search/recall") {
+        response.end(JSON.stringify({ result: { rendered: "", entries: [], stats: {} } }));
+      } else if (request.url?.includes("/messages")) {
+        const parsed = JSON.parse(body);
+        messages.push(...(parsed.messages ?? [parsed]));
+        response.end(JSON.stringify({ result: { ok: true } }));
+      } else {
+        if (request.url?.endsWith("/commit")) commits.push(request.url);
+        response.end(JSON.stringify({ result: { ok: true } }));
+      }
+    });
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const root = mkdtempSync(join(tmpdir(), "openviking-antigravity-threshold-"));
+  const transcriptPath = join(root, "transcript_full.jsonl");
+  const stateFile = join(root, "state", "antigravity", "conv-thresh.json");
+  const writeState = () => JSON.parse(readFileSync(stateFile, "utf8"));
+  // Default threshold: 8 captured messages since the last commit.
+  const env = {
+    HOME: root,
+    OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
+    OPENVIKING_HOOK_STATE_DIR: join(root, "state"),
+    OPENVIKING_MEMORY_ENABLED: "1",
+    OPENVIKING_WRITE_PATH_ASYNC: "0",
+  };
+  const say = (index, question, answer) => step(index, { source: "USER_EXPLICIT", type: "USER_INPUT", content: `<USER_REQUEST>\n${question}\n</USER_REQUEST>` })
+    + step(index + 1, { source: "MODEL", type: "PLANNER_RESPONSE", content: answer });
+  try {
+    const base = { conversationId: "conv-thresh", cwd: "/workspace", transcriptPath };
+    // 2 messages: below the threshold, sent but not committed.
+    writeFileSync(transcriptPath, say(0, "What is the first question?", "The first answer has enough signal."));
+    await runHook("stop", base, env);
+    assert.equal(messages.length, 2);
+    assert.equal(commits.length, 0);
+    assert.equal(writeState().capturedSinceCommit, 2);
+
+    // 5 more (7 total): still below the threshold.
+    appendFileSync(transcriptPath, say(2, "What is the second question?", "The second answer has enough signal.")
+      + step(4, { source: "MODEL", type: "PLANNER_RESPONSE", content: "An extra remark with enough signal to be captured." })
+      + say(5, "What is the third question?", "The third answer has enough signal."));
+    await runHook("stop", base, env);
+    assert.equal(messages.length, 7);
+    assert.equal(commits.length, 0);
+    assert.equal(writeState().capturedSinceCommit, 7);
+
+    // 2 more (9 total): the threshold is crossed, one commit commits everything
+    // sent, and the counter starts over.
+    appendFileSync(transcriptPath, say(7, "What is the fourth question?", "The fourth answer has enough signal."));
+    await runHook("stop", base, env);
+    assert.equal(messages.length, 9);
+    assert.equal(commits.length, 1);
+    assert.ok(commits[0].includes("ag-conv-thresh"));
+    assert.equal(writeState().capturedSinceCommit, 0);
+
+    // The tail below the threshold waits for later messages of the conversation.
+    appendFileSync(transcriptPath, say(9, "What is the fifth question?", "The fifth answer has enough signal."));
+    await runHook("stop", base, env);
+    assert.equal(messages.length, 11);
+    assert.equal(commits.length, 1);
+    assert.equal(writeState().capturedSinceCommit, 2);
+  } finally {
+    server.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

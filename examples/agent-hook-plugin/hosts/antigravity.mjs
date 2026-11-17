@@ -11,7 +11,8 @@
  * from the last recorded request marks it as a new turn. Injected
  * context goes back as a `systemMessage` step, which stays in the conversation.
  * Stop carries no message text: capture reads the finished steps of
- * `transcriptPath` after the last captured step.
+ * `transcriptPath` after the last captured step. Sent messages commit once
+ * `commitTurnThreshold` of them have accumulated since the last commit.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -20,6 +21,7 @@ import { basename, dirname, join } from "node:path";
 
 import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { shouldCommitCapture } from "./incremental-turn-capture.mjs";
 
 // The host wraps a typed request as `<USER_REQUEST>…</USER_REQUEST>` followed by
 // metadata blocks. Only that record is unwrapped, and only an envelope that
@@ -157,7 +159,7 @@ export const antigravity = {
     input.prompt_id = `${input.conversationId}:${turnStep ?? input.initialNumSteps}`;
     return text;
   },
-  async capture(ctx, state) {
+  async capture(ctx, state, event) {
     const afterStep = Number.isInteger(state.lastStep) ? state.lastStep : -1;
     const path = antigravityTranscriptPath(ctx.input.transcriptPath);
     const jsonl = path ? await readFile(path, "utf8").catch(() => "") : "";
@@ -168,8 +170,16 @@ export const antigravity = {
       ? await addAgentMessages(ctx.fetchJSON, ctx.sessionId, kept, ctx.peerId)
       : { sent: 0, queued: 0 };
     const captured = result.sent + result.queued;
-    if (captured > 0) await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
+    // The host has no exit hook, so like Cursor, Kimi Code, CodeBuddy Code and
+    // Qoder CLI, `Stop` sends the messages and commits only once
+    // `commitTurnThreshold` captured messages have accumulated; the tail below
+    // the threshold waits for later messages of the same conversation.
+    let capturedSinceCommit = Number(state.capturedSinceCommit || 0) + captured;
+    if (shouldCommitCapture(event, ctx.cfg, state.capturedSinceCommit, captured)) {
+      const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
+      if (committed.ok || committed.pendingQueued) capturedSinceCommit = 0;
+    }
     // Keep the cursor when a write was lost, so the next Stop resends it.
-    return { ...state, lastStep: captured >= kept.length ? lastStep : afterStep };
+    return { ...state, lastStep: captured >= kept.length ? lastStep : afterStep, capturedSinceCommit };
   },
 };

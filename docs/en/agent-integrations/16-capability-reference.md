@@ -58,7 +58,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | Every 8 captured messages | Yes | Commits uncommitted messages |
 | CodeBuddy Code | Yes, session-aware, in the interactive TUI only | Profile, memory index, skills | Every 8 captured messages | Yes, in the interactive TUI only | Commits uncommitted messages |
 | Qoder CLI | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | Yes | Commits uncommitted messages |
-| Antigravity | Yes, session-aware, at the first model call of each turn | Profile, memory index, skills | Every turn | No exit hook; turns are already committed | No pre-compaction hook |
+| Antigravity | Yes, session-aware, at the first model call of each turn | Profile, memory index, skills | Every 8 captured messages | No exit hook; messages below the threshold wait for later messages | No pre-compaction hook |
 | OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 20,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
 | DSH | Yes, session-aware | Profile, memory index, skills, once per session | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
 | pi | Yes, session-aware | Profile, memory index, skills, every turn | Takeover on: about 30,000 tokens; off: 20,000 | Takeover on: no; off: yes | Takeover replaces pi's summary |
@@ -364,7 +364,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Kimi Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent | `PreCompact` commits everything not yet committed |
 | CodeBuddy Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` (interactive TUI only) commits everything not yet committed, including messages `Stop` already sent; `SessionStart` replays queued writes | `PreCompact` commits everything not yet committed |
 | Qoder CLI | `Stop` after 8 captured messages since the last commit | `SessionEnd` commits everything not yet committed, including messages `Stop` already sent; `SessionStart` replays queued writes | `PreCompact` commits everything not yet committed |
-| Antigravity | Every `Stop` that captured content; steps a missed `Stop` left behind are captured at the next `Stop` | None; `SessionStart` replays queued writes | No pre-compaction hook |
+| Antigravity | `Stop` after 8 captured messages since the last commit; steps a missed `Stop` left behind are captured at the next `Stop` | None; `SessionStart` replays queued writes | No pre-compaction hook |
 | OpenCode | v1 `session.idle`, v2 end of execution: at 20,000 pending tokens | Session deletion, v1 `session.error`, v1 dispose, and v2 cleanup force a commit | v1 before and after compaction; v2 once after compaction ends |
 | DSH | `turn/end` at 20,000 pending tokens | Cordis teardown commits each session | `compaction/start` commits without the threshold check |
 | pi, takeover on (default) | Locally estimated 30,000 tokens with more than 3 user turns | `/viking commit` | `session_before_compact` |
@@ -390,7 +390,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Kimi Code | Commits | Conditional | Not verified | Not verified | No | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent. `Interrupt` shares a 2-second request budget between capture and commit, so a slow capture leaves the commit to the next commit of the same session |
 | CodeBuddy Code | Conditional | No | No | No | No | `SessionEnd` fires only in the interactive TUI, where it commits everything not yet committed, including messages `Stop` already sent; a headless run relies on the threshold or `/compact`. The capture runs in a detached worker that the hook's own timeout does not reach |
 | Qoder CLI | Commits | Not verified | Not verified | Not verified | No | `SessionEnd` fires on `/exit` and at the end of a headless `-p` run, and commits everything not yet committed, including messages `Stop` already sent. The capture runs in a detached worker that the hook's own timeout does not reach |
-| Antigravity | No | No | No | No | No | No exit hook is registered. Every `Stop` that captured content already committed, so at most the turn in progress is left; its finished steps are captured at the next `Stop` of the same conversation |
+| Antigravity | No | No | No | No | No | No exit hook is registered. Messages below the threshold stay uncommitted until later messages of the same conversation arrive; already-written messages are archived by the next commit of the same session |
 | OpenCode | Conditional | Conditional | Conditional | Conditional | No | v1 1.15.11+ `dispose` and v2 cleanup commit every session, but host cleanup time is limited, so slow requests or many sessions can be cut off. v2 cleanup also runs after 60 minutes idle and on plugin hot reload |
 | DSH | Commits | Commits | Commits | No | No | Teardown gives each session one 3-second commit, queued behind any slow write, inside a 5-second process grace period. A second Ctrl+C force-quits without it. Closing a browser tab in the web form does not tear down |
 | pi, takeover on | No | No | No | No | No | `session_shutdown` saves takeover state but does not commit. The next run that reaches the threshold, or `/viking commit` |
@@ -403,7 +403,8 @@ What this means in practice:
 
 - **Commits at a normal exit:** Claude Code, Codex 0.145+, Qoder CLI, OpenCode, DSH, pi with takeover off, and Hermes. The others rely on the recovery in the last column.
 - **No integration commits after `kill -9`.** Written messages stay live until the next commit of that session. A server auto-commit policy with an idle timeout is the only server-side fallback, and the plugins do not configure one.
-- **TRAE, TRAE CN, ZCode, and Antigravity** have the simplest exit behavior because every turn commits, at the cost of a full archive and extraction on every `Stop`.
+- **TRAE, TRAE CN, and ZCode** have the simplest exit behavior because every turn commits, at the cost of a full archive and extraction on every `Stop`.
+- **Antigravity** batches commits behind `OPENVIKING_COMMIT_TURN_THRESHOLD` like Cursor. With no exit hook, the tail below the threshold waits for later messages of the same conversation; `OPENVIKING_COMMIT_TURN_THRESHOLD=1` restores commit-every-`Stop`.
 
 <a id="_3-3-4-pending-queue-offline-compensation-comparison"></a>
 
@@ -586,7 +587,7 @@ Integrations built on the shared plugin code read behavior settings from, highes
 
 Settings that apply only to some integrations:
 
-- `OPENVIKING_COMMIT_TURN_THRESHOLD`: Cursor, Kimi Code, CodeBuddy Code, and Qoder CLI. TRAE, TRAE CN, ZCode, and Antigravity commit every turn.
+- `OPENVIKING_COMMIT_TURN_THRESHOLD`: Cursor, Kimi Code, CodeBuddy Code, Qoder CLI, and Antigravity. TRAE, TRAE CN, and ZCode commit every turn.
 - `OPENVIKING_WRITE_PATH_ASYNC`: Claude Code, Codex, ZCode, and Antigravity.
 - `OPENVIKING_RECALL_COMPRESS=client`: Claude Code and Codex. `server` and `auto` work for every integration listed under [Recall digest](#recall-digest).
 - The workspace files, the `ovcli.conf` `plugin` section, `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`, `OPENVIKING_PEER_SOURCE`, and the skill catalog settings: every integration built on the shared plugin code, not OpenClaw or Hermes.

@@ -58,7 +58,7 @@
 | Kimi Code | 是，带会话 | profile、记忆索引、skill，在首次提问时 | 每捕获 8 条消息 | 是 | 提交尚未提交的消息 |
 | CodeBuddy Code | 是，带会话，仅限交互式 TUI | profile、记忆索引、skill | 每捕获 8 条消息 | 是，仅限交互式 TUI | 提交尚未提交的消息 |
 | Qoder CLI | 是，带会话 | profile、记忆索引、skill | 每捕获 8 条消息 | 是 | 提交尚未提交的消息 |
-| Antigravity | 是，带会话，在每轮第一次模型调用时 | profile、记忆索引、skill | 每轮 | 没有退出 hook；每轮已提交 | 没有压缩前 hook |
+| Antigravity | 是，带会话，在每轮第一次模型调用时 | profile、记忆索引、skill | 每 8 条已捕获的消息 | 没有退出 hook；低于阈值的消息等后续消息 | 没有压缩前 hook |
 | OpenCode | 是，带会话 | profile、记忆索引、skill、已索引的仓库 | 空闲时，待提交 token 达到 20,000 | 是，在宿主的清理时限内 | 在压缩前后提交 |
 | DSH | 是，带会话 | profile、记忆索引、skill，每个会话一次 | 待提交 token 达到 20,000 | 是，预算 3 秒 | 先提交，再由宿主摘要 |
 | pi | 是，带会话 | profile、记忆索引、skill，每轮 | takeover 开：约 30,000 token；关：20,000 | takeover 开：否；关：是 | takeover 替换 pi 的摘要 |
@@ -362,7 +362,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Kimi Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的 | `PreCompact` 提交所有尚未提交的消息 |
 | CodeBuddy Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd`（仅交互式 TUI）提交所有尚未提交的消息，包括 `Stop` 已经发送的；`SessionStart` 重放排队的写入 | `PreCompact` 提交所有尚未提交的消息 |
 | Qoder CLI | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的；`SessionStart` 重放排队的写入 | `PreCompact` 提交所有尚未提交的消息 |
-| Antigravity | 每个捕获到内容的 `Stop`；漏掉的 `Stop` 留下的 step 在下一个 `Stop` 补齐 | 无；`SessionStart` 重放排队的写入 | 没有压缩前 hook |
+| Antigravity | 距上次 commit 攒够 8 条已捕获消息后的 `Stop`；漏掉的 `Stop` 留下的 step 在下一个 `Stop` 补齐 | 无；`SessionStart` 重放排队的写入 | 没有压缩前 hook |
 | OpenCode | v1 `session.idle`、v2 执行结束时：待提交 token 达到 20,000 | 删除会话、v1 `session.error`、v1 dispose 和 v2 cleanup 强制提交 | v1 在压缩前后各一次；v2 在压缩结束后一次 |
 | DSH | `turn/end` 时待提交 token 达到 20,000 | Cordis teardown 提交每个会话 | `compaction/start` 提交，跳过阈值检查 |
 | pi，takeover 开（默认） | 本地估算达到 30,000 token，且用户轮多于 3 个 | `/viking commit` | `session_before_compact` |
@@ -388,7 +388,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Kimi Code | 提交 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。`Interrupt` 的捕获和提交共用 2 秒请求预算，捕获慢时提交留给同一会话的下一次提交 |
 | CodeBuddy Code | 视情况 | 否 | 否 | 否 | 否 | `SessionEnd` 只在交互式 TUI 触发，会提交所有尚未提交的消息，包括 `Stop` 已经发送的；headless 运行依赖阈值或 `/compact`。捕获由分离的 worker 完成，hook 自身的超时不会波及它 |
 | Qoder CLI | 提交 | 未验证 | 未验证 | 未验证 | 否 | `SessionEnd` 在 `/exit` 和 headless `-p` 运行结束时触发，会提交所有尚未提交的消息，包括 `Stop` 已经发送的。捕获由分离的 worker 完成，hook 自身的超时不会波及它 |
-| Antigravity | 否 | 否 | 否 | 否 | 否 | 没有注册退出 hook。每个捕获到内容的 `Stop` 已经提交，最多留下正在进行的那一轮；它已完成的 step 在同一对话的下一个 `Stop` 捕获 |
+| Antigravity | 否 | 否 | 否 | 否 | 否 | 没有注册退出 hook。低于阈值的消息等同一对话的后续消息到来才提交；已写入的消息由同一会话的下一次 commit 归档 |
 | OpenCode | 视情况 | 视情况 | 视情况 | 视情况 | 否 | v1 1.15.11+ 的 `dispose` 和 v2 cleanup 会提交所有会话，但宿主留给清理的时间有限，慢请求或会话较多时可能被截断。v2 cleanup 还会在空闲 60 分钟和插件热重载时运行 |
 | DSH | 提交 | 提交 | 提交 | 否 | 否 | teardown 给每个会话一次 3 秒的提交，排在慢写入之后，整体处于 5 秒的进程宽限期内。第二次 Ctrl+C 会强制退出，跳过提交。Web 形态下关闭浏览器标签页不会触发 teardown |
 | pi，takeover 开 | 否 | 否 | 否 | 否 | 否 | `session_shutdown` 保存 takeover 状态但不提交。等下次运行达到阈值，或执行 `/viking commit` |
@@ -401,7 +401,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 - **正常退出时会提交**：Claude Code、Codex 0.145+、Qoder CLI、OpenCode、DSH、takeover 关闭的 pi，以及 Hermes。其他集成依赖最后一列的回收方式。
 - **`kill -9` 之后没有任何集成会提交**。已写入的消息保持未提交，直到该会话的下一次提交。带空闲超时的服务端自动提交策略是唯一的服务端兜底，而插件不会配置它。
-- **TRAE、TRAE CN、ZCode 和 Antigravity** 的退出行为最简单，因为每轮都提交；代价是每个 `Stop` 都要做一次完整的归档和抽取。
+- **TRAE、TRAE CN、ZCode** 的退出行为最简单，因为每轮都提交；代价是每个 `Stop` 都要做一次完整的归档和抽取。
+- **Antigravity** 与 Cursor 一样按 `OPENVIKING_COMMIT_TURN_THRESHOLD` 攒批提交。没有退出 hook，低于阈值的尾部等同一会话的后续消息；`OPENVIKING_COMMIT_TURN_THRESHOLD=1` 可恢复每个 `Stop` 都提交。
 
 <a id="_3-3-4-pending-queue-离线补偿对照"></a>
 
@@ -584,7 +585,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 只对部分集成生效的设置：
 
-- `OPENVIKING_COMMIT_TURN_THRESHOLD`：Cursor、Kimi Code、CodeBuddy Code 和 Qoder CLI。TRAE、TRAE CN、ZCode 和 Antigravity 每轮都提交。
+- `OPENVIKING_COMMIT_TURN_THRESHOLD`：Cursor、Kimi Code、CodeBuddy Code、Qoder CLI 和 Antigravity。TRAE、TRAE CN、ZCode 每轮都提交。
 - `OPENVIKING_WRITE_PATH_ASYNC`：Claude Code、Codex、ZCode 和 Antigravity。
 - `OPENVIKING_RECALL_COMPRESS=client`：Claude Code 和 Codex。`server` 和 `auto` 适用于[召回摘要](#召回摘要)中列出的所有集成。
 - 工作区文件、`ovcli.conf` 的 `plugin` 段、`OPENVIKING_RECALL_DEDUP_TURNS`、`OPENVIKING_RECALL_QUERY_EXPANSION`、`OPENVIKING_PEER_SOURCE` 和 skill 清单相关设置：所有基于共享插件代码的集成，不包括 OpenClaw 和 Hermes。
