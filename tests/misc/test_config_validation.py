@@ -488,6 +488,7 @@ def test_openviking_config_defaults_roundtrip():
     dumped = OpenVikingConfig.from_dict({}).to_dict()
     agfs = dumped["storage"]["agfs"]
 
+    assert "cache" not in dumped
     assert "instance" not in agfs["queuefs"]
     assert "instance" not in agfs["cachefs"]
     assert "instance" not in agfs["pathlock"]

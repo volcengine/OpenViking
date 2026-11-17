@@ -753,6 +753,8 @@ class OpenVikingConfig(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
         config = self.model_dump()
+        if config["cache"] is None:
+            config.pop("cache")
         agfs = config["storage"]["agfs"]
         if agfs["queuefs"]["backend"] != "cache":
             agfs["queuefs"].pop("instance", None)
