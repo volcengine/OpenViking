@@ -133,6 +133,28 @@ class TestStatsAggregator:
         assert result["by_category"]["cases"] == 0
         assert result["total_memories"] == 0
 
+    @pytest.mark.asyncio
+    async def test_query_all_memories_paginates_past_the_single_query_cap(
+        self, aggregator, mock_vikingdb, mock_ctx
+    ):
+        """Totals must include records beyond the first 10,000-row query page."""
+        records = [_make_memory_record("events") for _ in range(10_050)]
+        calls: list[tuple[int, int]] = []
+
+        async def query(**kwargs):
+            calls.append((kwargs["limit"], kwargs["offset"]))
+            start = kwargs["offset"]
+            return records[start : start + kwargs["limit"]]
+
+        mock_vikingdb.query = query
+
+        result = await aggregator.get_memory_stats(mock_ctx)
+
+        assert result["total_memories"] == 10_050
+        assert result["by_category"]["events"] == 10_050
+        assert calls[0][1] == 0
+        assert calls[-1][1] == 10_000
+
 
 class TestParseDatetime:
     def test_none(self):
