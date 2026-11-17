@@ -23,6 +23,7 @@ from openviking_gateway.compaction import (
 from openviking_gateway.protocols import text_content, usage_of
 from openviking_gateway.state_store import get_state
 from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain, tool_protocol
+from openviking_gateway.tool_protocols.anthropic import deduplicate_server_tool_history
 from openviking_gateway.tool_protocols.common import SUMMARY_HEADROOM, SummaryError
 
 FIELD = {"chat": "messages", "anthropic": "messages", "responses": "input"}
@@ -69,6 +70,128 @@ async def answered(kernel, request, credential, reply, tokens=1000):
         request.protocol, reply, usage={"input_tokens": tokens, "output_tokens": 5}, complete=True
     )
     await kernel.completed(request, credential, response)
+
+
+def test_exact_duplicate_anthropic_server_tool_pairs_are_repaired():
+    call = {
+        "type": "server_tool_use",
+        "id": "srvtoolu-1",
+        "name": "web_search",
+        "input": {"query": "OpenViking"},
+    }
+    result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu-1",
+        "content": [{"type": "web_search_result", "title": "OpenViking"}],
+    }
+    original = [
+        {
+            "role": "assistant",
+            "content": [copy.deepcopy(call), copy.deepcopy(result), call, result],
+        }
+    ]
+
+    repaired, removed = deduplicate_server_tool_history(original)
+
+    assert repaired == [{"role": "assistant", "content": [call, result]}]
+    assert removed == 2
+    assert len(original[0]["content"]) == 4
+
+
+def test_conflicting_anthropic_server_tool_copies_are_preserved():
+    first = {
+        "type": "server_tool_use",
+        "id": "srvtoolu-1",
+        "name": "web_search",
+        "input": {"query": "first"},
+    }
+    conflicting = {**first, "input": {"query": "second"}}
+    original = [{"role": "assistant", "content": [first, conflicting]}]
+
+    repaired, removed = deduplicate_server_tool_history(original)
+
+    assert repaired == original
+    assert removed == 0
+
+
+def test_matching_calls_with_conflicting_server_results_are_preserved():
+    call = {
+        "type": "server_tool_use",
+        "id": "srvtoolu-1",
+        "name": "web_search",
+        "input": {"query": "OpenViking"},
+    }
+    first = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu-1",
+        "content": [{"type": "web_search_result", "title": "First"}],
+    }
+    conflicting = {**first, "content": [{"type": "web_search_result", "title": "Second"}]}
+    original = [
+        {
+            "role": "assistant",
+            "content": [copy.deepcopy(call), first, call, conflicting],
+        }
+    ]
+
+    repaired, removed = deduplicate_server_tool_history(original)
+
+    assert repaired == original
+    assert removed == 0
+
+
+def test_unfinished_duplicate_server_calls_are_repaired_per_assistant_turn():
+    call = {
+        "type": "server_tool_use",
+        "id": "srvtoolu-1",
+        "name": "web_search",
+        "input": {"query": "OpenViking"},
+    }
+    original = [
+        {"role": "assistant", "content": [copy.deepcopy(call), call]},
+        {"role": "user", "content": "Continue"},
+        {"role": "assistant", "content": [call]},
+    ]
+
+    repaired, removed = deduplicate_server_tool_history(original)
+
+    assert repaired == [
+        {"role": "assistant", "content": [call]},
+        original[1],
+        original[2],
+    ]
+    assert removed == 1
+
+
+async def test_gateway_repairs_duplicate_anthropic_server_tool_history(
+    setup_kernel, credential, policy
+):
+    kernel, _, _, _ = setup_kernel
+    policy.update(recall=False, capture=False, gateway_tools=False)
+    call = {
+        "type": "server_tool_use",
+        "id": "srvtoolu-1",
+        "name": "web_search",
+        "input": {"query": "OpenViking"},
+    }
+    result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu-1",
+        "content": [{"type": "web_search_result", "title": "OpenViking"}],
+    }
+    messages = [
+        {"role": "user", "content": "Research OpenViking"},
+        {
+            "role": "assistant",
+            "content": [copy.deepcopy(call), copy.deepcopy(result), call, result],
+        },
+        {"role": "user", "content": "Continue"},
+    ]
+
+    request = await prepare(kernel, "anthropic", messages, credential, policy)
+
+    assert request.body["messages"][1]["content"] == [call, result]
+    assert request.metrics["server_tool_duplicates_removed"] == 2
 
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
