@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from openviking.core.skill_loader import SkillLoader
+from openviking.core.skill_package import SkillDestination
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -110,7 +111,7 @@ class SkillOperationUpdater:
             ctx=ctx,
             allow_local_path_resolution=False,
             # The skills root the package sits in, so the skill stays in its own scope.
-            target_uri=root_uri.rsplit("/", 1)[0],
+            destination=SkillDestination(root_uri.rsplit("/", 1)[0]),
             lease_ref=transaction_handle,
         )
         new_root_uri = processor_result.get("root_uri") or root_uri

@@ -28,6 +28,7 @@ from openviking.connector.auth import (
     validate_feishu_auth_args,
 )
 from openviking.core.namespace import classify_uri, is_content_root_uri
+from openviking.core.skill_package import SkillDestination
 from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
@@ -2729,7 +2730,7 @@ class ResourceService:
         source_path_hint: Optional[str] = None,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
-        target_uri: Optional[str] = None,
+        destination: Optional[SkillDestination] = None,
         source_metadata: Optional[Dict[str, Any]] = None,
         task_id: Optional[str] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
@@ -2739,13 +2740,13 @@ class ResourceService:
         Args:
             data: Skill data (directory path, file path, string, or dict)
             wait: Whether to wait for vectorization to complete
-            target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
+            destination: Canonical skill installation destination.
 
         Returns:
             Processing result
         """
         self._ensure_initialized()
-        if not target_uri:
+        if destination is None:
             from openviking.server.dependencies import get_server_config
 
             target_uri = await effective_skill_add_target(
@@ -2753,6 +2754,8 @@ class ResourceService:
                 ctx=ctx,
                 server_config=get_server_config(),
             )
+            if target_uri is not None:
+                destination = SkillDestination(target_uri)
         from openviking.service.task_tracker import get_task_tracker
         from openviking.service.task_tracker_concurrency import run_to_completion
         from openviking.service.task_work_index import bind_task_context
@@ -2803,7 +2806,7 @@ class ResourceService:
                             ctx=ctx,
                             apply_privacy=apply_privacy,
                             privacy_change_reason=privacy_change_reason,
-                            target_uri=target_uri,
+                            destination=destination,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
                         )
@@ -2816,7 +2819,7 @@ class ResourceService:
                             source_path_hint=source_path_hint,
                             apply_privacy=apply_privacy,
                             privacy_change_reason=privacy_change_reason,
-                            target_uri=target_uri,
+                            destination=destination,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
                         )

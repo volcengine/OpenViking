@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_content_target_uri, validate_request_viking_uri
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -23,7 +23,11 @@ from openviking.server.routers.filesystem import CpRequest, MvRequest
 from openviking.server.routers.filesystem import cp as copy_filesystem_entry
 from openviking.server.routers.filesystem import mv as move_filesystem_entry
 from openviking.server.routers.filesystem import rm as remove_filesystem_entry
-from openviking.server.skill_ingest import ingest_temp_upload_skill, install_skills
+from openviking.server.skill_ingest import (
+    ingest_temp_upload_skill,
+    install_skills,
+    resolve_skill_destination,
+)
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.telemetry import TelemetryRequest
@@ -125,6 +129,9 @@ class AddSkillRequest(BaseModel):
     )
     source_metadata: Optional[Dict[str, Any]] = None
     target_uri: Optional[str] = None
+    parent: Optional[str] = None
+    to: Optional[str] = None
+    create_parent: bool = False
     telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
@@ -249,14 +256,13 @@ async def add_skill(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add skill to OpenViking."""
-    target_uri = resolve_path_variables(request.target_uri).strip() if request.target_uri else ""
-    if target_uri:
-        target_uri = validate_content_target_uri(
-            target_uri,
-            _ctx,
-            kind="skill",
-            field_name="target_uri",
-        )
+    destination = resolve_skill_destination(
+        _ctx,
+        target_uri=request.target_uri,
+        parent=request.parent,
+        to=request.to,
+        create_parent=request.create_parent,
+    )
     data = request.data
     allow_local_path_resolution = False
     resolved = None
@@ -290,7 +296,7 @@ async def add_skill(
                 names=request.skills,
                 list_only=request.list_only,
                 wait=request.wait,
-                target_uri=target_uri,
+                destination=destination,
                 source_metadata=source_metadata,
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,

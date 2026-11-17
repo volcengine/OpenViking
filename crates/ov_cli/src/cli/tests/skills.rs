@@ -83,9 +83,49 @@ fn cli_parses_skills_command_group() {
         assert!(args.list);
         assert!(args.yes);
         assert!(args.wait);
-        assert_eq!(args.parent.as_deref(), Some("viking://agent/skills"));
+        assert_eq!(
+            args.parent_auto_create.as_deref(),
+            Some("viking://agent/skills")
+        );
         assert!(args.upload_options.no_progress);
     }
+
+    for flag in ["--parent", "--to"] {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-skill",
+                "./demo",
+                flag,
+                "viking://agent/skills/team/demo"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "add-skill",
+                "./demo",
+                flag,
+                "viking://agent/skills/team/demo",
+                "-p",
+                "viking://agent/skills"
+            ])
+            .is_err()
+        );
+    }
+    assert!(
+        Cli::try_parse_from([
+            "ov",
+            "add-skill",
+            "./demo",
+            "--parent",
+            "viking://agent/skills/team",
+            "--to",
+            "viking://agent/skills/team/demo"
+        ])
+        .is_err()
+    );
 
     let show = Cli::try_parse_from([
         "ov",

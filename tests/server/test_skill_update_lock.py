@@ -46,14 +46,14 @@ async def test_update_lock_blocks_same_package_until_failed_update_finishes(
     resume = asyncio.Event()
     original_apply = SkillProcessor.apply_skill_privacy
 
-    async def fail_after_clear(self, *args, **kwargs):
+    async def fail_after_cleanup(self, *args, **kwargs):
         if kwargs.get("change_reason") == "auto-extracted from update_skill":
             paused.set()
             await resume.wait()
-            raise RuntimeError("injected preparation failure after clearing the package")
+            raise RuntimeError("injected preparation failure after removing obsolete files")
         return await original_apply(self, *args, **kwargs)
 
-    monkeypatch.setattr(SkillProcessor, "apply_skill_privacy", fail_after_clear)
+    monkeypatch.setattr(SkillProcessor, "apply_skill_privacy", fail_after_cleanup)
     updating = asyncio.create_task(
         client.put(
             f"/api/v1/skills/{name}",
@@ -87,10 +87,9 @@ async def test_update_lock_blocks_same_package_until_failed_update_finishes(
         assert failed.status_code == 500, failed.text
         assert await fs.read_file_bytes(f"{root}/SKILL.md", ctx=_ctx()) == original_definition
         assert not await fs.exists(hidden_uri, ctx=_ctx())
-        assert await fs.vector_store.get_context_by_uri(root, level=0, ctx=_ctx()) == []
-        assert (
-            await fs.vector_store.get_context_by_uri(f"{root}/SKILL.md", level=2, ctx=_ctx()) == []
-        )
+        # Retained paths keep their records (and ACL) until replacement indexing finishes.
+        for uri, level in ((root, 0), (f"{root}/SKILL.md", 2)):
+            assert await fs.vector_store.get_context_by_uri(uri, level=level, ctx=_ctx())
         # Both the request and background references must have been released.
         lease = await fs._async_agfs.pathlock_acquire_tree(fs._uri_to_path(root, ctx=_ctx()))
         await fs._async_agfs.pathlock_release(lease)

@@ -28,6 +28,7 @@ from openviking.core.namespace import (
     uri_parts,
 )
 from openviking.core.namespace_policy import namespace_policy_for_uri
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -223,7 +224,7 @@ class ReindexExecutor:
         self._ensure_reconciliation_scope_visible(uri, ctx)
         if task_id is not None and wait:
             raise InvalidArgumentError("task_id requires asynchronous reindex")
-        object_type = self._infer_target_type(uri)
+        object_type = await self._infer_target_type(uri, ctx)
         self._validate_mode(object_type, mode)
         if not recursive and object_type in {
             "global_namespace",
@@ -387,7 +388,7 @@ class ReindexExecutor:
         """
         if get_task_context() is None:
             raise RuntimeError("TaskContext is required for nested reindex execution")
-        object_type = self._infer_target_type(uri)
+        object_type = await self._infer_target_type(uri, ctx)
         self._validate_mode(object_type, mode)
         return await self._run(
             uri=uri,
@@ -423,7 +424,7 @@ class ReindexExecutor:
             kwargs["ingest_options"] = ingest_options
         return kwargs
 
-    def _infer_target_type(self, uri: str) -> str:
+    async def _infer_target_type(self, uri: str, ctx: RequestContext) -> str:
         if not uri.startswith("viking://"):
             raise OpenVikingError(
                 f"Unsupported reindex URI: {uri}",
@@ -448,9 +449,10 @@ class ReindexExecutor:
             return "memory"
         if classification.is_skill_namespace:
             return "skill_namespace"
-        if classification.is_skill_root:
-            return "skill"
         if classification.is_skill:
+            root = await SkillPackageResolver(get_viking_fs(), ctx).resolve(uri)
+            if not root or root == uri.rstrip("/"):
+                return "skill"
             raise OpenVikingError(
                 f"Unsupported reindex URI: {uri}",
                 code="UNSUPPORTED_URI",

@@ -87,9 +87,14 @@ class AddResourceOptions(_ExtraOptions, total=False):
 class AddSkillOptions(_ExtraOptions, total=False):
     telemetry: Any
     target_uri: str
+    parent: str
+    to: str
+    create_parent: bool
 
 
-class UpdateSkillOptions(AddSkillOptions, total=False):
+class UpdateSkillOptions(_ExtraOptions, total=False):
+    telemetry: Any
+    target_uri: str
     source_metadata: Dict[str, Any]
 
 

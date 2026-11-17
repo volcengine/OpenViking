@@ -4,11 +4,11 @@
 
 import pytest
 
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.retrieve.skill_package_retriever import SkillPackageRetriever
 from openviking.retrieve.skill_results import (
     SkillResultResolver,
     package_abstract,
-    skill_root_uri,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
@@ -31,7 +31,10 @@ def row(uri, score, level=2, abstract="file summary", kind="skill"):
 
 
 class Files:
-    def __init__(self, denied=(), missing=()):
+    def __init__(self, denied=(), missing=(), roots=None):
+        self.roots = set(
+            roots or [f"{SKILLS}/{name}" for name in ("a", "b", "c", "demo", "denied", "missing")]
+        )
         self.denied = set(denied)
         self.missing = set(missing)
         self.stat_calls = []
@@ -39,10 +42,14 @@ class Files:
     async def stat(self, uri, ctx=None, skip_count=False):
         assert skip_count
         self.stat_calls.append(uri)
-        if uri in self.denied:
+        if uri in self.denied and not ctx.bypass_acl:
             raise PermissionDeniedError("root denied", resource=uri)
-        if uri in self.missing:
+        if any(uri == root or uri.startswith(root + "/") for root in self.missing):
             raise NotFoundError(uri)
+        if uri.endswith("/SKILL.md"):
+            if uri.removesuffix("/SKILL.md") not in self.roots:
+                raise NotFoundError(uri)
+            return {"isDir": False}
         return {"isDir": True}
 
     async def abstract(self, *args, **kwargs):
@@ -105,26 +112,28 @@ def query(target=SKILLS):
 @pytest.mark.asyncio
 async def test_quick_fills_distinct_skills_beyond_fixed_overfetch():
     records = [row(SKILLS, 1, 0), row(f"{SKILLS}/.a.update-backup-123/SKILL.md", 1)]
-    records.extend(row(f"{SKILLS}/a/ref/{i}.md", 0.99 - i / 1000) for i in range(120))
-    records.append(row(f"{SKILLS}/b/ref/backup.md", 0.5))
+    records.extend(row(f"{SKILLS}/ops/a/ref/{i}.md", 0.99 - i / 1000) for i in range(120))
+    records.append(row(f"{SKILLS}/ops/b/ref/backup.md", 0.5))
     store = PagedStore(records)
-    files = Files()
+    files = Files(roots=[f"{SKILLS}/ops/a", f"{SKILLS}/ops/b"])
     result = await SkillPackageRetriever(store, None).retrieve_skills(
         query(),
         ctx(),
         limit=2,
         skill_resolver=SkillResultResolver(files, ctx()),
     )
-    assert [skill_root_uri(item.uri) for item in result.matched_contexts] == [
-        f"{SKILLS}/a",
-        f"{SKILLS}/b",
+    assert [
+        await SkillPackageResolver(files, ctx()).resolve(item.uri)
+        for item in result.matched_contexts
+    ] == [
+        f"{SKILLS}/ops/a",
+        f"{SKILLS}/ops/b",
     ]
-    assert result.matched_contexts[0].uri == f"{SKILLS}/a/ref/0.md"
+    assert result.matched_contexts[0].uri == f"{SKILLS}/ops/a/ref/0.md"
     assert result.matched_contexts[0].level == 2
     assert result.matched_contexts[0].abstract == "file summary"
     assert result.matched_contexts[1].score == 0.5
     assert [call["offset"] for call in store.calls] == list(range(0, len(records), 10))
-    assert files.stat_calls == [f"{SKILLS}/a", f"{SKILLS}/b"]
 
 
 @pytest.mark.asyncio

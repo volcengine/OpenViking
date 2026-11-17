@@ -11,7 +11,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Set
 from weakref import WeakKeyDictionary
 
-from openviking.core.namespace import classify_uri
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -1564,11 +1564,11 @@ class SemanticTreeExecutor:
         node = self._nodes.get(dir_uri)
         if not node:
             return
-        skill_definition_changed = (
+        is_skill_package = (
             self._context_type == "skill"
-            and classify_uri(dir_uri).is_skill_root
-            and f"{dir_uri}/SKILL.md" in self._changed_paths
+            and await SkillPackageResolver(self._viking_fs, self._ctx).resolve(dir_uri) == dir_uri
         )
+        skill_definition_changed = is_skill_package and f"{dir_uri}/SKILL.md" in self._changed_paths
         if not self._aggregate_directory and not skill_definition_changed:
             # Deferred aggregation still ran changed-file work. Finish without
             # touching directory sidecars or their vectors.
@@ -1592,7 +1592,7 @@ class SemanticTreeExecutor:
         sampled_inputs: List[tuple[str, Dict[str, str]]] = []
         sampled_entries = 0
         try:
-            if self._context_type == "skill" and classify_uri(dir_uri).is_skill_root:
+            if is_skill_package:
                 # The package root describes the skill definition, independently
                 # of the summaries produced for its attachments.
                 definition_changed = f"{dir_uri}/SKILL.md" in self._changed_paths
@@ -1771,8 +1771,7 @@ class SemanticTreeExecutor:
                             ),
                             **(
                                 {"skill_source_path": (self._source or {}).get("path", "")}
-                                if self._context_type == "skill"
-                                and classify_uri(dir_uri).is_skill_root
+                                if is_skill_package
                                 else {}
                             ),
                             **directory_vector_kwargs,

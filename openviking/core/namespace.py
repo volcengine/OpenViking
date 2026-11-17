@@ -76,13 +76,6 @@ class UriClassification:
             and len(self.parts) == self.content_index + 1
         )
 
-    @property
-    def is_skill_root(self) -> bool:
-        return (
-            self.is_skill
-            and self.content_index is not None
-            and len(self.parts) == self.content_index + 2
-        )
 
 
 def uri_parts(uri: str) -> list[str]:

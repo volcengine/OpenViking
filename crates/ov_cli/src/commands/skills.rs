@@ -16,6 +16,7 @@ use std::path::Path;
 struct InstalledSkillSummary {
     name: String,
     description: String,
+    parent: Option<String>,
 }
 
 pub async fn add(
@@ -30,7 +31,11 @@ pub async fn add(
     output_format: OutputFormat,
     compact: bool,
     parent: Option<&str>,
+    to: Option<&str>,
+    parent_auto_create: Option<&str>,
 ) -> Result<()> {
+    let create_parent = parent_auto_create.is_some();
+    let parent = parent.or(parent_auto_create);
     if list_only || (!yes && !data.contains('\n')) {
         let listing = client
             .add_skill(
@@ -40,6 +45,8 @@ pub async fn add(
                 verbose,
                 None,
                 parent,
+                to,
+                create_parent,
                 &skill_names,
                 true,
             )
@@ -72,6 +79,8 @@ pub async fn add(
             verbose,
             None,
             parent,
+            to,
+            create_parent,
             &skill_names,
             false,
         )
@@ -155,7 +164,11 @@ pub async fn update(
     parent: Option<&str>,
 ) -> Result<()> {
     let update_all = skill_names.is_empty();
-    let names = resolve_installed_skill_names(client, skill_names).await?;
+    let skills = resolve_installed_skills(client, skill_names, parent).await?;
+    let names = skills
+        .iter()
+        .map(|skill| skill.name.clone())
+        .collect::<Vec<_>>();
     if names.is_empty() {
         output_message_result(
             serde_json::json!({ "updated": [], "total": 0 }),
@@ -177,7 +190,9 @@ pub async fn update(
 
     let mut updated = Vec::new();
     let mut skipped = Vec::new();
-    for name in names {
+    for skill in skills {
+        let name = skill.name;
+        let parent = skill.parent.as_deref();
         let result = async {
             let detail = client.skill_show(&name, false, false, true, Some(0), parent).await?;
             if detail["source"]["type"].as_str() == Some("git") {
@@ -238,17 +253,17 @@ pub async fn remove(
         ));
     }
     let requested_names = normalize_skill_names(skill_names)?;
-    let names = if all {
-        resolve_installed_skill_names(client, Vec::new()).await?
+    let skills = if all {
+        resolve_installed_skills(client, Vec::new(), parent).await?
     } else if !requested_names.is_empty() {
-        requested_names
+        resolve_installed_skills(client, requested_names, parent).await?
     } else {
         if yes || !can_prompt() {
             return Err(Error::Client(
                 "Specify at least one skill name, or pass --all.".to_string(),
             ));
         }
-        match prompt_remove_skill_selection(client).await? {
+        match prompt_remove_skill_selection(client, parent).await? {
             Some(selected) => selected,
             None => {
                 output_message_result(
@@ -261,6 +276,10 @@ pub async fn remove(
             }
         }
     };
+    let names = skills
+        .iter()
+        .map(|skill| skill.name.clone())
+        .collect::<Vec<_>>();
     if names.is_empty() {
         output_message_result(
             serde_json::json!({ "removed": [], "total": 0 }),
@@ -282,8 +301,12 @@ pub async fn remove(
 
     let removed_names = names.clone();
     let mut removed = Vec::new();
-    for name in names {
-        removed.push(client.skill_remove(&name, parent).await?);
+    for skill in skills {
+        removed.push(
+            client
+                .skill_remove(&skill.name, skill.parent.as_deref())
+                .await?,
+        );
     }
     let total = removed.len();
     output_message_result(
@@ -673,24 +696,30 @@ fn normalize_skill_names(names: Vec<String>) -> Result<Vec<String>> {
     Ok(out)
 }
 
-async fn resolve_installed_skill_names(
+async fn resolve_installed_skills(
     client: &HttpClient,
     requested: Vec<String>,
-) -> Result<Vec<String>> {
+    parent: Option<&str>,
+) -> Result<Vec<InstalledSkillSummary>> {
     let requested = normalize_skill_names(requested)?;
     if !requested.is_empty() {
-        return Ok(requested);
+        return Ok(requested
+            .into_iter()
+            .map(|name| InstalledSkillSummary {
+                name,
+                description: String::new(),
+                parent: parent.map(String::from),
+            })
+            .collect());
     }
-
-    Ok(list_installed_skills(client)
-        .await?
-        .into_iter()
-        .map(|skill| skill.name)
-        .collect())
+    list_installed_skills(client, parent).await
 }
 
-async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkillSummary>> {
-    let result = client.skills_list(10000, None).await?;
+async fn list_installed_skills(
+    client: &HttpClient,
+    parent: Option<&str>,
+) -> Result<Vec<InstalledSkillSummary>> {
+    let result = client.skills_list(10000, parent).await?;
     let skills = result
         .get("skills")
         .and_then(Value::as_array)
@@ -704,14 +733,23 @@ async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkill
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            Some(InstalledSkillSummary { name, description })
+            let root = item.get("root_uri").and_then(Value::as_str)?;
+            let (parent, _) = root.rsplit_once('/')?;
+            Some(InstalledSkillSummary {
+                name,
+                description,
+                parent: Some(parent.to_string()),
+            })
         })
         .collect();
     Ok(skills)
 }
 
-async fn prompt_remove_skill_selection(client: &HttpClient) -> Result<Option<Vec<String>>> {
-    let skills = list_installed_skills(client).await?;
+async fn prompt_remove_skill_selection(
+    client: &HttpClient,
+    parent: Option<&str>,
+) -> Result<Option<Vec<InstalledSkillSummary>>> {
+    let skills = list_installed_skills(client, parent).await?;
     if skills.is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -725,7 +763,7 @@ fn can_prompt() -> bool {
 fn prompt_multi_select_skills(
     prompt: &str,
     skills: &[InstalledSkillSummary],
-) -> Result<Option<Vec<String>>> {
+) -> Result<Option<Vec<InstalledSkillSummary>>> {
     use crossterm::{
         cursor,
         event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -791,7 +829,7 @@ fn prompt_multi_select_skills(
                     }
                     KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
                         clear_rendered_region(&rendered_region)?;
-                        let selected = selected_skill_names(skills, current, &checked);
+                        let selected = selected_skills(skills, current, &checked);
                         return Ok(Some(selected));
                     }
                     KeyCode::Esc => {
@@ -828,21 +866,21 @@ fn prompt_multi_select_skills(
     }
 }
 
-fn selected_skill_names(
+fn selected_skills(
     skills: &[InstalledSkillSummary],
     current: usize,
     checked: &[bool],
-) -> Vec<String> {
+) -> Vec<InstalledSkillSummary> {
     let mut selected = skills
         .iter()
         .zip(checked)
         .filter(|(_, checked)| **checked)
-        .map(|(skill, _)| skill.name.clone())
+        .map(|(skill, _)| skill.clone())
         .collect::<Vec<_>>();
     if selected.is_empty()
         && let Some(skill) = skills.get(current)
     {
-        selected.push(skill.name.clone());
+        selected.push(skill.clone());
     }
     selected
 }
@@ -889,10 +927,14 @@ fn skill_multi_select_lines(
 }
 
 fn skill_selection_label(skill: &InstalledSkillSummary, width: usize) -> String {
+    let location = match &skill.parent {
+        Some(parent) => format!("{}/{}", parent, skill.name),
+        None => skill.name.clone(),
+    };
     let label = if skill.description.is_empty() {
-        skill.name.clone()
+        location
     } else {
-        format!("{} - {}", skill.name, skill.description)
+        format!("{} - {}", location, skill.description)
     };
     truncate_to_display_width(&label, width)
 }

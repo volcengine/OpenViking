@@ -30,9 +30,21 @@ from openviking_cli.session.user_id import UserIdentifier
 
 USER_ROOT = "viking://user/test_user"
 SKILLS_ROOT = f"{USER_ROOT}/skills"
-DEPLOY = f"{SKILLS_ROOT}/deploy"
+DEPLOY = f"{SKILLS_ROOT}/team/deploy"
 REVIEW = f"{SKILLS_ROOT}/review"
 NOT_READY = "# {uri} [Directory abstract is not ready]"
+
+
+async def _skill_stat(uri, **kwargs):
+    definitions = {
+        f"{DEPLOY}/SKILL.md",
+        f"{REVIEW}/SKILL.md",
+        f"{USER_ROOT}/skills/user-skill/SKILL.md",
+        "viking://agent/skills/agent-skill/SKILL.md",
+    }
+    if uri not in definitions:
+        raise FileNotFoundError(uri)
+    return {"isDir": False}
 
 
 def _ctx():
@@ -94,7 +106,7 @@ def _service(
 
     return SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract, stat=_skill_stat),
         sessions=SimpleNamespace(get=fake_get),
         viking_fs=None,
         vlm_resolver=vlm_resolver,
@@ -350,7 +362,7 @@ async def test_purpose_quotas_are_not_truncated_by_global_limit():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
-        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract, stat=_skill_stat),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -675,7 +687,7 @@ def _skill_service(hits, abstracts=None, *, finds=None, reads=None, bodies=None)
 
     return SimpleNamespace(
         search=SimpleNamespace(find_skills=fake_find_skills),
-        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract, stat=_skill_stat),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -709,7 +721,7 @@ async def test_every_hit_in_a_package_collapses_into_one_skill_entry():
         (f"{DEPLOY}/SKILL.md", 0.8, "abstract", "name: deploy\ndescription: ship the service"),
         (f"{REVIEW}/SKILL.md", 0.5, "abstract", "name: review\ndescription: read diffs"),
     ]
-    assert sorted(reads) == [DEPLOY, REVIEW]
+    assert sorted(reads) == sorted([DEPLOY, REVIEW])
 
 
 async def test_a_hit_on_the_package_abstract_needs_no_extra_read():
@@ -877,7 +889,7 @@ async def test_a_filter_only_query_stays_on_the_generic_path():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
-        fs=SimpleNamespace(read=None, abstract=fake_abstract),
+        fs=SimpleNamespace(read=None, abstract=fake_abstract, stat=_skill_stat),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -981,7 +993,7 @@ async def test_flat_retrieval_collapses_skills_and_leaves_other_hits_alone():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract, stat=_skill_stat),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -1373,7 +1385,7 @@ async def test_context_rerank_scores_skills_on_their_package_abstract():
         (f"{DEPLOY}/SKILL.md", 0.9, "name: deploy"),
         (f"{REVIEW}/SKILL.md", 0.7, ""),
     ]
-    assert sorted(reads) == [DEPLOY, REVIEW]
+    assert sorted(reads) == sorted([DEPLOY, REVIEW])
 
 
 async def test_image_query_skips_context_rerank():

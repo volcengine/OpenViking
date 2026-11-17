@@ -1,6 +1,6 @@
 # ACL API
 
-ACL 通过独立的 `/api/v1/acl` 接口查询和修改，只适用于 `viking://resources/...` 共享资源。权限模型见[资源访问控制](../concepts/15-acl.md)。
+ACL 通过独立的 `/api/v1/acl` 接口查询和修改，适用于 `viking://resources/...` 和 `viking://agent/...` 的共享目录及文件。权限模型见[访问控制](../concepts/15-acl.md)。
 
 ## 接口
 
@@ -23,6 +23,14 @@ POST /api/v1/acl/revoke
 ```
 
 以上操作均要求 `manage`，无权限时返回 403。账号 ADMIN 隐式拥有 manage。
+
+两个共享根目录均固定授予 `user:* = manage`，不可修改。可在 `viking://agent/skills` 或具体 Skill 包目录上设置权限，例如：
+
+```bash
+ov acl set viking://agent/skills/code-review --acl-mode restricted --entry group:engineering=read
+```
+
+`add-skill` 继承目标父目录权限；更新已有 Skill 时保留仍存在的目录和文件的授权。安装和更新请求不新增 `acl` 参数，显式授权继续使用上述 ACL 接口。
 
 查询响应中的 `result`：
 

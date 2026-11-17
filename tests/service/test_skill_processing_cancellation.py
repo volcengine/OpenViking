@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.core.skill_package import SkillDestination
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.service.task_store import PersistentTaskStore, WorkRegistration
@@ -88,7 +89,11 @@ async def test_cancel_during_skill_task_creation_settles_persisted_record(monkey
     with bind_telemetry(OperationTelemetry("cancel-skill-create")):
         adding = asyncio.create_task(
             service.add_skill(
-                "body", ctx, wait=True, target_uri="viking://agent/skills", task_id="create-test"
+                "body",
+                ctx,
+                wait=True,
+                destination=SkillDestination("viking://agent/skills"),
+                task_id="create-test",
             )
         )
         try:
@@ -130,7 +135,9 @@ async def test_skill_success_remains_completed_when_queue_work_finishes_first(mo
     service._background_tasks = set()
 
     with bind_telemetry(OperationTelemetry("add-skill")):
-        result = await service.add_skill("body", ctx, wait=True, target_uri="viking://agent/skills")
+        result = await service.add_skill(
+            "body", ctx, wait=True, destination=SkillDestination("viking://agent/skills")
+        )
 
     task = await tracker.get(result["task_id"], **owner)
     assert task.status is TaskStatus.COMPLETED
@@ -155,7 +162,9 @@ async def test_skill_failure_preserves_business_error_without_queue_work(monkeyp
 
     with bind_telemetry(OperationTelemetry("add-skill")):
         with pytest.raises(RuntimeError, match="skill processing failed"):
-            await service.add_skill("body", ctx, wait=True, target_uri="viking://agent/skills")
+            await service.add_skill(
+                "body", ctx, wait=True, destination=SkillDestination("viking://agent/skills")
+            )
 
     tasks = await tracker.list_tasks(**owner)
     assert len(tasks) == 1

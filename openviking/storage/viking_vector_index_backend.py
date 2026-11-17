@@ -3317,22 +3317,14 @@ class VikingVectorIndexBackend:
                 ]
             )
 
-        shared_acl_filter = And(
-            [
-                PathScope("uri", "viking://resources", depth=-1),
-                acl_filter(ctx, AclAction.READ),
-            ]
-        )
+        roots = visible_roots(ctx)
+        shared_scope = Or([PathScope("uri", root, depth=-1) for root in roots if is_acl_uri(root)])
         access_filters: List[FilterExpr] = [
-            *(
-                PathScope("uri", root, depth=-1)
-                for root in visible_roots(ctx)
-                if not is_acl_uri(root)
-            ),
-            shared_acl_filter,
+            *(PathScope("uri", root, depth=-1) for root in roots if not is_acl_uri(root)),
+            And([shared_scope, acl_filter(ctx, AclAction.READ)]),
         ]
         if ctx.role == Role.ADMIN:
-            access_filters.append(PathScope("uri", "viking://resources", depth=-1))
+            access_filters.append(shared_scope)
         return And([account_filter, Or(access_filters)])
 
     async def _acl_enabled(self, ctx: RequestContext) -> bool:

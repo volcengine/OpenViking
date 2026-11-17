@@ -47,6 +47,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.core.uri_validation import (
     validate_content_target_uri,
     validate_request_viking_uri,
@@ -65,7 +66,6 @@ from openviking.retrieve.context_assembler import (
     AssembleParams,
     assemble_context,
 )
-from openviking.retrieve.skill_results import skill_root_uri
 from openviking.server.auth import (
     _build_request_context,
     _extract_api_key,
@@ -85,7 +85,7 @@ from openviking.server.local_input_guard import (
 )
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.routers.search import context_only_fields_error
-from openviking.server.skill_ingest import install_skills
+from openviking.server.skill_ingest import install_skills, resolve_skill_destination
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
 from openviking.service.rule_service import RuleSearchRequest
@@ -97,7 +97,6 @@ from openviking.utils.search_filters import (
     merge_search_filter,
     resolve_context_types,
 )
-from openviking.utils.skill_processor import SkillProcessor
 from openviking.utils.time_decay import validate_event_time_decay_request
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -427,8 +426,8 @@ async def list_groups(context: Context) -> dict[str, Any]:
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def get_acl(uri: str) -> dict[str, Any]:
-    """Read a shared resource's full ACL (direct, inherited, effective grants).
-    Requires manage permission on that resource, or account ADMIN role.
+    """Read the full ACL of a directory or file under viking://resources or viking://agent.
+    Requires manage permission on that path, or account ADMIN role.
     """
     ctx = _get_ctx()
     return await get_service().fs.get_acl(_resolve_mcp_workspace_uri(uri, ctx), ctx=ctx)
@@ -437,7 +436,7 @@ async def get_acl(uri: str) -> dict[str, Any]:
 @_mcp_error_results()
 @mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def set_acl(uri: str, acl: AclSpec) -> dict[str, Any]:
-    """Set a shared resource's ACL; requires manage permission before the change.
+    """Set ACL under viking://resources or viking://agent; requires manage before the change.
     entries replaces direct grants; omitted entries preserves them. Each entry
     has principal (user:<id>, group:<id>, or user:*) and level (read/write/manage).
     acl_mode=inherit adds parent grants; restricted uses only direct grants.
@@ -835,20 +834,6 @@ async def rule_search(
     return json.dumps(result, ensure_ascii=False)
 
 
-def _hit_uri(ctx_type: str, uri: str) -> str:
-    """The URI an agent should read for a hit.
-
-    A skill is indexed as a whole package: the hit may be its .abstract.md, its
-    .overview.md, or any file inside the directory. The skill itself is the
-    package's SKILL.md.
-    """
-    if ctx_type == "skill":
-        root = skill_root_uri(uri)
-        if root:
-            return f"{root}/SKILL.md"
-    return uri
-
-
 def _package_abstract(uri: str, abstract: str) -> str:
     """The skill's own frontmatter, or "" when the package has no usable abstract."""
     text = (abstract or "").strip()
@@ -883,6 +868,7 @@ async def _describe_skills_by_package(items: List[Dict[str, Any]], *, service, c
 
 
 async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
+    packages = SkillPackageResolver(service.fs, ctx)
     items: List[Dict[str, Any]] = []
     seen: dict[str, int] = {}
     for ctx_type, contexts in [
@@ -891,7 +877,12 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         ("skill", result.skills),
     ]:
         for m in contexts:
-            uri = _hit_uri(ctx_type, m.uri)
+            uri = m.uri
+            if ctx_type == "skill":
+                root = await packages.resolve(uri)
+                if not root:
+                    continue
+                uri = f"{root}/SKILL.md"
             item = {
                 "type": ctx_type,
                 "uri": uri,
@@ -1542,7 +1533,7 @@ async def write(
       Markdown file in replace mode (including its create alias); defaults to false.
     - defer_processing: save content without semantic or vector processing. Run reindex
       for this URI before relying on search; defaults to false.
-    - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
+    - acl: optional shared-path ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve
       existing ACL or inherit on creation.
@@ -2120,8 +2111,8 @@ async def add_skill(
         data: Full SKILL.md text of a skill to create or replace.
         path: Git URL, or a local path to a SKILL.md, a skill directory, or a .zip.
         skills: Names of the skill directories to install from a multi-skill source.
-        target_uri: Skill root to install under. Empty installs into the caller's own
-            skills; "viking://agent/skills" shares the skill with the whole account.
+        target_uri: Parent directory in private or shared skills, including category subdirectories.
+            Empty uses the configured default. Shared destinations follow the account's ACL.
         list_only: Describe the skills in a Git or local source without installing them.
     """
     ctx = _get_ctx()
@@ -2148,11 +2139,8 @@ async def add_skill(
             f"({', '.join(GIT_SKILL_SOURCE_PREFIXES)}) or a local path."
         )
     try:
-        target = resolve_path_variables(target_uri).strip() if target_uri else ""
-        if target:
-            target = validate_content_target_uri(target, ctx, kind="skill", field_name="target_uri")
-            # Fail here, not after a one-time upload token is spent on a root the installer rejects.
-            target = SkillProcessor._resolve_skill_root_uri(ctx, target)  # noqa: SLF001
+        destination = resolve_skill_destination(ctx, target_uri=target_uri)
+        target = destination.uri if destination else ""
     except (InvalidArgumentError, PermissionDeniedError) as exc:
         return _mcp_failure(exc)
 
@@ -2163,7 +2151,7 @@ async def add_skill(
                 ctx,
                 names=skills,
                 list_only=list_only,
-                target_uri=target,
+                destination=destination,
                 source_metadata=(
                     {"type": "mcp", "source": "inline_content", "operation": "add"}
                     if data.strip()

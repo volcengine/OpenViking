@@ -823,8 +823,9 @@ class AsyncHTTPClient:
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
         option_values = dict(_normalize_timeout_options(timeout, options) or {})
-        if "target_uri" in option_values:
-            option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
+        for key in ("target_uri", "parent", "to"):
+            if key in option_values:
+                option_values[key] = VikingURI.normalize(option_values[key])
         request_data = self._build_options_payload(
             option_values,
             AddSkillOptions,

@@ -16,6 +16,7 @@ from openviking.core.directories import preset_directory_uris
 from openviking.core.namespace import AGENT_SKILLS_ROOT, canonical_user_root
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.retrieve.context_assembler.params import (
     MEMORY_CATEGORIES,
     ORIGIN_ORDER,
@@ -26,7 +27,7 @@ from openviking.retrieve.context_assembler.params import (
     RERANK_CANDIDATE_MULTIPLIER,
 )
 from openviking.retrieve.rerank_scoring import Reranker, RerankScores
-from openviking.retrieve.skill_results import package_abstract, skill_root_uri
+from openviking.retrieve.skill_results import package_abstract
 from openviking.server.identity import RequestContext
 from openviking.utils.search_filters import merge_context_type_filter
 from openviking_cli.exceptions import InvalidArgumentError
@@ -248,7 +249,9 @@ async def gather_candidates(
     rerank_stats: Dict[str, Any] = {}
     excluded_count = 0
 
-    def _build(items: Sequence[Tuple[Any, Optional[str]]]) -> List[Candidate]:
+    packages = SkillPackageResolver(service.fs, ctx)
+
+    async def _build(items: Sequence[Tuple[Any, Optional[str]]]) -> List[Candidate]:
         nonlocal excluded_count
         built: List[Candidate] = []
         for item, bucket in items:
@@ -265,7 +268,7 @@ async def gather_candidates(
                 # vector, so a hit anywhere inside one stands for the package:
                 # it becomes the package's SKILL.md before exclusion is checked,
                 # which is what lets the ledger cool a whole package for a turn.
-                root = skill_root_uri(uri)
+                root = await packages.resolve(uri)
                 if not root:
                     continue
                 if uri != f"{root}/.abstract.md":
@@ -413,7 +416,7 @@ async def gather_candidates(
             )
         found = dedupe_keep_best(found)
         searched[bucket] = len(found)
-        candidates = _build([(item, bucket) for item in found])
+        candidates = await _build([(item, bucket) for item in found])
         if bucket == "skills":
             candidates = _dedupe_candidates(candidates)
         candidates.sort(key=_rank_key, reverse=True)
@@ -462,7 +465,7 @@ async def gather_candidates(
                 found.append(item)
         found = dedupe_keep_best(found)
         searched["all"] = len(found)
-        candidates = _build([(item, buckets.get(_uri(item))) for item in found])
+        candidates = await _build([(item, buckets.get(_uri(item))) for item in found])
         # Only skills collapse here. Merging the other categories before the cut
         # would hand them quota they never had in this mode.
         skills = [c for c in candidates if c.category == "skills"]
@@ -554,7 +557,7 @@ async def _fill_skill_abstracts(service: Any, candidates: List[Candidate]) -> Li
         candidate = candidates[index]
         async with semaphore:
             abstract = await package_abstract(
-                service.fs, candidate.read_ctx, skill_root_uri(candidate.base_uri)
+                service.fs, candidate.read_ctx, candidate.base_uri.rsplit("/", 1)[0]
             )
         return index, abstract
 

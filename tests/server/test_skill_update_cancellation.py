@@ -74,6 +74,7 @@ async def test_update_cancellation_keeps_replacement_files_and_partial_index(
     added = await client.post("/api/v1/skills", json={"temp_file_id": old_upload, "wait": True})
     assert added.status_code == 200, added.text
     root = added.json()["result"]["root_uri"]
+    old_definition = await _indexed_record(client, f"{root}/SKILL.md", 2)
     files = {"references/000-fast.md": "A replacement file that reaches the index."}
     files.update({f"references/slow-{index}.md": "Unfinished replacement." for index in range(8)})
     new_upload = await _upload_package(client, tmp_path, name, "Replacement description", files)
@@ -145,7 +146,8 @@ async def test_update_cancellation_keeps_replacement_files_and_partial_index(
         for path, content in files.items():
             assert await _download(client, f"{root}/{path}") == content.encode()
         for path in started:
-            assert await _indexed_record(client, path, 2) == []
+            expected = old_definition if path == f"{root}/SKILL.md" else []
+            assert await _indexed_record(client, path, 2) == expected
     finally:
         release.set()
         await asyncio.wait_for(get_queue_manager().wait_complete(), 5)

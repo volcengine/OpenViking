@@ -55,6 +55,7 @@ EMPTY_ACL_GRANT = "none"
 ACL_GRANT_FIELDS = ("acl_direct_grants", "acl_inherited_grants")
 ACL_MODE_FIELD = "acl_mode"
 ACL_CONTEXT_FIELDS = frozenset((ACL_MODE_FIELD, *ACL_GRANT_FIELDS))
+ACL_ROOT_URIS = ("viking://resources", "viking://agent")
 _ACL_OUTPUT_FIELDS = ["uri", *sorted(ACL_CONTEXT_FIELDS)]
 
 
@@ -165,7 +166,7 @@ class EffectiveAcl:
         }
 
 
-_RESOURCES_ROOT_ACL = EffectiveAcl(
+_ROOT_ACL = EffectiveAcl(
     AclMode.INHERIT,
     DirectAcl((AclEntry("user:*", AclLevel.MANAGE),)),
     DirectAcl(),
@@ -242,7 +243,7 @@ def acl_grant_tokens(principals: Iterable[str], action: AclAction) -> list[str]:
 
 
 def acl_filter(ctx: RequestContext, action: AclAction, *, denied: bool = False) -> FilterExpr:
-    """Filter shared-resource ACL records; callers handle role and namespace bypasses."""
+    """Filter shared ACL records; callers handle role and namespace bypasses."""
     grants = acl_grant_tokens(acl_principals(ctx), action)
     controlled_modes = [AclMode.INHERIT.value, AclMode.RESTRICTED.value]
     grant_op = "must_not" if denied else "must"
@@ -283,14 +284,14 @@ def _normalize_entries(entries: Iterable[AclEntry | Mapping[str, Any]]) -> list[
 
 
 def is_acl_uri(uri: str) -> bool:
-    return uri_parts(uri)[:1] == ["resources"]
+    return f"viking://{'/'.join(uri_parts(uri)[:1])}" in ACL_ROOT_URIS
 
 
 def acl_ancestors(uri: str) -> list[str]:
-    """Return ACL-bearing ancestors from the resource root through *uri*."""
+    """Return ACL-bearing ancestors from the shared namespace root through *uri*."""
     parts = uri_parts(uri)
-    if parts[:1] != ["resources"]:
-        raise InvalidArgumentError("ACL is only supported for viking://resources")
+    if not is_acl_uri(uri):
+        raise InvalidArgumentError(f"ACL is only supported for {', '.join(ACL_ROOT_URIS)}")
     return [f"viking://{'/'.join(parts[:depth])}" for depth in range(1, len(parts) + 1)]
 
 
@@ -464,8 +465,9 @@ class AclManager:
                 continue
             result[uri] = effective
 
-        if "viking://resources" in ancestors_by_uri:
-            result["viking://resources"] = _RESOURCES_ROOT_ACL
+        for root in ACL_ROOT_URIS:
+            if root in ancestors_by_uri:
+                result[root] = _ROOT_ACL
 
         unresolved_uris = [uri for uri in unique_uris if uri not in result]
         if unresolved_uris:
@@ -477,7 +479,7 @@ class AclManager:
                 uri: self._effective_from_records(records)
                 for uri, records in ancestor_groups.items()
             }
-            acl_map["viking://resources"] = _RESOURCES_ROOT_ACL
+            acl_map.update(dict.fromkeys(ACL_ROOT_URIS, _ROOT_ACL))
             for uri in unresolved_uris:
                 effective = EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
                 for ancestor in ancestors_by_uri[uri]:
@@ -508,19 +510,19 @@ class AclManager:
         *,
         update: AclUpdate | None = None,
     ) -> list[dict[str, Any]]:
-        resource_uris: set[str] = set()
+        acl_uris: set[str] = set()
         for record in records:
             uri = record.get("uri")
             if not uri:
                 continue
-            resource_uri = str(uri)
-            if not is_acl_uri(resource_uri):
+            acl_uri = str(uri)
+            if not is_acl_uri(acl_uri):
                 continue
-            resource_uris.add(resource_uri)
-        if not resource_uris:
+            acl_uris.add(acl_uri)
+        if not acl_uris:
             return list(records)
 
-        effective = await self.resolve_many(resource_uris, ctx, update=update)
+        effective = await self.resolve_many(acl_uris, ctx, update=update)
         return [
             {**record, **effective[str(record["uri"])].context_fields()}
             if str(record.get("uri") or "") in effective
@@ -559,8 +561,8 @@ class AclManager:
         effective_by_uri: dict[str, EffectiveAcl] = {}
         root_depth = len(root_ancestors)
         for uri in sorted(grouped, key=lambda value: len(acl_ancestors(value))):
-            if uri == "viking://resources":
-                effective_by_uri[uri] = _RESOURCES_ROOT_ACL
+            if uri in ACL_ROOT_URIS:
+                effective_by_uri[uri] = _ROOT_ACL
                 continue
             ancestors = acl_ancestors(uri)
             parent_effective = base
@@ -600,8 +602,8 @@ class AclManager:
         *,
         acl_mode: AclMode | None = None,
     ) -> EffectiveAcl:
-        if uri_parts(uri) == ["resources"]:
-            raise InvalidArgumentError("ACL cannot be set on viking://resources")
+        if len(acl_ancestors(uri)) == 1:
+            raise InvalidArgumentError(f"ACL cannot be set on {uri}")
         if entries is None and acl_mode is None:
             raise InvalidArgumentError("entries or acl_mode must be provided")
         proposed_direct = DirectAcl.from_entries(entries) if entries is not None else None

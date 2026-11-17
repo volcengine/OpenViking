@@ -549,7 +549,7 @@ class _AccessMixin:
         """Authorize an explicit ACL against the permissions before the write."""
         spec = AclSpec.model_validate(acl)
         if len(acl_ancestors(uri)) == 1:
-            raise InvalidArgumentError("ACL cannot be set on viking://resources")
+            raise InvalidArgumentError(f"ACL cannot be set on {uri}")
         await self._ensure_acl_manage(uri, ctx)
         return AclUpdate(uri=uri, acl=spec)
 

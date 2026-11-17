@@ -22,6 +22,11 @@ from openviking.config.vlm import VLMHandle, VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.core.skill_package import (
+    SkillDestination,
+    SkillPackageResolver,
+    list_skill_packages,
+)
 from openviking.privacy.reference import parse_privacy_field_reference
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
@@ -29,6 +34,7 @@ from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
 from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.storage.acl import AclAction
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -130,7 +136,7 @@ class SkillProcessor:
         source_path_hint: Optional[str] = None,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
-        target_uri: Optional[str] = None,
+        destination: Optional[SkillDestination] = None,
         source_metadata: Optional[Dict[str, Any]] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
         lease_ref: Any = None,
@@ -142,8 +148,7 @@ class SkillProcessor:
             data: Skill data (directory, file path, string, or dict)
             viking_fs: VikingFS instance for storage
             user: Username for context
-            target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
-                When omitted, defaults to ``{user_root}/skills``.
+            destination: Canonical skill installation destination.
 
         Returns:
             Processing result with status and metadata
@@ -169,7 +174,7 @@ class SkillProcessor:
             ctx=ctx,
             apply_privacy=apply_privacy,
             privacy_change_reason=privacy_change_reason,
-            target_uri=target_uri,
+            destination=destination,
             source_metadata=source_metadata,
             owner_lease_ref=owner_lease_ref,
             lease_ref=lease_ref,
@@ -183,7 +188,7 @@ class SkillProcessor:
         *,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
-        target_uri: Optional[str] = None,
+        destination: Optional[SkillDestination] = None,
         source_metadata: Optional[Dict[str, Any]] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
         lease_ref: Any = None,
@@ -200,8 +205,14 @@ class SkillProcessor:
         if owner_lease_ref is None:
             owner_lease_ref = lease_ref
         try:
-            effective_root_uri = self._resolve_skill_root_uri(ctx, target_uri)
-            skill_dir_uri = f"{effective_root_uri}/{skill_dict['name']}"
+            destination = destination or SkillDestination(f"{canonical_user_root(ctx)}/skills")
+            skill_dir_uri = destination.package_uri(skill_dict["name"], ctx)
+            parent_uri = skill_dir_uri.rsplit("/", 1)[0]
+            if destination.mode == "parent":
+                parent_info = await viking_fs.stat(parent_uri, ctx=ctx, skip_count=True)
+                if not parent_info["isDir"]:
+                    raise InvalidArgumentError(f"Skill parent is not a directory: {parent_uri}")
+            await viking_fs._ensure_access(skill_dir_uri, ctx, action=AclAction.WRITE)
 
             async def acquire_package_lock() -> None:
                 nonlocal lease
@@ -211,6 +222,14 @@ class SkillProcessor:
                 )
 
             await run_to_completion(acquire_package_lock)
+            await viking_fs._ensure_access(skill_dir_uri, ctx, action=AclAction.WRITE)
+            packages = SkillPackageResolver(viking_fs, ctx)
+            if await packages.resolve(parent_uri):
+                raise InvalidArgumentError("Cannot install a Skill inside another Skill package")
+            if not await packages.resolve(skill_dir_uri) and await list_skill_packages(
+                viking_fs, ctx, skill_dir_uri, limit=1
+            ):
+                raise InvalidArgumentError("Cannot replace a category containing Skill packages")
             # Privacy changes finish under the package lease even if installation is cancelled.
             if apply_privacy:
                 skill_dict = await run_to_completion(
@@ -432,33 +451,6 @@ class SkillProcessor:
             normalized["tags"] = SkillProcessor._normalize_list_field(tags)
 
         return normalized
-
-    @staticmethod
-    def _resolve_skill_root_uri(ctx: RequestContext, target_uri: Optional[str]) -> str:
-        """Resolve the skill storage root URI.
-
-        Defaults to the per-user private skills root.  Callers may pass
-        ``viking://agent/skills`` (or a future agent-scope subpath) to publish
-        the skill under the account-global ``/agent`` scope.
-        """
-        if target_uri:
-            normalized = target_uri.rstrip("/")
-            if normalized.startswith("viking://agent/skills"):
-                return "viking://agent/skills"
-            user_root = f"{canonical_user_root(ctx)}/skills"
-            if normalized == user_root.rstrip("/"):
-                return user_root
-            raise InvalidArgumentError(
-                f"Unsupported skill root URI: {target_uri}; use {user_root} or viking://agent/skills",
-                details={
-                    "field": "target_uri",
-                    "allowed": [
-                        f"{canonical_user_root(ctx)}/skills",
-                        "viking://agent/skills",
-                    ],
-                },
-            )
-        return f"{canonical_user_root(ctx)}/skills"
 
     @staticmethod
     def _validate_skill_dict(skill_dict: Dict[str, Any]) -> None:

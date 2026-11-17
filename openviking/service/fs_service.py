@@ -31,11 +31,12 @@ from openviking.core.namespace_policy import (
     namespace_policy_for_uri,
 )
 from openviking.core.path_variables import resolve_path_variables
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
-from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
+from openviking.privacy.skill_restore import restore_skill_content
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
@@ -180,8 +181,8 @@ class FSService:
     async def _resolve_uri(self, uri_or_id: str, ctx: RequestContext) -> str:
         """If ``uri_or_id`` is a 32-char hex vector record id, resolve it to the
         corresponding Viking URI via the vector store. Otherwise return as-is.
-        Used so that service-layer helpers (classify_uri, get_skill_name_from_uri,
-        visible_content) always see a real URI, even when callers pass an id.
+        Used so that service-layer helpers (classify_uri, visible_content) always
+        see a real URI, even when callers pass an id.
         """
         if not is_vector_record_id(uri_or_id):
             return uri_or_id
@@ -646,7 +647,7 @@ class FSService:
 
         cleanup_result: Optional[Dict[str, Any]] = None
         context_type = context_type_for_uri(uri)
-        refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
+        refresh_parent_uri = await self._semantic_refresh_parent_uri(uri, context_type, ctx)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
         parent_uri = VikingURI(uri).parent
         if parent_uri is not None and await viking_fs.exists(parent_uri.uri, ctx=ctx):
@@ -740,8 +741,9 @@ class FSService:
             return "failed"
         return "complete"
 
-    @staticmethod
-    def _semantic_refresh_parent_uri(uri: str, context_type: str) -> Optional[str]:
+    async def _semantic_refresh_parent_uri(
+        self, uri: str, context_type: str, ctx: RequestContext
+    ) -> Optional[str]:
         if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             return None
         if context_type not in {"resource", "skill"}:
@@ -753,7 +755,8 @@ class FSService:
             classification = classify_uri(parent.uri)
             if (
                 not classification.is_skill
-                or classification.is_skill_root
+                or await SkillPackageResolver(self._ensure_initialized(), ctx).resolve(parent.uri)
+                == parent.uri
                 or classification.is_skill_namespace
             ):
                 return None
@@ -1024,7 +1027,9 @@ class FSService:
             target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
             target_is_dir = bool(target_stat.get("isDir"))
             rebuild_root_uri = (
-                to_uri if target_is_dir else self._semantic_refresh_parent_uri(to_uri, context_type)
+                to_uri
+                if target_is_dir
+                else await self._semantic_refresh_parent_uri(to_uri, context_type, ctx)
             )
             if not rebuild_root_uri:
                 result["semantic_status"] = "skipped"
@@ -1049,7 +1054,7 @@ class FSService:
                 result["semantic_error"] = str(exc)
             return result
 
-        refresh_parent_uri = self._semantic_refresh_parent_uri(to_uri, context_type)
+        refresh_parent_uri = await self._semantic_refresh_parent_uri(to_uri, context_type, ctx)
         if not refresh_parent_uri:
             if target_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
                 result["semantic_status"] = "skipped"
@@ -1189,7 +1194,9 @@ class FSService:
             target_is_dir = bool(target_stat.get("isDir"))
             context_type = context_type_for_uri(to_uri)
             rebuild_root_uri = (
-                to_uri if target_is_dir else self._semantic_refresh_parent_uri(to_uri, context_type)
+                to_uri
+                if target_is_dir
+                else await self._semantic_refresh_parent_uri(to_uri, context_type, ctx)
             )
             if rebuild_root_uri:
                 try:
@@ -1296,8 +1303,12 @@ class FSService:
 
         source_context_type = context_type_for_uri(from_uri)
         target_context_type = context_type_for_uri(to_uri)
-        source_parent_uri = self._semantic_refresh_parent_uri(from_uri, source_context_type)
-        target_parent_uri = self._semantic_refresh_parent_uri(to_uri, target_context_type)
+        source_parent_uri = await self._semantic_refresh_parent_uri(
+            from_uri, source_context_type, ctx
+        )
+        target_parent_uri = await self._semantic_refresh_parent_uri(
+            to_uri, target_context_type, ctx
+        )
 
         refreshes: List[tuple[str, str, Literal["added", "deleted"], str]] = []
         if source_parent_uri and source_parent_uri != target_parent_uri:
@@ -1529,7 +1540,16 @@ class FSService:
         ctx = self._ensure_initialized().authorize_read(ctx, [uri])
         resolved_uri, content = await self._read_content(uri, ctx)
         if self._privacy_config_service is not None and ctx.data_access is None:
-            skill_name = get_skill_name_from_uri(resolved_uri)
+            skill_root = (
+                await SkillPackageResolver(self._ensure_initialized(), ctx).resolve(resolved_uri)
+                if resolved_uri.endswith("/SKILL.md")
+                else ""
+            )
+            skill_name = (
+                skill_root.rsplit("/", 1)[-1]
+                if skill_root and resolved_uri == f"{skill_root}/SKILL.md"
+                else None
+            )
             session_id = get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
             if skill_name is not None:
                 content = await restore_skill_content(

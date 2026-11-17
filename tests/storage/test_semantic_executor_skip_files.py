@@ -24,6 +24,15 @@ class _FakeVikingFS:
         self.writes = []
         self._async_agfs = self
 
+    async def stat(self, uri, ctx=None, skip_count=False):
+        if uri in self._tree:
+            return {"isDir": True}
+        parent, _, name = uri.rpartition("/")
+        for entry in self._tree.get(parent, []):
+            if entry["name"] == name:
+                return {"isDir": entry.get("isDir", False)}
+        raise FileNotFoundError(uri)
+
     async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(uri, [])
 

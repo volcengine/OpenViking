@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from openviking.core.namespace import classify_uri, resolve_request_uri
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import (
@@ -278,10 +279,9 @@ async def _scan_privacy_content(
                         )
                     finally:
                         await service.viking_fs._async_agfs.pathlock_release(lease)
-                    parts = file_uri.split("/skills/", 1)
-                    skill_name = parts[1].split("/", 1)[0] if len(parts) == 2 else ""
-                    if skill_name:
-                        reindex_roots.add(f"{parts[0]}/skills/{skill_name}")
+                    root = await SkillPackageResolver(service.viking_fs, ctx).resolve(file_uri)
+                    if root:
+                        reindex_roots.add(root)
                 else:
                     await service.fs.write(file_uri, result.content, ctx=ctx, wait=False)
                 item["fixed"] = True

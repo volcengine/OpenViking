@@ -21,6 +21,7 @@ from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent, T
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
+from openviking.core.skill_package import SkillDestination
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.dependencies import set_service
@@ -579,6 +580,11 @@ async def test_find_tool_skill_only_searches_both_skill_roots(
 
 
 async def test_find_tool_points_skill_hits_at_their_skill_md(service, monkeypatch):
+    await service.viking_fs.write_file(
+        "viking://agent/skills/deploy-runbook/SKILL.md",
+        _skill_md("deploy-runbook"),
+        ctx=DEFAULT_CTX,
+    )
     hit = SimpleNamespace(
         uri="viking://agent/skills/deploy-runbook/.abstract.md",
         abstract="name: deploy-runbook\ndescription: Shared runbook",
@@ -605,8 +611,13 @@ async def test_find_tool_points_skill_hits_at_their_skill_md(service, monkeypatc
 
 
 async def test_find_tool_points_an_auxiliary_file_hit_at_the_skill_md(service, monkeypatch):
+    await service.viking_fs.write_file(
+        "viking://user/test_user/skills/team/pdf-forms/SKILL.md",
+        _skill_md("pdf-forms"),
+        ctx=DEFAULT_CTX,
+    )
     hit = SimpleNamespace(
-        uri="viking://user/test_user/skills/pdf-forms/scripts/fill.py",
+        uri="viking://user/test_user/skills/team/pdf-forms/scripts/fill.py",
         abstract="Fill a PDF form field by field",
         score=0.52,
     )
@@ -618,11 +629,17 @@ async def test_find_tool_points_an_auxiliary_file_hit_at_the_skill_md(service, m
 
     result = await mcp_endpoint.find(query="fill a pdf", context_type="skill")
 
-    assert "- [skill 52%] viking://user/test_user/skills/pdf-forms/SKILL.md" in result
+    assert "- [skill 52%] viking://user/test_user/skills/team/pdf-forms/SKILL.md" in result
     assert "scripts/fill.py" not in result
 
 
 async def test_find_tool_keeps_same_named_skills_from_both_roots(service, monkeypatch):
+    await service.viking_fs.write_file(
+        "viking://user/test_user/skills/review/SKILL.md", _skill_md("review"), ctx=DEFAULT_CTX
+    )
+    await service.viking_fs.write_file(
+        "viking://agent/skills/review/SKILL.md", _skill_md("review"), ctx=DEFAULT_CTX
+    )
     hits = [
         SimpleNamespace(
             uri="viking://user/test_user/skills/review/.abstract.md",
@@ -649,6 +666,9 @@ async def test_find_tool_keeps_same_named_skills_from_both_roots(service, monkey
 
 
 async def test_find_tool_collapses_several_hits_from_one_skill_package(service, monkeypatch):
+    await service.viking_fs.write_file(
+        "viking://agent/skills/deploy/SKILL.md", _skill_md("deploy"), ctx=DEFAULT_CTX
+    )
     hits = [
         SimpleNamespace(
             uri="viking://agent/skills/deploy/scripts/rollback.sh",
@@ -744,7 +764,7 @@ async def test_find_tool_keeps_a_filter_only_skill_query_on_the_generic_find(ser
         "viking://agent/skills",
     ],
 )
-async def test_find_tool_leaves_a_uri_outside_a_skill_package_alone(service, monkeypatch, hit_uri):
+async def test_find_tool_omits_a_uri_outside_a_skill_package(service, monkeypatch, hit_uri):
     hit = SimpleNamespace(uri=hit_uri, abstract="Not an installed skill", score=0.4)
 
     async def fake_find_skills(**kwargs):
@@ -754,11 +774,13 @@ async def test_find_tool_leaves_a_uri_outside_a_skill_package_alone(service, mon
 
     result = await mcp_endpoint.find(query="review", context_type="skill")
 
-    assert f"- [skill 40%] {hit_uri}\n" in result
-    assert "SKILL.md/SKILL.md" not in result
+    assert result == "No matching context found."
 
 
 async def test_find_tool_describes_a_package_file_hit_with_the_skill_abstract(service, monkeypatch):
+    await service.viking_fs.write_file(
+        "viking://agent/skills/pdf-forms/SKILL.md", _skill_md("pdf-forms"), ctx=DEFAULT_CTX
+    )
     hit = SimpleNamespace(
         uri="viking://agent/skills/pdf-forms/scripts/fill.py",
         abstract="Iterate the AcroForm fields and write each value",
@@ -784,6 +806,9 @@ async def test_find_tool_describes_a_package_file_hit_with_the_skill_abstract(se
 
 
 async def test_find_tool_keeps_the_file_abstract_when_the_package_has_none(service, monkeypatch):
+    await service.viking_fs.write_file(
+        "viking://agent/skills/pdf-forms/SKILL.md", _skill_md("pdf-forms"), ctx=DEFAULT_CTX
+    )
     hit = SimpleNamespace(
         uri="viking://agent/skills/pdf-forms/scripts/fill.py",
         abstract="Iterate the AcroForm fields and write each value",
@@ -806,6 +831,9 @@ async def test_find_tool_keeps_the_file_abstract_when_the_package_has_none(servi
 
 
 async def test_find_tool_keeps_the_package_abstract_of_a_sidecar_hit(service, monkeypatch):
+    await service.viking_fs.write_file(
+        "viking://agent/skills/pdf-forms/SKILL.md", _skill_md("pdf-forms"), ctx=DEFAULT_CTX
+    )
     hit = SimpleNamespace(
         uri="viking://agent/skills/pdf-forms/.abstract.md",
         abstract="name: pdf-forms\ndescription: Fill in a PDF form",
@@ -832,6 +860,9 @@ async def test_find_tool_keeps_the_package_abstract_of_a_sidecar_hit(service, mo
 
 
 async def test_search_tool_collapses_skill_package_hits(service, monkeypatch):
+    await service.viking_fs.write_file(
+        "viking://agent/skills/deploy/SKILL.md", _skill_md("deploy"), ctx=DEFAULT_CTX
+    )
     hits = [
         SimpleNamespace(
             uri="viking://agent/skills/deploy/scripts/rollback.sh",
@@ -1742,7 +1773,7 @@ async def test_add_skill_forwards_git_source_to_shared_installer(monkeypatch):
     assert captured["data"] == "https://github.com/org/skills"
     assert captured["names"] == ["pdf"]
     assert captured["list_only"] is True
-    assert captured["target_uri"] == "viking://agent/skills"
+    assert captured["destination"] == SkillDestination("viking://agent/skills")
     assert captured["source_metadata"] is None
     assert "nothing was installed" in result
     assert "- pdf (pdf): Fill PDF forms" in result
@@ -1787,29 +1818,19 @@ async def test_add_skill_local_path_issues_skill_upload_token(service):
     upload_token_store.clear()
 
 
-async def test_add_skill_rejects_a_target_below_a_skill_root_before_minting_a_token(service):
+@pytest.mark.parametrize("parent", ["viking://~/skills/team", "viking://agent/skills/team"])
+async def test_add_skill_preserves_nested_target_in_upload_token(service, parent):
     from openviking.server.upload_token_store import upload_token_store
 
     upload_token_store.clear()
     token = _mcp_ctx.set(RequestContext(DEFAULT_CTX.user, Role.USER))
     try:
-        result = await add_skill(path="/tmp/skills/pdf", target_uri="viking://~/skills/pdf")
+        result = await add_skill(path="/tmp/skills/pdf", target_uri=parent)
     finally:
         _mcp_ctx.reset(token)
-
-    assert result.startswith("INVALID_ARGUMENT: Unsupported skill root URI")
-    assert "viking://agent/skills" in result
-    assert upload_token_store._store == {}
-
-
-async def test_add_skill_maps_a_shared_subpath_to_the_shared_root(service):
-    from openviking.server.upload_token_store import upload_token_store
-
-    upload_token_store.clear()
-    result = await add_skill(path="/tmp/skills/pdf", target_uri="viking://agent/skills/pdf")
-
-    token = re.search(r"temp_upload\?token=([A-Za-z0-9]+)", result).group(1)
-    assert upload_token_store.peek(token).skill_target_uri == "viking://agent/skills"
+    upload_token = re.search(r"temp_upload\?token=([A-Za-z0-9]+)", result).group(1)
+    expected = parent.replace("viking://~", "viking://user/test_user")
+    assert upload_token_store.peek(upload_token).skill_target_uri == expected
     upload_token_store.clear()
 
 

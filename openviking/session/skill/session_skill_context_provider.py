@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.core.skill_package import list_skill_packages
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -106,13 +107,8 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
         errors: Dict[str, str] = {}
         for skill_root_uri in skill_roots:
             try:
-                entries = await self._viking_fs.ls(
-                    skill_root_uri,
-                    output="agent",
-                    abs_limit=256,
-                    show_all_hidden=False,
-                    node_limit=1000,
-                    ctx=self._ctx,
+                entries = await list_skill_packages(
+                    self._viking_fs, self._ctx, skill_root_uri, limit=1000
                 )
                 for entry in entries:
                     if not entry.get("isDir", False):

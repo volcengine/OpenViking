@@ -15,7 +15,7 @@ OpenViking 支持多种技能定义格式：
 
 ### 技能存储结构
 
-技能支持当前用户私有根 `viking://user/{user_id}/skills/` 和账户内共享根 `viking://agent/skills/`。新增时的目标优先级为：请求 `target_uri` → 用户 `add_targets.skill_uri` → 服务端 `user_config_defaults.add_targets.skill_uri` → 当前用户私有根。所有访问仍受当前身份和权限约束。
+技能支持当前用户私有根 `viking://user/{user_id}/skills/` 和账户内共享根 `viking://agent/skills/`。新增时的目标优先级为：请求 `parent` / `to` / `target_uri` → 用户 `add_targets.skill_uri` → 服务端 `user_config_defaults.add_targets.skill_uri` → 当前用户私有根。所有访问仍受当前身份和权限约束。
 
 家目录别名 `viking://~/skills/` 始终按认证身份展开为当前用户的私有根，不随默认新增目标改变。无 uid 的 `viking://user/skills/` 和 peer-scoped skills 均不支持。私有根的包结构如下；共享根使用相同结构：
 
@@ -191,7 +191,10 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 | wait | bool | 否 | False | 是否等待技能处理完成 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
-| target_uri | string | 否 | 按目标优先级解析 | 目标 skills 根，例如 `viking://~/skills` 或 `viking://agent/skills` |
+| parent | string | 否 | 未指定 | 已存在的父目录，例如 `viking://agent/skills/team` |
+| to | string | 否 | 未指定 | 完整包目录，例如 `viking://agent/skills/team/code-review`；只能安装一个 Skill，末级目录名须与 Skill 名称一致 |
+| create_parent | bool | 否 | False | 配合 `parent` 自动创建缺失父目录 |
+| target_uri | string | 否 | 按目标优先级解析 | 兼容已有客户端的父目录参数；允许 skills 下的分类子目录，自动创建缺失父目录 |
 | skills | List[str] | 否 | `[]` | 从目录/Git 集合按目录名选择 Skill；空列表或 `["*"]` 选择全部 |
 | list_only | bool | 否 | False | 只列出来源中的 Skill，不安装；需可解析的文件、目录或 Git 来源，不能使用内联字典 |
 | source_metadata | object | 否 | 自动生成 | 来源跟踪信息，保存在 `.source.json`；不是 frontmatter 的 `metadata` |
@@ -212,7 +215,8 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
   - MCP 客户端使用 `add_skill` 工具：`data` 传 SKILL.md 文本，`path` 传 Git URL 或本地路径。传本地路径时工具返回一次性的签名 `temp_upload` URL；客户端把 SKILL.md 或 ZIP POST 上去后，服务端按 token 绑定的 `target_uri`、`skills`、`list_only` 完成安装，上传响应里就是安装结果。
 
 - **目标规则**：
-  - 新增使用 `target_uri` 指定 skills 根，不接受 `to`、`parent` 或 `root_uri` 作为 HTTP 请求字段。CLI 的 `-p/--parent-auto-create` 映射到 `target_uri`。
+  - `parent`、`to`、`target_uri` 三者互斥。CLI `--parent` 对应 `parent`；`--to` 对应完整包目录 `to`；`-p/--parent-auto-create` 对应 `parent` 加 `create_parent=true`。不传目标时仍按原有默认规则安装。
+  - 私有和共享 skills 树都支持多层分类目录。可用 `mkdir` 创建目录，再安装 Skill；分类目录以实际 `SKILL.md` 区分，不能在已有 Skill 包内安装另一个包。`to` 自动创建缺失父目录，已安装的同名 Skill 仍可覆盖。
   - 不支持 peer-scoped skill 根；actor peer 过滤只作用于 peer memories/resources，不作用于 peer skills。
   - 列出、读取、删除或搜索技能时，使用家目录别名 `viking://~/skills/...` 访问自己的技能；无 uid 的 `viking://user/skills/...` 写法会报错并提示正确写法。
 
@@ -229,7 +233,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 
 单个 Skill 导入默认返回 `task_id`。通过 [任务 API](17-tasks.md) 查询状态，任务为 `completed` 后再检索；`wait=true` 则等待队列处理并返回 `queue_status`。多 Skill 导入返回 `installed` 数组，每个结果独立携带任务信息，不保证批次原子性。`list_only=true` 只返回来源中的 `skills` 与 `total`，不创建导入任务。
 
-HTTP 字段和 SDK 参数并非同名同层级：Python `add_skill(data, wait=False, options=None)` / `update_skill(skill_name, data, ...)` 将 `target_uri`、`telemetry` 放在 `options` 中；`skills`、`list_only`、`source_metadata`（新增）及 `from_source`（更新）等字段放在 `options["extra"]` 中。TypeScript 使用 `targetUri` 和 `extra`，Go 使用 `TargetURI` 和 `Extra`。TypeScript 的本地路径自动上传仅适用于 Node.js。
+HTTP 字段和 SDK 参数并非同名同层级：Python `add_skill(data, wait=False, options=None)` / `update_skill(skill_name, data, ...)` 将 `target_uri`、`telemetry` 放在 `options` 中；新增还支持 `options` 中的 `parent`、`to`、`create_parent`；`skills`、`list_only`、`source_metadata`（新增）及 `from_source`（更新）等字段放在 `options["extra"]` 中。TypeScript 使用 `targetUri` 和 `extra`，Go 使用 `TargetURI` 和 `Extra`。TypeScript 的本地路径自动上传仅适用于 Node.js。
 
 ```python
 # 预览本地集合；不写入 OpenViking
@@ -499,7 +503,7 @@ Python HTTP SDK 和 Go SDK 都暴露专用技能管理方法。Python 方法包�
 
 ### 列出技能
 
-`GET /api/v1/skills` 的查询参数为 `node_limit=1000` 和可选 `target_uri`。省略目标时合并私有与共享根，同名 Skill 都保留，以 `root_uri` 区分。当前服务端实际固定每个根的目录扫描 `node_limit=1000`，尚未把请求的 `node_limit` 传到扫描层，不应依赖它作为全局条数限制或分页参数。
+`GET /api/v1/skills` 的查询参数为 `node_limit=1000` 和可选 `target_uri`。省略目标时合并私有与共享根，同名 Skill 都保留，以 `root_uri` 区分。`node_limit` 限制每个根返回的技能数量；列表递归扫描分类目录，不进入已安装的 Skill 包。
 
 **Python SDK**：
 
@@ -539,7 +543,7 @@ curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
 
 | 查询参数 | 默认值 | 含义 |
 |----------|--------|------|
-| `target_uri` | 未指定 | 优先查找的 skills 根 |
+| `target_uri` | 未指定 | 优先查找的 skills 父目录 |
 | `level` | 未指定 | `0` 返回 abstract，`1` 返回 overview，`2` 返回 SKILL.md；未指定时返回三个层级 |
 | `include_content` | 未指定 | `true` 额外返回正文；`false` 在未指定 level 时关闭正文；`level=2` 始终返回正文 |
 | `include_files` | `true` | 返回文件和目录清单，默认不计算哈希 |
@@ -704,7 +708,7 @@ curl -X POST http://localhost:1933/api/v1/skills/find \
 |------|--------|------|
 | `data` / `temp_file_id` | 未指定 | 新内容或上传包，使用方式与新增相同 |
 | `from_source` | `false` | 根据已记录的 Git 来源更新；不能与 data/temp_file_id 同用 |
-| `target_uri` | 未指定 | 优先查找的 skills 根，参见读取接口的回退规则 |
+| `target_uri` | 未指定 | 优先查找的 skills 父目录，参见读取接口的回退规则 |
 | `source_metadata` | 自动生成 | 更新来源信息 |
 | `wait` | `false` | 是否等待后台处理 |
 | `timeout` | `null` | 已废弃：兼容旧请求，传入值会被忽略 |
@@ -837,6 +841,18 @@ ov skills validate ./skills/search-web --strict
 ov skills update search-web -p viking://~/skills --wait --yes
 ov skills remove old-skill -p viking://~/skills --yes
 ```
+
+例如，先建立共享分类目录，再安装技能：
+
+```bash
+ov mkdir viking://agent/skills/team
+ov add-skill ./code-review --parent viking://agent/skills/team --wait
+# 或指定完整包目录（code-review 须与 SKILL.md 的 name 一致）
+ov add-skill ./code-review --to viking://agent/skills/team/code-review --wait
+ov skills show code-review -p viking://agent/skills/team
+```
+
+开启账户 ACL 后，共享目录及其技能沿用父目录权限；创建和安装需要写权限。ACL 同样覆盖 `viking://agent` 下的其他子目录，规则见 [ACL](12-acl.md)。
 
 `list/find/show` 的 `-p` 长选项为 `--uri`；`add/update/remove` 为 `--parent-auto-create`。`show` 默认返回各文本层级，文件清单需 `--files`，来源需 `--source`。`validate` 在本地校验，不安装；`update` 从记录的 Git 来源刷新，非 Git 来源在交互模式可要求补充路径/URL。
 

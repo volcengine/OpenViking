@@ -12,14 +12,41 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
+from openviking.core.path_variables import resolve_path_variables
+from openviking.core.skill_package import SkillDestination, validate_skill_parent_uri
+from openviking.core.uri_validation import validate_content_target_uri
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.service.skill_sources import describe_skill_sources, resolve_skill_source
 from openviking.telemetry import TelemetryRequest
+from openviking_cli.exceptions import InvalidArgumentError
+
+
+def resolve_skill_destination(
+    ctx: RequestContext,
+    *,
+    target_uri: str | None = None,
+    parent: str | None = None,
+    to: str | None = None,
+    create_parent: bool = False,
+) -> SkillDestination | None:
+    if sum(bool(value) for value in (target_uri, parent, to)) > 1:
+        raise InvalidArgumentError("target_uri, parent and to are mutually exclusive")
+    if create_parent and not parent:
+        raise InvalidArgumentError("create_parent requires parent")
+    uri = to or parent or target_uri
+    if not uri:
+        return None
+    uri = validate_content_target_uri(resolve_path_variables(uri), ctx, kind="skill")
+    validate_skill_parent_uri(uri.rsplit("/", 1)[0] if to else uri, ctx)
+    mode: Literal["parent", "parent_auto_create", "to"] = (
+        "to" if to else "parent" if parent and not create_parent else "parent_auto_create"
+    )
+    return SkillDestination(uri.rstrip("/"), mode)
 
 
 async def install_skills(
@@ -29,7 +56,7 @@ async def install_skills(
     names: Optional[list[str]] = None,
     list_only: bool = False,
     wait: bool = False,
-    target_uri: str = "",
+    destination: SkillDestination | None = None,
     source_metadata: Optional[dict[str, Any]] = None,
     allow_local_path_resolution: bool = False,
     source_path_hint: Optional[str] = None,
@@ -38,7 +65,7 @@ async def install_skills(
     """Install the skills found in ``data``; return one result or ``{"installed", "total"}``.
 
     ``list_only`` describes the source's skills without persisting anything.
-    ``target_uri`` must already be validated as a skill root by the caller.
+    ``destination`` is normalized at the request boundary.
     """
     service = get_service()
     async with resolve_skill_source(
@@ -49,6 +76,8 @@ async def install_skills(
     ) as targets:
         if list_only:
             return await asyncio.to_thread(describe_skill_sources, targets)
+        if destination is not None and destination.mode == "to" and len(targets) != 1:
+            raise InvalidArgumentError("to requires exactly one selected Skill")
         installed = []
         for skill_data, skill_source in targets:
 
@@ -59,7 +88,7 @@ async def install_skills(
                     wait=wait,
                     allow_local_path_resolution=isinstance(skill_data, Path),
                     source_path_hint=source_path_hint,
-                    target_uri=target_uri,
+                    destination=destination,
                     source_metadata=skill_source,
                 )
                 return result
@@ -105,7 +134,7 @@ async def ingest_temp_upload_skill(
             ctx,
             names=names,
             list_only=list_only,
-            target_uri=target_uri,
+            destination=resolve_skill_destination(ctx, target_uri=target_uri),
             source_metadata=source_metadata,
             allow_local_path_resolution=True,
             source_path_hint=resolved.original_filename,

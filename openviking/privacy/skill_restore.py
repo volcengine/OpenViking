@@ -8,19 +8,6 @@ from openviking.privacy.skill_placeholder import build_placeholder
 from openviking.server.identity import RequestContext
 
 
-def get_skill_name_from_uri(uri: str) -> str | None:
-    normalized = uri.strip().rstrip("/")
-    marker = "/skills/"
-    suffix = "/SKILL.md"
-    if marker not in normalized or not normalized.endswith(suffix):
-        return None
-    start = normalized.rfind(marker)
-    middle = normalized[start + len(marker) : -len(suffix)]
-    if not middle or "/" in middle:
-        return None
-    return middle
-
-
 async def restore_skill_content(
     privacy: UserPrivacyConfigService,
     content: str,

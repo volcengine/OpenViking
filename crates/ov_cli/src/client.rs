@@ -1288,7 +1288,9 @@ impl HttpClient {
         show_progress: bool,
         verbose: bool,
         source_metadata: Option<Value>,
-        target_uri: Option<&str>,
+        parent: Option<&str>,
+        to: Option<&str>,
+        create_parent: bool,
         skills: &[String],
         list_only: bool,
     ) -> Result<serde_json::Value> {
@@ -1300,8 +1302,14 @@ impl HttpClient {
         if list_only {
             body["list_only"] = json!(true);
         }
-        if let Some(target_uri) = target_uri {
-            body["target_uri"] = json!(target_uri);
+        if let Some(parent) = parent {
+            body["parent"] = json!(parent);
+            if create_parent {
+                body["create_parent"] = json!(true);
+            }
+        }
+        if let Some(to) = to {
+            body["to"] = json!(to);
         }
         if let Some(metadata) = source_metadata {
             body["source_metadata"] = metadata;

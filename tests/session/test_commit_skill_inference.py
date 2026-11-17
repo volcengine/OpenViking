@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking.core.skill_loader import SkillLoader
+from openviking.core.skill_package import SkillDestination
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.compressor_v3 import _v3_extraction_response
@@ -88,6 +89,7 @@ def test_session_skill_operations_dedup_duplicate_creates():
 async def test_session_skill_context_provider_prefetch_lists_existing_skills():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     viking_fs = MagicMock()
+    viking_fs.stat = AsyncMock(return_value={"isDir": False})
     viking_fs.ls = AsyncMock(
         return_value=[
             {
@@ -138,6 +140,7 @@ async def test_agent_trajectory_context_provider_without_session_skills_prefetch
 async def test_agent_trajectory_context_provider_delegates_skill_prefetch_and_read():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     viking_fs = MagicMock()
+    viking_fs.stat = AsyncMock(return_value={"isDir": False})
     viking_fs.ls = AsyncMock(
         return_value=[
             {
@@ -247,7 +250,7 @@ async def test_skill_operation_updater_creates_skill_with_session_defaults():
     assert result.written_uris == [uri]
     assert result.edited_uris == []
     assert result.operation_results[0]["action"] == "create"
-    assert call["target_uri"] == "viking://user/default/skills"
+    assert call["destination"] == SkillDestination("viking://user/default/skills")
 
 
 @pytest.mark.asyncio
@@ -290,7 +293,9 @@ async def test_skill_operation_updater_keeps_a_shared_skill_in_the_shared_root()
         RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
     )
 
-    assert processor.process_skill.await_args.kwargs["target_uri"] == "viking://agent/skills"
+    assert processor.process_skill.await_args.kwargs["destination"] == SkillDestination(
+        "viking://agent/skills"
+    )
     assert result.written_uris == [uri]
 
 
@@ -354,7 +359,7 @@ tags:
     assert result.edited_uris == [uri]
     assert result.operation_results[0]["action"] == "update"
     call = processor.process_skill.await_args.kwargs
-    assert call["target_uri"] == "viking://user/default/skills"
+    assert call["destination"] == SkillDestination("viking://user/default/skills")
     assert call["data"]["allowed_tools"] == ["Read"]
     assert call["data"]["tags"] == ["session-derived"]
     assert call["data"]["description"] == "Review code from evidence"
@@ -377,6 +382,8 @@ tags:
 """
     viking_fs = MagicMock()
     viking_fs.read_file = AsyncMock(return_value=existing_skill_md)
+    viking_fs._ensure_access = AsyncMock()
+    viking_fs.stat = AsyncMock(return_value={"isDir": False})
     viking_fs._async_agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "test"})
     viking_fs._async_agfs.pathlock_release = AsyncMock()
 

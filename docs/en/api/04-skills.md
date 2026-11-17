@@ -15,7 +15,7 @@ OpenViking supports multiple skill definition formats:
 
 ### Skill Storage Structure
 
-Skills support the current user's private root `viking://user/{user_id}/skills/` and the account-shared root `viking://agent/skills/`. The add target resolves in this order: request `target_uri` → user `add_targets.skill_uri` → server `user_config_defaults.add_targets.skill_uri` → current user's private root. Access remains subject to the current identity and permissions.
+Skills support the current user's private root `viking://user/{user_id}/skills/` and the account-shared root `viking://agent/skills/`. The add target resolves in this order: request `parent` / `to` / `target_uri` → user `add_targets.skill_uri` → server `user_config_defaults.add_targets.skill_uri` → current user's private root. Access remains subject to the current identity and permissions.
 
 The home alias `viking://~/skills/` always resolves to the authenticated user's private root, independently of the configured add target. The uid-less `viking://user/skills/` and peer-scoped skills are unsupported. The private package layout below also applies under the shared root:
 
@@ -191,7 +191,10 @@ This endpoint stores Skill instructions and supporting files, then generates sum
 | wait | bool | No | False | Wait for skill processing to complete |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
-| target_uri | str | No | Target resolution order | Skills root, such as `viking://~/skills` or `viking://agent/skills` |
+| parent | str | No | Unspecified | Existing parent directory, such as `viking://agent/skills/team` |
+| to | str | No | Unspecified | Exact package directory, such as `viking://agent/skills/team/code-review`; requires one selected Skill and a final directory name matching its name |
+| create_parent | bool | No | False | With `parent`, create missing parent directories |
+| target_uri | str | No | Target resolution order | Legacy parent destination; supports category subdirectories and creates missing parents |
 | skills | List[str] | No | `[]` | Select directory names from a directory/Git collection; empty or `["*"]` selects all |
 | list_only | bool | No | False | Inspect source Skills without installing; requires a resolvable file, directory, or Git source, not an inline dictionary |
 | source_metadata | object | No | Generated automatically | Source tracking saved in `.source.json`; distinct from frontmatter `metadata` |
@@ -211,7 +214,8 @@ Supply at least one of `data` or `temp_file_id`. The current server gives upload
   - MCP clients use the `add_skill` tool: `data` takes SKILL.md text, and `path` takes a Git URL or a local path. For a local path the tool returns a one-time signed `temp_upload` URL; after the client POSTs the SKILL.md or ZIP there, the server installs it with the token-bound `target_uri`, `skills`, and `list_only`, and the upload response carries the install result.
 
 - **Targeting**:
-  - Add requests use `target_uri` for the skills root; `to`, `parent`, and `root_uri` are not HTTP request fields. CLI `-p/--parent-auto-create` maps to `target_uri`.
+  - `parent`, `to`, and `target_uri` are mutually exclusive. CLI `--parent` maps to `parent`, `--to` to the exact package directory, and `-p/--parent-auto-create` to `parent` with `create_parent=true`. Omitting the destination keeps the existing default resolution.
+  - Both private and shared skills trees support nested category directories. Create a category with `mkdir`, then install into it. An actual `SKILL.md` marks a package boundary; installing another package inside it is rejected. `to` creates missing parent directories and can overwrite an installed Skill with the same name.
   - Peer-scoped skill roots are not supported; actor peer filtering only applies to peer memories/resources, not peer skills.
   - Use the home alias `viking://~/skills/...` to address your own skills when listing, reading, deleting, or searching. The uid-less `viking://user/skills/...` spelling returns an error with a corrective hint.
 
@@ -228,7 +232,7 @@ Local `.json` files are not automatically decoded into structured Skills. Parse 
 
 Single-Skill imports return a `task_id` by default. Query the [Task API](17-tasks.md) and search after the task reaches `completed`. With `wait=true`, the call waits for queue processing and returns `queue_status`. Multiple imports return an `installed` array with independent task information per result; the batch is not atomic. `list_only=true` returns source `skills` and `total` without creating import tasks.
 
-HTTP fields and SDK parameters do not have identical names or nesting. Python `add_skill(data, wait=False, options=None)` / `update_skill(skill_name, data, ...)` take `target_uri` and `telemetry` inside `options`. Put fields such as `skills`, `list_only`, `source_metadata` (add), and `from_source` (update) in `options["extra"]`. TypeScript uses `targetUri` and `extra`; Go uses `TargetURI` and `Extra`. TypeScript local path uploads require Node.js.
+HTTP fields and SDK parameters do not have identical names or nesting. Python `add_skill(data, wait=False, options=None)` / `update_skill(skill_name, data, ...)` take `target_uri` and `telemetry` inside `options`. Add also accepts `parent`, `to`, and `create_parent` in `options`. Put fields such as `skills`, `list_only`, `source_metadata` (add), and `from_source` (update) in `options["extra"]`. TypeScript uses `targetUri` and `extra`; Go uses `TargetURI` and `Extra`. TypeScript local path uploads require Node.js.
 
 ```python
 # Preview a local collection without writing to OpenViking
@@ -500,7 +504,7 @@ filesystem/content/retrieval methods still work for URI-level access.
 
 ### List Skills
 
-`GET /api/v1/skills` accepts query parameters `node_limit=1000` and optional `target_uri`. Without a target it merges private and shared roots, retaining same-name Skills distinguished by `root_uri`. The current server fixes directory scanning at `node_limit=1000` per root and does not forward the requested `node_limit` to that scan; do not rely on it as a global result limit or pagination parameter.
+`GET /api/v1/skills` accepts query parameters `node_limit=1000` and optional `target_uri`. Without a target it merges private and shared roots, retaining same-name Skills distinguished by `root_uri`. `node_limit` caps the number of Skills returned per root. Listing traverses category directories without entering installed packages.
 
 **Python SDK**
 
@@ -539,7 +543,7 @@ curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
 
 | Query parameter | Default | Meaning |
 |-----------------|---------|---------|
-| `target_uri` | Unspecified | Skills root to try first |
+| `target_uri` | Unspecified | Skills parent directory to try first |
 | `level` | Unspecified | `0` returns abstract, `1` overview, `2` SKILL.md; omitted returns all three levels |
 | `include_content` | Unspecified | `true` adds content; `false` disables content when level is omitted; `level=2` always returns content |
 | `include_files` | `true` | File and directory manifest, without hashes by default |
@@ -702,7 +706,7 @@ Missing names/descriptions and invalid YAML produce errors. Directory/name misma
 |-----------|---------|---------|
 | `data` / `temp_file_id` | Unspecified | New content or uploaded package, as for add |
 | `from_source` | `false` | Refresh from recorded Git source; cannot be combined with data/temp_file_id |
-| `target_uri` | Unspecified | Skills root to try first; see read resolution fallback |
+| `target_uri` | Unspecified | Skills parent directory to try first; see read resolution fallback |
 | `source_metadata` | Generated automatically | Updated source tracking |
 | `wait` | `false` | Wait for background processing |
 | `timeout` | `null` | Deprecated: accepted and ignored |
@@ -834,6 +838,18 @@ ov skills validate ./skills/search-web --strict
 ov skills update search-web -p viking://~/skills --wait --yes
 ov skills remove old-skill -p viking://~/skills --yes
 ```
+
+Create a shared category and install a Skill into it:
+
+```bash
+ov mkdir viking://agent/skills/team
+ov add-skill ./code-review --parent viking://agent/skills/team --wait
+# Or select the exact package directory; code-review must match SKILL.md's name.
+ov add-skill ./code-review --to viking://agent/skills/team/code-review --wait
+ov skills show code-review -p viking://agent/skills/team
+```
+
+When account ACL is enabled, shared categories and Skills inherit parent permissions. Creation and installation require write access. The same ACL rules cover other subdirectories of `viking://agent`; see [ACL](12-acl.md).
 
 The long form of `-p` is `--uri` for `list/find/show` and `--parent-auto-create` for `add/update/remove`. `show` returns all text levels by default; request files with `--files` and tracking with `--source`. `validate` runs locally without installation. `update` refreshes recorded Git sources; for non-Git sources, interactive use can prompt for a path/URL.
 

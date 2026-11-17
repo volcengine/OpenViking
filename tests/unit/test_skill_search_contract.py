@@ -36,7 +36,7 @@ def fake_search(monkeypatch):
     abstract = AsyncMock(side_effect=root_abstract)
     service = SimpleNamespace(
         search=SimpleNamespace(find_skills=find),
-        fs=SimpleNamespace(abstract=abstract),
+        fs=SimpleNamespace(abstract=abstract, stat=AsyncMock(return_value={"isDir": False})),
     )
 
     async def run_operation(*, operation, telemetry, fn):

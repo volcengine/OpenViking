@@ -578,56 +578,162 @@ async def test_skills_api_add_accepts_source_metadata_override(client, monkeypat
     assert len(downloads) == count
 
 
-async def test_skills_api_update_accepts_binary_auxiliary_files(client, tmp_path):
-    await _add_skill(client, "binary-skill", "Original binary skill")
+async def test_shared_skill_update_preserves_acl_and_replaces_auxiliary_files(
+    client, app, service, tmp_path
+):
+    from openviking.server.auth import get_download_request_context, get_request_context
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
 
-    skill_dir = tmp_path / "binary-skill"
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text(
-        _skill_md("binary-skill", "Updated binary skill"),
-        encoding="utf-8",
+    admin = RequestContext(user=service.user, role=Role.ADMIN)
+    writer = RequestContext(user=service.user, role=Role.USER, group_ids=("writers",))
+    reader = RequestContext(
+        user=UserIdentifier(admin.account_id, "reader"), role=Role.USER, group_ids=("readers",)
     )
-    (skill_dir / "preview.bin").write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01")
+    outsider = RequestContext(user=UserIdentifier(admin.account_id, "outsider"), role=Role.USER)
+    caller = admin
+    app.dependency_overrides[get_request_context] = lambda: caller
+    app.dependency_overrides[get_download_request_context] = lambda: caller
+    await service.runtime_config_manager.patch_account(admin.account_id, {"acl": {"enabled": True}})
+    await service.resources.wait_processed()
+    shared_root = "viking://agent/skills"
+    grants = [
+        {"principal": "group:readers", "level": "read"},
+        {"principal": "group:writers", "level": "write"},
+    ]
+    root_acl = await client.get("/api/v1/acl", params={"uri": "viking://agent"})
+    assert root_acl.json()["result"]["effective_entries"] == [
+        {"principal": "user:*", "level": "manage"}
+    ]
+    immutable = await client.put("/api/v1/acl", json={"uri": "viking://agent", "entries": []})
+    assert immutable.status_code == 400, immutable.text
+    restricted = await client.put(
+        "/api/v1/acl", json={"uri": shared_root, "acl_mode": "restricted", "entries": grants}
+    )
+    assert restricted.status_code == 200, restricted.text
 
-    archive = tmp_path / "binary-skill.zip"
-    with zipfile.ZipFile(archive, "w") as zip_file:
-        for path in skill_dir.rglob("*"):
-            zip_file.write(path, path.relative_to(skill_dir).as_posix())
-
-    with archive.open("rb") as handle:
-        upload_response = await client.post(
-            "/api/v1/resources/temp_upload",
-            files={"file": ("binary-skill.zip", handle, "application/zip")},
+    caller = writer
+    shared_root += "/team"
+    created = await client.post("/api/v1/fs/mkdir", json={"uri": shared_root})
+    assert created.status_code == 200, created.text
+    caller = admin
+    inherited = await client.get("/api/v1/acl", params={"uri": shared_root})
+    assert inherited.status_code == 200, inherited.text
+    assert inherited.json()["result"]["effective_entries"] == grants
+    caller = writer
+    added = await client.post(
+        "/api/v1/skills",
+        json={
+            "data": _skill_md("binary-skill", "Original binary skill"),
+            "parent": shared_root,
+            "wait": True,
+        },
+    )
+    assert added.status_code == 200, added.text
+    root_uri = added.json()["result"]["root_uri"]
+    snapshots = {}
+    for revision in (1, 2):
+        archive = tmp_path / "binary-skill.zip"
+        with zipfile.ZipFile(archive, "w") as package:
+            package.writestr("SKILL.md", _skill_md("binary-skill", f"Revision {revision}"))
+            package.writestr("preview.bin", b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01")
+            package.writestr("reference/guide.md", f"Revision {revision} instructions.")
+        with archive.open("rb") as handle:
+            uploaded = await client.post(
+                "/api/v1/resources/temp_upload",
+                files={"file": (archive.name, handle, "application/zip")},
+            )
+        assert uploaded.status_code == 200, uploaded.text
+        updated = await client.put(
+            "/api/v1/skills/binary-skill",
+            json={
+                "temp_file_id": uploaded.json()["result"]["temp_file_id"],
+                "target_uri": shared_root,
+                "wait": True,
+            },
         )
-    assert upload_response.status_code == 200, upload_response.text
-    temp_file_id = upload_response.json()["result"]["temp_file_id"]
+        assert updated.status_code == 200, updated.text
+        caller = admin
+        if revision == 1:
+            for uri, entries in (
+                (root_uri, grants),
+                (f"{root_uri}/reference", [{"principal": "user:reader", "level": "read"}]),
+                (f"{root_uri}/reference/guide.md", [{"principal": "user:reader", "level": "read"}]),
+            ):
+                response = await client.put(
+                    "/api/v1/acl", json={"uri": uri, "acl_mode": "restricted", "entries": entries}
+                )
+                assert response.status_code == 200, response.text
+                snapshots[uri] = response.json()["result"]
+            for denied_caller in (reader, writer):
+                caller = denied_caller
+                denied = await client.put(
+                    "/api/v1/skills/binary-skill",
+                    json={
+                        "data": _skill_md("binary-skill", "Denied replacement"),
+                        "target_uri": shared_root,
+                        "wait": True,
+                    },
+                )
+                assert denied.status_code == 403, denied.text
+            caller = admin
+        for uri, expected in snapshots.items():
+            report = await client.get("/api/v1/acl", params={"uri": uri})
+            assert report.status_code == 200, report.text
+            assert report.json()["result"] == expected
 
-    update_response = await client.put(
+    caller = reader
+    download = await client.get(
+        "/api/v1/content/download", params={"uri": f"{root_uri}/preview.bin"}
+    )
+    assert download.status_code == 200, download.text
+    assert download.content.startswith(b"\xff\xd8\xff\xe0")
+    guide = await client.get(
+        "/api/v1/content/download", params={"uri": f"{root_uri}/reference/guide.md"}
+    )
+    assert guide.content == b"Revision 2 instructions."
+    listed = await client.get("/api/v1/skills")
+    assert [skill["name"] for skill in listed.json()["result"]["skills"]] == ["binary-skill"]
+    for endpoint in ("/api/v1/skills/find", "/api/v1/search/find"):
+        found = await client.post(endpoint, json={"query": "binary skill", "target_uri": root_uri})
+        assert found.status_code == 200, found.text
+        assert found.json()["result"]["skills"]
+
+    caller = outsider
+    denied_mkdir = await client.post("/api/v1/fs/mkdir", json={"uri": f"{shared_root}/denied"})
+    assert denied_mkdir.status_code == 403, denied_mkdir.text
+    for endpoint in ("/api/v1/skills/find", "/api/v1/search/find"):
+        found = await client.post(endpoint, json={"query": "binary skill", "target_uri": root_uri})
+        assert found.status_code == 200, found.text
+        assert found.json()["result"]["skills"] == []
+    denied = await client.get("/api/v1/content/download", params={"uri": f"{root_uri}/SKILL.md"})
+    assert denied.status_code == 403, denied.text
+    denied_add = await client.post(
+        "/api/v1/skills",
+        json={"data": _skill_md("denied-skill", "Denied installation"), "target_uri": shared_root},
+    )
+    assert denied_add.status_code == 403, denied_add.text
+    # An unreadable shared registry must not hide the caller's private skills.
+    await _add_skill(client, "private-skill", "Private skill")
+    listed = await client.get("/api/v1/skills")
+    assert listed.status_code == 200, listed.text
+    assert [skill["name"] for skill in listed.json()["result"]["skills"]] == ["private-skill"]
+
+    caller = admin
+    replaced = await client.put(
         "/api/v1/skills/binary-skill",
-        json={"temp_file_id": temp_file_id, "wait": True},
+        json={
+            "data": _skill_md("binary-skill", "Updated without auxiliary files"),
+            "target_uri": shared_root,
+            "wait": True,
+        },
     )
-    assert update_response.status_code == 200, update_response.text
-    root_uri = update_response.json()["result"]["root_uri"]
-
-    download_response = await client.get(
-        "/api/v1/content/download",
-        params={"uri": f"{root_uri}/preview.bin"},
-    )
-    assert download_response.status_code == 200, download_response.text
-    assert download_response.content.startswith(b"\xff\xd8\xff\xe0")
-
-    replace_response = await client.put(
-        "/api/v1/skills/binary-skill",
-        json={"data": _skill_md("binary-skill", "Updated without auxiliary files"), "wait": True},
-    )
-    assert replace_response.status_code == 200, replace_response.text
-    replaced_root_uri = replace_response.json()["result"]["root_uri"]
-
-    stale_download_response = await client.get(
-        "/api/v1/content/download",
-        params={"uri": f"{replaced_root_uri}/preview.bin"},
-    )
-    assert stale_download_response.status_code == 404
+    assert replaced.status_code == 200, replaced.text
+    for path in ("preview.bin", "reference/guide.md"):
+        missing = await client.get("/api/v1/content/download", params={"uri": f"{root_uri}/{path}"})
+        assert missing.status_code == 404, missing.text
+    report = await client.get("/api/v1/acl", params={"uri": root_uri})
+    assert report.json()["result"] == snapshots[root_uri]
 
 
 async def test_skills_api_validate_inline_skill(client):
@@ -701,13 +807,31 @@ async def test_skills_api_validate_rfc_strict_and_loose_rules(client):
     assert any(issue["rule"] == "body_max_lines" for issue in long_body_result["warnings"])
 
 
+@pytest.mark.parametrize("namespace", ["viking://~/skills", "viking://agent/skills"])
+@pytest.mark.parametrize("destination_mode", ["parent", "to"])
 async def test_skill_package_indexes_nested_content_and_returns_actual_hit(
-    client, service, tmp_path
+    client, service, tmp_path, namespace, destination_mode
 ):
     from openviking.server.identity import RequestContext, Role
     from openviking.storage.expr import Eq
     from openviking_cli.session.user_id import UserIdentifier
 
+    parent = f"{namespace}/team/subteam"
+    data = _skill_md("package-search", "Root skill description")
+    missing = await client.post("/api/v1/skills", json={"data": data, "parent": parent})
+    assert missing.status_code == 404, missing.text
+    for uri in (f"{namespace}/team", parent):
+        created = await client.post("/api/v1/fs/mkdir", json={"uri": uri})
+        assert created.status_code == 200, created.text
+    invalid = await client.post(
+        "/api/v1/skills", json={"data": data, "parent": parent, "to": f"{parent}/package-search"}
+    )
+    assert invalid.status_code == 400, invalid.text
+    mismatch = await client.post(
+        "/api/v1/skills", json={"data": data, "to": f"{parent}/another-name"}
+    )
+    assert mismatch.status_code == 400, mismatch.text
+    destination = parent if destination_mode == "parent" else f"{parent}/package-search"
     archive = tmp_path / "package-search.zip"
     with zipfile.ZipFile(archive, "w") as package:
         skill = _skill_md("package-search", "Root skill description")
@@ -725,10 +849,22 @@ async def test_skill_package_indexes_nested_content_and_returns_actual_hit(
     assert uploaded.status_code == 200, uploaded.text
     added = await client.post(
         "/api/v1/skills",
-        json={"temp_file_id": uploaded.json()["result"]["temp_file_id"], "wait": True},
+        json={
+            "temp_file_id": uploaded.json()["result"]["temp_file_id"],
+            "wait": True,
+            destination_mode: destination,
+        },
     )
     assert added.status_code == 200, added.text
     root = added.json()["result"]["root_uri"]
+    assert root.endswith("/skills/team/subteam/package-search")
+    category = await client.post(
+        "/api/v1/skills",
+        json={"data": _skill_md("subteam", "Category overwrite"), "to": parent},
+    )
+    assert category.status_code == 400, category.text
+    nested = await client.post("/api/v1/skills", json={"data": data, "parent": f"{root}/reference"})
+    assert nested.status_code == 400, nested.text
     # Both root summary levels retain the package identity in the stored index.
     records = await service.vikingdb_manager.filter(
         filter=Eq("uri", root),
@@ -772,7 +908,19 @@ async def test_skill_package_indexes_nested_content_and_returns_actual_hit(
 
     listed = await client.get("/api/v1/skills")
     assert [skill["name"] for skill in listed.json()["result"]["skills"]] == ["package-search"]
-    deleted = await client.delete("/api/v1/skills/package-search")
+    shown = await client.get("/api/v1/skills/package-search", params={"target_uri": parent})
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["result"]["root_uri"] == root
+    updated = await client.put(
+        "/api/v1/skills/package-search",
+        json={"data": data, "target_uri": parent, "wait": True},
+    )
+    assert updated.status_code == 200, updated.text
+    rebuilt = await client.post(
+        "/api/v1/content/reindex", json={"uri": root, "mode": "vectors_only", "wait": True}
+    )
+    assert rebuilt.status_code == 200, rebuilt.text
+    deleted = await client.delete("/api/v1/skills/package-search", params={"target_uri": parent})
     assert deleted.status_code == 200, deleted.text
     found = await client.post("/api/v1/skills/find", json={"query": "backup recovery"})
     assert found.json()["result"]["skills"] == []

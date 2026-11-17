@@ -343,6 +343,7 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("shared_root", ["viking://resources", "viking://agent"])
 @pytest.mark.parametrize(
     "legacy_mode,action",
     [
@@ -352,7 +353,7 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
     ],
 )
 async def test_tenant_search_enforces_visible_roots_and_shared_acl(
-    vector_backend_factory, tmp_path, legacy_mode, action
+    vector_backend_factory, tmp_path, legacy_mode, action, shared_root
 ):
     ctx = _ctx()
     own_uri = "viking://user/alice/resources/notes"
@@ -382,13 +383,13 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         {
             **legacy_mode,
             "id": "default-shared",
-            "uri": "viking://resources/default.md",
+            "uri": f"{shared_root}/default.md",
             "account_id": "acct",
             "context_type": "resource",
         },
         {
             "id": "direct-shared",
-            "uri": "viking://resources/direct.md",
+            "uri": f"{shared_root}/direct.md",
             "account_id": "acct",
             "context_type": "resource",
             "acl_mode": "inherit",
@@ -397,7 +398,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         },
         {
             "id": "inherited-shared",
-            "uri": "viking://resources/inherited.md",
+            "uri": f"{shared_root}/inherited.md",
             "account_id": "acct",
             "context_type": "resource",
             "acl_mode": "inherit",
@@ -405,7 +406,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         },
         {
             "id": "restricted-inherited-shared",
-            "uri": "viking://resources/restricted-inherited.md",
+            "uri": f"{shared_root}/restricted-inherited.md",
             "account_id": "acct",
             "context_type": "resource",
             "acl_mode": "restricted",
@@ -413,7 +414,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         },
         {
             "id": "restricted-direct-shared",
-            "uri": "viking://resources/restricted-direct.md",
+            "uri": f"{shared_root}/restricted-direct.md",
             "account_id": "acct",
             "context_type": "resource",
             "acl_mode": "restricted",
@@ -423,7 +424,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         },
         {
             "id": "denied-shared",
-            "uri": "viking://resources/finance/denied.md",
+            "uri": f"{shared_root}/finance/denied.md",
             "account_id": "acct",
             "context_type": "resource",
             "acl_mode": "inherit",
@@ -433,7 +434,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         },
         {
             "id": "foreign-account",
-            "uri": "viking://resources/foreign.md",
+            "uri": f"{shared_root}/foreign.md",
             "account_id": "other",
             "context_type": "resource",
             "acl_mode": "restricted",
@@ -478,7 +479,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
             filter=And(
                 [
                     Eq("account_id", ctx.account_id),
-                    PathScope("uri", "viking://resources", depth=-1),
+                    PathScope("uri", shared_root, depth=-1),
                     acl_filter(finance_ctx, action, denied=True),
                 ]
             ),
@@ -524,7 +525,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
             query_vector=[1.0, 0.0, 0.0, 0.0],
             context_type="resource",
             **decay,
-            target_directories=["viking://resources/finance"],
+            target_directories=[f"{shared_root}/finance"],
         )
         assert [record["id"] for record in finance] == ["denied-shared"]
 

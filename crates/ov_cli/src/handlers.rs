@@ -337,6 +337,8 @@ pub async fn handle_add_skill(
         ctx.output_format,
         ctx.compact,
         args.parent.as_deref(),
+        args.to.as_deref(),
+        args.parent_auto_create.as_deref(),
     )
     .await
 }

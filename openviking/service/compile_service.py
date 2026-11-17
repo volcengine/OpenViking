@@ -17,6 +17,7 @@ from openviking.concurrency import bounded_map
 from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSInternalError
 from openviking.server.identity import RequestContext, Role
@@ -1200,7 +1201,7 @@ class CompileService:
         skill = validate_request_viking_uri(
             resolve_path_variables(skill), ctx, field_name="skill"
         ).rstrip("/")
-        if not classify_uri(skill).is_skill_root:
+        if not classify_uri(skill).is_skill or classify_uri(skill).is_skill_namespace:
             raise InvalidArgumentError(
                 "The input skill is not in a supported location. "
                 "Select a Skill directory or its SKILL.md, "
@@ -1218,6 +1219,7 @@ class CompileService:
         """Validate inputs for new admissions without revalidating recovered submissions."""
         request = self._normalize_request_uris(request, ctx)
         assert request.to is not None
+        assert request.skill is not None
         parts = uri_parts(request.to)
         if parts[:1] == ["user"] and parts[2:4] == ["memories", "experiences"]:
             raise InvalidArgumentError(
@@ -1243,6 +1245,8 @@ class CompileService:
         skill_file = await self._fs.stat(f"{request.skill}/SKILL.md", ctx, skip_count=True)
         if skill_file.get("isDir"):
             raise InvalidArgumentError("Skill directory must contain a SKILL.md file")
+        if await SkillPackageResolver(self._fs, ctx).resolve(request.skill) != request.skill:
+            raise InvalidArgumentError("skill must resolve to a Skill package, not an attachment")
         await self._fs.ensure_write_access(request.to, ctx)
         try:
             target_stat = await self._fs.stat(request.to, ctx, skip_count=True)

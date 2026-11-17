@@ -15,7 +15,7 @@ from openviking.privacy.skill_placeholder import (
     placeholderize_skill_content,
     placeholderize_skill_content_with_blocks,
 )
-from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
+from openviking.privacy.skill_restore import restore_skill_content
 
 __all__ = [
     "UserPrivacyConfigMeta",
@@ -28,6 +28,5 @@ __all__ = [
     "build_placeholder",
     "placeholderize_skill_content_with_blocks",
     "placeholderize_skill_content",
-    "get_skill_name_from_uri",
     "restore_skill_content",
 ]

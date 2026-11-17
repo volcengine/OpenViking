@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 import yaml
 
 from openviking.core.namespace import classify_uri
+from openviking.core.skill_package import SkillPackageResolver
 from openviking.models.model_error import ModelErrorKind, model_error_kind
 from openviking.observability.context import (
     bind_root_observability_context,
@@ -403,12 +404,14 @@ class SemanticProcessor(DequeueHandlerBase):
         if parent is None:
             return
         parent_uri = parent.uri.rstrip("/")
+        parent_ctx = self._ctx_from_semantic_msg(msg)
         if msg.context_type == "skill":
             classification = classify_uri(parent_uri)
             if (
                 not classification.is_skill
                 or classification.is_skill_namespace
-                or classification.is_skill_root
+                or await SkillPackageResolver(get_viking_fs(), parent_ctx).resolve(parent_uri)
+                == parent_uri
             ):
                 return
         if (
@@ -417,7 +420,6 @@ class SemanticProcessor(DequeueHandlerBase):
             or parent_uri == uri.rstrip("/")
         ):
             return
-        parent_ctx = self._ctx_from_semantic_msg(msg)
         semantic_config = get_openviking_config().semantic
         try:
             decision = await plan_abstract_overview_refresh(
@@ -2031,7 +2033,10 @@ class SemanticProcessor(DequeueHandlerBase):
 
         active_ctx = ctx or self._default_ctx
         skill_meta = None
-        if context_type == "skill" and classify_uri(uri).is_skill_root:
+        if (
+            context_type == "skill"
+            and await SkillPackageResolver(get_viking_fs(), active_ctx).resolve(uri) == uri
+        ):
             import yaml
 
             parsed = yaml.safe_load(body_for_preview(abstract))

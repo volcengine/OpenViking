@@ -19,14 +19,19 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.skill_loader import validate_skill_format
+from openviking.core.skill_package import (
+    SkillDestination,
+    SkillPackageResolver,
+    list_skill_packages,
+    validate_skill_parent_uri,
+)
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.models.embedder.base import query_embed_cache_scope
-from openviking.retrieve.skill_results import skill_root_uri
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking.server.skill_package_update import clear_skill_package_contents
+from openviking.server.skill_package_update import remove_obsolete_skill_files
 from openviking.server.skill_source_metadata import (
     SOURCE_METADATA_FILENAME,
     read_skill_source_metadata,
@@ -35,11 +40,13 @@ from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.service.skill_sources import resolve_skill_source
 from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.storage.acl import AclAction
 from openviking.telemetry import TelemetryRequest
-from openviking.utils.skill_processor import validate_skill_name
+from openviking.utils.skill_processor import SkillProcessingPreparation, validate_skill_name
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     ResourceExhaustedError,
 )
 from openviking_cli.utils import get_logger
@@ -103,87 +110,22 @@ class ValidateSkillRequest(BaseModel):
     target_uri: Optional[str] = None
 
 
-def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) -> str:
-    user_root = f"{canonical_user_root(ctx)}/skills"
-    if not target_uri:
-        return user_root
-    resolved_uri = validate_request_viking_uri(
-        resolve_path_variables(target_uri), ctx, field_name="target_uri"
-    ).rstrip("/")
-    if resolved_uri == "viking://agent/skills" or resolved_uri.startswith("viking://agent/skills/"):
-        return "viking://agent/skills"
-    if resolved_uri == user_root or resolved_uri.startswith(f"{user_root}/"):
-        return user_root
-    raise InvalidArgumentError(
-        f"Unsupported skill target URI: {target_uri}",
-        details={
-            "field": "target_uri",
-            "allowed": [user_root, "viking://agent/skills"],
-        },
+def _skill_parent_uri(ctx: RequestContext, target_uri: Optional[str] = None) -> str:
+    return validate_skill_parent_uri(
+        validate_request_viking_uri(
+            resolve_path_variables(target_uri), ctx, field_name="target_uri"
+        )
+        if target_uri
+        else f"{canonical_user_root(ctx)}/skills",
+        ctx,
     )
 
 
 async def _list_skills_from_root(
     service, ctx: RequestContext, root_uri: str, node_limit: int = _DEFAULT_SKILL_LIST_LIMIT
 ) -> list[Dict[str, Any]]:
-    """List skills from a specific root URI.
-
-    Filters out directory entries that do not look like a valid skill — i.e.
-    their abstract metadata does not yield a valid ``name`` (matching the same
-    rules ``add_skill`` enforces via ``validate_skill_name``).  If the abstract
-    is missing or unreadable we fall back to checking whether a SKILL.md file
-    exists under the entry; only then is the directory accepted.  This keeps
-    nested directories like ``<skill>/scripts`` out of the listing.
-    """
-    try:
-        page = await service.fs.ls(
-            root_uri,
-            ctx=ctx,
-            output="agent",
-            abs_limit=1024,
-            node_limit=node_limit,
-        )
-        entries = page.entries
-    except NotFoundError:
-        return []
-
-    results: list[Dict[str, Any]] = []
-    for entry in entries:
-        if not (isinstance(entry, dict) and entry.get("isDir", False)):
-            continue
-        if not await _entry_looks_like_skill(service, ctx, entry):
-            continue
-        results.append(_skill_summary_from_entry(entry))
-    return results
-
-
-async def _entry_looks_like_skill(service, ctx: RequestContext, entry: Dict[str, Any]) -> bool:
-    """Decide whether a directory entry from ``ls`` represents a real skill."""
-    entry_uri = entry.get("uri", "")
-    if not entry_uri:
-        return False
-
-    meta = _parse_abstract_meta(entry.get("abstract", ""))
-    if meta:
-        try:
-            validate_skill_name(meta.get("name"))
-        except Exception:
-            return False
-        description = meta.get("description")
-        if not isinstance(description, str) or not description.strip():
-            return False
-        return True
-
-    # Abstract is missing or unparsable — fall back to checking that the
-    # directory actually contains a SKILL.md file before listing it.  Any
-    # error (including NotFound) means we cannot confirm it is a skill.
-    try:
-        skill_md_stat = await service.fs.stat(_skill_md_uri(entry_uri), ctx=ctx, skip_count=True)
-    except Exception:
-        return False
-    if not skill_md_stat or skill_md_stat.get("isDir", False):
-        return False
-    return True
+    entries = await list_skill_packages(service.viking_fs, ctx, root_uri, limit=node_limit)
+    return [_skill_summary_from_entry(entry) for entry in entries]
 
 
 def _validate_skill_name(skill_name: str) -> str:
@@ -191,7 +133,7 @@ def _validate_skill_name(skill_name: str) -> str:
 
 
 def _skill_root_uri(ctx: RequestContext, skill_name: str, target_uri: Optional[str] = None) -> str:
-    return f"{_agent_skills_root(ctx, target_uri)}/{_validate_skill_name(skill_name)}"
+    return f"{_skill_parent_uri(ctx, target_uri)}/{_validate_skill_name(skill_name)}"
 
 
 def _skill_md_uri(root_uri: str) -> str:
@@ -247,10 +189,10 @@ def _skill_summary_from_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _skill_summary_from_hit(
-    hit: Dict[str, Any], service, ctx: RequestContext
+    hit: Dict[str, Any], service, ctx: RequestContext, packages: SkillPackageResolver
 ) -> Dict[str, Any]:
     hit_uri = hit.get("uri", "")
-    root_uri = _skill_root_from_hit_uri(hit_uri)
+    root_uri = await packages.resolve(hit_uri)
     meta = _parse_abstract_meta(await service.fs.abstract(root_uri, ctx=ctx))
     name = meta.get("name") or _skill_name_from_uri(root_uri)
     summary = _skill_summary_from_meta(name, root_uri, meta)
@@ -262,46 +204,27 @@ async def _skill_summary_from_hit(
     return summary
 
 
-def _skill_root_from_hit_uri(hit_uri: str) -> str:
-    """Resolve the package root even when a hit is several directories deep."""
-    return skill_root_uri(hit_uri) or hit_uri.rstrip("/")
-
-
 async def _require_skill(
     service, ctx: RequestContext, skill_name: str, target_uri: Optional[str] = None
 ) -> str:
+    roots = []
     if target_uri:
-        root_uri = _skill_root_uri(ctx, skill_name, target_uri)
+        roots.append(_skill_root_uri(ctx, skill_name, target_uri))
+    roots.extend(
+        [
+            _skill_root_uri(ctx, skill_name),
+            _skill_root_uri(ctx, skill_name, "viking://agent/skills"),
+        ]
+    )
+    packages = SkillPackageResolver(service.fs, ctx)
+    for root in dict.fromkeys(roots):
         try:
-            stat = await service.fs.stat(root_uri, ctx=ctx, skip_count=True)
-            if stat and stat.get("isDir", False):
-                return root_uri
+            info = await service.fs.stat(root, ctx=ctx, skip_count=True)
         except NotFoundError:
-            pass
-        except Exception as exc:
-            raise NotFoundError(root_uri, "skill") from exc
-
-    user_root_uri = _skill_root_uri(ctx, skill_name)
-    try:
-        stat = await service.fs.stat(user_root_uri, ctx=ctx, skip_count=True)
-        if stat and stat.get("isDir", False):
-            return user_root_uri
-    except NotFoundError:
-        pass
-    except Exception as exc:
-        raise NotFoundError(user_root_uri, "skill") from exc
-
-    agent_root_uri = _skill_root_uri(ctx, skill_name, "viking://agent/skills")
-    try:
-        stat = await service.fs.stat(agent_root_uri, ctx=ctx, skip_count=True)
-        if stat and stat.get("isDir", False):
-            return agent_root_uri
-    except NotFoundError:
-        pass
-    except Exception as exc:
-        raise NotFoundError(agent_root_uri, "skill") from exc
-
-    raise NotFoundError(_skill_root_uri(ctx, skill_name), "skill")
+            continue
+        if info["isDir"] and await packages.resolve(root) == root:
+            return root
+    raise NotFoundError(roots[0], "skill")
 
 
 async def _list_skill_files(
@@ -535,7 +458,12 @@ async def list_skills(
         user_skills = await _list_skills_from_root(
             service, _ctx, f"{canonical_user_root(_ctx)}/skills", limit
         )
-        agent_skills = await _list_skills_from_root(service, _ctx, "viking://agent/skills", limit)
+        try:
+            agent_skills = await _list_skills_from_root(
+                service, _ctx, "viking://agent/skills", limit
+            )
+        except PermissionDeniedError:
+            agent_skills = []
         # Intentionally concatenate without deduplication: when the same skill
         # name exists in both the user-private and the account-shared agent
         # scope, both entries should be visible so the caller can tell them
@@ -558,6 +486,7 @@ async def find_skills(
 ):
     """Find agent skills by semantic search."""
     service = get_service()
+    packages = SkillPackageResolver(service.fs, _ctx)
     target_uri = request.target_uri
     if target_uri:
         resolved_uri = validate_request_viking_uri(
@@ -578,7 +507,7 @@ async def find_skills(
         result = execution.result
         result_dict = result.to_dict() if hasattr(result, "to_dict") else dict(result or {})
         hits = [
-            await _skill_summary_from_hit(hit, service, _ctx)
+            await _skill_summary_from_hit(hit, service, _ctx, packages)
             for hit in result_dict.get("skills", [])
         ]
         return Response(
@@ -625,7 +554,7 @@ async def find_skills(
             user_result.to_dict() if hasattr(user_result, "to_dict") else dict(user_result or {})
         )
         user_hits = [
-            await _skill_summary_from_hit(hit, service, _ctx)
+            await _skill_summary_from_hit(hit, service, _ctx, packages)
             for hit in user_result_dict.get("skills", [])
         ]
 
@@ -634,7 +563,7 @@ async def find_skills(
             agent_result.to_dict() if hasattr(agent_result, "to_dict") else dict(agent_result or {})
         )
         agent_hits = [
-            await _skill_summary_from_hit(hit, service, _ctx)
+            await _skill_summary_from_hit(hit, service, _ctx, packages)
             for hit in agent_result_dict.get("skills", [])
         ]
 
@@ -754,7 +683,7 @@ async def update_skill(
 
     async def _update() -> Dict[str, Any]:
         skill_root_parent = root_uri.rsplit("/", 1)[0]
-        preparation = None
+        preparation: SkillProcessingPreparation | None = None
         privacy = service.privacy_configs
         viking_fs = service.fs._ensure_initialized()  # noqa: SLF001
         update_lease = None
@@ -769,6 +698,7 @@ async def update_skill(
 
         async def prepare_replacement() -> None:
             nonlocal update_lease, privacy_lease
+            assert preparation is not None
             update_lease = await viking_fs._async_agfs.pathlock_acquire_tree(
                 viking_fs._uri_to_path(root_uri, ctx=_ctx)
             )
@@ -776,6 +706,7 @@ async def update_skill(
             # Recheck the installed definition under the lock.
             if not await viking_fs.exists(f"{root_uri}/SKILL.md", ctx=_ctx):
                 raise NotFoundError(root_uri, "skill")
+            await viking_fs._ensure_access(root_uri, _ctx, action=AclAction.WRITE)
             if privacy is not None:
                 # Always acquire package then config, and keep both locks
                 # until this update's writes have finished.
@@ -785,8 +716,8 @@ async def update_skill(
                     ),
                     timeout_secs=30.0,
                 )
-            await clear_skill_package_contents(
-                viking_fs, root_uri, ctx=_ctx, lease_ref=update_lease
+            await remove_obsolete_skill_files(
+                viking_fs, root_uri, preparation, ctx=_ctx, lease_ref=update_lease
             )
 
         async def release_update_locks() -> None:
@@ -870,7 +801,7 @@ async def update_skill(
                     source_path_hint=source_path_hint,
                     apply_privacy=False,
                     privacy_change_reason="auto-extracted from update_skill",
-                    target_uri=skill_root_parent,
+                    destination=SkillDestination(skill_root_parent, "parent"),
                     source_metadata=skill_source,
                     task_id=task_id,
                     owner_lease_ref=update_lease,

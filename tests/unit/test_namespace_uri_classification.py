@@ -64,10 +64,9 @@ def test_system_compile_skill_namespaces(segment):
     root = f"viking://system/compile/{segment}"
     assert classify_uri(root).is_system
     assert classify_uri(root).is_skill_namespace
-    assert not classify_uri(root).is_skill_root
-    assert classify_uri(f"{root}/demo").is_skill_root
+    assert classify_uri(f"{root}/demo").is_skill
     assert classify_uri(f"{root}/demo/SKILL.md").is_skill
-    assert not classify_uri(f"{root}/demo/references").is_skill_root
+    assert classify_uri(f"{root}/demo/references").is_skill
 
 
 @pytest.mark.parametrize(
@@ -117,25 +116,20 @@ def test_exact_memory_and_skill_root_detection():
     assert not classify_uri("viking://user/alice/memories/preferences").is_memory_root
 
     assert classify_uri("viking://user/alice/skills/demo/SKILL.md").is_skill
-    assert classify_uri("viking://user/alice/skills/demo").is_skill_root
-    assert not classify_uri("viking://user/skills/demo").is_skill_root
+    assert classify_uri("viking://user/alice/skills/demo").is_skill
+    assert not classify_uri("viking://user/skills/demo").is_skill
     assert classify_uri("viking://agent/skills").is_skill_namespace
-    assert classify_uri("viking://agent/skills/demo").is_skill_root
+    assert classify_uri("viking://agent/skills/demo").is_skill
     assert classify_uri(
         "viking://system/compile/example-skills"
     ).is_skill_namespace
-    assert classify_uri(
-        "viking://system/compile/example-skills/llm-wiki"
-    ).is_skill_root
+    assert classify_uri("viking://system/compile/example-skills/llm-wiki").is_skill
     assert classify_uri(
         "viking://system/compile/example-skills/llm-wiki/SKILL.md"
     ).is_skill
     assert not classify_uri("viking://system/compile").is_skill
-    assert not classify_uri(
-        "viking://system/compile/example-skills/llm-wiki/references"
-    ).is_skill_root
-    assert not classify_uri("viking://user/alice/skills").is_skill_root
-    assert not classify_uri("viking://user/alice/skills/demo/assets").is_skill_root
+    assert classify_uri("viking://system/compile/example-skills/llm-wiki/references").is_skill
+    assert classify_uri("viking://user/alice/skills/team/demo/assets").is_skill
 
 
 def test_shared_agent_skill_target_has_no_user_owner_or_peer_filter():

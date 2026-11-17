@@ -1,6 +1,6 @@
 # ACL API
 
-ACL is queried and managed through the dedicated `/api/v1/acl` endpoints for shared resources under `viking://resources/...`. See [resource access control](../concepts/15-acl.md) for inheritance rules.
+ACL is queried and managed through the dedicated `/api/v1/acl` endpoints for shared directories and files under `viking://resources/...` and `viking://agent/...`. See [access control](../concepts/15-acl.md) for inheritance rules.
 
 ## Endpoints
 
@@ -23,6 +23,14 @@ POST /api/v1/acl/revoke
 ```
 
 All ACL operations require `manage` and return 403 without it; account ADMIN has implicit manage.
+
+Both shared namespace roots have an immutable `user:* = manage` grant. Set permissions on `viking://agent/skills` or an individual Skill package, for example:
+
+```bash
+ov acl set viking://agent/skills/code-review --acl-mode restricted --entry group:engineering=read
+```
+
+`add-skill` inherits its destination parent's permissions. Updating a Skill preserves grants on retained directories and files. Installation and update requests do not add an `acl` parameter; use the ACL endpoints above for explicit grants.
 
 GET returns the ACL report directly in `result`. The report contains `uri`, `acl_mode`, `direct_entries`, `inherited_entries`, and `effective_entries`. Mutation endpoints return the report directly.
 

@@ -1,22 +1,25 @@
 # 资源访问控制（ACL）
 
-OpenViking ACL 用于在同一个 account 内，把共享资源目录或文件授权给用户或用户组。ACL 不改变 account 隔离：任何授权都只在当前 account 内生效。
+OpenViking ACL 用于在同一个 account 内，把共享资源和 Agent 能力目录或文件授权给用户或用户组。ACL 不改变 account 隔离：任何授权都只在当前 account 内生效。
 
 ACL 采用协作文档式的继承模型。目录授权默认持续作用于所有后代，子目录和文件可以继续增加直接授权，也可以用 restricted 模式在某个节点切断继承权限。
 
 ## 适用 URI
 
-ACL 只作用于共享资源：
+ACL 作用于以下两个共享目录及其所有后代：
 
 ```text
 viking://resources/...
+viking://agent/...
 ```
 
-- `viking://resources/...` 的 account `ADMIN` 隐式拥有 `manage`。
-- `viking://resources` 的根 ACL 固定为 `user:* = manage`，不可修改；下级节点默认继承，直到 restricted 边界。
+- 两个共享目录中的 account `ADMIN` 均隐式拥有 `manage`。
+- `viking://resources` 和 `viking://agent` 的根 ACL 均固定为 `user:* = manage`，不可修改；下级节点默认继承，直到 restricted 边界。
 - `viking://user/{user_id}/resources/...` 是个人私有区，不接受 ACL。需要分享时，将资源移动到有权写入的共享目录，并继承该目录的 ACL。
 
 隐式管理权不会写入 ACL 条目，也不能被 ACL 删除。它保证共享资源始终有人能够首次设置或恢复权限。
+
+`agent/skills`、单个 Skill 包及附件、`agent/tools` 等目录使用相同规则，共用账号级 `acl.enabled`。共享 Skill 的安装和更新受写入权限约束，删除旧附件仍要求对应的 `manage` 权限。更新时保留仍存在的目录和文件的 ACL；新附件继承父目录权限。Skill 列表和检索只返回可读取的技能；共享 skills 根不可读时，默认技能列表仍返回调用者的个人技能。普通文件目录列表沿用资源规则，可显示无权访问的名称和 `access=denied`，但不返回其摘要或内容。
 
 ## Principal 与权限级别
 

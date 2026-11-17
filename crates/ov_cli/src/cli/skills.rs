@@ -20,9 +20,15 @@ pub(crate) struct SkillAddArgs {
     /// Skip confirmation prompt
     #[arg(short = 'y', long = "yes")]
     pub(crate) yes: bool,
-    /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
-    #[arg(short = 'p', long = "parent-auto-create", value_name = "uri")]
+    /// Existing parent directory; install each Skill under its own name
+    #[arg(long, value_name = "uri", conflicts_with_all = ["to", "parent_auto_create"])]
     pub(crate) parent: Option<String>,
+    /// Exact Skill directory; its final segment must match the Skill name
+    #[arg(long, value_name = "uri", conflicts_with_all = ["parent", "parent_auto_create"])]
+    pub(crate) to: Option<String>,
+    /// Parent directory to create if missing; defaults to user-private skills
+    #[arg(short = 'p', long = "parent-auto-create", value_name = "uri", conflicts_with_all = ["parent", "to"])]
+    pub(crate) parent_auto_create: Option<String>,
     #[command(flatten)]
     pub(crate) upload_options: UploadCliOptions,
 }

@@ -1,22 +1,25 @@
 # Resource Access Control (ACL)
 
-OpenViking ACL shares directories or files from the shared resource scope with users or groups inside one account. ACL never changes the account boundary: every grant is limited to the current account.
+OpenViking ACL grants users or groups access to shared resource and Agent capability directories or files inside one account. ACL never changes the account boundary: every grant is limited to the current account.
 
 ACL uses a collaborative-document inheritance model. A directory grant applies to descendants by default. Child directories and files can add direct grants or establish a restricted boundary that ignores inherited permissions.
 
 ## Supported URIs
 
-ACL applies only to shared resources:
+ACL applies to both shared namespaces and all their descendants:
 
 ```text
 viking://resources/...
+viking://agent/...
 ```
 
-- An account `ADMIN` implicitly has `manage` on `viking://resources/...`.
-- `viking://resources` has a fixed, immutable `user:* = manage` ACL. Descendants inherit it until a restricted boundary.
+- An account `ADMIN` implicitly has `manage` in both shared namespaces.
+- `viking://resources` and `viking://agent` each have a fixed, immutable `user:* = manage` ACL. Descendants inherit it until a restricted boundary.
 - `viking://user/{user_id}/resources/...` is private and does not accept ACLs. To share it, move the resource into a writable shared directory and inherit that directory's ACL.
 
 Implicit management is not stored as an ACL entry and cannot be removed by ACL changes. It ensures that shared resources always have an identity that can establish or recover permissions.
+
+`agent/skills`, individual Skill packages and attachments, and directories such as `agent/tools` follow the same rules and account-level `acl.enabled` switch. Installing or updating a shared Skill requires write access; removing obsolete attachments still requires their corresponding `manage` access. Updates preserve ACLs on retained directories and files; new attachments inherit their parent permissions. Skill listings and retrieval return readable skills only. An unreadable shared skills root does not prevent the default listing from returning the caller's private skills. Ordinary filesystem listings retain the resource behavior: denied names can appear with `access=denied`, without summaries or content.
 
 ## Principals and Levels
 
