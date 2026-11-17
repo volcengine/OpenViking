@@ -44,7 +44,12 @@ export function createFileEditing(
                 reason,
               }))
           : undefined;
-      return { content, annotations };
+      return {
+        content,
+        annotations,
+        // The full Wiki read keeps the projected body as an exact prefix.
+        readOnlySuffix: wikiSource?.slice(content.length) || undefined,
+      };
     },
     save: async (content) => {
       await client.request({
