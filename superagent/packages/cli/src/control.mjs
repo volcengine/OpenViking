@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import { pm2Bin as platformPm2Bin } from '../../updater/src/pm2-platform.mjs';
@@ -82,7 +82,7 @@ export function appsFor(target, targets = loadTargets()) {
   const web = { id: 'web', ...SHARED_WEB };
   const updater = { id: 'updater', app: UPDATER_APP };
   if (target === undefined) return [...instances, web, ...(capabilities.updater ? [updater] : [])];
-  if (target === 'updater' && !capabilities.updater) throw new Error('Windows source installations do not support the release updater.');
+  if (target === 'updater' && !capabilities.updater) throw new Error('Automatic release updates are not supported on this platform; use the installer manually.');
   if (target === 'web') return [web];
   if (target === 'updater') return [updater];
   const instance = instances.find((spec) => spec.id === target);

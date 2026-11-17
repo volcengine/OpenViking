@@ -1,12 +1,14 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import { PI_BUILTIN_EXTENSIONS } from '../src/ov-isolation.mjs';
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import { managedPiBin, PI_VERSION, PI_MCP_EXTENSION, PI_MCP_STATUS } from '../src/pi-runtime.mjs';
 import { assembleConversationPolicy } from '../src/conversation-policy.mjs';
 import {
@@ -18,19 +20,22 @@ import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-pi-'));
+after(() => fs.rmSync(testRoot, { recursive: true, force: true }));
+
 const baseConfig = {
   piBin: 'pi',
   piModel: 'openai/gpt-4o',
   piEffort: 'medium',
   workspace: '/tmp/superagent-workspace',
   projectDir: '/release',
-  dataDir: '/tmp/superagent-pi-data',
+  dataDir: path.join(testRoot, 'data'),
   databasePath: '/tmp/superagent-test.sqlite3',
   profile: 'test-profile',
   connectors: ['lark'],
   larkCliBin: '/fake/lark-cli',
   slackCliBin: '/fake-slack/slack',
-  actionSocketPath: '/tmp/superagent-pi-data/actions.sock',
+  actionSocketPath: path.join(testRoot, 'data', 'actions.sock'),
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
   maxReplyChars: 1_000,
@@ -358,7 +363,7 @@ describe('PiAgent persistent rpc runtime', () => {
     const env = calls.at(-1).options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
     assert.ok(calls.every((call) => call.options.env.PATH.startsWith('/fake:/fake-slack:')));
-    assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/superagent-pi-data/actions.sock');
+    assert.equal(env.PERSONAL_AGENT_SOCKET, baseConfig.actionSocketPath);
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
     assert.equal(env.LARK_APP_SECRET, undefined);
     assert.equal(env.PI_LARK_TOOLS_CONFIG, undefined);

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { appsFor, pm2StopTimeout, restartCommand, startCommand, statusCommand, stopCommand } from '../src/control.mjs';
+import { capabilities } from '../../daemon/src/capabilities.mjs';
 
 const windows = process.platform === 'win32';
 const TARGETS = JSON.stringify({
@@ -56,7 +57,7 @@ function fixture(t, online = []) {
 test('a target names one instance, the Web, the updater, or everything', () => {
   const targets = JSON.parse(TARGETS);
   assert.deepEqual(appsFor('beta', targets).map(({ app }) => app), ['superagent-beta']);
-  assert.deepEqual(appsFor(undefined, targets).map(({ app }) => app), ['superagent-alpha', 'superagent-beta', 'superagent-web', ...(windows ? [] : ['superagent-updater'])]);
+  assert.deepEqual(appsFor(undefined, targets).map(({ app }) => app), ['superagent-alpha', 'superagent-beta', 'superagent-web', ...(capabilities.updater ? ['superagent-updater'] : [])]);
   assert.deepEqual(appsFor('web', targets).map(({ app }) => app), ['superagent-web']);
   assert.throws(() => appsFor('gamma', targets), /unknown instance gamma/);
 });
@@ -65,15 +66,15 @@ test('start registers every app, then reports readiness; online apps are left al
   const f = fixture(t, ['superagent-alpha']);
   const result = await startCommand(undefined, { ...f.options, socketPath: '/nonexistent.sock' }).catch((error) => error.message);
   // The updater never answers on a nonexistent socket; every other app did.
-  assert.equal(result, windows ? 0 : 1);
+  assert.equal(result, capabilities.updater ? 1 : 0);
   assert.deepEqual(f.commands.filter((command) => command.startsWith('start')), [
     `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-beta --update-env`,
     `start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-web --update-env`,
-    ...(windows ? [] : [`start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-updater --update-env`]),
+    ...(capabilities.updater ? [`start ${fs.realpathSync(path.join(path.dirname(f.options.releaseLink), 'releases', '0.4.0-test', 'ecosystem.config.cjs'))} --only superagent-updater --update-env`] : []),
   ]);
   assert.match(f.output(), /superagent-alpha 已就绪/);
   assert.deepEqual(f.ready, ['http://127.0.0.1:3738/ready', 'http://127.0.0.1:3739/ready', 'http://127.0.0.1:3737/ready']);
-  if (windows) assert.equal(f.stderr(), '');
+  if (!capabilities.updater) assert.equal(f.stderr(), '');
   else assert.match(f.stderr(), /superagent-updater: updater did not become ready/);
 });
 
@@ -105,8 +106,9 @@ test('start verifies the identity of an already online app before reporting it',
 
 test('start checks an already online updater socket instead of announcing success', async (t) => {
   const f = fixture(t, ['superagent-updater']);
-  if (windows) {
-    await assert.rejects(startCommand('updater', f.options), /do not support the release updater/);
+  if (!capabilities.updater) {
+    await assert.rejects(startCommand('updater', f.options), /Automatic release updates are not supported on this platform/);
+    assert.deepEqual(f.commands, []);
   } else {
     // Readiness is a report now: the socket never answers, so start returns 1.
     const code = await startCommand('updater', f.options);
@@ -233,7 +235,7 @@ test('status lists every app with its pm2 state and readiness', async (t) => {
   await statusCommand(f.options);
   assert.match(f.output(), /superagent-alpha\s+运行中\s+就绪/);
   assert.match(f.output(), /superagent-beta\s+未启动\s+-/);
-  if (windows) assert.doesNotMatch(f.output(), /superagent-updater/);
+  if (!capabilities.updater) assert.doesNotMatch(f.output(), /superagent-updater/);
   else assert.match(f.output(), /superagent-updater\s+未启动/);
 });
 

@@ -34,6 +34,8 @@ To pin a Windows preview version or skip setup:
 
 The one-line command also accepts `OV_SUPERAGENT_VERSION` and `OV_SUPERAGENT_DOWNLOAD_BASE`; the latter is the HTTPS OpenViking SuperAgent root, before `/windows-preview`. For offline artifacts and publishing details, see [Windows package maintenance](windows-preview.md).
 
+**Native Termux (Android/Bionic, arm64):** configure [Termux APT dependencies](termux.md), then use this same POSIX installer with the `termux-arm64` archive. CI preinstalls JS dependencies and builds native lark-cli; the device uses APT Node, without npm hooks or Linux/glibc binaries. Automatic release upgrades are initially disabled.
+
 Both the installer and CLI support English and Chinese. `ov-superagent --lang en` (or `zh`) persists the choice in `~/.ov-superagent/language`. To install in English, use `--lang en` on macOS / Linux or `-Lang en` on Windows. `OV_SUPERAGENT_LANG` overrides the language for one invocation only. The default is Chinese when no preference is set.
 
 Interactive download progress uses a sailing-boat animation, followed by a checkmark per completed step. Redirected output and `NO_COLOR` use plain text. If `~/.ov-superagent/config.json` does not exist, rerunning the installer returns to setup; with existing instances, it installs the release and asks you to run `ov-superagent restart`.

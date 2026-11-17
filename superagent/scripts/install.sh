@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 # SPDX-License-Identifier: AGPL-3.0
 
 # OpenViking SuperAgent installer.
@@ -10,8 +10,8 @@
 # Installs the release for this machine under ~/.ov-superagent (releases/<version>,
 # the `current` link, bin/ov-superagent) and then runs `ov-superagent setup` when the machine
 # has no instance yet. Needs only sh, curl, tar and sha256sum or shasum: the
-# release brings its own Node, pm2 and lark-cli, so nothing else on the
-# machine is used or changed.
+# desktop release brings Node, pm2 and lark-cli. Native Termux uses its APT Node
+# with a prebuilt Android/Bionic archive; the installer never changes APT packages.
 #
 # Options: --version <v> (default: latest), --file <archive>, --no-setup,
 # --lang <zh|en>.
@@ -74,21 +74,45 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Android and PRoot guests share a Linux kernel. Inspect this shell's libc,
+# not inherited Termux variables, to select the userspace ABI. A guest may
+# retain host loader mappings, so glibc/musl takes precedence over Bionic.
 case "$(uname -s)" in
-  Linux) os=linux ;;
+  Linux)
+    os=linux
+    [ -r "/proc/$$/maps" ] || die 'Cannot identify Linux/Android userspace: /proc must be available'
+    if ! grep -Eq '/(libc[.]so[.][0-9]+|libc-[0-9.]+[.]so|(ld-|libc[.])musl-[^ /]+[.]so[.]1)([[:space:]]|$)' "/proc/$$/maps" \
+      && grep -Eq '/libc[.]so([[:space:]]|$)' "/proc/$$/maps"; then os=android; fi
+    ;;
   Darwin) os=darwin ;;
   *) die "$(m "不支持 $(uname -s)；Windows 请用 install-preview.ps1（预览包），或在 WSL2 里安装" "$(uname -s) is not supported; on Windows, use install-preview.ps1 (the preview package), or install inside WSL2")" ;;
 esac
+
+environment=posix
+TERMUX_NODE=""
+if [ "$os" = android ]; then
+  [ -n "${TERMUX_VERSION:-}" ] || { [ -n "${PREFIX:-}" ] && [ -x "${PREFIX:-}/bin/termux-info" ]; } \
+    || die 'This native Android environment is not supported; the current Android archive requires Termux'
+  environment=termux
+  case "${PREFIX:-}" in /*) ;; *) die 'Termux requires an absolute PREFIX; see docs/termux.md' ;; esac
+  TERMUX_NODE="$PREFIX/bin/node"
+  [ -x "$TERMUX_NODE" ] && command -v bash >/dev/null 2>&1 || die 'Install Termux nodejs-lts (or nodejs) and bash; see docs/termux.md'
+  "$TERMUX_NODE" -e 'const [a,b]=process.versions.node.split(".").map(Number); if(process.platform!=="android"||a<22||(a===22&&b<19))process.exit(1); new(require("node:sqlite").DatabaseSync)(":memory:").close()' >/dev/null 2>&1 \
+    || die 'Native Termux Node >=22.19.0 with node:sqlite is required; Linux/glibc Node is unsupported'
+fi
 case "$(uname -m)" in
   x86_64|amd64) arch=x64 ;;
   aarch64|arm64) arch=arm64 ;;
   *) die "$(m "不支持 CPU 架构 $(uname -m)" "the $(uname -m) CPU architecture is not supported")" ;;
 esac
+if [ "$environment" = termux ] && [ "$arch" != arm64 ]; then die 'Only native Termux arm64 artifacts are available'; fi
 if [ "$os" = linux ]; then
   # The release's Node is linked against glibc; it does not start on musl (Alpine).
   if (ldd --version 2>&1 || true) | grep -qi musl; then die "$(m '不支持 musl（Alpine 等）系统' 'musl systems (Alpine and others) are not supported')"; fi
 fi
 PLATFORM="$os-$arch"
+# The archive also encodes environment-specific Node/service policy, not just ABI.
+if [ "$environment" = termux ]; then PLATFORM="termux-$arch"; fi
 
 command -v tar >/dev/null 2>&1 || die "$(m '需要 tar' 'tar is needed')"
 sha256() {
@@ -252,6 +276,13 @@ stop_legacy_instances() {
     [ -d "$legacy_home" ] || continue
     note "$(m "发现旧版安装 ~/.${legacy_name}：停止它的进程和开机自启（数据保留，不迁移）" "found a legacy install at ~/.${legacy_name}: stopping its processes and autostart (its data is kept, not migrated)")"
     # Autostart first, so nothing restarts what is stopped below.
+    if [ "$environment" = termux ]; then
+      legacy_service="${SVDIR:-$PREFIX/var/service}/$legacy_name"
+      if [ -f "$legacy_service/run" ]; then
+        touch "$legacy_service/down"
+        sv -w 45 down "$legacy_service" >/dev/null 2>&1 || true
+      fi
+    fi
     legacy_unit="$HOME/.config/systemd/user/${legacy_name}.service"
     if [ -f "$legacy_unit" ] && { [ "$legacy_name" != superagent ] || grep -q "/\.superagent/" "$legacy_unit" 2>/dev/null; }; then
       if command -v systemctl >/dev/null 2>&1; then
@@ -298,13 +329,26 @@ case "$DIR" in
 esac
 VERSION=${DIR#superagent-}
 VERSION=${VERSION%-"$PLATFORM"}
-# Run the new release's own Node before anything points at it: a glibc or
-# CPU mismatch surfaces here and the existing install is left untouched.
+# Termux archives deliberately contain no desktop Node. Link the APT-owned
+# native binary so the existing launcher, PM2 and rollback paths stay shared.
+if [ "$environment" = termux ]; then
+  { [ ! -e "$PENDING/$DIR/node" ] && [ ! -L "$PENDING/$DIR/node" ]; } || { rm -rf "$PENDING"; die 'Termux archives must not bundle Node'; }
+  mkdir -p "$PENDING/$DIR/node/bin"
+  ln -s "$TERMUX_NODE" "$PENDING/$DIR/node/bin/node"
+  if ! "$TERMUX_NODE" "$PENDING/$DIR/packages/daemon/scripts/check-pi.mjs" >/dev/null 2>&1 \
+    || ! "$TERMUX_NODE" "$PENDING/$DIR/packages/daemon/scripts/check-durable.mjs" >/dev/null 2>&1 \
+    || ! "$PENDING/$DIR/node_modules/@larksuite/cli/bin/lark-cli" --version >/dev/null 2>&1; then
+    rm -rf "$PENDING"
+    die 'Termux runtime or bundled lark-cli check failed; the installed release was not changed'
+  fi
+fi
+# Run the candidate Node before activation; incompatible libraries/CPUs or a
+# broken entrypoint leave the existing installation untouched.
 if ! "$PENDING/$DIR/node/bin/node" "$PENDING/$DIR/packages/cli/bin/ov-superagent.mjs" --version >/dev/null 2>&1; then
   rm -rf "$PENDING"
   die "$(m '这台机器运行不了这个版本（系统库太旧或 CPU 不匹配）' 'this machine cannot run this release (its system libraries are too old, or the CPU differs)')"
 fi
-ok "$(m '自检' 'Check   ')  ${GRAY}$(m '自带的 Node 能在这台机器上运行' 'the bundled Node runs on this machine')${RESET}"
+ok "$(m '自检' 'Check   ')  ${GRAY}$(m '安装版本能在这台机器上运行' 'the candidate release runs on this machine')${RESET}"
 
 CONFIG_FILE="${OV_SUPERAGENT_CONFIG:-$OV_SUPERAGENT_HOME/config.json}"
 if [ ! -f "$CONFIG_FILE" ] && [ "$RUN_SETUP" = 1 ] && [ -t 1 ] && { : </dev/tty; } 2>/dev/null; then SETUP_NEXT=1; else SETUP_NEXT=0; fi
@@ -341,8 +385,8 @@ fi
 if [ -n "$LANG_FLAG" ]; then printf '%s\n' "$LANG_FLAG" > "$OV_SUPERAGENT_HOME/language"; fi
 
 mkdir -p "$OV_SUPERAGENT_HOME/bin"
-cat > "$OV_SUPERAGENT_HOME/bin/ov-superagent" <<'LAUNCHER'
-#!/bin/sh
+if [ "$environment" = termux ]; then printf '#!%s/bin/sh\n' "$PREFIX"; else printf '#!/bin/sh\n'; fi > "$OV_SUPERAGENT_HOME/bin/ov-superagent"
+cat >> "$OV_SUPERAGENT_HOME/bin/ov-superagent" <<'LAUNCHER'
 # Always the installed release: `current` moves on upgrade, this file does not.
 exec "$HOME/.ov-superagent/current/node/bin/node" "$HOME/.ov-superagent/current/packages/cli/bin/ov-superagent.mjs" "$@"
 LAUNCHER

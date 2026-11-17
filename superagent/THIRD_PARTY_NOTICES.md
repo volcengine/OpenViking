@@ -15,4 +15,11 @@ third-party software below. Each part stays under its own license.
 | Claude Code stream-json adapter derived from [ZaynJarvis/zouk-daemon](https://github.com/ZaynJarvis/zouk-daemon) 0.6.0 | source: `packages/daemon/src/claude.mjs` | MIT |
 | Pi durable harness ([earendil-works/pi](https://github.com/earendil-works/pi), `@earendil-works/pi-durable`, `pi-ai`, `chord`) | release: `node_modules/@earendil-works/` | MIT |
 
+Termux archives do not bundle Node.js or Slack CLI. They use Termux's APT-owned Node;
+CI builds the native Android lark-cli from the commit pinned in
+`scripts/release/lark-cli-source.json`. Its upstream MIT license is kept at
+`node_modules/@larksuite/cli/LICENSE`, and `termux-build.json` beside it records
+source/toolchain provenance. These third-party licenses are not replaced by the
+SuperAgent source copyright notice.
+
 `npm ls --omit=dev --all` lists the exact npm dependency tree of a checkout.

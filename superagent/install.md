@@ -5,6 +5,7 @@ Install OpenViking SuperAgent and verify that it can receive and answer messages
 ## Prerequisites
 
 - **System:** macOS / Linux / WSL2 (x64 or arm64), or Windows 10/11 (x64, preview). macOS / Linux needs sh, curl, tar, and sha256sum (or shasum); musl / Alpine is unsupported. Native Windows needs PowerShell 5.1 or 7 and a normal user account, without administrator rights. Node, npm, PM2, and lark-cli are bundled.
+- **Native Termux (Android/Bionic, arm64):** follow the [APT/dependency guide](docs/termux.md), then use the same POSIX installer with a `termux-arm64` prebuilt archive. Node comes from Termux APT; native lark-cli and JS dependencies are bundled. Automatic release upgrades are initially disabled.
 - **Windows runtimes:** Durable uses native PowerShell; Pi also requires Git Bash. Slack needs a separately installed CLI configured with `SLACK_CLI_BIN`.
 - **OpenViking:** a reachable OV service is required, either local or remote. Have its address and required credentials ready, or import an existing configuration during setup. There is no skip option.
 - **Runtime:** choose one below and prepare its model authentication or API configuration.

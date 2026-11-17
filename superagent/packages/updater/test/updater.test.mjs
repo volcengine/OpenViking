@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { capabilities } from '../../daemon/src/capabilities.mjs';
 
 process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON = JSON.stringify({
   alpha: {
@@ -756,7 +757,9 @@ test('a second updater cannot unlink the live updater socket', async (t) => {
   assert.equal(response.status, 200);
 });
 
-test('CLI upgrade command reaches the updater over the Unix socket', async (t) => {
+test('CLI upgrade command reaches the updater over the Unix socket', {
+  skip: !capabilities.updater && 'automatic release updates are unsupported on this platform',
+}, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-cli-test-');
   const socketPath = path.join(root, 'updater.sock');
   const updater = await createUpdaterServer({
