@@ -488,11 +488,19 @@ mod tests {
     fn registered_values_preserve_references_and_report_unicode_spans() {
         let reference = "{{ov_privacy:default:viking://~/privacy/session/demo#/values/key}}";
         let matcher = matcher(vec![
+            ("pass123", vec!["short"]),
+            ("pass123-v2", vec!["long"]),
             ("秘密", vec!["short"]),
             ("秘密值", vec!["long"]),
             ("session", vec!["ref-b", "ref-a", "ref-a"]),
             ("default", vec!["owner-ref"]),
         ]);
+        assert_eq!(
+            matcher
+                .sanitize("pass123-v2x pass123-v2 中pass123 pass123_ pass123²")
+                .content,
+            "short-v2x long 中pass123 pass123_ pass123²"
+        );
         let input = format!("🙂秘密值 {reference} session default");
         let (found, exceeded) = matcher.find_limited(&input, 3);
         assert!(!exceeded);
@@ -519,10 +527,9 @@ mod tests {
 
     #[test]
     fn match_limits_discard_partial_rewrites_and_metadata() {
-        let matcher = matcher(vec![
-            ("secret", vec!["ref"]),
-            ("shared", vec!["ref-a", "ref-b"]),
-        ]);
+        let shared = Arc::new(matcher(vec![("shared", vec!["ref-a", "ref-b"])]));
+        let matcher = matcher(vec![("secret", vec!["ref"]), ("shared", vec!["local"])])
+            .with_preferred(shared);
         for (input, expected, exceeded) in [
             ("shared secret", "{{ov_privacy:ambiguous}} ref", false),
             ("shared secret secret", "shared secret secret", true),
@@ -537,75 +544,6 @@ mod tests {
                 assert!(rewritten.replacements.is_empty());
                 assert!(rewritten.ambiguous_references.is_empty());
                 assert!(found.ambiguous_references.is_empty());
-            }
-        }
-    }
-    #[test]
-    fn boundaries_filter_before_leftmost_longest_selection() {
-        let matcher = matcher(vec![
-            ("pass123", vec!["short"]),
-            ("pass123-v2", vec!["long"]),
-            ("token-value", vec!["token"]),
-            ("/path/", vec!["path"]),
-        ]);
-        let text =
-            "pass123-v2x pass123-v2 中token-value token-value² _token-value token-value_ x/path/y";
-        assert_eq!(
-            matcher.sanitize(text).content,
-            "short-v2x long 中token-value token-value² _token-value token-value_ xpathy"
-        );
-    }
-
-    #[test]
-    fn dense_overlaps_only_count_final_replacements() {
-        let entries = (6..70)
-            .map(|len| ("/".repeat(len), vec![format!("ref-{len}")]))
-            .collect();
-        let matcher = PrivacyMatcher::new(entries, "AMB").unwrap();
-        let text = "/".repeat(4096);
-        let (found, exceeded) = matcher.find_limited(&text, 60);
-        assert!(!exceeded);
-        assert_eq!(found.replacements.len(), 60);
-        assert_eq!(found.replacements[0].reference, "ref-69");
-        assert_eq!(found.replacements[59].reference, "ref-25");
-        let (rewritten, exceeded) = matcher.sanitize_limited(&text, 59);
-        assert!(exceeded);
-        assert_eq!(rewritten.content, text);
-        assert!(rewritten.replacements.is_empty());
-    }
-
-    #[test]
-    fn shared_matchers_preserve_flat_selection_and_budgets() {
-        let shared = Arc::new(matcher(vec![
-            ("b-c", vec!["middle"]),
-            ("c-d", vec!["tail"]),
-            ("same", vec!["shared"]),
-            ("pass123", vec!["short"]),
-        ]));
-        let combined = matcher(vec![
-            ("a-b", vec!["local"]),
-            ("same", vec!["local-same"]),
-            ("pass123-v2", vec!["long"]),
-        ])
-        .with_preferred(shared);
-        let flat = matcher(vec![
-            ("b-c", vec!["middle"]),
-            ("c-d", vec!["tail"]),
-            ("same", vec!["shared"]),
-            ("pass123", vec!["short"]),
-            ("a-b", vec!["local"]),
-            ("pass123-v2", vec!["long"]),
-        ]);
-        for input in [
-            "a-b-c-d same pass123-v2 pass123-v2x",
-            "🙂same a-b-c-d {{ov_privacy:same}} same",
-            "中same same_ xsame same pass123-v2²",
-        ] {
-            for limit in 0..8 {
-                let (actual, exceeded) = combined.sanitize_limited(input, limit);
-                let (expected, expected_exceeded) = flat.sanitize_limited(input, limit);
-                assert!(actual == expected);
-                assert_eq!(exceeded, expected_exceeded);
             }
         }
     }

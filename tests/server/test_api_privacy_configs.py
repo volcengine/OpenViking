@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import httpx
+import yaml
 
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.server.identity import RequestContext, Role
@@ -100,9 +101,9 @@ async def test_privacy_tree_category_filter_and_route_not_shadowed(client: httpx
 
 async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     upsert = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill",
+        "/api/v1/privacy-configs/credential/demo-skill",
         json={
-            "values": {"api_key": "secret-1"},
+            "values": {"api_key": "sample"},
             "change_reason": "seed",
         },
     )
@@ -110,15 +111,19 @@ async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     body = upsert.json()
     assert body["status"] == "ok"
     assert body["result"]["version"] == 1
+    assert [(warning["code"], warning["field"]) for warning in body["result"]["warnings"]] == [
+        ("weak_credential", "api_key")
+    ]
+    assert "sample" not in str(body["result"]["warnings"])
 
-    get_current = await client.get("/api/v1/privacy-configs/skill/demo-skill")
+    get_current = await client.get("/api/v1/privacy-configs/credential/demo-skill")
     assert get_current.status_code == 200
     current_body = get_current.json()
-    assert current_body["result"]["current"]["values"]["api_key"] == "secret-1"
+    assert current_body["result"]["current"]["values"]["api_key"] == "sample"
     assert current_body["result"]["meta"]["active_version"] == 1
 
     second = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill",
+        "/api/v1/privacy-configs/credential/demo-skill",
         json={
             "values": {"api_key": "secret-2"},
             "change_reason": "rotate",
@@ -127,19 +132,19 @@ async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     assert second.status_code == 200
     assert second.json()["result"]["version"] == 2
 
-    versions = await client.get("/api/v1/privacy-configs/skill/demo-skill/versions")
+    versions = await client.get("/api/v1/privacy-configs/credential/demo-skill/versions")
     assert versions.status_code == 200
     assert versions.json()["result"] == [1, 2]
 
     activate = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill/activate",
+        "/api/v1/privacy-configs/credential/demo-skill/activate",
         json={"version": 1},
     )
     assert activate.status_code == 200
     assert activate.json()["result"]["version"] == 1
 
-    final_current = await client.get("/api/v1/privacy-configs/skill/demo-skill")
-    assert final_current.json()["result"]["current"]["values"]["api_key"] == "secret-1"
+    final_current = await client.get("/api/v1/privacy-configs/credential/demo-skill")
+    assert final_current.json()["result"]["current"]["values"]["api_key"] == "sample"
 
 
 async def test_privacy_config_update_allows_new_keys(client: httpx.AsyncClient):
@@ -401,7 +406,7 @@ async def test_privacy_scan_is_dry_run_by_default_and_fix_rewrites_content(
     )
     assert created.status_code == 200, created.text
     owner = created.json()["result"]["created_by"]
-    uri = f"viking://user/{owner}/legacy-privacy-content.md"
+    uri = f"viking://user/{owner}/legacy-privacy-content.yaml"
     ctx = RequestContext(
         user=UserIdentifier(service.user.account_id, owner),
         role=Role.USER,
@@ -409,7 +414,9 @@ async def test_privacy_scan_is_dry_run_by_default_and_fix_rewrites_content(
     raw_path = service.viking_fs._uri_to_path(uri, ctx=ctx)
     await service.viking_fs._async_agfs.write(
         raw_path,
-        f"before {secret} after".encode("utf-8"),
+        f"display: &label {secret} # keep comment\nlookup: {{*label: 23}}\nitems: [true, null, 42]\n".encode(
+            "utf-8"
+        ),
     )
 
     dry_run = await client.post(
@@ -436,11 +443,13 @@ async def test_privacy_scan_is_dry_run_by_default_and_fix_rewrites_content(
     fixed_report = fixed.json()["result"]
     assert fixed_report["repaired_files"] == 1
     stored = await service.viking_fs.read_file(uri, ctx=ctx)
-    assert secret not in stored
-    assert (
-        build_privacy_field_reference(owner, "credential", "legacy-service", "custom_field")
-        in stored
-    )
+    reference = build_privacy_field_reference(owner, "credential", "legacy-service", "custom_field")
+    assert yaml.safe_load(stored) == {
+        "display": reference,
+        "lookup": {secret: 23},
+        "items": [True, None, 42],
+    }
+    assert "# keep comment" in stored
 
 
 async def test_privacy_scan_fix_repairs_skill_and_reindexes_package(

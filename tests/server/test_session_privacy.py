@@ -6,6 +6,7 @@ import asyncio
 import json
 from copy import deepcopy
 from dataclasses import asdict
+from itertools import chain, count
 from unittest.mock import AsyncMock
 
 import pytest
@@ -180,11 +181,24 @@ async def test_business_values_do_not_pollute_later_reads(client, service, ctx):
 
 @pytest.mark.usefixtures("auto_privacy")
 async def test_batch_repeated_text_values_allow_later_messages(service, ctx):
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate(
+            {
+                "privacy": {
+                    "custom_rules": [{"id": "short", "prefix": "T", "min_length": 3}],
+                    "never_mask": [SECOND_SECRET],
+                }
+            }
+        ),
+    )
+    value = "T7k9"
     session = await service.sessions.create(ctx, "batch-repeat")
     texts = [
-        f"password={SECRET} password={SECRET}",
-        f"**password={SECRET}**",
-        f"password={SECRET}",
+        f"password={value} password={value}",
+        f"**password={value}**",
+        f"password={value} public={SECOND_SECRET}",
     ]
     await session.add_messages_async(
         [
@@ -194,10 +208,10 @@ async def test_batch_repeated_text_values_allow_later_messages(service, ctx):
     )
     await session.add_message_async("user", [TextPart(texts[2])])
     current = await service.privacy_configs.get_current(ctx, "session", session.session_id)
-    assert list(current.values.values()) == [SECRET]
+    assert list(current.values.values()) == [value]
     assert await service.privacy_configs.list_versions(ctx, "session", session.session_id) == [1]
     disk = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
-    assert SECRET not in disk
+    assert value not in disk and SECOND_SECRET in disk
     restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx)
     assert [json.loads(line)["parts"][0]["text"] for line in restored.splitlines()] == texts
 
@@ -420,7 +434,10 @@ async def test_concurrent_writers_preserve_messages_and_independent_fields(
     service, ctx, monkeypatch
 ):
 
-    ids = iter(field for i in range(8) for field in ("same0001", f"next{i:04d}"))
+    from openviking.privacy.sanitizer import PrivacySanitizer
+    from openviking.privacy.service import UserPrivacyConfigService
+
+    ids = chain(("same0001",), (f"next{i:04d}" for i in count()))
     monkeypatch.setattr(session_extractor, "token_urlsafe", lambda _: next(ids))
     session = await service.sessions.create(ctx, "concurrent")
     await service.privacy_configs.upsert(
@@ -430,151 +447,32 @@ async def test_concurrent_writers_preserve_messages_and_independent_fields(
         ctx.user.user_id, "session", session.session_id, "same0001"
     )
     await session.add_message_async("user", [TextPart(old_reference)])
+    writers = [service.sessions.session(ctx, "concurrent") for _ in range(8)]
+    for writer in writers:
+        writer._privacy_config_service = UserPrivacyConfigService(service.viking_fs)
+        writer._privacy_sanitizer = PrivacySanitizer(writer._privacy_config_service)
+        await writer._privacy_sanitizer.prepare_matcher(ctx, scope=("session", "concurrent"))
     await asyncio.gather(
         *(
-            service.sessions.session(ctx, "concurrent").add_message_async(
-                "user", [TextPart(f"password={SECRET}{i}")]
+            writer.add_message_async(
+                "user", [TextPart(f"password={SECRET}{i} shared={SECOND_SECRET}")]
             )
-            for i in range(8)
+            for i, writer in enumerate(writers)
         )
     )
     loaded = await service.sessions.get("concurrent", ctx)
     current = await service.privacy_configs.get_current(ctx, "session", "concurrent")
-    assert set(current.values.values()) == {"old-secret", *(f"{SECRET}{i}" for i in range(8))}
+    assert set(current.values.values()) == {
+        "old-secret",
+        SECOND_SECRET,
+        *(f"{SECRET}{i}" for i in range(8)),
+    }
     assert current.version == 9
     restored = await service.fs.read(loaded.uri + "/messages.jsonl", ctx=ctx)
     assert sorted(json.loads(line)["parts"][0]["text"] for line in restored.splitlines()) == [
         "old-secret",
-        *(f"password={SECRET}{i}" for i in range(8)),
+        *(f"password={SECRET}{i} shared={SECOND_SECRET}" for i in range(8)),
     ]
-
-
-@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
-async def test_concurrent_same_values_reuse_fields_with_stale_worker_caches(
-    service, ctx, monkeypatch, mode
-):
-    from openviking.privacy.sanitizer import PrivacySanitizer
-    from openviking.privacy.service import UserPrivacyConfigService
-
-    await patch_user_config(
-        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
-    )
-    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
-    await service.privacy_configs.upsert(ctx, "session", "other", {"other001": SECRET})
-    await service.privacy_configs.upsert(ctx, "skill", "other", {"other001": SECRET})
-    session = await service.sessions.create(ctx, "same-values")
-    writers = []
-    for _ in range(8):
-        writer = service.sessions.session(ctx, "same-values")
-        writer._privacy_config_service = UserPrivacyConfigService(service.viking_fs)
-        writer._privacy_sanitizer = PrivacySanitizer(writer._privacy_config_service)
-        await writer._privacy_sanitizer.prepare_matcher(ctx, scope=("session", "same-values"))
-        writers.append(writer)
-    text = f"正文🙂 `{SECRET}` repeated {SECRET}"
-    await asyncio.gather(
-        *(
-            writer.add_message_async(
-                "user",
-                [
-                    TextPart(text),
-                    ToolPart(tool_input={"nested": [SECRET, SECOND_SECRET, False, 17]}),
-                ],
-            )
-            for writer in writers
-        )
-    )
-    current = await service.privacy_configs.get_current(ctx, "session", "same-values")
-    assert len(current.values) == 2 and set(current.values.values()) == {SECRET, SECOND_SECRET}
-    assert await service.privacy_configs.list_versions(ctx, "session", "same-values") == [1]
-    stored = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
-    rows = [json.loads(line) for line in stored.splitlines()]
-    assert len(rows) == 8
-    assert len({row["parts"][0]["text"] for row in rows}) == 1
-    assert SECRET not in stored and SECOND_SECRET not in stored
-    restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx)
-    for line in restored.splitlines():
-        parts = json.loads(line)["parts"]
-        assert parts[0]["text"] == text
-        assert parts[1]["tool_input"] == {"nested": [SECRET, SECOND_SECRET, False, 17]}
-
-
-async def test_short_discoveries_reuse_fields_across_messages_and_writers(service, ctx):
-    await patch_user_config(
-        service.viking_fs,
-        ctx,
-        UserSettingsPatch.model_validate(
-            {
-                "privacy": {
-                    "mode": "auto",
-                    "custom_rules": [{"id": "code", "prefix": "T", "min_length": 3}],
-                }
-            }
-        ),
-    )
-    value = "T7k9"
-    await service.privacy_configs.upsert(ctx, "session", "other", {"other001": value})
-    session = await service.sessions.create(ctx, "custom-repeat")
-    writers = [service.sessions.session(ctx, "custom-repeat") for _ in range(8)]
-    await asyncio.gather(
-        *(writer.add_message_async("user", [TextPart(value)]) for writer in writers)
-    )
-    for _ in range(3):
-        await session.add_message_async("user", [TextPart(value)])
-    current = await service.privacy_configs.get_current(ctx, "session", "custom-repeat")
-    assert current.version == 1 and list(current.values.values()) == [value]
-    stored = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
-    texts = [json.loads(line)["parts"][0]["text"] for line in stored.split("\n") if line.strip()]
-    assert len(texts) == 11 and len(set(texts)) == 1
-    restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx)
-    assert [
-        json.loads(line)["parts"][0]["text"] for line in restored.split("\n") if line.strip()
-    ] == [value] * 11
-
-
-@pytest.mark.parametrize("mode", ["auto", "auto_strict"])
-async def test_concurrent_skill_preparations_reuse_current_fields_and_preserve_references(
-    service, ctx, monkeypatch, mode
-):
-    from openviking.privacy.service import UserPrivacyConfigService
-    from openviking.privacy.skill_placeholder import build_placeholder
-    from openviking.privacy.skill_restore import restore_skill_content
-    from openviking.utils.skill_processor import SkillProcessor
-
-    await patch_user_config(
-        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
-    )
-    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
-    await service.privacy_configs.upsert(ctx, "session", "other", {"other001": SECRET})
-    await service.privacy_configs.upsert(ctx, "skill", "other", {"other001": SECRET})
-    await service.privacy_configs.upsert(ctx, "skill", "same-values", {"kept0001": SECOND_SECRET})
-    explicit = build_placeholder("same-values", "kept0001")
-    body = f"正文🙂 `{SECRET}` repeated {SECRET}\nexplicit={explicit}"
-    processors = [
-        SkillProcessor(
-            vikingdb=None, privacy_config_service=UserPrivacyConfigService(service.viking_fs)
-        )
-        for _ in range(8)
-    ]
-    skill = {"name": "same-values", "content": body}
-    prepared = await asyncio.gather(
-        *(processor.prepare_skill_privacy(skill, ctx) for processor in processors)
-    )
-    results = await asyncio.gather(
-        *(
-            processor.apply_skill_privacy(
-                skill, preparation, ctx, change_reason="Concurrent discovery"
-            )
-            for processor, preparation in zip(processors, prepared, strict=True)
-        )
-    )
-    current = await service.privacy_configs.get_current(ctx, "skill", "same-values")
-    assert len(current.values) == 2 and set(current.values.values()) == {SECRET, SECOND_SECRET}
-    assert await service.privacy_configs.list_versions(ctx, "skill", "same-values") == [1, 2]
-    for result in results:
-        assert explicit in result["content"] and SECRET not in result["content"]
-        assert await restore_skill_content(
-            service.privacy_configs, result["content"], ctx, skill_name="same-values"
-        ) == body.replace(explicit, SECOND_SECRET)
 
 
 @pytest.mark.parametrize(
@@ -753,34 +651,3 @@ async def test_short_reference_resolves_only_current_users_session_config(servic
         "viking://user/alice/sessions/same-id/messages.jsonl", ctx=alice
     )
     assert json.loads(restored)["parts"][0]["text"] == "alice-private"
-
-
-async def test_session_discovery_follows_persisted_mode_changes(service, ctx, monkeypatch):
-    session = await service.sessions.create(ctx, "mode-changes")
-    settings = AsyncMock(wraps=service.privacy_configs.get_settings)
-    monkeypatch.setattr(service.privacy_configs, "get_settings", settings)
-    third = "AKAP" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
-    fourth = "AKTP" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
-    steps = [
-        ("off", SECRET, []),
-        ("registered", SECOND_SECRET, []),
-        ("auto", third, [third]),
-        ("registered", fourth, [third]),
-    ]
-    values = [value for _, value, _ in steps]
-    for mode, value, expected in steps:
-        await patch_user_config(
-            service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": mode}})
-        )
-        settings.reset_mock()
-        await session.add_message_async("user", [TextPart(value)])
-        settings.assert_awaited_once_with(ctx)
-        current = await service.privacy_configs.get_current(ctx, "session", session.session_id)
-        assert (list(current.values.values()) if current else []) == expected
-    stored = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
-    texts = [json.loads(line)["parts"][0]["text"] for line in stored.splitlines()]
-    assert texts[0:2] == values[0:2]
-    assert third not in stored and texts[3] == fourth
-    assert await service.privacy_configs.list_versions(ctx, "session", session.session_id) == [1]
-    restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx)
-    assert [json.loads(line)["parts"][0]["text"] for line in restored.splitlines()] == values

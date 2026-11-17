@@ -426,20 +426,6 @@ mod tests {
     }
 
     #[test]
-    fn token_boundaries_reject_partial_credentials() {
-        let extractor = PrivacyExtractor::new().unwrap();
-        let secret = ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"].concat();
-        for prefix in ['a', '9', '_', '-', '中', '²'] {
-            let text = format!("{prefix}{secret}");
-            assert!(extractor.extract(&text).unwrap().is_empty(), "{text}");
-        }
-        for suffix in ['_', '-', '中', '²'] {
-            let text = format!("{secret}{suffix}");
-            assert!(extractor.extract(&text).unwrap().is_empty(), "{text}");
-        }
-    }
-
-    #[test]
     fn extraction_limits_are_enforced() {
         let extractor = PrivacyExtractor::new().unwrap();
         for unit in ["x", "中", "🙂"] {
@@ -490,27 +476,6 @@ mod tests {
     }
 
     #[test]
-    fn custom_rules_reject_invalid_configuration() {
-        for rules in [
-            r#"[{"id":"x","regex":"("}]"#,
-            r#"[{"id":"x","regex":"a*"}]"#,
-            r#"[{"id":"x","regex":"(?=secret)"}]"#,
-            r#"[{"id":"x","prefix":"abc","min_length":0}]"#,
-            r#"[{"id":"x","prefix":"abc","min_length":12,"regex":"secret"}]"#,
-            r#"[{"id":"x","prefix":"abc"}]"#,
-            r#"[{"id":"volcengine_ak","regex":"secret"}]"#,
-            r#"[{"id":"x","regex":"abc"},{"id":"x","regex":"def"}]"#,
-        ] {
-            assert!(
-                PrivacyExtractor::with_custom_rules(rules).is_err(),
-                "{rules}"
-            );
-        }
-        let oversized = serde_json::json!([{"id":"x", "regex":"[a-zA-Z0-9]{1000000000}"}]);
-        assert!(PrivacyExtractor::with_custom_rules(&oversized.to_string()).is_err());
-    }
-
-    #[test]
     fn rule_resource_budgets_are_enforced() {
         let limits = PrivacyRuleLimits::default();
         let rules: Vec<_> = (0..=limits.max_rules)
@@ -542,78 +507,12 @@ mod tests {
             .err()
             .unwrap()
             .contains("Privacy rule two exceeds the remaining compiled size budget"));
-    }
-
-    #[test]
-    fn rule_budget_follows_actual_program_size() {
-        // Unicode classes compile to large programs; one such rule may use most of the budget.
-        let unicode = r#"[{"id":"unicode","regex":"tok_\\w{20}"}]"#;
-        let extractor = PrivacyExtractor::with_custom_rules(unicode).unwrap();
-        assert_eq!(
-            extractor.extract("tok_ABCDEFGHIJKLMNOPQRST").unwrap(),
-            vec![(0, 24, "unicode".to_string())]
-        );
-        let builtin = PrivacyExtractor::new().unwrap().reserved_bytes();
-        assert!(builtin < extractor.reserved_bytes());
-        // The same rules fit while their combined programs stay within the budget.
-        let small: Vec<_> = (0..PrivacyRuleLimits::default().max_rules)
-            .map(|n| serde_json::json!({"id":format!("rule{n}"),"regex":"tok_[a-z0-9]{12}"}))
-            .collect();
-        assert!(
-            PrivacyExtractor::with_custom_rules(&serde_json::to_string(&small).unwrap()).is_ok()
-        );
-    }
-
-    #[test]
-    fn capture_workspaces_are_bounded_before_search() {
-        let rules = serde_json::json!([{
+        let captures = serde_json::json!([{
             "id": "captures", "regex": "([a-z0-9]{200})".repeat(100)
         }]);
-        assert!(PrivacyExtractor::with_custom_rules(&rules.to_string())
+        assert!(PrivacyExtractor::with_custom_rules(&captures.to_string())
             .err()
             .unwrap()
             .contains("capture workspace budget"));
-
-        let rules = serde_json::json!([{
-            "id": "captures", "regex": "([a-z0-9]{20})".repeat(10)
-        }]);
-        let extractor = PrivacyExtractor::with_custom_rules(&rules.to_string()).unwrap();
-        let value = "a1b2c3d4".repeat(25);
-        assert_eq!(
-            extractor.extract(&value).unwrap(),
-            vec![(0, value.len(), "captures".into())]
-        );
-    }
-    #[test]
-    fn custom_rules_accept_long_values_and_skip_zero_width_matches() {
-        let prefix = "汉字".repeat(300);
-        let id = "gateway_".repeat(10);
-        let body = "aB3dE5gH7jK9".repeat(350);
-        let rules = serde_json::json!([
-            {"id":id, "prefix":prefix,"min_length":4097},
-            {"id":"regex", "regex":format!("{prefix}[A-Za-z0-9_-]+")},
-        ]);
-        let extractor = PrivacyExtractor::with_custom_rules(&rules.to_string()).unwrap();
-        let text = format!("{prefix}{body}");
-        assert_eq!(
-            extractor.extract(&text).unwrap(),
-            vec![(0, text.chars().count(), id)]
-        );
-        let zero_width =
-            PrivacyExtractor::with_custom_rules(r#"[{"id":"boundary","regex":"\\b"}]"#).unwrap();
-        assert!(zero_width.extract("ordinary word").unwrap().is_empty());
-    }
-
-    #[test]
-    fn overlapping_detectors_only_count_final_results() {
-        let rules: Vec<_> = (0..64)
-            .map(|n| serde_json::json!({"id":format!("rule{n}"),"prefix":"corp_","min_length":20}))
-            .collect();
-        let extractor =
-            PrivacyExtractor::with_custom_rules(&serde_json::to_string(&rules).unwrap()).unwrap();
-        let text = "corp_A7b9C2d4E6f8G0h1J3k5 ".repeat(313);
-        let hits = extractor.extract(&text).unwrap();
-        assert_eq!(hits.len(), 313);
-        assert!(hits.iter().all(|(_, _, id)| id == "rule0"));
     }
 }

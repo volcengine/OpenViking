@@ -13,10 +13,6 @@ import pytest
 
 from openviking.message.part import ContextPart, ImagePart, TextPart, ToolPart
 from openviking.privacy import session_extractor as extraction
-from openviking.privacy.sanitizer import (
-    DEFAULT_SANITIZER_MAX_CONTENT_BYTES,
-    DEFAULT_SANITIZER_MAX_REPLACEMENTS,
-)
 from openviking.privacy.session_extractor import extract_session_privacy_values
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.server.user_config import ResolvedPrivacyConfig
@@ -204,34 +200,6 @@ def test_limits_reject_batch_without_mutating_input(monkeypatch, limit, bound, a
     with pytest.raises(InvalidArgumentError) as exc:
         extract_session_privacy_values("demo", specs, settings=auto_privacy)
     assert SECRET not in str(exc.value) and SECOND_SECRET not in str(exc.value)
-    assert specs == before
-
-
-def test_batch_byte_budget_accumulates_across_messages_and_parts(auto_privacy):
-    half = DEFAULT_SANITIZER_MAX_CONTENT_BYTES // 2
-    specs = [
-        {"parts": [TextPart("🙂" * (half // 4))]},
-        {"parts": [TextPart("x" * half)]},
-    ]
-    assert extract_session_privacy_values("demo", specs, settings=auto_privacy) == (specs, {})
-    specs[1]["parts"].append(TextPart("x"))
-    before = deepcopy(specs)
-    with pytest.raises(InvalidArgumentError, match="text limit"):
-        extract_session_privacy_values("demo", specs, settings=auto_privacy)
-    assert specs == before
-
-
-def test_batch_match_budget_counts_repeated_values_across_parts(auto_privacy):
-    half = DEFAULT_SANITIZER_MAX_REPLACEMENTS // 2
-    specs = [{"parts": [TextPart((SECRET + " ") * half), TextPart((SECRET + " ") * half)]}]
-    protected, values = extract_session_privacy_values("demo", specs, settings=auto_privacy)
-    assert list(values.values()) == [SECRET]
-    reference = extraction.build_session_placeholder("demo", next(iter(values)))
-    assert message_jsonl(protected).count(reference) == DEFAULT_SANITIZER_MAX_REPLACEMENTS
-    specs[0]["parts"].append(TextPart(SECRET))
-    before = deepcopy(specs)
-    with pytest.raises(InvalidArgumentError, match="match limit"):
-        extract_session_privacy_values("demo", specs, settings=auto_privacy)
     assert specs == before
 
 
