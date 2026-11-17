@@ -199,6 +199,17 @@ to handle the request itself there. A task keeps the runtime it started on.
 Three turns run at once, plus one slot only a follow-up to an existing task may
 take. Each task works in `<workspace>/tasks/<id>/`.
 
+A worker's own shell is not capped like the router's: it may build, test and
+wait. Pi's `bash` alone has no default timeout, so a Pi worker's command
+without a `timeout` is stopped after 300 seconds and none may ask for more than
+3600; the worker's policy says so, for builds and test runs that need longer.
+Codex returns a long command's output after at most 30 seconds and lets it run
+on; Claude Code gives a command 2 minutes unless it asks for up to 10.
+Every worker is told to search with the bundled `rg` rather than `grep -r`, in
+its own directory first, and never over a whole home directory, `/`, or the
+OpenViking SuperAgent installation and data. Its working directory is its task
+directory, but nothing else confines it.
+
 A worker's policy is `agent/worker.md` plus the instance Role. Its first input
 is the brief: the original input lines, who asked and where, the router's note
 and its directory. Its Core tools are `task_check` (lines routed to it since it

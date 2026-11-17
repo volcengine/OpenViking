@@ -4,8 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentCliCommands, cliCommandCode } from './agent-clis.mjs';
+import { agentCliCommands, cliCommandCode, ripgrepCommand } from './agent-clis.mjs';
 import { safeError } from './logger.mjs';
+import { PI_SHELL_DEFAULT_S, PI_SHELL_MAX_S } from './pi-runtime.mjs';
 
 // The conversation policy is the Core's markdown under agent/ (how inputs,
 // decisions and deliveries work, one section per connector the instance
@@ -206,12 +207,45 @@ function workersSection(config = {}) {
 
 // A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
 // keeps the instance's Role, for the domain and the voice of its drafts.
-export function assembleWorkerPolicy(config = {}) {
+export function assembleWorkerPolicy(config = {}, { runtime = null } = {}) {
   return joinSections([
     renderPrompt(config, 'worker.md'),
+    shellSection(config, { runtime, worker: true }),
     roleSection(config),
     naturalWritingSection(config),
   ]);
+}
+
+// Where this OpenViking SuperAgent lives. A release runs from
+// <install>/releases/<version>, and the install keeps every release (each
+// with its node_modules) and the instances' data: tens of GB, more than a
+// million files after a few months of upgrades. A source checkout is named
+// with the data directory beside it.
+const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+function ownDirectories(config) {
+  const project = config.projectDir || PACKAGE_DIR;
+  const install = path.basename(path.dirname(project)) === 'releases' ? path.dirname(path.dirname(project)) : project;
+  const inside = (dir, parent) => { const relative = path.relative(parent, dir); return !relative.startsWith('..') && !path.isAbsolute(relative); };
+  return [install, config.dataDir].filter(Boolean).map((dir) => path.resolve(dir))
+    .filter((dir, index, all) => all.indexOf(dir) === index && !all.some((other) => other !== dir && inside(dir, other)));
+}
+
+// How a session uses its shell. Every runtime searches with the bundled rg,
+// and only where the answer can be: one recursive search over a home
+// directory or the installation reads for many minutes, and holds the turn
+// until its timeout. On Pi a command without a timeout of its own is stopped
+// after PI_SHELL_DEFAULT_S (pi-mcp-extension.mjs), so the model must know to
+// give longer work its own; a workers router is capped shorter (workers.md).
+function shellSection(config, { runtime = null, worker = false } = {}) {
+  const lines = [
+    `- Search file contents with ${cliCommandCode(ripgrepCommand(config))} rather than \`grep -r\`: it skips what .gitignore excludes, hidden files and binaries (\`-uu\` adds ignored and hidden files), and is much faster in a large tree.`,
+    `- Search only where the answer can be: ${worker ? 'your directory first, then the' : 'the'} repository or directory the request is about. Never search a whole home directory, \`/\`, or OpenViking SuperAgent's own installation and data (${ownDirectories(config).map((dir) => cliCommandCode(dir)).join(', ')}): they hold hundreds of thousands of files, and one search there runs for many minutes. When the request is about one of them, search the subdirectory it concerns.`,
+  ];
+  if (runtime === 'pi' && (worker || config.scheduler !== 'workers')) {
+    lines.push(`- A shell command without a \`timeout\` of its own is stopped after ${PI_SHELL_DEFAULT_S / 60} minutes, and none runs longer than ${PI_SHELL_MAX_S / 60}: give a build, test run or install that needs more its own \`timeout\` (in seconds).`);
+  }
+  return ['## Shell', '', ...lines].join('\n');
 }
 
 // How a decision is delivered: one final delivery, or (agents[].stagedReplies)
@@ -232,13 +266,15 @@ function bundledCliSection(config) {
 }
 
 // Codex, TraeX, Claude, Pi, Durable, OpenCode and Antigravity: the whole policy, delivered
-// through the Core tools.
-export function assembleConversationPolicy(config = {}) {
+// through the Core tools. `runtime` names the runtime when its shell has rules
+// of its own (Pi).
+export function assembleConversationPolicy(config = {}, { runtime = null } = {}) {
   return joinSections([
     renderPrompt(config, 'core.md').replace('{{DELIVERY_RULES}}', () => deliveryRules(config)),
     renderPrompt(config, 'events.md'),
     ...connectorSections(config),
     bundledCliSection(config),
+    shellSection(config, { runtime }),
     renderPrompt(config, 'openviking.md'),
     config.meetingNotes ? renderPrompt(config, 'meeting-notes.md') : '',
     roleSection(config),

@@ -71,6 +71,8 @@ Pi's exact version is pinned in `packages/daemon/package.json` and the lockfile 
 
 The daemon registers `personal_agent` MCP only for its Pi session, with `direct` exposure so the model sees each tool and parameter. It does not edit `~/.pi/agent/mcp.json` or workspace `.pi/mcp.json`, or add the server to other sessions. A conflicting server name, disabled built-in MCP, or unloaded tools makes startup fail; there is no Bash/CLI fallback. Pi still loads other user MCP servers normally.
 
+Pi's `bash` has no default timeout, so one command that never ends would hold the session. A Pi session that does the work itself (a worker, or the router of the legacy or inbox scheduler) gives a command without a `timeout` 300 seconds and lets none ask for more than 3600 (a `tool_call` handler in `pi-mcp-extension.mjs`); its policy tells the model to give longer builds, test runs and installs their own `timeout`. A workers router keeps its 30-second cap ([scheduler.md](scheduler.md)).
+
 Durable is bundled from [pi-durable](https://github.com/earendil-works/pi), without a separate CLI installation. It records conversations, model turns, and tool calls in `<dataDir>/durable/session.sqlite` before displaying them, and resumes an interrupted turn from the last checkpoint after restart. It shares Pi's built-in providers and `~/.pi/agent/models.json` (custom providers, including OpenAI-compatible Ark endpoints), `auth.json` (keys saved through `/login`), and the default model in `settings.json`. Built-in providers can also use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, etc. in `~/.ov-superagent/secrets.env`, never in `config.json`. With no override, Pi's default model is used. Change it through `/model` and `/effort`, or manifest `env` keys `OV_SUPERAGENT_DURABLE_MODEL` and `OV_SUPERAGENT_DURABLE_EFFORT`. Like other runtimes, Durable sends messages through Agent tools; it also provides pi-durable's `bash`, `read`, `write`, and `edit` in the instance workspace. See [Durable runtime](pi-durable-runtime.md).
 
 ## Manual Feishu setup
@@ -95,7 +97,7 @@ Source development requires Node.js 22.19.0 or later.
 ```bash
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking/superagent
-npm run setup          # Install locked dependencies, pinned lark-cli and Slack CLI, and check managed Pi
+npm run setup          # Install locked dependencies, pinned lark-cli, Slack CLI and ripgrep, and check managed Pi
 npm test && npm run check
 mkdir -p ~/.ov-superagent && cp config.example.json ~/.ov-superagent/config.json
 # Edit config.json: profile (Feishu), dataDir, workspace, model, ovConfig; ovAutoRecall defaults to false

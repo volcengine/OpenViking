@@ -229,6 +229,7 @@ export function getConfig() {
     actionMcpPath: path.join(sourceDir, 'actions', 'mcp.mjs'),
     larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
     slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),
+    ripgrepBin: cliBin(process.env.RIPGREP_BIN || undefined),
     emailAccounts,
     weixinLongPollTimeoutMs: intEnv('OV_SUPERAGENT_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
       min: 5_000,

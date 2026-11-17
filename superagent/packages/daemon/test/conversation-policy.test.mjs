@@ -190,7 +190,52 @@ describe('conversation policy assemble', () => {
     const text = assembleConversationPolicy({ connectors: ['weixin'] });
     assert.match(text, /## Bundled command-line tools/);
     for (const { name, bin } of agentCliCommands()) assert.ok(text.includes(`- ${name}: ${cliCommandCode(bin)}`));
+    assert.ok(agentCliCommands().some(({ name }) => name === 'rg'));
     assert.match(text, /messages still go through the Core tools/);
+  });
+
+  it('tells every session to search with the bundled rg, and a Pi session that does the work itself its timeout', () => {
+    const rule = /A shell command without a `timeout` of its own is stopped after 5 minutes, and none runs longer than 60: give a build, test run or install that needs more its own `timeout` \(in seconds\)\./;
+    const rg = cliCommandCode(agentCliCommands().find(({ name }) => name === 'rg').bin);
+    for (const scheduler of ['legacy', 'inbox', 'workers']) {
+      const config = { connectors: ['lark'], scheduler };
+      const text = assembleConversationPolicy(config);
+      assert.ok(text.includes(`\n## Shell\n\n- Search file contents with ${rg} rather than \`grep -r\``), scheduler);
+      assert.ok(text.indexOf('## Bundled command-line tools') < text.indexOf('## Shell'), 'with the CLIs, before the Role');
+      assert.doesNotMatch(text, rule, `${scheduler}: only Pi's shell has no timeout of its own`);
+      const pi = assembleConversationPolicy(config, { runtime: 'pi' });
+      if (scheduler === 'workers') assert.doesNotMatch(pi, rule, 'a workers router keeps its 30-second cap');
+      else assert.match(pi, rule, scheduler);
+      assert.match(assembleWorkerPolicy(config, { runtime: 'pi' }), rule, `${scheduler} worker`);
+      for (const runtime of ['codex', 'claude']) {
+        const worker = assembleWorkerPolicy(config, { runtime });
+        assert.ok(worker.includes(`- Search file contents with ${rg}`), runtime);
+        assert.doesNotMatch(worker, rule, runtime);
+      }
+    }
+    const spaced = assembleWorkerPolicy({ ripgrepBin: '/opt/my tools/rg' }, { runtime: 'pi' });
+    assert.ok(spaced.includes("- Search file contents with `'/opt/my tools/rg'` rather than"));
+  });
+
+  it('keeps searches where the answer can be: the worker\'s own directory first, never a home, / or the installation', () => {
+    const release = { connectors: ['lark'], projectDir: '/home/u/.ov-superagent/releases/0.5.3', dataDir: '/home/u/.ov-superagent/data/asd' };
+    const never = (dirs) => `Never search a whole home directory, \`/\`, or OpenViking SuperAgent's own installation and data (${dirs}): they hold hundreds of thousands of files, and one search there runs for many minutes. When the request is about one of them, search the subdirectory it concerns.`;
+    for (const runtime of ['pi', 'codex', 'claude']) {
+      const worker = assembleWorkerPolicy(release, { runtime });
+      assert.ok(worker.includes('- Search only where the answer can be: your directory first, then the repository or directory the request is about.'), runtime);
+      // Every release kept and the data are under the installation: it is named once.
+      assert.ok(worker.includes(never('`/home/u/.ov-superagent`')), runtime);
+    }
+    const router = assembleConversationPolicy(release, { runtime: 'pi' });
+    assert.ok(router.includes('- Search only where the answer can be: the repository or directory the request is about.'));
+    assert.doesNotMatch(router, /your directory first/);
+    // A source checkout is named with its data directory, wherever that is.
+    const source = assembleWorkerPolicy({ projectDir: '/src/OpenViking/superagent', dataDir: '/home/u/.vika/data/asd' }, { runtime: 'pi' });
+    assert.ok(source.includes(never('`/src/OpenViking/superagent`, `/home/u/.vika/data/asd`')));
+    assert.ok(assembleWorkerPolicy({ projectDir: '/srv/sa', dataDir: '/srv/sa/data' }).includes(never('`/srv/sa`')));
+    // Without a config, the package this policy runs from.
+    const packageDir = path.resolve(DEFAULT_PROMPT_DIR, '..', '..', '..');
+    assert.ok(assembleWorkerPolicy({}).includes(never(cliCommandCode(packageDir))));
   });
 
   it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {

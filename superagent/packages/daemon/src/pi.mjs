@@ -15,7 +15,7 @@ import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
-import { assertPiVersion, piCommand, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
+import { assertPiVersion, piCommand, piShellTimeoutEnv, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
 import { piIsolationArgs } from './ov-isolation.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
@@ -126,7 +126,7 @@ export class PiAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, { runtime: 'pi' });
     this.developerInstructionsText = this.systemPrompt;
     this.model = options.model
       ?? store.getSetting?.('pi_model')
@@ -356,6 +356,10 @@ export class PiAgent {
       if (this.config.scheduler === 'workers') {
         env.PERSONAL_AGENT_SHELL_LIMIT_S = String(ROUTER_SHELL_LIMIT_S);
         env.PERSONAL_AGENT_WORK_TOOL_BUDGET = String(ROUTER_WORK_TOOL_BUDGET);
+      } else {
+        // A router that does the work itself may run long commands, but one
+        // that never ends must not hold every chat (pi-runtime.mjs).
+        Object.assign(env, piShellTimeoutEnv());
       }
 
       let child;

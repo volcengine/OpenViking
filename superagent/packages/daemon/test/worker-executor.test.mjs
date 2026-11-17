@@ -19,7 +19,8 @@ function fakeCli(dir, name, lines, code = 0) {
 const fs = require('node:fs');
 fs.appendFileSync(${JSON.stringify(path.join(dir, `${name}.calls`))}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(),
   mcp: process.env.PERSONAL_AGENT_MCP_CONFIG ?? null, authority: process.env.PERSONAL_AGENT_AUTHORITY ?? null,
-  shellLimit: process.env.PERSONAL_AGENT_SHELL_LIMIT_S ?? null }) + '\\n');
+  shellLimit: process.env.PERSONAL_AGENT_SHELL_LIMIT_S ?? null, shellDefault: process.env.PERSONAL_AGENT_SHELL_DEFAULT_S ?? null,
+  shellMax: process.env.PERSONAL_AGENT_SHELL_MAX_S ?? null }) + '\\n');
 for (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + '\\n');
 ${code ? `process.stderr.write('upstream said HTTP 429'); process.exit(${code});` : ''}
 `, { mode: 0o755 });
@@ -91,6 +92,11 @@ describe('WorkerExecutor', () => {
     assert.equal(call.cwd, task().workdir);
     assert.deepEqual(JSON.parse(call.mcp).args.slice(-2), ['--authority', 'worker-token']);
     assert.equal(call.shellLimit, null, 'a worker shell is not capped like the router\'s');
+    // but a command that never ends cannot hold the task, and the policy says so.
+    assert.deepEqual([call.shellDefault, call.shellMax], ['300', '3600']);
+    const policy = fs.readFileSync(arg('--append-system-prompt'), 'utf8');
+    assert.match(policy, /\n## Shell\n\n- Search file contents with .*rg.* rather than `grep -r`/);
+    assert.match(policy, /A shell command without a `timeout` of its own is stopped after 5 minutes, and none runs longer than 60/);
   });
 
   it('starts a task that follows a Pi task from a copy of that task\'s session, unless it is gone or too large', async (t) => {
@@ -179,6 +185,9 @@ describe('WorkerExecutor', () => {
     assert.deepEqual(one.argv.slice(0, 3), ['exec', '--json', '--skip-git-repo-check']);
     assert.ok(!one.argv.includes('resume'));
     assert.match(one.argv.join(' '), /developer_instructions="## Worker/);
+    assert.match(one.argv.join(' '), /## Shell\\n\\n- Search file contents with /);
+    assert.doesNotMatch(one.argv.join(' '), /stopped after 5 minutes/, 'Pi\'s timeout rule is Pi\'s');
+    assert.equal(one.shellDefault, null);
     assert.match(one.argv.join(' '), /mcp_servers\.personal_agent\.args=\[.*"--authority","tok"\]/);
     assert.deepEqual(two.argv.slice(-3), ['resume', 'th_123', 'second']);
     assert.ok(two.argv.includes('gpt-6-astra'));

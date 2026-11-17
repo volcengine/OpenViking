@@ -10,7 +10,7 @@ import { assembleWorkerPolicy } from './conversation-policy.mjs';
 import { sanitizePiEnv } from './pi.mjs';
 import { sanitizeClaudeEnv } from './claude.mjs';
 import { sanitizeCodexEnv } from './codex.mjs';
-import { PI_MCP_EXTENSION, piCommand } from './pi-runtime.mjs';
+import { PI_MCP_EXTENSION, piCommand, piShellTimeoutEnv } from './pi-runtime.mjs';
 import { claudeIsolationSettings, codexConfigFile, codexIsolationArgs, piIsolationArgs } from './ov-isolation.mjs';
 import { safeError } from './logger.mjs';
 import { TASK_INPUT_EVENTS, taskInputHookCommand } from './task-input-hook.mjs';
@@ -94,6 +94,9 @@ const RUNTIMES = {
       });
       // New task inputs reach the running worker (pi-mcp-extension.mjs).
       env.PERSONAL_AGENT_TASK_INPUTS = '1';
+      // A command that never ends must not hold the task (pi-runtime.mjs);
+      // a worker is not capped like its router.
+      Object.assign(env, piShellTimeoutEnv());
       const isolation = await piIsolationArgs(env, task.workdir);
       const args = [
         '--mode', 'json', '-p',
@@ -233,7 +236,7 @@ export class WorkerExecutor {
       const scratch = path.join(this.config.dataDir, 'workers', task.id);
       fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
       fs.mkdirSync(task.workdir, { recursive: true });
-      const policy = assembleWorkerPolicy(this.config);
+      const policy = assembleWorkerPolicy(this.config, { runtime: task.runtime });
       const policyFile = path.join(scratch, 'worker-policy.md');
       fs.writeFileSync(policyFile, policy, { mode: 0o600 });
       const { model, effort } = this.modelFor(task);
