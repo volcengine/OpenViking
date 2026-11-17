@@ -298,6 +298,8 @@ import '@openviking/react/modules/file-browser/style.css';
 | l1Overview              | 目录预览里 L1 总览的页签名                                                                    | `string`                             | `'L1 总览'`                              |
 | summaryEmpty            | 目录某一级摘要尚未生成时的提示；预览目前不显示它，覆盖不会生效                                | `string`                             | `'暂无生成内容'`                         |
 | summaryFailed           | 某一级摘要读取失败且服务端没有返回消息时的提示                                                | `string`                             | `'摘要加载失败。'`                       |
+| emptyL0Summary          | L0 摘要暂无内容时的提示                                                                       | `string`                             | `'暂无 L0 摘要'`                         |
+| emptyL1Overview         | L1 总览暂无内容时的提示                                                                       | `string`                             | `'暂无 L1 总览'`                         |
 | formatCharacterCount    | 预览底部字符数的文案                                                                          | `(count: number) => string`          | 按 `locale` 格式化，如 `'1,234 字符数'`  |
 | formatPreviewUpdatedAt  | 预览底部更新时间的文案                                                                        | `(time: string) => string`           | `'更新于 {time}'`                        |
 | previewModelNotice      | 资源预览右侧的模型解析提示，传空字符串可隐藏                                                  | `string`                             | `'内容解析由 内容理解大模型 提供'`       |
@@ -598,6 +600,7 @@ await browserRef.current?.openResource(directoryUri);
 - 预览失败时，右侧显示失败状态：`labels.error` 是结论，服务端返回的原始消息是原因，`labels.retry` 是重试按钮，重试会同时重新加载目录树和当前预览。
 - 只有没选中资源时才显示空状态（`labels.empty`），选中了资源却读不出来时显示失败状态。
 - 目录的 L0 摘要和 L1 总览分别请求：一级失败时只有该级显示失败原因，两级都失败时整个预览显示失败状态；服务端没有返回消息时显示 `labels.summaryFailed`。
+- 返回空正文或后端的 `Directory … is not ready` 占位文本时，显示对应层级的空态。
 - 搜索失败时，弹窗保留接口返回的原因，可以再次提交同一个关键词重试。
 
 ### 目录树宽度

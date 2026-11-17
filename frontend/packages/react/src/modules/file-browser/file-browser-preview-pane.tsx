@@ -1,12 +1,15 @@
 import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
-import { useRenderErrors, type ResolvedLabels } from './file-browser-labels.js';
+import {
+  useRenderErrors,
+  withDirectoryEmptyLabel,
+  type ResolvedLabels,
+} from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
 import { useRef } from 'react';
 import { useOvClient } from '../../client/provider.js';
 import { scopeKeyOf } from './fs-scope.js';
 import { previewActionContext } from './file-browser-preview-action-source.js';
-import { isSystemUri } from './preview-policy.js';
 import type { Locale } from '../../shared/locale.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { FileBrowserDetail } from './file-browser-detail.js';
@@ -54,7 +57,6 @@ function FileBrowserPreviewPaneContent({
   const { currentUri: uri, previewTabs, previewKey } = browser;
   const tab =
     previewTabs?.find(({ key }) => key === previewKey) ?? previewTabs?.[0];
-  const systemDirectory = tab?.kind === 'directory' && isSystemUri(tab.key);
   const modelNotice = previewModelNotice(uri, text.previewModelNotice);
   const previewFooter =
     tab &&
@@ -127,11 +129,7 @@ function FileBrowserPreviewPaneContent({
           tabs={previewTabs}
           activeKey={previewKey}
           locale={locale}
-          labels={
-            systemDirectory
-              ? { ...previewLabels, fileEmpty: text.systemDirectory }
-              : previewLabels
-          }
+          labels={withDirectoryEmptyLabel(tab, previewLabels, text)}
           footer={previewFooter}
           titleExtra={permissions.titleExtra}
           readOnly={!canWrite || !controls.policy.edit}

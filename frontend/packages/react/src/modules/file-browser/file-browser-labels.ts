@@ -7,11 +7,15 @@ import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import { resolveLocale, type Locale } from '../../shared/locale.js';
 import enUS, { stackedEmpty as stackedEmptyEn } from './locales/en-US.js';
 import zhCN, { stackedEmpty as stackedEmptyZh } from './locales/zh-CN.js';
+import { isSystemUri } from './preview-policy.js';
 
 const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
 const STACKED_EMPTY = { 'en-US': stackedEmptyEn, 'zh-CN': stackedEmptyZh };
 
-import type { FilePreviewLabels } from '../../components/file-preview/index.js';
+import type {
+  FilePreviewLabels,
+  FilePreviewTab,
+} from '../../components/file-preview/index.js';
 import type { FileTreeLabels } from '../../components/file-tree/index.js';
 import type { FileBrowserLabels } from './types.js';
 
@@ -64,6 +68,19 @@ export function resolvePreviewLabels(text: ResolvedLabels): FilePreviewLabels {
     viewSwitch: text.viewSwitch,
     ...text.previewLabels,
   };
+}
+
+export function withDirectoryEmptyLabel(
+  tab: FilePreviewTab | undefined,
+  labels: FilePreviewLabels | undefined,
+  text: ResolvedLabels,
+): FilePreviewLabels | undefined {
+  if (tab?.kind !== 'directory') return labels;
+  if (isSystemUri(tab.key))
+    return { ...labels, fileEmpty: text.systemDirectory };
+  const empty =
+    tab.activeLevelKey === 'l1' ? text.emptyL1Overview : text.emptyL0Summary;
+  return { ...labels, fileEmpty: labels?.fileEmpty ?? empty };
 }
 
 export const DEFAULT_LABELS: Required<ShellLabels> = enUS;

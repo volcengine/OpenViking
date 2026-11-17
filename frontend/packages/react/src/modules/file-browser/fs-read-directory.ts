@@ -3,6 +3,23 @@ import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { isAbort } from './fs-errors.js';
 import { type DirectorySummary } from './fs-model.js';
 
+const NOT_READY_SUFFIXES = [
+  '[Directory abstract is not ready]',
+  '[Directory overview is not ready]',
+];
+
+function summaryBody(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const content = value.trimEnd();
+  for (const suffix of NOT_READY_SUFFIXES) {
+    if (!content.endsWith(suffix)) continue;
+    const heading = content.slice(0, -suffix.length).trim();
+    // The successful placeholder contains only a heading and the marker.
+    if (heading.startsWith('# ') && !/[\r\n]/.test(heading)) return '';
+  }
+  return value;
+}
+
 /**
  * 读目录的两级摘要，各自成一个页签：L0 是摘要，L1 是总览。
  *
@@ -44,7 +61,7 @@ export async function readDirectory(
       .request<string>({ method: 'GET', path, query: { uri }, options })
       .then((value) => ({
         ok: true as const,
-        text: typeof value === 'string' ? value : '',
+        text: summaryBody(value),
       }))
       .catch((cause: unknown) => ({ ok: false as const, cause }));
 

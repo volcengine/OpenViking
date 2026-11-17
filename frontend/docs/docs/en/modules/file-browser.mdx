@@ -298,6 +298,8 @@ All fields are optional, and omitted fields follow `locale`.
 | l1Overview              | Tab name of the L1 overview in a directory preview                                                                           | `string`                             | `'L1 Overview'`                                                       |
 | summaryEmpty            | Message for a summary level not generated yet; the preview does not show it, so overriding it has no effect                  | `string`                             | `'No summary generated yet'`                                          |
 | summaryFailed           | Message when a summary level fails to load and the server gives no message                                                   | `string`                             | `'The summary could not be loaded.'`                                  |
+| emptyL0Summary          | Message when the L0 summary is absent                                                                                        | `string`                             | `'No L0 summary'`                                                     |
+| emptyL1Overview         | Message when the L1 overview is absent                                                                                       | `string`                             | `'No L1 overview'`                                                    |
 | formatCharacterCount    | Character count text in the preview footer                                                                                   | `(count: number) => string`          | Formatted per `locale`, for example `'1,234 characters'`              |
 | formatPreviewUpdatedAt  | Update time text in the preview footer                                                                                       | `(time: string) => string`           | `'Updated on {time}'`                                                 |
 | previewModelNotice      | Model notice in resource previews; pass an empty string to hide it                                                           | `string`                             | `'Content parsing provided by the Content Understanding Model'`       |
@@ -598,6 +600,7 @@ Pass host request functions through `experienceDataSource`. Omitted functions us
 - When the preview fails, the detail pane shows a failure state: `labels.error` is the conclusion, the server's own message is the reason, and `labels.retry` is the button, which reloads the tree and the current preview together.
 - The empty state (`labels.empty`) appears only when nothing is selected; a selected resource that cannot be read shows the failure state.
 - A directory's L0 summary and L1 overview are requested separately: when one fails, only that level shows its reason, and when both fail the whole preview shows the failure state. Without a server message, `labels.summaryFailed` is shown.
+- An empty response or a server-generated `Directory … is not ready` placeholder displays the empty state for that level.
 - When a search fails, the dialog keeps the endpoint's reason, and you can submit the same query again to retry.
 
 ### Tree width
