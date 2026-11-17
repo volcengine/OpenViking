@@ -1110,7 +1110,11 @@ export async function connectLark({
     const oldUserScopes = await larkCli.userScopes({ profile }).catch(() => null);
     await larkCli.logoutUser({ profile });
     await larkCli.configureProfile({ profile, ...app });
-    if (oldUserScopes?.length) {
+    // lark-cli may resolve an app's login after a new profile starts pointing
+    // at it, so clear once more on the selected app side as well.
+    const selectedUserScopes = await larkCli.userScopes({ profile }).catch(() => null);
+    await larkCli.logoutUser({ profile });
+    if (oldUserScopes?.length || selectedUserScopes?.length) {
       prompter.success(t(`已清除 ${profile} 原有的用户登录和 user token`,
         `Removed the previous user login and user token from ${profile}`));
     }

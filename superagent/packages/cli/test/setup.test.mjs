@@ -1471,12 +1471,40 @@ test('reconnecting a full-user profile as bot-only clears its old login before r
   assert.deepEqual(addons.scopes, scopes);
   // The app may still carry old user scopes, but setup revokes and removes the
   // reusable user token before writing the selected app to the profile.
-  assert.deepEqual(larkCli.calls, [['logout', 'superagent-asd'], ['profile', 'superagent-asd', 'cli_old']]);
+  assert.deepEqual(larkCli.calls, [
+    ['logout', 'superagent-asd'], ['profile', 'superagent-asd', 'cli_old'], ['logout', 'superagent-asd'],
+  ]);
   assert.equal(login, null);
   assert.doesNotMatch(written(), /第 2 次扫码|等待授权/);
   assert.match(written(), /已清除 superagent-asd 原有的用户登录和 user token/);
   assert.match(written(), /飞书已接好（仅机器人权限）/);
   assert.doesNotMatch(written(), /用于搜索和读历史/);
+});
+
+test('a new bot-only profile also clears a user login inherited from the selected app', async () => {
+  const scopes = larkScopes('bot');
+  const granted = [...scopes.tenant.map((scope) => ({ scope, token_types: ['tenant'] })),
+    ...larkScopes().user.map((scope) => ({ scope, token_types: ['user'] }))];
+  let configured = false;
+  let sharedLogin = larkScopes().user;
+  const larkCli = {
+    ...fakeLarkCli(),
+    userScopes: async () => (configured ? sharedLogin : null),
+    configureProfile: async ({ profile, appId }) => { larkCli.calls.push(['profile', profile, appId]); configured = true; },
+    logoutUser: async ({ profile }) => {
+      larkCli.calls.push(['logout', profile]);
+      if (configured) sharedLogin = null;
+    },
+  };
+  const register = async () => ({ client_id: 'cli_old', client_secret: 's', user_info: { open_id: 'ou_owner' } });
+  const { prompter, written } = pipePrompter([]);
+  await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
+    profile: 'superagent-fresh', source: 'select', access: 'bot', register });
+  assert.deepEqual(larkCli.calls, [
+    ['logout', 'superagent-fresh'], ['profile', 'superagent-fresh', 'cli_old'], ['logout', 'superagent-fresh'],
+  ]);
+  assert.equal(sharedLogin, null);
+  assert.match(written(), /已清除 superagent-fresh 原有的用户登录和 user token/);
 });
 
 test('connecting a picked app: another instance on it is a warning, what it lacks is named, and only its user scopes are asked for', async () => {
