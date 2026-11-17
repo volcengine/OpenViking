@@ -605,7 +605,7 @@ Settings that apply only to some integrations:
 | DSH | No | None | The same four as Cursor | No |
 | CodeBuddy Code | No | None | The same four as Cursor | No |
 | Qoder CLI | No | None | The same four as Cursor | No |
-| Antigravity | No | None | The same four as Cursor | Installer menu |
+| Antigravity | No | None | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search` | Installer menu |
 | pi | Yes | `/viking`, `/viking commit` | The same four as Cursor, unless `mcpEnabled` is `false` | Yes |
 | OpenClaw | No | `/add-resource`, `/add-skill`, `/ov-search`, `/ov-query-config`, `/ov-recall-trace` | Four plugin skills, including `openviking-rule-search` | Yes; checks the key's role and version compatibility |
 | Hermes (bundled) | No | None | None | Yes; `hermes memory status` lists environment overrides |
@@ -705,7 +705,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Antigravity
 
-[Community integrations: Antigravity](./08-community-plugins.md#antigravity-memory-integration). A plugin with 3 hooks (`SessionStart`, `PreInvocation`, `Stop`), an MCP proxy and the same four skills as Cursor, and no URI guard, installed by the unified installer, and an `agent-hook-plugin` host adapter like ZCode. The Antigravity desktop app and the `agy` CLI load the same plugin from `~/.gemini/config/plugins/openviking-memory`.
+[Community integrations: Antigravity](./08-community-plugins.md#antigravity-memory-integration). A plugin with 3 hooks (`SessionStart`, `PreInvocation`, `Stop`), an MCP proxy and the shared OpenViking skills `openviking-memory`, `openviking-skills`, `ov-experience-memory` and `openviking-rule-search`, and no URI guard, installed by the unified installer, and an `agent-hook-plugin` host adapter like ZCode. The Antigravity desktop app and the `agy` CLI load the same plugin from `~/.gemini/config/plugins/openviking-memory`.
 
 - `PreInvocation` runs before every model call, including each call in a tool loop (`invocationNum` above 0) and each reactive wakeup for a background task, subagent message, or `Stop` continuation. Recall runs only when `invocationNum` is 0 and no `MODEL` step has run since the latest `USER_INPUT` step in `transcriptPath`, so a turn injects once. A `lastUserInput` that differs from that step's request is a new turn the transcript has not recorded yet, and recalls too.
 - Antigravity hooks use their own `hooks.json` format, with each top-level key naming a hook. Context goes back as a `systemMessage` step in `injectSteps`, which stays in the conversation.
