@@ -3845,6 +3845,9 @@ postgres = [
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
+redis = [
+    { name = "redis" },
+]
 redis-mysql = [
     { name = "aiomysql" },
     { name = "redis" },
@@ -3983,6 +3986,7 @@ requires-dist = [
     { name = "rapidfuzz", specifier = ">=3.14,<4" },
     { name = "readability-lxml", marker = "extra == 'bot'", specifier = ">=0.8.0" },
     { name = "redis", marker = "extra == 'expiry'", specifier = ">=5.3.1,<7" },
+    { name = "redis", marker = "extra == 'redis'", specifier = ">=5.3.1,<7" },
     { name = "redis", marker = "extra == 'redis-mysql'", specifier = ">=5.3.1,<7" },
     { name = "redis", marker = "extra == 'test'", specifier = ">=5.3.1,<7" },
     { name = "requests", specifier = ">=2.33.0" },
@@ -4028,7 +4032,7 @@ requires-dist = [
     { name = "wheel", marker = "extra == 'build'" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
-provides-extras = ["reporting", "expiry", "gateway-fast", "postgres", "mysql", "redis-mysql", "test", "auth", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "local-embed", "opengauss", "pgvector"]
+provides-extras = ["reporting", "expiry", "gateway-fast", "postgres", "mysql", "redis", "redis-mysql", "test", "auth", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "local-embed", "opengauss", "pgvector"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]
