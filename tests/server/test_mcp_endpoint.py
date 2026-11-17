@@ -429,6 +429,9 @@ async def test_search_tools_expose_only_context_type_parameter():
     for tool_name in ("find", "search"):
         properties = tools[tool_name].inputSchema["properties"]
         assert "context_type" in properties
+        assert properties["context_type"]["description"] == (
+            "Filter results to one or more context types: memory, resource, or skill."
+        )
         assert properties["tags"]["type"] == "array"
         assert "include_tags" not in properties
         assert "filter" not in properties
@@ -453,6 +456,11 @@ async def test_retrieval_tools_expose_tag_parameters_with_compatible_defaults():
         assert properties["include_tags"]["description"] == (
             "Include each result's tags in the output; this does not filter results."
         )
+
+    for tool_name in ("find", "search", "list", "tree", "grep"):
+        assert "k=v" not in tools[tool_name].description
+    for tool_name in ("list", "tree", "grep"):
+        assert "include_tags" not in tools[tool_name].description
 
 
 async def test_recall_tool_is_replaced_by_search_context_mode():
@@ -1129,6 +1137,120 @@ async def test_search_context_schema_uses_portable_scalar_types():
     assert properties["other_peer_penalties"]["type"] == "object"
     assert properties["rewrite"]["type"] == "string"
     assert properties["rewrite"]["enum"] == ["off", "auto"]
+
+
+async def test_retrieval_tools_describe_advanced_parameters_without_changing_contracts():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    find_schema = tools["find"].inputSchema
+    search_schema = tools["search"].inputSchema
+    find_properties = find_schema["properties"]
+    search_properties = search_schema["properties"]
+
+    assert find_properties["level"]["description"] == (
+        "Filter indexed representation levels: 0=abstract, 1=overview, 2=detail/content."
+    )
+    assert search_properties["level"]["description"] == (
+        "In mode='list', filter indexed representation levels: "
+        "0=abstract, 1=overview, 2=detail/content; ignored in mode='context'."
+    )
+    assert search_properties["quotas"]["description"] == (
+        "In mode='context', set first-pass result ceilings for explicitly listed "
+        "categories: events, entities, preferences, experiences, resources, or skills; "
+        "unused slots may be filled by other listed categories, and explicit quotas take "
+        "precedence over purpose presets."
+    )
+    assert search_properties["detail_by_category"]["description"] == (
+        "In mode='context', request abstract, overview, or full detail per category "
+        "(events, entities, preferences, experiences, resources, skills, or memories); "
+        "do not combine with a non-auto detail value."
+    )
+    assert search_properties["dedup_turns"]["description"] == (
+        "In mode='context' with session_id, suppress URIs served with content within "
+        "this many recent turns; 0 disables cross-turn deduplication."
+    )
+    assert search_properties["peer_scope"]["description"] == (
+        "In mode='context', use 'actor' for the user's own and current peer's memories, "
+        "or 'all' to also consider memories from other peers."
+    )
+    assert search_properties["other_peer_penalty"]["description"] == (
+        "In mode='context', subtract one score penalty from every category of results "
+        "owned by peers other than the current peer; values are clamped to 0..1, and this "
+        "cannot be combined with other_peer_penalties."
+    )
+    assert search_properties["other_peer_penalties"]["description"] == (
+        "In mode='context', override default other-peer score penalties by category; "
+        "allowed categories are events, entities, preferences, experiences, resources, "
+        "skills, and memories, values are clamped to 0..1, and omitted categories keep "
+        "their defaults; do not combine with other_peer_penalty."
+    )
+    assert search_properties["rewrite"]["description"] == (
+        "In mode='context', use 'auto' to ask the account model for a cited bullet digest; "
+        "on failure the assembled context is returned unchanged, while 'off' skips rewriting."
+    )
+
+    decay_description = (
+        "Apply updated_at-based recency decay after an unpenalized protection window; "
+        "use '0' or a non-negative integer plus m, h, or d (for example, 2d), and "
+        "provide a non-empty query."
+    )
+    assert find_properties["events_time_decay_protection"]["description"] == decay_description
+    assert search_properties["events_time_decay_protection"]["description"] == decay_description
+
+    assert find_properties["level"]["type"] == "array"
+    assert find_properties["context_type"]["type"] == "array"
+    assert find_properties["events_time_decay_protection"]["type"] == "string"
+    assert search_properties["level"]["type"] == "array"
+    assert search_properties["context_type"]["type"] == "array"
+    assert search_properties["quotas"]["type"] == "object"
+    assert search_properties["detail_by_category"]["type"] == "object"
+    assert search_properties["dedup_turns"]["type"] == "integer"
+    assert search_properties["peer_scope"]["type"] == "string"
+    assert search_properties["other_peer_penalty"]["type"] == "number"
+    assert search_properties["other_peer_penalties"]["type"] == "object"
+    assert search_properties["rewrite"]["type"] == "string"
+    assert search_properties["events_time_decay_protection"]["type"] == "string"
+    assert search_properties["dedup_turns"]["default"] == 0
+    assert search_properties["peer_scope"]["default"] == "all"
+    assert search_properties["rewrite"]["default"] == "off"
+    for properties, parameters in (
+        (
+            find_properties,
+            ("level", "context_type", "events_time_decay_protection"),
+        ),
+        (
+            search_properties,
+            (
+                "level",
+                "context_type",
+                "quotas",
+                "detail_by_category",
+                "other_peer_penalty",
+                "other_peer_penalties",
+                "events_time_decay_protection",
+            ),
+        ),
+    ):
+        for parameter in parameters:
+            assert "default" not in properties[parameter]
+    for parameter in (
+        "level",
+        "context_type",
+        "events_time_decay_protection",
+    ):
+        assert parameter not in find_schema.get("required", [])
+    for parameter in (
+        "level",
+        "context_type",
+        "quotas",
+        "detail_by_category",
+        "dedup_turns",
+        "peer_scope",
+        "other_peer_penalty",
+        "other_peer_penalties",
+        "rewrite",
+        "events_time_decay_protection",
+    ):
+        assert parameter not in search_schema.get("required", [])
 
 
 async def test_mcp_middleware_sets_actor_peer_context():

@@ -591,6 +591,55 @@ _TAG_FILTER_DESCRIPTION = (
 _INCLUDE_TAGS_DESCRIPTION = (
     "Include each result's tags in the output; this does not filter results."
 )
+_CONTEXT_TYPE_DESCRIPTION = (
+    "Filter results to one or more context types: memory, resource, or skill."
+)
+_FIND_LEVEL_DESCRIPTION = (
+    "Filter indexed representation levels: 0=abstract, 1=overview, 2=detail/content."
+)
+_SEARCH_LEVEL_DESCRIPTION = (
+    "In mode='list', filter indexed representation levels: "
+    "0=abstract, 1=overview, 2=detail/content; ignored in mode='context'."
+)
+_EVENTS_TIME_DECAY_DESCRIPTION = (
+    "Apply updated_at-based recency decay after an unpenalized protection window; "
+    "use '0' or a non-negative integer plus m, h, or d (for example, 2d), and "
+    "provide a non-empty query."
+)
+_QUOTAS_DESCRIPTION = (
+    "In mode='context', set first-pass result ceilings for explicitly listed "
+    "categories: events, entities, preferences, experiences, resources, or skills; "
+    "unused slots may be filled by other listed categories, and explicit quotas take "
+    "precedence over purpose presets."
+)
+_DETAIL_BY_CATEGORY_DESCRIPTION = (
+    "In mode='context', request abstract, overview, or full detail per category "
+    "(events, entities, preferences, experiences, resources, skills, or memories); "
+    "do not combine with a non-auto detail value."
+)
+_DEDUP_TURNS_DESCRIPTION = (
+    "In mode='context' with session_id, suppress URIs served with content within "
+    "this many recent turns; 0 disables cross-turn deduplication."
+)
+_PEER_SCOPE_DESCRIPTION = (
+    "In mode='context', use 'actor' for the user's own and current peer's memories, "
+    "or 'all' to also consider memories from other peers."
+)
+_OTHER_PEER_PENALTY_DESCRIPTION = (
+    "In mode='context', subtract one score penalty from every category of results "
+    "owned by peers other than the current peer; values are clamped to 0..1, and this "
+    "cannot be combined with other_peer_penalties."
+)
+_OTHER_PEER_PENALTIES_DESCRIPTION = (
+    "In mode='context', override default other-peer score penalties by category; "
+    "allowed categories are events, entities, preferences, experiences, resources, "
+    "skills, and memories, values are clamped to 0..1, and omitted categories keep "
+    "their defaults; do not combine with other_peer_penalty."
+)
+_REWRITE_DESCRIPTION = (
+    "In mode='context', use 'auto' to ask the account model for a cited bullet digest; "
+    "on failure the assembled context is returned unchanged, while 'off' skips rewriting."
+)
 
 
 def _format_tags(tags: Optional[List[str]]) -> str:
@@ -605,16 +654,25 @@ async def find(
     target_uri: str = "",
     limit: int = 10,
     min_score: float = 0.35,
-    level: Optional[List[int]] = None,
-    context_type: Optional[Union[str, List[str]]] = None,
+    level: Annotated[
+        Optional[List[int]],
+        Field(description=_FIND_LEVEL_DESCRIPTION),
+    ] = None,
+    context_type: Annotated[
+        Optional[Union[str, List[str]]],
+        Field(description=_CONTEXT_TYPE_DESCRIPTION),
+    ] = None,
     tags: Annotated[
         Optional[List[str]],
         Field(description=_TAG_FILTER_DESCRIPTION),
     ] = None,
     read_content: bool = False,
-    events_time_decay_protection: Optional[str] = None,
+    events_time_decay_protection: Annotated[
+        Optional[str],
+        Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
+    ] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. tags requires every supplied k=v tag. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
     try:
         validate_event_time_decay_request(events_time_decay_protection)
     except ValueError as exc:
@@ -681,8 +739,14 @@ async def search(
     session_id: Optional[str] = None,
     limit: int = 10,
     min_score: Optional[float] = None,
-    level: Optional[List[int]] = None,
-    context_type: Optional[Union[str, List[str]]] = None,
+    level: Annotated[
+        Optional[List[int]],
+        Field(description=_SEARCH_LEVEL_DESCRIPTION),
+    ] = None,
+    context_type: Annotated[
+        Optional[Union[str, List[str]]],
+        Field(description=_CONTEXT_TYPE_DESCRIPTION),
+    ] = None,
     tags: Annotated[
         Optional[List[str]],
         Field(description=_TAG_FILTER_DESCRIPTION),
@@ -690,28 +754,50 @@ async def search(
     mode: Literal["list", "context"] = "list",
     query_expansion: Literal["off", "auto"] = "auto",
     max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
-    quotas: Optional[Dict[str, int]] = None,
+    quotas: Annotated[
+        Optional[Dict[str, int]],
+        Field(description=_QUOTAS_DESCRIPTION),
+    ] = None,
     purpose: Optional[Literal["chat", "coding"]] = None,
     detail: Literal["auto", "abstract", "overview", "full"] = "auto",
-    detail_by_category: Optional[Dict[str, str]] = None,
-    dedup_turns: Annotated[int, Field(ge=0, le=100)] = 0,
+    detail_by_category: Annotated[
+        Optional[Dict[str, str]],
+        Field(description=_DETAIL_BY_CATEGORY_DESCRIPTION),
+    ] = None,
+    dedup_turns: Annotated[
+        int,
+        Field(ge=0, le=100, description=_DEDUP_TURNS_DESCRIPTION),
+    ] = 0,
     exclude_uris: Annotated[Optional[List[str]], Field(max_length=MAX_EXCLUDE_URIS)] = None,
-    peer_scope: Literal["actor", "all"] = "all",
-    other_peer_penalty: Optional[float] = None,
-    other_peer_penalties: Optional[Dict[str, float]] = None,
-    rewrite: Literal["off", "auto"] = "off",
+    peer_scope: Annotated[
+        Literal["actor", "all"],
+        Field(description=_PEER_SCOPE_DESCRIPTION),
+    ] = "all",
+    other_peer_penalty: Annotated[
+        Optional[float],
+        Field(description=_OTHER_PEER_PENALTY_DESCRIPTION),
+    ] = None,
+    other_peer_penalties: Annotated[
+        Optional[Dict[str, float]],
+        Field(description=_OTHER_PEER_PENALTIES_DESCRIPTION),
+    ] = None,
+    rewrite: Annotated[
+        Literal["off", "auto"],
+        Field(description=_REWRITE_DESCRIPTION),
+    ] = "off",
     rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
-    events_time_decay_protection: Optional[str] = None,
+    events_time_decay_protection: Annotated[
+        Optional[str],
+        Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
+    ] = None,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 
     ``mode="list"`` returns ranked memories, resources, and skills with URI,
     abstract, and score. ``mode="context"`` returns an injection-ready,
-    token-budgeted context block and supports category quotas, purpose presets,
-    detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
-    ``tags`` requires every supplied k=v tag in both modes. List results include
-    matched tags; context mode uses tags only to filter assembled context.
+    token-budgeted context block. List results include matched tags; assembled
+    context does not expose tag metadata.
     ``target_uri`` is only supported in list mode. ``read_content`` only expands
     stored content; use ``read`` explicitly to execute a Live Context node.
     """
@@ -1373,8 +1459,6 @@ async def ls(
         limit: Optional maximum number of entries.
         sort_by: Optional name or modification-time ordering.
         sort_order: Ascending or descending order.
-        tags: Only include entries matching all k=v tags.
-        include_tags: Whether to include tags in each entry.
 
     Returns:
         A line-oriented directory listing.
@@ -1471,8 +1555,6 @@ async def tree(
         node_limit: Existing default result limit.
         include_abstract: Whether to include directory summaries (a skill directory's
             summary is its name and description).
-        tags: Only include entries matching all k=v tags.
-        include_tags: Whether to include tags in each entry.
         offset: Number of visible nodes to skip.
         limit: Optional result limit that overrides node_limit.
 
@@ -2400,7 +2482,7 @@ async def grep(
         Field(description=_INCLUDE_TAGS_DESCRIPTION),
     ] = False,
 ) -> str:
-    """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. tags requires every supplied k=v tag; include_tags adds tags to each matched URI. Use this for exact text matching; use the search tool for semantic retrieval."""
+    """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. Use this for exact text matching; use the search tool for semantic retrieval."""
     import asyncio
 
     service = get_service()
