@@ -146,7 +146,11 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
 
   return (
     <>
-      <div className="ov-file-preview__code-editor" ref={container} />
+      <div
+        className="ov-file-preview__code-editor"
+        data-language={language}
+        ref={container}
+      />
       {highlightFailure ? (
         <>
           <ErrorNotification
