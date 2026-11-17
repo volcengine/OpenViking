@@ -146,7 +146,7 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 |------|------|------|--------|------|
 | branch | str | 否 | `main` | 要回溯的分支 |
 | limit | int | 否 | 20 | 最多返回的提交数量。HTTP 接口限制范围为 1–500 |
-| offset | int | 否 | 0 | 跳过的匹配提交数量，之后最多返回 `limit` 条。HTTP 和原生服务接受 0–9,223,372,036,854,775,807（`i64::MAX`），超范围返回参数错误 |
+| offset | int | 否 | 0 | 跳过前多少条匹配的提交，必须为非负整数。例如每页 10 条，第二页传 `offset=10` |
 | paths | List[str] | 否 | null | 只返回修改了任一指定 `viking://` URI 的提交；USER/ADMIN 必须显式传入。本地 ROOT 模式可省略以查询全局历史。最多接受 32 条路径，每条 account-relative 路径最多包含 64 个层级。HTTP 接口通过重复 `paths` 查询参数传入多个 URI |
 
 路径过滤和提交去重发生在 `offset`、`limit` 之前。
@@ -162,7 +162,7 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 - 没有可用索引：旧版过滤扫描仍最多检查 1,000 条候选提交。无关提交和被 `offset` 跳过的匹配提交都计入扫描预算。
 - 旧版扫描尚未凑齐请求页，且仍有未检查的更早历史时，返回 `INVALID_ARGUMENT`，不返回部分结果。
 
-非过滤查询没有候选提交扫描预算。CLI 接受的 `offset` 范围为 0–4,294,967,295（`u32::MAX`）。
+不传 `paths` 时，查询不受上述 1,000 条扫描限制。
 
 每页 10 条时，第一页省略 `offset`，下一页使用 `offset=10`，示例如下。
 每次请求都从当前分支 HEAD 开始，两次请求之间新增提交可能使页边界移动。

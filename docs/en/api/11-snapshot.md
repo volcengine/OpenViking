@@ -146,7 +146,7 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 |-----------|------|----------|---------|-------------|
 | branch | str | No | `main` | Branch to walk |
 | limit | int | No | 20 | Max commits to return. The HTTP endpoint accepts values from 1 to 500 |
-| offset | int | No | 0 | Number of matching commits to skip before returning up to `limit` commits. HTTP and the native service accept 0–9,223,372,036,854,775,807 (`i64::MAX`); values outside this range are rejected |
+| offset | int | No | 0 | Number of matching commits to skip; must be a non-negative integer. For pages of 10, use `offset=10` for the second page |
 | paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; USER/ADMIN callers must provide it, while local ROOT mode may omit it for account-wide history. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
 
 Path filtering and commit de-duplication happen before `offset` and `limit` are applied. With `paths=[X]`, `offset=10`, and `limit=10`, the result contains matches 11–20 for X. Unrelated commits do not advance the offset; a commit touching multiple requested paths counts once. Once traversal reaches the end of history, an offset beyond the matching commits returns an empty list.
@@ -159,7 +159,7 @@ snapshot commits and does not change the response format:
 - With an index behind HEAD, the server scans the newer commits and combines their matches with indexed history. This tail scan has no 1,000-commit cap.
 - When no usable index is available, the legacy filtered scan still inspects at most 1,000 candidate commits, including unrelated commits and matches skipped by `offset`. If the requested page is incomplete and older uninspected history remains, it returns `INVALID_ARGUMENT` without partial results.
 
-Unfiltered history has no candidate scan budget. The CLI accepts offsets from 0 to 4,294,967,295 (`u32::MAX`).
+Without `paths`, queries are not subject to the 1,000-commit scan limit above.
 
 For pages of 10, omit `offset` for the first page and use `offset=10` for the next page, as shown below. Each request starts from the current branch HEAD; new commits between requests can shift page boundaries.
 
