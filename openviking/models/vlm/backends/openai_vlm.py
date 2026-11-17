@@ -225,20 +225,16 @@ class OpenAIVLM(VLMBase):
             tracer.info(f"response.usage={response.usage}")
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
-            prompt_tokens_details = getattr(response.usage, "prompt_tokens_details", None)
-            completion_tokens_details = getattr(response.usage, "completion_tokens_details", None)
-            prompt_cached_tokens = getattr(prompt_tokens_details, "cached_tokens", 0) or 0
-            completion_reasoning_tokens = (
-                getattr(completion_tokens_details, "reasoning_tokens", 0) or 0
-            )
+            from openviking.metrics.datasources.model_usage import response_usage_subsets
+
+            subsets = response_usage_subsets(response.usage, prompt_tokens, completion_tokens)
             self.update_token_usage(
                 model_name=self.model or "gpt-4o-mini",
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 duration_seconds=duration_seconds,
-                prompt_cached_tokens=prompt_cached_tokens,
-                completion_reasoning_tokens=completion_reasoning_tokens,
+                **subsets,
             )
         return
 

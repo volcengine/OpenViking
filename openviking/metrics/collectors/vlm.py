@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from openviking.metrics.core.base import MetricCollector
+from openviking.metrics.datasources.model_usage import reported_token_subset
 
 from .base import EventMetricCollector
 
@@ -55,7 +56,20 @@ class VLMCollector(EventMetricCollector):
     TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "tokens", unit="total")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_ingestion_tokens_total
     # e.g.: openviking_vlm_ingestion_tokens_total
-    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "ingestion_tokens", unit="total")
+    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "ingestion_tokens", unit="total"
+    )
+
+    # These are subsets of existing input/output counters, never extra tokens.
+    USAGE_SUBSET_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "usage_subset_tokens", unit="total"
+    )
+    USAGE_SUBSET_PARENT_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "usage_subset_parent_tokens", unit="total"
+    )
+    USAGE_SUBSET_REPORTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "usage_subset_reports", unit="total"
+    )
 
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"vlm.call"})
 
@@ -87,6 +101,8 @@ class VLMCollector(EventMetricCollector):
                 None if payload.get("account_id") is None else str(payload.get("account_id"))
             ),
             source_type=payload.get("source_type"),
+            prompt_cached_tokens=payload.get("prompt_cached_tokens"),
+            completion_reasoning_tokens=payload.get("completion_reasoning_tokens"),
         )
 
     def record_call(
@@ -101,6 +117,8 @@ class VLMCollector(EventMetricCollector):
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
+        prompt_cached_tokens: int | None = None,
+        completion_reasoning_tokens: int | None = None,
     ) -> None:
         """
         Record one VLM call as counters for calls and tokens plus a latency histogram sample.
@@ -131,28 +149,49 @@ class VLMCollector(EventMetricCollector):
         if labels["error_code"] != "OK":
             return
         token_labels = {"provider": str(provider), "model_name": str(model_name)}
-        registry.inc_counter(
-            self.TOKENS_INPUT_TOTAL,
-            labels=token_labels,
-            label_names=("provider", "model_name"),
-            amount=int(prompt_tokens),
-            account_id=account_id,
-        )
-        registry.inc_counter(
-            self.TOKENS_OUTPUT_TOTAL,
-            labels=token_labels,
-            label_names=("provider", "model_name"),
-            amount=int(completion_tokens),
-            account_id=account_id,
-        )
+        for metric, amount in (
+            (self.TOKENS_INPUT_TOTAL, prompt_tokens),
+            (self.TOKENS_OUTPUT_TOTAL, completion_tokens),
+        ):
+            if amount > 0:
+                registry.inc_counter(
+                    metric,
+                    labels=token_labels,
+                    label_names=("provider", "model_name"),
+                    amount=amount,
+                    account_id=account_id,
+                )
+        for subset, value, parent in (
+            ("cached_prompt", prompt_cached_tokens, prompt_tokens),
+            ("reasoning_completion", completion_reasoning_tokens, completion_tokens),
+        ):
+            known = reported_token_subset(value, parent)
+            if known is None:
+                continue
+            subset_labels = {**token_labels, "subset": subset}
+            for metric, amount in (
+                (self.USAGE_SUBSET_TOKENS_TOTAL, known),
+                (self.USAGE_SUBSET_PARENT_TOKENS_TOTAL, parent),
+                (self.USAGE_SUBSET_REPORTS_TOTAL, 1),
+            ):
+                if amount <= 0:
+                    continue
+                registry.inc_counter(
+                    metric,
+                    labels=subset_labels,
+                    label_names=("provider", "model_name", "subset"),
+                    amount=amount,
+                    account_id=account_id,
+                )
         total_tokens = int(prompt_tokens) + int(completion_tokens)
-        registry.inc_counter(
-            self.TOKENS_TOTAL,
-            labels=token_labels,
-            label_names=("provider", "model_name"),
-            amount=total_tokens,
-            account_id=account_id,
-        )
+        if total_tokens > 0:
+            registry.inc_counter(
+                self.TOKENS_TOTAL,
+                labels=token_labels,
+                label_names=("provider", "model_name"),
+                amount=total_tokens,
+                account_id=account_id,
+            )
         if total_tokens > 0 and source_type:
             registry.inc_counter(
                 self.INGESTION_TOKENS_TOTAL,

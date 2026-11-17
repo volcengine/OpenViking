@@ -81,3 +81,46 @@ scrape_configs:
 - [VikingBot 问答效果反馈观测方案设计](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/design/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景
 - [系统与监控](07-system.md) - 健康检查、系统状态与 Observer API
 - [API 概览](01-overview.md) - 所有 API 端点共享约定
+
+## VLM 已上报的缓存与 reasoning 子集
+
+官方 `vlm.call` 事件新增可空的 `prompt_cached_tokens` 与
+`completion_reasoning_tokens`。未上报或无效值保持 `null`，真实上报的 0 仍为 0。
+OpenAI、LiteLLM、VolcEngine Chat Completions 与媒体用量复用同一规范化入口。
+[DeepSeek Chat Completions 契约](https://api-docs.deepseek.com/api/create-chat-completion/)
+将 `prompt_cache_hit_tokens` 与 `prompt_tokens_details.cached_tokens` 定义为同一事实，
+这里只作别名兼容，不相加。别名冲突、非整数、负数或大于所属输入/输出的值保持未知。
+缓存未命中与缓存写入不作为缓存命中。
+
+现有 VLM collector 新增三组指标，标签为 `provider`、`model_name` 和有界的
+`subset`（`cached_prompt` 或 `reasoning_completion`）：
+
+| 指标 | 含义 |
+| --- | --- |
+| `openviking_vlm_usage_subset_tokens_total` | 实际上报的子集 Token |
+| `openviking_vlm_usage_subset_parent_tokens_total` | 仅上报该子集的调用对应的输入/输出 Token |
+| `openviking_vlm_usage_subset_reports_total` | 上报有效值的成功事件数，包含真实 0 |
+
+现有输入、输出和总 Token 的含义不变，**不能把子集再加进总 Token**。
+未知字段不增加上报计数，失败事件不增加 Token 或子集上报。0 不递增只允许正增量的
+registry Counter；通过上报计数区分真实 0 和缺失。
+
+在父项分母大于 0 时，可计算已上报调用的缓存命中比例：
+
+```promql
+(
+  rate(openviking_vlm_usage_subset_tokens_total{subset="cached_prompt"}[5m])
+  or
+  0 * rate(openviking_vlm_usage_subset_reports_total{subset="cached_prompt"}[5m])
+)
+/
+rate(openviking_vlm_usage_subset_parent_tokens_total{subset="cached_prompt"}[5m])
+```
+
+分母不能混入未上报缓存用量的调用，否则会低估命中比例。只有存在上报证据时才补 0。
+上报覆盖可按相同 provider/model/account 筛选与成功的 VLM 事件数比较，但不代表全部
+物理 RPC 的覆盖。既有尽力交付、provider 用量缺失、进程重启及抓取间隙仍是限制。
+这些指标不是持久收据账本或完整账单，也不包含 workflow/performance Console API/UI。
+
+开启账户指标时，新指标遵循现有 allowlist 和基数策略（如 `openviking_vlm_*`），
+不记录提示、回答、任务 ID 或新增无界标签。

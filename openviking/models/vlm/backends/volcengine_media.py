@@ -349,16 +349,17 @@ def _record_usage(
 ) -> None:
     try:
         usage = getattr(response, "usage", None)
-        input_details = getattr(usage, "input_tokens_details", None)
-        output_details = getattr(usage, "output_tokens_details", None)
+        from openviking.metrics.datasources.model_usage import response_usage_subsets
+
+        prompt = int(getattr(usage, "input_tokens", 0) or 0)
+        completion = int(getattr(usage, "output_tokens", 0) or 0)
         vlm.update_token_usage(
             model_name=vlm.model,
             provider=vlm.provider,
-            prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            prompt_tokens=prompt,
+            completion_tokens=completion,
             duration_seconds=duration_seconds,
-            prompt_cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
-            completion_reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
+            **response_usage_subsets(usage, prompt, completion),
         )
     except Exception as error:
         _log_sanitized_exception("usage", error, logging.INFO)

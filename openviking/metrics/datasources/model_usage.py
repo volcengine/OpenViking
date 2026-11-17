@@ -24,11 +24,55 @@ They only emit events or expose read APIs. Collectors are the only writers.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Mapping
+from typing import Any, Callable, TypedDict
 
 from openviking.metrics.core.base import ReadEnvelope
 
 from .base import DomainStatsMetricDataSource, EventMetricDataSource
+
+
+def reported_token_subset(value: object, parent: int) -> int | None:
+    """Keep reported zero distinct from absence; reject invalid subset facts."""
+    return value if type(value) is int and 0 <= value <= parent else None
+
+
+class UsageSubsets(TypedDict):
+    prompt_cached_tokens: int | None
+    completion_reasoning_tokens: int | None
+
+
+def response_usage_subsets(
+    usage: object, prompt_tokens: int, completion_tokens: int
+) -> UsageSubsets:
+    """Normalize SDK object/mapping details and DeepSeek's cache-hit alias.
+
+    Conflicting aliases remain unknown; cache writes and misses are not hits.
+    """
+
+    def field(value, name):
+        return value.get(name) if isinstance(value, Mapping) else getattr(value, name, None)
+
+    def subset(parent, *values):
+        reported = [value for value in values if value is not None]
+        if not reported:
+            return None
+        known = [reported_token_subset(value, parent) for value in reported]
+        return known[0] if known[0] is not None and all(v == known[0] for v in known) else None
+
+    return {
+        "prompt_cached_tokens": subset(
+            prompt_tokens,
+            field(field(usage, "prompt_tokens_details"), "cached_tokens"),
+            field(field(usage, "input_tokens_details"), "cached_tokens"),
+            field(usage, "prompt_cache_hit_tokens"),
+        ),
+        "completion_reasoning_tokens": subset(
+            completion_tokens,
+            field(field(usage, "completion_tokens_details"), "reasoning_tokens"),
+            field(field(usage, "output_tokens_details"), "reasoning_tokens"),
+        ),
+    }
 
 
 class ModelUsageDataSource(DomainStatsMetricDataSource):
@@ -159,6 +203,8 @@ class VLMEventDataSource(EventMetricDataSource):
         account_id: str | None = None,
         source_type: str | None = None,
         cost_bearer: str | None = None,
+        prompt_cached_tokens: int | None = None,
+        completion_reasoning_tokens: int | None = None,
     ) -> None:
         """
         Emit one VLM call event with model identity, latency, token usage, error code, and account context.
@@ -174,6 +220,10 @@ class VLMEventDataSource(EventMetricDataSource):
                 "duration_seconds": float(duration_seconds),
                 "prompt_tokens": int(prompt_tokens),
                 "completion_tokens": int(completion_tokens),
+                "prompt_cached_tokens": reported_token_subset(prompt_cached_tokens, prompt_tokens),
+                "completion_reasoning_tokens": reported_token_subset(
+                    completion_reasoning_tokens, completion_tokens
+                ),
                 "error_code": str(error_code or "unknown"),
                 "account_id": None if account_id is None else str(account_id),
                 "source_type": source_type,

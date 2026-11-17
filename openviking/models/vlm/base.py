@@ -237,8 +237,8 @@ class VLMBase(ABC):
         prompt_tokens: int,
         completion_tokens: int,
         duration_seconds: float = 0.0,
-        prompt_cached_tokens: int = 0,
-        completion_reasoning_tokens: int = 0,
+        prompt_cached_tokens: Optional[int] = None,
+        completion_reasoning_tokens: Optional[int] = None,
     ) -> None:
         """Update token usage
 
@@ -267,8 +267,8 @@ class VLMBase(ABC):
                 prompt_tokens,
                 completion_tokens,
                 stage=stage,
-                prompt_cached_tokens=max(int(prompt_cached_tokens), 0),
-                completion_reasoning_tokens=max(int(completion_reasoning_tokens), 0),
+                prompt_cached_tokens=max(int(prompt_cached_tokens or 0), 0),
+                completion_reasoning_tokens=max(int(completion_reasoning_tokens or 0), 0),
             )
         except Exception as e:
             # Telemetry must never break model inference.
@@ -295,6 +295,8 @@ class VLMBase(ABC):
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
                 cost_bearer=self.cost_bearer,
+                prompt_cached_tokens=prompt_cached_tokens,
+                completion_reasoning_tokens=completion_reasoning_tokens,
             )
         except Exception as e:
             # Metrics must never break model inference.
@@ -762,6 +764,8 @@ class FailoverVLM(VLMBase):
         prompt_tokens: int,
         completion_tokens: int,
         duration_seconds: float = 0.0,
+        prompt_cached_tokens: Optional[int] = None,
+        completion_reasoning_tokens: Optional[int] = None,
     ) -> None:
         """Update token usage for the currently active instance."""
         self._active_vlm.update_token_usage(
@@ -770,6 +774,8 @@ class FailoverVLM(VLMBase):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             duration_seconds=duration_seconds,
+            prompt_cached_tokens=prompt_cached_tokens,
+            completion_reasoning_tokens=completion_reasoning_tokens,
         )
 
     def get_token_usage(self) -> Dict[str, Any]:
