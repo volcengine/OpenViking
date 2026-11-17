@@ -233,6 +233,49 @@ const freshConfig = {
   last_run: null,
 }
 
+it('keeps named schedules for the same directory distinct when editing and disabling', async () => {
+  const first = { ...daily, compile_name: 'wiki-daily' }
+  const second = { ...daily, compile_name: 'wiki-weekly' }
+  const args = { template: 'daily' }
+  mocks.fetchCompileConfigs.mockResolvedValue({
+    targets: [first, second],
+    next_cursor: null,
+  })
+  mocks.fetchCompileConfig.mockResolvedValue({ ...freshConfig, ...first, args })
+  mocks.updateCompileConfig.mockResolvedValue({ ...first, auto_update: false })
+  const page = mount()
+
+  const edit = await page.findByRole('button', {
+    name: 'schedule.edit: wiki-weekly',
+  })
+  fireEvent.click(edit)
+  expect(mocks.navigate).toHaveBeenCalledWith({
+    to: '/compile/new',
+    search: { compileName: 'wiki-weekly' },
+  })
+  fireEvent.click(
+    page.getByRole('switch', { name: 'schedule.autoUpdate: wiki-daily' }),
+  )
+  await waitFor(() => {
+    expect(mocks.fetchCompileConfig).toHaveBeenCalledWith(
+      'wiki-daily',
+      expect.any(AbortSignal),
+    )
+    expect(mocks.updateCompileConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compile_name: 'wiki-daily',
+        args,
+        auto_update: false,
+      }),
+    )
+  })
+  expect(
+    page
+      .getByRole('switch', { name: 'schedule.autoUpdate: wiki-weekly' })
+      .getAttribute('aria-checked'),
+  ).toBe('true')
+})
+
 it('turns off directly from the list, preserves fresh compilation settings, and blocks duplicate clicks', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
     targets: [daily],

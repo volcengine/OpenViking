@@ -6,6 +6,7 @@ import {
   fetchCompileConfig,
   fetchCompileConfigs,
   fetchCompileSkills,
+  saveCompileSchedule,
   updateCompileConfig,
   fetchCompileTask,
   fetchCompileTasks,
@@ -61,6 +62,9 @@ describe('Compile scheduling APIs', () => {
 
   it('passes target cursors and URI query values without changing them', async () => {
     const cursor = 'viking://resources/a folder?value=1'
+    clientMocks.get.mockResolvedValueOnce({ targets: [], next_cursor: null })
+    clientMocks.get.mockResolvedValueOnce({ to: cursor })
+    clientMocks.post.mockResolvedValueOnce({ to: cursor })
     await fetchCompileConfigs(cursor)
     expect(clientMocks.get).toHaveBeenLastCalledWith({
       url: '/api/v1/compile/configs',
@@ -84,6 +88,77 @@ describe('Compile scheduling APIs', () => {
     expect(clientMocks.post).toHaveBeenLastCalledWith({
       url: '/api/v1/compile/config/update',
       body,
+    })
+  })
+
+  it('creates a named configuration without executing it on a server with an empty new catalog', async () => {
+    const signal = new AbortController().signal
+    const body = {
+      from: ['viking://resources/source'],
+      to: 'viking://resources/wiki',
+      skill: 'viking://agent/skills/wiki',
+      args: {
+        auto_update: true,
+        update_schedule: { frequency: 'daily', hour: 8, minute: 30 },
+      },
+    }
+    clientMocks.get.mockResolvedValueOnce({ configs: [], next_cursor: null })
+    clientMocks.post.mockResolvedValueOnce({ compile_name: 'wiki-plan' })
+
+    await expect(
+      saveCompileSchedule(body, 'wiki-plan', 'unused-on-new-server', signal),
+    ).resolves.toEqual({ compile_name: 'wiki-plan' })
+    expect(clientMocks.post).toHaveBeenCalledExactlyOnceWith({
+      url: '/api/v1/compile/create',
+      body: { ...body, compile_name: 'wiki-plan' },
+      signal,
+    })
+  })
+
+  it('uses the legacy plan endpoint when the catalog returns targets', async () => {
+    const body = {
+      from: ['viking://resources/source'],
+      to: 'viking://resources/wiki',
+      skill: 'viking://agent/skills/wiki',
+      args: { auto_update: true },
+    }
+    clientMocks.get.mockResolvedValueOnce({ targets: [], next_cursor: null })
+    clientMocks.post.mockResolvedValueOnce({ to: body.to })
+
+    await saveCompileSchedule(
+      body,
+      'wiki-plan',
+      'legacy-plan-key',
+      new AbortController().signal,
+    )
+    expect(clientMocks.post).toHaveBeenCalledExactlyOnceWith({
+      url: '/api/v1/compile',
+      body,
+      headers: { 'Idempotency-Key': 'legacy-plan-key' },
+    })
+  })
+
+  it('reads a named config and normalizes the next scheduled slot', async () => {
+    const config = {
+      compile_name: 'wiki-plan',
+      to: 'viking://resources/wiki',
+      next_triggered_slot: '2026-11-20T08:30:00+08:00',
+    }
+    clientMocks.get.mockResolvedValueOnce({
+      configs: [config],
+      next_cursor: null,
+    })
+    clientMocks.get.mockResolvedValueOnce(config)
+
+    const catalog = await fetchCompileConfigs()
+    expect(catalog.targets[0].next_run_at).toBe(config.next_triggered_slot)
+    await expect(fetchCompileConfig('wiki-plan')).resolves.toMatchObject({
+      next_run_at: config.next_triggered_slot,
+    })
+    expect(clientMocks.get).toHaveBeenLastCalledWith({
+      url: '/api/v1/compile/config',
+      signal: undefined,
+      query: { compile_name: 'wiki-plan' },
     })
   })
 })

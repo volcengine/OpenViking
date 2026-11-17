@@ -17,6 +17,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const api = vi.hoisted(() => ({
   BUILTIN_SKILLS_ROOT: 'viking://system/compile/example-skills',
   createCompile: vi.fn(),
+  saveCompileSchedule: vi.fn(),
   fetchCompileConfig: vi.fn(),
   updateCompileConfig: vi.fn(),
   lookupSubmission: vi.fn(),
@@ -80,7 +81,12 @@ const storageKey = 'compile-submission:recovery-test'
 const clients: QueryClient[] = []
 const task = { task_id: 'cmp-original', status: 'pending' }
 function mount(
-  props: { fromTask?: string; sourceUri?: string; target?: string } = {},
+  props: {
+    fromTask?: string
+    sourceUri?: string
+    target?: string
+    compileName?: string
+  } = {},
   cachedConfig?: unknown,
   cachedAt = Date.now(),
 ) {
@@ -90,7 +96,7 @@ function mount(
   clients.push(client)
   if (cachedConfig)
     client.setQueryData(
-      ['compile-config', 'recovery-test', props.target],
+      ['compile-config', 'recovery-test', props.compileName ?? props.target],
       cachedConfig,
       { updatedAt: cachedAt },
     )
@@ -266,7 +272,7 @@ const configuredTarget = {
 }
 
 it('saves a weekly plan without navigating to a task or leaving a submission recovery key', async () => {
-  api.createCompile.mockResolvedValueOnce(configuredTarget)
+  api.saveCompileSchedule.mockResolvedValueOnce({ compile_name: 'weekly-plan' })
   const page = mountRestoredDraft()
   fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
   await choose(
@@ -286,15 +292,16 @@ it('saves a weekly plan without navigating to a task or leaving a submission rec
       search: { tab: 'schedules' },
     }),
   )
-  expect(api.createCompile.mock.calls[0][0].args).toEqual({
+  expect(api.saveCompileSchedule.mock.calls[0][0].args).toEqual({
     auto_update: true,
     update_schedule: configuredTarget.update_schedule,
   })
+  expect(api.createCompile).not.toHaveBeenCalled()
   expect(sessionStorage.getItem(storageKey)).toBeNull()
 })
 
 it('keeps a failed plan save retryable without task submission recovery', async () => {
-  api.createCompile
+  api.saveCompileSchedule
     .mockRejectedValueOnce(new Error('response lost'))
     .mockResolvedValueOnce(configuredTarget)
   const page = mountRestoredDraft()
@@ -305,7 +312,37 @@ it('keeps a failed plan save retryable without task submission recovery', async 
   expect(page.queryByText('unknownSubmission')).toBeNull()
   page.submit()
   await waitFor(() => expect(api.navigate).toHaveBeenCalled())
+  expect(api.saveCompileSchedule.mock.calls[1][1]).toBe(
+    api.saveCompileSchedule.mock.calls[0][1],
+  )
   expect(api.lookupSubmission).not.toHaveBeenCalled()
+})
+
+it('loads and saves a named plan while preserving its stored skill arguments', async () => {
+  const config = {
+    ...configuredTarget,
+    compile_name: 'wiki-plan',
+    args: { template: 'weekly' },
+  }
+  api.fetchCompileConfig.mockResolvedValueOnce(config)
+  api.updateCompileConfig.mockResolvedValueOnce(config)
+  const page = mount({ compileName: config.compile_name })
+  const save = page.getByRole('button', { name: 'schedule.save' })
+  await waitFor(() => expect(save.hasAttribute('disabled')).toBe(false))
+  fireEvent.click(save)
+  await waitFor(() => {
+    expect(api.fetchCompileConfig).toHaveBeenCalledWith(
+      config.compile_name,
+      expect.any(AbortSignal),
+    )
+    expect(api.updateCompileConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compile_name: config.compile_name,
+        to: config.to,
+        args: config.args,
+      }),
+    )
+  })
 })
 
 it('loads a registered target and disables its schedule without requiring an execution runtime', async () => {

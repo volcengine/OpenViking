@@ -10,7 +10,7 @@ export default {
     saving: 'Saving…',
     turnedOff: 'Automatic updates turned off. No further scheduled runs.',
     disableHint:
-      'Turning off clears the schedule and keeps compiled content and execution history. Any running compilation continues.',
+      'Turning off automatic updates stops future scheduled runs. Compiled content and execution history are kept, and any running compilation continues.',
     filter: 'Automatic update status',
     allTargets: 'All targets',
     active: 'Enabled',
