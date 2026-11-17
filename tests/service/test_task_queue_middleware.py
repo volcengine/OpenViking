@@ -677,14 +677,16 @@ async def test_compile_tag_lock_limit(tracked_queue, monkeypatch, recovers):
     await tracker.complete(task.task_id, {"directory_count": 1}, **OWNER)
     payload = json.loads(transport.write.await_args.args[1])
     stale = ValueError("invalid lock request: owned lease capability does not match ref 'old'")
-    finalize = AsyncMock(side_effect=[stale] * 16 + [True if recovers else stale])
+    finalize = AsyncMock(side_effect=[stale, stale, True if recovers else stale])
     queue.set_dequeue_handler(
         tag_module.CompileTargetTagProcessor(Mock(finalize_compile_directories=finalize))
     )
     manager = Mock(enqueue=AsyncMock())
     monkeypatch.setattr(tag_module, "get_queue_manager", lambda: manager)
     monkeypatch.setattr(tag_module, "sleep", AsyncMock())
-    for retry in range(1, 17):
+    for retry in (1, 500):
+        if retry > 1:
+            payload["lock_retry_count"] = retry - 1
         assert (await queue.process_dequeued(payload)).outcome is ProcessOutcome.REQUEUED
         payload = manager.enqueue.await_args.args[1]
         assert payload["lock_retry_count"] == retry
@@ -692,5 +694,5 @@ async def test_compile_tag_lock_limit(tracked_queue, monkeypatch, recovers):
     task = await tracker.get(task.task_id, **OWNER)
     assert task.status is (TaskStatus.COMPLETED if recovers else TaskStatus.FAILED)
     if not recovers:
-        assert result.error == task.error == "Compile target tag lock conflict after 16 retries"
-    assert manager.enqueue.await_count == 16
+        assert result.error == task.error == "Compile target tag lock conflict after 500 retries"
+    assert manager.enqueue.await_count == 2

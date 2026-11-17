@@ -19,7 +19,6 @@ from openviking.service.task_work_index import (
 )
 from openviking.storage.errors import HandoffRecoveryRequired
 from openviking.storage.pathlock_recovery import (
-    COMPILE_LOCK_MAX_RETRIES,
     is_compile_lock_conflict,
     is_stale_compile_lease,
     lock_retry_delay,
@@ -33,6 +32,7 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 ATTEMPT_TIMEOUT_SECONDS = 30.0
+TAG_LOCK_MAX_RETRIES = 500
 
 
 class CompileTargetTagProcessor(DequeueHandlerBase):
@@ -144,10 +144,10 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
         while True:
             if error is not None and is_compile_lock_conflict(error):
                 retries = payload.get("lock_retry_count", 0)
-                delay = lock_retry_delay(retries, COMPILE_LOCK_MAX_RETRIES)
+                delay = lock_retry_delay(retries, TAG_LOCK_MAX_RETRIES)
                 if delay is None:
                     return ProcessResult.failed(
-                        f"Compile target tag lock conflict after {COMPILE_LOCK_MAX_RETRIES} retries"
+                        f"Compile target tag lock conflict after {TAG_LOCK_MAX_RETRIES} retries"
                     )
                 payload["lock_retry_count"] = retries + 1
             await sleep(delay)

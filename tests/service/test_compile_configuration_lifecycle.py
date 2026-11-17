@@ -922,14 +922,14 @@ async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatc
     provider.configure_lifecycle(setup.lifecycle)
     external.register(provider)
     terminal = ExternalTaskSnapshot(status="cancelled" if cancelled else "failed")
-    for attempt in range(17):
+    for attempt in range(61):
         done = await external._apply_snapshot(terminal, task_id=task.task_id, auth={}, **owner)
-        assert done is (attempt == 16)
+        assert done is (attempt == 60)
     await tracker.mark_work_done(task.task_id, "work", **owner)
     failed = await tracker.get(task.task_id, **owner)
-    assert failed.status is TaskStatus.FAILED and failed.meta["rollback_lock_retries"] == 16
+    assert failed.status is TaskStatus.FAILED and failed.meta["rollback_lock_retries"] == 60
     assert failed.result == {"rollback_incomplete": True, "start_snapshot": baseline}
-    assert [call.args[0] for call in sleep.await_args_list] == [0.5, 1, 2, 4, 8, 16] + [30] * 10
+    assert [call.args[0] for call in sleep.await_args_list] == [0.5, 1, 2, 4, 8, 16] + [30] * 54
     if not cancelled:
         run = await setup.store.get_run("acme", "alice", registered[1], task.task_id)
         assert run["status"] == "failed"

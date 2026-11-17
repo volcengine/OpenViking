@@ -55,7 +55,6 @@ from openviking.service.task_domain import TaskPatch, TaskStatus, sanitize_error
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.pathlock_recovery import (
-    COMPILE_LOCK_MAX_RETRIES,
     is_compile_lock_conflict,
     lock_retry_delay,
 )
@@ -70,6 +69,7 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 LOCK_TIMEOUT_SECONDS = 30.0
+ROLLBACK_LOCK_MAX_RETRIES = 60
 COMPILE_NAME_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$"
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 GIT_RETRIES = 3
@@ -944,7 +944,7 @@ class CompileLifecycle:
                     raise
                 return ExternalTaskSnapshot(status="running", stage="committing")
             retries = task.meta.get("rollback_lock_retries", 0)
-            delay = lock_retry_delay(retries, COMPILE_LOCK_MAX_RETRIES)
+            delay = lock_retry_delay(retries, ROLLBACK_LOCK_MAX_RETRIES)
             if delay is None:
                 return await self._fail_blocked_rollback(task, snapshot, scope)
             update = {"rollback_lock_retries": retries + 1}
@@ -963,7 +963,7 @@ class CompileLifecycle:
             run = await self._store.get_run(*scope) if scope else await self._read_run(task)
             if run and run["finished_at"] is not None:
                 return self._finished_snapshot(run, snapshot)
-            message = f"Compile rollback incomplete after {COMPILE_LOCK_MAX_RETRIES} lock retries"
+            message = f"Compile rollback incomplete after {ROLLBACK_LOCK_MAX_RETRIES} lock retries"
             if snapshot.error_message:
                 message += f": {snapshot.error_message}"
             result = {

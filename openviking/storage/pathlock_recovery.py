@@ -22,7 +22,6 @@ logger = get_logger(__name__)
 Requests = list[dict[str, str]]
 HANDOFF_RECOVERY_MAX_RETRIES = 8
 HANDOFF_RECOVERY_MAX_DELAY_SECS = 30.0
-COMPILE_LOCK_MAX_RETRIES = 16
 
 
 def is_stale_compile_lease(error: Exception) -> bool:
@@ -48,7 +47,7 @@ def lock_retry_delay(retries: int, limit: int) -> float | None:
     """Return backoff in seconds, or None when the retry limit is reached."""
     if retries >= limit:
         return None
-    return min(0.5 * 2**retries, HANDOFF_RECOVERY_MAX_DELAY_SECS)
+    return min(2 ** (retries - 1), HANDOFF_RECOVERY_MAX_DELAY_SECS)
 
 
 async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> dict | None:
