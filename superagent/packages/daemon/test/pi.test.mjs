@@ -196,6 +196,8 @@ function harness({ config = baseConfig, store = makeStore(), agentOptions = {}, 
   const failures = [];
   const agent = new PiAgent(config, store, quietLogger, {
     spawn,
+    // FakeChild is not an OS process, so Windows taskkill cannot terminate it.
+    terminateProcessTree: (child, signal) => child.kill(signal),
     isolationArgs: async () => ['-ne', ...PI_BUILTIN_EXTENSIONS.flatMap((entry) => ['--extension', entry])],
     startTimeoutMs: 100,
     onTurnFailed: (failure) => failures.push(failure),

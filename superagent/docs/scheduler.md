@@ -184,18 +184,24 @@ it.
 
 ### Workers
 
-A worker turn is one run of the router's runtime CLI in its non-interactive
-mode, resuming the task's own session (`worker-executor.mjs`):
+Pi, Codex and Claude Code run one worker turn as a non-interactive CLI process,
+resuming the task's own session (`worker-executor.mjs`). DSH instead keeps one
+profile process for the router and workers: each task gets a native session with
+the `ov-superagent-worker` preset, and the existing JSON-RPC bridge drives it.
+The DSH worker uses the same TaskManager contract and turn-scoped Core authority; cancelling one worker does not cancel the router or other workers.
 
 | Runtime | Turn |
 |---|---|
 | Pi | `pi --mode json -p --session-id <task> ...` |
 | Codex | `codex exec --json ...`, then `codex exec resume <thread>` |
 | Claude Code | `claude --print --output-format stream-json --session-id/--resume <task>` |
+| DSH | `worker/ensure → submit → wait` in the router's DSH profile, `worker-<task>` with the worker preset |
 
-No process runs between turns, so an idle task holds nothing; Durable,
-OpenCode, TraeX and Ark have no worker mode, and `task_create` tells the router
-to handle the request itself there. A task keeps the runtime it started on.
+No process runs between CLI turns, so an idle CLI task holds no process. DSH sessions stay in the shared profile and resume on the next task turn. Durable,
+OpenCode, TraeX and Ark have no worker mode. With `scheduler: "workers"` they
+keep inbox behavior, but the workers prompt and `task_*` router tools are not
+exposed; stale or direct calls are refused and the router handles the request
+itself. A task keeps the runtime it started on.
 Three turns run at once, plus one slot only a follow-up to an existing task may
 take. Each task works in `<workspace>/tasks/<id>/`.
 
@@ -301,8 +307,9 @@ the reply text, so a rewritten reply is a new message).
   tools (`bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`); past them the
   call is refused with a pointer to `task_create` (a `tool_call` handler in
   `pi-mcp-extension.mjs`). A per-command cap alone did not stop a router from
-  investigating with many short commands. Core reads are not counted. On Codex
-  and Claude Code this is policy text only.
+  investigating with many short commands. Core reads are not counted. On Codex,
+  Claude Code and DSH the call budget is policy text only; DSH still applies
+  its configured per-command timeout.
 - **Restart.** Tasks, inputs and reports are in SQLite. A turn cut by a
   shutdown is not reported; at start its task runs again from the persisted
   request history, told to check what it already did before repeating an outside

@@ -7,8 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sanitizeAgentChildEnv } from './process-utils.mjs';
 import { preparePrivateDirectory } from './private-temp.mjs';
+import { isWindows } from './platform/index.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { DSH_HOME_SHARED, dshAgentsHomePath, dshHomePath, dshHostHome } from './dsh-config.mjs';
+export { DSH_WORKER_METHODS } from './dsh-bridge/workers.mjs';
 
 const RUNTIME = getRuntimeDefinition('dsh');
 export const DSH_BRIDGE_PATH = fileURLToPath(new URL('./dsh-bridge.mjs', import.meta.url));
@@ -256,9 +258,43 @@ export function dshCommand({ bin = 'dsh', patchPath }) {
 // writes (design §1). A provider section here would make `superagent/settings/mutate`
 // answer "overridden by a home patch or command-line overlay", so the CLI would
 // be editing a document nothing reads.
+// The worker preset is a tool/prompt surface, not a second task manager. The
+// bridge adds per-session Core tools and authority; this preset supplies the
+// ordinary coding tools without DSH's person-facing or delegation entry points.
+function workerPreset(platformIsWindows) {
+  return {
+    id: 'ov-superagent-worker-preset', name: '@deepseek-ai/dsh-agent-preset',
+    config: {
+      id: 'ov-superagent-worker', name: 'OVSA Worker',
+      description: 'OpenViking SuperAgent task worker; managed by the daemon bridge.',
+      order: 90,
+      plugins: [
+        { id: 'agent-instructions', name: '@deepseek-ai/dsh-agent-instructions', config: { maxBytes: 65536 } },
+        { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
+        { id: 'shell', name: 'cordis:group', group: true, isolate: { shell: true }, config: [
+          { id: 'bash-sandbox', name: '@deepseek-ai/dsh-bash-sandbox', disabled: platformIsWindows, config: { timeoutMs: 30000, maxTimeoutMs: 30000 } },
+          { id: 'pwsh-sandbox', name: '@deepseek-ai/dsh-pwsh-sandbox', disabled: !platformIsWindows, config: { timeoutMs: 30000, maxTimeoutMs: 30000 } },
+          { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash', disabled: platformIsWindows },
+          { id: 'tool-pwsh', name: '@deepseek-ai/dsh-tool-pwsh', disabled: !platformIsWindows },
+        ] },
+        { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
+        { id: 'tool-fs-search', name: '@deepseek-ai/dsh-tool-fs-search', config: { sampleOverCapGlobResults: false } },
+        { id: 'tool-jobs', name: '@deepseek-ai/dsh-tool-jobs', config: { waitTimeoutMs: 5000, maxWaitTimeoutMs: 5000 } },
+        { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
+        { id: 'tool-skill', name: '@deepseek-ai/dsh-tool-skill' },
+        { id: 'compaction', name: 'cordis:group', group: true, isolate: { compaction: true, toolResultPruner: true }, config: [
+          { id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic' },
+          { id: 'command-compact', name: '@deepseek-ai/dsh-command-compact' },
+          { id: 'tool-result-pruner', name: '@deepseek-ai/dsh-tool-result-pruner', config: { thresholdChars: 8192, headChars: 4096, tailChars: 4096 } },
+        ] },
+      ],
+    },
+  };
+}
+
 export function buildDshPatch({
   policy = '', bridgePath = DSH_BRIDGE_PATH, mcp = null,
-  skillDirs = [], includeDefaultSkillRoots = true,
+  skillDirs = [], includeDefaultSkillRoots = true, platformIsWindows = isWindows,
 } = {}) {
   const insert = [];
   const patch = [];
@@ -279,6 +315,10 @@ export function buildDshPatch({
       ...(mcp.toolCallTimeoutMs ? { toolCallTimeoutMs: mcp.toolCallTimeoutMs } : {}),
     },
   });
+  if (bridgePath !== null) {
+    insert.push({ id: 'agent-preset-registry', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'standard' } });
+    insert.push(workerPreset(platformIsWindows));
+  }
   if (insert.length > 0) patch.push({ insert });
   // Setup owns the six/four standard roots. Default discovery must be off when
   // it supplies a selection, including an empty one; otherwise DSH would put
