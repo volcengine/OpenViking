@@ -3,6 +3,7 @@
 import asyncio
 import json
 from copy import deepcopy
+from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -20,6 +21,7 @@ from openviking.service.compile_targets import (
 )
 from openviking.service.external_task_service import (
     ExternalTaskError,
+    ExternalTaskResultSaveError,
     ExternalTaskService,
     ExternalTaskSnapshot,
 )
@@ -894,7 +896,7 @@ async def test_rollback_reindexes_without_waiting(setup, registered, status, sch
     setup.find.assert_not_awaited()
 
 
-@pytest.mark.parametrize("conflict", ["output", "admission", "cancelled"])
+@pytest.mark.parametrize("conflict", ["output", "admission", "cancelled", "history"])
 async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatch, conflict):
     cancelled = conflict == "cancelled"
     template = make_task(setup) if cancelled else registered[2]
@@ -911,7 +913,9 @@ async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatc
     if cancelled:
         await tracker.cancel(task.task_id, **owner)
     error = ValueError("invalid lock request: pathlock lease expired during acquisition")
-    if conflict == "admission":
+    if conflict == "history":
+        monkeypatch.setattr(setup.store, "lock_run", Mock(side_effect=error))
+    elif conflict == "admission":
         monkeypatch.setattr(setup.lifecycle, "_admission", Mock(side_effect=error))
     else:
         monkeypatch.setattr(setup.files, "pathlock_acquire_tree", AsyncMock(side_effect=error))
@@ -921,15 +925,40 @@ async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatc
     provider = CompileService(Mock(), external, setup.fs)
     provider.configure_lifecycle(setup.lifecycle)
     external.register(provider)
-    terminal = ExternalTaskSnapshot(status="cancelled" if cancelled else "failed")
-    for attempt in range(61):
-        done = await external._apply_snapshot(terminal, task_id=task.task_id, auth={}, **owner)
-        assert done is (attempt == 60)
+    terminal = ExternalTaskSnapshot(
+        status="cancelled" if cancelled else "failed",
+        error_code=None if cancelled else "RUNTIME_FAILED",
+    )
+    publish = partial(external._apply_snapshot, terminal, task_id=task.task_id, auth={}, **owner)
+    for _ in range(60):
+        assert not await publish()
+    assert [call.args[0] for call in sleep.await_args_list] == [0.5, 1, 2, 4, 8, 16] + [30] * 54
+    if conflict == "history":
+        assert not await publish()
+        assert (await setup.lifecycle._read_run(task))["finished_at"] is None
+        assert not (await tracker.get(task.task_id, **owner)).is_terminal()
+        # Resume from durable state with the output available but history still locked.
+        provider.configure_lifecycle(CompileLifecycle(setup.store, setup.fs))
+        monkeypatch.setattr(provider._lifecycle, "_admission", Mock(side_effect=AssertionError))
+        assert not await publish()
+        monkeypatch.delattr(setup.store, "lock_run")
+        with monkeypatch.context() as patch:
+            patch.setattr(setup.store, "put_run", AsyncMock(side_effect=error))
+            assert not await publish()
+            assert (await setup.lifecycle._read_run(task))["finished_at"] is None
+    with monkeypatch.context() as patch:
+        save_failure = AsyncMock(side_effect=OSError("Task write unavailable"))
+        patch.setattr(tracker, "fail", save_failure)
+        with pytest.raises(ExternalTaskResultSaveError):
+            await publish()
+    assert await publish()
     await tracker.mark_work_done(task.task_id, "work", **owner)
     failed = await tracker.get(task.task_id, **owner)
     assert failed.status is TaskStatus.FAILED and failed.meta["rollback_lock_retries"] == 60
     assert failed.result == {"rollback_incomplete": True, "start_snapshot": baseline}
-    assert [call.args[0] for call in sleep.await_args_list] == [0.5, 1, 2, 4, 8, 16] + [30] * 54
+    assert failed.error == save_failure.await_args.args[1]
+    assert failed.error.startswith("COMPILE_ROLLBACK_LOCK_EXHAUSTED:")
     if not cancelled:
         run = await setup.store.get_run("acme", "alice", registered[1], task.task_id)
         assert run["status"] == "failed"
+        assert run["finished_at"] is not None and run["result"] == failed.result

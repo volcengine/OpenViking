@@ -18,11 +18,7 @@ from openviking.service.task_work_index import (
     extract_task_metadata,
 )
 from openviking.storage.errors import HandoffRecoveryRequired
-from openviking.storage.pathlock_recovery import (
-    is_compile_lock_conflict,
-    is_stale_compile_lease,
-    lock_retry_delay,
-)
+from openviking.storage.pathlock_recovery import is_stale_compile_lease
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -32,7 +28,6 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 ATTEMPT_TIMEOUT_SECONDS = 30.0
-TAG_LOCK_MAX_RETRIES = 500
 
 
 class CompileTargetTagProcessor(DequeueHandlerBase):
@@ -53,11 +48,10 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
             guard = PathLockGuard(self._fs._ensure_initialized()._async_agfs)
             try:
                 await guard.adopt(payload["target_lock"])
-            except (HandoffRecoveryRequired, ValueError) as exc:
-                if not is_stale_compile_lease(exc):
-                    raise
+            except HandoffRecoveryRequired:
+                pass  # An expired or already consumed holder needs no new reservation.
             finally:
-                await self._close(guard)
+                await guard.close()
         return ProcessResult.cancelled()
 
     async def on_dequeue(self, data: dict | None) -> ProcessResult:
@@ -74,8 +68,6 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                 raise ValueError("Missing Compile target tag ownership")
             payload[TASK_WORK_ID_FIELD] = metadata.work_id
             retry = max(0, int(payload.get("retry_count", 0)))
-            if "lock_retry_count" in payload:
-                payload["lock_retry_count"] = max(0, int(payload["lock_retry_count"]))
             ctx = RequestContext(
                 UserIdentifier(payload["account_id"], payload["user_id"]),
                 Role(payload.get("role") or "user"),
@@ -94,7 +86,6 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
         guard = PathLockGuard(agfs)
         try:
             with bind_task_context_from_message(data):
-                error = None
                 try:
                     async with timeout(ATTEMPT_TIMEOUT_SECONDS):
                         if handoff:
@@ -124,33 +115,25 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                             return ProcessResult.success()
                 except Exception as exc:
                     self._warn(payload, retry, exc)
-                    error = exc
                 payload["retry_count"] = retry + 1
-                return await self._requeue(
-                    payload, min(60.0, 5.0 * 2 ** min(retry, 4)), guard, error
-                )
+                return await self._requeue(payload, min(60.0, 5.0 * 2 ** min(retry, 4)), guard)
         except CancelledError:
             if guard.lease is None and not guard.transferred:
                 await run_to_completion(lambda: self.on_cancelled(payload))
             raise
         finally:
-            await self._close(guard)
+            await guard.close()
 
-    async def _requeue(
-        self, payload: dict, delay: float, guard: PathLockGuard, error: Exception | None
-    ) -> ProcessResult:
-        """Keep the same Work during backoff and charge lock conflicts to its durable payload."""
+    async def _requeue(self, payload: dict, delay: float, guard: PathLockGuard) -> ProcessResult:
+        """Retain the original delivery through network failures and cancellation.
+
+        Existing Work is reused so enqueue failures cannot create a failed child
+        that later changes a successful repair Task into a failed Task.
+        """
         failures = 0
         while True:
-            if error is not None and is_compile_lock_conflict(error):
-                retries = payload.get("lock_retry_count", 0)
-                delay = lock_retry_delay(retries, TAG_LOCK_MAX_RETRIES)
-                if delay is None:
-                    return ProcessResult.failed(
-                        f"Compile target tag lock conflict after {TAG_LOCK_MAX_RETRIES} retries"
-                    )
-                payload["lock_retry_count"] = retries + 1
             await sleep(delay)
+            lease = guard.lease
             try:
                 async with timeout(ATTEMPT_TIMEOUT_SECONDS):
 
@@ -159,7 +142,7 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                             QueueManager.COMPILE_TARGET_TAG, payload
                         )
 
-                    if guard.lease is not None:
+                    if lease is not None:
                         payload["target_lock"] = await guard.to_handoff()
                         await guard.handoff_and_dispatch(payload["target_lock"], enqueue)
                     else:
@@ -171,21 +154,10 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                 return ProcessResult.cancelled()
             except Exception as exc:
                 self._warn(payload, failures, exc)
+                if lease is not None and guard.lease is lease and is_stale_compile_lease(exc):
+                    guard.detach()
                 failures += 1
-                if is_stale_compile_lease(exc):
-                    await self._close(guard)
-                error = exc
                 delay = min(60.0, delay * 2)
-
-    @staticmethod
-    async def _close(guard: PathLockGuard) -> None:
-        """Release the holder or discard its expired capability."""
-        try:
-            await guard.close()
-        except ValueError as exc:
-            if not is_stale_compile_lease(exc):
-                raise
-            guard.detach()
 
     @staticmethod
     def _warn(payload: dict, attempt: int, error: Exception) -> None:
