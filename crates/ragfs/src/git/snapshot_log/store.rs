@@ -117,6 +117,7 @@ pub trait SnapshotLogStore: Send + Sync {
         branch: &str,
         paths: &[String],
         max_id: i64,
+        offset: usize,
         limit: usize,
     ) -> Result<Vec<SnapshotLogHit>, SnapshotLogError>;
 }

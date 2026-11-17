@@ -6,7 +6,9 @@ const ok = (result: unknown) =>
   new Response(JSON.stringify({ status: 'ok', result }), {
     headers: { 'content-type': 'application/json' },
   });
-let config = {
+const config = {
+  compile_name: 'handbook',
+  args: {},
   to: DEMO_WIKI,
   from: [`${DEMO_USER}/resources/notes`],
   skill: `${DEMO_USER}/skills/compile`,
@@ -14,6 +16,10 @@ let config = {
   auto_update: false,
   update_schedule: null,
 };
+const configurations = new Map([
+  ['handbook', config],
+  ['handbook-review', { ...config, compile_name: 'handbook-review' }],
+]);
 const SYSTEM = 'viking://system';
 const COMPILE = `${SYSTEM}/compile`;
 const EXAMPLE_SKILLS = `${COMPILE}/example-skills`;
@@ -23,7 +29,7 @@ const systemDirectories = new Map([
   [EXAMPLE_SKILLS, []],
 ]);
 const originalSnapshot = {
-  oid: 'demo-snapshot',
+  oid: '0'.repeat(40),
   message: 'Offline example revision',
   author: { time_seconds: 1794268800 },
   committer: { time_seconds: 1794268800 },
@@ -71,7 +77,7 @@ export function nativePreviewDemoResponse(
         const latest = savedSnapshots.get(targets[0] ?? '')?.[0];
         return ok({ result: 'noop', commit_oid: latest?.info.oid });
       }
-      const oid = `demo-snapshot-${nextSnapshot++}`;
+      const oid = (nextSnapshot++).toString(16).padStart(40, '0');
       const timestamp = { time_seconds: Math.floor(Date.now() / 1000) };
       const info = { oid, message, author: timestamp, committer: timestamp };
       for (const target of changed) {
@@ -90,16 +96,12 @@ export function nativePreviewDemoResponse(
     }
     case '/api/v1/snapshot/versions':
       return ok({
-        versions: [
-          {
-            version_id: 'demo-version',
-            version_number: 1,
-            snapshot_id: 'demo-snapshot',
-            snapshot_path: url.searchParams.get('uri'),
-            created_at: 1794268800,
-          },
-        ],
-        next_before_version: null,
+        versions: [2, 1].map((version) => ({
+          oid: String(version).repeat(40),
+          message: `Offline revision ${version}`,
+          committer: { time_seconds: 1794268800 + version * 3600 },
+        })),
+        next_before_snapshot: null,
       });
     case '/api/v1/snapshot/show': {
       const path = canonicalUri(url.searchParams.get('path') ?? '');
@@ -109,14 +111,20 @@ export function nativePreviewDemoResponse(
         ?.find(({ info }) => info.oid === target);
       return new Response(
         snapshot?.content ??
-          '# Historical content\n\nThis revision is simulated.',
+          `# Historical content\n\nSimulated ${target ?? 'revision'}.`,
       );
     }
+    case '/api/v1/snapshot/restore':
+      return ok({ result: 'noop' });
     case '/api/v1/compile/config':
-      return ok(config);
-    case '/api/v1/compile/config/update':
-      config = JSON.parse(body) as typeof config;
-      return ok(config);
+      return ok(
+        configurations.get(url.searchParams.get('compile_name') ?? 'handbook'),
+      );
+    case '/api/v1/compile/config/update': {
+      const next = JSON.parse(body) as typeof config;
+      configurations.set(next.compile_name, next);
+      return ok(next);
+    }
     case '/api/v1/resources/temp_upload':
       return ok({ temp_file_id: 'demo-upload' });
     case '/api/v1/pack/import':

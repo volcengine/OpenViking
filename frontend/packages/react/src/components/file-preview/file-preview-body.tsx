@@ -99,6 +99,7 @@ function FilePreviewBodyContent({
     return (
       <FilePreviewEditor
         draft={editing.draft}
+        annotations={editing.annotations}
         source={fileTab.source}
         text={text}
         loading={editing.loadingEdit}

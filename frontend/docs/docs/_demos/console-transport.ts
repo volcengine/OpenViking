@@ -26,21 +26,23 @@ export function consoleTransport(): typeof fetch {
       name: 'notes.md',
       isDir: false,
     };
-    const configOnly =
-      path === '/api/v1/compile' &&
-      typeof init?.body === 'string' &&
-      (JSON.parse(init.body) as { args?: { auto_update?: boolean } }).args
-        ?.auto_update === false;
+    const compileName =
+      path === '/api/v1/compile/create' && typeof init?.body === 'string'
+        ? (JSON.parse(init.body) as { compile_name: string }).compile_name
+        : undefined;
     const writes: Record<string, unknown> = {
       '/api/v1/resources': { task_id: 'demo-resource', root_uri: resource.uri },
       '/api/v1/skills': { root_uri: 'viking://agent/skills/llm-wiki' },
-      '/api/v1/compile': configOnly
-        ? { to: 'viking://resources/demo-wiki', auto_update: false }
-        : {
-            task_id: 'demo-compile',
-            status: 'pending',
-            resource_id: resource.uri,
-          },
+      '/api/v1/compile/create': { compile_name: compileName },
+      '/api/v1/compile': {
+        task_id: 'demo-compile',
+        status: 'pending',
+        resource_id: 'viking://resources/demo-wiki',
+      },
+      '/api/v1/tasks/demo-compile': {
+        task_id: 'demo-compile',
+        status: 'completed',
+      },
     };
     const writeResult =
       writes[path] ??

@@ -1,6 +1,6 @@
 import { useExposureRef } from '../../shared/analytics/use-exposure.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useCallback, useMemo, useState } from 'react';
+import { forwardRef, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
@@ -19,6 +19,7 @@ import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js'
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
 import { useFileBrowserHandle } from './use-file-browser-handle.js';
+import { useFileBrowserUri } from './use-file-browser-uri.js';
 import type {
   FileBrowserComponent,
   FileBrowserHandle,
@@ -57,6 +58,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     readOnly,
     previewActions,
     onUriChange,
+    onSelect,
     onImportResources,
     renderImportResources,
     previewSlots,
@@ -69,21 +71,10 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   ref,
 ) {
   const locale = useLocale(localeProp);
-  const [internalUri, setInternalUri] = useState<string | null>(
-    () => defaultUri ?? null,
-  );
+  const { currentUri, isControlled, reportedUri, changeUri } =
+    useFileBrowserUri(uri, defaultUri, onUriChange);
   const [preferredTreeWidth, setPreferredTreeWidth] =
     useState(TREE_DEFAULT_WIDTH);
-  // `uri !== undefined` 才是受控：传了空字符串也算宿主接管，而不是「没传」。
-  // 模块自身不会主动清空选中——点目录行与点面包屑祖先都带具体 URI，没有「取消
-  // 选中」的交互——因此这里不需要为 `null` 单独留一条分支。
-  //
-  // `uri !== undefined` is what makes it controlled: even an empty string counts as
-  // the host taking over rather than "absent". The module never clears the selection
-  // on its own — both the row click and the breadcrumb ancestor carry a concrete URI,
-  // and there is no "deselect" interaction — so no separate `null` branch is needed.
-  const isControlled = uri !== undefined;
-  const currentUri = isControlled ? uri : internalUri;
   const { ref: layoutRef, width: layoutWidth } =
     useContainerWidth<HTMLDivElement>();
   const stacked = layoutWidth > 0 && layoutWidth < SIDE_BY_SIDE_MIN_WIDTH;
@@ -98,20 +89,6 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   // container widens again.
   const treeMaxWidth = resolveTreeMaxWidth(layoutWidth);
   const treeWidth = Math.min(preferredTreeWidth, treeMaxWidth);
-
-  // 引用必须稳定：它一路传到预览的取数 effect，每次渲染换新函数会让 effect
-  // 反复重跑并取消上一次请求，预览永远加载不出来。
-  //
-  // The identity must stay stable: it reaches the preview's loading effect, and a
-  // fresh function every render would re-run that effect and cancel the previous
-  // request, leaving the preview permanently empty.
-  const changeUri = useCallback(
-    (next: string | null) => {
-      if (!isControlled) setInternalUri(next);
-      onUriChange?.(next);
-    },
-    [isControlled, onUriChange],
-  );
 
   // 摘要文案只影响展示，不作为预览请求的依赖。
   // Summary copy changes presentation without restarting preview requests.
@@ -146,6 +123,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     currentUri,
     requestOptions,
     onUriChange: changeUri,
+    onSelect,
   });
   const permissions = useFileBrowserAcl({
     uri: browser.currentUri,
@@ -155,7 +133,13 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     requestOptions,
     refresh: browser.actions.refresh,
   });
-  const navigation = useFileBrowserHandle(browser, ref, rootUri);
+  const navigation = useFileBrowserHandle(
+    browser,
+    ref,
+    rootUri,
+    uri,
+    reportedUri,
+  );
 
   const search = useFileBrowserSearchDialog(layoutRef);
   const baseClass = stacked
@@ -242,7 +226,9 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
         requestOptions={requestOptions}
         advancedOpen={search.advanced}
         onToggleAdvanced={search.setAdvanced}
-        onOpenResource={navigation.openResource}
+        onOpenResource={(target) => {
+          void navigation.openResource(target).catch(() => {});
+        }}
         onClose={search.close}
       />
     </LocaleProvider>

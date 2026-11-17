@@ -2,6 +2,8 @@ import {
   WikiDashboard,
   type WikiDashboardProps,
 } from '../../components/wiki-dashboard/index.js';
+import { useContext } from 'react';
+import { FilePreviewEditContext } from '../../components/file-preview/file-preview-edit-context.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useWikiDashboard } from './use-wiki-dashboard.js';
 
@@ -25,6 +27,7 @@ export function WikiDashboardPane({
   onOpenDashboard,
   ...props
 }: Props) {
+  const editConflict = useContext(FilePreviewEditContext)?.editFile;
   const query = useWikiDashboard({ uri, requestOptions, refreshGeneration });
   const common = {
     ...props,
@@ -40,6 +43,7 @@ export function WikiDashboardPane({
         kind="file"
         data={query.data?.kind === 'file' ? query.data.data : undefined}
         onOpenUri={onOpenUri && (() => onOpenUri(uri))}
+        onEditConflict={editConflict}
       />
     );
   return (

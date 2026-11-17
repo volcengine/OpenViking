@@ -56,7 +56,8 @@
   gap: 24px;
   padding-bottom: 12px;
 }
-.ov-console__panel .ov-command-console__empty {
+.ov-console__panel
+  .ov-command-console__empty:not(.ov-command-console__empty--hero) {
   padding: 0;
 }
 .ov-console__panel .ov-command-console__composer {

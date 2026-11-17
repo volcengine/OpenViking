@@ -43,19 +43,13 @@
 }
 .ov-command-console__empty--hero .ov-command-console__empty-subtitle {
   margin: 8px 0 32px;
-  color: var(
-    --ov-ui-color-text-3,
-    var(--ov-ui-command-console-guide-text-default)
-  );
+  color: var(--ov-ui-command-console-muted);
   font-size: 13px;
   line-height: 26px;
 }
 .ov-command-console__empty--hero .ov-command-console__empty-quick-label {
   margin: 0 0 8px;
-  color: var(
-    --ov-ui-color-text-3,
-    var(--ov-ui-command-console-guide-text-default)
-  );
+  color: var(--ov-ui-command-console-muted);
   font-size: 12px;
   line-height: 24px;
 }
@@ -80,10 +74,7 @@
   border: 0;
   border-radius: 16px;
   padding: 0 16px;
-  background: var(
-    --ov-ui-color-bg-4,
-    var(--ov-ui-command-console-quick-bg-default)
-  );
+  background: var(--ov-ui-command-console-neutral-bg);
   color: inherit;
   font: inherit;
   text-align: start;
@@ -158,7 +149,7 @@
 .ov-command-console__empty-desc {
   color: var(
     --ov-ui-color-text-description,
-    var(--ov-ui-text-description-default)
+    var(--ov-ui-command-console-muted)
   );
   font-family: var(
     --ov-ui-font-family,
@@ -169,7 +160,7 @@
   font-size: 12px;
   line-height: 22px;
 }
-@container (max-width: 420px) {
+@container (max-width: 320px) {
   .ov-command-console__empty--hero {
     padding-block: 16px;
   }

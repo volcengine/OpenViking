@@ -1,11 +1,11 @@
+import './helpers/history-viewer-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { notificationContent } from './helpers/feedback-dom.mjs';
 import {
   fixture,
-  tree,
+  tree as resourceTree,
   mount,
-  rootUri,
   workflow,
   click,
   button,
@@ -15,6 +15,9 @@ import {
 } from './helpers/preview-native-dom.mjs';
 import { waitForEditor, setEditor } from './helpers/preview-editor-dom.mjs';
 
+const rootUri = 'viking://user/alice/memories';
+const tree = (fetch, uri, props = {}) =>
+  resourceTree(fetch, uri, { rootUri, ...props });
 const uri = `${rootUri}/guide.md`;
 async function edit(view, value = '# Updated') {
   await click(view.container.querySelector('[aria-label="Edit"]'));
@@ -114,7 +117,8 @@ test('save succeeds before snapshot choice; conflict retains description and ret
     );
     await click(button('Done', workflow()));
     await openAction('Version history');
-    assert.match(workflow().textContent, /Update guide/);
+    assert.match(workflow().textContent, /# Updated/);
+    assert.ok(fetch.countOf('/api/v1/snapshot/log') > 0);
     assert.equal(fetch.countOf('/api/v1/content/write'), 1);
   } finally {
     await view.unmount();

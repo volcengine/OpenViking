@@ -316,6 +316,8 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### VikingBotReferences
 
+与左侧目录树联动时，宿主把选中的目录以 `{ uri, name, type: 'directory' }` 写入 `references.selected`，目录就会出现在输入框上方。通过 `onChange` 接收移除后的引用列表，通过 `onOpenUri` 定位标签对应的目录。
+
 | 参数          | 说明                                                                                                               | 类型                                                  | 默认值  |
 | ------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | ------- |
 | rows          | 可选择的文件和目录，使用 [FileTree](./file-tree) 的行结构；展开、分页和权限过滤由宿主完成，`disabled` 的行不能选择 | `readonly FileTreeRow[]`                              | 必填    |

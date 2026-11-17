@@ -222,6 +222,7 @@ class ExtractLoop:
         self.schema_model_generator = SchemaModelGenerator(
             schemas,
             template_context={"language": output_language},
+            consolidation=getattr(self.context_provider, "is_consolidation", False),
             # include_decision_reasoning=(
             #     type(self.context_provider).__name__ != "PatchMergeContextProvider"
             # ),
@@ -262,6 +263,7 @@ class ExtractLoop:
             page_id_map=self._extract_context.page_id_map,
             read_file_contents=self.context_provider.read_file_contents,
             link_enabled=self._link_enabled,
+            consolidation=getattr(self.context_provider, "is_consolidation", False),
             role_scope=role_scope,
             available_tools=tuple(allowed_tools),
             template_context={"language": output_language},
@@ -822,6 +824,21 @@ class ExtractLoop:
         role_scope = self._isolation_handler.get_read_scope()
         page_id_map = getattr(self._extract_context, "page_id_map", None)
         schemas = list(self.context_provider.get_memory_schemas(self.ctx))
+        if getattr(self.context_provider, "is_consolidation", False):
+            payload = {}
+            for schema in schemas:
+                value = getattr(operations, schema.memory_type, None)
+                if value:
+                    items = value if isinstance(value, list) else [value]
+                    payload[schema.memory_type] = [dict(item) for item in items]
+            ExtractionOutputContext(
+                operations_model=type(operations),
+                schemas=tuple(schemas),
+                page_id_map=page_id_map,
+                read_file_contents=self.context_provider.read_file_contents,
+                link_enabled=False,
+                consolidation=True,
+            ).validate_creates(payload)
         assigned_page_ids, page_id_assignments = self._assign_response_page_ids(
             operations,
             schemas,
@@ -954,6 +971,16 @@ class ExtractLoop:
                         exc,
                     )
 
+                if (
+                    getattr(self.context_provider, "is_consolidation", False)
+                    and schema.requires_messages()
+                    and resolved_op.uris
+                    and (
+                        resolved_op.old_memory_file_content is None
+                        or resolved_op.uris != [resolved_op.old_memory_file_content.uri]
+                    )
+                ):
+                    raise ValueError(f"Cannot create {memory_type} without original messages")
                 upsert_operations.append(resolved_op)
 
         delete_replacements: dict[str, str] = {}

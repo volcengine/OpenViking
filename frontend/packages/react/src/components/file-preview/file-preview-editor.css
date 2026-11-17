@@ -6,6 +6,18 @@
 }
 
 .ov-file-preview__code-editor .cm-editor {
+  --ov-ui-file-preview-annotation-accent: var(
+    --ov-ui-color-dashboard-warning,
+    var(--ov-ui-dashboard-warning-default, var(--ov-ui-warning-solid-default))
+  );
+  --ov-ui-file-preview-annotation-fill: var(
+    --ov-ui-color-dashboard-warning-light,
+    var(
+      --ov-ui-dashboard-warning-light-default,
+      var(--ov-ui-warning-light-default)
+    )
+  );
+
   height: 100%;
   color: inherit;
   background: none;
@@ -37,6 +49,50 @@
 .ov-file-preview__code-editor .cm-gutters {
   border: 0;
   background: none;
+  color: var(--ov-ui-file-preview-text-muted);
+}
+.ov-file-preview__code-editor .ov-file-preview__annotation-line,
+.ov-file-preview__code-editor .ov-file-preview__annotation-gutter {
+  background: var(--ov-ui-file-preview-annotation-fill);
+}
+.ov-file-preview__code-editor .ov-file-preview__annotation-gutter {
+  box-shadow: inset 3px 0 var(--ov-ui-file-preview-annotation-accent);
+}
+.ov-file-preview__code-editor .cm-tooltip.ov-file-preview__annotation-tooltip {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(32.5rem, calc(100% - 1rem));
+  border: 1px solid var(--ov-ui-file-preview-annotation-accent);
+  border-radius: 6px;
+  color: var(--ov-ui-file-preview-text);
+  background: var(--ov-ui-file-preview-annotation-fill);
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.ov-file-preview__annotation-tooltip-content {
+  overflow: auto;
+  padding: 10px 12px;
+}
+.ov-file-preview__annotation-tooltip.cm-tooltip-above
+  .cm-tooltip-arrow::before {
+  border-top-color: var(--ov-ui-file-preview-annotation-accent);
+}
+.ov-file-preview__annotation-tooltip.cm-tooltip-above .cm-tooltip-arrow::after {
+  border-top-color: var(--ov-ui-file-preview-annotation-fill);
+}
+.ov-file-preview__annotation-tooltip.cm-tooltip-below
+  .cm-tooltip-arrow::before {
+  border-bottom-color: var(--ov-ui-file-preview-annotation-accent);
+}
+.ov-file-preview__annotation-tooltip.cm-tooltip-below .cm-tooltip-arrow::after {
+  border-bottom-color: var(--ov-ui-file-preview-annotation-fill);
+}
+.ov-file-preview__annotation-tooltip section + section {
+  margin-top: 8px;
+}
+.ov-file-preview__annotation-tooltip p {
+  margin: 4px 0 0;
   color: var(--ov-ui-file-preview-text-muted);
 }
 .ov-file-preview__code-editor .cm-cursor {

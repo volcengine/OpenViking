@@ -21,6 +21,12 @@ const messages: typeof enUS = {
       | 'quickStart'
     >
   >,
+  taskCompletion: {
+    title: '任务完成',
+    description: '异步任务已完成。',
+    resource: '资源添加任务已完成，可点击查看结果。',
+    viewResult: '查看结果',
+  },
   commands: {
     'add-resource': '添加路径或 URL 到资源',
     'add-skill': '添加 Skill 到技能目录',
@@ -79,15 +85,40 @@ const messages: typeof enUS = {
     'compile create': {
       description: '保存来源、目标和 Skill 的编译配置，不立即启动编译。',
       examples: [
-        'ov compile create --from viking://resources/source --to viking://resources/wiki',
+        'ov compile create --compile-name demo-wiki --from viking://resources/source --to viking://resources/wiki --skill viking://system/compile/example-skills/llm-wiki',
       ],
     },
     compile: {
-      description:
-        '默认使用内置 llm-wiki Skill 整理资料，将 Wiki 写入目标目录。可通过 --skill 指定其他 Skill。',
-      examples: [
-        'ov compile --from viking://resources/source --to viking://resources/wiki',
-      ],
+      description: '按名称执行已保存的编译配置。',
+      examples: ['ov compile --compile-name demo-wiki'],
+      quickStart: {
+        documentation: {
+          label: '操作指南',
+          href: 'https://docs.openviking.ai/zh/context-compilation/01-overview',
+        },
+        steps: [
+          {
+            description:
+              '确认推理配置。确认 OpenViking 已配置编译所需的推理服务。',
+          },
+          { description: '导入资料。使用 add-resource 导入待编译的资料。' },
+          {
+            description:
+              '创建编译配置。create 保存来源、目标和 Skill，供后续执行。',
+            command:
+              'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
+          },
+          {
+            description:
+              '执行编译。使用已保存的来源、目标、Skill、指令、模型和定时计划。',
+            command: 'ov compile --compile-name <name>',
+          },
+          {
+            description: '查询进度。使用返回的 task_id 查询执行状态。',
+            command: 'ov task status <task_id>',
+          },
+        ],
+      },
     },
   },
   parameters: {
@@ -97,6 +128,8 @@ const messages: typeof enUS = {
     'parent-auto-create': '父目录不存在时创建',
     reason: '导入原因',
     args: '以 JSON 对象提供解析参数',
+    'compile-args':
+      'JSON 对象，可保存 model_name、auto_update 和 update_schedule',
     wait: '等待处理完成后返回',
     'target-uri': 'Skill 的目标根目录',
     content: '要写入记忆的纯文本',
@@ -105,7 +138,9 @@ const messages: typeof enUS = {
     target_uri: '限制检索范围的 URI',
     limit: '最多返回的条目数量',
     level: '筛选内容层级，例如 0,1,2',
-    from: '待编译的来源 URI',
+    'compile-name':
+      '1–64 位 ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符',
+    from: '已存在的来源目录 URI，可重复传入 --from，或用英文逗号分隔多个 URI',
     skill: '用于编译的 Skill URI',
     instruction: '编译的额外要求',
   },
@@ -126,6 +161,8 @@ const messages: typeof enUS = {
     expectedUri: (value: string) => `需要 Viking URI：${value}`,
     invalidArgument: (value: string) => `无效参数 ${value}`,
     missingArgument: (value: string) => `缺少参数 ${value}`,
+    compileNamedRunInputs: () =>
+      '请先使用 compile create 保存输入，再使用 compile --compile-name 执行。',
   },
 };
 export default messages;

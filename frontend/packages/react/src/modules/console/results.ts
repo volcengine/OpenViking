@@ -3,6 +3,7 @@ import type {
   CommandConsoleRecordContent,
   CommandConsoleSearchResultItem,
 } from '../../components/command-console/index.js';
+import type { ArgumentValues } from './command-parser.js';
 
 function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -18,7 +19,7 @@ function text(value: unknown): string {
 export function formatResult(
   name: string,
   data: unknown,
-  values: Record<string, string | number | boolean>,
+  values: ArgumentValues,
 ): CommandConsoleRecordContent {
   if (['read', 'abstract', 'overview'].includes(name))
     return {

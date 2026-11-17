@@ -61,9 +61,8 @@ export function VikingBotSubmit({
     <Tooltip content={tip ?? label}>
       <Button
         {...props}
-        size="default"
+        size="small"
         type="primary"
-        shape="circle"
         iconOnly
         htmlType="button"
         className={['ov-viking-bot__submit', className]
