@@ -15,8 +15,10 @@ from urllib.parse import parse_qs, quote, urlsplit
 import async_timeout
 import orjson
 
+from .capture import capture_messages, lineage
 from .capture_store import Document
 from .client import VikingError, peer_argument
+from .compaction import active_cut
 from .config import MOUNT_PATH
 from .protocols import string_type
 from .state_store import get_state
@@ -31,6 +33,10 @@ UPLOAD_URL = re.compile(
 DOWNLOAD_URL = re.compile(r'https?://[^\s<>"\x27`]+/api/v1/content/download\?token=[^\s<>"\x27`]+')
 AUTO_DETECTED_NOTE = re.compile(
     r"\n*Note for the user: this (?:upload|download) URL was auto-detected[^\n]*"
+)
+NOTHING_SAVED = (
+    "Nothing from this conversation is saved in OpenViking yet, so there is nothing to look up; "
+    "work from what is in your context."
 )
 UNKNOWN_OUTCOME = "Tool timed out or a previous attempt has an unknown outcome; inspect state before retrying writes"
 
@@ -142,6 +148,31 @@ def attachment_bytes(part, limit):
     return name, data
 
 
+def unsaved(request, capture):
+    """How many messages are neither saved nor in the current context window.
+
+    They follow the delivered anchor up to the active cut, the part a compaction summary or a
+    new window replaced. Without a cut everything unsaved is still in context. Without a delivered anchor in this
+    history, or when a new OpenViking session took over from earlier ones, the gateway cannot
+    tell which messages the saved sessions hold, so it counts none rather than too many.
+    """
+    delivered, chain, cut = capture.get("delivered", ""), request.capture_chain, active_cut(request)
+    if not delivered or delivered not in chain:
+        return 0
+    start = chain.index(delivered) + 1
+    return len(capture_messages(request.messages[start : cut + 1], chain[start : cut + 1]))
+
+
+def unsaved_note(count):
+    """The line after a result that lacks the ``count`` unsaved messages before the window."""
+    last = "last message" if count == 1 else f"last {count} messages"
+    verb = "is" if count == 1 else "are"
+    return (
+        f"Gateway note: the {last} before your current context window {verb} not saved yet and "
+        "may be missing from this result."
+    )
+
+
 def result_text(result, limit):
     """Text blocks only; structuredContent repeats them, and media becomes a note."""
     parts = []
@@ -224,9 +255,12 @@ class ToolExecutor:
                         if time.time() - claim["time"] > timeout:
                             raise asyncio.TimeoutError
                         await asyncio.sleep(0.05)
-                value = await self._call(name.removeprefix(PREFIX), self.arguments(call))
-                content = result_text(value, self.policy.get("tool_result_bytes", 65536))
-                failed = bool(value.get("isError"))
+                if name == "openviking_session_history":
+                    content, failed = await self.history(self.arguments(call))
+                else:
+                    value = await self._call(name.removeprefix(PREFIX), self.arguments(call))
+                    content = result_text(value, self.policy.get("tool_result_bytes", 65536))
+                    failed = bool(value.get("isError"))
                 await self.store.state.swap(
                     scope, receipt_key, receipt, {**claim, "content": content, "failed": failed}
                 )
@@ -241,6 +275,40 @@ class ToolExecutor:
                 scope, receipt_key, receipt, {**claim, "content": content, "failed": True}
             )
         return {**result, "content": content, "failed": True}
+
+    async def history(self, args):
+        """A session_history lookup; returns its text and whether it failed.
+
+        Without a session from the model it looks up this conversation's saved sessions and
+        says when messages cut from the current window are not saved yet, after the result
+        so that truncation keeps it.
+        """
+        session = args.get("session")
+        properties = self.schemas["openviking_session_history"].get("properties", {})
+        capture = None
+        if "session" in properties and (
+            session is None or (isinstance(session, str) and not session.strip())
+        ):
+            try:
+                capture = await self.store.capture.get(self.request.scope, self.request.session)
+                capture = capture.value
+            except Exception:
+                # A read-only lookup never fails on the store; the request's own view serves.
+                capture = self.request.capture.value
+            sessions = lineage(capture)
+            if not sessions:
+                # Nothing is saved yet, so every message so far is waiting.
+                waiting = len(capture_messages(self.request.messages, self.request.capture_chain))
+                if not waiting:
+                    return NOTHING_SAVED, False
+                count = "message so far is" if waiting == 1 else f"{waiting} messages so far are"
+                return NOTHING_SAVED + f" Its {count} waiting to be saved.", False
+            args["session"] = ",".join(sessions)
+        value = await self._call("session_history", args)
+        content = result_text(value, self.policy.get("tool_result_bytes", 65536))
+        if capture is not None and (count := unsaved(self.request, capture)):
+            content += "\n" + unsaved_note(count)
+        return content, bool(value.get("isError"))
 
     def arguments(self, call):
         """Decoded arguments with only frozen keys and every required one."""

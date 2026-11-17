@@ -47,6 +47,16 @@ MCP_TOOLS = [
     mcp_tool("glob", {"pattern": TEXT}, ("pattern",)),
     mcp_tool("health", {}),
 ]
+# Newer servers add session_history; MCP_TOOLS stays the catalog of servers without it.
+HISTORY_TOOL = mcp_tool(
+    "session_history",
+    {
+        "action": {"type": "string", "enum": ["search", "read", "overview"]},
+        **dict.fromkeys(("session", "query", "role", "tool", "from_id", "to_id", "id"), TEXT),
+        **dict.fromkeys(("before", "after", "offset", "limit"), {"type": "integer"}),
+    },
+    ("action",),
+)
 
 
 class FakeViking:
