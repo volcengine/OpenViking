@@ -17,7 +17,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 | 部分 | 作用 | 主要设置和默认值 |
 | --- | --- | --- |
 | 召回记忆 | 用每条新的用户消息检索 OpenViking，把相关内容附加到这条消息上。 | 检索范围：记忆、资源、技能 · 单条消息预算：1,600 token · 单个上下文窗口预算：30,000 token · 相关度阈值：0.35 · 超时时间：2 秒 |
-| 保存对话 | 把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。 | 最新回复等待时长：600 秒 · 提交阈值：20,000 token · 保留最近消息：10 |
+| 保存对话 | 把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。 | 空闲提交时间：600 秒 · 提交阈值：20,000 token · 保留最近消息：10 |
 | 长对话 | 对话接近上下文窗口时，让同一个模型写摘要，替换之前的消息。 | 压缩：开启 · 压缩时机：窗口的 0.9 · 摘要长度上限：8,000 token · Agent 自管上下文窗口：关闭 |
 | OpenViking 工具 | 让模型在回答时使用 OpenViking 的工具。 | 开启 · 勾选全部工具，见 [OpenViking 工具](04-openviking-tools.md) |
 
@@ -84,18 +84,27 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 
 ## 保存对话 {#save-conversations}
 
-**保存对话**部分（默认开启）控制[保存](../guides/15-gateway.md#key-terms)：网关把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。网关怎样判断一轮已经完成，见[对话什么时候保存](01-how-it-works.md#when-conversations-are-saved)。
+**保存对话**部分（默认开启）控制[保存](../guides/15-gateway.md#key-terms)：每一轮结束时，网关把它写入 OpenViking 会话，再按下面的设置提交会话，供 OpenViking 归档已保存的消息并从中提取记忆。网关什么时候写入，见[对话什么时候保存](01-how-it-works.md#when-conversations-are-saved)。
 
 | 设置 | 默认值 | 控制什么 |
 | --- | --- | --- |
-| **最新回复等待时长** | 600 秒 | 最新一轮等待后续消息多久，之后网关保存它并提交会话。 |
-| **提交阈值** | 20,000 token | 会话中待提交的内容达到多少 token 时提交。 |
-| **保留最近消息** | 10 | 提交后会话中保留多少条消息。 |
+| **空闲提交时间** | 600 秒 | 最后一轮结束后多久没有新的一轮结束，就提交剩下的全部消息。 |
+| **提交阈值** | 20,000 token | 一轮结束时，待提交的内容达到多少 token 就提交一次。 |
+| **保留最近消息** | 10 | 按提交阈值提交时，会话中留下最近多少条消息。 |
 
-- 下一条用户消息到达时，上一轮就会保存。**最新回复等待时长**针对的是最后一轮，这样短对话也能被提交。
-- 会话中待提交的内容达到**提交阈值**时提交一次。每次提交后，OpenViking 在后台提取记忆。
-- 提交后，会话中保留最新的若干完整轮次，至少包含**保留最近消息**条消息。
-- OpenViking Server 0.5.0 及以上版本默认继承用户的记忆策略，包括[记忆类型](../api/16-memory.md)限制。要为会话策略指定类型，用管理 API 或 `X-OpenViking-Context` 请求头把 `capture_memory_types` 设为这些类型的名称，例如 `["preferences","events"]`；设为空列表时只保存对话，不提取记忆。Studio 中没有这项设置，在 Studio 中保存配置时保留原值。OpenViking 不认识的名称会使保存失败，见[配置参考](13-configuration.md#profile-saving)。
+- 默认由网关提交，任何 OpenViking Server 都适用。网关创建 OpenViking 会话时关闭 OpenViking 自己的自动提交，在每一轮结束时检查**提交阈值**，并为每段对话计时**空闲提交时间**；更新的一轮结束时重新计时，一轮中间的截断保存和失败的保存不影响正在等待的提交。每次提交后，OpenViking 在后台提取记忆。
+- 空闲提交归档全部消息，不保留最近消息；按提交阈值提交时，**保留最近消息**按消息条数计算。
+- 空闲提交失败时，到期时间保留，网关每分钟再试一次，直到成功；OpenViking 被标记为不可用期间暂停重试。按提交阈值提交失败时不单独重试，由之后的空闲提交或下一轮的阈值检查补上。提交失败只记在网关日志里（`could not commit`），不改变请求记录。
+- 空闲提交的到期时间和要使用的密钥记录 ID 随保存进度记在网关存储里，不含对话文本，所以网关重启、崩溃或 Pod 被终止都不会丢掉等待中的提交：每个网关进程每分钟检查一次，把到期已满一分钟、还没有提交的补上，使用存储的密钥记录里的 OpenViking 密钥，因此这类提交会比到期时间晚一两分钟。这份密钥记录已不存在（密钥被吊销或过期）时，这次提交不再执行，等这段对话的下一轮结束后重新计时。停机时网关不执行、也不等待空闲提交。
+- 会话已经存在时（例如由更早版本的网关或另一种提交方式创建），网关在这段对话第一次写入前，以及修改 `openviking_auto_commit` 之后的第一次写入前，把它的自动提交策略（`auto_commit_policy`）改成当前方式的设置。
+- OpenViking Server 0.5.0 及以上版本默认继承用户的记忆策略，包括[记忆类型](../api/16-memory.md)限制，网关的提交不生成 Working Memory；更早版本的 Server 上，网关创建会话时关闭 Working Memory。要为会话策略指定类型，用管理 API 或 `X-OpenViking-Context` 请求头把 `capture_memory_types` 设为这些类型的名称，例如 `["preferences","events"]`；设为空列表时只保存对话，不提取记忆。Studio 中没有这项设置，在 Studio 中保存配置时保留原值。OpenViking 不认识的名称会使这段对话的每次保存都失败，见[配置参考](13-configuration.md#profile-saving)。
+
+**交给 OpenViking 提交。** 网关配置 `openviking_auto_commit: true`（见[网关字段](13-configuration.md#gateway-fields)）时，网关不提交，也不计时，而是把这三项写入会话的 `auto_commit_policy`，由 OpenViking 的会话自动提交完成，适合开启了会话自动提交的 OpenViking Server。三项设置的含义不变，与默认方式的区别如下：
+
+- 按提交阈值提交在任何 Server 上都有效；如果之前的一次提交还在提取记忆，OpenViking 跳过这次提交，由之后的写入或空闲提交补上。
+- 空闲提交只在 OpenViking Server 开启 `memory.session_auto_commit.enabled`（0.4.x 版本为 `memory.session_auto_commit.idle_enabled`）时发生，开源版 Server 默认关闭，见[配置指南](../guides/01-configuration.md#session-auto-commit-配置)。没有开启时，达不到提交阈值的对话只保存为消息，不会归档，也不会提取记忆。
+- OpenViking 要求空闲提交时间至少 300 秒，低于 300 秒的值按 300 秒处理。Server 使用默认的本地扫描（`idle_backend: local`）时，每隔 `check_interval_seconds`（默认 600 秒）检查一次，提交最多再晚一个间隔；`redis` 后端按时提交。
+- OpenViking Server 0.5.0 及以上版本按用户自己的记忆策略决定是否生成 Working Memory（默认关闭）；默认方式下网关的每次提交都不生成 Working Memory。
 
 ## 长对话和 OpenViking 工具 {#long-conversations-and-tools}
 
