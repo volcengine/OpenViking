@@ -45,6 +45,7 @@ class ToolCall:
     id: str
     name: str
     arguments: Dict[str, Any]
+    raw_arguments: str | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass

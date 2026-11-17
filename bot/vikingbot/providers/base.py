@@ -18,6 +18,34 @@ class ToolCallRequest:
     name: str
     arguments: dict[str, Any]
     tokens: int
+    raw_arguments: str | None = field(default=None, repr=False, compare=False)
+
+
+def tool_arguments_json(call, *, ensure_ascii=False):
+    """Replay only complete, strict JSON that equals the executed arguments."""
+    raw = getattr(call, "raw_arguments", None)
+    if isinstance(raw, str):
+
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError("Duplicate tool argument key")
+                result[key] = value
+            return result
+
+        def invalid_constant(value):
+            raise ValueError("Non-finite JSON number")
+
+        try:
+            parsed = json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid_constant)
+            if isinstance(parsed, dict) and json.dumps(
+                parsed, sort_keys=True, ensure_ascii=False, allow_nan=False
+            ) == json.dumps(call.arguments, sort_keys=True, ensure_ascii=False, allow_nan=False):
+                return raw
+        except (ValueError, TypeError, RecursionError):
+            pass
+    return json.dumps(call.arguments, ensure_ascii=ensure_ascii)
 
 
 @dataclass
@@ -122,6 +150,7 @@ def build_stream_response(
                 name=name,
                 arguments=arguments,
                 tokens=tokens,
+                raw_arguments=raw_arguments,
             )
         )
 
