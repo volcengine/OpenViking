@@ -26,6 +26,17 @@ headers = {
 }
 
 
+def _raise_for_http_failure(response, operation: str) -> None:
+    """Reject a non-200 response instead of reporting an empty result.
+
+    Several collection-management endpoints return no payload on success, so
+    the only failure signal is the HTTP status. Mapping it to ``{}``/``[]``
+    makes a rejected teardown, metadata read or index update look successful.
+    """
+    if response.status_code != 200:
+        raise RuntimeError(f"Failed to {operation}: HTTP {response.status_code}: {response.text}")
+
+
 def _parse_success_response(response, operation: str) -> Dict[str, Any]:
     if response.status_code != 200:
         raise RuntimeError(f"Failed to {operation}: HTTP {response.status_code}: {response.text}")
@@ -129,8 +140,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"UpdateVikingdbCollection response: {response.text}")
-        if response.status_code != 200:
-            return {}
+        _raise_for_http_failure(response, "update collection")
         result = json.loads(response.text)
         return result.get("data", {})
 
@@ -146,8 +156,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"GetCollectionMeta response: {response.text}")
-        if response.status_code != 200:
-            return {}
+        _raise_for_http_failure(response, "get collection metadata")
         result = json.loads(response.text)
         return result.get("data", {})
 
@@ -166,8 +175,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"DeleteVikingdbCollection response: {response.text}")
-        if response.status_code != 200:
-            return {}
+        _raise_for_http_failure(response, "drop collection")
         result = json.loads(response.text)
         return result.get("data", {})
 
@@ -210,8 +218,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"ListVikingdbIndex response: {response.text}")
-        if response.status_code != 200:
-            return []
+        _raise_for_http_failure(response, "list indexes")
         result = json.loads(response.text)
         return result.get("data", [])
 
@@ -238,8 +245,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"UpdateVikingdbIndex response: {response.text}")
-        if response.status_code != 200:
-            return {}
+        _raise_for_http_failure(response, "update index")
         result = json.loads(response.text)
         return result.get("data", {})
 
@@ -256,8 +262,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"GetVikingdbIndex response: {response.text}")
-        if response.status_code != 200:
-            return {}
+        _raise_for_http_failure(response, "get index metadata")
         result = json.loads(response.text)
         return result.get("data", {})
 
@@ -274,8 +279,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"DeleteVikingdbIndex response: {response.text}")
-        if response.status_code != 200:
-            return {}
+        _raise_for_http_failure(response, "drop index")
         result = json.loads(response.text)
         return result.get("data", {})
 
@@ -380,8 +384,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"DeleteAllData response: {response.text}")
-        if response.status_code != 200:
-            return {}
+        _raise_for_http_failure(response, "delete all data")
         result = json.loads(response.text)
         return result.get("data", {})
 
