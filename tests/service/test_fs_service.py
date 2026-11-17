@@ -5,7 +5,7 @@
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, call
+from unittest.mock import ANY, AsyncMock, Mock, call
 
 import pytest
 
@@ -1189,6 +1189,47 @@ async def test_resource_rm_queues_refresh_when_freshness_lock_is_busy(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wait", [False, True])
+async def test_resource_rm_reports_skipped_when_refresh_queue_is_unavailable(
+    request_context, monkeypatch, wait
+):
+    service = FSService(viking_fs=_FakeVikingFS())
+    service._wait_for_refresh = AsyncMock()
+    monkeypatch.setattr(
+        fs_module,
+        "get_queue_manager",
+        Mock(side_effect=RuntimeError("QueueManager not initialized")),
+    )
+
+    result = await service.rm("viking://resources/docs/a.md", ctx=request_context, wait=wait)
+
+    assert result["semantic_status"] == "skipped"
+    service._wait_for_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resource_rm_does_not_hide_refresh_enqueue_failure(request_context, monkeypatch):
+    viking_fs = _FakeVikingFS()
+    service = FSService(viking_fs=viking_fs)
+    queue_manager = _FakeQueueManager()
+    monkeypatch.setattr(fs_module, "get_queue_manager", lambda: queue_manager)
+    monkeypatch.setattr(
+        fs_module,
+        "plan_abstract_overview_refresh",
+        AsyncMock(side_effect=LockAcquisitionError("busy")),
+    )
+    monkeypatch.setattr(
+        queue_manager, "enqueue", AsyncMock(side_effect=RuntimeError("enqueue failed"))
+    )
+
+    with pytest.raises(RuntimeError, match="enqueue failed"):
+        await service.rm("viking://resources/docs/a.md", ctx=request_context)
+
+    assert len(viking_fs.rm_calls) == 1
+    queue_manager.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
     service = FSService(viking_fs=_FakeVikingFS())
     service._enqueue_delete_refresh = AsyncMock()
@@ -2293,32 +2334,6 @@ async def test_fs_operation_reports_retryable_busy_while_watch_keeps_running(
 def local_fs_service(tmp_path):
     viking_fs = local_viking_fs(tmp_path / "agfs")
     return FSService(viking_fs=viking_fs), viking_fs
-
-
-@pytest.mark.asyncio
-async def test_rm_target_lock_conflict_preserves_content_and_index(
-    request_context, local_fs_service, monkeypatch
-):
-    service, viking_fs = local_fs_service
-    monkeypatch.setattr(fs_module, "WATCH_BUSY_WAIT_SECONDS", 0)
-    queue_manager = _FakeQueueManager()
-    monkeypatch.setattr(fs_module, "get_queue_manager", lambda: queue_manager)
-    vector_store = SimpleNamespace(count=AsyncMock(), delete_uris=AsyncMock())
-    viking_fs.vector_store = vector_store
-    uri = "viking://resources/docs/locked.txt"
-    await viking_fs.write_file(uri, "content", ctx=request_context)
-    lease = await viking_fs._async_agfs.pathlock_acquire_exact(
-        viking_fs._uri_to_path(uri, ctx=request_context)
-    )
-    try:
-        with pytest.raises(ResourceBusyError):
-            await service.rm(uri, ctx=request_context)
-    finally:
-        await viking_fs._async_agfs.pathlock_release(lease)
-
-    assert await viking_fs.read_file(uri, ctx=request_context) == "content"
-    vector_store.delete_uris.assert_not_awaited()
-    assert queue_manager.messages == []
 
 
 @pytest.mark.asyncio

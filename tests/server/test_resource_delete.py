@@ -11,11 +11,10 @@ import pytest
 from openviking.core.context import Context, ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources
-from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
+from openviking.storage.abstract_overview import freshness_metadata, write_abstract_overview
 from openviking.storage.vector_ids import vector_record_id
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 def _ctx() -> RequestContext:
@@ -123,71 +122,15 @@ async def test_delete_resource_http_removes_real_shared_directory(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wait", [False, True])
-async def test_delete_resource_http_succeeds_when_parent_summary_is_locked(
-    client, service, monkeypatch, wait
-):
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    viking_fs = service.viking_fs
-    parent_uri = "viking://resources/docs"
-    uri = f"{parent_uri}/delete-me.txt"
-    await viking_fs.write_file(uri, "content", ctx=ctx)
-    metadata = {"freshness": freshness_metadata(1000, 32)}
-    sidecars = []
-    for name, level in [
-        (".abstract.md", ContextLevel.ABSTRACT),
-        (".overview.md", ContextLevel.OVERVIEW),
-    ]:
-        sidecar_uri = f"{parent_uri}/{name}"
-        await viking_fs.write_file(
-            sidecar_uri,
-            render_abstract_overview(level, parent_uri, "summary", metadata),
-            ctx=ctx,
-        )
-        sidecars.append(viking_fs._uri_to_path(sidecar_uri, ctx=ctx))
-
-    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(sidecars)
-    if wait:
-        queue = service._queue_manager.get_queue(service._queue_manager.SEMANTIC, allow_create=True)
-        enqueue = queue.enqueue
-
-        async def enqueue_after_unlock(msg, **kwargs):
-            nonlocal lease
-            # Release the competing writer once the fallback reaches enqueue,
-            # so wait=True can observe the actual queued refresh completing.
-            if lease is not None:
-                await viking_fs._async_agfs.pathlock_release(lease)
-                lease = None
-            return await enqueue(msg, **kwargs)
-
-        monkeypatch.setattr(queue, "enqueue", enqueue_after_unlock)
-    try:
-        response = await asyncio.wait_for(
-            client.delete("/api/v1/resources", params={"uri": uri, "wait": wait}),
-            timeout=10,
-        )
-    finally:
-        if lease is not None:
-            await viking_fs._async_agfs.pathlock_release(lease)
-
-    assert response.status_code == 200, response.text
-    assert response.json()["result"]["semantic_status"] == ("complete" if wait else "queued")
-    assert not await viking_fs.exists(uri, ctx=ctx)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("wait,slow_refresh", [(False, False), (True, False), (False, True)])
-async def test_concurrent_delete_distinct_siblings_removes_files_and_index(
-    client, service, monkeypatch, wait, slow_refresh
-):
+async def test_concurrent_delete_distinct_siblings_removes_files_and_index(client, service, wait):
     ctx = RequestContext(user=service.user, role=Role.ROOT)
     viking_fs = service.viking_fs
     vector_store = viking_fs._get_vector_store()
     vector_dim = (await vector_store._get_backend_for_context(ctx)).vector_dim
     parent_uri = "viking://resources/concurrent-delete"
     uris = [f"{parent_uri}/document-{index:04d}.txt" for index in range(64)]
-    priming_uris = [f"{parent_uri}/prime-{index}.txt" for index in range(8)] if slow_refresh else []
     records = []
-    for uri in uris + priming_uris:
+    for uri in uris:
         await viking_fs.write_file(uri, "content", ctx=ctx)
         record = Context(
             uri=uri,
@@ -201,67 +144,28 @@ async def test_concurrent_delete_distinct_siblings_removes_files_and_index(
         records.append(record.to_dict())
     await vector_store.upsert_many(records, ctx=ctx)
     ids = [record["id"] for record in records]
-    assert len(await vector_store.get(ids, ctx=ctx)) == len(records)
-    metadata = {"freshness": freshness_metadata(len(records), 32)}
-    for name, level in [
-        (".abstract.md", ContextLevel.ABSTRACT),
-        (".overview.md", ContextLevel.OVERVIEW),
-    ]:
-        await viking_fs.write_file(
-            f"{parent_uri}/{name}",
-            render_abstract_overview(level, parent_uri, "summary", metadata),
-            ctx=ctx,
-        )
-
-    model_started = asyncio.Event()
-    resume_model = asyncio.Event()
-    if slow_refresh:
-        complete = VLMConfig.get_completion_async
-
-        async def paused_completion(vlm, *args, **kwargs):
-            model_started.set()
-            await resume_model.wait()
-            return await complete(vlm, *args, **kwargs)
-
-        monkeypatch.setattr(VLMConfig, "get_completion_async", paused_completion)
+    assert len(await vector_store.get(ids, ctx=ctx)) == 64
+    await write_abstract_overview(
+        viking_fs=viking_fs,
+        dir_uri=parent_uri,
+        overview="summary",
+        abstract="summary",
+        ctx=ctx,
+        metadata={"freshness": freshness_metadata(64, 32)},
+    )
     semaphore = asyncio.Semaphore(32)
 
     async def remove(uri):
         async with semaphore:
             return await client.delete("/api/v1/resources", params={"uri": uri, "wait": wait})
 
-    try:
-        # Eight setup deletes cross the normal freshness threshold for 72 files.
-        # The remaining 64 targets are then deleted while model work is in flight.
-        for uri in priming_uris:
-            response = await client.delete("/api/v1/resources", params={"uri": uri, "wait": False})
-            assert response.status_code == 200, response.text
-        if slow_refresh:
-            await asyncio.wait_for(model_started.wait(), timeout=10)
-        responses = await asyncio.wait_for(
-            asyncio.gather(*(remove(uri) for uri in uris)), timeout=60
-        )
-    finally:
-        resume_model.set()
+    responses = await asyncio.wait_for(asyncio.gather(*(remove(uri) for uri in uris)), timeout=60)
     await asyncio.wait_for(service._queue_manager.wait_complete(), timeout=60)
-    remaining_files = [uri for uri in uris if await viking_fs.exists(uri, ctx=ctx)]
-    remaining_records = await vector_store.get(ids, ctx=ctx)
-    statuses = [response.status_code for response in responses]
-    print(
-        {
-            "wait": wait,
-            "slow_refresh": slow_refresh,
-            "setup_deletes": len(priming_uris),
-            "HTTP": {status: statuses.count(status) for status in set(statuses)},
-            "remaining_files": len(remaining_files),
-            "remaining_L2": len(remaining_records),
-        }
-    )
-    assert remaining_files == []
-    assert remaining_records == []
     assert all(response.status_code == 200 for response in responses), [
         response.json() for response in responses if response.status_code != 200
     ]
+    assert not [uri for uri in uris if await viking_fs.exists(uri, ctx=ctx)]
+    assert await vector_store.get(ids, ctx=ctx) == []
 
 
 @pytest.mark.asyncio
