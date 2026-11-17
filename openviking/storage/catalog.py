@@ -125,7 +125,7 @@ async def validate_resource_item_update(
     as_item: bool,
     item_attrs: Any = ITEM_ATTRS_OMITTED,
     is_dir: bool | None = None,
-) -> dict[str, Any]:
+) -> None:
     """Check a replacement before committing bytes under its resource lease."""
     from openviking_cli.exceptions import UnimplementedError
 
@@ -134,18 +134,17 @@ async def validate_resource_item_update(
     if execute is None:
         if as_item:
             raise UnimplementedError("Item declarations require Catalog support")
-        return {"valid": True, "has_item": False}
+        return
     request: dict[str, Any] = {"op": "validate_resource_update", "uri": uri}
     if is_dir is not None:
         request["node_type"] = "dir" if is_dir else "file"
     if attrs is not None:
         request["item_attrs"] = encode_item_attrs(attrs)
     try:
-        return await execute(request, ctx=ctx)
+        await execute(request, ctx=ctx)
     except UnimplementedError:
         if as_item:
             raise
-        return {"valid": True, "has_item": False}
 
 
 async def require_existing_item_root(storage, uri: str, ctx) -> None:

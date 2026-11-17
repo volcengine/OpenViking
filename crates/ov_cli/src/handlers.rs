@@ -619,15 +619,8 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             .await
         }
         AdminCommands::ListAccounts { name, limit, page } => {
-            commands::admin::list_accounts(
-                &client,
-                name,
-                limit,
-                page,
-                ctx.output_format,
-                ctx.compact,
-            )
-            .await
+            commands::admin::list_accounts(&client, name, limit, page, ctx.output_format, ctx.compact)
+                .await
         }
         AdminCommands::DeleteAccount { account_id } => {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
@@ -2148,7 +2141,12 @@ fn validate_cli_item_declaration(as_item: bool, item_attrs: Option<&Value>) -> R
     Ok(())
 }
 
-pub async fn handle_rm(uri: String, recursive: bool, wait: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_rm(
+    uri: String,
+    recursive: bool,
+    wait: bool,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
     commands::filesystem::rm(
         &client,
@@ -2303,9 +2301,7 @@ pub async fn handle_grep(
         node_limit,
         level_limit,
         &tags,
-        fields
-            .as_ref()
-            .is_some_and(|items| items.iter().any(|item| item == "tags")),
+        fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags")),
         ctx.output_format,
         ctx.compact,
     )

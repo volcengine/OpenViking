@@ -456,7 +456,11 @@ async def test_item_groups_reuse_classified_results_without_content_reads(
                 assert item["score"] == 4.0 - i
                 assert item["level"] == 0 and item["abstract"] == ""
                 assert item["item_attrs"] == {"name": str(i)}
-                assert item["item_extra_info"]["candidate_members_truncated"] is True
+                assert item["item_extra_info"] == {
+                    "candidate_members_count": 7,
+                    "candidate_members_uri": ["viking://" + roots[i].lstrip("/") + "/member.md"],
+                    "candidate_members_truncated": True,
+                }
                 assert "item_score" not in item
         assert grouping.await_args.kwargs["limit"] == limit
     assert grouping.await_count == 2

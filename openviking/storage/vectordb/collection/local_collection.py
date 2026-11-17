@@ -599,8 +599,6 @@ class LocalCollection(ICollection):
         ):
             raise NotImplementedError("Local advanced ranking supports time_decay only")
         search_result = SearchResult()
-        catalog_scope = None
-        catalog_revision = None
         if getattr(self, "_catalog", None) is not None:
             catalog_scope = self._catalog_scope(filters)
             if catalog_scope:
@@ -612,8 +610,7 @@ class LocalCollection(ICollection):
                     }
                 )
                 filters = compiled["filter"]
-                catalog_revision = compiled.get("revision")
-                search_result.catalog_revision = catalog_revision
+                search_result.catalog_revision = compiled.get("revision")
         index = self.indexes.get(index_name)
         if not index:
             return search_result
@@ -801,7 +798,7 @@ class LocalCollection(ICollection):
             self._open_catalog()
         # Group TopK must not change the semantic scoring population (especially sum).
         candidate_limit = 1000
-        for attempt in range(3):
+        for _ in range(3):
             generation = self._index_mutation_barrier.snapshot_generation()
             recalled = self.search_by_vector(
                 index_name=index_name,
@@ -814,7 +811,7 @@ class LocalCollection(ICollection):
             candidates = [
                 {
                     "label": str(item.id),
-                    "uri": item.fields.get("uri") if item.fields else "",
+                    "uri": item.fields["uri"],
                     "score": float(item.score or 0.0),
                 }
                 for item in recalled.data
@@ -826,11 +823,7 @@ class LocalCollection(ICollection):
                 self._index_mutation_barrier.is_current(generation)
             ):
                 return grouped
-            if attempt == 2:
-                raise RuntimeError(
-                    "Collection changed repeatedly during Item recall; retry the request"
-                )
-        raise AssertionError("unreachable")
+        raise RuntimeError("Collection changed repeatedly during Item recall; retry the request")
 
     def search_by_id(
         self,

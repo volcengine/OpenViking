@@ -61,7 +61,7 @@ client.add_resource(
 
 MCP 的 `add_resource` 工具暴露相同的 `as_item` 和 `item_attrs` 参数。省略 `as_item` 等价于 `false`；为 false 时必须同时省略 `item_attrs`（空对象也会被拒绝）。`item_uuid` 由 OpenViking 生成和维护，调用方不能指定。属性只属于声明根，不继承、不合并。移动 Item 会保留 UUID 和属性，复制不会复制 Item 声明，删除会移除声明。
 
-Item 导入沿用既有资源解析、保存、临时源清理和更新链路，不新增原文补齐目录、归属标记或专项维护规则。整根重导入按新快照替换并保留根 UUID；包含独立子 Item 时拒绝覆盖，不可变属性冲突在正文提交前拒绝。
+重导入沿用现有资源更新流程并保留根 UUID；独立子 Item 和不可变属性冲突在正文提交前检查。
 
 存量普通目录／资源根不支持补声明为 Item，需要用原输入导入新的 Item 根。已有 Item 可同根更新和幂等重试。新增 Skill 包自动声明 Item；旧普通 Skill 包更新时不补声明，已有 Item 包更新保留身份。
 
@@ -196,7 +196,7 @@ Item 模式只支持 list 结果，不支持 `read_content`、`include_provenanc
 | read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-`search_as_item` 开启时，`level` 过滤成员层级，返回的根固定为 `level=0`；不可同时使用 `read_content`、`include_provenance` 或 `events_time_decay_protection`。根 URI、聚合分和候选证据见 [Item Search](#item-search预览)。
+Item 模式的 `level` 过滤成员层级；根结果字段和互斥参数见 [Item Search](#item-search预览)。
 
 **目标解析说明**：
 - `target_uri` 为空时，非 ROOT 检索默认搜索当前用户根 `viking://user/{user}` 和公共 `viking://resources`。
@@ -547,9 +547,7 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容；仅支持 `mode="list"`。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-`search_as_item` 开启时，`level` 过滤成员层级，返回的根固定为 `level=0`；不可同时使用 `read_content`、`include_provenance` 或 `events_time_decay_protection`。根 URI、聚合分和候选证据见 [Item Search](#item-search预览)。
-
-Item 模式要求 `mode="list"`，忽略 `session`／`session_id`；`limit` 限制全部分类合计的 Item 数，`total` 为实际返回数。
+Item 模式的 `level` 过滤成员层级；根结果字段和互斥参数见 [Item Search](#item-search预览)。
 
 `search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query 和配置了全文索引的远程 VikingDB。`args` 在 `search_type="keywords"` 且 `mode="list"` 时接收引擎调参选项。关键词查询拒绝图片输入。
 

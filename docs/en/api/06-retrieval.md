@@ -61,7 +61,7 @@ client.add_resource(
 
 The MCP `add_resource` tool exposes the same `as_item` and `item_attrs` arguments. Omitting `as_item` is equivalent to `false`; when it is false, `item_attrs` must also be omitted (even an empty object is rejected). `item_uuid` is generated and maintained by OpenViking and cannot be supplied by callers. Attributes belong only to the declared root and are not inherited or merged. Moving an Item preserves its UUID and attributes, copying it does not copy the declaration, and removing it deletes the declaration.
 
-Item imports reuse the existing resource parsing, storage, temporary-source cleanup, and update lifecycle. They add no original-input supplementation directory, ownership marker, or special maintenance rules. Reimport replaces the resource snapshot while preserving the root UUID; independent child Items and immutable attribute conflicts are checked before committing content.
+Reimport uses the existing resource update flow and preserves the root UUID; independent child Items and immutable attribute conflicts are checked before committing content.
 
 Existing ordinary directories and resource roots cannot be promoted to Items; import their original inputs into a new Item root. Existing Items support same-root updates and retries. New Skill packages declare Items automatically; updates preserve an existing declaration or its absence for legacy packages.
 
@@ -196,7 +196,7 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-With `search_as_item` enabled, `level` filters member tiers while returned roots use `level=0`. Combining it with `read_content`, `include_provenance`, or `events_time_decay_protection` is rejected. See [Item Search](#item-search-preview) for root URIs, aggregate scores, and candidate evidence.
+In Item mode, `level` filters member tiers. See [Item Search](#item-search-preview) for root result fields and incompatible options.
 
 **Target resolution notes**:
 - With empty `target_uri`, non-ROOT retrieval searches the current user root (`viking://user/{user}`) and shared `viking://resources`.
@@ -547,9 +547,7 @@ Semantic retrieval with optional session-aware query planning.
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-With `search_as_item` enabled, `level` filters member tiers while returned roots use `level=0`. Combining it with `read_content`, `include_provenance`, or `events_time_decay_protection` is rejected. See [Item Search](#item-search-preview) for root URIs, aggregate scores, and candidate evidence.
-
-Item mode requires `mode="list"` and ignores `session`/`session_id`; `limit` bounds total Items across all buckets and `total` reports the actual returned count.
+In Item mode, `level` filters member tiers. See [Item Search](#item-search-preview) for root result fields and incompatible options.
 
 `search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query and a remote VikingDB backend with a full-text index. `args` accepts engine tuning options for `search_type="keywords"` in `mode="list"`. Keyword queries reject image input.
 
