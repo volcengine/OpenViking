@@ -559,16 +559,96 @@ def test_resource_without_abstract_never_substitutes_its_body():
         assert [(e.detail, e.text) for e in plan.entries] == [("uri", "")]
 
 
-def test_oversized_resource_abstract_degrades_without_reading_the_body():
+def test_oversized_resource_abstract_is_clipped_without_reading_the_body():
     uri = f"{USER_ROOT}/resources/creds.md"
-    candidate = _resource_candidate("X " * 400)
-    cap = per_entry_cap(60, 1)
+    candidate = _resource_candidate("head " + "X " * 400 + " tail")
+    cap = per_entry_cap(160, 1)
 
     assert not oversized_abstract_needs_body(candidate, cap)
     plan = plan_entries(
-        [candidate], {uri: "# Credentials\n\nTOKEN=secret"}, max_tokens=60, detail="abstract"
+        [candidate], {uri: "# Credentials\n\nTOKEN=secret"}, max_tokens=160, detail="abstract"
     )
-    assert [(e.detail, e.text) for e in plan.entries] == [("uri", "")]
+    entry = plan.entries[0]
+    assert entry.detail == "abstract"
+    assert entry.text.startswith("head")
+    assert entry.text.endswith("tail")
+    assert "\n…\n" in entry.text
+    assert "TOKEN=secret" not in entry.text
+    assert entry.tokens <= cap
+    assert plan.stats["truncated"] == 1
+
+
+def test_cjk_abstract_clipping_includes_the_xml_envelope_in_the_cap():
+    candidate = _resource_candidate("摘" * 256)
+    plan = plan_entries([candidate], {}, max_tokens=160)
+
+    entry = plan.entries[0]
+    assert entry.detail == "abstract"
+    assert entry.text
+    assert entry.tokens <= 160
+    assert plan.stats["used_tokens"] == entry.tokens
+
+
+def test_oversized_directory_overview_is_clipped_instead_of_dropped():
+    uri = f"{USER_ROOT}/resources/project"
+    candidate = _resource_candidate("", uri=uri)
+    candidate.is_directory = True
+    contents = {f"{uri}/.overview.md": "项目概览" + "目录" * 1000}
+
+    plan = plan_entries([candidate], contents, max_tokens=160)
+
+    entry = plan.entries[0]
+    assert entry.detail == "overview"
+    assert entry.text.startswith("项目概览")
+    assert "\n…\n" in entry.text
+    assert entry.tokens <= 160
+
+
+def test_clipping_shares_the_total_budget_across_remaining_candidates():
+    candidates = []
+    for index in range(10):
+        prefix = f"资源摘要{index}"
+        candidates.append(
+            _resource_candidate(
+                prefix + "摘" * (256 - len(prefix)), uri=f"{USER_ROOT}/resources/{index}.md"
+            )
+        )
+
+    plan = plan_entries(candidates, {}, max_tokens=1600)
+
+    assert len(plan.entries) == 10
+    assert all(entry.detail == "abstract" and entry.text for entry in plan.entries)
+    assert plan.stats["truncated"] == 10
+    assert plan.stats["used_tokens"] <= 1600
+    assert sum(entry.tokens for entry in plan.entries) + 9 <= 1600
+
+
+async def test_default_resource_clipping_does_not_read_the_resource_body():
+    uri = f"{USER_ROOT}/resources/live-context.md"
+    hits = [{"uri": uri, "score": 0.8, "abstract": "实时节点" + "参数" * 300, "level": 2}]
+    reads = []
+
+    async def fail_read(uri, **kwargs):
+        del kwargs
+        reads.append(uri)
+        raise AssertionError("default abstract clipping must not execute/read a live context")
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=lambda **kwargs: _async_value(_FakeFindResult(resources=hits))),
+        fs=SimpleNamespace(read=fail_read),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="live data", quotas={"resources": 1}, max_tokens=160),
+    )
+
+    assert reads == []
+    assert result.entries[0].detail == "abstract"
+    assert result.entries[0].text
+    assert result.stats["used_tokens"] <= 160
 
 
 def test_memory_keeps_overview_as_the_cheaper_abstract_substitute():

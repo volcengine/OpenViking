@@ -12,10 +12,13 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeFindResult:
-    def __init__(self, memories=None):
+    def __init__(self, memories=None, resources=None, skills=None):
         self.memories = memories or []
-        self.resources = []
-        self.skills = []
+        self.resources = resources or []
+        self.skills = skills or []
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
 
 
 def _memory(uri: str, score: float = 0.9, abstract: str = "", level: int = 2):
@@ -61,6 +64,59 @@ async def test_context_mode_returns_flat_entries_within_budget(
     assert all(entry["detail"] != "uri" for entry in result["entries"])
     assert result["rendered"].count("<memory ") == 2
     assert result["stats"]["used_tokens"] <= 1200
+
+
+async def test_context_mode_clips_oversized_resource_without_reading_it(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    uri = "viking://user/test_user/resources/live-context.md"
+    reads = []
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return _FakeFindResult(
+            resources=[
+                {
+                    "uri": uri,
+                    "score": 0.8,
+                    "abstract": "实时节点用途 " + "参数" * 300,
+                    "level": 2,
+                }
+            ]
+        )
+
+    async def fail_read(uri, **kwargs):
+        del kwargs
+        reads.append(uri)
+        raise AssertionError("default abstract clipping must not read a live-context node")
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fail_read)
+
+    response = await client.post(
+        "/api/v1/search/search",
+        json={
+            "query": "live data",
+            "mode": "context",
+            "quotas": {"resources": 1},
+            "peer_scope": "actor",
+            "max_tokens": 160,
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert reads == []
+    assert len(result["entries"]) == 1
+    entry = result["entries"][0]
+    assert entry["uri"] == uri
+    assert entry["detail"] == "abstract"
+    assert entry["text"].startswith("实时节点用途")
+    assert "\n…\n" in entry["text"]
+    assert result["stats"]["truncated"] == 1
+    assert result["stats"]["used_tokens"] <= 160
 
 
 async def test_context_mode_quotas_use_category_ownership_roots(
