@@ -12,11 +12,13 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    SecretStr,
     StrictBool,
     StrictInt,
     StrictStr,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 # Import auth plugin registry for config validation
@@ -313,12 +315,36 @@ class MetricsConfig(BaseModel):
     exporters: MetricsExportersConfig = Field(default_factory=MetricsExportersConfig)
 
 
+class UsageAuditPostgresConfig(BaseModel):
+    """Dedicated shared Console projection database (credentials are not repr'd)."""
+
+    dsn: SecretStr
+    schema_name: str = Field("openviking_usage_audit", pattern=r"^[a-z_][a-z0-9_]{0,62}$")
+    connect_timeout_seconds: int = Field(10, gt=0)
+    statement_timeout_seconds: int = Field(30, gt=0)
+
+    @field_validator("schema_name")
+    @classmethod
+    def dedicated_schema(cls, value: str) -> str:
+        if value.startswith("pg_") or value in {"public", "information_schema"}:
+            raise ValueError("usage_audit requires a dedicated PostgreSQL schema")
+        return value
+
+    @field_validator("dsn")
+    @classmethod
+    def nonempty_dsn(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("PostgreSQL DSN must not be empty")
+        return value
+
+
 class UsageAuditConfig(BaseModel):
     """Product usage and audit projection configuration."""
 
     enabled: bool = True
-    backend: Literal["sqlite"] = "sqlite"
+    backend: Literal["sqlite", "postgres"] = "sqlite"
     sqlite_path: Optional[str] = None
+    postgres: Optional[UsageAuditPostgresConfig] = None
     queue_size: int = Field(10_000, gt=0)
     batch_size: int = Field(500, gt=0)
     flush_interval_seconds: float = Field(1.0, gt=0)
@@ -328,6 +354,12 @@ class UsageAuditConfig(BaseModel):
     audit_retention_per_account: int = Field(1000, ge=0)
     timezone: str = "local"
     inventory_ttl_seconds: float = Field(10.0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_backend(self):
+        if self.backend == "postgres" and self.postgres is None:
+            raise ValueError("usage_audit.postgres is required for the postgres backend")
+        return self
 
 
 class UsageReporterSinkConfig(BaseModel):
