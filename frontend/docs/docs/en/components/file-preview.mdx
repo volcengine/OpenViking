@@ -136,7 +136,36 @@ A tab that renders `source` by its format. It includes every field of `FilePrevi
 | onOpenUri      | Called after `operations.openUri` opens a Markdown link, with the clicked target                                                                            | `(uri: string) => void`                                       | -        |
 | slots          | Slots for the header row, footer and states                                                                                                                 | `FilePreviewFileTabSlots`                                     | -        |
 
-Use milliseconds for transcript timestamps. Selecting the frames tab calls `onLoadFrames`. Update the image URLs and loading state in the host.
+#### videoDetails
+
+Renders below a video source. The host supplies transcript entries and frames independently; use an empty array when either has no entries.
+
+| Property      | Description                                                       | Type                 | Default  |
+| ------------- | ----------------------------------------------------------------- | -------------------- | -------- |
+| segments      | Timestamped transcript entries in display order                   | `readonly Segment[]` | Required |
+| frames        | Extracted frames in display order                                 | `readonly Frame[]`   | Required |
+| framesLoading | Shows a loading message while frames are being fetched            | `boolean`            | `false`  |
+| onLoadFrames  | Called when selecting the frames tab or retrying failed downloads | `() => void`         | -        |
+
+`segments` entries:
+
+| Property | Description                                                                       | Type     | Default  |
+| -------- | --------------------------------------------------------------------------------- | -------- | -------- |
+| startMs  | Start time in milliseconds; selecting the entry seeks to this position            | `number` | Required |
+| endMs    | End time in milliseconds; the entry is highlighted from `startMs` up to this time | `number` | Required |
+| text     | Transcript text                                                                   | `string` | Required |
+| speaker  | Speaker name; empty or omitted values use `labels.videoSpeaker`                   | `string` | -        |
+
+`frames` entries:
+
+| Property | Description                                                                           | Type      | Default  |
+| -------- | ------------------------------------------------------------------------------------- | --------- | -------- |
+| id       | Stable, unique frame identifier                                                       | `string`  | Required |
+| name     | Accessible image name; also shown before the image is available                       | `string`  | Required |
+| src      | Accessible image URL; selecting the image opens an enlarged preview                   | `string`  | -        |
+| failed   | Marks a failed download; when loading finishes, any failed frame shows a retry action | `boolean` | `false`  |
+
+The host owns requests, cancellation and image URL cleanup. In `onLoadFrames`, update `framesLoading` and each frame's `src` or `failed` value; retrying calls the same callback. FileBrowser loads frame images on demand and keeps discovered frames available while the transcript loads or if its request or parsing fails.
 
 ### FilePreviewDirectoryTab
 

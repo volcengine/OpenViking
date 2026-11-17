@@ -131,13 +131,7 @@ export async function loadVideoDetails(
   if (!uri || !tab.source.file?.type.startsWith('video/')) return;
   const artifacts = await findVideoArtifacts(client, uri, options);
   if (!artifacts || options.signal?.aborted) return;
-  const content = await client.request<string>({
-    method: 'GET',
-    path: OV_PATHS.contentRead,
-    query: { uri: artifacts.metadata, raw: true },
-    options,
-  });
-  const segments = parseTranscript(content);
+  let segments: Segment[] = [];
   const frames = new Map<string, VideoDetails['frames'][number]>(
     artifacts.frames.map((id) => [id, { id, name: nameFromUri(id) }]),
   );
@@ -190,5 +184,14 @@ export async function loadVideoDetails(
     loading = false;
     update();
   }
+  // Readable frames remain available while the transcript loads or fails.
+  update();
+  const content = await client.request<string>({
+    method: 'GET',
+    path: OV_PATHS.contentRead,
+    query: { uri: artifacts.metadata, raw: true },
+    options,
+  });
+  segments = parseTranscript(content);
   update();
 }

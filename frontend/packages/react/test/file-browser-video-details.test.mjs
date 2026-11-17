@@ -46,12 +46,20 @@ test('processed video shows playback before metadata, seeks by transcript, and r
   try {
     const video = view.container.querySelector('video');
     assert.ok(video);
-    assert.equal(button('Transcript', view.container), undefined);
+    assert.ok(button('Transcript', view.container));
+    assert.equal(
+      fetch.calls.some((call) => call.uri === frame),
+      false,
+    );
+    await click(button('Extracted frames (1)', view.container));
+    assert.ok(fetch.calls.find((call) => call.uri === frame));
     await act(async () =>
       video.dispatchEvent(new window.Event('loadedmetadata')),
     );
     pending.resolve(await ok(transcript));
     await settle();
+    assert.equal(view.container.querySelector('video'), video);
+    await click(button('Transcript', view.container));
 
     const entries = [
       ...view.container.querySelectorAll(
@@ -62,10 +70,6 @@ test('processed video shows playback before metadata, seeks by transcript, and r
     assert.match(entries[0].textContent, /Opening line/);
     await click(entries[1]);
     assert.equal(video.currentTime, 1);
-    assert.equal(
-      fetch.calls.some((call) => call.uri === frame),
-      false,
-    );
 
     await click(button('Extracted frames (1)', view.container));
     const download = fetch.calls.find((call) => call.uri === frame);
@@ -77,6 +81,55 @@ test('processed video shows playback before metadata, seeks by transcript, and r
     assert.equal(download.init.signal.aborted, false);
     await view.render(tree(fetch, `${rootUri}/another.md`));
     assert.equal(download.init.signal.aborted, true);
+    assert.equal(button('Transcript', view.container), undefined);
+  } finally {
+    await view.unmount();
+  }
+});
+
+for (const [name, readMetadata] of [
+  [
+    'a failed metadata request',
+    () =>
+      Promise.resolve(new Response('Metadata unavailable', { status: 503 })),
+  ],
+  ['malformed metadata', () => ok('{')],
+  ['metadata without audio segments', () => ok('{}')],
+]) {
+  test(`readable frames remain available after ${name}`, async () => {
+    const fetch = videoFixture(readMetadata);
+    const view = await mount(tree(fetch, videoUri));
+    try {
+      assert.ok(view.container.querySelector('video'));
+      assert.equal(
+        fetch.calls.some((call) => call.uri === frame),
+        false,
+      );
+      await click(button('Extracted frames (1)', view.container));
+      assert.equal(
+        fetch.calls.find((call) => call.uri === frame)?.path,
+        '/api/v1/content/download',
+      );
+    } finally {
+      await view.unmount();
+    }
+  });
+}
+
+test('late transcript results cannot restore a replaced video preview', async () => {
+  const pending = deferred();
+  const fetch = videoFixture(() => pending.promise);
+  const view = await mount(tree(fetch, videoUri));
+  try {
+    await click(button('Extracted frames (1)', view.container));
+    const download = fetch.calls.find((call) => call.uri === frame);
+    const read = fetch.calls.find((call) => call.uri === metadata);
+    await view.render(tree(fetch, `${rootUri}/another.md`));
+    assert.equal(download.init.signal.aborted, true);
+    assert.equal(read.init.signal.aborted, true);
+    pending.resolve(await ok(transcript));
+    await settle();
+    assert.equal(view.container.querySelector('video'), null);
     assert.equal(button('Transcript', view.container), undefined);
   } finally {
     await view.unmount();

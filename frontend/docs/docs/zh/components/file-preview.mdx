@@ -136,7 +136,36 @@ import '@openviking/react/components/file-preview/style.css';
 | onOpenUri      | Markdown 里的链接通过 `operations.openUri` 打开后触发，参数为被点击的链接地址        | `(uri: string) => void`                                       | -       |
 | slots          | 标题行、页脚与状态插槽                                                               | `FilePreviewFileTabSlots`                                     | -       |
 
-文稿时间戳使用毫秒。切到抽帧图片页签时会触发 `onLoadFrames`，由宿主更新图片地址和加载状态。
+#### videoDetails
+
+显示在视频源下方。宿主分别提供文稿与帧图，没有条目时传入空数组。
+
+| 参数          | 说明                             | 类型                 | 默认值  |
+| ------------- | -------------------------------- | -------------------- | ------- |
+| segments      | 按展示顺序排列的带时间戳文稿     | `readonly Segment[]` | 必填    |
+| frames        | 按展示顺序排列的抽帧图片         | `readonly Frame[]`   | 必填    |
+| framesLoading | 获取帧图时显示加载提示           | `boolean`            | `false` |
+| onLoadFrames  | 选择抽帧页签或重试失败下载时触发 | `() => void`         | -       |
+
+`segments` 中的条目：
+
+| 参数    | 说明                                                    | 类型     | 默认值 |
+| ------- | ------------------------------------------------------- | -------- | ------ |
+| startMs | 开始时间，单位为毫秒，点击条目跳转到该位置              | `number` | 必填   |
+| endMs   | 结束时间，单位为毫秒，从 `startMs` 到该时间之前高亮条目 | `number` | 必填   |
+| text    | 文稿正文                                                | `string` | 必填   |
+| speaker | 发言人名称，空值或省略时使用 `labels.videoSpeaker`      | `string` | -      |
+
+`frames` 中的条目：
+
+| 参数   | 说明                                             | 类型      | 默认值  |
+| ------ | ------------------------------------------------ | --------- | ------- |
+| id     | 稳定且唯一的帧标识                               | `string`  | 必填    |
+| name   | 图片的无障碍名称，图片未就绪时显示该名称         | `string`  | 必填    |
+| src    | 可访问的图片地址，点击图片可放大                 | `string`  | -       |
+| failed | 标记下载失败，加载结束后存在失败帧时显示重试按钮 | `boolean` | `false` |
+
+宿主负责请求、取消和图片地址回收。在 `onLoadFrames` 中更新 `framesLoading` 及每帧的 `src` 或 `failed`，点击重试会再次调用同一回调。FileBrowser 按需下载帧图，文稿加载中、请求失败或解析失败时仍可访问已发现的帧图。
 
 ### FilePreviewDirectoryTab
 
