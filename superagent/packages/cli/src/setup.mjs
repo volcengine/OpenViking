@@ -48,6 +48,7 @@ import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
 import { connectOneBot, groupDefault, policyPath } from './onebot.mjs';
+import { prepareGitHub } from './github.mjs';
 
 // `ov-superagent setup`: add, change or remove an instance. A new instance is asked
 // question by question; a change is a list of every setting with its current
@@ -1745,6 +1746,7 @@ async function setupFlow({
   memo = {},
   pendingOV = new Set(),
   registrations,
+  github = prepareGitHub,
 }) {
   const out = (text) => prompter.write(text);
   const cli = superagentCommand(env);
@@ -1780,6 +1782,10 @@ async function setupFlow({
       throw error;
     }
   }
+  // GitHub is an optional, machine-wide OVSA capability. Its token stays in
+  // gh's private config; only the isolated paths enter the manifest on save.
+  if (memo.github === undefined) memo.github = await github({ prompter, env });
+  const githubEnv = memo.github ?? {};
   if (!current) {
     const ensured = await ensureRuntime({ prompter, env: probeEnv, detect, connect, live }, runtimes);
     // Logging in elsewhere and running setup again is the owner's own plan, so
@@ -1908,7 +1914,8 @@ async function setupFlow({
     const before = current ? connectorsOf(current) : [];
     return ims(state).filter((im) => !before.includes(im) || (im === 'lark' && larkSource(state, current) !== 'keep'));
   };
-  const pinned = () => (state.runtime.binEnv && state.runtime.bin ? { [state.runtime.binEnv]: state.runtime.bin } : {});
+  const pinned = () => ({ ...githubEnv,
+    ...(state.runtime.binEnv && state.runtime.bin ? { [state.runtime.binEnv]: state.runtime.bin } : {}) });
   const manifestWith = (agent) => (current
     ? withChangedInstance(manifest, agent, pinned()) : withInstance(manifest, { ...agent, port }, pinned()));
   // The whole instance is known before any scan, so a manifest the daemon
@@ -1987,7 +1994,11 @@ async function setupFlow({
   for (;;) {
     prompter.navigable = prompter.tty;
     if (current) {
-      const describe = () => describeChanges(current, build(), mailPlan(state), homeDir, state);
+      const describe = () => [
+        ...describeChanges(current, build(), mailPlan(state), homeDir, state),
+        ...(Object.entries(githubEnv).some(([key, value]) => manifest.env?.[key] !== value)
+          ? [t('配置 OVSA 独立的 GitHub 账号', 'Configure OVSA’s isolated GitHub account')] : []),
+      ];
       if (!await editInstance(ctx, state, { describe, check: () => problem(build()), before: original, page })) return 0;
       out(`\n${t(`将修改 ${current.displayName}（${current.id}）：`, `Changing ${current.displayName} (${current.id}):`)}\n${describe().map((change) => `  ${change}\n`).join('')}`);
       connectionSteps(prompter, toConnect(), { larkSource: larkSource(state, current) });

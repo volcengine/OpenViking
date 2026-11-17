@@ -183,6 +183,12 @@ ov-superagent login onebot [instance]
 
 Use this to change the address or token, or to rebind the owner. A failed or cancelled login keeps the previous account.
 
+## Isolated GitHub account
+
+Interactive setup offers to sign OVSA into GitHub with GitHub CLI's device flow. Install `gh` first; a missing CLI, declined or failed authorization, and non-interactive setup skip this optional step without blocking instance setup. An existing OVSA login is reused.
+
+Credentials live only in `~/.ov-superagent/github/gh` (or the corresponding directory under the configured home). HTTPS Git uses `~/.ov-superagent/github/gitconfig`, whose credential helper calls that same isolated gh account. The manifest stores only `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, and `GIT_CONFIG_NOSYSTEM=1`, never a token. Host and system Git configuration, global gh configuration, and inherited `GH_TOKEN` / `GITHUB_TOKEN` are not used by OVSA workers. The setup process does not run `gh auth setup-git` against or otherwise modify the host configuration. Windows uses the same environment-based isolation and inherits the console for the device code; POSIX config directories/files use modes 0700/0600.
+
 ## Managing instances with setup
 
 The runtime list always includes Codex, Claude Code, Pi, Durable, TraeX, OpenCode, Antigravity and DSH, including runtimes that are not currently usable. Selecting one reports whether it is not installed, not logged in, protocol-incompatible or missing a usable model, then exits without saving. For DSH, setup also chooses isolated/shared configuration and checks the skill roots to enable. Ctrl+C cancels setup directly; the Windows launcher exits with the CLI's status rather than asking to terminate a batch job.

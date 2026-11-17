@@ -136,6 +136,20 @@ test('CLI discovery preserves the agent credential boundary and leaves connector
   assert.deepEqual(inherited, before);
 });
 
+test('isolated GitHub workers inherit only config paths, not host tokens or Git credential overrides', () => {
+  const env = sanitizeAgentChildEnv({
+    PATH: '/usr/bin:/bin', GH_CONFIG_DIR: '/home/me/.ov-superagent/github/gh',
+    GIT_CONFIG_GLOBAL: '/home/me/.ov-superagent/github/gitconfig', GIT_CONFIG_NOSYSTEM: '1',
+    GH_TOKEN: 'host-secret', GITHUB_TOKEN: 'host-secret', GH_ENTERPRISE_TOKEN: 'host-secret',
+    GITHUB_ENTERPRISE_TOKEN: 'host-secret', GIT_CONFIG_COUNT: '1', GIT_CONFIG_PARAMETERS: 'injected', GIT_ASKPASS: '/host/askpass',
+  });
+  assert.equal(env.GH_CONFIG_DIR, '/home/me/.ov-superagent/github/gh');
+  assert.equal(env.GIT_CONFIG_GLOBAL, '/home/me/.ov-superagent/github/gitconfig');
+  assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN',
+    'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_ASKPASS']) assert.equal(env[key], undefined);
+});
+
 const bundled = bundledLarkCli();
 test('the installed bundled CLI runs --version in an agent shell', {
   skip: posixShell.skip || (!path.isAbsolute(bundled) && 'run scripts/install-lark-cli.mjs to install the pinned binary'),

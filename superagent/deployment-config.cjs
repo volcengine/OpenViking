@@ -55,6 +55,11 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OV_SUPERAGENT_VOLC_REQUEST_TIMEOUT_MS',
   'OV_SUPERAGENT_VOLC_STREAM_IDLE_TIMEOUT_MS',
   'FALLBACK_MODEL',
+  // OVSA's isolated GitHub account. These are paths/behavior flags, never
+  // tokens; runtime children inherit them so gh and HTTPS git agree.
+  'GH_CONFIG_DIR',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_NOSYSTEM',
   'OV_SUPERAGENT_HISTORY_LIMIT',
 ]);
 // Read from the operator environment only: forwarded to the daemon and updater

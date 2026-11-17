@@ -498,6 +498,33 @@ test('mixed Telegram setup describes each authorization method and keeps email a
   assert.deepEqual(h.calls.map(([kind]) => kind), ['email', 'lark', 'weixin', 'telegram', 'start', 'restart', 'start', 'greet']);
 });
 
+test('setup saves only isolated GitHub paths, never a GitHub token', async (t) => {
+  const h = harness(t, ['', '', '', '1', '2', 'y']);
+  h.options.env.GH_TOKEN = 'host-secret';
+  h.options.github = async ({ env }) => {
+    assert.equal(env.GH_TOKEN, 'host-secret');
+    return { GH_CONFIG_DIR: path.join(h.home, '.ov-superagent', 'github', 'gh'),
+      GIT_CONFIG_GLOBAL: path.join(h.home, '.ov-superagent', 'github', 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
+  };
+  assert.equal(await setupCommand(h.options), 0);
+  const manifest = h.manifest();
+  assert.equal(manifest.env.GH_CONFIG_DIR, path.join(h.home, '.ov-superagent', 'github', 'gh'));
+  assert.equal(manifest.env.GIT_CONFIG_NOSYSTEM, '1');
+  assert.doesNotMatch(JSON.stringify(manifest), /GH_TOKEN|host-secret/);
+});
+
+test('GitHub alone is a savable change to an existing installation', async (t) => {
+  const h = harness(t, ['2', '11']);
+  const before = existing(h, {});
+  h.options.github = async () => ({ GH_CONFIG_DIR: path.join(h.home, '.ov-superagent', 'github', 'gh'),
+    GIT_CONFIG_GLOBAL: path.join(h.home, '.ov-superagent', 'github', 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' });
+  assert.equal(await setupCommand(h.options), 0);
+  assert.deepEqual(h.manifest().agents, [before]);
+  assert.equal(h.manifest().env.GH_CONFIG_DIR, path.join(h.home, '.ov-superagent', 'github', 'gh'));
+  assert.match(h.written(), /配置 OVSA 独立的 GitHub 账号/);
+  assert.deepEqual(h.calls, [['restart', 'asd']]);
+});
+
 test('a second instance keeps the shared env and the default instance', async (t) => {
   const h = harness(t, ['', '', '', '3', '1', '', '', 'y']);
   assert.equal(await setupCommand(h.options), 0);
