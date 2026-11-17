@@ -650,12 +650,7 @@ async def find(
             level=level,
             events_time_decay_protection=events_time_decay_protection,
         )
-    return await _format_search_result(
-        result,
-        service=service,
-        ctx=ctx,
-        read_content=read_content,
-    )
+    return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
 # This tool exposes two of the router's context-only fields as a pair each, so a caller
@@ -825,12 +820,7 @@ async def search(
         level=level,
         events_time_decay_protection=events_time_decay_protection,
     )
-    return await _format_search_result(
-        result,
-        service=service,
-        ctx=ctx,
-        read_content=read_content,
-    )
+    return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
 @_mcp_error_results()
@@ -906,13 +896,7 @@ async def _describe_skills_by_package(items: List[Dict[str, Any]], *, service, c
     await asyncio.gather(*(_describe(root) for root in pending))
 
 
-async def _format_search_result(
-    result,
-    *,
-    service,
-    ctx,
-    read_content: bool = False,
-) -> str:
+async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
     items: List[Dict[str, Any]] = []
     seen: dict[str, int] = {}
     for ctx_type, contexts in [
