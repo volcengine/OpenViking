@@ -72,6 +72,7 @@ const resources = {
       success: 'OK',
     },
     table: {
+      delegatedBy: 'Admin actor: {{user}}',
       accountId: 'Account ID',
       apiType: 'API Type',
       duration: 'Duration',

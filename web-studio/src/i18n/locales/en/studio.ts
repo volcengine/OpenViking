@@ -1,4 +1,15 @@
 const studio = {
+  delegation: {
+    title: 'Open a user view',
+    description:
+      'Use your account Admin credential to open an ordinary user view in {{account}}. Actions use USER permissions and retain your Admin identity in request audit records.',
+    user: 'Existing user ID',
+    open: 'Open user view',
+    checking: 'Verifying user view…',
+    profile: 'User view: {{user}}',
+    unverified:
+      'The server has not verified this delegated user view. Reconnect to a server that supports Admin user delegation.',
+  },
   credentialStorage: {
     sessionOnly:
       'Connection changes cannot be saved in this environment and will be lost after refreshing or closing this page. Existing local records are preserved.',

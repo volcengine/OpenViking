@@ -120,6 +120,14 @@ export function RequestLogRow({ log }: RequestLogRowProps) {
         </TableCell>
         <TableCell className="max-w-36 truncate font-mono text-xs text-muted-foreground">
           {log.user_id || '-'}
+          {log.delegated_by_user_id ? (
+            <div
+              className="truncate text-xs"
+              title={t('table.delegatedBy', { user: log.delegated_by_user_id })}
+            >
+              {t('table.delegatedBy', { user: log.delegated_by_user_id })}
+            </div>
+          ) : null}
         </TableCell>
       </TableRow>
       {hasErrorDetails && expanded ? (
