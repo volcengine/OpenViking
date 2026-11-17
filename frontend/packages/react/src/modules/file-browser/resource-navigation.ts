@@ -1,4 +1,4 @@
-import { normalizeResourceUri } from './fs-uri.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
 
 /** Resolve directory summary links before selecting, loading or revealing a resource. */
 export function resolveResourceNavigation(uri: string): {

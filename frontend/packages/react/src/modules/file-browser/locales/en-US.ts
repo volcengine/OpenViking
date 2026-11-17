@@ -73,6 +73,8 @@ const messages = {
   resizeTree: 'Resize the directory tree',
   l0Summary: 'L0 Summary',
   l1Overview: 'L1 Overview',
+  emptyL0Summary: 'No L0 summary',
+  emptyL1Overview: 'No L1 overview',
   summaryEmpty: 'No summary generated yet',
   summaryFailed: 'The summary could not be loaded.',
 } satisfies Required<ShellLabels>;

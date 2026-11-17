@@ -466,6 +466,7 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
     setup, registered
 ):
     record, compile_name, first = registered
+    setup.files.write = AsyncMock(wraps=setup.files.write)
     await setup.lifecycle.record_queued(first)
     assert await setup.lifecycle.on_start(first) == "proceed"
     first_plan = await setup.lifecycle.runtime_changes(
@@ -473,6 +474,8 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
     )
     assert first_plan["execution"]["mode"] == "full"
     await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
+    paths = [call.args[0] for call in setup.files.write.await_args_list]
+    assert sum(path.endswith("/state.json") for path in paths) == 2
     state = await setup.store.get("acme", "alice", compile_name)
     assert state["progress"]["source_commit"] == first_plan["head"]
     second = make_task(
@@ -829,6 +832,41 @@ async def test_finalization_does_not_search_conflicts(setup, registered, status)
     assert checkpoint["phase"] == "finished"
     setup.find.assert_not_awaited()
     setup.finalize.assert_not_awaited()
+
+
+@pytest.mark.parametrize("run_exists", [False, True])
+async def test_cancel_before_start_repairs_registration(setup, registered, run_exists):
+    """Cancellation without a start repairs missing runs and unpersisted acceptance times."""
+    _, compile_name, task = registered
+    if run_exists:
+        await setup.store.put_run("acme", "alice", compile_name, new_run(task))
+
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="cancelled"))
+
+    assert result.status == "cancelled"
+    state = await setup.store.get("acme", "alice", compile_name)
+    assert state["task_first_create_time"] == state["last_run_time"] == task.created_at
+    assert state["progress"] == {}
+    run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
+    assert run["status"] == "cancelled"
+    assert run["started_at"] is None
+    assert run["finished_at"] is not None
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+async def test_prepared_finalization_reads_state_only_for_progress(setup, registered, status):
+    """A durable preparation checkpoint avoids acceptance reads even with stale worker auth."""
+    _, _, task = registered
+    await setup.lifecycle.on_start(task)
+    task.auth = {}
+    reads = setup.files.read = AsyncMock(wraps=setup.files.read)
+
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
+
+    assert result.status == status
+    paths = [call.args[0] for call in reads.await_args_list]
+    assert sum(path.endswith("/state.json") for path in paths) == (status == "completed")
+    assert sum("/runs/" in path for path in paths) == 1
 
 
 async def test_progress_publication_recovers_after_state_write_failure(

@@ -17,7 +17,11 @@ import zhCN, {
 const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
 const STACKED_EMPTY = { 'en-US': stackedEmptyEn, 'zh-CN': stackedEmptyZh };
 
-import type { FilePreviewLabels } from '../../components/file-preview/index.js';
+import type {
+  FilePreviewLabels,
+  FilePreviewTab,
+} from '../../components/file-preview/index.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
 import type { FileTreeLabels } from '../../components/file-tree/index.js';
 import type { FileBrowserLabels } from './types.js';
 
@@ -72,6 +76,16 @@ export function resolvePreviewLabels(text: ResolvedLabels): FilePreviewLabels {
   };
 }
 
+export function withDirectoryEmptyLabel(
+  tab: FilePreviewTab | undefined,
+  labels: FilePreviewLabels | undefined,
+  text: ResolvedLabels,
+): FilePreviewLabels | undefined {
+  if (tab?.kind === 'directory' && isSystemUri(tab.key))
+    return { ...labels, fileEmpty: text.systemDirectory };
+  return labels;
+}
+
 export const DEFAULT_LABELS: Required<ShellLabels> = enUS;
 
 export interface DirectorySummaryLabels {
@@ -89,12 +103,13 @@ export function resolveSummaryLabels(
 ) {
   const text = resolveLabels(labels, locale);
   const empty = locale === 'zh-CN' ? emptySummariesZh : emptySummariesEn;
+  const sharedEmpty = labels?.summaryEmpty ?? labels?.preview?.fileEmpty;
   return {
     l0: text.l0Summary,
     l1: text.l1Overview,
     failure: text.summaryFailed,
-    l0Empty: labels?.summaryEmpty ?? empty.l0,
-    l1Empty: labels?.summaryEmpty ?? empty.l1,
+    l0Empty: labels?.emptyL0Summary ?? sharedEmpty ?? empty.l0,
+    l1Empty: labels?.emptyL1Overview ?? sharedEmpty ?? empty.l1,
   };
 }
 

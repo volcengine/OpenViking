@@ -11,6 +11,7 @@ import {
   DEMO_PREVIEW_FILE,
   MEMORIES,
 } from '#file-browser-basic-data';
+import { DEMO_PREVIEW_VIDEO } from '#file-browser-native-demo';
 import '@openviking/react/modules/file-browser/style.css';
 
 export default function FileBrowserBasic() {
@@ -144,14 +145,7 @@ export default function FileBrowserBasic() {
         >
           {componentLocale === 'zh-CN' ? '预览图片' : 'Preview image'}
         </Button>
-        <Button
-          size="small"
-          onClick={() =>
-            setUri(
-              `${DEMO_PREVIEW_FILE.slice(0, DEMO_PREVIEW_FILE.lastIndexOf('/'))}/demo.webm`,
-            )
-          }
-        >
+        <Button size="small" onClick={() => setUri(DEMO_PREVIEW_VIDEO)}>
           {componentLocale === 'zh-CN' ? '预览视频' : 'Preview video'}
         </Button>
         <code style={{ overflowWrap: 'anywhere' }}>{uri}</code>

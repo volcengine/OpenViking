@@ -62,6 +62,11 @@ export function PreviewHistoryControls({
           .map((entry) => (
             <SelectOption key={entry.id} value={entry.id}>
               {historyVersionLabel(entry, locale)}
+              {entry.restored ? (
+                <span className="ov-file-history__version-badge">
+                  {text.rollbackBadge}
+                </span>
+              ) : null}
             </SelectOption>
           ))}
       </Select>
@@ -95,7 +100,7 @@ export function PreviewHistoryPath({
       <Tooltip content={path}>
         <span>{path}</span>
       </Tooltip>
-      <Tooltip content={text.copyPath}>
+      <Tooltip content={text.copyPath} focusVisibleOnly>
         <Button
           size="small"
           type="text"

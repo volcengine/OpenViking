@@ -28,6 +28,8 @@ The stylesheet includes the styles of FileTree, FilePreview, FileBrowserActionBa
 
 Shows how the directory tree, search and preview work together, plus the Wiki and experience dashboards. The buttons below switch the previewed resource type, and the drop-down switches the preview actions mode. Dashboard actions stay pinned to the visible right edge of the tree during horizontal scrolling.
 
+Select “Preview video” to see the sample segment’s transcript and extracted frames. Select a transcript entry to seek the player or a frame to enlarge it.
+
 ```tsx file="../../_demos/file-browser-basic.tsx" preview
 
 ```
@@ -296,8 +298,10 @@ All fields are optional, and omitted fields follow `locale`.
 | deleteConfirm           | Confirm button of the delete confirmation                                                                                    | `string`                             | `'Delete'`                                                            |
 | l0Summary               | Tab name of the L0 summary in a directory preview                                                                            | `string`                             | `'L0 Summary'`                                                        |
 | l1Overview              | Tab name of the L1 overview in a directory preview                                                                           | `string`                             | `'L1 Overview'`                                                       |
-| summaryEmpty            | Overrides the empty message for both summary levels.                                                                         | `string`                             | Localized L0 and L1 messages                                          |
+| summaryEmpty            | Shared fallback for both summary levels when no level-specific message is configured                                         | `string`                             | Localized L0 and L1 messages                                          |
 | summaryFailed           | Message when a summary level fails to load and the server gives no message                                                   | `string`                             | `'The summary could not be loaded.'`                                  |
+| emptyL0Summary          | Message when the L0 summary is absent                                                                                        | `string`                             | `'No L0 summary available'`                                           |
+| emptyL1Overview         | Message when the L1 overview is absent                                                                                       | `string`                             | `'No L1 overview available'`                                          |
 | formatCharacterCount    | Character count text in the preview footer                                                                                   | `(count: number) => string`          | Formatted per `locale`, for example `'1,234 characters'`              |
 | formatPreviewUpdatedAt  | Update time text in the preview footer                                                                                       | `(time: string) => string`           | `'Updated on {time}'`                                                 |
 | previewModelNotice      | Model notice in resource previews; pass an empty string to hide it                                                           | `string`                             | `'Content parsing provided by the Content Understanding Model'`       |
@@ -379,9 +383,10 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 | comparisonVersion  | Compare with                                                          | `string`                     | `'Compare with'`                                                                     |
 | latest             | Latest                                                                | `string`                     | `'Latest'`                                                                           |
 | rollback           | Restore this version                                                  | `string`                     | `'Restore this version'`                                                             |
+| rollbackBadge      | Badge on versions created by restoring a file                         | `string`                     | `'Restored'`                                                                         |
 | rollbackTitle      | Restore this version?                                                 | `string`                     | `'Restore this document to this version?'`                                           |
-| rollbackUnchanged  | The content is identical; no new version was created.                 | `string`                     | `'The content is identical; no new version was created.'`                            |
-| rollbackSaved      | File restored.                                                        | `string`                     | `'File restored.'`                                                                   |
+| rollbackUnchanged  | Feedback when the selected version matches the current file           | `string`                     | `'The selected version matches the current file. No new version was created.'`       |
+| rollbackSaved      | Feedback when a file is restored                                      | `string`                     | `'Restore completed.'`                                                               |
 | importChoose       | Choose file                                                           | `string`                     | `'Choose file'`                                                                      |
 | importDrop         | Click to choose or drop a file                                        | `string`                     | `'Click to choose or drop a file'`                                                   |
 | importFormat       | .ovpack files supported                                               | `string`                     | `'.ovpack files supported'`                                                          |
@@ -600,6 +605,7 @@ Pass host request functions through `experienceDataSource`. Omitted functions us
 - When the preview fails, the detail pane shows a failure state: `labels.error` is the conclusion, the server's own message is the reason, and `labels.retry` is the button, which reloads the tree and the current preview together.
 - The empty state (`labels.empty`) appears only when nothing is selected; a selected resource that cannot be read shows the failure state.
 - A directory's L0 summary and L1 overview are requested separately: when one fails, only that level shows its reason, and when both fail the whole preview shows the failure state. Without a server message, `labels.summaryFailed` is shown.
+- An empty response or a server-generated `Directory … is not ready` placeholder displays the empty state for that level.
 - When a search fails, the dialog keeps the endpoint's reason, and you can submit the same query again to retry.
 
 ### Tree width

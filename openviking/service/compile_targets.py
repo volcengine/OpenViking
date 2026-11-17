@@ -228,11 +228,17 @@ class CompileStore(Protocol):
     async def get(
         self, account_id: str, owner_user_id: str, compile_name: str
     ) -> Optional[dict]: ...
+    async def require_config_exists(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> None: ...
     async def list_users(self, account_id: str) -> list[str]: ...
     def edit(self, account_id: str, owner_user_id: str, compile_name: str) -> Any: ...
     async def get_run(
         self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
     ) -> Optional[dict]: ...
+    async def list_runs(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> list[dict]: ...
     async def put_run(
         self, account_id: str, owner_user_id: str, compile_name: str, run: dict
     ) -> None: ...
@@ -363,16 +369,30 @@ class CompileStateStore:
     async def get(self, account_id: str, owner_user_id: str, compile_name: str) -> Optional[dict]:
         return await self.read_json(self._record_path(account_id, owner_user_id, compile_name))
 
+    async def require_config_exists(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> None:
+        """Raise NotFoundError before a filesystem lock can create a missing config directory.
+
+        A fresh stat observes configurations published by other workers after a cached miss.
+        """
+        path = self._record_path(account_id, owner_user_id, compile_name)
+        try:
+            await self._agfs.stat(path, bypass_cache=True)
+        except (AGFSNotFoundError, FileNotFoundError) as exc:
+            raise NotFoundError(compile_name, "compile name") from exc
+
     @asynccontextmanager
     async def edit(
         self, account_id: str, owner_user_id: str, compile_name: str
     ) -> AsyncIterator[dict]:
-        """Mutate an existing configuration atomically; failed bodies leave it unchanged."""
+        """Persist only changed JSON under the configuration lock; failed bodies leave it unchanged."""
         path = self._record_path(account_id, owner_user_id, compile_name)
         async with self.locked(path) as lease:
             record = await self.read_json(path)
             if record is None:
                 raise NotFoundError(compile_name, "compile configuration")
+            original_json = json.dumps(record, ensure_ascii=False, sort_keys=True)
             yield record
             if set(record) != STATE_FIELDS:
                 raise InvalidArgumentError(
@@ -380,7 +400,8 @@ class CompileStateStore:
                 )
             if record["execution_context"].get("owner_user_id") != owner_user_id:
                 raise InvalidArgumentError("Compile configuration owner cannot change")
-            await self.write_json(path, record, lease)
+            if json.dumps(record, ensure_ascii=False, sort_keys=True) != original_json:
+                await self.write_json(path, record, lease)
 
     async def iter_records(
         self,
@@ -742,11 +763,26 @@ class CompileLifecycle:
             async with self._store.edit(
                 task.account_id, self._owner_user_id(task), compile_name
             ) as record:
-                await self.record_queued(task, locked_record=record)
+                await self._ensure_queued_run(task, compile_name, record)
             return
+        await self._ensure_queued_run(task, compile_name, locked_record)
+
+    async def _ensure_queued_run(self, task: Any, compile_name: str, locked_record: dict) -> dict:
+        """Return the persisted run, repairing missing registration under the caller's config lock."""
         run = await self._store.get_run(
             task.account_id, self._owner_user_id(task), compile_name, task.task_id
         )
+        if locked_record["task_first_create_time"] is None:
+            # A persisted initial run survives a failed state.json acceptance write.
+            history = await self._store.list_runs(
+                task.account_id, self._owner_user_id(task), compile_name
+            )
+            initial = next(
+                (item for item in reversed(history) if item["meta"]["trigger"] == "initial"),
+                None,
+            )
+            if initial is not None:
+                locked_record["task_first_create_time"] = initial["created_at"]
         is_first = locked_record["task_first_create_time"] is None
         if run is None:
             run = new_run(task)
@@ -758,6 +794,7 @@ class CompileLifecycle:
         locked_record["last_run_time"] = max(
             locked_record["last_run_time"] or task.created_at, task.created_at
         )
+        return run
 
     @asynccontextmanager
     async def _admission(self, task: Any) -> AsyncIterator[None]:
@@ -801,14 +838,20 @@ class CompileLifecycle:
 
     async def on_start(self, task: Any) -> Any:
         """Resume a fixed plan; target admission also serializes duplicate task deliveries."""
-        if self._compile_name(task):
-            await self.record_queued(task)
+        compile_name = self._compile_name(task)
         try:
             async with self._admission(task):
                 await self._refresh_checkpoint(task)
                 if not self._checkpoint(task).get("phase"):
                     await self._save_checkpoint(task, {"phase": "planning"})
-                run = await self._read_run(task)
+                record = None
+                if compile_name:
+                    async with self._store.edit(
+                        task.account_id, self._owner_user_id(task), compile_name
+                    ) as record:
+                        run = await self._ensure_queued_run(task, compile_name, record)
+                else:
+                    run = await self._read_run(task)
                 if run["status"] in TERMINAL and run["finished_at"] is not None:
                     return self._finished_snapshot(run)
                 checkpoint = self._checkpoint(task)
@@ -819,7 +862,7 @@ class CompileLifecycle:
                         status=checkpoint["terminal_status"], error_message=run.get("error")
                     )
                 if not checkpoint.get("plan"):
-                    await self._begin_run(task, run)
+                    await self._begin_run(task, run, record)
                 if self._checkpoint(task).get("noop"):
                     return ExternalTaskSnapshot(
                         status="completed", result=dict.fromkeys(_RESULT_KEYS.values(), 0)
@@ -828,8 +871,8 @@ class CompileLifecycle:
         except LockAcquisitionError:
             return "busy"
 
-    async def _begin_run(self, task: Any, run: dict) -> None:
-        """Freeze source and Skill snapshots plus a replayable Runtime plan before submission."""
+    async def _begin_run(self, task: Any, run: dict, record: Optional[dict]) -> None:
+        """Freeze a replayable plan using the config read at start, or no config for one-off runs."""
         request = task.meta["request"]
         compile_name = self._compile_name(task)
         ctx = await self.task_ctx(task)
@@ -837,14 +880,11 @@ class CompileLifecycle:
         checkpoint = self._checkpoint(task)
         if "baseline" not in checkpoint:
             progress = {}
-            if compile_name:
-                record = await self._store.get(
-                    task.account_id, self._owner_user_id(task), compile_name
-                )
-                if record is None:
-                    raise NotFoundError(compile_name, "compile configuration")
-                if execution_signature(record) == request["compile"]["input_signature"]:
-                    progress = deepcopy(record["progress"])
+            if (
+                record is not None
+                and execution_signature(record) == request["compile"]["input_signature"]
+            ):
+                progress = deepcopy(record["progress"])
             await self._save_checkpoint(
                 task, {"baseline": progress, "progress_before": progress.get("source_commit")}
             )
@@ -966,9 +1006,11 @@ class CompileLifecycle:
             if self._checkpoint(task).get("phase") == "rollback_exhausted":
                 return await self._fail_blocked_rollback(task, snapshot, scope)
         try:
-            await self.record_queued(task)
             async with self._admission(task):
                 await self._refresh_checkpoint(task)
+                # A baseline key proves registration completed; early cancellation can bypass start.
+                if "baseline" not in self._checkpoint(task):
+                    await self.record_queued(task)
                 async with self._store.lock_run(*scope) if scope else nullcontext():
                     return await self._finish(task, snapshot)
         except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:

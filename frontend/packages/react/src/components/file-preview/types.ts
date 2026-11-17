@@ -1,3 +1,5 @@
+import type { FilePreviewLabels } from './label-types.js';
+export type { FilePreviewLabels } from './label-types.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FilePreviewActionSource } from './action-types.js';
 import type { FilePreviewEditing } from './editing-types.js';
@@ -186,6 +188,25 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * textures of a 3D model.
    */
   resources?: readonly FileViewerResource[];
+  /** Optional transcript and extracted frames supplied by the video host. */
+  videoDetails?: {
+    segments: readonly {
+      startMs: number;
+      endMs: number;
+      text: string;
+      speaker?: string;
+    }[];
+    frames: readonly {
+      id: string;
+      name: string;
+      src?: string;
+      failed?: boolean;
+    }[];
+    framesLoading?: boolean;
+    onLoadFrames?: () => void;
+    /** Report an image load/decode failure; the host invalidates the matching source. */
+    onFrameError?: (frameId: string, src: string) => void;
+  };
   /** 可选的分级内容，宿主提供 L0/L1/L2 等视图与内容。 Optional host-supplied content levels. */
   levels?: readonly FilePreviewLevel[];
   /** 受控分级 key。 Controlled content-level key. */
@@ -516,54 +537,6 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
  * 可替换文案，组件内置中英文文案。
  * Replaceable copy with built-in Chinese and English defaults.
  */
-export interface FilePreviewLabels {
-  previewImage?: string;
-  closePreview?: string;
-  /** 展开折叠路径层级的无障碍名称。Accessible name for hidden path levels. */
-  showHiddenPath?: string;
-  copyPath?: string;
-  copied?: string;
-  copyFailed?: string;
-  moreActions?: string;
-  actionFailed?: string;
-  previewMode?: string;
-  sourceMode?: string;
-  viewSwitch?: string;
-  edit?: string;
-  editFile?: string;
-  save?: string;
-  /** 编辑区文本框的无障碍名称。Accessible name of the editor. */
-  editor?: string;
-  /** 编辑器加载失败时的提示。Message shown when the editor fails to load. */
-  editorLoadFailed?: string;
-  /** 语法高亮加载失败时的提示。Message shown when syntax highlighting fails to load. */
-  highlightFailed?: string;
-  /** 读取失败后退出编辑态的按钮文案。Label of the button that leaves editing after a failed load. */
-  leaveEditing?: string;
-  /** 重试按钮文案。Retry button label. */
-  retry?: string;
-  /** 读取失败时的提示。Message shown when reading failed. */
-  loadFailed?: string;
-  /** 保存失败时的提示。Message shown when saving failed. */
-  saveFailed?: string;
-  versionNoteTitle?: string;
-  versionNoteLabel?: string;
-  versionNotePlaceholder?: string;
-  versionNoteCancel?: string;
-  versionNoteConfirm?: string;
-  versionNotCreated?: string;
-  /** 无法预览该格式时的提示。Message shown when the format cannot be previewed. */
-  unsupported?: string;
-  /** 取回正文时的加载提示。Message shown while the text is being fetched. */
-  loading?: string;
-  /** 文件长度为 0 时的提示。Message shown when the file itself is empty. */
-  fileEmpty?: string;
-  /** 文件非空但没有可展示内容时的提示。Message shown for a non-empty file with nothing to render. */
-  noContent?: string;
-  /** 正文被截断时的提示。Message shown when the body was truncated. */
-  truncated?: string;
-}
-
 /**
  * 通过组件 ref 切换或查询当前页签，并透传底座的命令式能力。
  * Switches or queries the active tab through the component ref, and exposes the
