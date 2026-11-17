@@ -146,6 +146,12 @@ export async function loadVideoDetails(
           frames: [...frames.values()],
           framesLoading: loading,
           onLoadFrames,
+          onFrameError: (id, src) => {
+            const frame = frames.get(id);
+            if (!frame || frame.src !== src || options.signal?.aborted) return;
+            frames.set(id, { ...frame, src: undefined, failed: true });
+            update();
+          },
         },
       });
     }

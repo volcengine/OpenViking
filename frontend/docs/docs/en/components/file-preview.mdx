@@ -140,12 +140,13 @@ A tab that renders `source` by its format. It includes every field of `FilePrevi
 
 Renders below a video source. The host supplies transcript entries and frames independently; use an empty array when either has no entries.
 
-| Property      | Description                                                       | Type                 | Default  |
-| ------------- | ----------------------------------------------------------------- | -------------------- | -------- |
-| segments      | Timestamped transcript entries in display order                   | `readonly Segment[]` | Required |
-| frames        | Extracted frames in display order                                 | `readonly Frame[]`   | Required |
-| framesLoading | Shows a loading message while frames are being fetched            | `boolean`            | `false`  |
-| onLoadFrames  | Called when selecting the frames tab or retrying failed downloads | `() => void`         | -        |
+| Property      | Description                                                                                | Type                                     | Default  |
+| ------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------- | -------- |
+| segments      | Timestamped transcript entries in display order                                            | `readonly Segment[]`                     | Required |
+| frames        | Extracted frames in display order                                                          | `readonly Frame[]`                       | Required |
+| framesLoading | Shows a loading message while frames are being fetched                                     | `boolean`                                | `false`  |
+| onLoadFrames  | Called when selecting the frames tab or retrying failed downloads                          | `() => void`                             | -        |
+| onFrameError  | Reports a thumbnail or enlarged image load/decode failure with its frame ID and failed URL | `(frameId: string, src: string) => void` | -        |
 
 `segments` entries:
 
@@ -165,7 +166,7 @@ Renders below a video source. The host supplies transcript entries and frames in
 | src      | Accessible image URL; selecting the image opens an enlarged preview                   | `string`  | -        |
 | failed   | Marks a failed download; when loading finishes, any failed frame shows a retry action | `boolean` | `false`  |
 
-The host owns requests, cancellation and image URL cleanup. In `onLoadFrames`, update `framesLoading` and each frame's `src` or `failed` value; retrying calls the same callback. FileBrowser loads frame images on demand and keeps discovered frames available while the transcript loads or if its request or parsing fails.
+The host owns requests, cancellation and image URL cleanup. In `onLoadFrames`, update `framesLoading` and each frame's `src` or `failed` value; retrying calls the same callback. An image load or decode failure hides the thumbnail and closes its enlarged preview. In `onFrameError`, clear the matching `src` and mark the frame `failed`; ignore the event if the frame already has a different URL. FileBrowser handles this invalidation and downloads the failed frame again on retry. It loads frame images on demand and keeps discovered frames available while the transcript loads or if its request or parsing fails.
 
 ### FilePreviewDirectoryTab
 

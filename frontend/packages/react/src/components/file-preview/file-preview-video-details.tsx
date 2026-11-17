@@ -1,9 +1,8 @@
 import { useId, useRef, useState } from 'react';
-import { Button } from '../../shared/primitives/button/button.js';
+import { VideoFrames } from './frames.js';
 import type { FilePreviewFileTab, FilePreviewLabels } from './types.js';
 
 type VideoDetails = NonNullable<FilePreviewFileTab['videoDetails']>;
-type Frame = VideoDetails['frames'][number];
 
 function formatTime(ms: number) {
   const total = Math.floor(ms / 1000);
@@ -117,71 +116,5 @@ export function FilePreviewVideoDetails({
         {tab === 'frames' && <VideoFrames details={details} text={text} />}
       </div>
     </div>
-  );
-}
-
-function VideoFrames({
-  details,
-  text,
-}: {
-  details: VideoDetails;
-  text: Required<FilePreviewLabels>;
-}) {
-  const [selected, setSelected] = useState<Frame>();
-  const dialog = useRef<HTMLDialogElement>(null);
-  if (!details.frames.length)
-    return <p className="ov-file-preview__video-empty">{text.videoNoFrames}</p>;
-
-  return (
-    <>
-      {details.framesLoading && (
-        <p className="ov-file-preview__video-empty" role="status">
-          {text.loading}
-        </p>
-      )}
-      <ul
-        className="ov-file-preview__video-frames"
-        aria-busy={details.framesLoading}
-      >
-        {details.frames.map((frame) => (
-          <li key={frame.id}>
-            {frame.src ? (
-              <button
-                type="button"
-                aria-label={`${text.previewImage}: ${frame.name}`}
-                onClick={() => {
-                  setSelected(frame);
-                  dialog.current?.showModal();
-                }}
-              >
-                <img src={frame.src} alt={frame.name} loading="lazy" />
-              </button>
-            ) : (
-              <span>{frame.name}</span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {!details.framesLoading &&
-        details.frames.some((frame) => frame.failed) && (
-          <div className="ov-file-preview__video-empty">
-            {text.loadFailed}{' '}
-            <Button size="small" onClick={details.onLoadFrames}>
-              {text.retry}
-            </Button>
-          </div>
-        )}
-      <dialog
-        className="ov-file-preview__image-dialog ov-file-preview__frame-dialog"
-        ref={dialog}
-        aria-label={selected?.name ?? text.previewImage}
-        onClose={() => setSelected(undefined)}
-      >
-        {selected?.src && <img src={selected.src} alt={selected.name} />}
-        <Button size="small" onClick={() => dialog.current?.close()}>
-          {text.closePreview}
-        </Button>
-      </dialog>
-    </>
   );
 }

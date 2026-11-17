@@ -202,6 +202,8 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
     }[];
     framesLoading?: boolean;
     onLoadFrames?: () => void;
+    /** Report an image load/decode failure; the host invalidates the matching source. */
+    onFrameError?: (frameId: string, src: string) => void;
   };
   /** 可选的分级内容，宿主提供 L0/L1/L2 等视图与内容。 Optional host-supplied content levels. */
   levels?: readonly FilePreviewLevel[];
