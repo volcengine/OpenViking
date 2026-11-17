@@ -60,13 +60,16 @@ export function useExperienceDashboard({
     days: 7,
     tab: 'impact' as 'impact' | 'source' | 'test',
   });
-  const current =
+  let current =
     state.owner === owner
       ? state
       : { owner, page: 0, days: 7, tab: 'impact' as const };
-  const { page, days } = current;
-  const tab =
-    current.tab === 'test' && !dataSource?.tests ? 'impact' : current.tab;
+  // Revoking Test also expires its saved selection, so restoring it stays on Impact.
+  if (current.tab === 'test' && !dataSource?.tests) {
+    current = { ...current, tab: 'impact', page: 0 };
+    setState(current);
+  }
+  const { page, days, tab } = current;
   const setPage = (value: number) =>
     setState({ ...current, page: Math.max(0, value) });
   const setDays = (value: number) =>
