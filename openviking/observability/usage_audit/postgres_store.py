@@ -59,10 +59,6 @@ class PostgresUsageAuditStore(SQLUsageAuditStore):
         self._connect_timeout = connect_timeout_seconds
         self._statement_timeout = statement_timeout_seconds * 1000
 
-    async def initialize(self) -> None:
-        async with self._lock:
-            await self._run_sync(self._initialize_sync)
-
     def _initialize_sync(self) -> None:
         if self._conn is not None:
             return

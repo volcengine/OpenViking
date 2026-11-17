@@ -354,3 +354,31 @@ async def test_cancellation_keeps_thread_connection_owned_until_completion(
     assert (
         await store.get_today_tokens(account_id="acct", user_date="2026-05-12", tz=ZoneInfo("UTC"))
     )["vlm_input"] == 3
+
+
+@pytest.mark.asyncio
+async def test_cancelled_initialization_closes_the_opened_connection(
+    usage_store_factory, monkeypatch
+):
+    import threading
+
+    store = usage_store_factory()
+    entered, release = threading.Event(), threading.Event()
+    original = store._initialize_sync
+
+    def opened():
+        original()
+        entered.set()
+        assert release.wait(timeout=5)
+
+    monkeypatch.setattr(store, "_initialize_sync", opened)
+    initialization = asyncio.create_task(store.initialize())
+    assert await asyncio.to_thread(entered.wait, 5)
+    initialization.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await initialization
+    assert store._conn is None
+    monkeypatch.setattr(store, "_initialize_sync", original)
+    await store.initialize()
+    assert store._conn is not None

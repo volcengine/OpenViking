@@ -23,10 +23,6 @@ class SQLiteUsageAuditStore(SQLUsageAuditStore):
         super().__init__(**kwargs)
         self._db_path = Path(db_path)
 
-    async def initialize(self) -> None:
-        async with self._lock:
-            await self._run_sync(self._initialize_sync)
-
     def _initialize_sync(self) -> None:
         if self._conn is not None:
             return

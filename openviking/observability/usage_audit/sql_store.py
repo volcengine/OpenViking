@@ -53,6 +53,16 @@ class SQLUsageAuditStore:
         self._conn: Any = None
         self._lock = asyncio.Lock()
 
+    async def initialize(self) -> None:
+        async with self._lock:
+            try:
+                await self._run_sync(self._initialize_sync)
+            except BaseException:
+                # A cancelled caller never receives the initialized store; its
+                # completed connection must not outlive that failed startup.
+                await self._run_sync(self._close_sync)
+                raise
+
     async def _run_sync(self, function, *args):
         # Cancellation must not release the connection lock while its thread is
         # still using the connection (including COMMIT/ROLLBACK or close).
