@@ -357,6 +357,61 @@ Activity events persist in the same SQLite ledger and are not deleted by ordinar
 
 ## Runtime boundaries
 
+### Automatic runtime fallback
+
+The instance's `model` selector remains its primary runtime and model. Recognized
+model-service failures (network errors, timeouts, rate limits, upstream failures,
+or an empty stream) can retry the failed turn once on a backup. Backup failures
+do not recursively switch again. Cancellation, denied credentials, tool failures
+and business errors do not activate the configurable route.
+
+Configure `agents[]` in `config.json`, then restart the instance:
+
+```json
+{
+  "model": "traex",
+  "primaryRuntime": "traex",
+  "fallbackRuntime": "pi",
+  "fallbackReturnAfterMs": 600000
+}
+```
+
+These are fields of an existing agent entry, not a complete deployment manifest.
+`primaryRuntime` is optional: it defaults to the runtime named by `model` (Claude
+for the legacy unconfigured failure policy). `fallbackRuntime` defaults to Codex.
+Both accept `codex`, `claude`, `traex`, `pi`, `durable`, `opencode`, `agy`, `dsh`,
+or `volc`, subject to the same backend/connector compatibility checks as manual
+runtime selection. A primary equal to the backup disables switching.
+
+The interval defaults to **600000 ms (10 minutes)**, accepts integer values from
+0 through 86400000, and starts when the backup has successfully started. Requests
+or successful turns do not extend it. During that interval new requests also use
+the backup. At the deadline Core closes new ingress, drains already accepted
+work, then restores the primary: the interval is a recovery threshold, not a
+hard task timeout. A stuck turn must still be cancelled or timed out by its own
+runtime. If restoration fails, Core reports it and keeps new requests queued;
+an explicit `/runtime` selection or process restart recovers admission.
+
+Set the interval to `0` to retain the previous sticky fallback behavior. There
+is also a separate five-minute fallback cooldown; it is not a return timer.
+Automatic switches never rewrite the desired runtime in the manifest. Restart
+reconciles SQLite's active backup with the configured primary. An explicit
+`/runtime` selection takes precedence over automatic return. Manual model/effort
+changes invalidate a pending return rather than being silently overwritten.
+
+For deployments using environment settings, the corresponding names are
+`OV_SUPERAGENT_PRIMARY_RUNTIME`, `OV_SUPERAGENT_FALLBACK_RUNTIME`, and
+`OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS`; per-agent fields override manifest-wide
+environment defaults. `FALLBACK_MODEL` remains an optional backup-model override
+(legacy default `gpt-5.6-sol` for Codex only). For Pi and other backends, omit it
+or set it to an empty string to retain that backend's saved/configured model and
+effort. For example, Pi's existing model and `OV_SUPERAGENT_PI_EFFORT` are not
+replaced by TraeX's settings.
+
+Handoff uses Core's existing authority fence, shared outbox, and OpenViking recent
+context; it does not transfer native reasoning or guarantee exactly-once execution
+of arbitrary shell/external tools. Verify uncertain actions before retrying work.
+
 The daemon and slash commands control models only through `AgentRuntime.start`, `submit`, `snapshot`, `transition`, and `stop`. `runtime-catalog` centralizes aliases, efforts, and capabilities; `runtime-adapter` normalizes transports; `runtime-input` creates authenticated envelopes. Adapters retain protocol differences: Codex JSON-RPC, Claude stream-json, Pi RPC JSONL, Durable host JSONL, DSH bridge JSON-RPC (LF-framed), OpenCode and Antigravity ACP nd-JSON, and Ark Sessions/SSE. Self-hosted Ark output/tool execution belongs to Worker/runtime. `submit` with `accepted: false` leaves the batch with the caller; ownership transfers only on true.
 
 ### Runtime tools

@@ -18,7 +18,9 @@ function fixture(t, script) {
   const children = [];
   const closed = [];
   const spawnImpl = (...args) => {
-    const child = spawn(...args);
+    // Run this JS fixture through the test interpreter. A freshly created
+    // executable's platform launch latency is not part of the protocol bound.
+    const child = spawn(process.execPath, [args[0], ...args[1]], args[2]);
     children.push(child);
     closed.push(once(child, 'close'));
     return child;

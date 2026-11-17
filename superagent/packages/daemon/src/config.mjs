@@ -11,6 +11,7 @@ import { bundledLarkCli } from './lark-cli-bin.mjs';
 import { managedPiBin } from './pi-runtime.mjs';
 import { OV_SOUL_URI } from './conversation-policy.mjs';
 import { defaultDshSkillRoots, dshSkillRootChoices } from './dsh-config.mjs';
+import { RUNTIME_IDS } from './runtime-catalog.mjs';
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -146,6 +147,9 @@ export function getConfig() {
   const dataDir = path.resolve(
     process.env.OV_SUPERAGENT_DATA_DIR || path.join(os.homedir(), '.ov-superagent', 'data'),
   );
+  const primaryRuntime = process.env.OV_SUPERAGENT_PRIMARY_RUNTIME
+    ? enumEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', '', RUNTIME_IDS) : '';
+  const fallbackRuntime = enumEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'codex', RUNTIME_IDS);
   const configuredTempDir = (process.env.OV_SUPERAGENT_TEMP_DIR ?? '').trim();
   if (configuredTempDir && !path.isAbsolute(configuredTempDir)) {
     throw new Error('OV_SUPERAGENT_TEMP_DIR must be an absolute path');
@@ -241,6 +245,9 @@ export function getConfig() {
     opencodeBin: process.env.OPENCODE_BIN || 'opencode',
     agyBin: process.env.AGY_BIN || 'agy',
     initialModel: process.env.OV_SUPERAGENT_MODEL || '',
+    primaryRuntime,
+    fallbackRuntime,
+    fallbackReturnAfterMs: intEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', 600_000, { min: 0, max: 86_400_000 }),
     codexEffort: enumEnv('OV_SUPERAGENT_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
     traexEffort: enumEnv('OV_SUPERAGENT_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
     claudeModel: process.env.OV_SUPERAGENT_CLAUDE_MODEL || '',
@@ -298,8 +305,9 @@ export function getConfig() {
       min: 30_000,
       max: 3_600_000,
     }),
-    // Codex model the daemon auto-switches to when a claude turn fails.
-    fallbackModel: process.env.FALLBACK_MODEL || 'gpt-5.6-sol',
+    // Only Codex uses the legacy model default; other backends keep their own
+    // saved/configured model and effort unless explicitly overridden.
+    fallbackModel: process.env.FALLBACK_MODEL || (fallbackRuntime === 'codex' ? 'gpt-5.6-sol' : ''),
     host,
     port: intEnv('OV_SUPERAGENT_PORT', 3738, { min: 1, max: 65535 }),
     httpEnabled: boolEnv('OV_SUPERAGENT_HTTP_ENABLED', true),

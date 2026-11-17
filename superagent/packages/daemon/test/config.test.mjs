@@ -26,6 +26,26 @@ afterEach(() => {
 });
 
 describe('configuration safety', { concurrency: false }, () => {
+  it('validates primary, backup and failback timeout without changing backend model defaults', () => {
+    setEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', undefined);
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', undefined);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', undefined);
+    setEnv('FALLBACK_MODEL', undefined);
+    assert.equal(getConfig().primaryRuntime, '');
+    assert.equal(getConfig().fallbackRuntime, 'codex');
+    assert.equal(getConfig().fallbackReturnAfterMs, 600_000);
+    setEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', 'traex');
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'pi');
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '2000');
+    assert.equal(getConfig().primaryRuntime, 'traex');
+    assert.equal(getConfig().fallbackModel, '');
+    assert.equal(getConfig().fallbackReturnAfterMs, 2000);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '-1');
+    assert.throws(() => getConfig(), /FALLBACK_RETURN_AFTER_MS/);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '600000');
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'missing');
+    assert.throws(() => getConfig(), /FALLBACK_RUNTIME/);
+  });
   it('resolves relative CLI overrides against the connector cwd while preserving names and absolute paths', () => {
     const absolute = path.resolve(projectDir, '/opt/custom tools/renamed-cli');
     for (const [envKey, configKey] of [['LARK_CLI_BIN', 'larkCliBin'], ['SLACK_CLI_BIN', 'slackCliBin']]) {

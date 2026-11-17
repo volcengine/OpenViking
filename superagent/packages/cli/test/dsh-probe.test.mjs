@@ -22,7 +22,8 @@ function fixture(t, script) {
   const children = [];
   const closed = [];
   const spawnImpl = (...args) => {
-    const child = spawn(...args);
+    // Keep a real subprocess without measuring fresh executable launch latency.
+    const child = spawn(process.execPath, [args[0], ...args[1]], args[2]);
     children.push(child);
     closed.push(once(child, 'close'));
     return child;
