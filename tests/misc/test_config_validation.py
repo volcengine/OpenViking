@@ -460,7 +460,7 @@ def test_openviking_config_dump_uses_only_canonical_cache_schema():
         },
     })
 
-    dumped = config.model_dump(mode="json")
+    dumped = config.to_dict()
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
         cache=config.cache,
@@ -480,6 +480,26 @@ def test_openviking_config_dump_uses_only_canonical_cache_schema():
     assert "max_file_size_bytes" not in binding["cache"]
     assert "traversal_mode" not in binding["cache"]
     assert "bypass_prefixes" not in binding["cache"]
+    assert OpenVikingConfig.from_dict(dumped).storage.agfs.cachefs.instance == "default"
+
+
+def test_openviking_config_defaults_roundtrip():
+    """Serialize defaults without selectors invalid for their inactive backends."""
+    dumped = OpenVikingConfig.from_dict({}).to_dict()
+    agfs = dumped["storage"]["agfs"]
+
+    assert "instance" not in agfs["queuefs"]
+    assert "instance" not in agfs["cachefs"]
+    assert "instance" not in agfs["pathlock"]
+    assert "instance" not in agfs["coordination"]
+    assert OpenVikingConfig.from_dict(dumped)
+
+
+@pytest.mark.parametrize("section", ["queuefs", "cachefs", "pathlock", "coordination"])
+def test_openviking_config_rejects_explicit_inactive_cache_instance(section):
+    """Reject explicitly configured selectors for inactive cache consumers."""
+    with pytest.raises(ValueError, match=rf"storage\.agfs\.{section}.*instance requires"):
+        OpenVikingConfig.from_dict({"storage": {"agfs": {section: {"instance": "custom"}}}})
 
 
 def test_openviking_config_rejects_removed_queuefs_redis_schema():
@@ -1675,11 +1695,37 @@ def test_cache_shares_redis_backend_compares_service_identity():
     )
 
 
+def test_cache_shares_redis_backend_with_tls_default_port():
+    """Treat implicit and explicit TLS Redis ports as one service."""
+    cache = {
+        "instances": {
+            "default": {
+                "provider": "redis",
+                "params": {"endpoints": ["rediss://cache-test.invalid"]},
+            },
+            "queue": {
+                "provider": "redis",
+                "params": {"endpoints": ["rediss://cache-test.invalid:6380"]},
+            },
+        },
+    }
+
+    assert _cache_shares_redis_backend(
+        cache,
+        {
+            "cachefs": {"backend": "cache"},
+            "queuefs": {"backend": "cache", "instance": "queue"},
+        },
+        None,
+    )
+
+
 def test_redis_service_keys_normalizes_endpoints():
     assert _redis_service_keys(["127.0.0.1:6379"]) == {"127.0.0.1:6379"}
     assert _redis_service_keys(["127.0.0.1:6379"], tls=True) == {"127.0.0.1:6379"}
     assert _redis_service_keys(["redis://127.0.0.1:6379"]) == {"127.0.0.1:6379"}
     assert _redis_service_keys(["redis://127.0.0.1"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["rediss://127.0.0.1"]) == {"127.0.0.1:6380"}
     assert _redis_service_keys("127.0.0.1:6379") == {"127.0.0.1:6379"}
     assert _redis_service_keys([" 127.0.0.1:6379 "]) == {"127.0.0.1:6379"}
     assert _redis_service_keys(["REDIS://127.0.0.1:6379"]) == {"127.0.0.1:6379"}

@@ -268,7 +268,8 @@ def _redis_service_keys(endpoints: Any, tls: bool = False) -> set[str]:
             continue
         if not host:
             continue
-        keys.add(f"{host}:{port or 6379}")
+        default_port = 6380 if parsed.scheme.lower() == "rediss" else 6379
+        keys.add(f"{host}:{port if port is not None else default_port}")
     return keys
 
 

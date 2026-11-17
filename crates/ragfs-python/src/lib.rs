@@ -872,7 +872,9 @@ fn cache_config_from_canonical_ov_conf_with_runtime(
         ));
     }
     config.instances = parse_canonical_cache_instances(cache)?;
-    config.runtime_enabled = true;
+    if !config.instances.contains_key("default") {
+        return Err("cache.instances must contain a non-empty default instance".to_string());
+    }
     validate_cache_runtime_config(&config)?;
     Ok(config)
 }
@@ -1150,7 +1152,7 @@ fn validate_cache_runtime_config(config: &RagfsCacheConfig) -> Result<(), String
 }
 
 fn provider_kind(value: String) -> Result<CacheProviderKind, String> {
-    match value.as_str() {
+    match value.trim() {
         "redis" => Ok(CacheProviderKind::Redis),
         "dynamic" => Ok(CacheProviderKind::Dynamic),
         other => Err(format!(
@@ -4473,6 +4475,47 @@ mod tests {
             instances["default"].redis.endpoints,
             RedisCacheConfig::default().endpoints
         );
+    }
+
+    /// Accept canonical provider values normalized by the Python config layer.
+    #[test]
+    fn canonical_cache_provider_name_is_trimmed() {
+        let cache = serde_json::json!({
+            "instances": {
+                "default": {
+                    "provider": " redis "
+                }
+            }
+        });
+
+        let instances = parse_canonical_cache_instances(cache.as_object().unwrap()).unwrap();
+
+        assert!(matches!(
+            instances["default"].provider,
+            CacheProviderKind::Redis
+        ));
+    }
+
+    /// Avoid opening configured cache providers until a consumer selects one.
+    #[test]
+    fn canonical_unused_cache_instances_do_not_enable_runtime() {
+        let config = cache_config_from_canonical_ov_conf(
+            &serde_json::json!({
+                "cache": {
+                    "instances": {
+                        "default": {
+                            "provider": "redis"
+                        }
+                    }
+                }
+            }),
+            "tenant-a",
+        )
+        .unwrap();
+
+        assert!(!config.enabled);
+        assert!(!config.runtime_enabled);
+        assert!(config.stack_config().is_none());
     }
 
     #[test]
