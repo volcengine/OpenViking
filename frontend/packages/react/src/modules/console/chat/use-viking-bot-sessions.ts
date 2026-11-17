@@ -15,8 +15,13 @@ export function useVikingBotSessions(
   const { service = native, enabled = true, scopeKey } = options;
   const controller = useMemo(() => {
     void scopeKey;
-    void native;
-    return createSessionsController(service, enabled, signal, monitoring);
+    return createSessionsController(
+      service,
+      enabled,
+      signal,
+      monitoring,
+      native.patchSessionTitle,
+    );
   }, [native, service, enabled, signal, scopeKey, monitoring]);
   // Effect necessity: the session list is synchronized with a remote service.
   // Identity changes can arrive through navigation, not just clicks. Cleanup
@@ -31,5 +36,8 @@ export function useVikingBotSessions(
     refresh: controller.refresh,
     create: controller.create,
     remove: controller.remove,
+    rename: state.sessions.some((item) => item.canRename)
+      ? controller.rename
+      : undefined,
   };
 }

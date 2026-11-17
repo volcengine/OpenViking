@@ -29,7 +29,14 @@ export function ConsoleTaskNotifications({
   // cleanup unsubscribes, while the holder owns notice timers and portal cleanup.
   useEffect(() => {
     const update = () => {
-      const tasks = tracker.getSnapshot();
+      const tasks = tracker
+        .getSnapshot()
+        .filter(
+          (task) =>
+            task.kind !== 'resource' ||
+            isTaskTerminal(task.status) ||
+            task.queryError,
+        );
       const current = new Set(tasks.map((task) => task.key));
       for (const key of versions.current.keys()) {
         if (!current.has(key)) {
