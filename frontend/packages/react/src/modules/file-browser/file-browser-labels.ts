@@ -7,7 +7,7 @@ import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import { resolveLocale, type Locale } from '../../shared/locale.js';
 import enUS, { stackedEmpty as stackedEmptyEn } from './locales/en-US.js';
 import zhCN, { stackedEmpty as stackedEmptyZh } from './locales/zh-CN.js';
-import { isSystemUri } from './preview-policy.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
 
 const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
 const STACKED_EMPTY = { 'en-US': stackedEmptyEn, 'zh-CN': stackedEmptyZh };

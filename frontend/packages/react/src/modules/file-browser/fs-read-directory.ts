@@ -1,6 +1,6 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { isAbort } from './fs-errors.js';
+import { isAbort } from '../../shared/request/fs-errors.js';
 import { type DirectorySummary } from './fs-model.js';
 
 const NOT_READY_SUFFIXES = [

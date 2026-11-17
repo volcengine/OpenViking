@@ -1,12 +1,12 @@
 import { createSearchObserver, type SearchTarget } from './search-observer.js';
-import { QueryObservation } from './query-observation.js';
+import { QueryObservation } from '../../shared/monitoring/query-observation.js';
 import { type Workflow } from '../../shared/monitoring/workflow.js';
 import { bindingOf } from '../../shared/monitoring/client.js';
 import { useWorkflowCommit } from '../../shared/monitoring/use-workflow-commit.js';
 import { useMemo, useRef, useSyncExternalStore } from 'react';
 import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { useQueryScope } from './use-query-scope.js';
+import { useQueryScope } from '../../shared/request/use-query-scope.js';
 import type {
   SearchFilters,
   SearchMode,

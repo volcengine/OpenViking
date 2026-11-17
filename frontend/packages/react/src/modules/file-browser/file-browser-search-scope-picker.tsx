@@ -6,7 +6,7 @@ import treeZh from '../../components/file-tree/locales/zh-CN.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useLocale } from '../../shared/locale-context.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
-import { nameFromUri } from './fs-model.js';
+import { nameFromUri } from '../../shared/directory-tree/rows.js';
 import { useSearchScopePage } from './use-search-scope-page.js';
 import type { ScopeOption } from './search-types.js';
 

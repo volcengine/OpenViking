@@ -5,7 +5,7 @@ import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient } from '../../client/provider.js';
 import { queryKeys } from '../../client/query-keys.js';
 import type { OvRequestOptions } from '../../client/types.js';
-import { useQueryScope } from './use-query-scope.js';
+import { useQueryScope } from '../../shared/request/use-query-scope.js';
 import {
   InvalidWikiConflictSearchResponse,
   readWikiConflictSummary,

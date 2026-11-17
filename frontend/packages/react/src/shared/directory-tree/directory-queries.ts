@@ -1,10 +1,10 @@
-import { bindingOf } from '../../shared/monitoring/client.js';
-import { QueryObservation } from './query-observation.js';
+import { bindingOf } from '../monitoring/client.js';
+import { QueryObservation } from '../monitoring/query-observation.js';
 import { InfiniteQueryObserver, type InfiniteData } from '@tanstack/query-core';
-import type { DirState } from './fs-model.js';
-import { toError } from './fs-errors.js';
+import type { DirState } from './types.js';
+import { toError } from '../request/fs-errors.js';
 import { directoryOptions, type DirectoryPage } from './directory-query.js';
-import type { QueryRequest } from './use-query-scope.js';
+import type { QueryRequest } from '../request/use-query-scope.js';
 
 type Observer = InfiniteQueryObserver<
   DirectoryPage,

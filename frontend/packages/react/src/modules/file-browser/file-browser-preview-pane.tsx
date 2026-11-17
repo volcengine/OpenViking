@@ -8,7 +8,7 @@ import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
 import { useRef } from 'react';
 import { useOvClient } from '../../client/provider.js';
-import { scopeKeyOf } from './fs-scope.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 import { previewActionContext } from './file-browser-preview-action-source.js';
 import type { Locale } from '../../shared/locale.js';
 import type { OvRequestOptions } from '../../client/types.js';

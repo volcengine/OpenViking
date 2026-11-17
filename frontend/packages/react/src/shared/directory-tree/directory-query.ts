@@ -1,14 +1,14 @@
-import { traceLink } from '../../shared/monitoring/trace/link.js';
-import { tagModel, tagData, readData } from '../../shared/monitoring/data.js';
-import { bindingOf } from '../../shared/monitoring/client.js';
+import { traceLink } from '../monitoring/trace/link.js';
+import { tagModel, tagData, readData } from '../monitoring/data.js';
+import { bindingOf } from '../monitoring/client.js';
 import type {
   InfiniteData,
   InfiniteQueryObserverOptions,
 } from '@tanstack/query-core';
 import { queryKeys } from '../../client/query-keys.js';
 import { loadPage, PAGE_SIZE } from './fs-page.js';
-import { isSystemUri } from './preview-policy.js';
-import type { QueryRequest } from './use-query-scope.js';
+import { isSystemUri } from '../resource-uri.js';
+import type { QueryRequest } from '../request/use-query-scope.js';
 
 export type DirectoryPage = Awaited<ReturnType<typeof loadPage>> & {
   nextOffset: number;

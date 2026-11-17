@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo } from 'react';
-import type { DirState } from './fs-model.js';
+import type { DirState } from './types.js';
 
 /** Observe committed directory state; never use a fetch callback as UI readiness. */
 export function useDirectoryMonitoring(

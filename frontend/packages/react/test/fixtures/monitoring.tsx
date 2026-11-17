@@ -28,7 +28,7 @@ export { FilePreviewTransition } from '../../src/components/file-preview/file-pr
 export { MonitoringFlow } from '../../src/shared/monitoring/flow-context.js';
 export { useMonitoringBinding } from '../../src/shared/monitoring/context.js';
 
-export { loadPage } from '../../src/modules/file-browser/fs-page.js';
+export { loadPage } from '../../src/shared/directory-tree/fs-page.js';
 export { useOvClient } from '../../src/client/provider.js';
 export { useFsTree } from '../../src/modules/file-browser/use-fs-tree.js';
 export { createQueryClient } from '../../src/client/query-client.js';

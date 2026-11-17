@@ -1,6 +1,6 @@
 import { useAnalyticsRef } from '../../../shared/analytics/context.js';
 import { beginMutation } from '../../../shared/analytics/mutation.js';
-import { toError } from '../fs-errors.js';
+import { toError } from '../../../shared/request/fs-errors.js';
 import { localRequestErrors } from '../../../client/observe-errors.js';
 import { useEffect, useRef, useState } from 'react';
 import type {

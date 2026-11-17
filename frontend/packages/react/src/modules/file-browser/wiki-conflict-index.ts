@@ -2,8 +2,8 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { within } from './dashboard-model.js';
 import { resolveDashboardUri } from './dashboard-resource.js';
-import { normalizeResourceUri } from './fs-uri.js';
-import type { FsEntry } from './fs-model.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
+import type { FsEntry } from '../../shared/directory-tree/types.js';
 
 /** Indexed files determine subtree presence without expanding the visible tree. */
 export async function readWikiConflictIndex(

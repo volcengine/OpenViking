@@ -1,10 +1,7 @@
-import { beginWorkflow } from '../../shared/monitoring/workflow.js';
-import { now } from '../../shared/monitoring/clock.js';
-import { bindClient, bindingOf } from '../../shared/monitoring/client.js';
-import {
-  rawClient,
-  type BoundClient,
-} from '../../shared/monitoring/binding.js';
+import { beginWorkflow } from '../monitoring/workflow.js';
+import { now } from '../monitoring/clock.js';
+import { bindClient, bindingOf } from '../monitoring/client.js';
+import { rawClient, type BoundClient } from '../monitoring/binding.js';
 import {
   useCallback,
   useEffect,

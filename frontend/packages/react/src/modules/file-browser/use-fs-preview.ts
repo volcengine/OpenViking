@@ -11,9 +11,9 @@ import type {
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
-import { isAbort } from './fs-errors.js';
+import { isAbort } from '../../shared/request/fs-errors.js';
 import { toDirectoryTab, type DirectorySummary } from './fs-model.js';
-import { isSystemUri } from './preview-policy.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
 import { readDirectory } from './fs-read-directory.js';
 import { loadingTab } from './fs-preview-loading-tab.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';

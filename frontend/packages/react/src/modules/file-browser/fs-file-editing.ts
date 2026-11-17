@@ -2,7 +2,8 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewEditing } from '../../components/file-preview/index.js';
 import { isExperienceFile } from './experience-data.js';
-import { isSummaryUri, isSystemUri } from './preview-policy.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
+import { isSummaryUri } from './preview-policy.js';
 import { readFileContent } from './fs-read-content.js';
 import { parseWikiFileConflicts } from './wiki-conflicts.js';
 

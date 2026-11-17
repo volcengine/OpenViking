@@ -6,7 +6,8 @@ import { fileTypeIcon } from './fs-icon.js';
 import { readFileContent } from './fs-read-content.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
 import { createFileEditing } from './fs-file-editing.js';
-import { nameFromUri, toFileTab } from './fs-model.js';
+import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { toFileTab } from './fs-model.js';
 
 /** 读取正文的行数上限；读满即按截断处理。The line cap; a full read counts as truncated. */
 export const MAX_LINES = 2000;

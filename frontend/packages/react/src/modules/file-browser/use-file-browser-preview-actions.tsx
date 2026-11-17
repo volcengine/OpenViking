@@ -13,7 +13,7 @@ import { previewPolicy } from './preview-policy.js';
 import { defaultPreviewActions } from './preview-default-actions.js';
 import { downloadPreview } from './preview-native.js';
 import { isBinaryFile } from './fs-file-kind.js';
-import { scopeKeyOf } from './fs-scope.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import type { FileBrowserPreviewActions } from './preview-types.js';
