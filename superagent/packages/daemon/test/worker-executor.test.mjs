@@ -124,6 +124,20 @@ describe('WorkerExecutor', () => {
     assert.equal(exhausted.transient, true);
   });
 
+  for (const stopReason of ['aborted', 'length']) {
+    it(`does not treat a Pi retry ending with ${stopReason} as recovered`, async (t) => {
+      const { dir, config, task } = setup(t);
+      // Pi's JSON print mode exits zero even for these incomplete responses.
+      config.piBin = fakeCli(dir, 'pi', [
+        { type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'HTTP 429' } },
+        { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'unfinished' }], stopReason } },
+      ]);
+      const result = await new WorkerExecutor({ config }).start({ task: task(), prompt: 'p', authority: 'x' }).done;
+      assert.match(result.error, new RegExp(stopReason));
+      assert.equal(result.transient, false, 'the terminal failure replaces the earlier rate limit');
+    });
+  }
+
   it('runs Codex with exec --json, resuming the thread it named on the first turn', async (t) => {
     const { dir, config, task } = setup(t);
     config.codexBin = fakeCli(dir, 'codex', [

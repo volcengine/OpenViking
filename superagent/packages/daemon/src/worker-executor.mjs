@@ -124,7 +124,10 @@ const RUNTIMES = {
           if (text) state.text = text;
           // Pi retries a failed model call itself (auto_retry_start), so an
           // error is the turn's only if no assistant message got past it.
-          state.error = message.stopReason === 'error' ? String(message.errorMessage || 'pi turn failed') : null;
+          // JSON print mode also exits zero on aborted or truncated responses;
+          // neither is a successful recovery from the earlier model error.
+          state.error = ['error', 'aborted', 'length'].includes(message.stopReason)
+            ? String(message.errorMessage || `pi turn ${message.stopReason}`) : null;
           state.usage.inputTokens += Number(message.usage?.input ?? 0);
           state.usage.cachedInputTokens += Number(message.usage?.cacheRead ?? 0);
           state.usage.outputTokens += Number(message.usage?.output ?? 0);

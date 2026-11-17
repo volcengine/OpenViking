@@ -784,16 +784,15 @@ export class TaskManager {
     // latest input, and the worker goes on with that input: a delivery naming
     // the task stays allowed until this report is settled (working()).
     const ahead = !failed && fresh.length > 0;
-    // Ending the task and recording the obligation to deliver its report are
-    // atomic. A failed inbox write leaves this durable outbox available to retry.
+    // Persist the next state with the report obligation. At the catch-up cap,
+    // restore() must still resume the pending input if publication is interrupted.
     this.transaction(() => {
-      this.setStatus(taskId, STATUS_FOR[report.state] ?? 'done');
+      this.setStatus(taskId, ahead ? 'queued' : STATUS_FOR[report.state] ?? 'done');
       this.db.prepare('INSERT OR IGNORE INTO task_report_deliveries(report_id, created_at_ms, while_working) VALUES (?, ?, ?)')
         .run(report.id, this.now(), ahead ? 1 : 0);
     });
     this.flushReports();
     if (ahead) {
-      this.setStatus(taskId, 'queued');
       this.request(taskId);
     } else if (ENDED.has(this.get(taskId)?.status)) {
       this.handBackUnseen(taskId, `the task ended (${this.get(taskId).status}) before its worker saw them`);

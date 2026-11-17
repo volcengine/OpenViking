@@ -376,6 +376,39 @@ describe('TaskManager', () => {
     assert.deepEqual(db.prepare('SELECT while_working FROM task_report_deliveries ORDER BY report_id').all().map((r) => r.while_working), [1, 0]);
   });
 
+  it('recovers the latest input if interrupted while publishing a report at the catch-up cap', async (t) => {
+    const { tasks, executor, db, workspace, inbox, relayed } = setup(t);
+    tasks.create({ rows: [row({ content: 'write the report' })], title: 'X', runtime: 'pi' });
+    for (let index = 0; index < 4; index += 1) {
+      tasks.route('t1', [row({ content: `addition ${index + 1}` })], 'owner');
+      tasks.report('t1', { state: 'done', draft: `version ${index + 1}` });
+      if (index === 3) {
+        tasks.flushReports = () => {
+          tasks.shutdown();
+          throw new Error('interrupted before inbox publication');
+        };
+      }
+      executor.turns[index].finish({ text: '' });
+      await settle();
+    }
+    assert.equal(executor.turns.length, 4);
+    assert.equal(relayed.length, 0);
+
+    const next = fakeExecutor();
+    const restored = new TaskManager({ db, config: { workspace }, executor: next, inbox, lineFor: () => '' });
+    t.after(() => restored.shutdown());
+    restored.restore();
+    assert.equal(relayed.length, 1, 'the saved result is offered after restart');
+    assert.match(relayed[0].item.text, /working=1/);
+    assert.equal(next.turns.length, 1, 'the pending addition is resumed after restart');
+    assert.match(next.turns[0].prompt, /addition 4/);
+    restored.report('t1', { state: 'done', draft: 'all additions included' });
+    next.turns[0].finish({ text: '' });
+    await settle();
+    assert.equal(restored.get('t1').status, 'done');
+    assert.equal(restored.undelivered('t1').length, 0);
+  });
+
   it('starts the turns a previous daemon was running again, with a recovery note', async (t) => {
     const { tasks, executor, db, workspace, inbox } = setup(t);
     tasks.create({ rows: [row({ content: 'original request: never publish' })], title: 'X', runtime: 'pi' });
