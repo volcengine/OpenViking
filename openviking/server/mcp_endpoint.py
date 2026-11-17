@@ -585,9 +585,12 @@ async def invoke_mcp_tool(
 # -- find / search ---------------------------------------------------------
 
 _TAG_FILTER_DESCRIPTION = (
-    "Only return records matching every supplied tag. Each tag must use strict k=v format."
+    "Filter results by tags; every supplied tag must match and use k=v format "
+    "(for example, team=search)."
 )
-_INCLUDE_TAGS_DESCRIPTION = "Include tags in the tool output."
+_INCLUDE_TAGS_DESCRIPTION = (
+    "Include each result's tags in the output; this does not filter results."
+)
 
 
 def _format_tags(tags: Optional[List[str]]) -> str:
