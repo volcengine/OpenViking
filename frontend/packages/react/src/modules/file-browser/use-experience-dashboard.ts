@@ -167,6 +167,14 @@ export function useExperienceDashboard({
     enabled: enabled && !directory && tab === 'test',
     refreshGeneration,
   });
+  // A refresh can remove the final page; reset before committing the empty view.
+  if (tests.data) {
+    const lastPage = Math.max(
+      0,
+      Math.ceil(tests.data.total / EXPERIENCE_PAGE_SIZE) - 1,
+    );
+    if (page > lastPage) setPage(lastPage);
+  }
   return {
     list,
     sources,

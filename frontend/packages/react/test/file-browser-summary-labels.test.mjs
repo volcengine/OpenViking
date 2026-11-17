@@ -133,6 +133,23 @@ test('directory placeholders become empty summaries without removing real Markdo
     const contents = () =>
       api.current.previewTabs[0].levels.map(({ source }) => source.content);
     assert.deepEqual(contents(), ['', '']);
+    for (const value of [
+      '# dir\n\n[Directory overview is not ready]',
+      '# dir\r\n\r\n[Directory overview is not ready]\r\n',
+    ]) {
+      overview = value;
+      await act(async () => {
+        await api.current.actions.refresh();
+      });
+      await settle();
+      assert.deepEqual(contents(), ['', '']);
+    }
+    overview = '# other-directory\n\n[Directory overview is not ready]';
+    await act(async () => {
+      await api.current.actions.refresh();
+    });
+    await settle();
+    assert.deepEqual(contents(), ['', overview]);
     overview =
       '# viking://resources/team-docs\n\nAn upstream placeholder follows.\n\n[Directory overview is not ready]';
     await act(async () => {

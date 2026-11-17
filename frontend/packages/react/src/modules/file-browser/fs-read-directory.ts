@@ -46,13 +46,16 @@ export async function readDirectory(
   // them apart. The failed level therefore keeps its reason for the tab to show; when
   // both levels fail the whole read is thrown so the preview shows its failure state
   // and a retry.
-  const read = (path: string, placeholder: RegExp) =>
+  const basename = uri.replace(/\/$/, '').split('/').at(-1);
+  const unavailableOverview = `# ${basename}\n\n[Directory overview is not ready]`;
+  const read = (path: string, placeholder: (value: string) => boolean) =>
     client
       .request<string>({ method: 'GET', path, query: { uri }, options })
       .then((value) => ({
         ok: true as const,
         text:
-          typeof value === 'string' && !placeholder.test(value.trimEnd())
+          typeof value === 'string' &&
+          !placeholder(value.trimEnd().replaceAll('\r\n', '\n'))
             ? value
             : '',
       }))
@@ -65,8 +68,14 @@ export async function readDirectory(
   // sibling switching inside it, not file tabs. A file tab answers "which files
   // are open"; these answer "which summary level of this directory is shown".
   const [abstractResult, overviewResult] = await Promise.all([
-    read(OV_PATHS.contentAbstract, placeholders.abstract),
-    read(OV_PATHS.contentOverview, placeholders.overview),
+    read(OV_PATHS.contentAbstract, (value) =>
+      placeholders.abstract.test(value),
+    ),
+    read(
+      OV_PATHS.contentOverview,
+      (value) =>
+        placeholders.overview.test(value) || value === unavailableOverview,
+    ),
   ]);
   // 被取消的那一级不是「没有生成」，而是「这次请求作废了」：把它当作空摘要
   // 返回，调用方就会拿着一个过期结果当成成功。取消优先于其余失败上报。

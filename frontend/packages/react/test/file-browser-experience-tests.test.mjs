@@ -52,11 +52,13 @@ const findByText = (container, selector, label) =>
 test('Test tab is opt-in and loads test materials by page with retry', async () => {
   const fetch = fixture();
   const requests = [];
+  let total = 21;
   const dataSource = {
     async tests(request) {
       requests.push(request);
       if (request.offset && requests.length === 2)
         throw new Error('Unavailable');
+      if (request.offset >= total) return { items: [], total };
       return {
         items: [
           {
@@ -65,7 +67,7 @@ test('Test tab is opt-in and loads test materials by page with retry', async () 
             content: `Fixture ${request.offset}`,
           },
         ],
-        total: 21,
+        total,
       };
     },
   };
@@ -95,6 +97,17 @@ test('Test tab is opt-in and loads test materials by page with retry', async () 
       ],
     );
     assert.equal(requests[0].signal.aborted, true);
+    total = 20;
+    await click(view.container.querySelector('.ov-file-browser__refresh'));
+    assert.match(view.container.textContent, /Fixture 0/);
+    assert.deepEqual(
+      requests.slice(-2).map(({ offset }) => offset),
+      [20, 0],
+    );
+    total = 0;
+    await click(view.container.querySelector('.ov-file-browser__refresh'));
+    assert.match(view.container.textContent, /No test materials/);
+    assert.equal(requests.at(-1).offset, 0);
   } finally {
     await view.unmount();
   }

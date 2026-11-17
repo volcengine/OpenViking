@@ -7,7 +7,7 @@ import { ExperienceSourceMessages } from './experience-source-messages.js';
 import { Modal } from '../../shared/primitives/modal/modal.js';
 import { useLocale } from '../../shared/locale-context.js';
 import type { Locale } from '../../shared/locale.js';
-import { experienceLabels } from './labels.js';
+import { experienceLabels, trajectoryDetailLabels } from './labels.js';
 import { ExperienceQueryState } from './experience-state.js';
 import { ExperienceCopyAction } from './experience-copy-action.js';
 import type {
@@ -15,23 +15,6 @@ import type {
   ExperienceTrajectory,
   ExperienceTrajectoryMessages,
 } from './types.js';
-
-const text = {
-  'zh-CN': {
-    body: '轨迹正文',
-    preview: '预览',
-    emptyBody: '暂无轨迹正文',
-    messages: '来源消息',
-    emptyMessages: '暂无来源消息',
-  },
-  'en-US': {
-    body: 'Trajectory document',
-    preview: 'Preview',
-    emptyBody: 'No trajectory document',
-    messages: 'Source messages',
-    emptyMessages: 'No source messages',
-  },
-};
 
 export function ExperienceTrajectoryDetail({
   trajectory,
@@ -55,7 +38,7 @@ export function ExperienceTrajectoryDetail({
   onOpenUri?: (uri: string) => void;
 }) {
   const locale = useLocale(localeProp);
-  const copy = text[locale];
+  const copy = trajectoryDetailLabels(locale);
   const t = experienceLabels(locale);
   const [raw, setRaw] = useState(false);
   const slash = trajectory.uri.lastIndexOf('/') + 1;

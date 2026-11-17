@@ -4,25 +4,31 @@ import type { Locale } from '../../shared/locale.js';
 import { experienceTime } from './experience-time.js';
 import type { ExperienceTrajectoryMessages } from './types.js';
 
-function speaker(role: string, unknown: string) {
+import { trajectoryDetailLabels } from './labels.js';
+
+function speaker(
+  role: string,
+  unknown: string,
+  labels: ReturnType<typeof trajectoryDetailLabels>,
+) {
   switch (role.trim().toLowerCase()) {
     case 'user':
       return {
-        name: 'User',
+        name: labels.user,
         variant: 'user',
         icon: <UserIcon width={14} height={14} />,
       };
     case 'assistant':
     case 'agent':
       return {
-        name: 'Agent',
+        name: labels.agent,
         variant: 'agent',
         icon: <WikiDiscussIcon width={14} height={14} />,
       };
     case 'tool':
     case 'function':
       return {
-        name: 'Tool',
+        name: labels.tool,
         variant: 'tool',
         icon: <VikingBotIcon name="tool" width={14} height={14} />,
       };
@@ -44,10 +50,11 @@ export function ExperienceSourceMessages({
   locale: Locale;
   unknown: string;
 }) {
+  const labels = trajectoryDetailLabels(locale);
   return (
     <ol className="ov-experience-trajectory-detail__messages">
       {items.map(({ role, content, createdAt, tools }, index) => {
-        const { name, variant, icon } = speaker(role, unknown);
+        const { name, variant, icon } = speaker(role, unknown, labels);
         return (
           <li key={index}>
             <div className="ov-experience-trajectory-detail__role">
