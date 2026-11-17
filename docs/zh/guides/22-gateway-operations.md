@@ -166,7 +166,7 @@ chart 不创建 Ingress。把代理指向它的 Service，并保持 `fullnameOve
 
 ### 启动检查 {#startup-checks}
 
-选择 Redis 后端时，启动 PING 必须成功。地址、凭据错误或 Redis 不可达会使启动失败，Kubernetes 会重启容器；滚动发布使用 `maxUnavailable: 0`。运行时 Redis 故障不会改变 `/health`；鉴权阶段存储失败返回纯文本 HTTP 500，并在 stderr 输出异常栈。
+选择 Redis 后端时，启动 PING 必须成功。地址、凭据错误或 Redis 不可达会使启动失败，Kubernetes 会重启容器；滚动发布使用 `maxUnavailable: 0`。运行时 Redis 故障不会改变 `/health`；鉴权或路由阶段存储失败返回 JSON `503 store_unavailable`，带 `Retry-After: 1`，网关日志记一条写明错误类型的警告。
 
 独立网关开始监听前会先检查 OpenViking 的认证模式：
 
@@ -361,9 +361,11 @@ config:
 
 无管理面、按密钥隔离的部署再加上 `management_api: false`、`openviking_keys: true`、`tenancy: key`、`default_upstreams` 和 `request_log_sink: stdout`，见[直接使用 OpenViking API 密钥](../gateway/09-gateway-keys.md#openviking-keys)和[部署默认上游](../gateway/07-upstreams.md#deployment-default-upstreams)。没有管理 API 时，在 OpenViking 中删除用户不会通知网关，该用户的网关数据按[保留期限](../gateway/11-security-and-data.md#retention)过期。部署在它前面的服务遵循[宿主集成约定](#host-integration-contract)。
 
-Redis `mode: standalone` 用于单个端点，包括托管代理；`mode: cluster` 用 Redis Cluster 端点且数据库必须为 0。TLS 用 `rediss://`，端点 URL 中不要写凭证。`pool_size` 限制每个进程同时执行的 Redis 命令数，超出的命令等待空闲连接。保持 `pool_size >= capture_concurrency + 8`。Redis 位于鉴权路径，整体不可用时请求返回 HTTP 500；需要高可用时使用主从和自动切换，内存和持久化按 [Redis 内存策略](#redis-memory-policy)配置。
+Redis `mode: standalone` 用于单个端点，包括托管代理；`mode: cluster` 用 Redis Cluster 端点且数据库必须为 0。TLS 用 `rediss://`，端点 URL 中不要写凭证。`pool_size` 限制每个进程同时执行的 Redis 命令数，超出的命令等待空闲连接。每条命令连同这段等待最长 `connect_timeout_ms + command_timeout_ms`（`command_timeout_ms` 为 `0` 时不限）。保持 `pool_size >= capture_concurrency + 8`。Redis 位于鉴权路径，整体不可用时请求在 `connect_timeout_ms + command_timeout_ms` 内返回 `503 store_unavailable`（JSON），带 `Retry-After: 1` 和 `X-OpenViking-Upstream-Attempted: 0`。连不上存储的保存 worker 会退避，等待时间逐次翻倍、最长 30 秒，存储恢复后自行继续；需要高可用时使用主从和自动切换，内存和持久化按 [Redis 内存策略](#redis-memory-policy)配置。
 
 Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`；多副本时创建 `maxUnavailable: 1` 的 PDB。通过 `affinity` 把副本分散到不同节点。各进程缓存管理记录，所以修改管理配置或吊销签发密钥后，其他副本最多 **2 秒**后生效。
+
+`max_inflight_requests` 限制一个进程同时处理的模型请求数；默认 `0` 表示不限制。超出时，请求立即得到 HTTP 503 `gateway_overloaded` 和 `Retry-After: 1`，网关不读存储、不调用 OpenViking，也不会发给服务商（`X-OpenViking-Upstream-Attempted: 0`），客户端或网关前置服务可以把它改发到别处。流式回复在响应体结束前一直占用名额。`.../models` 不受限制。这个值根据压测结果来定：[状态行](#status-line)中的 `inflight_requests` 是在途请求数，`rejected_overload` 是被拒绝的请求数。
 
 所有探针都不带凭证访问 `/health`，只返回本地状态，不调用 OpenViking 或 Redis。startupProbe 预算为 300 秒（`2 × 150`）。启动完成后，OpenViking 故障不会使 Pod 摘流。
 
@@ -378,9 +380,25 @@ Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`�
 | `X-API-Key` 或 `Authorization: Bearer` | 客户端的 OpenViking API 密钥，原样透传 |
 | `X-OpenViking-Upstream-URL` | 选中的端点，必须与某个 `default_upstreams` 条目的 `base_url` 相同；其他值返回 403，且不发出任何请求。见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header) |
 | `X-OpenViking-Upstream-Key` | 服务商 API Key，用于 `auth_mode: passthrough` 的上游 |
+| `X-OpenViking-Request-Id` | 可选：宿主自己为请求分配的 ID，须匹配 `[A-Za-z0-9._:/-]{1,128}`。网关把它用作自己的 `request_id`，宿主日志和网关记录因此共用一个关联键。缺失时网关自行生成；不合法时替换为生成的 ID，记录中加上 `request_id_rejected: true` |
+| `X-OpenViking-Resource-Id` | 可选：宿主希望写入记录的 ID（`[A-Za-z0-9._:-]{1,128}`），仅在 `trusted_host_headers: true` 时记为 `resource_id` |
+| `X-OpenViking-Request-Source` | 可选：调用方类型（`[a-z0-9_-]{1,32}`），仅在 `trusted_host_headers: true` 时记为 `request_source` |
 | 其他请求头 | 客户端自己的请求头，例如 `X-OpenViking-Session` 和 `X-OpenViking-Context`，原样透传 |
 
-网关把请求转发给服务商之前，会去掉所有 `X-OpenViking-*` 请求头、客户端凭证和逐跳请求头。
+设置这三个可选请求头时，要覆盖客户端可能发来的同名值。网关把请求转发给服务商之前，会去掉所有 `X-OpenViking-*` 请求头、客户端凭证和逐跳请求头；也会去掉服务商响应中的所有 `X-OpenViking-*` 响应头，因此服务商无法伪造下面这些响应头。
+
+模型路由的每个响应都会给宿主带回这些响应头：
+
+| 响应头 | 何时出现 | 取值 |
+| --- | --- | --- |
+| `X-OpenViking-Request-Id` | 每个响应：成功、转发的服务商错误、网关错误、流式回复 | 网关的 `request_id` |
+| `X-OpenViking-Error-Reason` | 仅当状态码和响应体由网关自己产生时 | [模型路由的错误](../api/25-gateway.md#model-route-errors)中的原因 |
+| `X-OpenViking-Error-Origin` | 同上 | `gateway`、`openviking` 或 `upstream` |
+| `X-OpenViking-Upstream-Attempted` | 同上 | 网关已开始向服务商发送请求（包括压缩摘要请求）时为 `1`，否则为 `0` |
+| `X-OpenViking-Degraded` | 发送响应头时请求已经降级 | 用 `,` 连接的异常代码，例如 `revocation_check_unavailable,recall_failed` |
+| `Retry-After` | `store_unavailable` 和 `gateway_overloaded` 响应 | `1` |
+
+非 2xx 响应如果没有 `X-OpenViking-Error-Reason`，就是服务商自己的错误，网关原样转发。只有带 `X-OpenViking-Upstream-Attempted: 0` 的响应，宿主才可以把请求改发到别处；为 `1` 时服务商可能已经收到了请求。网关处理请求时发给 OpenViking 的调用，在 `X-Request-ID` 中带上同一个 ID。
 
 ## Redis 内存策略 {#redis-memory-policy}
 
@@ -403,11 +421,43 @@ appendfsync everysec
 
 网关不导出 Prometheus 之类的监控指标。请求日志默认写入存储，可通过 Studio 的[概览和请求日志](../gateway/10-overview-and-requests.md#overview)标签页查看，或者调用管理 API 的 `/gateway/admin/overview` 和 `/gateway/admin/logs`。
 
-在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个完成的模型请求和后台保存状态变更各产生一行 JSON，即使 stdout 接到管道也会立即刷新。每条记录包含 `time`（写入时的 Unix 秒数）、`account`、`user_id`（旧保存状态可能为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
+在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个模型请求（包括失败的请求）和每次后台保存状态变更各产生一行 JSON，即使 stdout 接到管道也会立即刷新。设置 `capture_delivery_records: true` 时，每次投递、提交和失败的尝试也各产生一行。每条记录包含 `time`（写入时的 Unix 秒数）、`account` 和 `user_id`（密钥确认之前就失败的请求为 `null`，旧保存状态也可能为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
+
+设置 `request_log_sink: "file"` 和 `request_log_path`，就把同样的行写到文件。写文件由后台线程完成，磁盘慢也不会拖住请求；它的队列（10,000 行）满了时，新行被丢弃，并计入状态行的 `records_dropped`。文件达到 `request_log_max_bytes`（默认 256 MiB）时轮转，保留四个旧文件（`requests.jsonl.1` … `.4`）。这种输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker；需要扩容时增加副本。在 Kubernetes 上，把文件放在日志采集器能读到的卷上，例如用 chart 的 `extraVolumes` 和 `extraVolumeMounts`：
+
+```yaml
+config:
+  request_log_sink: file
+  request_log_path: /var/log/openviking-gateway/$HOSTNAME.jsonl
+extraVolumes:
+  - name: gateway-logs
+    hostPath:
+      path: /var/log/openviking-gateway
+      type: DirectoryOrCreate
+extraVolumeMounts:
+  - name: gateway-logs
+    mountPath: /var/log/openviking-gateway
+```
+
+`$HOSTNAME` 从环境变量解析为 Pod 名，每个 Pod 写自己的文件：副本之间绝不能共用一个日志文件。
+
+独立网关设置 `log_path` 后，应用日志（警告、错误和 traceback）不再以文本写到 stderr，而是以 JSON 行写入这个轮转文件，字段为 `time`、`level`、`logger`、`message`、`request_id`（处理请求时写下的行才有）和 `exc`（有 traceback 时）。
 
 当 `management_api: false` 关闭 Studio 和管理接口时，配置 stdout sink 并采集进程或容器日志进行观测。管理面开启但选择 stdout sink 时也采用同样流程：请求日志页和概览中的请求统计不会收到新记录。之前已存储的记录仍可见，直到过期。
 
-从请求日志的顶层字段统计 reason 和首调缓存结果。对 capture 暂停（`kind: capture`）、队列增长、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。identify 拒绝发生在代理请求记录之前，所以从代理访问日志统计 401/402/403 和 Redis 故障引发的 500，具体 traceback 看网关 stderr。代理并发连接数可以近似表示在途流数。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
+从请求日志的顶层字段统计 reason 和首调缓存结果。对 capture 暂停（`kind: capture`）、队列增长、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。网关自身的错误也会写入记录：按 `error_reason` 和 `error_origin` 统计（见[日志记录](../api/25-gateway.md#log-records)）。store 输出不保存密钥确认之前就被拒绝的请求，使用它时请从代理访问日志统计这些 401/402/403；`internal_error` 的 traceback 看网关 stderr。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
+
+### 状态行 {#status-line}
+
+设置 `snapshot_interval_seconds`（例如 `60`）后，每个网关进程按这个间隔写一行状态。使用 `stdout` 和 `file` 输出时，它和请求记录写在同一处；使用 `store` 时，由 `openviking_gateway.snapshot` logger 以 INFO 级别输出，宿主没有配置日志 handler 时写到 stderr。状态行不含账户、用户、会话、模型或请求 ID，字段见[状态行](../api/25-gateway.md#status-line)。每行统计的是距上一行的这段时间。区间计数（包括 `capture.delivered` 和 `capture.failed`）、`inflight_*` 和 `capture.workers` 按进程统计，可以跨进程相加；`capture.due`、`capture.scheduled` 和 `capture.oldest_due_age_s` 描述的是共享存储，从任意一个进程读取即可（使用 Redis 时把它们相加，积压会按副本数重复计算）。建议的告警：
+
+- `errors.store_unavailable` 或 `store_errors` 大于零：状态存储（SQLite 或 Redis）出错。
+- `errors.upstream_timeout`、`upstream_unreachable` 或 `upstream_disconnected` 上升：服务商变慢或无法连接。
+- `openviking.state` 不是 `ok`，或 `degradations.recall_failed` 上升：OpenViking 没有应答。
+- `inflight_requests` 接近容量；`inflight_streams` 反映长时间运行的流；`rejected_overload` 大于零：进程已达 `max_inflight_requests`。
+- `records_dropped` 或 `records_failed` 大于零：请求记录在丢失。
+- `capture.oldest_due_age_s` 持续增长，或 `capture.workers` 小于 `capture_concurrency`：后台保存落后或已停止。
+- `capture.failed` 大于零而 `capture.delivered` 一直为零：保存到 OpenViking 卡住了。保存在重试期间，`capture.due` 和 `capture.oldest_due_age_s` 不会增长，因为重试被安排在之后的时间。
 
 ### 例行检查 {#day-to-day-operations}
 

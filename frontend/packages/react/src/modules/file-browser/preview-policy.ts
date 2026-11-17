@@ -1,9 +1,10 @@
-import { normalizeResourceUri } from './fs-uri.js';
+import {
+  isSystemUri,
+  normalizeResourceUri,
+} from '../../shared/resource-uri.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import { isExperienceFile } from './experience-data.js';
 
-export const isSystemUri = (uri: string) =>
-  /^viking:\/\/system(?:\/|$)/i.test(normalizeResourceUri(uri));
 export const isSummaryUri = (uri: string) =>
   /\/(?:\.abstract|\.overview)\.md$/i.test(normalizeResourceUri(uri));
 export const isEditableText = (uri: string) =>

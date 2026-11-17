@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import { useOvSignal } from '../../client/provider.js';
 import { isHomeResourceUri, resourceUriIdentity } from './fs-uri.js';
-import type { DirState } from './fs-model.js';
-import type { RequestScopeHandle } from './use-request-scope.js';
+import type { DirState } from '../../shared/directory-tree/types.js';
+import type { RequestScopeHandle } from '../../shared/request/use-request-scope.js';
 
 const childPrefix = (uri: string) => (uri.endsWith('/') ? uri : `${uri}/`);
 const isUserUri = (uri: string) =>

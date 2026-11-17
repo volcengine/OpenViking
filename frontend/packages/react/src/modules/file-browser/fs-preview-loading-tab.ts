@@ -1,6 +1,6 @@
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
-import { nameFromUri } from './fs-model.js';
-import { isSystemUri } from './preview-policy.js';
+import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
 
 /**

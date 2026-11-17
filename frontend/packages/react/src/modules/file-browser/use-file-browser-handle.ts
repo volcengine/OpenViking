@@ -9,7 +9,7 @@ import type { ForwardedRef, RefObject } from 'react';
 import type { FileTreeHandle } from '../../components/file-tree/index.js';
 import type { FileBrowserApi } from './file-browser-state-types.js';
 import type { FileBrowserHandle } from './types.js';
-import { toError } from './fs-errors.js';
+import { toError } from '../../shared/request/fs-errors.js';
 
 import { resolveResourceNavigation } from './resource-navigation.js';
 

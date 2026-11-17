@@ -717,11 +717,13 @@ def validate_server_config(config: ServerConfig) -> None:
     """
     # Check for empty root_api_key
     if config.root_api_key == "":
-        logger.error(
+        print(
             "Invalid server.root_api_key: empty string is not allowed. "
             "Set a non-empty server.root_api_key in ov.conf and restart. "
             "Only remove this setting if the selected auth mode does not require a root key; "
-            "trusted and api_key modes require it even on localhost."
+            "trusted and api_key modes require it even on localhost.",
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 
@@ -754,10 +756,11 @@ def validate_server_config(config: ServerConfig) -> None:
 
     plugin_cls = registry.get(effective_auth_mode)
     if plugin_cls is None:
-        logger.error(
-            "Unknown auth_mode: %r. No auth plugin registered for this mode. Registered modes: %s.",
-            effective_auth_mode,
-            ", ".join(registry.list_modes()),
+        print(
+            "No auth plugin registered for the configured auth mode. "
+            "Check server.auth_mode and the installed authentication plugins.",
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 

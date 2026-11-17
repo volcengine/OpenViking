@@ -24,8 +24,10 @@ export interface VikingBotReferences {
   onOpenChange?: (open: boolean) => void;
   onQueryChange?: (query: string) => void;
   onExpand?: (uri: string) => void;
-  onLoadMore?: (parentId: string) => void;
-  onRetry?: (parentId?: string) => void;
+  /** Return the pending work to deduplicate repeated load requests. */
+  onLoadMore?: (parentId: string) => unknown;
+  /** Return the pending work to deduplicate repeated retries. */
+  onRetry?: (parentId?: string) => unknown;
   isLoading?: boolean;
   error?: string;
 }

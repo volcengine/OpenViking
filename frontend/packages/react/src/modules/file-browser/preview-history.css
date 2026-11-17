@@ -99,6 +99,15 @@
       background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
     }
 
+    &:has(.ov-file-history__version-badge + i) {
+      flex-wrap: wrap;
+      row-gap: 2px;
+
+      .ov-file-history__version-name {
+        flex-basis: 100%;
+      }
+    }
+
     .ov-file-history__version-name {
       overflow: hidden;
       min-width: 0;

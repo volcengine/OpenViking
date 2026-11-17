@@ -106,6 +106,8 @@ class Harness:
                             "mock-long",
                             "mock-tools",
                             "mock-silent-gzip",
+                            "mock-hang",
+                            "mock-stall",
                         ],
                     }
                     for protocol in ("chat", "anthropic", "responses")

@@ -161,6 +161,10 @@ export interface FileBrowserLabels {
   l0Summary?: string;
   /** 目录预览的 L1 总览页签。The L1 overview tab of a directory preview. */
   l1Overview?: string;
+  /** L0 摘要为空时的提示。Message shown when the L0 summary is absent. */
+  emptyL0Summary?: string;
+  /** L1 总览为空时的提示。Message shown when the L1 overview is absent. */
+  emptyL1Overview?: string;
   /** 目录某一级摘要尚未生成时的提示。Message shown when a summary level is empty. */
   summaryEmpty?: string;
   /**

@@ -1,6 +1,12 @@
 import { useLocale } from '../../shared/locale-context.js';
-import { renderErrors as renderEn } from './locales/en-US.js';
-import { renderErrors as renderZh } from './locales/zh-CN.js';
+import {
+  renderErrors as renderEn,
+  trajectoryDetail as detailEn,
+} from './locales/en-US.js';
+import {
+  renderErrors as renderZh,
+  trajectoryDetail as detailZh,
+} from './locales/zh-CN.js';
 import type { ExperienceDashboardLabels } from './types.js';
 import { mergeLabels } from '../../shared/locale.js';
 
@@ -134,6 +140,9 @@ export const experienceLabels = (
   labels?: Partial<ExperienceDashboardLabels>,
 ): ExperienceDashboardLabels =>
   mergeLabels(locale === 'zh-CN' ? zh : en, labels);
+
+export const trajectoryDetailLabels = (locale: string) =>
+  locale === 'zh-CN' ? detailZh : detailEn;
 
 /** Private render-failure copy; independent of request errors and public label overrides. */
 export function useRenderErrors(locale?: Parameters<typeof useLocale>[0]) {

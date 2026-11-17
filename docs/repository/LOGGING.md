@@ -735,14 +735,14 @@ Assert fields, formats, and record counts rather than complete business messages
 
 ## 9. Rollout
 
-Land one module batch before starting the next. Refresh from upstream before each batch to limit conflicts.
+Submit module groups in order and refresh from upstream before starting each group. Batches 3 and 4 share one PR; subsequent batches start after the preceding group merges.
 
 | Batch | Scope | Status |
 | --- | --- | --- |
 | 1 | Model logs and safe payload summaries | Merged in #7769 |
-| 2 | Logging initialization, observability logs, Python/Rust/C++ output | Implemented; adds no audit capabilities |
-| 3 | Existing authentication, account, ACL, and ROOT-related logs | After batch 2 merges |
-| 4 | Existing business service logs | After batch 3 merges |
+| 2 | Logging initialization, observability logs, Python/Rust/C++ output | Merged in #7778; C++ compatibility fixes in #7794 |
+| 3 | Existing authentication, account, ACL, and ROOT-related logs | Implemented; shares a PR with batch 4, adds no audit capabilities |
+| 4 | Existing business service logs | Implemented; shares a PR with batch 3 |
 | 5 | Parsing, ingestion, and connectors | After batch 4 merges |
 | 6 | Storage and queues | After batch 5 merges |
 | 7 | Retrieval, core, and utilities | After batch 6 merges |

@@ -8,4 +8,6 @@
 @import '../../theme.css';
 @import '../../shared/primitives/empty/empty.css';
 @import '../../shared/dashboard/dashboard.css';
+@import '../../shared/primitives/modal/modal.css';
 @import './experience-dashboard.css';
+@import './experience-trajectory-detail.css';

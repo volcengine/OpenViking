@@ -176,6 +176,7 @@ class MemoryOperationSource(BaseModel):
 class MemoryOperationSkipCode(str, Enum):
     """Stable reason codes for intentionally skipped memory operations."""
 
+    PARSE_ERROR = "parse_error"
     MEMORY_TYPE_FILTERED = "memory_type_filtered"
     SELF_MEMORY_DISABLED = "self_memory_disabled"
     PEER_MEMORY_DISABLED = "peer_memory_disabled"

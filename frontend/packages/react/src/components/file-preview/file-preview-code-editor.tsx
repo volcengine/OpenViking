@@ -37,6 +37,7 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   latest.current = props;
   const access = useRef(new Compartment());
   const highlighting = useRef(new Compartment());
+  const decorations = useRef(new Compartment());
   const [highlightFailure, setHighlightFailure] = useState<{
     reason: unknown;
   }>();
@@ -60,8 +61,10 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
         keymap.of([...defaultKeymap, ...historyKeymap]),
         access.current.of([]),
         highlighting.current.of([]),
-        marked?.extensions ?? [],
-        readOnlySuffix ? editorReadOnlySuffix(readOnlySuffix) : [],
+        decorations.current.of([
+          marked?.extensions ?? [],
+          readOnlySuffix ? editorReadOnlySuffix(readOnlySuffix) : [],
+        ]),
         EditorView.updateListener.of((update) => {
           if (
             update.docChanged &&
@@ -117,6 +120,19 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
         annotations: Transaction.addToHistory.of(false),
       });
   }, [props.draft]);
+
+  // useEffect 必要性：标注与只读尾段需同步到 CodeMirror，React 渲染无法更新编辑器扩展。
+  // 重配置和编辑器销毁都会卸载旧扩展，释放标注监听及定时器。
+  useEffect(() => {
+    editor.current!.dispatch({
+      effects: decorations.current.reconfigure([
+        props.annotations?.length
+          ? editorAnnotations(props.annotations).extensions
+          : [],
+        props.readOnlySuffix ? editorReadOnlySuffix(props.readOnlySuffix) : [],
+      ]),
+    });
+  }, [props.annotations, props.readOnlySuffix]);
 
   // useEffect 必要性：按语言和重试次数加载 Prism 语法并配置 CodeMirror 插件；
   // 异步模块加载与命令式插件安装不能在 React 渲染中执行。

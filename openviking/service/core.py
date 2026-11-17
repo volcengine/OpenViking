@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonical_user_root
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
@@ -225,7 +226,7 @@ class OpenVikingService:
                 max_concurrent_external_task=max_concurrent_external_task,
             )
         else:
-            logger.warning("RAGFS client not initialized, skipping queue manager")
+            logger.info("RAGFS client not initialized; skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
         self._vikingdb_manager = VikingDBManager(
@@ -379,10 +380,9 @@ class OpenVikingService:
 
             self._data_dir_lock_path = acquire_data_dir_lock(storage.workspace)
         else:
-            logger.warning(
-                "Skipping workspace process lock for '%s'; multi-process access may corrupt "
-                "embedded vector storage",
-                storage.workspace,
+            logger.info(
+                "Workspace process lock disabled; concurrent access may corrupt embedded vector storage",
+                extra={"target_id": safe_path_for_log(storage.workspace)},
             )
         self._data_dir_lock_acquired = True
 
@@ -850,13 +850,17 @@ class OpenVikingService:
         if should_preflight_mineru and pdf_config.mineru_endpoint:
             try:
                 await wait_for_mineru_ready(pdf_config.mineru_endpoint)
-                logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
+                logger.info(
+                    "MinerU preflight passed",
+                    extra={"target_id": safe_uri_for_log(pdf_config.mineru_endpoint)},
+                )
             except RuntimeError as exc:
                 if pdf_config.strategy == "mineru":
                     await self._stop_expiry()
                     raise
-                logger.warning(
-                    "MinerU preflight failed (fallback will retry on first parse): %s", exc
+                logger.info(
+                    "MinerU preflight failed; fallback will retry on first parse",
+                    extra={"error_type": type(exc).__name__, "degraded": True},
                 )
 
         if self._runtime_config_manager is not None:
@@ -882,7 +886,7 @@ class OpenVikingService:
         try:
             await runtime.close()
         except Exception as exc:
-            logger.exception("Expiry shutdown failed")
+            logger.error("Expiry shutdown failed", extra={"error_type": type(exc).__name__})
             if getattr(exc, "code", None) == "shard_not_stopped":
                 # Retain the runtime and leave QueueFS/AGFS open for still-running
                 # callbacks. The caller can retry close after they terminate.

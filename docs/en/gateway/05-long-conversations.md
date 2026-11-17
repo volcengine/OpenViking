@@ -60,7 +60,7 @@ The request contains the conversation up to the cut, plus an instruction for the
 - open items;
 - key facts from the latest tool results.
 
-The summary is plain text of at most **Summary length** (8,000) tokens. Thinking counts against the output cap, and some models (such as DeepSeek V4.1) think by default even when the request has no thinking settings, so the gateway always allows 16,000 tokens of output on top of the summary length; when the client sets an explicit thinking budget, it adds that budget instead. The provider bills this request like any other.
+The summary is plain text of at most **Summary length** (8,000) tokens. Thinking counts against the output cap, and some models (such as DeepSeek V4.1) think by default even when the request has no thinking settings, so the gateway always allows 16,000 tokens of output on top of the summary length; when the client sets an explicit thinking budget, it adds that budget instead. The provider bills this request like any other. The whole request may take at most `summary_timeout_seconds` ([configuration](13-configuration.md#gateway-fields); by default `upstream_timeout_seconds`, 600 seconds); after that it counts as a failed summary. Its time does not count against `prepare_timeout_seconds`.
 
 ## What the model receives afterwards {#what-the-model-receives-afterwards}
 

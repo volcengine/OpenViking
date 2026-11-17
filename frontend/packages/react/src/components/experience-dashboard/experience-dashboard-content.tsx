@@ -39,6 +39,7 @@ export function ExperienceDashboardContent({
   onLoadMore,
   locale: localeProp,
   onOpenUri,
+  onOpenTrajectory,
   labels,
   className,
   ...rest
@@ -187,23 +188,15 @@ export function ExperienceDashboardContent({
                 onOpenUri={events.trajectory}
               />
             ) : tab === 'source' ? (
-              data.sources?.length ? (
-                <ExperienceSources
-                  items={data.sources}
-                  labels={t}
-                  locale={locale}
-                  onOpenUri={events.source}
-                />
-              ) : (
-                <ExperienceQueryState
-                  state={states.sources}
-                  rows={4}
-                  empty={t.emptySource}
-                  loading={t.loading}
-                  failed={t.failed}
-                  retry={t.retry}
-                />
-              )
+              <ExperienceSources
+                groups={data.sourceGroups}
+                items={data.sources}
+                state={states.sources}
+                onOpenTrajectory={onOpenTrajectory}
+                labels={t}
+                locale={locale}
+                onOpenUri={events.source}
+              />
             ) : data.testMaterials?.length ? (
               <>
                 <ExperienceTests

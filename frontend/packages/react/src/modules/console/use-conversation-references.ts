@@ -7,7 +7,7 @@ import type {
   VikingBotReference,
   VikingBotReferences,
 } from '../../components/viking-bot/index.js';
-import { useFsTree } from '../file-browser/use-fs-tree.js';
+import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import {
   mentionPattern,
   mentionSearchRows,
@@ -89,7 +89,7 @@ export function useConversationReferences({
     .filter(Boolean)
     .join('/');
   const opened = enabled && openCount > 0;
-  const tree = useFsTree({
+  const tree = useDirectoryTree({
     client: opened ? client : null,
     rootUri: MENTION_ROOT,
     requestOptions: scope.options,
@@ -177,14 +177,11 @@ export function useConversationReferences({
         if (row?.kind === 'entry') void tree.toggleExpand(row);
       }
     },
-    onLoadMore: (uri) => void tree.loadMore(uri),
+    onLoadMore: (uri) => tree.loadMore(uri),
     onRetry: (uri) => {
-      if (keyword) {
-        setSearch(undefined);
-        setAttempt((current) => current + 1);
-      } else {
-        void tree.retry(uri ?? MENTION_ROOT);
-      }
+      if (!keyword) return tree.retry(uri ?? MENTION_ROOT);
+      setSearch(undefined);
+      setAttempt((current) => current + 1);
     },
     isLoading: keyword ? !result : !tree.isReady && tree.isInitializing,
     error: keyword ? result?.error : tree.error?.message,

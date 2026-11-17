@@ -541,8 +541,11 @@ class RedisMySQLAccountStore(AccountStore):
                 hit, value = read_payload(payload)
                 if hit:
                     return value
-            except Exception:
-                logger.exception("Redis cache read failed; reading %s from MySQL", key)
+            except Exception as exc:
+                logger.info(
+                    "Redis account cache read failed; reading from MySQL",
+                    extra={"error_type": type(exc).__name__},
+                )
                 # Redis read failure cannot authorize a cache write.
                 return await self._read_mysql(loader)
 
@@ -611,8 +614,11 @@ class RedisMySQLAccountStore(AccountStore):
         # earlier payload under these newly captured generations.
         try:
             await self._read_generations(account_id, user_id, key)
-        except Exception:
-            logger.exception("Redis snapshot initialization failed for %s", key)
+        except Exception as exc:
+            logger.info(
+                "Redis snapshot initialization failed; using MySQL result",
+                extra={"error_type": type(exc).__name__},
+            )
         return verified
 
     async def _fill_cache(
@@ -639,8 +645,11 @@ class RedisMySQLAccountStore(AccountStore):
                 user_generation,
                 make_payload(value),
             )
-        except Exception:
-            logger.exception("Failed to populate Redis account cache for %s", key)
+        except Exception as exc:
+            logger.info(
+                "Redis account cache population failed; using MySQL result",
+                extra={"error_type": type(exc).__name__},
+            )
         return value
 
     async def _mutate_account(
@@ -657,8 +666,11 @@ class RedisMySQLAccountStore(AccountStore):
             # bump on every attempted mutation and settle cleanup before returning.
             try:
                 await wait_redis_cleanup(self._bump_generation(account_id, user_id))
-            except Exception:
-                logger.exception("Failed to bump Redis cache generation for %s", account_id)
+            except Exception as exc:
+                logger.error(
+                    "Redis account cache generation update failed",
+                    extra={"account_id": account_id, "error_type": type(exc).__name__},
+                )
 
     async def verify_api_key(
         self,

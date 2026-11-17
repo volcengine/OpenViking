@@ -3,7 +3,14 @@ import { Button } from '../../shared/primitives/button/button.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { orderContextRoots } from '../../shared/context-tree-root-order.js';
 import type { Locale } from '../../shared/locale.js';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { SenderProps } from '@ark-design/ui/sender';
 import { usePortalTheme } from '../../shared/primitives/tooltip/use-portal-theme.js';
 import { FileTree } from '../file-tree/index.js';
@@ -62,6 +69,8 @@ export function ReferencePicker({
     isLoading,
     error,
   } = config;
+  const loadMore = useReferenceAction(onLoadMore);
+  const retry = useReferenceAction(onRetry);
   const queryChange = useRef(onQueryChange);
   const remoteSearch = Boolean(onQueryChange);
   const id = useId();
@@ -78,7 +87,7 @@ export function ReferencePicker({
         );
   }, [config.rows, query, remoteSearch]);
   const activeId = useReferenceNavigation({
-    config,
+    config: { ...config, onLoadMore: loadMore, onRetry: retry },
     rows,
     query,
     editor,
@@ -122,8 +131,8 @@ export function ReferencePicker({
       {error ? (
         <div className="ov-viking-bot__reference-error">
           <span role="alert">{error}</span>
-          {onRetry ? (
-            <Button size="mini" onClick={() => onRetry()}>
+          {retry ? (
+            <Button size="mini" onClick={() => void retry(undefined)}>
               {labels.retry}
             </Button>
           ) : null}
@@ -136,14 +145,16 @@ export function ReferencePicker({
           locale={locale}
           aria-label={labels.reference}
           rows={rows}
+          operations={{
+            loadMore: loadMore && ((row) => loadMore(row.parentId)),
+            retry: retry && ((row) => retry(row.parentId)),
+          }}
           search={false}
           refresh={false}
           isReady={!isLoading}
           selectedId={activeId}
           onSelect={onSelect}
           onToggleExpand={onExpand && ((row) => onExpand(row.uri))}
-          onLoadMore={onLoadMore && ((row) => onLoadMore(row.parentId))}
-          onRetry={onRetry && ((row) => onRetry(row.parentId))}
           renderRowTooltip={() => null}
           getRowAttributes={(row) => ({
             className:
@@ -167,4 +178,25 @@ export function ReferencePicker({
       )}
     </div>
   );
+}
+
+// The editor and search field handle Enter outside FileTree. Share the pending
+// actions with its buttons so either input path can only start one request.
+function useReferenceAction<T>(action?: (id: T) => unknown) {
+  const pending = useRef(new Set<T>());
+  const run = useCallback(
+    async (id: T) => {
+      if (!action || pending.current.has(id)) return;
+      pending.current.add(id);
+      try {
+        await action(id);
+      } catch {
+        // The host supplies the error state for its action.
+      } finally {
+        pending.current.delete(id);
+      }
+    },
+    [action],
+  );
+  return action ? run : undefined;
 }
