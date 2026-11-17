@@ -109,6 +109,33 @@ curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravit
 curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
 ```
 
+## Kimi Code 记忆插件（独立分发，2.x，社区实现）
+
+源码：[examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin)
+
+这是一个面向 **Kimi Code 2.6.2** 的社区维护实现，与上面的 `agent-hook-plugin` Kimi 集成属于同一类。它不修改、也不替换后者；后者仍是 Kimi Code CLI 0.43.x 的旧路径，代码和文档都保持独立。
+
+两者都是 Kimi 原生插件，都由宿主从 managed 插件目录加载。区别在分发方式：上面的适配器由 OpenViking 安装器组装，本目录自包含，可以直接安装。
+
+- 六个 hook：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`Stop`、`PreCompact`、`SessionEnd`；不注册 `Interrupt`。
+- `PreToolUse` 拒绝 Read、Glob、Grep、Edit、Write、ReadMediaFile 访问 `viking://` 路径；shell 命令不拦截。
+- 捕获读取每个 agent 的 `wire.jsonl`，投影活动分支，并让每个子代理使用独立的 OpenViking 会话。
+- 用宿主自带的插件管理器安装；宿主继承的 `PATH` 中必须有 Node.js 22.19+：
+
+```text
+/plugins install <examples/kimi-code-memory-plugin 的路径>
+```
+
+主线发布后也可以用 release ZIP 一条命令安装（tag 遵循 `<包名>@<版本>` 惯例）：
+
+```text
+/plugins install https://github.com/volcengine/OpenViking/releases/download/kimi-code-memory-plugin@<version>/kimi-code-memory-plugin-<version>.zip
+```
+
+`pack.mjs` 也可以打出 ZIP 归档（根目录即插件根目录），`/plugins install <zip-url>` 可以接受来自任意静态托管的 ZIP。
+- 安装前的会话用 `node ./scripts/backfill.mjs` 显式导入；见 [Kimi Code](./22-kimi-code.md)。
+- 两个发行包的插件名都是 `openviking-memory`。宿主注册表同名只保留一个条目，因此同一宿主只安装一个。
+
 ## AstrBot 插件
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 是一个多平台 IM Bot 框架，支持 QQ、Telegram、Discord、飞书等 20+ 平台。

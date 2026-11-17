@@ -1,0 +1,88 @@
+name: OpenViking Kimi Code plugin
+
+# The Kimi Code plugin is installed by the host's own `/plugins install` from a
+# local directory, and that host never runs the shared generator. So this job
+# checks what a local install actually loads: the generated copies committed in
+# the directory, the plugin's own test suite, and the archive's import closure
+# for anyone packaging it with pack.mjs.
+
+on:
+  pull_request:
+    paths:
+      - "examples/kimi-code-memory-plugin/**"
+      - "examples/memory-plugin-shared/lib/**"
+      - "examples/memory-plugin-shared/sync.mjs"
+      - "examples/skills/**"
+      - ".github/workflows/kimi-code-plugin-tests.yml"
+      - ".github/scripts/check-plugin-version-bumps.sh"
+  push:
+    branches: [main]
+    paths:
+      - "examples/kimi-code-memory-plugin/**"
+      - "examples/memory-plugin-shared/lib/**"
+      - "examples/memory-plugin-shared/sync.mjs"
+      - "examples/skills/**"
+      - ".github/workflows/kimi-code-plugin-tests.yml"
+      - ".github/scripts/check-plugin-version-bumps.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      # The generated copies are committed, so this must be a no-op; a diff means
+      # somebody edited a copy or forgot to regenerate one.
+      - name: Regenerate shared copies and skills
+        run: |
+          node examples/memory-plugin-shared/sync.mjs
+          # A newly generated module is untracked, so `git diff` would report
+          # nothing while the archive shipped a file git does not hold.
+          status="$(git status --porcelain --untracked-files=normal -- examples/kimi-code-memory-plugin)"
+          if [ -n "${status}" ]; then
+            echo "${status}"
+            echo "::error::the generated copies are not committed"
+            exit 1
+          fi
+      - name: Plugin tests
+        working-directory: examples/kimi-code-memory-plugin
+        run: npm test
+      - name: Archive closure
+        working-directory: examples/kimi-code-memory-plugin
+        run: node ./scripts/pack.mjs --check
+      - name: Manifest contract
+        working-directory: examples/kimi-code-memory-plugin
+        run: node --test tests/contract/manifest.test.mjs
+  package:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Build the installable ZIP
+        working-directory: examples/kimi-code-memory-plugin
+        run: node ./scripts/pack.mjs --out openviking-memory.zip
+      - name: The ZIP root must be the plugin root
+        working-directory: examples/kimi-code-memory-plugin
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          names = zipfile.ZipFile("openviking-memory.zip").namelist()
+          assert "kimi.plugin.json" in names, "the host looks for kimi.plugin.json at the ZIP root"
+          assert any(n.startswith("scripts/shared/") for n in names), "the shared runtime is missing"
+          assert any(n.startswith("skills/") for n in names), "the skills are missing"
+          assert not any(n.startswith(("tests/", "node_modules/", ".git/")) for n in names), "the archive carries non-runtime files"
+          assert not any(n.endswith((".env", ".pem", ".key")) for n in names), "the archive carries secret-shaped files"
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openviking-memory-kimi-zip
+          path: examples/kimi-code-memory-plugin/openviking-memory.zip
+          if-no-files-found: error

@@ -38,6 +38,14 @@ export const TARGETS = [
     dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"),
     committed: true,
   },
+  // Kimi Code installs this one through its own `/plugins install`, from a
+  // directory or a ZIP of it, and never runs this generator: the copy has to be
+  // in git for the directory to be installable at all.
+  {
+    root: join(ROOT, "examples", "kimi-code-memory-plugin"),
+    dir: join(ROOT, "examples", "kimi-code-memory-plugin", "scripts", "shared"),
+    committed: true,
+  },
   {
     root: join(ROOT, "agent-plugins"),
     dir: join(ROOT, "agent-plugins", "servers", "shared"),
@@ -252,6 +260,21 @@ export const SKILL_TARGETS = [
     committed: true,
   })),
 ];
+
+// Kimi Code ships all four: its plugin bundles skills, its MCP server exposes
+// the tools they drive, and its host displays them as `openviking-memory:<skill>`.
+SKILL_TARGETS.push(
+  ...[
+    "openviking-memory",
+    "openviking-skills",
+    "openviking-rule-search",
+    "ov-experience-memory",
+  ].map((skill) => ({
+    skill,
+    dir: join(ROOT, "examples", "kimi-code-memory-plugin", "skills"),
+    committed: true,
+  })),
+);
 
 const SOURCE_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".ts", ".mts"]);
 const SKIPPED_DIRS = new Set(["node_modules", ".git", "dist", "coverage"]);

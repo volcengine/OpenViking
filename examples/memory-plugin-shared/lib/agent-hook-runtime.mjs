@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { createLogger } from "./debug-log.mjs";
 import { sendSessionMessages } from "./batch-send.mjs";
 import { createOvHttp } from "./ov-http.mjs";
-import { enqueue, replayPending } from "./pending-queue.mjs";
-import { buildProfileBlock } from "./profile-inject.mjs";
-import { buildRecallBlock, isRecallEnabled } from "./recall-core.mjs";
+import { enqueue, replayPending, replayPendingDetailed } from "./pending-queue.mjs";
+import { buildProfileBlockDetailed } from "./profile-inject.mjs";
+import { buildRecallBlock, buildRecallBlockDetailed, isRecallEnabled } from "./recall-core.mjs";
 import { buildPluginConfig } from "./plugin-config.mjs";
 import { isRetryableFailure } from "./retryable.mjs";
 import { deriveHarnessSessionId, isBypassed } from "./session-model.mjs";
@@ -109,11 +109,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function withAgentHookLock(clientId, nativeSessionId, callback) {
+/**
+ * Take one session's lock, run `callback`, release.
+ *
+ * `waitMs` is the caller's own remaining budget. A SessionStart hook that has
+ * three seconds in total must not spend five waiting for a lock another hook
+ * holds: it would be killed by the host with nothing written, which is worse
+ * than leaving the work for the next boundary. Callers that pass nothing keep
+ * the historical five-second wait.
+ */
+export async function withAgentHookLock(clientId, nativeSessionId, callback, { waitMs = 5000 } = {}) {
   const file = statePath(clientId, nativeSessionId);
   const lock = `${file}.lock`;
   await mkdir(dirname(file), { recursive: true, mode: STATE_DIR_MODE });
-  const deadline = Date.now() + 5000;
+  const budget = Number.isFinite(waitMs) ? Math.max(0, Math.min(5000, waitMs)) : 5000;
+  const deadline = Date.now() + budget;
   while (true) {
     try {
       await mkdir(lock, { mode: STATE_DIR_MODE });
@@ -137,13 +147,84 @@ export async function withAgentHookLock(clientId, nativeSessionId, callback) {
   }
 }
 
-export async function readHookState(clientId, nativeSessionId) {
+/**
+ * Read one session's state and say why it could not be read.
+ *
+ * The bare `{}` this used to return collapsed four different situations into
+ * one: no state yet, a state file that is not JSON, a state file this process
+ * may not read, and a state file that parsed but is not an object. A host that
+ * treats them alike resets its cursors — replaying a whole transcript as new
+ * memory — after a transient EACCES. So the status is explicit:
+ *
+ *   missing    ENOENT only; the session has never had state here
+ *   ok         parsed, and an object
+ *   corrupt    unreadable as JSON, or JSON that is not an object
+ *   unreadable anything else: permissions, a directory, an I/O error
+ *
+ * Reading never writes. Quarantining a corrupt file is the caller's explicit
+ * decision (`quarantineHookState`), so a read-only consumer such as doctor
+ * cannot move a user's cursors out from under a running hook.
+ */
+export async function readHookStateDetailed(clientId, nativeSessionId) {
+  const file = statePath(clientId, nativeSessionId);
+  let raw;
   try {
-    const parsed = JSON.parse(await readFile(statePath(clientId, nativeSessionId), "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
+    raw = await readFile(file, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return { status: "missing", state: {}, file };
+    return {
+      status: "unreadable",
+      state: {},
+      file,
+      error: error?.code || error?.message || "read_failed",
+    };
   }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return { status: "corrupt", state: {}, file, error: error?.message || "invalid_json" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { status: "corrupt", state: {}, file, error: "not_an_object" };
+  }
+  return { status: "ok", state: parsed, file };
+}
+
+/**
+ * Move a corrupt state file aside so the next write starts clean.
+ *
+ * A timestamped copy, not a delete: the file holds the only local record of
+ * which turns were already delivered, and a maintainer may still be able to
+ * recover it by hand. The original is renamed away, so the caller that decided
+ * to quarantine gets a state path it can write to and an untouched backup it
+ * can point a user at.
+ */
+export async function quarantineHookState(clientId, nativeSessionId, { at = Date.now() } = {}) {
+  const file = statePath(clientId, nativeSessionId);
+  const stamp = new Date(at).toISOString().replace(/[:.]/g, "-");
+  const backup = `${file}.corrupt-${stamp}`;
+  try {
+    await rename(file, backup);
+    return { ok: true, backup };
+  } catch (error) {
+    // Rename can fail across devices or when the file vanished between the
+    // failed read and this call. A copy still preserves the bytes.
+    try {
+      await copyFile(file, backup);
+      await rm(file, { force: true });
+      return { ok: true, backup, copied: true };
+    } catch (copyError) {
+      return { ok: false, error: copyError?.code || error?.code || "quarantine_failed" };
+    }
+  }
+}
+
+/** The state, or `{}` — the pre-detailed behaviour, kept for existing callers. */
+export async function readHookState(clientId, nativeSessionId) {
+  const { state } = await readHookStateDetailed(clientId, nativeSessionId);
+  return state;
 }
 
 export async function writeHookState(clientId, nativeSessionId, value) {
@@ -170,6 +251,10 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd(), {
   defaultTimeoutMs,
   getActorPeerId,
   requireJsonBody = false,
+  // A hook with one total budget passes a getter so every request inside it is
+  // capped by what is left. Callers that pass nothing keep the old behaviour:
+  // one default timeout per request.
+  getRemainingMs = null,
 } = {}) {
   let resolved = null;
   const workspacePeer = () => (resolved ??= resolveEffectivePeerId({ cfg, cwd }));
@@ -177,6 +262,7 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd(), {
     defaultTimeoutMs: defaultTimeoutMs ?? cfg.timeoutMs,
     resolveActorPeerId: getActorPeerId || (() => workspacePeer().peerId),
     requireJsonBody,
+    getRemainingMs,
   });
   return { fetchJSON, get effectivePeer() { return workspacePeer(); } };
 }
@@ -206,8 +292,15 @@ async function notePendingWrite(type, sessionId, payload, result) {
     return result;
   }
   const pending = await enqueueAgentPending(type, sessionId, payload);
-  if (pending.ok) result.pendingQueued = true;
-  else result.pendingEnqueueFailed = true;
+  if (pending.ok) {
+    result.pendingQueued = true;
+    // The dedup key is what a later replay reports, and what `commitPending`
+    // has to carry to recognise its own settlement. Without it the settlement
+    // match is a guess.
+    result.dedupKey = pending.dedupKey;
+  } else {
+    result.pendingEnqueueFailed = true;
+  }
   return result;
 }
 
@@ -264,14 +357,34 @@ export async function getAgentSessionContext(fetchJSON, sessionId, tokenBudget =
   return result.ok ? result.result : null;
 }
 
-export async function replayAgentPending(fetchJSON, log = () => {}) {
-  return replayPending(fetchJSON, log);
+/** The aggregate shape every existing caller expects. */
+export async function replayAgentPending(fetchJSON, log = () => {}, options = {}) {
+  return replayPending(fetchJSON, log, options);
+}
+
+/** Per-operation results, for a caller that has to settle a specific write. */
+export async function replayAgentPendingDetailed(fetchJSON, log = () => {}, options = {}) {
+  return replayPendingDetailed(fetchJSON, log, options);
 }
 
 export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
-  if (!isRecallEnabled(cfg) || !String(prompt || "").trim()) return null;
+  return (await recallForPromptDetailed(fetchJSON, cfg, prompt, cwd, log, options)).block;
+}
+
+/**
+ * Recall, with the facts a caller needs to decide whether to retry.
+ *
+ * A host that pauses recall after repeated failures has to tell "the server had
+ * nothing" from "the server did not answer"; the block alone cannot. The peer
+ * and the recall call chain stay here, so an adapter that needs the detail does
+ * not rebuild them.
+ */
+export async function recallForPromptDetailed(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
+  if (!isRecallEnabled(cfg) || !String(prompt || "").trim()) {
+    return { block: null, stage: "disabled", failed: false };
+  }
   const peer = resolveEffectivePeerId({ cfg, cwd });
-  return buildRecallBlock(fetchJSON, cfg, prompt, {
+  const detailed = await buildRecallBlockDetailed(fetchJSON, cfg, prompt, {
     actorPeerId: peer.peerId,
     legacyPeerId: peer.legacyPeerId,
     // Passing the OV session id is what turns on server-side query expansion
@@ -280,12 +393,34 @@ export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {
     excludeUris: cfg.recallExcludeUris,
     log,
   });
+  return {
+    block: detailed.block || null,
+    stage: detailed.stage,
+    failed: Boolean(detailed.error),
+    error: detailed.error,
+  };
 }
 
 export async function buildAgentProfile(fetchJSON, cfg, cwd) {
+  return (await buildAgentProfileDetailed(fetchJSON, cfg, cwd)).block;
+}
+
+/**
+ * The profile block, and whether the reads behind it succeeded.
+ *
+ * `block` is `null` both for "this user has no profile" and "the server did not
+ * answer". A host that injects the profile once per session needs the
+ * difference, so the outcome is reported next to the block.
+ */
+export async function buildAgentProfileDetailed(fetchJSON, cfg, cwd) {
   const peer = resolveEffectivePeerId({ cfg, cwd });
-  const profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, peer.peerId, cfg);
-  return profile?.block || null;
+  const outcome = await buildProfileBlockDetailed(fetchJSON, cfg.profileTokenBudget, peer.peerId, cfg);
+  return {
+    block: outcome.block || null,
+    empty: outcome.empty === true,
+    failed: outcome.failed === true,
+    error: outcome.error,
+  };
 }
 
 export function shouldBypassAgent(cfg, input = {}) {

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://statics.kimi.ai/catalog/schemas/kimi.plugin.schema.json",
+  "name": "openviking-memory",
+  "version": "0.6.0",
+  "description": "Long-term semantic memory for Kimi Code, powered by OpenViking.",
+  "author": "OpenViking",
+  "homepage": "https://github.com/volcengine/OpenViking",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "openviking", "kimi-code", "long-term-memory"],
+  "hooks": [
+    { "event": "SessionStart", "command": "node ./scripts/session-start.mjs", "timeout": 10 },
+    { "event": "UserPromptSubmit", "command": "node ./scripts/user-prompt.mjs", "timeout": 20 },
+    { "event": "PreToolUse", "command": "node ./scripts/uri-guard.mjs", "timeout": 5 },
+    { "event": "Stop", "command": "node ./scripts/stop.mjs", "timeout": 10 },
+    { "event": "PreCompact", "command": "node ./scripts/pre-compact.mjs", "timeout": 15 },
+    { "event": "SessionEnd", "command": "node ./scripts/session-end.mjs", "timeout": 10 }
+  ],
+  "mcpServers": {
+    "openviking": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["./servers/mcp-proxy.mjs"]
+    }
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "OpenViking Memory",
+    "shortDescription": "Long-term memory",
+    "longDescription": "Recall relevant memories before each prompt, capture the turns the model actually saw, and expose OpenViking's own tools over MCP.",
+    "developerName": "OpenViking",
+    "websiteURL": "https://github.com/volcengine/OpenViking",
+    "iconUrl": "https://docs.openviking.ai/agents/image/kimi-code/logo.png",
+    "category": "DEVELOPER",
+    "hostKind": "local",
+    "defaultLocale": "en-US",
+    "locales": "./locales/",
+    "tryPrompts": [
+      "What did we decide about the capture cursor last week?",
+      "Remember that this project deploys with pnpm",
+      "Search my memory for the OpenViking plugin design"
+    ],
+    "mcpOverrides": {
+      "openviking": {
+        "displayName": "OpenViking",
+        "description": "Search, write and manage OpenViking long-term memory"
+      }
+    },
+    "skillOverrides": {
+      "openviking-memory": {
+        "displayName": "OpenViking Memory",
+        "description": "Retrieve, remember and forget long-term memory"
+      }
+    }
+  }
+}

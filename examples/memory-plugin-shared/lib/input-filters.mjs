@@ -211,6 +211,9 @@ export function describeInputFilters(cfg = {}) {
       label,
       total: configured.length,
       active,
+      // Doctor reports the number of rules that will actually run; keep the
+      // count under the name it reads.
+      rules: active,
       summary: `${active} rule${active === 1 ? "" : "s"}${bits.length ? ` (${bits.join(", ")})` : ""}`,
       errors: compiled.errors,
     };

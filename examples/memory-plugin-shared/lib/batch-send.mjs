@@ -16,6 +16,10 @@ function makeResult() {
     retryable: false,
     usedBatch: true,
     lastError: null,
+    // One entry per payload, in order. The counters above answer "how many";
+    // this answers "which", which is what a caller needs to attribute a queued
+    // message back to the turn it came from and to the queue's dedup key.
+    items: [],
   };
 }
 
@@ -25,6 +29,9 @@ async function enqueueRemainder(sessionId, payloads, startIndex, result, retryab
 
   if (!retryable) {
     result.failed += Math.max(0, payloads.length - startIndex);
+    for (let i = startIndex; i < payloads.length; i++) {
+      result.items.push({ index: i, status: "failed", retryable: false });
+    }
     return result;
   }
 
@@ -38,9 +45,18 @@ async function enqueueRemainder(sessionId, payloads, startIndex, result, retryab
       // prefix: consumers mark the first sent+queued payloads as captured, so
       // skipping a payload here and queueing a later one would silently drop it.
       result.enqueueFailed += payloads.length - i;
+      for (let j = i; j < payloads.length; j++) {
+        result.items.push({ index: j, status: "enqueue_failed" });
+      }
       return result;
     }
     result.queued++;
+    result.items.push({
+      index: i,
+      status: "queued",
+      dedupKey: queued.dedupKey,
+      deduped: queued.deduped === true,
+    });
   }
   return result;
 }
@@ -55,6 +71,7 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
     });
     if (res?.ok) {
       result.sent++;
+      result.items.push({ index: i, status: "sent" });
       await opts.onSent?.(1);
       continue;
     }
@@ -66,6 +83,9 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
     result.retryable = retryable;
     result.lastError = res?.error ?? res ?? null;
     result.failed += payloads.length - i;
+    for (let j = i; j < payloads.length; j++) {
+      result.items.push({ index: j, status: "failed", retryable });
+    }
     return result;
   }
   return result;
@@ -80,7 +100,7 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
  * @param {object} opts
  * @param {boolean} opts.enqueueOnRetryable - enqueue unsent payloads after a retryable failure
  * @param {Function} opts.onSent - called with the number of messages durably sent after each success
- * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
+ * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,retryable:boolean,usedBatch:boolean,lastError:any,items:Array<{index:number,status:"sent"|"queued"|"failed"|"enqueue_failed",dedupKey?:string,deduped?:boolean}>}>}
  */
 export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts = {}) {
   const result = makeResult();
@@ -97,6 +117,7 @@ export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts =
 
     if (res?.ok) {
       result.sent += chunk.length;
+      for (let i = 0; i < chunk.length; i += 1) result.items.push({ index: start + i, status: "sent" });
       await opts.onSent?.(chunk.length);
       continue;
     }
@@ -113,6 +134,7 @@ export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts =
     result.retryable = retryable;
     result.lastError = res?.error ?? res ?? null;
     result.failed += messages.length - start;
+    for (let i = start; i < messages.length; i += 1) result.items.push({ index: i, status: "failed", retryable });
     return result;
   }
 

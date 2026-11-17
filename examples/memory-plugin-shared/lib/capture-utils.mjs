@@ -462,7 +462,9 @@ function faithfulCaptureDecision(text, cfg) {
  * will not be sent cannot satisfy a keep rule. Tool parts never decide keep or drop.
  */
 export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}, faithful = false } = {}) {
-  const options = { toolMaxChars: cfg.captureToolMaxChars, toolNameById };
+  // `??` not `||`: a caller that omits the knob must get the default ceiling,
+  // and spreading `undefined` would turn truncation off entirely.
+  const options = { toolMaxChars: cfg.captureToolMaxChars ?? DEFAULT_TOOL_MAX_CHARS, toolNameById };
   const rawText = extractTextFromPayload(payload, options);
   const sourceParts = extractPartsFromPayload(payload, options);
   const hasTextPart = sourceParts.some((part) => part?.type === "text");

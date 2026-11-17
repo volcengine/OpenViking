@@ -1,0 +1,185 @@
+name: OpenViking Kimi Code plugin release
+
+# Publishes the standalone ZIP that Kimi Code installs with
+# `/plugins install <url>`, plus a marketplace entry pointing at that same ZIP.
+# The archive is built from the repository, checked against the runtime's own
+# import closure, and attached to the GitHub release for the tag that triggered
+# it.
+#
+# The version in the ZIP must match the tag: a release that carries a different
+# manifest version than its tag would install a build nobody can identify.
+
+on:
+  release:
+    # Only this plugin's own releases. Without the filter every published
+    # release in the repository (python-sdk@*, cli@*, v0.3.26 …) would start this
+    # job and fail on the tag check.
+    types: [published]
+  push:
+    tags:
+      - "kimi-code-memory-plugin@*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (kimi-code-memory-plugin@<version>)"
+        required: true
+
+permissions:
+  contents: write
+
+# A tag push and the release published for that tag are the same publication.
+# Serialising them on the tag keeps the second run from racing the first for the
+# same release asset.
+concurrency:
+  group: kimi-code-plugin-release-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: >-
+      github.event_name != 'release'
+      || startsWith(github.event.release.tag_name, 'kimi-code-memory-plugin@')
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # A manual run publishes the tag it was given, not the branch it was
+          # dispatched from.
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Read the manifest version
+        id: version
+        working-directory: examples/kimi-code-memory-plugin
+        run: |
+          VERSION="$(node -p "require('./kimi.plugin.json').version")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Manifest version: ${VERSION}"
+
+      - name: The tag and the manifest must agree
+        env:
+          REF_NAME: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Exactly one accepted spelling. A bare `v<version>` is the main
+          # package's tag, and accepting it would attach this plugin's ZIP to an
+          # unrelated release that happens to share the number.
+          if [ "${REF_NAME}" != "kimi-code-memory-plugin@${VERSION}" ]; then
+            echo "::error::tag ${REF_NAME} is not kimi-code-memory-plugin@${VERSION}"
+            exit 1
+          fi
+          echo "tag ${REF_NAME} matches ${VERSION}"
+
+      - name: The release must be a published release or a pushed tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          IS_DRAFT: ${{ github.event.release.draft }}
+        run: |
+          if [ "${EVENT_NAME}" = "release" ]; then
+            [ -n "${RELEASE_TAG}" ] || { echo "::error::a release event without a tag"; exit 1; }
+            [ "${IS_DRAFT}" = "true" ] && { echo "::error::a draft release must not publish"; exit 1; }
+          fi
+          echo "event ${EVENT_NAME} is allowed to publish"
+
+      - name: Regenerate the shared copies
+        run: |
+          node examples/memory-plugin-shared/sync.mjs
+          # `git diff` cannot see a newly generated module, which is exactly what
+          # a committed-copy plugin would then ship without holding in git.
+          status="$(git status --porcelain --untracked-files=normal -- examples/kimi-code-memory-plugin)"
+          if [ -n "${status}" ]; then
+            echo "${status}"
+            echo "::error::the generated copies are not committed"
+            exit 1
+          fi
+
+      - name: Test before shipping
+        working-directory: examples/kimi-code-memory-plugin
+        run: npm test
+
+      - name: Check the archive closure
+        working-directory: examples/kimi-code-memory-plugin
+        run: node ./scripts/pack.mjs --check
+
+      - name: Build the installable ZIP
+        working-directory: examples/kimi-code-memory-plugin
+        run: node ./scripts/pack.mjs --out "kimi-code-memory-plugin-${{ steps.version.outputs.version }}.zip"
+
+      - name: Build the marketplace entry that points at this release's ZIP
+        working-directory: examples/kimi-code-memory-plugin
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bash ../../.github/scripts/generate-kimi-marketplace-json.sh \
+            "https://github.com/${REPOSITORY}/releases/download/kimi-code-memory-plugin@${VERSION}/kimi-code-memory-plugin-${VERSION}.zip" \
+            "kimi-code-memory-plugin-${VERSION}.zip" \
+            "marketplace.json"
+
+      - name: Verify what the host will actually receive
+        working-directory: examples/kimi-code-memory-plugin
+        run: |
+          python3 - <<'PY'
+          import json, zipfile
+          path = f"kimi-code-memory-plugin-{json.load(open('kimi.plugin.json'))['version']}.zip"
+          with zipfile.ZipFile(path) as archive:
+              names = archive.namelist()
+              assert archive.testzip() is None, "the archive is corrupt"
+              assert "kimi.plugin.json" in names, "the host looks for the manifest at the ZIP root"
+              manifest = json.loads(archive.read("kimi.plugin.json"))
+              assert manifest["name"] == "openviking-memory"
+              assert len(manifest["hooks"]) == 6, "all six hooks must ship"
+              assert any(n.startswith("scripts/shared/") for n in names), "the shared runtime is missing"
+              assert any(n.startswith("skills/") for n in names), "the skills are missing"
+              assert any(n.startswith("servers/") for n in names), "the MCP proxy is missing"
+              for forbidden in ("tests/", "node_modules/", ".git/"):
+                  assert not any(n.startswith(forbidden) for n in names), f"{forbidden} must not ship"
+              for name in names:
+                  base = name.rsplit("/", 1)[-1]
+                  assert not base.endswith((".env", ".pem", ".key", ".p12", ".pfx")), f"secret-shaped file {name}"
+              # Every relative import the shipped code makes must resolve inside
+              # the archive; a missing module installs fine and fails on the first
+              # hook.
+              import re
+              for name in names:
+                  if not name.endswith(".mjs"):
+                      continue
+                  source = archive.read(name).decode("utf-8")
+                  for spec in re.findall(r"""(?:import|export)\b[^;'"]*?from\s*["'](\.[^"']+)["']""", source):
+                      resolved = (name.rsplit("/", 1)[0] + "/" + spec) if "/" in name else spec[2:]
+                      parts = []
+                      for segment in resolved.split("/"):
+                          if segment == "..":
+                              parts.pop()
+                          elif segment not in (".", ""):
+                              parts.append(segment)
+                      target = "/".join(parts)
+                      assert target in names, f"{name} imports {spec}, which is not in the archive"
+          print(f"{path}: {len(names)} files, closure complete")
+          PY
+
+      - name: Attach the ZIP to the release
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+        # Pinned to the commit behind the v2 tag: a moving major tag lets a
+        # third party change what runs in this job without a review here.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          # The explicit tag is what keeps a tag push from creating a release of
+          # its own; it attaches to the release for that tag instead.
+          tag_name: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+          files: |
+            examples/kimi-code-memory-plugin/kimi-code-memory-plugin-${{ steps.version.outputs.version }}.zip
+            examples/kimi-code-memory-plugin/marketplace.json
+          fail_on_unmatched_files: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kimi-code-memory-plugin-release
+          path: |
+            examples/kimi-code-memory-plugin/kimi-code-memory-plugin-${{ steps.version.outputs.version }}.zip
+            examples/kimi-code-memory-plugin/marketplace.json
+          if-no-files-found: error

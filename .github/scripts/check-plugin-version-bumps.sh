@@ -28,6 +28,7 @@ PLUGINS=(
   "examples/dsh-memory-plugin:examples/dsh-memory-plugin/package.json"
   "examples/pi-coding-agent-extension:examples/pi-coding-agent-extension/package.json"
   "examples/magpie-memory-plugin:examples/magpie-memory-plugin/package.json"
+  "examples/kimi-code-memory-plugin:examples/kimi-code-memory-plugin/kimi.plugin.json"
 )
 
 # A change to the shared library reaches every plugin, and it no longer reaches
@@ -65,6 +66,10 @@ PAIRED=(
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/kimi.plugin.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/codebuddy/plugin.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/qoder/plugin.json"
+  # The native Kimi Code package carries the version in two files the host and
+  # npm both read; they have to move together or the host installs one version
+  # and reports another.
+  "examples/kimi-code-memory-plugin/kimi.plugin.json:examples/kimi-code-memory-plugin/package.json"
 )
 
 failed=0

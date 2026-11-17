@@ -1,3 +1,28 @@
+/**
+ * The profile block, plus whether the emptiness was a finished read or a
+ * failure. `empty` is true only when the server answered and had nothing.
+ */
+export function buildProfileBlockDetailed(
+  fetchJSON: (path: string, init?: any, options?: any) => Promise<{ ok: boolean; status?: number; result?: any; error?: any }>,
+  totalBudgetTokens: number,
+  actorPeerId?: string,
+  options?: { skillCatalog?: boolean; skillCatalogTokenBudget?: number; sessionStartMaxBytes?: number },
+): Promise<{
+  block: string | null;
+  empty: boolean;
+  failed: boolean;
+  error?: string;
+  /** Everything that existed was dropped by the byte cap: not "no memory". */
+  truncated?: boolean;
+  droppedPref?: number;
+  droppedEnt?: number;
+  droppedSkill?: number;
+  chars?: number;
+  tokens?: number;
+  profileUri?: string;
+  skillCount?: number;
+}>;
+
 export function buildProfileBlock(
   fetchJSON: (path: string, init?: any, options?: any) => Promise<{ ok: boolean; status?: number; result?: any; error?: any }>,
   totalBudgetTokens: number,

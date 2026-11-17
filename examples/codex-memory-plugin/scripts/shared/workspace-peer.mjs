@@ -151,7 +151,13 @@ export function renderPeerTemplate(template, vars) {
     if (!value) empty = true;
     return value;
   });
-  return empty ? "" : rendered;
+  if (empty) return "";
+  // A `{Dir}` or `{git-remote}` the pattern never matched is a broken template,
+  // and so is a value with whitespace in it: either would send an identity
+  // nobody meant to create. Falling through to the next template is the same
+  // all-or-nothing rule the empty case follows.
+  if (/[{}]/.test(rendered) || /\s/.test(rendered)) return "";
+  return rendered;
 }
 
 /**

@@ -1462,7 +1462,9 @@ export async function runDoctor(host) {
   const identity = host.resolveIdentity(cfg);
   const connection = await checkConnection(report, cfg, { ...configInfo, ...identity }, opts, host);
   const serverHealth = await checkServerHealth(report, { baseUrl: cfg.baseUrl, ovConf: configInfo.ovConf, health: effectiveHealthProbe(connection?.probes), conn: connection?.conn, offline: opts.offline, timeoutMs: opts.timeoutMs });
-  host.checkActivity(report, cfg, connection);
+  // Await it: a host whose activity check reads files is async, and an
+  // un-awaited promise would let the report render before its sections exist.
+  await host.checkActivity(report, cfg, connection);
 
   if (opts.json) {
     console.log(JSON.stringify({

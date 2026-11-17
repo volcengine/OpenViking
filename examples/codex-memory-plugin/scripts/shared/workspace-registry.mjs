@@ -36,7 +36,13 @@ export function slotName(root, identity = null) {
   const path = String(root || "");
   const key = identity ? identityKey(identity) : "path";
   const source = key === "path" ? path : key;
-  const label = key.startsWith("remote:") ? key.split("/").pop() : basename(path);
+  // The label has to come from the same place as the key. Deriving it from the
+  // checkout path would split one repository into two files: two linked
+  // worktrees share `git:<commonDir>` but not their directory name.
+  let label;
+  if (key.startsWith("remote:")) label = key.split("/").pop();
+  else if (key.startsWith("git:")) label = basename(String(identity?.gitCommonDir || path));
+  else label = basename(path);
   const readable = String(label || "").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
   const digest = createHash("sha256").update(source).digest("hex").slice(0, 12);
   return `${readable ? `${readable}-` : ""}${digest}.json`;

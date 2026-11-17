@@ -28,6 +28,8 @@ The feature is doubly disabled and must be turned on explicitly:
 | `cursor` | Deferred | `~/Library/Application Support/Cursor/User/**/state.vscdb` | undocumented, version-unstable KV blobs; not yet implemented |
 
 > "harness" (agent framework) here means a whole tool like Claude Code or Codex — distinct from OpenViking's "tool" (tool-call) concept.
+>
+> Kimi Code is not a server-side ingest adapter. Its community-maintained standalone plugin imports existing sessions with `node ./scripts/backfill.mjs`; see [Kimi Code](./22-kimi-code.md#importing-existing-history).
 
 ## Enable in ov.conf
 

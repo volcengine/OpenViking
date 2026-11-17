@@ -37,7 +37,12 @@ _INJECTION_TOOL_OPERATIONS: dict[str, ToolOperation] = {
     "ov_multi_read": "multi_read",
 }
 _MCP_OPENVIKING_TOOL_RE = re.compile(
-    r"^mcp__(?:openviking|plugin_.+_openviking)__(find|search|list|read|multi_read)$",
+    # Hosts sanitise an MCP server name and keep its punctuation: Claude Code and
+    # Codex send `plugin_openviking-memory_openviking`, Kimi Code sends
+    # `plugin-openviking-memory_openviking`. Both are this plugin's tools, and
+    # the lineage helper already accepts both — the usage reporter has to agree,
+    # or the same host is counted in one place and missed in the other.
+    r"^mcp__(?:openviking|plugin[-_].+[-_]openviking)__(find|search|list|read|multi_read)$",
     re.IGNORECASE,
 )
 _MCP_SEARCH_RESULT_RE = re.compile(r"^- \[[^]]+\]\s+(viking://.+?)\s*$")

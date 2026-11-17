@@ -23,7 +23,12 @@ _READ_TOOL_OPERATIONS = {
     "ov_multi_read": "multi_read",
 }
 _MCP_OPENVIKING_READ_RE = re.compile(
-    r"^mcp__(?:openviking|plugin_.+_openviking)__(read|multi_read)$",
+    # Hosts qualify an MCP tool as `mcp__<server>__<tool>` after sanitising the
+    # server name, and they spell the plugin's server differently: Claude Code
+    # and Codex send `plugin_openviking-memory_openviking`, Kimi Code sends
+    # `plugin-openviking-memory_openviking`. Both are this plugin's read tools,
+    # so both separators have to be accepted here rather than in every host.
+    r"^mcp__(?:openviking|plugin[-_].+[-_]openviking)__(read|multi_read)$",
     re.IGNORECASE,
 )
 TRAJECTORY_OUTCOMES = ("success", "failure", "partial", "unknown", "unfinished")

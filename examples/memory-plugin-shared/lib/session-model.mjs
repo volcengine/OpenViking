@@ -6,11 +6,18 @@
  * Glob -> RegExp. Minimal implementation: supports `*`, `**`, and literals.
  */
 function globToRe(glob) {
+  // A trailing `/**` means "this directory and everything under it", which is
+  // what the documented bypass examples rely on: `/tmp/**` must match `/tmp`
+  // itself, or a user standing in the directory they asked to bypass is let
+  // through.
+  const source = String(glob);
+  const trailingAny = source.endsWith("/**");
+  const body = trailingAny ? source.slice(0, -3) : source;
   let re = "^";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
     if (c === "*") {
-      if (glob[i + 1] === "*") { re += ".*"; i++; }
+      if (body[i + 1] === "*") { re += ".*"; i++; }
       else re += "[^/]*";
     } else if (/[.+?^${}()|[\]\\]/.test(c)) {
       re += "\\" + c;
@@ -18,8 +25,14 @@ function globToRe(glob) {
       re += c;
     }
   }
+  if (trailingAny) re += "(?:/.*)?";
   re += "$";
   return new RegExp(re);
+}
+
+/** Does one bypass pattern match one directory? Exposed for the tests. */
+export function globMatchesCwd(pattern, cwd) {
+  return globToRe(pattern).test(String(cwd || ""));
 }
 
 export function isBypassed(cfg, { sessionId, cwd } = {}) {

@@ -356,6 +356,15 @@ async def test_memory_usage_extractor_canonicalizes_home_alias_list_uri():
             "mcp__plugin_openviking-memory_openviking__read",
             {"uris": "viking://user/test/memories/experiences/read.md"},
         ),
+        # Kimi Code keeps the hyphens in the sanitised server name.
+        (
+            "mcp__plugin-openviking-memory_openviking__read",
+            {"uris": "viking://user/test/memories/experiences/read.md"},
+        ),
+        (
+            "mcp__PLUGIN-OPENVIKING-MEMORY_OPENVIKING__READ",
+            {"uris": "viking://user/test/memories/experiences/read.md"},
+        ),
     ],
 )
 async def test_memory_usage_extractor_recognizes_generic_read_tools(tool_name, tool_input):
@@ -393,6 +402,8 @@ async def test_memory_usage_extractor_recognizes_generic_read_tools(tool_name, t
         "mcp__openviking__multi_read",
         "mcp__plugin_openviking-memory_openviking__multi_read",
         "mcp__PLUGIN_openviking-memory_OpenViking__MULTI_READ",
+        "mcp__plugin-openviking-memory_openviking__multi_read",
+        "mcp__PLUGIN-OPENVIKING-MEMORY_OPENVIKING__MULTI_READ",
     ],
 )
 async def test_memory_usage_extractor_multi_read_counts_only_successful_experiences(tool_name):

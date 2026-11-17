@@ -298,6 +298,17 @@ const TRUE_WORDS = ["1", "true", "yes", "on"];
 const FALSE_WORDS = ["0", "false", "no", "off"];
 
 /**
+ * A value a text-shaped knob can be built from: a string, a number, or a
+ * boolean. A boolean is not noise here — `usageView: false` is how the Codex
+ * usage view is switched off — while an array or an object is a shape error
+ * that must fall back to the layer below rather than become `"[object
+ * Object]"`.
+ */
+function isScalarSetting(raw) {
+  return typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean";
+}
+
+/**
  * Coerce one raw value to the knob's type.
  *
  * A value out of range is clamped and a value of the wrong shape falls back to
@@ -317,13 +328,18 @@ export function coerceKnobValue(knob, raw, fallback) {
     case "int":
     case "number": {
       if (typeof raw === "string" && !raw.trim()) return fallback;
+      // `Number(true)` is 1 and `Number([])` is 0, so a value of the wrong shape
+      // would be clamped onto a bound and recorded as the user's own choice.
+      // A shape error is a config error: fall back to the layer below.
+      if (typeof raw !== "number" && typeof raw !== "string") return fallback;
       const value = knob.type === "int" ? Math.round(Number(raw)) : Number(raw);
       if (!Number.isFinite(value)) return fallback;
       const floored = knob.min === undefined ? value : Math.max(knob.min, value);
       return knob.max === undefined ? floored : Math.min(knob.max, floored);
     }
     case "enum": {
-      const word = String(raw ?? "").trim();
+      if (!isScalarSetting(raw)) return fallback;
+      const word = String(raw).trim();
       return (knob.values || []).includes(word) ? word : fallback;
     }
     // A peer template may be one string or an ordered list of fallbacks, and
@@ -333,18 +349,26 @@ export function coerceKnobValue(knob, raw, fallback) {
         const items = raw.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean);
         return items.length ? items : fallback;
       }
-      const text = String(raw ?? "").trim();
+      // `String({})` is "[object Object]" and `String(true)` is "true": a
+      // template built from either would be a peer id nobody asked for. A
+      // template is not a place where a boolean is a spelling of anything.
+      if (typeof raw !== "string" && typeof raw !== "number") return fallback;
+      const text = String(raw).trim();
       return text ? text : fallback;
     }
     case "list": {
-      const items = Array.isArray(raw)
-        ? raw
-        : typeof raw === "string" ? raw.split(",") : null;
+      let items = null;
+      if (Array.isArray(raw)) items = raw;
+      else if (typeof raw === "string") items = raw.split(",");
       if (!items) return fallback;
       return items.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean);
     }
     default: {
-      const text = String(raw ?? "").trim();
+      // Booleans are a real spelling for a text knob here: `usageView: false`
+      // is how a user switches the view off, and the consumers lowercase the
+      // value and match "false". Only a container is a shape error.
+      if (!isScalarSetting(raw)) return fallback;
+      const text = String(raw).trim();
       return text ? text : fallback;
     }
   }

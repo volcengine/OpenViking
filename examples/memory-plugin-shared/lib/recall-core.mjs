@@ -310,7 +310,7 @@ async function resolveTargetUri(fetchJSON, targetUri, actorPeerId = "") {
   return `viking://user/${space}/${parts.join("/")}`;
 }
 
-async function searchOneSource(fetchJSON, cfg, query, source, limit, options) {
+async function searchOneSource(fetchJSON, cfg, query, source, limit, options, failures) {
   const actorPeerId = options.actorPeerId || "";
   const home = await resolveTargetUri(fetchJSON, source.uri, actorPeerId);
   const targets = [...new Set(cfg.user
@@ -331,6 +331,13 @@ async function searchOneSource(fetchJSON, cfg, query, source, limit, options) {
       const { session_id, ...findBody } = body;
       res = await fetchJSON("/api/v1/search/find", { method: "POST", body: JSON.stringify(findBody) }, { actorPeerId });
     }
+    if (!res.ok) {
+      failures.requests += 1;
+      if (!failures.failedSources.has(source.type)) {
+        failures.failedSources.add(source.type);
+        failures.sources += 1;
+      }
+    }
     const items = res.ok && Array.isArray(res.result?.[source.bucket]) ? res.result[source.bucket] : [];
     return items.map((item) => ({ ...item, _sourceType: source.type }));
   };
@@ -348,15 +355,22 @@ async function searchOneSource(fetchJSON, cfg, query, source, limit, options) {
 }
 
 async function searchAllSources(fetchJSON, cfg, query, perSourceLimit, options, log = () => {}) {
+  // `failures` counts requests; `failedSources` counts sources. Only the latter
+  // can answer "did every source fail?", because one source issues several
+  // requests when a user scope is configured.
+  const failures = { requests: 0, sources: 0, failedSources: new Set() };
   const results = await Promise.all(
-    SOURCES.map((src) => searchOneSource(fetchJSON, cfg, query, src, perSourceLimit, options)),
+    SOURCES.map((src) => searchOneSource(fetchJSON, cfg, query, src, perSourceLimit, options, failures)),
   );
   const all = results.flat();
   log("recall_search_summary", {
     counts: SOURCES.map((src, i) => ({ type: src.type, uri: src.uri, count: results[i].length })),
     total: all.length,
+    failures: failures.requests,
+    failedSources: failures.sources,
+    sourceCount: SOURCES.length,
   });
-  return all;
+  return { items: all, failedSources: failures.sources, sourceCount: SOURCES.length };
 }
 
 async function resolveItemContent(fetchJSON, item, cfg, actorPeerId = "") {
@@ -706,8 +720,23 @@ export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
   return block || null;
 }
 
-function emptyRecall(stage) {
-  return { block: "", contentCount: 0, hintCount: 0, budgetUsed: 0, stage };
+/**
+ * An empty result, and whether the emptiness was an answer.
+ *
+ * `stage` alone cannot say it: every failure path also ends in an empty block,
+ * so a caller that counts failures would treat an unreachable server exactly
+ * like a query with no matches. `error` is present only when a request failed,
+ * which is the fact a circuit breaker needs.
+ */
+function emptyRecall(stage, error) {
+  return {
+    block: "",
+    contentCount: 0,
+    hintCount: 0,
+    budgetUsed: 0,
+    stage,
+    ...(error === undefined ? {} : { error }),
+  };
 }
 
 async function recallForPeer(fetchJSON, cfg, query, options = {}) {
@@ -738,8 +767,16 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
 
   const recallLimit = Math.max(1, Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT));
   const perSourceLimit = Math.max(recallLimit * 2, 8);
-  const raw = await searchAllSources(fetchJSON, cfg, trimmed, perSourceLimit, { ...options, actorPeerId }, log);
-  if (raw.length === 0) return emptyRecall("no_results");
+  const search = await searchAllSources(fetchJSON, cfg, trimmed, perSourceLimit, { ...options, actorPeerId }, log);
+  const raw = search.items;
+  if (raw.length === 0) {
+    // Only *every* source failing is a broken connection. One source erroring
+    // while another answers with nothing is a healthy server with no matches,
+    // and treating it as an outage would pause recall on a working deployment.
+    return search.failedSources > 0 && search.failedSources >= search.sourceCount
+      ? emptyRecall("no_results", "sources_failed")
+      : emptyRecall("no_results");
+  }
 
   const profile = buildQueryProfile(trimmed);
   const scoreThreshold = Number.isFinite(Number(cfg.scoreThreshold)) ? Number(cfg.scoreThreshold) : 0.35;

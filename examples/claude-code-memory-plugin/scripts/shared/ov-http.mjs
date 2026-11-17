@@ -58,6 +58,11 @@ export function createOvHttp(cfg = {}, {
   identityHeaders,
   extraHeaders,
   requireJsonBody = false,
+  // A hook owns one total budget for its whole run, and every request inside it
+  // has to fit in what is left. Without this each request gets the full timeout
+  // again, so a batch of three can outlive the host's own limit and be killed
+  // mid-write. A caller that passes no getter keeps the old behaviour exactly.
+  getRemainingMs = null,
 } = {}) {
   // dsh and pi name this field `endpoint`; every other harness names it `baseUrl`.
   const baseUrl = cfg.baseUrl || cfg.endpoint || "";
@@ -68,7 +73,36 @@ export function createOvHttp(cfg = {}, {
   // harness by hand is how the header blocks drifted in the first place.
   const resolvedExtraHeaders = extraHeaders ?? parseExtraHeaders(process.env.OPENVIKING_EXTRA_HEADERS);
   return async function fetchJSON(path, init = {}, options = {}) {
-    const timeoutMs = Math.max(MIN_TIMEOUT_MS, Number(options.timeoutMs) || Number(defaultTimeoutMs) || 0);
+    // The budget left, when the caller tracks one. Zero is not "use the
+    // default": it means the hook is out of time, and starting a request it
+    // cannot wait for would only guarantee a kill instead of a clean stop.
+    let budget = null;
+    if (typeof getRemainingMs === "function") {
+      try {
+        budget = Number(getRemainingMs());
+      } catch {
+        budget = null;
+      }
+      // A request that cannot be given the minimum timeout must not start:
+      // `Math.max(MIN_TIMEOUT_MS, budget)` below would push it past the hook's
+      // own deadline, which is exactly the kill this budget exists to avoid.
+      // `deferred` tells the retry rules this is not a failure of the server.
+      if (Number.isFinite(budget) && budget < MIN_TIMEOUT_MS) {
+        return {
+          ok: false,
+          status: 0,
+          result: null,
+          error: {
+            code: "deadline_exceeded",
+            message: "the hook's time budget is spent",
+            deferred: true,
+          },
+        };
+      }
+    }
+    const requested = Number(options.timeoutMs) || Number(defaultTimeoutMs) || 0;
+    const capped = Number.isFinite(budget) ? (requested ? Math.min(requested, budget) : budget) : requested;
+    const timeoutMs = Math.max(MIN_TIMEOUT_MS, capped);
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   PEER_SOURCE_PRESETS,
@@ -103,7 +103,7 @@ test("marking a plain directory makes it a workspace, but naming its peer is a s
   // workspace root's name.
   assert.equal(resolve(deep, marked.env, { peerId: "my-project" }).peerId, "my-project");
   const named = resolve(deep, marked.env, { peerSource: "{dir}" });
-  assert.equal(named.peerId, marked.root.split("/").pop(), "{dir} is the marked root, not the subdirectory");
+  assert.equal(named.peerId, basename(marked.root), "{dir} is the marked root, not the subdirectory");
   assert.equal(resolve(marked.root, marked.env, { peerSource: "{dir}" }).peerId, named.peerId);
 });
 
@@ -130,11 +130,11 @@ test("none, and the switch that predates it, both send no peer", async () => {
 test("a template can shape the id, and a list is tried in order", async () => {
   const { root, env } = await repo();
   assert.equal(resolve(root, env, { peerSource: "git-{git_remote}" }).peerId, "git-github.com-volcengine-openviking");
-  assert.equal(resolve(root, env, { peerSource: "team-{dir}" }).peerId, `team-${root.split("/").pop()}`);
+  assert.equal(resolve(root, env, { peerSource: "team-{dir}" }).peerId, `team-${basename(root)}`);
 
   const noRemote = await repo({ remote: "" });
   const chain = resolve(noRemote.root, noRemote.env, { peerSource: ["{git_remote}", "team-{dir}"] });
-  assert.equal(chain.peerId, `team-${noRemote.root.split("/").pop()}`, "an empty variable falls through");
+  assert.equal(chain.peerId, `team-${basename(noRemote.root)}`, "an empty variable falls through");
   assert.equal(chain.origin, "team-{dir}");
 });
 

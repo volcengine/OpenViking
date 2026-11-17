@@ -57,6 +57,24 @@ test("evaluateUriGuard denies a guarded tool and passes everything else", () => 
   assert.equal(evaluateUriGuard("Write", { file_path: "/tmp/a.md", content: "see viking://resources/a.md" }), null)
 })
 
+test("ReadMediaFile is a file tool too, whatever its media argument is called", () => {
+  // Kimi's ReadMediaFile takes a local media path; a viking:// URI in it can
+  // only fail, exactly as it would in Read.
+  for (const input of [
+    { path: "viking://resources/diagram.png" },
+    { file_path: "viking://resources/diagram.png" },
+    { paths: ["/tmp/ok.png", "viking://resources/diagram.png"] },
+  ]) {
+    const denied = evaluateUriGuard("ReadMediaFile", input)
+    assert.equal(denied?.uri, "viking://resources/diagram.png", JSON.stringify(input))
+    assert.match(denied?.reason ?? "", /Use OpenViking MCP read instead/)
+  }
+  assert.equal(evaluateUriGuard("readmediafile", { path: "viking://a.png" })?.uri, "viking://a.png")
+  // A local media path is untouched, and a viking:// URI is not a shell command.
+  assert.equal(evaluateUriGuard("ReadMediaFile", { path: "C:/tmp/shot.png" }), null)
+  assert.equal(evaluateUriNotice("ReadMediaFile", { path: "viking://a.png" }), null)
+})
+
 test("a shell command that carries a viking:// URI gets a notice, never a deny", () => {
   for (const [tool, input] of [
     ["Bash", { command: "ov read viking://resources/a.md" }],
