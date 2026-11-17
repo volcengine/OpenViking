@@ -138,8 +138,8 @@ export async function autostartCommand([action, ...extra], {
     return 0;
   }
   const pathValue = env.PATH || '/usr/bin:/bin';
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   if (platform.loginService === 'launchd') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.mkdirSync(path.join(homeDir, '.ov-superagent', 'logs'), { recursive: true });
     fs.writeFileSync(file, launchAgent({ homeDir, pathValue }));
     await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
@@ -147,12 +147,28 @@ export async function autostartCommand([action, ...extra], {
     output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
     return 0;
   }
+  const loginctlUser = String(uid ?? env.USER ?? '');
+  const lingerArgs = loginctlUser ? ['show-user', loginctlUser, '--property=Linger', '--value'] : [];
+  const lingerEnabled = async () => {
+    if (!lingerArgs.length) return false;
+    const { stdout } = await execFileImpl('loginctl', lingerArgs);
+    return String(stdout).trim().toLowerCase() === 'yes';
+  };
+  let lingers = await lingerEnabled().catch(() => false);
+  if (!lingers) {
+    await execFileImpl('loginctl', ['enable-linger', ...(loginctlUser ? [loginctlUser] : [])]).catch(() => {});
+    lingers = await lingerEnabled().catch(() => false);
+  }
+  if (!lingers) {
+    output.write(t('无法开启 linger，未写入 systemd 用户服务。请运行 sudo loginctl enable-linger "$USER"，然后重试。\n',
+      'Could not enable linger; the systemd user service was not installed. Run sudo loginctl enable-linger "$USER", then retry.\n'));
+    return 1;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, systemdUnit({ homeDir, pathValue }));
   await execFileImpl('systemctl', ['--user', 'daemon-reload']);
   await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
-  output.write(t('服务器上还要执行一次 loginctl enable-linger，否则退出登录后 OpenViking SuperAgent 会停。\n',
-    'On a server, also run loginctl enable-linger once, or OpenViking SuperAgent stops when you log out.\n'));
   return 0;
 }
 
