@@ -26,6 +26,7 @@
     --ov-ui-color-border-1,
     var(--ov-ui-border-1-default)
   );
+  --ov-ui-experience-card: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
   --ov-ui-experience-border: var(--ov-ui-trajectory-detail-border);
   --ov-ui-experience-muted: var(--ov-ui-trajectory-detail-muted);
   --ov-ui-trajectory-detail-muted: var(
