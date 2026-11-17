@@ -55,6 +55,9 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OV_SUPERAGENT_VOLC_REQUEST_TIMEOUT_MS',
   'OV_SUPERAGENT_VOLC_STREAM_IDLE_TIMEOUT_MS',
   'FALLBACK_MODEL',
+  'OV_SUPERAGENT_PRIMARY_RUNTIME',
+  'OV_SUPERAGENT_FALLBACK_RUNTIME',
+  'OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS',
   'OV_SUPERAGENT_HISTORY_LIMIT',
 ]);
 // Read from the operator environment only: forwarded to the daemon and updater
@@ -107,6 +110,9 @@ const AGENT_FIELDS = Object.freeze([
   'scheduler',
   'naturalWriting',
   'model',
+  'primaryRuntime',
+  'fallbackRuntime',
+  'fallbackReturnAfterMs',
   'dshHomeMode',
   'dshSkillRoots',
   'volcSessionId',
@@ -255,6 +261,14 @@ function parseAgent(value, index, ignored) {
     throw new Error(`${label}.port must be an integer between 1 and 65535`);
   }
   const model = manifestString(value.model, `${label}.model`);
+  const runtimeIds = ['codex', 'traex', 'claude', 'pi', 'durable', 'opencode', 'agy', 'dsh', 'volc'];
+  for (const field of ['primaryRuntime', 'fallbackRuntime']) {
+    if (value[field] !== undefined && !runtimeIds.includes(value[field])) throw new Error(`${label}.${field} must name a supported runtime`);
+  }
+  if (value.fallbackReturnAfterMs !== undefined
+    && (!Number.isSafeInteger(value.fallbackReturnAfterMs) || value.fallbackReturnAfterMs < 0 || value.fallbackReturnAfterMs > 86_400_000)) {
+    throw new Error(`${label}.fallbackReturnAfterMs must be an integer between 0 and 86400000`);
+  }
   let connectors = null;
   if (value.connectors !== undefined) {
     if (!Array.isArray(value.connectors) || value.connectors.length === 0) {
@@ -390,6 +404,9 @@ function parseAgent(value, index, ignored) {
     scheduler: value.scheduler ?? 'legacy',
     naturalWriting: value.naturalWriting ?? true,
     model,
+    primaryRuntime: value.primaryRuntime ?? null,
+    fallbackRuntime: value.fallbackRuntime ?? null,
+    fallbackReturnAfterMs: value.fallbackReturnAfterMs ?? null,
     dshHomeMode,
     dshSkillRoots: Object.freeze([...dshSkillRoots]),
     volcSessionId,
@@ -595,6 +612,11 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
     OV_SUPERAGENT_WORKSPACE: agent.workspace,
     OV_SUPERAGENT_MODEL: agent.model,
   });
+  for (const [field, key] of [['primaryRuntime', 'OV_SUPERAGENT_PRIMARY_RUNTIME'], ['fallbackRuntime', 'OV_SUPERAGENT_FALLBACK_RUNTIME'], ['fallbackReturnAfterMs', 'OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS']]) {
+    if (agent[field] !== null) env[key] = String(agent[field]);
+    else if (deployment.env[key] !== undefined) env[key] = deployment.env[key];
+    else delete env[key];
+  }
   if (agent.tempDir) env.OV_SUPERAGENT_TEMP_DIR = agent.tempDir;
   if (agent.profile) {
     env.OV_SUPERAGENT_LARK_PROFILE = agent.profile;

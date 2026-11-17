@@ -3,6 +3,7 @@
 // The short-lived DSH control process: patch, handshake, settings and credentials calls, teardown.
 
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -321,13 +322,18 @@ test('NOT_READY is retried, other bridge errors are not', async (t) => {
 test('a request that exceeds its bound kills the process and reports why', async (t) => {
   const dataDir = instanceDataDir(t);
   const fake = fakeDsh(t, { mode: 'silent' });
+  let child;
+  const spawnImpl = (...args) => { child = spawn(...args); return child; };
   const startedAt = Date.now();
   await assert.rejects(
-    DshControlClient.open({ dataDir, bin: fake.script, env: fake.env, helloTimeoutMs: 250 }),
+    DshControlClient.open({ dataDir, bin: fake.script, env: fake.env, spawnImpl, helloTimeoutMs: 250 }),
     (error) => error instanceof DshControlError && /did not answer superagent\/hello within 250ms/.test(error.message),
   );
   assert.ok(Date.now() - startedAt < 5000, 'the bound, not the process, decides how long this takes');
-  const pid = fake.calls().find((call) => call.event === 'start').pid;
+  // The deadline may expire before the script writes its first log entry.
+  // Assert termination of the actual child, not that startup beat the deadline.
+  const pid = child.pid;
+  assert.ok(pid, 'the timed-out child was spawned');
   await waitUntil(() => !isAlive(pid), 'the timed-out process to be killed');
 });
 

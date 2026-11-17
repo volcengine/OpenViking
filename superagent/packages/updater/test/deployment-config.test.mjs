@@ -77,6 +77,21 @@ function withManifest(value, callback) {
 }
 
 test('loads any number of agents from one absolute deployment manifest', () => {
+  const value = validManifest();
+  value.agents[0].primaryRuntime = 'traex';
+  value.agents[0].fallbackRuntime = 'pi';
+  value.agents[0].fallbackReturnAfterMs = 600_000;
+  withManifest(value, (manifestPath) => {
+    const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
+    const env = { OV_SUPERAGENT_PRIMARY_RUNTIME: 'claude' };
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.OV_SUPERAGENT_PRIMARY_RUNTIME, 'traex');
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RUNTIME, 'pi');
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS, '600000');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_PRIMARY_RUNTIME, undefined);
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RUNTIME, undefined);
+  });
   withManifest(validManifest(), (manifestPath) => {
     const deployment = loadDeploymentManifest({
       OV_SUPERAGENT_CONFIG: manifestPath,

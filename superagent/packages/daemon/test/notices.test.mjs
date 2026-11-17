@@ -122,6 +122,131 @@ describe('automatic claude fallback', () => {
   });
 });
 
+describe('configurable runtime fallback', () => {
+  function fixture(t, overrides = {}) {
+    let now = 1_000_000;
+    let timer = null;
+    let finish;
+    const calls = [];
+    const delivered = [];
+    const replies = [];
+    const runtime = {
+      runtime: 'traex', model: 'main-model', revision: 1, held: false,
+      snapshot() { return { revision: this.revision }; },
+      holdAdmission() { this.held = true; return () => { this.held = false; }; },
+      async transition(request) {
+        calls.push(request);
+        if (request.whenIdle) await new Promise(resolve => { finish = resolve; });
+        if (request.whenIdle && overrides.returnFails) throw new Error('primary unavailable');
+        this.runtime = request.runtime;
+        this.revision += 1;
+        return { ok: true };
+      },
+      submit(items) { delivered.push(items); return { accepted: true }; },
+    };
+    const row = chatEvent({ seq: 1, messageId: 'message', chatId: 'chat',
+      conversationKey: 'conversation', senderId: 'sender', content: 'task', mentions: [] });
+    const policy = new FailurePolicy({
+      config: { initialModel: 'traex', fallbackRuntime: 'pi', ...overrides },
+      store: { getCognitionState: () => ({ runtime: runtime.runtime }), inboundBySeq: () => row },
+      actions: { async replyToEvent(event, text) { replies.push(text); if (overrides.noticeFails) throw new Error('notice delivery failed'); return { ok: true }; } },
+      logger: createLogger('error'), runtime, recordActivity() {},
+      clock: () => now,
+      setTimer: (callback, ms) => { timer = { callback, ms }; return timer; },
+      clearTimer: () => { timer = null; },
+    });
+    t.after(() => policy.stop());
+    return { policy, runtime, calls, delivered, replies,
+      timer: () => timer, advance: ms => { now += ms; }, finish: () => finish() };
+  }
+
+  it('keeps saved backup model settings and returns after a fixed ten-minute window', async t => {
+    const f = fixture(t);
+    assert.equal(await f.policy.onTurnFailed({ inboundSeqs: [1], error: 'empty stream (3083)' }), true);
+    assert.equal(f.calls[0].runtime, 'pi');
+    assert.equal(f.calls[0].model, undefined);
+    assert.equal(f.calls[0].persistPreference, false);
+    assert.equal(f.timer().ms, 600_000);
+    f.advance(100_000);
+    f.policy.onTurnSucceeded();
+    assert.equal(f.timer().ms, 600_000);
+    const returning = f.policy.returnToPrimary(f.policy.backupWindow);
+    assert.equal(f.runtime.held, true);
+    assert.equal(f.runtime.runtime, 'pi');
+    assert.equal(f.calls[1].whenIdle, true);
+    assert.equal(f.calls[1].model, 'main-model');
+    f.finish();
+    await returning;
+    assert.equal(f.runtime.runtime, 'traex');
+    assert.equal(f.runtime.held, false);
+  });
+
+  it('keeps admission held if the primary cannot restart', async t => {
+    const f = fixture(t, { returnFails: true });
+    await f.policy.onTurnFailed({ inboundSeqs: [1], error: 'timeout' });
+    const returning = f.policy.returnToPrimary(f.policy.backupWindow);
+    f.finish(); await returning;
+    assert.equal(f.runtime.held, true);
+    assert.match(f.replies.at(-1), /恢复失败/);
+    f.policy.onRuntimeSelected('pi');
+    assert.equal(f.runtime.held, false);
+    assert.equal(f.policy.backupWindow, null);
+  });
+
+  it('does not enqueue a second return while accepted work is draining', async t => {
+    const f = fixture(t);
+    await f.policy.onTurnFailed({ inboundSeqs: [1], error: 'timeout' });
+    const window = f.policy.backupWindow;
+    const returning = f.policy.returnToPrimary(window);
+    await f.policy.returnToPrimary(window);
+    assert.equal(f.calls.length, 2);
+    f.finish(); await returning;
+    assert.equal(f.runtime.held, false);
+  });
+
+  it('rejects non-retryable HTTP errors even when their message mentions an upstream timeout', async t => {
+    const f = fixture(t);
+    for (const status of [400, 401, 403, 404, 422]) {
+      assert.equal(await f.policy.onTurnFailed({ inboundSeqs: [1],
+        error: Object.assign(new Error('upstream request timeout'), { status }) }), false);
+    }
+    assert.equal(f.calls.length, 0);
+  });
+
+  it('does not override a manual runtime or model change', async t => {
+    const f = fixture(t);
+    await f.policy.onTurnFailed({ inboundSeqs: [1], error: 'timeout' });
+    f.runtime.revision += 1;
+    await f.policy.returnToPrimary(f.policy.backupWindow);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.policy.backupWindow, null);
+  });
+
+  it('allows a zero return interval for legacy sticky fallback', async t => {
+    const f = fixture(t, { fallbackReturnAfterMs: 0 });
+    await f.policy.onTurnFailed({ inboundSeqs: [1], error: 'timeout' });
+    assert.equal(f.timer(), null);
+  });
+
+  it('does not recursively fallback or retry tool errors, denied credentials, cancellation or business failures', async t => {
+    const f = fixture(t);
+    for (const error of ['tool failed', 'permission denied', 'cancelled', 'business error', 'invalid parameters']) {
+      assert.equal(await f.policy.onTurnFailed({ inboundSeqs: [1], error }), false);
+    }
+    assert.equal(f.calls.length, 0);
+    await f.policy.onTurnFailed({ inboundSeqs: [1], error: 'timeout' });
+    assert.equal(await f.policy.onTurnFailed({ inboundSeqs: [1], error: 'timeout' }), false);
+    assert.equal(f.calls.length, 1);
+  });
+
+  it('retries the failed input even when fallback notice delivery fails', async t => {
+    const f = fixture(t, { noticeFails: true, fallbackReturnAfterMs: 250 });
+    assert.equal(await f.policy.onTurnFailed({ inboundSeqs: [1], error: 'timeout' }), true);
+    assert.equal(f.delivered.length, 1);
+    assert.equal(f.timer().ms, 250);
+  });
+});
+
 describe('failure notice mute', () => {
   function makePolicy(inboundRows, { mentionTarget } = {}) {
     const replies = [];

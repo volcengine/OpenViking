@@ -287,6 +287,7 @@ export class PersonalAgentDaemon {
         },
         recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
         onAvailable: () => { this.harness?.onAvailable(); },
+        onRuntimeSelected: (runtime) => this.failurePolicy?.onRuntimeSelected(runtime),
         onAuthorityChanged: ({ runtime, authorityToken }) => {
           // Fires at startup and on a /runtime switch; authority also rotates
           // within a runtime, so warn only when the runtime changes.
@@ -612,6 +613,7 @@ export class PersonalAgentDaemon {
         metadata: { reason: safeError(reason), exitCode },
       }, 'stopping');
       if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+      this.failurePolicy?.stop();
       if (this.ovSyncTimer) clearInterval(this.ovSyncTimer);
       this.timerConnector?.stop();
       this.ovContext?.stop();
