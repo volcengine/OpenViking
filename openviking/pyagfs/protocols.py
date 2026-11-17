@@ -156,10 +156,6 @@ class CacheRuntimeHandleProtocol(Protocol):
     def ping(self) -> Awaitable[None]:
         """Check cache provider health."""
 
-    def close(self) -> Awaitable[None]:
-        """Close this Runtime instance and reject future operations."""
-
-
 @runtime_checkable
 class AGFSSyncClientProtocol(Protocol):
     """AGFS binding contract used by OpenViking."""

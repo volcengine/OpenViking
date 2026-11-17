@@ -617,10 +617,4 @@ impl PyCacheRuntimeHandle {
         self.future(py, async move { runtime.ping().await })
     }
 
-    /// Close this Runtime instance and reject future operations.
-    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let runtime = Arc::clone(&self.runtime);
-        self.future(py, async move { runtime.close().await })
-    }
-
 }

@@ -1694,7 +1694,7 @@ Provider-neutral entries:
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `instances` | object | Named Runtime providers; must contain `default` | required |
-| `instances.<name>.provider` | str | Provider for one named Runtime; this release supports `redis` | required |
+| `instances.<name>.provider` | str | Provider for one named Runtime; this release supports `redis` and `dynamic` | required |
 | `instances.<name>.params` | object | Provider-owned parameters; parsed as Redis connection settings when the provider is `redis` | `{}` |
 
 `storage.agfs.cachefs` only controls CacheFS behavior:

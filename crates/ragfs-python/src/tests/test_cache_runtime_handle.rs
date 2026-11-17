@@ -86,29 +86,7 @@ asyncio.run(exercise(handle))
             Some(&locals),
         )?;
 
-        py.run(
-            c"
-import asyncio
-
-async def close_and_validate(handle):
-    await handle.close()
-    try:
-        await handle.get('key')
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError('closed Runtime accepted get')
-    try:
-        handle.register_script('closed.script.v1', 'return 1')
-    except RuntimeError:
-        return
-    raise AssertionError('closed Runtime accepted script registration')
-
-asyncio.run(close_and_validate(handle))
-",
-            None,
-            Some(&locals),
-        )?;
+        assert!(handle.bind(py).getattr("close").is_err());
         Ok(())
     })
     .unwrap();

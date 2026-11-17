@@ -33,7 +33,8 @@ class CacheInstanceConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate the configured cache provider name."""
-        if not self.provider.strip():
+        self.provider = self.provider.strip()
+        if not self.provider:
             raise ValueError("cache provider must not be empty")
         if self.provider not in {"redis", "dynamic"}:
             raise ValueError("cache provider must be redis or dynamic")

@@ -227,9 +227,9 @@ Cache PathLock 选择的实例必须使用 `redis`。
 `RAGFSBindingClient.cache_runtime(instance="default")` 和
 `AsyncAGFSClient.cache_runtime(instance="default")` 返回同一个进程内原生
 Runtime 句柄，不调用 HTTP API，也不新建 Redis 连接。句柄提供 KV、Hash、Set、
-Sorted Set、List、`register_script`、`execute_script`、`default_ttl_seconds`
-和实例级 `close()`。所有 I/O 方法都可 await；同步调用方应自行在最外层使用
-`asyncio.run()`。
+Sorted Set、List、`register_script`、`execute_script` 和 `default_ttl_seconds`。
+`RAGFSBindingClient.close()` 负责关闭 Runtime。所有 I/O 方法都可 await；同步调用方
+应自行在最外层使用 `asyncio.run()`。
 
 ## 整体架构
 

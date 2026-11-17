@@ -410,6 +410,15 @@ def test_cache_instance_repr_hides_provider_params():
     assert "top-secret" not in repr(config)
 
 
+def test_cache_provider_name_is_trimmed():
+    """Normalize surrounding whitespace in configured cache provider names."""
+    config = CacheConfig(
+        instances={"default": {"provider": " redis ", "params": {}}}
+    )
+
+    assert config.instances["default"].provider == "redis"
+
+
 def test_unused_dynamic_cache_instance_does_not_enable_runtime():
     config = OpenVikingConfig.model_validate({
         "cache": {

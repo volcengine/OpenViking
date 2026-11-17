@@ -1673,7 +1673,7 @@ Redis 命名空间。
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `instances` | object | 命名 Runtime Provider，必须包含 `default` | 必填 |
-| `instances.<name>.provider` | str | 一个命名 Runtime 的 Provider；本期支持 `redis` | 必填 |
+| `instances.<name>.provider` | str | 一个命名 Runtime 的 Provider；本期支持 `redis` 和 `dynamic` | 必填 |
 | `instances.<name>.params` | object | Provider 自有参数；Provider 为 `redis` 时解析为 Redis 连接参数 | `{}` |
 
 `storage.agfs.cachefs` 只控制 CacheFS 业务行为：

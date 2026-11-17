@@ -240,9 +240,9 @@ Cache-backed PathLock requires its selected instance to use `redis`.
 `AsyncAGFSClient.cache_runtime(instance="default")` return the same in-process
 native Runtime handle. They do not call an HTTP API or create a Redis
 connection. The handle exposes KV, hash, set, sorted-set, and list operations,
-`register_script`, `execute_script`, `default_ttl_seconds`, and instance-wide
-`close()`. All I/O methods are awaitable; synchronous callers should own the
-outer `asyncio.run()` boundary.
+`register_script`, `execute_script`, and `default_ttl_seconds`.
+`RAGFSBindingClient.close()` owns Runtime shutdown. All I/O methods are
+awaitable; synchronous callers should own the outer `asyncio.run()` boundary.
 
 ## Architecture
 
