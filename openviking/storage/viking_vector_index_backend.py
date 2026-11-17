@@ -463,7 +463,7 @@ class _SingleAccountBackend:
         # that doesn't need ``content`` requires no extra code.
         if self._adapter.USE_CONTENT_FIELD:
             content = result.get("content")
-            if isinstance(content, (str, bytes)):
+            if self._mode != "sag2" and isinstance(content, (str, bytes)):
                 result["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
         else:
             result.pop("content", None)
@@ -486,7 +486,7 @@ class _SingleAccountBackend:
             )
         if self._adapter.USE_CONTENT_FIELD:
             content = payload.get("content")
-            if isinstance(content, (str, bytes)):
+            if self._mode != "sag2" and isinstance(content, (str, bytes)):
                 payload["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
         else:
             payload.pop("content", None)

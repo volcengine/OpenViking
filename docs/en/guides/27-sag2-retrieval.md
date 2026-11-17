@@ -50,6 +50,8 @@ THINKING uses the existing JEV configuration with `provider="jev"` and `mode="no
 - Expansion uses the algorithm's collection+account N/DF statistics. Titles and aliases use only the canonical scope.
 - Index metadata includes the tokenizer, Jieba version, schema, and record chunk policy. Incompatible indexes require a rebuild.
 - Retrieval-related writes advance the account epoch in the same transaction. A concurrent content, ACL, or scalar change during multi-round retrieval raises `IndexChanged`; OV does not automatically repeat billable JEV calls.
+- In-flight JEV requests share one process-wide limiter across retrievers and event loops. Mixed configurations use the smallest cap, and cancellation releases a permit only after the actual HTTP worker finishes.
+- `content/abstract` must be valid UTF-8 and at most 1 MiB. Oversized or invalid byte input rejects the whole write batch without silent truncation, records, or epoch changes.
 - Exact grep stays on the filesystem engine. SAG2 tokenization removes stopwords and punctuation and therefore cannot provide a complete exact-grep candidate set.
 
 Migrate with a blue/green workspace and rebuild records/FTS from OVPack or the source-of-truth content. Do not switch an existing workspace in place or require dense snapshots. Once the target accepts new writes, rollback requires stopping writes and migrating the increment back to the source before switching endpoints.

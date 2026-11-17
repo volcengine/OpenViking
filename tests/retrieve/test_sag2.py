@@ -174,6 +174,75 @@ async def test_h2_full_pool_respects_configured_budget_without_final_rescore(mon
 
 
 @pytest.mark.asyncio
+async def test_h2_truncates_only_incoming_to_twenty_and_marks_previous_scores(monkeypatch):
+    initial = [_candidate(key, f"viking://resources/{key}", key) for key in ("a", "b", "c")]
+    incoming = [
+        _candidate(f"n{index}", f"viking://resources/n{index}", "new") for index in range(25)
+    ]
+
+    class Scope:
+        def __init__(self):
+            self.expansion = 0
+
+        async def query(self, expression, **kwargs):
+            if kwargs.get("required_term") is None:
+                return [dict(item) for item in initial[:2]]
+            self.expansion += 1
+            values = initial[2:] if self.expansion == 1 else incoming
+            return [dict(item) for item in values]
+
+        async def has_match(self, expression, excluded_ids=()):
+            return True
+
+        async def titles(self):
+            return []
+
+        async def check_epoch(self):
+            return None
+
+    async def terms(scope, query, seeds, limit):
+        return [Term("bridge", 1.0)]
+
+    async def resolve(scope, terms, seen, max_query_terms):
+        return terms
+
+    monkeypatch.setattr("openviking.retrieve.sag2.expansion_terms", terms)
+    monkeypatch.setattr("openviking.retrieve.sag2._resolve_terms", resolve)
+
+    class Scorer:
+        def __init__(self):
+            self.calls = []
+            self.evidence = []
+
+        async def score(self, question, candidates, evidence):
+            self.calls.append([item["id"] for item in candidates])
+            self.evidence.append(evidence)
+            preferred = "b" if len(self.calls) == 1 else "c"
+            return [
+                {**item, "_score": 0.99 if item["id"] == preferred else 0.5} for item in candidates
+            ]
+
+    config = SimpleNamespace(
+        candidate_k=30,
+        seed_k=1,
+        protected_k=1,
+        expansion_term_limit=1,
+        max_query_terms=80,
+        max_hops=2,
+        max_judgments=100,
+        total_timeout_s=30,
+    )
+    scorer = Scorer()
+    await retrieve_sag2(Scope(), "alpha", config, scorer, max_hops=2)
+    third = scorer.calls[2]
+    assert len(third) == 23
+    assert len([key for key in third if key.startswith("n")]) == 20
+    assert "n19" in third and "n20" not in third
+    assert len(scorer.evidence[2]) == 3
+    assert all("previous_jev_score" in item for item in scorer.evidence[2])
+
+
+@pytest.mark.asyncio
 async def test_zero_seed_weights_and_interleave_are_deterministic(tmp_path):
     scope, config, adapter = await _scope(
         tmp_path,

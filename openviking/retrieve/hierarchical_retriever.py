@@ -57,6 +57,17 @@ def _has_context_type_filter(scope: Any) -> bool:
     )
 
 
+async def _account_supports_sag2(proxy: Any) -> bool:
+    """Probe optional account capability without breaking legacy proxy doubles."""
+    probe = getattr(proxy, "account_supports_sag2", None)
+    if probe is None:
+        return False
+    capability = probe() if callable(probe) else probe
+    if inspect.isawaitable(capability):
+        capability = await capability
+    return capability is True
+
+
 class RetrieverMode(str):
     THINKING = "thinking"
     QUICK = "quick"
@@ -168,11 +179,7 @@ class HierarchicalRetriever:
                 searched_directories=[],
             )
 
-        sag2_capability = vector_proxy.account_supports_sag2()
-        if inspect.isawaitable(sag2_capability):
-            sag2_capability = await sag2_capability
-        supports_sag2 = sag2_capability if isinstance(sag2_capability, bool) else False
-        if supports_sag2:
+        if await _account_supports_sag2(vector_proxy):
             if mode == RetrieverMode.THINKING and self._rerank_client is not None:
                 is_noul_jev = (
                     getattr(self._rerank_client, "provider", None) == "jev"

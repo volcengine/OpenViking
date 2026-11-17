@@ -5,9 +5,68 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Any, Iterable
 
 from openviking.models.jev import MODE_NOUL, validate_jev_probability
+
+_TRANSPORT_EXECUTOR = ThreadPoolExecutor(max_workers=32, thread_name_prefix="sag2-jev")
+
+
+class _ProcessLimiter:
+    """One cancellation-safe process limit shared by all loops and configurations."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._limit: int | None = None
+        self._active = 0
+
+    def configure(self, max_concurrent: int) -> None:
+        with self._lock:
+            # Never sum independent limits. A smaller account config tightens the
+            # process cap conservatively instead of weakening an active limit.
+            self._limit = (
+                max_concurrent if self._limit is None else min(self._limit, max_concurrent)
+            )
+
+    def try_acquire(self) -> bool:
+        with self._lock:
+            if self._active >= self._limit:
+                return False
+            self._active += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            self._active -= 1
+
+
+_LIMITER = _ProcessLimiter()
+
+
+async def _run_limited(limit: int, request) -> Any:
+    _LIMITER.configure(limit)
+    while not _LIMITER.try_acquire():
+        # Waiting never occupies the default or transport executor.
+        await asyncio.sleep(0.001)
+    try:
+        running = _TRANSPORT_EXECUTOR.submit(request)
+    except BaseException:
+        _LIMITER.release()
+        raise
+    try:
+        # A cancelled wrapper cannot stop an already running concurrent future.
+        return await asyncio.wrap_future(running)
+    finally:
+        if running.done():
+            _LIMITER.release()
+        else:
+            # Release only when the actual HTTP worker finishes, including after
+            # caller cancellation or event-loop teardown.
+            running.add_done_callback(lambda _: _LIMITER.release())
 
 
 class Sag2Scorer:
@@ -16,7 +75,14 @@ class Sag2Scorer:
             raise ValueError("SAG2 THINKING requires rerank.provider='jev' and mode='noul'")
         self._client = client
         self._max_context_tokens = max_context_tokens
-        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._max_concurrent = max_concurrent
+
+    @staticmethod
+    def _dedupe(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        by_id: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        for record in records:
+            by_id[str(record["id"])] = record
+        return list(by_id.values())
 
     def _tokens(self, value: Any) -> int:
         return self._client._estimate_tokens(str(value))
@@ -75,6 +141,8 @@ class Sag2Scorer:
         candidates: list[dict[str, Any]],
         evidence: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        candidates = self._dedupe(candidates)
+        evidence = self._dedupe(evidence)
         if not candidates:
             return []
         scores: dict[str, float] = {}
@@ -101,10 +169,10 @@ class Sag2Scorer:
                 "original_question": question,
                 "previously_retrieved_evidence": self._evidence_payload(evidence),
             }
-            async with self._semaphore:
-                data, duration, _ = await asyncio.to_thread(
-                    self._client._transport.request, state=state, questions=questions
-                )
+            data, duration, _ = await _run_limited(
+                self._max_concurrent,
+                partial(self._client._transport.request, state=state, questions=questions),
+            )
             answers = data.get("answers")
             if not isinstance(answers, dict) or set(answers) != set(questions):
                 raise ValueError("SAG2 JEV response candidate ids are incomplete or unexpected")

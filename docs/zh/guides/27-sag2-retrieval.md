@@ -63,6 +63,8 @@ THINKING 需要现有 JEV Noul 配置：
 - SAG2 扩展统计采用固定算法的 collection+account N/DF 口径；标题与别名只使用当前 canonical scope。
 - 索引保存 tokenizer、jieba 版本、schema 和 record chunk policy。版本不匹配时要求重建，不读取不兼容索引。
 - 每个检索相关写事务推进 account epoch。多轮等待期间正文、ACL 或标量变化会触发 `IndexChanged`，调用方可重试，OV 不自动重复计费的 JEV 请求。
+- JEV 在途请求使用跨 Retriever、跨事件循环的进程级信号量；不同配置取最小并发上限，取消调用会等实际 HTTP worker 结束后才释放许可。
+- `content/abstract` 必须是有效 UTF-8 且不超过 1 MiB。超长或非法字节输入在写入时整批拒绝，不静默截断，不产生记录或 epoch 变化。
 - 精确 grep 使用现有 filesystem 引擎。SAG2 的检索分词会移除 stopword 和标点，不能作为精确 grep 的完整候选集。
 
 ## 迁移与边界

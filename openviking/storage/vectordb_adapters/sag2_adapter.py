@@ -17,7 +17,7 @@ from openviking.storage.abstract_overview import AbstractOverviewFormatError, bo
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.expr import And, FilterExpr, Or
 
-from .base import CollectionAdapter
+from .base import VIKINGDB_TEXT_FIELD_BYTE_LIMIT, CollectionAdapter
 from .sag2_lexical import (
     CHUNK_POLICY,
     SCHEMA_VERSION,
@@ -284,6 +284,20 @@ class Sag2CollectionAdapter(CollectionAdapter):
 
     def _write_row(self, record: Dict[str, Any]) -> Dict[str, Any]:
         normalized = self._normalize_record_for_write(record)
+        for field in ("content", "abstract"):
+            value = normalized.get(field)
+            if isinstance(value, bytes):
+                try:
+                    value = value.decode("utf-8", errors="strict")
+                except UnicodeDecodeError as exc:
+                    raise ValueError(f"SAG2 {field} must be valid UTF-8") from exc
+                normalized[field] = value
+            size = len(value.encode("utf-8")) if isinstance(value, str) else 0
+            if size > VIKINGDB_TEXT_FIELD_BYTE_LIMIT:
+                raise ValueError(
+                    f"SAG2 {field} exceeds {VIKINGDB_TEXT_FIELD_BYTE_LIMIT} UTF-8 bytes; "
+                    "refusing to truncate indexed evidence"
+                )
         return {key: self._json_value(value) for key, value in normalized.items()}
 
     @staticmethod

@@ -627,11 +627,16 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     async def _materialize_content(
         embedding_msg: EmbeddingMsg,
         ctx: RequestContext,
+        *,
+        truncate: bool = True,
     ) -> str:
+        def bounded(value: str) -> str:
+            return value[:VIKINGDB_CONTENT_MAX_SIZE] if truncate else value
+
         inserted_data = embedding_msg.context_data
         materialized = inserted_data.pop("_materialized_content", None)
         if isinstance(materialized, str):
-            return materialized[:VIKINGDB_CONTENT_MAX_SIZE]
+            return bounded(materialized)
         if inserted_data.get("is_leaf") and inserted_data.get("context_type") in (
             ContextType.RESOURCE.value,
             ContextType.SKILL.value,
@@ -658,12 +663,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 source_content = _coerce_text_file_content(
                     await viking_fs.read_file(source_uri, ctx=ctx)
                 )
-                return source_content[:VIKINGDB_CONTENT_MAX_SIZE]
+                return bounded(source_content)
 
         return (
-            embedding_msg.message[:VIKINGDB_CONTENT_MAX_SIZE]
+            bounded(embedding_msg.message)
             if isinstance(embedding_msg.message, str)
-            else inserted_data["abstract"][:VIKINGDB_CONTENT_MAX_SIZE]
+            else bounded(inserted_data["abstract"])
         )
 
     async def _apply_non_embedding_operation(
@@ -932,6 +937,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         inserted_data["content"] = await self._materialize_content(
                             embedding_msg,
                             ctx,
+                            truncate=requires_embedding,
                         )
                     inserted_data.pop("_materialized_content", None)
                     if embedding_msg.action is IndexAction.MERGE:

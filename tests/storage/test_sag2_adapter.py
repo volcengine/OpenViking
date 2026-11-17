@@ -6,6 +6,7 @@ import pytest
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.expr import Eq, Or, PathScope
+from openviking.storage.vectordb_adapters.base import VIKINGDB_TEXT_FIELD_BYTE_LIMIT
 from openviking.storage.vectordb_adapters.sag2_adapter import IndexChanged, Sag2CollectionAdapter
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -90,6 +91,31 @@ def test_sag2_crud_lexical_filters_and_epoch(tmp_path):
     assert adapter.current_epoch("acct") == 3
     assert adapter.delete(filter=scope) == 1
     assert adapter.count(scope) == 0
+    adapter.close()
+
+
+@pytest.mark.parametrize("field", ["content", "abstract"])
+@pytest.mark.parametrize("as_bytes", [False, True])
+def test_sag2_rejects_oversized_evidence_without_partial_write(tmp_path, field, as_bytes):
+    adapter = _adapter(tmp_path)
+    record = _record("oversized", text="safe")
+    value = "x" * (VIKINGDB_TEXT_FIELD_BYTE_LIMIT + 1)
+    record[field] = value.encode() if as_bytes else value
+    with pytest.raises(ValueError, match="refusing to truncate"):
+        adapter.upsert(record)
+    assert adapter.count() == 0
+    assert adapter.current_epoch("acct") == 0
+    adapter.close()
+
+
+def test_sag2_rejects_invalid_utf8_evidence(tmp_path):
+    adapter = _adapter(tmp_path)
+    record = _record("invalid-utf8", text="safe")
+    record["content"] = b"\xff" * 1024
+    with pytest.raises(ValueError, match="valid UTF-8"):
+        adapter.upsert(record)
+    assert adapter.count() == 0
+    assert adapter.current_epoch("acct") == 0
     adapter.close()
 
 

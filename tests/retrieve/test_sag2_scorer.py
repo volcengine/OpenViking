@@ -1,8 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
+import threading
+import time
+
 import pytest
 
+from openviking.retrieve import sag2_scorer as scorer_module
 from openviking.retrieve.sag2_scorer import Sag2Scorer
 
 
@@ -74,6 +79,104 @@ async def test_scorer_rejects_invalid_probability(value):
     client = Client({"candidate_0": {"type": "noul", "noul": value}})
     with pytest.raises(ValueError):
         await Sag2Scorer(client, max_context_tokens=10000).score("q", [_candidate()], [])
+
+
+@pytest.mark.asyncio
+async def test_scorer_dedupes_candidates_and_shared_evidence_by_record_id():
+    client = Client()
+    scorer = Sag2Scorer(client, max_context_tokens=10000)
+    candidate = _candidate()
+    result = await scorer.score(
+        "question", [candidate, dict(candidate)], [candidate, dict(candidate)]
+    )
+    assert len(result) == 1
+    state, questions = client._transport.requests[0]
+    assert len(questions) == 1
+    assert len(state["previously_retrieved_evidence"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_scorer_semaphore_is_shared_across_instances(monkeypatch):
+    monkeypatch.setattr(scorer_module, "_LIMITER", scorer_module._ProcessLimiter())
+
+    class SlowTransport(Transport):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.max_active = 0
+            self.lock = threading.Lock()
+
+        def request(self, *, state, questions):
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            try:
+                time.sleep(0.05)
+                return super().request(state=state, questions=questions)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    transport = SlowTransport()
+    scorers = []
+    for _ in range(4):
+        client = Client()
+        client._transport = transport
+        scorers.append(
+            Sag2Scorer(client, max_context_tokens=10000, max_concurrent=2 if _ % 2 == 0 else 4)
+        )
+    await asyncio.gather(
+        *(scorer.score("q", [_candidate(str(index))], []) for index, scorer in enumerate(scorers))
+    )
+    assert transport.max_active == 2
+
+
+@pytest.mark.asyncio
+async def test_cancelled_transport_releases_permit_only_after_worker_finishes(monkeypatch):
+    monkeypatch.setattr(scorer_module, "_LIMITER", scorer_module._ProcessLimiter())
+
+    class BlockingTransport(Transport):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.starts = 0
+            self.max_active = 0
+            self.active = 0
+            self.lock = threading.Lock()
+
+        def request(self, *, state, questions):
+            with self.lock:
+                self.starts += 1
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            self.started.set()
+            try:
+                self.release.wait(2)
+                return super().request(state=state, questions=questions)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    transport = BlockingTransport()
+    client = Client()
+    client._transport = transport
+    scorer = Sag2Scorer(client, max_context_tokens=10000, max_concurrent=1)
+    first = asyncio.create_task(scorer.score("q", [_candidate("first")], []))
+    while not transport.started.is_set():
+        await asyncio.sleep(0.001)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    transport.started.clear()
+    second = asyncio.create_task(scorer.score("q", [_candidate("second")], []))
+    await asyncio.sleep(0.02)
+    assert transport.starts == 1
+    transport.release.set()
+    await second
+    assert transport.starts == 2
+    assert transport.max_active == 1
 
 
 @pytest.mark.asyncio
