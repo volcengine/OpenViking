@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { WorkerExecutor } from '../src/worker-executor.mjs';
+import { FORK_MAX_BYTES, WorkerExecutor } from '../src/worker-executor.mjs';
 import { PI_MCP_EXTENSION } from '../src/pi-runtime.mjs';
 
 // A CLI stand-in: records its argv, cwd and the agent env, then prints the
@@ -66,6 +66,26 @@ describe('WorkerExecutor', () => {
     assert.equal(call.cwd, task().workdir);
     assert.deepEqual(JSON.parse(call.mcp).args.slice(-2), ['--authority', 'worker-token']);
     assert.equal(call.shellLimit, null, 'a worker shell is not capped like the router\'s');
+  });
+
+  it('starts a task that follows a Pi task from a copy of that task\'s session, unless it is gone or too large', async (t) => {
+    const { dir, config, task } = setup(t);
+    config.piBin = fakeCli(dir, 'pi', [{ type: 'agent_settled' }]);
+    const executor = new WorkerExecutor({ config, settings: () => ({ runtime: 'pi', model: null, effort: null }) });
+    const parentDir = path.join(config.dataDir, 'workers', 't3');
+    fs.mkdirSync(parentDir, { recursive: true });
+    const parentFile = path.join(parentDir, '2026-11-16T09-00-00-000Z_aaaaaaaa-0000-4000-8000-000000000003.jsonl');
+    fs.writeFileSync(parentFile, '{"type":"session"}\n');
+    const fork = { taskId: 't3', runtime: 'pi', sessionId: 'aaaaaaaa-0000-4000-8000-000000000003' };
+    await executor.start({ task: task(), prompt: 'p', authority: 'x', fork }).done;
+    await executor.start({ task: task({ native_session: '6d0f2a51-0000-4000-8000-000000000001', turns: 2 }), prompt: 'p', authority: 'x', fork }).done;
+    await executor.start({ task: task(), prompt: 'p', authority: 'x', fork: { ...fork, sessionId: 'missing' } }).done;
+    fs.writeFileSync(parentFile, Buffer.alloc(FORK_MAX_BYTES + 1));
+    await executor.start({ task: task(), prompt: 'p', authority: 'x', fork }).done;
+    const forks = calls(dir, 'pi').map((call) => (call.argv.includes('--fork') ? call.argv[call.argv.indexOf('--fork') + 1] : null));
+    assert.deepEqual(forks, [parentFile, null, null, null], 'first turn only, and only a session that is there and not too large');
+    const [first] = calls(dir, 'pi');
+    assert.equal(first.argv[first.argv.indexOf('--session-id') + 1], '6d0f2a51-0000-4000-8000-000000000001', 'under the new task\'s own id');
   });
 
   it('reports a failed turn, and whether it is worth another try', async (t) => {

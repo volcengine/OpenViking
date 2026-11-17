@@ -50,10 +50,27 @@ function jsonLines(stream, onLine) {
   });
 }
 
+// A task that follows another starts from a copy of that task's own session
+// (its whole conversation, and so the provider's prefix cache) unless the
+// session is this large; then the brief's summary of it is the start.
+export const FORK_MAX_BYTES = 4 * 1024 * 1024;
+
+// The session file of the task a new one follows, when it can be forked.
+export function forkableSession(config, fork) {
+  if (!fork?.taskId || !fork.sessionId) return null;
+  const dir = path.join(config.dataDir, 'workers', fork.taskId);
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return null; }
+  const name = names.find((entry) => entry.endsWith(`_${fork.sessionId}.jsonl`));
+  if (!name) return null;
+  const file = path.join(dir, name);
+  try { return fs.statSync(file).size <= FORK_MAX_BYTES ? file : null; } catch { return null; }
+}
+
 // Each runtime: how to build one turn's command, and how to read its result.
 const RUNTIMES = {
   pi: {
-    async command({ config, task, prompt, authority, model, effort, policyFile }) {
+    async command({ config, task, prompt, authority, model, effort, policyFile, fork }) {
       const env = sanitizePiEnv(process.env, config.profile, agentToolEnv(config, authority), config);
       env.PERSONAL_AGENT_MCP_CONFIG = JSON.stringify({
         ...agentToolServer(config, authority),
@@ -64,6 +81,9 @@ const RUNTIMES = {
         '--mode', 'json', '-p',
         '--append-system-prompt', policyFile,
         ...(effort ? ['--thinking', effort] : []),
+        // The first turn of a task that follows a Pi task continues a copy of
+        // that task's session under this task's own id.
+        ...(fork?.runtime === 'pi' && !task.native_session && forkableSession(config, fork) ? ['--fork', forkableSession(config, fork)] : []),
         '--session-id', task.session_id,
         '--session-dir', path.join(config.dataDir, 'workers', task.id),
         '--approve',
@@ -180,7 +200,7 @@ export class WorkerExecutor {
     return { model: model && model !== runtime ? model : null, effort: effort || null };
   }
 
-  start({ task, prompt, authority }) {
+  start({ task, prompt, authority, fork = null }) {
     const definition = RUNTIMES[task.runtime];
     if (!definition) throw new Error(`workers do not run on ${task.runtime}; they need ${WORKER_RUNTIMES.join(', ')}`);
     let child = null;
@@ -194,7 +214,7 @@ export class WorkerExecutor {
       fs.writeFileSync(policyFile, policy, { mode: 0o600 });
       const { model, effort } = this.modelFor(task);
       const { command, args, env } = await definition.command({
-        config: this.config, task, prompt, authority, model, effort, policy, policyFile, scratch,
+        config: this.config, task, prompt, authority, model, effort, policy, policyFile, scratch, fork,
       });
       if (stopped) return { text: '', error: 'stopped' };
       const reader = definition.reader();

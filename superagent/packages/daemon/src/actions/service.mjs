@@ -48,6 +48,7 @@ const HANDLERS = {
   task_list: 'taskList',
   task_check: 'taskCheck',
   task_report: 'taskReport',
+  task_handback: 'taskHandback',
   list_chats: 'listChats',
   list_chat_members: 'listChatMembers',
   list_chat_messages: 'listChatMessages',
@@ -76,10 +77,14 @@ const HANDLERS = {
 // tools and reads. Never a delivery, a decision, a timer or a memory write:
 // the router is the only outlet.
 const WORKER_TOOLS = new Set([
-  'task_check', 'task_report', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
+  'task_check', 'task_report', 'task_handback', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
   'list_thread_messages', 'get_message_media', 'read_email', 'read_meeting_note', 'read_openviking_session_context',
   'get_time', 'openviking_find', 'openviking_search', 'openviking_read', 'openviking_list',
 ]);
+
+// What answers for a task's report (workers scheduler): a final delivery or a
+// silence that names the task (task_ids) or is made on its origin.
+const SETTLING = new Set(['send_message', 'notify_owner', 'reply_message', 'stay_silent']);
 
 // A refusal the model can act on; `code` is what logs and activities record.
 function blocked(code, message) {
@@ -231,11 +236,20 @@ export class ActionService {
       throw blocked('unsupported', `Workers run on pi, codex or claude; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
     }
     const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
+    // One request, one task: a line a live task already holds as its request
+    // or a follow-up is not started a second time.
+    for (const row of rows) {
+      const holder = tasks.liveHolder(row.seq);
+      if (holder) {
+        throw blocked('task_exists', `Not created: event=${row.event_id} is already part of ${holder}, which is still working on it. Leave it there, or task_route other lines to it. ${NO_ACTION}`);
+      }
+    }
+    if (input.follows && !tasks.get(input.follows)) throw blocked('unknown_task', `No task ${input.follows} to follow. ${NO_ACTION}`);
     const requester = senderLabel(this.store.inboundBySeq(rows[0].seq));
-    const task = tasks.create({ rows, title: input.title, note: input.note ?? '', requester, runtime });
+    const task = tasks.create({ rows, title: input.title, note: input.note ?? '', requester, runtime, parent: input.follows ?? null });
     this.routedDecisions(rows);
     return {
-      text: `Created ${task.id}: a worker is on it. Tell the requester once that you are on it; the result comes back as a [task report] input.`,
+      text: `Created ${task.id}${task.parent_id ? `, following ${task.parent_id}` : ''}: ${task.status === 'running' ? 'a worker is on it' : 'it waits for a free worker'}. Tell the requester once that you are on it; the result comes back as a [task report] input.`,
       data: { task_id: task.id, status: task.status },
     };
   }
@@ -243,9 +257,17 @@ export class ActionService {
   async taskRoute(input) {
     const tasks = this.requireTasks();
     const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
+    const target = tasks.get(input.task_id);
+    // A task's worker reports to the chat it was asked in: lines from another
+    // chat join it only when the owner wrote them.
+    const foreign = target ? rows.filter((row) => row.chat_id && target.origin_chat && row.chat_id !== target.origin_chat
+      && !this.isOwnerEvent(this.store.inboundBySeq(row.seq) ?? {})) : [];
+    if (foreign.length) {
+      throw blocked('other_chat', `Not routed: ${foreign.map((row) => `event=${row.event_id}`).join(', ')} is from another chat than ${target.id}, and only the owner's lines may join a task across chats. Decide on it where it was written. ${NO_ACTION}`);
+    }
     let task;
     try { task = tasks.route(input.task_id, rows, input.role); } catch (error) {
-      throw blocked('unknown_task', `${error.message}. ${NO_ACTION}`);
+      throw blocked(error.code ?? 'unknown_task', `${error.message}. ${NO_ACTION}`);
     }
     this.routedDecisions(rows);
     return {
@@ -273,6 +295,17 @@ export class ActionService {
     if (rows.length === 0) return { text: 'No new inputs for your task.', data: { count: 0 } };
     const text = rows.map((row) => (row.role === 'owner' ? row.text : `[context] ${row.text}`)).join('\n');
     return { text: `New inputs for your task, oldest first:\n${text}`, data: { count: rows.length } };
+  }
+
+  async taskHandback(input, caller) {
+    const tasks = this.requireTasks();
+    const rows = this.taskInputs(input.trigger_ids, null);
+    const inputs = tasks.inputsBySeq(caller.task, rows.map((row) => row.seq));
+    if (inputs.length === 0) {
+      throw blocked('invalid_input', `None of these lines was routed to your task as part of its request after it was created; only those can be handed back. A [context] line asks nothing of you: ignore it if it does not bear on your task. ${NO_ACTION}`);
+    }
+    const count = tasks.handBack(caller.task, inputs.map((row) => row.id), input.reason);
+    return { text: `Handed back ${count} input(s): the agent decides on them. Do not work on them; go on with your task.`, data: { count } };
   }
 
   async taskReport(input, caller) {
@@ -378,7 +411,7 @@ export class ActionService {
   definition(tool) {
     return toolDefinition(tool, {
       explicitSilence: Boolean(this.config.explicitSilence), stagedReplies: Boolean(this.config.stagedReplies),
-      larkMessageAccess: this.config.larkMessageAccess,
+      larkMessageAccess: this.config.larkMessageAccess, workers: this.config.scheduler === 'workers' && Boolean(this.tasks),
     });
   }
 
@@ -406,7 +439,18 @@ export class ActionService {
           throw blocked('timer_unavailable', 'Timer state is temporarily unavailable. Try again after OpenViking recovers.');
         }
       }
+      const taskIds = Array.isArray(input.task_ids) ? [...new Set(input.task_ids)] : [];
+      if (taskIds.length && this.tasks && name !== 'stay_silent') {
+        const working = this.tasks.working(taskIds);
+        if (working.length) {
+          throw blocked('task_working', `Delivery blocked: ${working.join(', ')} got new input from the requester's side after that report, and its worker is working on it again; its next [task report] replaces this one. Do not relay the old report. ${NO_ACTION}`);
+        }
+      }
       let result = await this[HANDLERS[name]](input, caller);
+      if (this.tasks && SETTLING.has(name) && !trace.interim && !result.data?.dry_run) {
+        const settled = this.tasks.settleReports({ taskIds, seqs: [trace.decisionSeq, trace.responseSeq] });
+        if (settled) trace.settledReports = settled;
+      }
       // Only a call that changed nothing says STOP: a success after a refused
       // attempt (decision_ambiguous fixed with decision_instance) is a fix.
       if (silence && result.data?.duplicate) {

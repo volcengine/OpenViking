@@ -473,7 +473,13 @@ describe('the workers scheduler', () => {
     const workers = assembleConversationPolicy({ ...base, scheduler: 'workers' });
     assert.ok(workers.startsWith(`${inbox}\n\n## Workers\n`));
     assert.match(workers, /Never rewrite the request or add a plan: the worker reads the original messages\./);
-    assert.match(workers, /A similar topic is a new request; when unsure, create a new task\./);
+    assert.match(workers, /A task is one piece of work, not a conversation\. Decide each input by what it asks for, never by where it was written or who wrote it/);
+    assert.match(workers, /More work on an ended task is always a new task that follows it; ended tasks take no inputs\./);
+    assert.match(workers, /When unsure between `owner` and a new task, create the new task with `follows`\./);
+    assert.match(workers, /Being near a task says nothing about belonging to it\./);
+    assert.match(workers, /A `\[task handback\]` input holds lines a worker found are not part of its task[\s\S]*never route one back to that task\./);
+    assert.match(workers, /and `task_ids` with its task \(several when one reply covers several reports\)/);
+    assert.match(workers, /A report marked `undelivered=1` was shown to you before/);
     assert.match(workers, /A `\[task report\]` line is a worker's result for one task, not an input from a person\./);
     assert.match(workers, /for `dropped`, tell the requester in one line why nothing needed doing/);
     assert.match(workers, /a command is cut off after 30 seconds and may not sleep, and a turn gets a few calls of them/);
@@ -486,6 +492,10 @@ describe('the workers scheduler', () => {
     assert.match(text, /^## Worker\n\nYou are a worker for Tester\./);
     assert.match(text, /Finish every turn with task_report/);
     assert.match(text, /You have no tool to send, reply, react or notify/);
+    assert.match(text, /New inputs routed to your task while you work may arrive by themselves as a `\[task input\]` message/);
+    assert.match(text, /hand it back with task_handback \(its event= and one sentence why\) and do not work on or answer it/);
+    assert.match(text, /A line marked as context asks nothing of you: when it does not bear on your task, ignore it; never hand it back\./);
+    assert.match(text, /When your brief says your task follows another one, start from that work/);
     assert.match(text, /## Role\n/);
     assert.doesNotMatch(text, /## Decisions and delivery|stay_silent|message_check|## Inbox/);
   });

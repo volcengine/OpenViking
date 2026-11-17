@@ -2018,6 +2018,83 @@ describe('workers scheduler', () => {
     await assert.rejects(call('task_create', { trigger_ids: ['message:om_neverSeen12345'], title: 'x' }), (error) => error.code === 'unknown_decision');
   });
 
+  it('starts more work on an ended task as a task that follows it, and keeps one request in one live task', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_followOrigin12', chatType: 'group', content: '查一下 X 为什么慢' }));
+    await call('task_create', { trigger_ids: ['message:om_followOrigin12'], title: '查 X' });
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_followOrigin12'], title: '查 X 2' }),
+      (error) => error.code === 'task_exists' && /already part of t1, which is still working on it/.test(error.message));
+    tasks.report('t1', { state: 'done', summary: 'X 慢在索引', draft: 'X 慢是因为缺索引' });
+    turns[0].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    store.ingest(chatEvent({ messageId: 'om_followMore1234', chatType: 'group', content: '那你提个 PR 修一下' }));
+    await assert.rejects(call('task_route', { task_id: 't1', trigger_ids: ['message:om_followMore1234'], role: 'owner' }),
+      (error) => error.code === 'task_ended' && /task_create with follows=t1/.test(error.message));
+    const created = await call('task_create', { trigger_ids: ['message:om_followMore1234'], title: '修 X', follows: 't1' });
+    assert.match(created.text, /^Created t2, following t1: a worker is on it\./);
+    assert.match(turns[1].prompt, /This task follows t1 "查 X" \(done\)[\s\S]*What that work found:\n\| X 慢在索引[\s\S]*Its last answer to the requester:\n\| X 慢是因为缺索引/);
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_followMore1234'], title: 'x', follows: 't9' }),
+      (error) => ['task_exists', 'unknown_task'].includes(error.code));
+  });
+
+  it('routes lines from another chat to a task only when the owner wrote them', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_chatOrigin1234', chatType: 'group', chatId: 'oc_first12345678' }));
+    await call('task_create', { trigger_ids: ['message:om_chatOrigin1234'], title: 'X' });
+    store.ingest(chatEvent({ messageId: 'om_chatStranger12', chatType: 'group', chatId: 'oc_second1234567', senderId: 'ou_stranger12345' }));
+    await assert.rejects(call('task_route', { task_id: 't1', trigger_ids: ['message:om_chatStranger12'], role: 'owner' }),
+      (error) => error.code === 'other_chat');
+    store.ingest(chatEvent({ messageId: 'om_chatOwner12345', chatType: 'p2p', chatId: 'oc_ownerDm123456', senderId: OWNER.id }));
+    assert.match((await call('task_route', { task_id: 't1', trigger_ids: ['message:om_chatOwner12345'], role: 'owner' })).text, /^Routed 1 input/);
+  });
+
+  it('settles a report on the delivery that names its task, and refuses one whose worker is working again', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_settleOrigin12', chatType: 'group', content: '查 X' }));
+    await call('task_create', { trigger_ids: ['message:om_settleOrigin12'], title: '查 X' });
+    tasks.report('t1', { state: 'needs_user', question: '查哪个环境？' });
+    turns[0].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    const delivery = () => store.db.prepare('SELECT inbox_id, settled_at_ms FROM task_report_deliveries').get();
+    assert.ok(delivery().inbox_id);
+    assert.equal(delivery().settled_at_ms, null);
+    await call('reply_message', { message_id: 'om_settleOrigin12', markdown: '查哪个环境？', decision_id: 'message:om_settleOrigin12', task_ids: ['t1'] });
+    assert.ok(delivery().settled_at_ms, 'the relay settles it');
+    store.ingest(chatEvent({ messageId: 'om_settleAnswer12', chatType: 'group', content: '线上环境' }));
+    await call('task_route', { task_id: 't1', trigger_ids: ['message:om_settleAnswer12'], role: 'owner' });
+    assert.equal(tasks.get('t1').status, 'running');
+    await assert.rejects(call('reply_message', { message_id: 'om_settleAnswer12', markdown: '旧结论', decision_id: 'message:om_settleAnswer12', task_ids: ['t1'] }),
+      (error) => error.code === 'task_working' && /its next \[task report\] replaces this one/.test(error.message));
+    const legacy = setup(t, { explicitSilence: true });
+    legacy.store.ingest(chatEvent({ messageId: 'om_legacyTaskIds1', chatType: 'group' }));
+    await assert.rejects(legacy.call('reply_message', { message_id: 'om_legacyTaskIds1', markdown: 'x', decision_id: 'message:om_legacyTaskIds1', task_ids: ['t1'] }),
+      (error) => error.code === 'invalid_input', 'task_ids only with the workers scheduler');
+  });
+
+  it('lets a worker hand back a routed line that is not its task, never the request it was created with', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_handOrigin1234', chatType: 'group', content: '查 X' }));
+    await call('task_create', { trigger_ids: ['message:om_handOrigin1234'], title: '查 X' });
+    store.ingest(chatEvent({ messageId: 'om_handOther12345', chatType: 'group', content: '帮我订个会议室' }));
+    await call('task_route', { task_id: 't1', trigger_ids: ['message:om_handOther12345'], role: 'owner' });
+    const token = turns[0].authority;
+    await assert.rejects(call('task_handback', { trigger_ids: ['message:om_handOrigin1234'], reason: 'x' }, token),
+      (error) => error.code === 'invalid_input');
+    assert.match((await call('task_handback', { trigger_ids: ['message:om_handOther12345'], reason: '订会议室不是查 X' }, token)).text, /^Handed back 1 input/);
+    const [entry] = tasks.inbox.entries;
+    assert.match(entry.item.text, /^\[task handback\] task=t1 title="查 X" reason="订会议室不是查 X"\n[\s\S]*Never route them back to that task\.\nline \d+$/);
+    assert.equal(tasks.undelivered('t1').length, 0, 'it is no longer the task\'s');
+    await assert.rejects(call('task_handback', { trigger_ids: ['message:om_handOther12345'], reason: 'x' }), (error) => error.code === 'unknown_tool', 'not for the router');
+    store.ingest(chatEvent({ messageId: 'om_handContext123', chatType: 'group', content: '你们那边也慢吗' }));
+    await call('task_route', { task_id: 't1', trigger_ids: ['message:om_handContext123'], role: 'context' });
+    await assert.rejects(call('task_handback', { trigger_ids: ['message:om_handContext123'], reason: 'x' }, token),
+      (error) => error.code === 'invalid_input' && /A \[context\] line asks nothing of you/.test(error.message), 'context is ignored, not handed back');
+  });
+
   it('refuses a task on a runtime workers do not run on', async (t) => {
     const { service, store, workspace, call } = setup(t, { scheduler: 'workers' });
     attachTasks(service, store, workspace, 'durable');

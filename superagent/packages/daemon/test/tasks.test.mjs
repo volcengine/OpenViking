@@ -154,25 +154,47 @@ describe('TaskManager', () => {
     assert.equal(executor.turns.length, 1, 'inputs it read need no catch-up turn');
   });
 
-  it('resumes an ended task on its requester\'s follow-up, but not on context; never a stopped one', async (t) => {
+  it('takes no inputs for an ended task: more work on it is a task that follows it', async (t) => {
     const { tasks, executor } = setup(t);
-    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
-    executor.turns[0].finish({ text: 'done' });
+    tasks.create({ rows: [row({ content: '查一下 X' })], title: '查 X', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', summary: 'X 慢在索引', draft: 'X 慢是因为缺索引', artifacts: ['notes.md'] });
+    executor.turns[0].finish({ text: '' });
     await settle();
     assert.equal(tasks.get('t1').status, 'done');
-    tasks.route('t1', [row({ content: 'fyi' })], 'context');
-    assert.equal(executor.turns.length, 1);
-    tasks.route('t1', [row({ content: '再补一个' })], 'owner');
-    assert.equal(executor.turns.length, 2);
-    assert.match(executor.turns[1].prompt, /fyi[\s\S]*再补一个|再补一个[\s\S]*fyi/);
-    tasks.stop('t1', 'Alice said stop');
-    assert.equal(executor.turns[1].stopped, true);
-    await settle();
-    assert.equal(tasks.get('t1').status, 'stopped');
-    assert.throws(() => tasks.route('t1', [row()], 'owner'), /was stopped/);
+    assert.throws(() => tasks.route('t1', [row({ content: '提个 PR 修一下' })], 'owner'),
+      (error) => error.code === 'task_ended' && /follows=t1/.test(error.message));
+    assert.throws(() => tasks.route('t1', [row()], 'context'), /has ended/);
+    tasks.create({ rows: [row({ content: '提个 PR 修一下' })], title: '修 X', runtime: 'pi', parent: 't1' });
+    assert.equal(tasks.get('t2').parent_id, 't1');
+    const brief = executor.turns[1].prompt;
+    assert.match(brief, /^\[task t2\] 修 X\n/);
+    assert.match(brief, /This task follows t1 "查 X" \(done\), earlier work it builds on\. Its request:\n\| \[chat=oc_a msg=om_\d+ event=e\d+\] 查一下 X/);
+    assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nIts directory, with whatever it left there: .*tasks\/t1\n/);
+    assert.match(tasks.list()[0], /^t2 \[running\] "修 X" for unknown in chat=oc_a \(follows t1\)$/);
+    tasks.stop('t2', 'Alice said stop');
+    assert.throws(() => tasks.route('t2', [row()], 'owner'), /has ended \(stopped\)/);
   });
 
-  it('keeps one slot for follow-ups to existing tasks', async (t) => {
+  it('starts a task that follows another from that task\'s session, on the same runtime only', async (t) => {
+    const { tasks, executor } = setup(t);
+    const seen = [];
+    const start = executor.start.bind(executor);
+    executor.start = (args) => { seen.push(args.fork); return start(args); };
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    executor.turns[0].finish({ text: 'a' });
+    await settle();
+    const parent = tasks.get('t1');
+    tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
+    tasks.create({ rows: [row()], title: 'C', runtime: 'codex', parent: 't1' });
+    assert.deepEqual(seen, [null, { taskId: 't1', runtime: 'pi', sessionId: parent.native_session }, null]);
+    tasks.route('t2', [row({ content: '只看上周' })], 'owner');
+    executor.turns[1].finish({ text: 'b' });
+    await settle();
+    assert.equal(executor.turns.at(-1).task.id, 't2', 'a catch-up turn');
+    assert.equal(seen.at(-1), null, 'only the first turn forks');
+  });
+
+  it('keeps one slot for follow-ups: a task that ran, or one that follows another', async (t) => {
     const { tasks, executor } = setup(t, { slots: 1, reservedSlots: 1 });
     tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
     executor.turns[0].finish({ text: 'a' });
@@ -180,27 +202,110 @@ describe('TaskManager', () => {
     tasks.create({ rows: [row()], title: 'B', runtime: 'pi' });
     tasks.create({ rows: [row()], title: 'C', runtime: 'pi' });
     assert.deepEqual(executor.turns.map((turn) => turn.task.id), ['t1', 't2'], 'C waits for a normal slot');
-    tasks.route('t1', [row({ content: 'follow-up' })], 'owner');
-    assert.deepEqual(executor.turns.map((turn) => turn.task.id), ['t1', 't2', 't1'], 'the follow-up takes the reserved slot');
+    tasks.create({ rows: [row({ content: 'follow-up' })], title: 'A2', runtime: 'pi', parent: 't1' });
+    assert.deepEqual(executor.turns.map((turn) => turn.task.id), ['t1', 't2', 't4'], 'the follow-up takes the reserved slot');
     executor.turns[1].finish({ text: 'b' });
     await settle();
     assert.equal(executor.turns.at(-1).task.id, 't3');
   });
 
-  it('names the tasks an input may belong to, and lets only the owner point across chats', (t) => {
-    const { tasks, ingest } = setup(t);
+  it('lists the tasks near an input with what each is doing, and lets only the owner point across chats', async (t) => {
+    const { tasks, ingest, executor } = setup(t);
     const origin = row({ thread_id: 'omt_9', sender_id: 'ou_alice', content: '排查飞书名字泄露' });
     ingest(origin);
-    tasks.create({ rows: [origin], title: '排查飞书名字泄露问题', runtime: 'pi' });
+    tasks.create({ rows: [origin], title: '排查飞书名字泄露问题', requester: 'Alice', runtime: 'pi' });
     tasks.report('t1', { state: 'needs_user', question: '要不要提 issue？' });
-    tasks.setStatus('t1', 'waiting');
+    executor.turns[0].finish({ text: '' });
+    await settle();
     const inThread = { chatId: 'oc_a', threadId: 'omt_9', senderId: 'ou_alice', scopeKey: origin.scope_key, content: '要' };
-    assert.match(tasks.hintFor(inThread, {}), /^\[daemon tasks\] may relate: t1 \[waiting\] "排查飞书名字泄露问题" \(same thread, waiting for this person, same requester\)/);
+    assert.equal(tasks.hintFor(inThread, {}), '[daemon tasks] near this input: t1 [waiting for Alice] "排查飞书名字泄露问题" (same thread, waiting for this person)');
     const reply = { chatId: 'oc_a', threadId: null, senderId: 'ou_bob', scopeKey: 'lark:oc_a:', content: 'ok', parentId: origin.message_id };
-    assert.match(tasks.hintFor(reply, {}), /t1 .*\(replies to its message\)/);
+    assert.match(tasks.hintFor(reply, {}), /t1 \[waiting for Alice\] .*\(replies to its message\)/);
+    const sameChat = { chatId: 'oc_a', threadId: null, senderId: 'ou_alice', scopeKey: 'lark:oc_a:', content: '飞书名字泄露那个怎么样了' };
+    assert.equal(tasks.hintFor(sameChat, {}), '', 'similar words alone point nowhere');
     const elsewhere = { chatId: 'oc_b', senderId: 'ou_alice', scopeKey: 'lark:oc_b:', content: '飞书名字泄露那个怎么样了' };
     assert.equal(tasks.hintFor(elsewhere, {}), '');
     assert.match(tasks.hintFor(elsewhere, { owner: true }), /t1 .*similar words/);
+    tasks.report('t1', { state: 'done', draft: 'ok' });
+    tasks.setStatus('t1', 'done');
+    assert.match(tasks.hintFor(inThread, {}), /t1 \[done 0m ago\]/);
+  });
+
+  it('settles a report when the router answers for its task, and offers one it was shown and left again', async (t) => {
+    const { tasks, executor, relayed, db, activities } = setup(t);
+    const origin = row({ content: '查 X' });
+    tasks.create({ rows: [origin], title: 'X', runtime: 'pi' });
+    const later = row({ content: '只看上周' });
+    tasks.report('t1', { state: 'done', draft: 'X 的原因是 A' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    const receipt = relayed[0].item.receiptId;
+    assert.equal(receipt, 'task-report:1');
+    const delivery = () => db.prepare('SELECT inbox_id, settled_at_ms, offers FROM task_report_deliveries').get();
+    // A router turn held it and finished without answering for t1: once more, marked.
+    db.prepare('DELETE FROM inbox_pending').run();
+    assert.equal(tasks.settleReports({ seqs: [later.seq] }), 0, 'an answer to some other line settles nothing');
+    assert.equal(tasks.routerTurnEnded({ receiptIds: [receipt], ok: true }), 1);
+    assert.equal(relayed.length, 2);
+    assert.match(relayed[1].item.text, /^\[task report\] task=t1 state=done title="X" requester=unknown undelivered=1\n.*\nYou were shown this report before and have not answered for t1: relay it now with task_ids=\["t1"\]/);
+    db.prepare('DELETE FROM inbox_pending').run();
+    assert.equal(tasks.routerTurnEnded({ receiptIds: [receipt], ok: true }), 0, 'not a third time');
+    assert.ok(delivery().settled_at_ms);
+    assert.equal(activities.at(-1).kind, 'task.report_unrelayed');
+
+    // A failed router turn: offered again as it was, until the router answers.
+    tasks.create({ rows: [row({ content: '查 Y' })], title: 'Y', runtime: 'pi' });
+    tasks.report('t2', { state: 'done', draft: 'Y 的原因是 B' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+    const second = relayed.at(-1).item.receiptId;
+    db.prepare('DELETE FROM inbox_pending').run();
+    assert.equal(tasks.routerTurnEnded({ receiptIds: [second], ok: false }), 1);
+    db.prepare('DELETE FROM inbox_pending').run();
+    const t2 = tasks.get('t2');
+    assert.equal(tasks.settleReports({ seqs: [t2.origin_seq] }), 1, 'a delivery on the origin settles it');
+    assert.equal(tasks.routerTurnEnded({ receiptIds: [second], ok: false }), 0, 'nothing to offer after the answer');
+  });
+
+  it('hands back the follow-ups a task never saw when it fails or is stopped, never its request or what a turn took', async (t) => {
+    const { tasks, executor, relayed } = setup(t);
+    tasks.create({ rows: [row({ content: '查 X' })], title: 'X', runtime: 'pi' });
+    const seenLine = row({ content: '只看上周' });
+    tasks.route('t1', [seenLine], 'owner');
+    assert.equal(tasks.check('t1').length, 1, 'the worker took it');
+    const unseenLine = row({ content: '另外帮我订个会议室' });
+    tasks.route('t1', [unseenLine], 'owner');
+    executor.turns[0].finish({ text: '', error: 'exit 1: boom' });
+    await settle();
+    assert.equal(tasks.get('t1').status, 'failed');
+    const texts = relayed.map((entry) => entry.item.text);
+    assert.match(texts[0], /^\[task report\] task=t1 state=failed/);
+    assert.match(texts[1], /^\[task handback\] task=t1 title="X" reason="the task ended \(failed\) before its worker saw them"/);
+    assert.match(texts[1], /另外帮我订个会议室$/);
+    assert.doesNotMatch(texts[1], /查 X|只看上周/);
+    assert.equal(relayed[1].meta.kind, 'task.handback');
+
+    tasks.create({ rows: [row({ content: '查 Z' })], title: 'Z', runtime: 'pi' });
+    tasks.route('t2', [row({ content: '顺便看下 W' })], 'owner');
+    tasks.stop('t2', 'Alice said stop');
+    assert.match(relayed.at(-1).item.text, /^\[task handback\] task=t2 .*stopped before its worker saw them"[\s\S]*顺便看下 W$/);
+  });
+
+  it('tells a worker catching up that its last report was never sent', async (t) => {
+    const { tasks, executor, relayed } = setup(t);
+    tasks.create({ rows: [row({ content: '查 X' })], title: 'X', runtime: 'pi' });
+    tasks.route('t1', [row({ content: '只看上周' })], 'owner');
+    tasks.report('t1', { state: 'done', draft: '全量的结论' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.equal(relayed.length, 0);
+    assert.match(executor.turns[1].prompt, /New input from the requester's side:\n.*只看上周\nYour previous report was not sent: the requester has not seen it\. Your next report replaces it, so it must stand on its own/);
+    tasks.report('t1', { state: 'done', draft: '上周的结论' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+    assert.equal(relayed.length, 1);
+    assert.match(relayed[0].item.text, /上周的结论/);
+    assert.doesNotMatch(relayed[0].item.text, /全量的结论/);
   });
 
   it('starts the turns a previous daemon was running again, with a recovery note', async (t) => {
@@ -279,10 +384,17 @@ describe('TaskManager', () => {
     assert.equal(inbox.size, 1);
     assert.equal(relayed.length, 1);
     assert.match(relayed[0].item.text, /complete result/);
+    // A router turn takes it from the inbox; until the router answers for t1,
+    // a restart offers it again, marked; once it has, nothing is offered.
     inbox.remove([...inbox.entries]);
     tasks.flushReports();
     tasks.restore();
-    assert.equal(relayed.length, 1);
+    assert.equal(relayed.length, 2);
+    assert.match(relayed[1].item.text, /^\[task report\] task=t1 state=done .* undelivered=1\n/);
+    inbox.remove([...inbox.entries]);
+    assert.equal(tasks.settleReports({ taskIds: ['t1'] }), 1);
+    tasks.restore();
+    assert.equal(relayed.length, 2);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM inbox_pending').get().n, 0);
     assert.equal(executor.turns.length, 1);
   });
