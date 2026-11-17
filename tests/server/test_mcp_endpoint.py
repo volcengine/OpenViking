@@ -440,12 +440,17 @@ async def test_retrieval_tools_expose_tag_parameters_with_compatible_defaults():
     for tool_name in ("find", "search", "list", "tree", "grep"):
         properties = tools[tool_name].inputSchema["properties"]
         assert properties["tags"]["type"] == "array"
+        assert properties["tags"]["description"] == (
+            "Only return records matching every supplied tag. "
+            "Each tag must use strict k=v format."
+        )
         assert "tags" not in tools[tool_name].inputSchema.get("required", [])
 
     for tool_name in ("list", "tree", "grep"):
         properties = tools[tool_name].inputSchema["properties"]
         assert properties["include_tags"]["type"] == "boolean"
         assert properties["include_tags"]["default"] is False
+        assert properties["include_tags"]["description"] == "Include tags in the tool output."
 
 
 async def test_recall_tool_is_replaced_by_search_context_mode():

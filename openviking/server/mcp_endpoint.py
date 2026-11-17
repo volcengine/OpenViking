@@ -584,6 +584,11 @@ async def invoke_mcp_tool(
 
 # -- find / search ---------------------------------------------------------
 
+_TAG_FILTER_DESCRIPTION = (
+    "Only return records matching every supplied tag. Each tag must use strict k=v format."
+)
+_INCLUDE_TAGS_DESCRIPTION = "Include tags in the tool output."
+
 
 def _format_tags(tags: Optional[List[str]]) -> str:
     normalized = normalize_search_tags(tags, discard_invalid=True)
@@ -599,7 +604,10 @@ async def find(
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
-    tags: Optional[List[str]] = None,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
     read_content: bool = False,
     events_time_decay_protection: Optional[str] = None,
 ) -> str:
@@ -672,7 +680,10 @@ async def search(
     min_score: Optional[float] = None,
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
-    tags: Optional[List[str]] = None,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
     mode: Literal["list", "context"] = "list",
     query_expansion: Literal["off", "auto"] = "auto",
     max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
@@ -1341,8 +1352,14 @@ async def ls(
     limit: int | None = None,
     sort_by: Literal["name", "mtime"] | None = None,
     sort_order: Literal["asc", "desc"] = "asc",
-    tags: Optional[List[str]] = None,
-    include_tags: bool = False,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
+    include_tags: Annotated[
+        bool,
+        Field(description=_INCLUDE_TAGS_DESCRIPTION),
+    ] = False,
 ) -> str:
     """List one sorted page under a viking:// directory URI.
 
@@ -1432,8 +1449,14 @@ async def tree(
     level_limit: int = 3,
     node_limit: int = 1000,
     include_abstract: bool = False,
-    tags: Optional[List[str]] = None,
-    include_tags: bool = False,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
+    include_tags: Annotated[
+        bool,
+        Field(description=_INCLUDE_TAGS_DESCRIPTION),
+    ] = False,
     offset: int = 0,
     limit: int | None = None,
 ) -> str:
@@ -2365,8 +2388,14 @@ async def grep(
     pattern: str | list[str],
     case_insensitive: bool = False,
     node_limit: int = 10,
-    tags: Optional[List[str]] = None,
-    include_tags: bool = False,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
+    include_tags: Annotated[
+        bool,
+        Field(description=_INCLUDE_TAGS_DESCRIPTION),
+    ] = False,
 ) -> str:
     """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. tags requires every supplied k=v tag; include_tags adds tags to each matched URI. Use this for exact text matching; use the search tool for semantic retrieval."""
     import asyncio
