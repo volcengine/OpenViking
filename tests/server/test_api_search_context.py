@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
+from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import search as search_router
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.retrieve import ContextType, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -16,6 +21,60 @@ class _FakeFindResult:
         self.memories = memories or []
         self.resources = []
         self.skills = []
+
+
+async def test_context_mode_recovers_whole_abstracts_without_a_model_call(monkeypatch):
+    hits = [
+        {
+            "uri": f"viking://resources/{i}.md",
+            "score": 0.9 - i * 0.01,
+            "abstract": str(i) + "摘" * 255,
+            "level": 2,
+        }
+        for i in range(10)
+    ]
+    reads = []
+
+    async def find(**kwargs):
+        return SimpleNamespace(memories=[], resources=hits, skills=[])
+
+    async def read(uri, **kwargs):
+        reads.append(uri)
+        raise AssertionError("default recall must not read resource bodies")
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=find),
+        fs=SimpleNamespace(read=read),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    monkeypatch.setattr(search_router, "get_service", lambda: service)
+    ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
+    app = FastAPI()
+    app.include_router(search_router.router)
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/search/search",
+            json={
+                "query": "recall budget",
+                "mode": "context",
+                "quotas": {"resources": 10},
+                "peer_scope": "actor",
+                "max_tokens": 1600,
+            },
+        )
+    assert response.status_code == 200
+    result = response.json()["result"]
+    originals = {hit["uri"]: hit["abstract"] for hit in hits}
+    assert len(result["entries"]) == 10
+    assert sum(bool(e["text"]) for e in result["entries"]) == 3
+    assert all(not e["text"] or e["text"] == originals[e["uri"]] for e in result["entries"])
+    assert estimate_text_tokens(result["rendered"]) <= result["stats"]["used_tokens"] <= 1600
+    assert result["stats"]["rewrite"] == "off"
+    assert reads == []
 
 
 def _memory(uri: str, score: float = 0.9, abstract: str = "", level: int = 2):
