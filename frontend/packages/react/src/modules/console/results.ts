@@ -21,13 +21,15 @@ export function formatResult(
   data: unknown,
   values: ArgumentValues,
 ): CommandConsoleRecordContent {
-  if (['read', 'abstract', 'overview'].includes(name))
+  if (['read', 'abstract', 'overview'].includes(name)) {
+    const uri = values.uri as string;
     return {
       variant: 'resource-preview',
-      title: String(values.uri).split('/').pop() || String(values.uri),
-      uri: String(values.uri),
+      title: uri.split('/').pop() || uri,
+      uri,
       content: text(data),
     };
+  }
   if (['ls', 'tree'].includes(name) && Array.isArray(data))
     return {
       variant: 'resource-tree',
@@ -87,6 +89,14 @@ export function formatResult(
           : [text(data)],
     };
   }
+  if (name === 'search' && values.mode === 'context')
+    return {
+      variant: 'text',
+      text:
+        typeof result.rendered === 'string' && result.rendered.trim()
+          ? result.rendered
+          : text(data),
+    };
   if (['find', 'search'].includes(name)) {
     const items: CommandConsoleSearchResultItem[] = [];
     for (const key of ['memories', 'resources', 'skills']) {
