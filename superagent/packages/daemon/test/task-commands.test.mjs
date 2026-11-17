@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { TaskManager } from '../src/tasks.mjs';
 import { MessageInbox } from '../src/inbox.mjs';
@@ -97,6 +98,20 @@ describe('/tasks', () => {
     assert.match(text, /产出：https:\/\/github\.com\/x\/pull\/1\nworker 轮数：1 · 目录：/);
     assert.match(run('t9').text, /^没有任务 t9。/);
     assert.match(run('nonsense').text, /^用法：/);
+  });
+
+  it('shows how much the task directories take, and which tasks share one', async (t) => {
+    const { tasks, turns, row, run } = setup(t);
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: 'a' });
+    turns[0].finish({ text: '' });
+    await settle();
+    tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
+    fs.writeFileSync(path.join(tasks.get('t2').workdir, 'a.bin'), randomBytes(2 * 1024 * 1024));
+    assert.doesNotMatch(run('').text, /任务目录/, 'not before the first sweep');
+    await tasks.sweepDirs();
+    assert.match(run('').text, /\n任务目录占用 2 MB（上限 20\.0 GB）\n/);
+    assert.match(run('t2').text, /目录：.*tasks[\\/]t1（与 t1 共用）$/);
   });
 
   it('stops a live task, and refuses an ended one', async (t) => {

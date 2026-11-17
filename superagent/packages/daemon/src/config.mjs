@@ -338,6 +338,13 @@ export function getConfig() {
     // read them at a checkpoint (inbox.mjs); workers adds worker sessions
     // the main session hands longer work to (tasks.mjs). Read at start only.
     scheduler: enumEnv('OV_SUPERAGENT_SCHEDULER', 'legacy', ['legacy', 'inbox', 'workers']),
+    // Directories of ended worker tasks (<workspace>/tasks): dependency
+    // folders are deleted after the first number of days, the whole directory
+    // and its worker sessions after the second; past the budget (GB) the
+    // oldest go first. 0 turns each off.
+    taskDirPruneDays: intEnv('OV_SUPERAGENT_TASK_DIR_PRUNE_DAYS', 3, { min: 0, max: 3_650 }),
+    taskDirRemoveDays: intEnv('OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS', 14, { min: 0, max: 3_650 }),
+    taskDirBudgetGb: intEnv('OV_SUPERAGENT_TASK_DIR_BUDGET_GB', 20, { min: 0, max: 1_000_000 }),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
