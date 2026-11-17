@@ -112,7 +112,7 @@ const EMPTY_OVERVIEW: Overview = {
   recall_count: 0,
   recall_requests: 0,
   recall_ms: 0,
-  capture_issues: { retrying: 0, paused: 0 },
+  capture_issues: { failed: 0 },
   sample_limit: 10000,
   log_retention_days: 30,
   cache_alerts: null,
@@ -141,7 +141,7 @@ const BUSY_OVERVIEW: Overview = {
   recall_count: 42,
   recall_requests: 40,
   recall_ms: 820,
-  capture_issues: { retrying: 1, paused: 2 },
+  capture_issues: { failed: 1 },
   sample_limit: 10000,
   log_retention_days: 7,
   cache_alerts: null,
@@ -376,7 +376,7 @@ describe('OverviewPage', () => {
     ).toBeTruthy()
     expect(
       screen.getByText(
-        '1 conversation is retrying saving to OpenViking after a failure.',
+        "1 conversation's latest turn wasn't saved to OpenViking. Its next turn saves what's missing.",
       ),
     ).toBeTruthy()
     // Saving problems and degraded requests both link to the issues filter.
