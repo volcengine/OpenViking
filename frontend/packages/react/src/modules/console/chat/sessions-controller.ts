@@ -28,6 +28,13 @@ export function createSessionsController(
     state = { ...state, ...patch };
     listeners.forEach((listener) => listener());
   };
+  const commitMutation = (
+    apply: (items: readonly VikingBotSession[]) => readonly VikingBotSession[],
+  ) => {
+    revision++;
+    loading?.abort();
+    update({ sessions: apply(state.sessions), isLoading: false });
+  };
   const signal = () =>
     parent ? AbortSignal.any([owner.signal, parent]) : owner.signal;
   const hostRename = service.renameSession?.bind(service);
@@ -84,14 +91,9 @@ export function createSessionsController(
     try {
       await renameSession(id, title, requestSignal);
       if (!active || requestSignal.aborted) return false;
-      revision++;
-      loading?.abort();
-      update({
-        sessions: state.sessions.map((item) =>
-          item.id === id ? { ...item, title } : item,
-        ),
-        isLoading: false,
-      });
+      commitMutation((items) =>
+        items.map((item) => (item.id === id ? { ...item, title } : item)),
+      );
       return true;
     } catch (error) {
       if (active && !requestSignal.aborted)
@@ -140,15 +142,10 @@ export function createSessionsController(
           operation?.span,
         ).createSession(requestSignal);
         if (!active || requestSignal.aborted) return;
-        revision++;
-        loading?.abort();
-        update({
-          sessions: [
-            withRenameAvailability(session),
-            ...state.sessions.filter((item) => item.id !== session.id),
-          ],
-          isLoading: false,
-        });
+        commitMutation((items) => [
+          withRenameAvailability(session),
+          ...items.filter((item) => item.id !== session.id),
+        ]);
         operation?.ready({});
         return session;
       } catch (error) {
@@ -181,12 +178,7 @@ export function createSessionsController(
           requestSignal,
         );
         if (!active || requestSignal.aborted) return false;
-        revision++;
-        loading?.abort();
-        update({
-          sessions: state.sessions.filter((item) => item.id !== id),
-          isLoading: false,
-        });
+        commitMutation((items) => items.filter((item) => item.id !== id));
         operation?.ready({});
         return true;
       } catch (error) {
