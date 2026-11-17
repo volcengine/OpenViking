@@ -127,6 +127,7 @@ function FilePreviewBodyContent({
       <FilePreviewMedia
         source={fileTab.source}
         kind={media}
+        videoDetails={fileTab.videoDetails}
         text={text}
         slots={fileTab.slots}
         reports={reports}

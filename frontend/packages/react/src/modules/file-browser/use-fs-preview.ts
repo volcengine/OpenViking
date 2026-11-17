@@ -19,6 +19,7 @@ import { loadingTab } from './fs-preview-loading-tab.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
+import { loadVideoDetails } from './fs-video-details.js';
 import { abortError, readPreviewStat } from './fs-stat.js';
 
 export interface PreviewState {
@@ -216,6 +217,10 @@ export function useFsPreview({
         const tab = result.tab;
         setTabs([tab]);
         setActiveKey(tab.key);
+        // Supplemental content can fail independently of the playable video.
+        void loadVideoDetails(client, tab, options, (updatedTab) =>
+          setTabs([updatedTab]),
+        ).catch(() => undefined);
       },
       (cause: unknown) => {
         if (isAbort(cause) || controller.signal.aborted) return;
@@ -253,19 +258,14 @@ export function useFsPreview({
         }
       : undefined;
   const current = tabs?.[0];
-  const body =
-    !directoryTab &&
-    current?.key === uri &&
-    current.kind === 'file' &&
-    !current.loading
-      ? current.source.content
-      : undefined;
   const count = directoryTab
     ? (
         directoryTab.levels.find((level) => level.key === activeLevelKey)
           ?.source.content ?? ''
       ).length
-    : body?.length;
+    : current?.key === uri && current.kind === 'file' && !current.loading
+      ? current.source.content?.length
+      : undefined;
   return {
     monitoring,
     tabs: directoryTab ? [directoryTab] : tabs,

@@ -128,12 +128,15 @@ import '@openviking/react/components/file-preview/style.css';
 | resources      | 伴随资源，按 `key` 匹配 Markdown 里的图片地址，可以是相对路径或 `viking://` URI      | `readonly FileViewerResource[]`                               | -       |
 | levels         | 分级内容，每级有自己的 `source`、`resources` 和 `editing`                            | `readonly FilePreviewLevel[]`                                 | -       |
 | activeLevelKey | 受控的当前层级，省略时使用第一个未禁用的层级                                         | `string`                                                      | -       |
+| videoDetails   | 视频转录文稿与抽帧图片                                                               | `FilePreviewFileTab['videoDetails']`                          | -       |
 | resolveImage   | 解析 Markdown 里的图片地址并返回可访问的 URL，请求、取消和 Blob URL 的回收由宿主负责 | `(src: string, source: FilePreviewSource) => Promise<string>` | -       |
 | editing        | 编辑能力，省略时只读，是否可编辑只取决于它；启用 `levels` 后只取当前层级的 `editing` | `FilePreviewEditing`                                          | -       |
 | actions        | 标题行里的宿主操作，数组或接收上下文的函数，规则见「注意」                           | `FilePreviewActionSource`                                     | -       |
 | onLevelChange  | 切换层级时触发，参数为新层级的 `key`，受控时由宿主更新 `activeLevelKey`              | `(key: string) => void`                                       | -       |
 | onOpenUri      | Markdown 里的链接通过 `operations.openUri` 打开后触发，参数为被点击的链接地址        | `(uri: string) => void`                                       | -       |
 | slots          | 标题行、页脚与状态插槽                                                               | `FilePreviewFileTabSlots`                                     | -       |
+
+文稿时间戳使用毫秒。切到抽帧图片页签时会触发 `onLoadFrames`，由宿主更新图片地址和加载状态。
 
 ### FilePreviewDirectoryTab
 
@@ -327,6 +330,16 @@ import '@openviking/react/components/file-preview/style.css';
 | fileEmpty              | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`                 |
 | noContent              | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`             |
 | truncated              | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`             |
+
+#### 视频预览文案
+
+| 参数              | 说明                           | 类型                        | 默认值       |
+| ----------------- | ------------------------------ | --------------------------- | ------------ |
+| videoTranscript   | 转录文稿页签                   | `string`                    | 转录文稿     |
+| videoFrames       | 按可见图片数格式化抽帧页签名称 | `(count: number) => string` | 抽帧图片     |
+| videoSpeaker      | 未标注发言人时的名称           | `string`                    | 说话人       |
+| videoNoTranscript | 文稿为空时的提示               | `string`                    | 暂无转录文稿 |
+| videoNoFrames     | 图片为空时的提示               | `string`                    | 暂无抽帧图片 |
 
 ### FilePreviewHandle
 

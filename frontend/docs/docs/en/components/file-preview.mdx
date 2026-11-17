@@ -128,12 +128,15 @@ A tab that renders `source` by its format. It includes every field of `FilePrevi
 | resources      | Companion resources matched by `key` against Markdown image targets, as relative paths or `viking://` URIs                                                  | `readonly FileViewerResource[]`                               | -        |
 | levels         | Content levels, each with its own `source`, `resources` and `editing`                                                                                       | `readonly FilePreviewLevel[]`                                 | -        |
 | activeLevelKey | Controlled content level; defaults to the first enabled level                                                                                               | `string`                                                      | -        |
+| videoDetails   | Video transcript and extracted frames                                                                                                                       | `FilePreviewFileTab['videoDetails']`                          | -        |
 | resolveImage   | Resolves a Markdown image target to an accessible URL; you own requests, cancellation and Blob URL cleanup                                                  | `(src: string, source: FilePreviewSource) => Promise<string>` | -        |
 | editing        | Editing capability; omit it for a read-only tab, since it alone decides whether a tab is editable. With `levels`, only the current level's `editing` counts | `FilePreviewEditing`                                          | -        |
 | actions        | Your commands in the header row, as an array or a function of the context; see Notes                                                                        | `FilePreviewActionSource`                                     | -        |
 | onLevelChange  | Called when the level changes, with the new level's `key`; when controlled, update `activeLevelKey` yourself                                                | `(key: string) => void`                                       | -        |
 | onOpenUri      | Called after `operations.openUri` opens a Markdown link, with the clicked target                                                                            | `(uri: string) => void`                                       | -        |
 | slots          | Slots for the header row, footer and states                                                                                                                 | `FilePreviewFileTabSlots`                                     | -        |
+
+Use milliseconds for transcript timestamps. Selecting the frames tab calls `onLoadFrames`. Update the image URLs and loading state in the host.
 
 ### FilePreviewDirectoryTab
 
@@ -327,6 +330,16 @@ Every field is an optional `string`; omitted fields use the default text of the 
 | fileEmpty              | Message when `content` is an empty string                                                                            | `string` | `'This file is empty'`                                     |
 | noContent              | The component never renders this text, so setting it has no effect                                                   | `string` | `'No content to show'`                                     |
 | truncated              | Message when `source.truncated` is `true`                                                                            | `string` | `'Only part of the content is shown'`                      |
+
+#### Video labels
+
+| Property          | Description                                               | Type                        | Default                       |
+| ----------------- | --------------------------------------------------------- | --------------------------- | ----------------------------- |
+| videoTranscript   | Transcript tab                                            | `string`                    | Transcript                    |
+| videoFrames       | Formats the frames tab label with the visible frame count | `(count: number) => string` | Extracted frames              |
+| videoSpeaker      | Fallback speaker name                                     | `string`                    | Speaker                       |
+| videoNoTranscript | Empty transcript message                                  | `string`                    | No transcript available       |
+| videoNoFrames     | Empty frames message                                      | `string`                    | No extracted frames available |
 
 ### FilePreviewHandle
 
