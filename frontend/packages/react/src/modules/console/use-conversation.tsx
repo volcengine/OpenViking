@@ -10,7 +10,10 @@ import { useHitl } from './hitl/use-hitl.js';
 import { useAttachmentUpload } from './chat/use-attachment-upload.js';
 import { compileQuickInputProps } from './compile-quick-inputs.js';
 import { useConversationReferences } from './use-conversation-references.js';
-import { conversationSessions } from './conversation-sessions.js';
+import {
+  conversationSessions,
+  useSessionActionScope,
+} from './conversation-sessions.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
 
@@ -78,10 +81,12 @@ export function useConversation(
     }),
     [selectSession],
   );
+  const hostSessions = conversation?.sessions;
   const sessions = useVikingBotSessions({
     ...options,
-    enabled: enabled && !conversation?.sessions,
+    enabled: enabled && !hostSessions,
   });
+  const sessionScope = useSessionActionScope(sessions.refresh, hostSessions);
   const submission = useRef(0);
   const resetInput = useCallback(() => {
     submission.current++;
@@ -97,7 +102,7 @@ export function useConversation(
       owner.active = false;
     };
   }, [owner]);
-  const selectedId = conversation?.sessions?.currentId;
+  const selectedId = hostSessions?.currentId;
   // Follow the host's URL-selected remote session, including Back/Forward.
   // A key would also tear down the stream when the URL echoes a newly created ID.
   // The controller cancels old requests on selection changes and unmount.
@@ -110,7 +115,7 @@ export function useConversation(
     if (selectedId) selection.select(selectedId);
     else reset();
   }, [enabled, selection, selectedId, sessionId, reset, resetInput]);
-  const onSelect = conversation?.sessions?.onSelect;
+  const onSelect = hostSessions?.onSelect;
   // Report asynchronously created remote IDs to the host router while streaming,
   // before send() settles. No event handler receives that intermediate ID.
   // This starts no resources; notified suppresses duplicate router callbacks.
@@ -121,7 +126,12 @@ export function useConversation(
     selection.notified = sessionId;
     if (sessionId && sessionId !== selectedId) onSelect?.(sessionId);
   }, [enabled, selection, selectedId, sessionId, onSelect]);
-  if (!enabled) return conversation ?? {};
+  if (!enabled) {
+    const scoped = hostSessions && { ...hostSessions, scopeKey: sessionScope };
+    return scoped
+      ? { ...conversation, sessions: scoped }
+      : (conversation ?? {});
+  }
   const switching = Boolean(
     selectedId && selection.prop !== selectedId && sessionId !== selectedId,
   );
@@ -180,8 +190,9 @@ export function useConversation(
           }
         : undefined,
     sessions: conversationSessions({
-      host: conversation?.sessions,
+      host: hostSessions,
       sessions,
+      scopeKey: sessionScope,
       activeId,
       select: (id) => {
         selection.notified = id;

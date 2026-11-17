@@ -289,6 +289,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | items         | 会话列表                                                                          | `readonly VikingBotSession[]`                                                | 必填    |
 | onSelect      | 选择历史会话时触发，参数为会话 ID                                                 | `(id: string) => void`                                                       | 必填    |
 | onNew         | 点击新建会话时触发                                                                | `() => void`                                                                 | 必填    |
+| scopeKey      | 会话作用域的稳定标识或对象引用。切换账号或服务时更新，关闭确认框。                | `string \| object`                                                           | -       |
 | currentId     | 当前会话 ID；设置后头部显示可复制的会话标识（过长时中间省略），历史列表中高亮该项 | `string`                                                                     | -       |
 | currentUri    | 当前会话对应的资源 URI；与 `onOpenUri` 一起设置时显示定位按钮                     | `string`                                                                     | -       |
 | isLoading     | 是否正在加载历史会话                                                              | `boolean`                                                                    | `false` |

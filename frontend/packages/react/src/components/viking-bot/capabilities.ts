@@ -44,6 +44,8 @@ export interface VikingBotSession {
 /** Session persistence and requests belong to the host. */
 export interface VikingBotSessions {
   items: readonly VikingBotSession[];
+  /** Change this stable key or object reference when the host's account or session service changes. */
+  scopeKey?: string | object;
   currentId?: string;
   /** Host-provided URI for locating the current session in the file browser. */
   currentUri?: string;

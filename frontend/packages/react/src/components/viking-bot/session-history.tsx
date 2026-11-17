@@ -20,6 +20,11 @@ import {
 
 const popupClass = 'ov-viking-bot__popover ov-viking-bot__history-popover';
 
+type PendingAction = SessionHistoryAction & {
+  scopeKey: VikingBotSessions['scopeKey'];
+  callback: VikingBotSessions['onRename'] | VikingBotSessions['onRemove'];
+};
+
 export function SessionHistory({
   sessions,
   labels,
@@ -32,8 +37,22 @@ export function SessionHistory({
   onSelect: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [action, setAction] = useState<SessionHistoryAction>();
+  const [action, setAction] = useState<PendingAction>();
   const trigger = useRef<HTMLButtonElement>(null);
+  const { scopeKey, onRename, onRemove } = sessions;
+  const actionCallback = (kind: SessionHistoryAction['kind']) =>
+    kind === 'rename' ? onRename : onRemove;
+  // Discard the pending action before rendering its dialog for a new owner.
+  if (action) {
+    const callback = actionCallback(action.kind);
+    if (
+      action.scopeKey !== scopeKey ||
+      !callback ||
+      (scopeKey === undefined && action.callback !== callback)
+    ) {
+      setAction(undefined);
+    }
+  }
   const managed = Boolean(sessions.onRename || sessions.onRemove);
   const changeOpen = (next: boolean) => {
     setOpen(next);
@@ -94,7 +113,8 @@ export function SessionHistory({
         locale,
         managed,
         onSelect,
-        onAction: setAction,
+        onAction: (next) =>
+          setAction({ ...next, scopeKey, callback: actionCallback(next.kind) }),
       })}
     </div>
   );
@@ -167,12 +187,15 @@ export function SessionHistory({
       </Tooltip>
       {action ? (
         <SessionHistoryDialog
-          {...action}
+          kind={action.kind}
+          session={action.session}
           sessions={sessions}
           labels={labels}
           locale={locale}
           triggerRef={trigger}
-          onClose={() => setAction(undefined)}
+          onClose={() =>
+            setAction((current) => (current === action ? undefined : current))
+          }
         />
       ) : null}
     </>
