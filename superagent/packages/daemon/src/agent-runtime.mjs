@@ -392,7 +392,7 @@ export class AgentRuntime {
     let decided = false;
     try {
       row = stop.decisionSeq == null ? null : this.store.inboundBySeq?.(stop.decisionSeq);
-      decided = Boolean(row?.scopeKey && this.store.coveringDecision?.(row.scopeKey, row.seq));
+      decided = Boolean(row && this.store.decisionOutcome?.(row.seq));
     } catch {}
     const target = row?.eventId ? ` for event=${metadataTag(row.eventId)}` : '';
     return `[daemon notice] The daemon stopped your previous turn: it called ${stop.tool}${target} ${stop.count} times`

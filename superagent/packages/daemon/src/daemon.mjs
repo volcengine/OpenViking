@@ -232,6 +232,8 @@ export class PersonalAgentDaemon {
         // A model that keeps redoing a settled decision: end its turn so the
         // inputs it holds go on (AgentRuntime.breakLoop).
         onNoProgress: (info) => this.agentRuntime?.breakLoop(info),
+        onStaleDecision: (info) => this.decisionPolicy?.onStaleDecision(info),
+        beforeFinalFreshnessCheck: this.config.beforeFinalFreshnessCheck,
         logger: this.logger.child({ component: 'actions' }),
       });
       this.actionApi = await startActionApi({
@@ -344,8 +346,8 @@ export class PersonalAgentDaemon {
         isStopping: () => this.shuttingDown,
       });
       // Checks at each successful turn's end that every input it consumed got a
-      // decision (a delivery or stay_silent), with up to three reminders by
-      // default if not: only on an instance with explicitSilence on. Recovers
+      // decision of its own (a delivery or stay_silent, or covers of one), with
+      // reminders if not: only on an instance with explicitSilence on. Recovers
       // what a loop-stopped turn left undecided on every instance.
       this.decisionPolicy = new DecisionPolicy({
         store: this.store,
@@ -356,6 +358,7 @@ export class PersonalAgentDaemon {
         decisionReminderLimit: this.config.decisionReminderLimit,
         notifyFailure: (info) => this.failurePolicy.notifyTurnFailure(info),
         isStopping: () => this.shuttingDown,
+        blockedDelayMs: this.config.decisionReminderDelayMs,
       });
       this.meeting.attachHarness({ runtime: this.agentRuntime });
       await this.agentRuntime.start();
@@ -543,6 +546,7 @@ export class PersonalAgentDaemon {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
     this.ready = false;
+    this.decisionPolicy?.stop();
     this.shutdownPromise = (async () => {
       this.logger.info('daemon_stopping', { reason });
       this.recordSystemActivity('system.stopping', {

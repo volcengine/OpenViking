@@ -187,6 +187,8 @@ function fakeLarkSource(dir) {
 // stay_silent on the newest event= of the turn input over the daemon's agent
 // tool socket, as a real runtime's MCP adapter would, then completes) |
 // 'reply' (likewise answers the newest msg= with reply_message "mock reply") |
+// 'covers-reply' (waits briefly for steered input, then answers the first
+// message with the newest event as decision_id and every event in covers) |
 // 'loop' (like 'silent', but a turn whose input says LOOP keeps calling
 // stay_silent on that event, new reason wording each time, as a model that
 // cannot stop, until turn/interrupt ends it as interrupted; turn/interrupt is
@@ -210,6 +212,7 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
     let turnSeq = 0;
     const interrupted = new Set();
     const steered = new Set();
+    const turnTexts = new Map();
     rl.on('line', (line) => {
       let msg;
       try { msg = JSON.parse(line); } catch { return; }
@@ -232,6 +235,7 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/start', text }) + '\\n');
         send({ id: msg.id, result: {} });
         const turnId = 'turn-' + (++turnSeq);
+        turnTexts.set(turnId, text);
         send({ method: 'turn/started', params: { turn: { id: turnId } } });
         if (BEHAVIOR === 'complete') {
           send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
@@ -247,6 +251,27 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
               fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n');
               done();
             });
+        } else if (BEHAVIOR === 'covers-reply') {
+          const done = () => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
+          setTimeout(() => {
+            const current = turnTexts.get(turnId) ?? text;
+            const events = [...current.matchAll(/ event=(\\S+)/g)].map((match) => match[1]);
+            const targets = [...current.matchAll(/ msg=(\\S+)/g)].map((match) => match[1]);
+            if (!events.length || !targets.length) { done(); return; }
+            const input = {
+              decision_id: events.at(-1),
+              response_to_id: events[0],
+              covers: [...new Set(events)],
+              message_id: targets[0],
+              markdown: 'mock combined reply',
+            };
+            fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'action-call', tool: 'reply_message', input }) + '\\n');
+            callTool(actionEndpoint('fake-codex'), 'reply_message', input)
+              .then(done, (error) => {
+                fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n');
+                done();
+              });
+          }, 250);
         } else if (BEHAVIOR === 'loop' || BEHAVIOR === 'reply-loop') {
           const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
           const target = [...text.matchAll(/ msg=(\\S+)/g)].at(-1)?.[1];
@@ -277,6 +302,7 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         const text = msg.params.input.map((part) => part.text).join('');
         fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/steer', text }) + '\\n');
         steered.add(msg.params.expectedTurnId);
+        turnTexts.set(msg.params.expectedTurnId, (turnTexts.get(msg.params.expectedTurnId) ?? '') + '\\n' + text);
         send({ id: msg.id, result: {} });
         return;
       }
