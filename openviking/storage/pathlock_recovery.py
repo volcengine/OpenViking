@@ -13,6 +13,7 @@ from openviking.storage.errors import (
     HandoffRecoveryRequired,
     InvalidPathLockRequestError,
     LockAcquisitionError,
+    ResourceBusyError,
 )
 from openviking.storage.internal_names import MULTIWRITE_PATH_LOCK_FILE
 from openviking_cli.utils.logger import get_logger
@@ -21,6 +22,34 @@ logger = get_logger(__name__)
 Requests = list[dict[str, str]]
 HANDOFF_RECOVERY_MAX_RETRIES = 8
 HANDOFF_RECOVERY_MAX_DELAY_SECS = 30.0
+
+COMPILE_LOCK_MAX_RETRIES = 16
+
+
+def is_stale_compile_lease(error: Exception) -> bool:
+    """Recognize native lease loss without retrying malformed lock requests."""
+    return isinstance(error, HandoffRecoveryRequired) or isinstance(error, ValueError) and (
+        str(error) == "invalid lock request: pathlock lease expired during acquisition"
+        or str(error).startswith(
+            "invalid lock request: owned lease capability does not match ref '"
+        )
+    )
+
+
+def is_compile_lock_conflict(error: Exception) -> bool:
+    """Return whether another attempt with a fresh lock can complete Compile work."""
+    return (
+        isinstance(error, LockAcquisitionError)
+        or (isinstance(error, ResourceBusyError) and error.retryable)
+        or is_stale_compile_lease(error)
+    )
+
+
+def compile_lock_retry_delay(retries: int) -> float | None:
+    """Return seconds before the next retry, or None after all retries are used."""
+    if retries >= COMPILE_LOCK_MAX_RETRIES:
+        return None
+    return min(0.5 * 2**retries, HANDOFF_RECOVERY_MAX_DELAY_SECS)
 
 
 async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> dict | None:

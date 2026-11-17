@@ -18,10 +18,15 @@ from openviking.service.compile_targets import (
     new_run,
     split_control_args,
 )
-from openviking.service.external_task_service import ExternalTaskError, ExternalTaskSnapshot
+from openviking.service.external_task_service import (
+    ExternalTaskError,
+    ExternalTaskService,
+    ExternalTaskSnapshot,
+)
 from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus
 from openviking.service.task_store import PersistentTaskStore
-from openviking.storage.errors import ResourceBusyError
+from openviking.service.task_tracker import TaskTracker
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError, PermissionDeniedError
 from tests.test_task_tracker import _FakeAgfs
 
@@ -887,3 +892,90 @@ async def test_rollback_reindexes_without_waiting(setup, registered, status, sch
         setup.fs._schedule_vector_rebuild.assert_not_called()
     setup.tracker.wait.assert_not_awaited()
     setup.find.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cancelled,configured", [(False, True), (True, False)])
+async def test_rollback_lock_exhaustion_fails_task(
+    setup, registered, monkeypatch, cancelled, configured
+):
+    """A fresh worker resumes the count, and failed cleanup wins over pending cancellation."""
+    template = registered[2] if configured else make_task(setup)
+    owner = {"account_id": template.account_id, "user_id": template.user_id}
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    for module in ("task_tracker", "external_task_service"):
+        monkeypatch.setattr(f"openviking.service.{module}.get_task_tracker", lambda: tracker)
+    task = await tracker.create("compile", task_id=template.task_id, meta=template.meta, **owner)
+    await tracker.start(task.task_id, **owner)
+    await tracker.register_work(task.task_id, "work", "ExternalTask", **owner)
+    await tracker.start_work(task.task_id, "work", queue_name="ExternalTask", **owner)
+    await setup.lifecycle.on_start(task)
+    baseline = (await setup.lifecycle._read_run(task))["meta"]["start_snapshot"]
+    if cancelled:
+        await tracker.cancel(task.task_id, **owner)
+    failure = ValueError("invalid lock request: pathlock lease expired during acquisition")
+    acquire = AsyncMock(side_effect=failure if configured else LockAcquisitionError("busy"))
+    monkeypatch.setattr(setup.files, "pathlock_acquire_tree", acquire)
+    backoff = AsyncMock()
+    monkeypatch.setattr("openviking.service.compile_targets.asyncio.sleep", backoff)
+    terminal = ExternalTaskSnapshot(status="cancelled" if cancelled else "failed")
+    for attempt in range(17):
+        external = ExternalTaskService()
+        external.register(
+            SimpleNamespace(
+                task_type="compile",
+                on_finish=CompileLifecycle(setup.store, setup.fs).on_finish,
+                serialization_key=lambda request: request["to"],
+            )
+        )
+        done = await external._apply_snapshot(terminal, task_id=task.task_id, auth={}, **owner)
+        current = await tracker.get(task.task_id, **owner)
+        assert done is (attempt == 16)
+        assert current.meta["rollback_lock_retries"] == min(attempt + 1, 16)
+        if not done:
+            assert current.error is None
+    await tracker.mark_work_done(task.task_id, "work", **owner)
+    failed = await tracker.get(task.task_id, **owner)
+    assert failed.status is TaskStatus.FAILED
+    assert "16 lock retries" in failed.error
+    assert failed.result == {"rollback_incomplete": True, "start_snapshot": baseline}
+    assert acquire.await_count == 17
+    assert [call.args[0] for call in backoff.await_args_list] == [0.5, 1, 2, 4, 8, 16] + [30] * 10
+    if configured:
+        run = await setup.store.get_run("acme", "alice", registered[1], task.task_id)
+        assert run["status"] == "failed" and run["finished_at"] is not None
+
+
+async def test_rollback_succeeds_on_last_lock_retry(setup, registered, monkeypatch):
+    """Restoring the baseline on retry sixteen preserves the requested cancellation."""
+    task = registered[2]
+    await setup.lifecycle.on_start(task)
+    task.meta["rollback_lock_retries"] = 15
+    busy = AsyncMock(side_effect=LockAcquisitionError("busy"))
+    with monkeypatch.context() as patch:
+        patch.setattr(setup.files, "pathlock_acquire_tree", busy)
+        patch.setattr("openviking.service.compile_targets.asyncio.sleep", AsyncMock())
+        snapshot = ExternalTaskSnapshot(status="cancelled")
+        assert (await setup.lifecycle.on_finish(task, snapshot)).status == "cancelling"
+    assert task.meta["rollback_lock_retries"] == 16
+    assert (await setup.lifecycle.on_finish(task, snapshot)).status == "cancelled"
+    setup.fs.restore.assert_awaited_once()
+
+
+async def test_busy_admission_does_not_block_failed_run_history(setup, registered, monkeypatch):
+    """An exhausted rollback records the named run even while another holder owns admission."""
+    _, name, task = registered
+    await setup.lifecycle.on_start(task)
+    task.meta["rollback_lock_retries"] = 16
+    acquire = setup.files.pathlock_acquire_exact
+
+    async def acquire_exact(path, **kwargs):
+        if "/task_locks/compile/" in path:
+            raise LockAcquisitionError("target busy")
+        return await acquire(path, **kwargs)
+
+    monkeypatch.setattr(setup.files, "pathlock_acquire_exact", acquire_exact)
+    outcome = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="failed"))
+    run = await setup.store.get_run("acme", "alice", name, task.task_id)
+    assert outcome.status == run["status"] == "failed"
+    assert outcome.result["start_snapshot"] == run["meta"]["start_snapshot"]
+    assert run["result"]["rollback_incomplete"]

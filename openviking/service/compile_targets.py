@@ -51,9 +51,14 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskSnapshot
-from openviking.service.task_domain import TaskPatch, sanitize_error
+from openviking.service.task_domain import TaskPatch, TaskStatus, sanitize_error
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.pathlock_recovery import (
+    COMPILE_LOCK_MAX_RETRIES,
+    compile_lock_retry_delay,
+    is_compile_lock_conflict,
+)
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -918,9 +923,9 @@ class CompileLifecycle:
     async def on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
         """Finish output publication or rollback before exposing a terminal Task result."""
         compile_name = self._compile_name(task)
-        if compile_name:
-            await self.record_queued(task)
         try:
+            if compile_name:
+                await self.record_queued(task)
             async with self._admission(task):
                 await self._refresh_checkpoint(task)
                 if compile_name:
@@ -929,11 +934,93 @@ class CompileLifecycle:
                     ):
                         return await self._finish(task, snapshot)
                 return await self._finish(task, snapshot)
-        except LockAcquisitionError:
-            return ExternalTaskSnapshot(
-                status="running" if snapshot.status == "completed" else "cancelling",
-                stage="committing" if snapshot.status == "completed" else "cancelling",
+        except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
+            if not is_compile_lock_conflict(exc):
+                raise
+            if (
+                snapshot.status == "completed"
+                and task.status != TaskStatus.CANCELLING
+                and self._checkpoint(task).get("phase") != "rolling_back"
+            ):
+                if not isinstance(exc, LockAcquisitionError):
+                    raise
+                return ExternalTaskSnapshot(status="running", stage="committing")
+            from openviking.service.task_tracker import get_task_tracker
+
+            retries = task.meta.get("rollback_lock_retries", 0)
+            delay = compile_lock_retry_delay(retries)
+            if delay is None:
+                return await self._fail_blocked_rollback(task, snapshot)
+            update = {"rollback_lock_retries": retries + 1}
+            persisted = await get_task_tracker().patch_task(
+                task.task_id,
+                TaskPatch(meta=update),
+                account_id=task.account_id,
+                user_id=task.user_id,
             )
+            if not persisted.accepted:
+                raise FailedPreconditionError("Compile task no longer accepts rollback retries")
+            task.meta.update(update)
+            await asyncio.sleep(delay)
+            return ExternalTaskSnapshot(status="cancelling", stage="cancelling")
+
+    async def _fail_blocked_rollback(
+        self, task: Any, snapshot: ExternalTaskSnapshot
+    ) -> ExternalTaskSnapshot:
+        """Persist the exhausted outcome and recovery baseline without taking the output lock."""
+        await self._refresh_checkpoint(task)
+        compile_name = self._compile_name(task)
+
+        async def finish(run: dict | None) -> ExternalTaskSnapshot:
+            failed = self._rollback_lock_failure(snapshot, run)
+            if run and run["finished_at"] is None:
+                run.update(
+                    status="failed",
+                    result=failed.result,
+                    error=failed.error_message,
+                    finished_at=time.time(),
+                )
+                await self._save_run(task, run)
+            return failed
+
+        if not compile_name:
+            return await finish(await self._read_run(task))
+        scope = (task.account_id, self._owner_user_id(task), compile_name, task.task_id)
+        try:
+            async with self._store.lock_run(*scope):
+                run = await self._store.get_run(*scope)
+                return await finish(run)
+        except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
+            if not is_compile_lock_conflict(exc):
+                raise
+            # A busy history file must not keep the public Task running.
+            return self._rollback_lock_failure(snapshot, await self._store.get_run(*scope))
+
+    @staticmethod
+    def _rollback_lock_failure(
+        snapshot: ExternalTaskSnapshot, run: dict | None
+    ) -> ExternalTaskSnapshot:
+        """Reuse a durable outcome or retain the rollback baseline for manual recovery."""
+        if run and run["finished_at"] is not None:
+            # Releasing a lease can fail after a terminal outcome is durable.
+            return ExternalTaskSnapshot(
+                status=run["status"],
+                result=run["result"],
+                error_code=snapshot.error_code,
+                error_message=run["error"],
+            )
+        return ExternalTaskSnapshot(
+            status="failed",
+            error_code="COMPILE_ROLLBACK_LOCK_EXHAUSTED",
+            error_message=(
+                f"Compile rollback incomplete after {COMPILE_LOCK_MAX_RETRIES} lock retries"
+                + (f": {snapshot.error_message}" if snapshot.error_message else "")
+            ),
+            result={
+                "rollback_incomplete": True,
+                "start_snapshot": run["meta"]["start_snapshot"] if run else None,
+            },
+        )
 
     async def _finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
         from openviking.service.task_tracker import get_task_tracker
@@ -1033,12 +1120,9 @@ class CompileLifecycle:
                     filter(None, [snapshot.error_message or snapshot.status, run.get("error")])
                 )
         except ResourceBusyError as exc:
-            if not exc.retryable:
+            if not exc.retryable or snapshot.status != "completed":
                 raise
-            return ExternalTaskSnapshot(
-                status="running" if snapshot.status == "completed" else "cancelling",
-                stage="committing" if snapshot.status == "completed" else "cancelling",
-            )
+            return ExternalTaskSnapshot(status="running", stage="committing")
         run["status"] = snapshot.status
         run["finished_at"] = time.time()
         await self._save_run(task, run)
