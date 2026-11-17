@@ -170,6 +170,7 @@ async def temp_upload(
                 names=signed.skill_names,
                 list_only=signed.list_only,
                 source_type="mcp",
+                request_id=getattr(request.state, "request_id", None),
             )
         return await ingest_temp_upload(
             store,
@@ -295,6 +296,7 @@ async def add_skill(
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,
                 telemetry=request.telemetry,
+                request_id=getattr(http_request.state, "request_id", None),
             )
         finally:
             if resolved:
