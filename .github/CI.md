@@ -21,8 +21,8 @@ binaries and musl CLI binaries are never reused in release wheels.
 With repository variable `CI_LINUX_BUILDS_ENABLED=true`, trusted Linux API jobs
 use `[self-hosted, Linux, X64, ci-linux-builds]`. Linux x86_64 wheel builds
 alternate between GitHub-hosted and this dedicated pool.
-Only the dedicated runner `iv-yezentk8ao3z47ge5tmm` has that custom label; runner
-display names do not select machines.
+Runners with that custom label form the dedicated pool; runner display names do
+not select machines.
 Linux wheels use the dedicated runner on even workflow run numbers.
 API native runtime preparation and its short change-planning job always use
 the dedicated runner for eligible events, regardless of workflow run number.
@@ -36,8 +36,12 @@ execution time. Conditional skips can change the observed share.
 The old ECS runner does not receive these jobs.
 
 Only official repository PRs from the same repository and branch pushes are
-eligible. Release/tag events, schedules, manual builds, fork PRs and other
-repositories use GitHub-hosted. The native producer publishes its selected labels
+eligible. Release/tag events, schedules, ordinary manual builds, fork PRs and other
+repositories use GitHub-hosted. An official-repository manual distribution build
+with `check_linux_runner=true` explicitly routes requested x86_64 wheels to the
+dedicated pool, regardless of run-number parity, when `CI_LINUX_BUILDS_ENABLED=true`
+and `CI_DISABLE_SELF_HOSTED` is not `true`. ARM remains hosted.
+The native producer publishes its selected labels
 and container image for its consumers; no extra selector job or token is needed.
 Studio, both musl CLI targets, other tests/checks and source packaging stay hosted. Native ARM,
 macOS and Windows assignments are unchanged.
@@ -58,30 +62,48 @@ recover root-owned build files from interrupted containers. Container cleanup
 uses the host-created workspace parent to determine the owner; checkout can
 recreate the checkout directory as root.
 
-### Prebuilt Ubuntu 24.04 CI image
+### Prebuilt Ubuntu 20.04 and 24.04 CI images
+
+`.github/images/ubuntu20-ci.Dockerfile` preinstalls GCC/G++ 10, CMake, ccache and
+the OS development libraries needed by Linux wheels. Both x86_64 and ARM Linux
+wheels use GCC/G++ 10 and preserve Ubuntu 20.04/glibc 2.31; a different glibc
+version is rejected before compilation. The published image is amd64, so only
+x86_64 wheels use it. ARM retains stock `ubuntu:20.04` and installs dependencies.
 
 `.github/images/ubuntu24-ci.Dockerfile` preinstalls Git, GCC/G++, CMake, ccache,
 OpenSSL development headers, Python 3 and the system tools used by API, database
 and cuVS tests. It contains no repository checkout, credentials or Python/Rust
 project dependencies. Python versions, Rust and dependency lockfiles remain
-managed by the existing setup actions. The API runtime uses GCC; Linux release
-wheels keep their existing Clang compiler and Ubuntu 20.04/glibc 2.31 baseline.
+managed by the existing setup actions. The API runtime uses Ubuntu 24.04's GCC.
 
-Run **Build Linux CI Base Image** manually. Its default `publish=false` builds
-the amd64 image and checks its installed tools on a hosted runner. After that
-passes, run with `publish=true` to publish
-`ghcr.io/volcengine/openviking-ci-ubuntu24:<commit-sha>`. Make this GHCR package
-publicly readable, then set repository Actions variable `CI_UBUNTU24_IMAGE` to
-the digest reference printed in the workflow summary. Another reachable public
+Run **Build Linux CI Base Image** manually with `ubuntu_version=20.04` or
+`24.04` (the default). Its default `publish=false` builds the amd64 image and
+validates dependencies, OpenSSL linking, C++17 compilation and the optimized
+AWS-LC memcmp probe without network access on a hosted runner. After that passes,
+run with `publish=true` to publish the corresponding
+`ghcr.io/volcengine/openviking-ci-ubuntu20:<commit-sha>` or
+`ghcr.io/volcengine/openviking-ci-ubuntu24:<commit-sha>`. Make the package
+publicly readable, then set the matching repository Actions variable to the
+immutable digest reference printed in the workflow summary:
+
+| Image | Repository variable | Consumers |
+| --- | --- | --- |
+| Ubuntu 20.04 amd64 | `CI_UBUNTU20_IMAGE` | Linux x86_64 wheels on hosted and self-hosted runners |
+| Ubuntu 24.04 amd64 | `CI_UBUNTU24_IMAGE` | API native producer and self-hosted API/database/cuVS consumers |
+
+Another reachable public
 registry can also host the image; avoid mutable `latest` tags.
 
-The API native producer uses that image and passes it to its self-hosted test
+The API native producer uses the Ubuntu 24.04 image and passes it to its self-hosted test
 consumers. Each bootstrap checks actual dpkg installation status: complete images
 skip apt, while incomplete images install the required packages. With no image
 variable, the producer uses stock `ubuntu:24.04` and installs packages as before.
+With no `CI_UBUNTU20_IMAGE`, x86_64 wheels fall back to stock `ubuntu:20.04`.
 The first pull still downloads the image; subsequent jobs on the same host reuse
 Docker's cached layers. Rebuild and validate periodically for OS package updates,
 then update the digest variable. Remove the variable to return to stock Ubuntu.
+The Ubuntu 20.04 Dockerfile can be built with the same local command below by
+substituting `ubuntu20-ci.Dockerfile` and `openviking-ci-ubuntu20`.
 
 For a local Linux build, provide the host CA bundle in the build context; minimal
 Ubuntu needs it to verify HTTPS before installing `ca-certificates`. The Dockerfile
@@ -103,6 +125,12 @@ five-minute diagnostic checks Docker access, HTTPS package-index downloads and
 package installation in both container images without checking out repository
 code. Enable `CI_LINUX_BUILDS_ENABLED` only after it passes. The runner user must
 be able to access Docker without interactive sudo.
+
+To verify the published Ubuntu 20.04 image on the dedicated pool, dispatch
+`_build.yml` with `check_linux_runner=true`, `build_wheels=true`,
+`build_sdist=false`, `os_json=["ubuntu-24.04"]` and `python_json=["3.10"]`.
+Confirm the x86_64 job's runner labels, configured digest pull, apt skip,
+GCC/G++ 10, glibc 2.31, wheel smoke test and uploaded artifact.
 
 Package sources use HTTPS. Minimal Ubuntu images bootstrap TLS verification with
 the host's `/etc/ssl/certs/ca-certificates.crt`, mounted read-only at a temporary

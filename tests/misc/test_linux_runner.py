@@ -86,6 +86,7 @@ def labels(
     run_number=2,
     ubuntu24_image="",
     ubuntu20_image="",
+    check_linux_runner=False,
     contexts=None,
 ):
     """Evaluate only the routing expressions in these checked-in workflows."""
@@ -104,6 +105,7 @@ def labels(
         "github.run_number": run_number,
         "vars.CI_UBUNTU24_IMAGE": ubuntu24_image,
         "vars.CI_UBUNTU20_IMAGE": ubuntu20_image,
+        "inputs.check_linux_runner": check_linux_runner,
     }.items():
         expression = expression.replace(key, repr(value))
     expression = re.sub(r"matrix\.(\w+)", lambda match: repr(row[match[1]]), expression)
@@ -359,6 +361,48 @@ def test_runner_diagnostic_is_explicit_and_does_not_checkout_code():
     assert "workflow_dispatch" in diagnostic["if"]
     assert "inputs.check_linux_runner" in diagnostic["if"]
     assert all("uses" not in step for step in diagnostic["steps"])
+
+
+@pytest.mark.parametrize("number", [1, 2])
+def test_explicit_manual_runner_check_routes_x64_wheels_to_dedicated_pool(number):
+    assert (
+        labels(
+            jobs("_build.yml")["build-linux"]["runs-on"],
+            {"arch": "x86_64"},
+            event="workflow_dispatch",
+            check_linux_runner=True,
+            run_number=number,
+        )
+        == SELF_HOSTED
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"repository": "fork/OpenViking"},
+        {"disabled": "true"},
+        {"enabled": ""},
+        {"enabled": "false"},
+        {"ref": "refs/tags/v1.0.0"},
+        {"event": "schedule"},
+        {"check_linux_runner": False},
+    ],
+)
+def test_manual_runner_check_keeps_routing_guards(overrides):
+    settings = {"event": "workflow_dispatch", "check_linux_runner": True, **overrides}
+    assert labels(jobs("_build.yml")["build-linux"]["runs-on"], {"arch": "x86_64"}, **settings) == [
+        "ubuntu-24.04"
+    ]
+
+
+def test_manual_runner_check_keeps_arm_on_native_hosted_runner():
+    assert labels(
+        jobs("_build.yml")["build-linux"]["runs-on"],
+        {"arch": "aarch64"},
+        event="workflow_dispatch",
+        check_linux_runner=True,
+    ) == ["ubuntu-24.04-arm"]
 
 
 @pytest.mark.parametrize("number", [1, 2])
