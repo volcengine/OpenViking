@@ -662,6 +662,7 @@ class CompileService:
         owner_user_id = (request.args or {}).get("owner_user_id", ctx.user.user_id)
         if compile_name and locked_record is None:
             lifecycle = self._require_lifecycle()
+            await lifecycle.store.require_config_exists(ctx.account_id, owner_user_id, compile_name)
             task = None
             try:
                 async with lifecycle.store.edit(

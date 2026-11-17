@@ -228,11 +228,17 @@ class CompileStore(Protocol):
     async def get(
         self, account_id: str, owner_user_id: str, compile_name: str
     ) -> Optional[dict]: ...
+    async def require_config_exists(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> None: ...
     async def list_users(self, account_id: str) -> list[str]: ...
     def edit(self, account_id: str, owner_user_id: str, compile_name: str) -> Any: ...
     async def get_run(
         self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
     ) -> Optional[dict]: ...
+    async def list_runs(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> list[dict]: ...
     async def put_run(
         self, account_id: str, owner_user_id: str, compile_name: str, run: dict
     ) -> None: ...
@@ -362,6 +368,19 @@ class CompileStateStore:
 
     async def get(self, account_id: str, owner_user_id: str, compile_name: str) -> Optional[dict]:
         return await self.read_json(self._record_path(account_id, owner_user_id, compile_name))
+
+    async def require_config_exists(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> None:
+        """Raise NotFoundError before a filesystem lock can create a missing config directory.
+
+        A fresh stat observes configurations published by other workers after a cached miss.
+        """
+        path = self._record_path(account_id, owner_user_id, compile_name)
+        try:
+            await self._agfs.stat(path, bypass_cache=True)
+        except (AGFSNotFoundError, FileNotFoundError) as exc:
+            raise NotFoundError(compile_name, "compile name") from exc
 
     @asynccontextmanager
     async def edit(
@@ -753,6 +772,17 @@ class CompileLifecycle:
         run = await self._store.get_run(
             task.account_id, self._owner_user_id(task), compile_name, task.task_id
         )
+        if locked_record["task_first_create_time"] is None:
+            # A persisted initial run survives a failed state.json acceptance write.
+            history = await self._store.list_runs(
+                task.account_id, self._owner_user_id(task), compile_name
+            )
+            initial = next(
+                (item for item in reversed(history) if item["meta"]["trigger"] == "initial"),
+                None,
+            )
+            if initial is not None:
+                locked_record["task_first_create_time"] = initial["created_at"]
         is_first = locked_record["task_first_create_time"] is None
         if run is None:
             run = new_run(task)

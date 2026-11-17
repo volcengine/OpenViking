@@ -190,12 +190,32 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
         await write_json(path, value, lease)
 
     monkeypatch.setattr(store, "write_json", write)
+    scan = AsyncMock(wraps=store.list_runs)
+    monkeypatch.setattr(store, "list_runs", scan)
     client.headers["Idempotency-Key"] = "test-lost-state-lease"
     for _ in range(2 if failure == "enqueue" else 1):
         response = await client.post("/api/v1/compile", json={"compile_name": name})
         assert response.status_code == (202 if failure == "expired" else 400), response.text
     if failure == "expired":
-        assert response.json()["result"]["task_id"] == queue.enqueue.await_args.args[1]["task_id"]
+        first_id = response.json()["result"]["task_id"]
+        assert first_id == queue.enqueue.await_args.args[1]["task_id"]
+        scope = (service.user.account_id, service.user.user_id, name)
+        first = await store.get_run(*scope, first_id)
+        for index in range(3):
+            if index == 1:
+                monkeypatch.setattr(store, "write_json", write_json)
+            client.headers["Idempotency-Key"] = f"test-next-submission-{index}"
+            response = await client.post("/api/v1/compile", json={"compile_name": name})
+            assert response.status_code == 202, response.text
+            run = await store.get_run(*scope, response.json()["result"]["task_id"])
+            assert run["meta"]["trigger"] == "manual"
+            state = await store.get(*scope)
+            assert state["task_first_create_time"] == (None if index == 0 else first["created_at"])
+            if index > 0:
+                assert state["last_run_time"] == run["created_at"]
+        assert scan.await_count == 3
+        assert all(call.args == scope for call in scan.await_args_list)
+        assert first["meta"]["trigger"] == "initial"
 
 
 async def test_creation_requires_name_before_side_effects(service, app, client, monkeypatch):
@@ -271,6 +291,8 @@ async def test_named_configuration_conflicts_and_lookup_permissions(
     assert response.json()["result"]["compile_name"] == name
     response = await client.post("/api/v1/compile", json={"compile_name": "missing"})
     assert response.status_code == 404, response.text
+    entries = await store._agfs.ls(store.root(ctx.account_id, ctx.user.user_id))
+    assert store._name_segment("missing") not in {entry["name"] for entry in entries}
     foreign = RequestContext(
         user=UserIdentifier("another-account", ctx.user.user_id), role=Role.USER
     )
