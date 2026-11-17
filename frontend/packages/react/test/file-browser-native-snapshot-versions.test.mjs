@@ -100,6 +100,7 @@ test('native snapshot versions use commit IDs and snapshot cursors for preview a
       badges[0].closest('button').querySelector('time').dateTime,
       new Date(restored.committer.time_seconds * 1000).toISOString(),
     );
+    assert.equal(badges[0].previousElementSibling.textContent, 'Latest');
   } finally {
     await view.unmount();
   }

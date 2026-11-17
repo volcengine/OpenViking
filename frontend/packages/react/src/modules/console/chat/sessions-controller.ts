@@ -1,3 +1,4 @@
+import type { VikingBotSession } from '../../../components/viking-bot/capabilities.js';
 import type { MonitoringBinding } from '../../../shared/monitoring/binding.js';
 import { workflowForBinding } from '../../../shared/monitoring/workflow.js';
 import {
@@ -14,6 +15,7 @@ export function createSessionsController(
   enabled = true,
   parent?: AbortSignal,
   monitoring?: MonitoringBinding,
+  patchSessionTitle?: VikingBotSessionService['renameSession'],
 ) {
   let state: VikingBotSessionsState = { sessions: [], isLoading: false };
   const listeners = new Set<() => void>();
@@ -28,6 +30,13 @@ export function createSessionsController(
   };
   const signal = () =>
     parent ? AbortSignal.any([owner.signal, parent]) : owner.signal;
+  const hostRename = service.renameSession?.bind(service);
+  const withRenameAvailability = (
+    item: VikingBotSession,
+  ): VikingBotSession => ({
+    ...item,
+    canRename: item.canRename ?? Boolean(hostRename),
+  });
   const refresh = async () => {
     if (!active) return;
     loading?.abort();
@@ -48,7 +57,7 @@ export function createSessionsController(
       ).listSessions(requestSignal);
       requestSignal.throwIfAborted();
       if (active && version === revision) {
-        update({ sessions });
+        update({ sessions: sessions.map(withRenameAvailability) });
         operation?.ready({ sessionCount: sessions.length });
       }
     } catch (error) {
@@ -63,6 +72,35 @@ export function createSessionsController(
         });
     } finally {
       if (active && version === revision) update({ isLoading: false });
+    }
+  };
+  const rename = async (id: string, title: string) => {
+    const canRename = state.sessions.find((item) => item.id === id)?.canRename;
+    const renameSession = hostRename ?? patchSessionTitle;
+    if (!active || mutation || !canRename || !renameSession) return false;
+    mutation = true;
+    const requestSignal = signal();
+    update({ error: undefined });
+    try {
+      await renameSession(id, title, requestSignal);
+      if (!active || requestSignal.aborted) return false;
+      revision++;
+      loading?.abort();
+      update({
+        sessions: state.sessions.map((item) =>
+          item.id === id ? { ...item, title } : item,
+        ),
+        isLoading: false,
+      });
+      return true;
+    } catch (error) {
+      if (active && !requestSignal.aborted)
+        update({
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      return false;
+    } finally {
+      mutation = false;
     }
   };
   return {
@@ -85,6 +123,7 @@ export function createSessionsController(
       };
     },
     refresh,
+    rename,
     create: async () => {
       if (!active || mutation) return;
       mutation = true;
@@ -105,7 +144,7 @@ export function createSessionsController(
         loading?.abort();
         update({
           sessions: [
-            session,
+            withRenameAvailability(session),
             ...state.sessions.filter((item) => item.id !== session.id),
           ],
           isLoading: false,

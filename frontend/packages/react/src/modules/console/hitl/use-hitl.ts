@@ -106,15 +106,26 @@ export function useHitl(
               }
               const input = formatAnswers(group, next);
               setDraft({ owner, group, answers, pendingInput: input });
-              const sent = await owner.send({ text: input, attachments: [] });
-              if (!owner.active || current.current.owner !== owner) return;
+              const ownsDraft = () =>
+                owner.active && current.current.owner === owner;
+              const close = () =>
+                setDraft({ owner, group, answers: next, closed: true });
+              let delivered = false;
+              const sent = await owner.send(
+                { text: input, attachments: [] },
+                () => {
+                  delivered = true;
+                  if (ownsDraft()) close();
+                },
+              );
+              if (delivered || !ownsDraft()) return;
               if (!sent) {
                 // A failed chat attempt may already have appended the user's wire message.
                 // Preserve the last card only while that attempt is still the latest input.
                 setDraft({ owner, group, answers, failedInput: input });
                 throw new Error();
               }
-              setDraft({ owner, group, answers: next, closed: true });
+              close();
             } finally {
               lock.current = false;
             }

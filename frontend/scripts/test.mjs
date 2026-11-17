@@ -92,6 +92,8 @@ try {
               'error-feedback': './src/shared/feedback/error-notification.tsx',
               'notification-scope':
                 './src/shared/feedback/notification-scope.tsx',
+              'reference-picker':
+                './src/components/viking-bot/reference-picker.tsx',
               'reference-tags':
                 './src/components/viking-bot/composer-reference-tags.tsx',
               'wiki-pane': './src/modules/file-browser/wiki-dashboard-pane.tsx',

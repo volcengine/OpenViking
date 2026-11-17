@@ -284,18 +284,22 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### VikingBotSessions
 
-| 参数          | 说明                                                                              | 类型                          | 默认值  |
-| ------------- | --------------------------------------------------------------------------------- | ----------------------------- | ------- |
-| items         | 会话列表                                                                          | `readonly VikingBotSession[]` | 必填    |
-| onSelect      | 选择历史会话时触发，参数为会话 ID                                                 | `(id: string) => void`        | 必填    |
-| onNew         | 点击新建会话时触发                                                                | `() => void`                  | 必填    |
-| currentId     | 当前会话 ID；设置后头部显示可复制的会话标识（过长时中间省略），历史列表中高亮该项 | `string`                      | -       |
-| currentUri    | 当前会话对应的资源 URI；与 `onOpenUri` 一起设置时显示定位按钮                     | `string`                      | -       |
-| isLoading     | 是否正在加载历史会话                                                              | `boolean`                     | `false` |
-| error         | 历史会话的加载错误                                                                | `string`                      | -       |
-| hasMore       | 是否还有更多历史会话；与 `onLoadMore` 一起设置时显示「加载更多」                  | `boolean`                     | `false` |
-| onOpenHistory | 打开历史会话列表时触发                                                            | `() => void`                  | -       |
-| onLoadMore    | 点击「加载更多」时触发                                                            | `() => void`                  | -       |
+| 参数          | 说明                                                                              | 类型                                                                         | 默认值  |
+| ------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------- |
+| items         | 会话列表                                                                          | `readonly VikingBotSession[]`                                                | 必填    |
+| onSelect      | 选择历史会话时触发，参数为会话 ID                                                 | `(id: string) => void`                                                       | 必填    |
+| onNew         | 点击新建会话时触发                                                                | `() => void`                                                                 | 必填    |
+| currentId     | 当前会话 ID；设置后头部显示可复制的会话标识（过长时中间省略），历史列表中高亮该项 | `string`                                                                     | -       |
+| currentUri    | 当前会话对应的资源 URI；与 `onOpenUri` 一起设置时显示定位按钮                     | `string`                                                                     | -       |
+| isLoading     | 是否正在加载历史会话                                                              | `boolean`                                                                    | `false` |
+| error         | 历史会话的加载错误                                                                | `string`                                                                     | -       |
+| hasMore       | 是否还有更多历史会话；与 `onLoadMore` 一起设置时显示「加载更多」                  | `boolean`                                                                    | `false` |
+| onOpenHistory | 打开历史会话列表时触发                                                            | `() => void`                                                                 | -       |
+| onRename      | 保存会话标题，提供后可从历史列表重命名                                            | `(id: string, title: string) => Promise<boolean \| void> \| boolean \| void` | -       |
+| onRemove      | 确认后删除会话                                                                    | `(id: string) => Promise<boolean \| void> \| boolean \| void`                | -       |
+| onLoadMore    | 点击「加载更多」时触发                                                            | `() => void`                                                                 | -       |
+
+返回 `false` 或抛出错误时，对话框会保留，以便重试。
 
 ### VikingBotSession
 

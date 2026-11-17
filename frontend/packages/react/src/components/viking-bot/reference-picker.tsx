@@ -1,6 +1,7 @@
 import { Input } from '../../shared/primitives/input/input.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
+import { orderContextRoots } from '../../shared/context-tree-root-order.js';
 import type { Locale } from '../../shared/locale.js';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { SenderProps } from '@ark-design/ui/sender';
@@ -64,16 +65,18 @@ export function ReferencePicker({
   const queryChange = useRef(onQueryChange);
   const remoteSearch = Boolean(onQueryChange);
   const id = useId();
-  const rows =
-    query && !remoteSearch
-      ? config.rows.filter(
+  const rows = useMemo(() => {
+    if (!query) return orderContextRoots(config.rows);
+    return remoteSearch
+      ? config.rows
+      : config.rows.filter(
           (row) =>
             row.kind === 'entry' &&
             `${row.name} ${row.uri}`
               .toLowerCase()
               .includes(query.toLowerCase()),
-        )
-      : config.rows;
+        );
+  }, [config.rows, query, remoteSearch]);
   const activeId = useReferenceNavigation({
     config,
     rows,

@@ -1,6 +1,7 @@
 import { asBotError as asError } from './errors.js';
 import { loadHistory } from './chat-history.js';
 import { createPersistence } from './chat-persistence.js';
+import type { AnalyticsReporter } from '../../../shared/analytics/reporter.js';
 import { tagData, readData } from '../../../shared/monitoring/data.js';
 import type { MonitoringBinding } from '../../../shared/monitoring/binding.js';
 import type { MonitoringSpan } from '../../../shared/monitoring/trace/span.js';
@@ -11,6 +12,7 @@ import type { AppendInput } from './chat-timeline.js';
 import { runChat } from './chat-run.js';
 import type {
   UseVikingBotChatOptions,
+  VikingBotChatResult,
   VikingBotChatService,
   VikingBotChatState,
 } from './types.js';
@@ -19,16 +21,14 @@ export function createChatController(
   service: VikingBotChatService,
   options: UseVikingBotChatOptions,
   parentSignal?: AbortSignal,
-  analytics?: import('react').RefObject<
-    | import('../../../shared/analytics/reporter.js').AnalyticsReporter
-    | undefined
-  >,
+  analytics?: import('react').RefObject<AnalyticsReporter | undefined>,
   monitoring?: MonitoringBinding,
 ) {
+  const loadOnStart = options.enabled !== false && !options.initialMessages;
   let state: VikingBotChatState = {
     sessionId: options.sessionId,
     messages: options.initialMessages ?? [],
-    status: 'idle',
+    status: loadOnStart && options.sessionId ? 'loading' : 'idle',
     isSubmitting: false,
   };
   const listeners = new Set<() => void>();
@@ -87,7 +87,7 @@ export function createChatController(
       if (current(controller)) request = undefined;
     }
   };
-  const send = async (input: string | VikingBotDraft) => {
+  const send: VikingBotChatResult['send'] = async (input, onDelivered) => {
     const draft =
       typeof input === 'string' ? { text: input, attachments: [] } : input;
     if (
@@ -120,6 +120,7 @@ export function createChatController(
         analytics,
         state,
         draft,
+        onDelivered,
         undelivered,
         signal: signalFor(controller),
         current: () => current(controller),
@@ -145,7 +146,7 @@ export function createChatController(
       responseComplete: false,
       messages: [],
       streaming: undefined,
-      status: 'idle',
+      status: active && sessionId ? 'loading' : 'idle',
       isSubmitting: false,
       error: undefined,
       persistenceError: undefined,
@@ -165,7 +166,7 @@ export function createChatController(
     start() {
       active = options.enabled !== false;
       lifetime = new AbortController();
-      if (active && options.initialMessages === undefined) void reload();
+      if (loadOnStart) void reload();
       return () => {
         active = false;
         cancel();
