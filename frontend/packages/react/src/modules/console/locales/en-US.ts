@@ -1,3 +1,6 @@
+import { coreParameters } from './core-parameters.js';
+import filesystemParameters from './filesystem-parameters.js';
+import { SEARCH_PARAMETERS_EN_US } from './search-parameters.js';
 import type { ConsoleCommandGuide, ConsoleLabels } from '../types.js';
 
 const commands = {
@@ -134,19 +137,22 @@ const messages = {
     args: 'Parser options as a JSON object',
     'compile-args':
       'JSON object for model_name, auto_update, and update_schedule',
-    wait: 'Wait for processing to complete',
     'target-uri': 'Destination skills root',
     content: 'Plain text to remember',
     'session-id': 'Session to append and commit',
-    query: 'Semantic search query',
-    target_uri: 'Limit retrieval to this URI',
     limit: 'Maximum number of results',
-    level: 'Filter content levels, e.g. 0,1,2',
     'compile-name':
       'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters.',
     from: 'Existing source directory URIs. Repeat --from or separate URIs with commas',
     skill: 'Compiler Skill URI',
     instruction: 'Additional compilation instructions',
+    'task-type': 'Filter by task type, for example add_resource or add_skill',
+    'task-status':
+      'Filter by task status, for example pending, running, completed, or failed',
+    'task-id': 'ID of the background task',
+    ...coreParameters['en-US'],
+    ...filesystemParameters['en-US'],
+    ...SEARCH_PARAMETERS_EN_US,
   },
   commandGroups: {
     core: 'Core workflow',
