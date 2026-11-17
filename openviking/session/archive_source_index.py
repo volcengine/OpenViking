@@ -15,6 +15,7 @@ ARCHIVE_SOURCE_MEMORY_TYPE = "archive_sources"
 _EXCERPT_CHARS = 2048
 _EXCERPT_SAMPLES = 8
 _ARCHIVE_ID = re.compile(r"archive_[0-9]+")
+_SOURCE_ENTRY_NAME = re.compile(r"message_[0-9]{6,}\.md")
 
 
 def _excerpt(text: str) -> str:
@@ -50,6 +51,25 @@ def archive_source_index_uri(session_path: str) -> str | None:
     return None
 
 
+def archive_source_embedding_text(uri: str, content: str) -> str | None:
+    """Get a source entry's persisted excerpt, or None for other files."""
+    parts = uri_parts(uri)
+    if (
+        len(parts) != 7
+        or parts[0] != "user"
+        or parts[2:4] != ["memories", ARCHIVE_SOURCE_MEMORY_TYPE]
+        or not _ARCHIVE_ID.fullmatch(parts[5])
+        or not _SOURCE_ENTRY_NAME.fullmatch(parts[6])
+    ):
+        return None
+
+    # The first two Markdown blocks hold the heading and source metadata.
+    blocks = content.split("\n\n", 2)
+    if len(blocks) != 3 or not blocks[2].strip():
+        raise ValueError(f"Missing excerpt in archive source entry: {uri}")
+    return blocks[2].removesuffix("\n")
+
+
 async def index_archive_sources(
     fs: VikingFS, archive_uri: str, messages: Sequence[Message], ctx: RequestContext
 ) -> None:
@@ -76,17 +96,19 @@ async def index_archive_sources(
             f"{_excerpt(text)}\n"
         )
         await fs.write_file(uri, content, ctx=ctx)
-        # Embed the persisted text so write-time privacy filtering also applies
-        # to the excerpt returned by search and passed to the embedder.
+        # Use the persisted excerpt so the embedder sees write-time privacy filtering.
         persisted = await fs.read_file(uri, ctx=ctx)
+        vector_text = archive_source_embedding_text(uri, persisted)
+        if vector_text is None:
+            raise ValueError(f"Invalid archive source entry URI: {uri}")
         if not await vectorize_file(
             file_path=uri,
             summary_dict={"name": name, "summary": persisted},
             parent_uri=directory,
             context_type="memory",
-            use_summary=True,
             ctx=ctx,
             action="upsert",
+            vector_text=vector_text,
         ):
             raise RuntimeError(f"Failed to enqueue archive source index: {uri}")
 

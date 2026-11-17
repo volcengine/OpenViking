@@ -11,6 +11,7 @@ import pytest_asyncio
 from openviking.core.namespace import canonical_user_root
 from openviking.message import TextPart, ToolPart
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.server import dependencies
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.storage import viking_fs as viking_fs_module
@@ -19,10 +20,17 @@ from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
 
+@pytest.fixture
+def embedding_inputs():
+    return []
+
+
 @pytest_asyncio.fixture
-async def archive_service(test_data_dir, request_context, monkeypatch):
+async def archive_service(test_data_dir, request_context, monkeypatch, embedding_inputs):
     class FakeEmbedder(DenseEmbedderBase):
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            if not is_query:
+                embedding_inputs.append(text)
             return EmbedResult(dense_vector=[0.1] * 1024)
 
         def get_dimension(self) -> int:
@@ -113,6 +121,47 @@ async def test_archive_sources_are_searchable_without_extraction(
     assert not await session._viking_fs.exists(directory, ctx=ctx)
     found = await service.search.find("reporting cutoff", ctx, target_uri=index_root)
     assert not found.memories
+
+
+async def test_archive_source_embeds_only_persisted_excerpt_on_commit_and_reindex(
+    archive_service, request_context, monkeypatch, embedding_inputs
+):
+    service = archive_service
+    ctx = request_context
+    cfg = get_openviking_config().memory
+    monkeypatch.setattr(cfg, "archive_source_index_enabled", True)
+    monkeypatch.setattr(cfg, "extraction_enabled", False)
+    monkeypatch.setattr(dependencies, "_service", service)
+
+    original = "Settlement terms\n\nAccount reference: XYZ-0123"
+    excerpt = "Settlement terms\n\nAccount reference: [redacted]"
+
+    async def sanitize(content, *, ctx, uri):
+        return content.replace(original, excerpt)
+
+    monkeypatch.setattr(service.privacy_sanitizer, "sanitize_for_write", sanitize)
+    session = await service.sessions.create(ctx)
+    await session.add_message_async("user", [TextPart(original)])
+    archive = await _commit(session)
+
+    root = f"{canonical_user_root(ctx)}/memories/archive_sources"
+    entry = f"{root}/{session.session_id}/{archive.rsplit('/', 1)[1]}/message_000001.md"
+    assert [value for value in embedding_inputs if "Settlement terms" in value] == [excerpt]
+    locator = await service.fs.read(entry, ctx)
+    assert f"- Source: `{archive}/messages.jsonl`" in locator
+    assert "- Line: 1\n" in locator
+    assert locator.endswith(f"{excerpt}\n")
+
+    result = await service.reindex(uri=entry, ctx=ctx, wait=True)
+    assert result["rebuilt_records"] == 1, result
+    assert [value for value in embedding_inputs if "Settlement terms" in value] == [
+        excerpt,
+        excerpt,
+    ]
+
+    found = await service.search.find("settlement", ctx, target_uri=entry)
+    assert len(found.memories) == 1
+    assert f"- Source: `{archive}/messages.jsonl`" in found.memories[0].abstract
 
 
 @pytest.mark.parametrize("index_enabled,self_enabled", [(False, True), (True, False)])

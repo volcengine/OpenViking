@@ -576,13 +576,15 @@ async def vectorize_file(
     materialize_content: bool = False,
     action: str = "merge",
     telemetry_id: str | None = None,
+    *,
+    vector_text: str | None = None,
 ) -> bool:
     """
     Vectorize a single file.
 
     Creates Context object for the file and enqueues it.
-    The effective vectorization strategy is resolved once from either the explicit
-    `use_summary` flag (code path override) or the embedding config.
+    `vector_text` can supply the embedding input while retaining `summary` as the abstract.
+    The default input is selected by `use_summary` and the embedding config.
     Returns whether an embedding message was enqueued.
     """
     try:
@@ -628,7 +630,9 @@ async def vectorize_file(
         effective_text_source = TEXT_SOURCE_SUMMARY_FIRST if use_summary else configured_text_source
         embed_summary = bool(summary and effective_text_source in SUMMARY_TEXT_SOURCES)
 
-        if content_type in (ResourceContentType.AUDIO, ResourceContentType.VIDEO):
+        if vector_text is not None:
+            context.set_vectorize(Vectorize(text=vector_text))
+        elif content_type in (ResourceContentType.AUDIO, ResourceContentType.VIDEO):
             effective_text = summary or file_name
             context.abstract = effective_text
             context.set_vectorize(Vectorize(text=effective_text))
