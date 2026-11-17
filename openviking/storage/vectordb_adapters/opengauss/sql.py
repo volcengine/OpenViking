@@ -456,9 +456,12 @@ def _build_where_clause(
             clause, params = _build_path_scope_clause(quoted_field, str(conds[0]), depth)
             return f"NOT ({clause})", params
         if not conds:
-            return "", []
+            # Keep this tautology in nested ORs instead of dropping the branch.
+            return "TRUE", []
         if field in (array_fields or set()):
-            comparisons = [f"NOT (%s = ANY({quoted_field}))" for _ in conds]
+            # Treat no matching element as false before negating, including
+            # NULL arrays and arrays containing only nonmatches and NULLs.
+            comparisons = [f"NOT COALESCE(%s = ANY({quoted_field}), FALSE)" for _ in conds]
             return " AND ".join(comparisons), list(conds)
         placeholders = ", ".join(["%s"] * len(conds))
         return f"{quoted_field} NOT IN ({placeholders})", list(conds)
