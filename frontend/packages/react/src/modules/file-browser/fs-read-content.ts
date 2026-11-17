@@ -61,7 +61,7 @@ export async function readFileContent(
   return {
     content: truncated ? joinLines(lines.slice(0, limit)) : visible,
     truncated,
-    // Only the business parser receives metadata; views and drafts receive content.
+    // Keep full Wiki data separate from the projected preview and draft content.
     wikiSource: wiki ? body : undefined,
     wiki,
   };

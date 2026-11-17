@@ -10,6 +10,8 @@ export interface FilePreviewEditorAnnotation {
 export interface FilePreviewEditorDocument {
   content: string;
   annotations?: readonly FilePreviewEditorAnnotation[];
+  /** Text displayed at the end of the editor, outside the editable document. */
+  readOnlySuffix?: string;
 }
 
 /**
@@ -28,7 +30,7 @@ export interface FilePreviewEditing {
    * request and keeps the preview open.
    */
   loadContent?: (source: FilePreviewSource) => Promise<string | undefined>;
-  /** Takes precedence over loadContent and supplies annotations with the draft. */
+  /** Takes precedence over loadContent and supplies the draft and its editor details. */
   loadDocument?: (
     source: FilePreviewSource,
   ) => Promise<FilePreviewEditorDocument | undefined>;

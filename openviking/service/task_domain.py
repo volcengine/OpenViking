@@ -446,8 +446,13 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     works = list(works)
     if task.status not in ACTIVE_TASK_STATUSES or any(work.is_open() for work in works):
         return False
+    rollback_failed = (
+        task.task_type == "compile"
+        and isinstance(task.result, dict)
+        and task.result.get("rollback_incomplete") is True
+    )
     if task.status == TaskStatus.CANCELLING and not (
-        task.error and task.has_compile_dependency_failure()
+        task.error and (task.has_compile_dependency_failure() or rollback_failed)
     ):
         task.status = TaskStatus.CANCELLED
     else:

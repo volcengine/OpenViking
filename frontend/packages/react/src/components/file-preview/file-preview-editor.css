@@ -47,6 +47,19 @@
 .ov-file-preview__code-editor .cm-line {
   padding: 0 8px;
 }
+.ov-file-preview__editor-suffix {
+  margin: 0;
+  padding: 0 8px;
+  color: var(
+    --ov-ui-color-editor-code-comment,
+    var(--ov-ui-editor-code-comment-default)
+  );
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 14px;
+  line-height: 25px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .ov-file-preview__code-editor .cm-gutters {
   border: 0;
   background: none;
