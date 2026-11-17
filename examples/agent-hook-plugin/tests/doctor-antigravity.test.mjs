@@ -96,7 +96,8 @@ test("ov-memory-doctor recognizes antigravity from integration.json and tolerate
 
     const mcpFinding = install.findings.find((f) => f.title.includes("mcp_config.json"));
     assert.equal(mcpFinding?.level, "info");
-    assert.doesNotMatch(mcpFinding?.fix || "", /--harness antigravity/);
+    assert.match(mcpFinding?.detail || "", /mcp_config\.json/);
+    assert.doesNotMatch(mcpFinding?.detail || "", /--harness antigravity/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -112,6 +113,8 @@ test("ov-memory-doctor accepts HTTP serverUrl MCP and warns when stdio MCP tags 
     }));
     const httpRun = runDoctor(pluginRoot, home, ["antigravity"]);
     assert.equal(httpRun.status, 0, httpRun.stdout + httpRun.stderr);
+    const httpInstall = JSON.parse(httpRun.stdout).sections.find((s) => s.title === "Plugin install");
+    assert.ok(httpInstall.findings.some((f) => f.level === "ok" && f.title.includes("MCP server 'openviking'")));
 
     writeFileSync(mcpPath, JSON.stringify({
       mcpServers: {
@@ -131,7 +134,7 @@ test("ov-memory-doctor accepts HTTP serverUrl MCP and warns when stdio MCP tags 
   }
 });
 
-test("ov-memory-doctor validates unquoted hook scripts and counts lastStep state as captured", () => {
+test("ov-memory-doctor validates OpenViking hook scripts, ignores foreign relative hooks, and counts lastStep", () => {
   const home = mkdtempSync(join(tmpdir(), "ov-doctor-ag-activity-"));
   try {
     const { pluginRoot, agPluginDir } = setupInstalledAntigravity(home);
@@ -153,7 +156,10 @@ test("ov-memory-doctor validates unquoted hook scripts and counts lastStep state
       join(agPluginDir, "hooks.json"),
       JSON.stringify({
         "openviking-memory": {
-          SessionStart: [{ type: "command", command: `node ${missingScript} session-start antigravity` }],
+          SessionStart: [{
+            type: "command",
+            command: `OPENVIKING_INTEGRATION_ID='openviking-memory' node ${missingScript} session-start antigravity`,
+          }],
         },
       }),
     );
@@ -161,6 +167,29 @@ test("ov-memory-doctor validates unquoted hook scripts and counts lastStep state
     assert.equal(badRun.status, 1);
     const install = JSON.parse(badRun.stdout).sections.find((s) => s.title === "Plugin install");
     assert.ok(install.findings.some((f) => f.level === "fail" && f.detail === missingScript));
+
+    // Foreign user hooks using relative paths in shared Cursor hooks.json must not fail OpenViking doctor.
+    const cursorDir = join(home, ".cursor");
+    mkdirSync(cursorDir, { recursive: true });
+    writeFileSync(
+      join(cursorDir, "hooks.json"),
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          sessionStart: [
+            { command: `OPENVIKING_INTEGRATION_ID='openviking-memory' '${process.execPath}' '${join(pluginRoot, "scripts", "hook.mjs")}' session-start cursor` },
+            { command: "node ./.cursor/hooks/my-own-hook.mjs" },
+          ],
+        },
+      }),
+    );
+    writeFileSync(join(cursorDir, "mcp.json"), JSON.stringify({ mcpServers: { openviking: { serverUrl: "http://127.0.0.1:1933/mcp" } } }));
+    const cursorRun = runDoctor(pluginRoot, home, ["cursor"]);
+    const cursorInstall = JSON.parse(cursorRun.stdout).sections.find((s) => s.title === "Plugin install");
+    assert.equal(
+      cursorInstall.findings.some((f) => f.title.includes("not on disk")),
+      false,
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

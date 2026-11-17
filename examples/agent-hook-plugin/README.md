@@ -49,7 +49,7 @@ For Kimi's managed plugin, use its installed path instead:
 node "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs" kimicode --offline
 ```
 
-For config-driven copies, the client defaults to the one that copy was installed for; pass `cursor`, `trae`, `trae-cn` or `zcode` as an argument to override it. Drop `--offline` to probe the server as well, and add `--json` for a machine-readable report.
+For config-driven copies, the client defaults to the one that copy was installed for; pass `antigravity`, `cursor`, `trae`, `trae-cn` or `zcode` as an argument to override it. Drop `--offline` to probe the server as well, and add `--json` for a machine-readable report.
 
 ## Tests
 

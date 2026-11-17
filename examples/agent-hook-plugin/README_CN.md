@@ -49,7 +49,7 @@ Kimi 的 managed plugin 需要使用它的实际安装路径：
 node "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs" kimicode --offline
 ```
 
-对于配置型安装副本，client 默认取安装时对应的宿主；传 `cursor`、`trae`、`trae-cn` 或 `zcode` 可以覆盖。去掉 `--offline` 会连带探测服务端，加 `--json` 输出机器可读报告。
+对于配置型安装副本，client 默认取安装时对应的宿主；传 `antigravity`、`cursor`、`trae`、`trae-cn` 或 `zcode` 可以覆盖。去掉 `--offline` 会连带探测服务端，加 `--json` 输出机器可读报告。
 
 ## 测试
 

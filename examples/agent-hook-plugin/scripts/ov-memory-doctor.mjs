@@ -124,6 +124,7 @@ function hookStateDir() {
 
 function extractHookScripts(value, found = new Set()) {
   if (typeof value === "string") {
+    if (!value.includes("OPENVIKING_INTEGRATION_ID") && !value.includes("# openviking-memory")) return found;
     for (const match of value.matchAll(/'([^']*\.mjs)'|"([^"]*\.mjs)"|(?:^|\s)([^\s'"]+\.mjs)(?=\s|$)/gu)) {
       const script = match[1] || match[2] || match[3];
       if (script) found.add(script);
@@ -171,8 +172,7 @@ function checkInstall(report) {
     const events = SPEC.extractHookEvents
       ? SPEC.extractHookEvents(hooks.data)
       : Object.keys(hooks.data.hooks?.events || hooks.data.hooks || {});
-    const hasHookMarker = text.includes("OPENVIKING_INTEGRATION_ID") || text.includes("scripts/hook.mjs");
-    if (!hasHookMarker) report.fail(`${homeShort(hooksPath)} has no OpenViking hooks`, `events present: ${events.join(", ") || "(none)"}`, `re-run the installer with --harness ${CLIENT}`);
+    if (!text.includes("OPENVIKING_INTEGRATION_ID")) report.fail(`${homeShort(hooksPath)} has no OpenViking hooks`, `events present: ${events.join(", ") || "(none)"}`, `re-run the installer with --harness ${CLIENT}`);
     else {
       report.ok(`hooks in ${homeShort(hooksPath)}: ${events.join(", ") || "(none)"}`);
       if (!text.includes("scripts/hook.mjs")) report.warn("the installed hook commands do not name scripts/hook.mjs", "they were written by an older installer", "re-run the installer");
@@ -190,15 +190,13 @@ function checkInstall(report) {
     ? `configure the 'openviking' MCP server manually in ${homeShort(mcpPath)} if you want the agent to search memory directly`
     : `re-run the installer with --harness ${CLIENT}`;
   if (!mcp.exists) {
-    report[SPEC.mcpOptional ? "info" : "warn"](`${homeShort(mcpPath)} not found`, "the MCP memory tools are not wired up", mcpFix);
+    if (SPEC.mcpOptional) report.info(`${homeShort(mcpPath)} not found`, `the MCP memory tools are not wired up (${mcpFix})`);
+    else report.warn(`${homeShort(mcpPath)} not found`, "the MCP memory tools are not wired up", mcpFix);
   } else if (!mcp.ok) {
     report.fail(`${homeShort(mcpPath)} cannot be parsed`, mcp.error, "fix the JSON");
   } else if (!server) {
-    report[SPEC.mcpOptional ? "info" : "fail"](
-      `no 'openviking' MCP server in ${homeShort(mcpPath)}`,
-      SPEC.mcpOptional ? "the installer leaves Antigravity MCP configuration manual" : "",
-      mcpFix,
-    );
+    if (SPEC.mcpOptional) report.info(`no 'openviking' MCP server in ${homeShort(mcpPath)}`, `the installer leaves Antigravity MCP configuration manual (${mcpFix})`);
+    else report.fail(`no 'openviking' MCP server in ${homeShort(mcpPath)}`, "", mcpFix);
   } else {
     report.ok(`MCP server 'openviking' in ${homeShort(mcpPath)}`);
     const proxy = Array.isArray(server.args) ? server.args.find((arg) => String(arg).endsWith("mcp-proxy.mjs")) : "";
