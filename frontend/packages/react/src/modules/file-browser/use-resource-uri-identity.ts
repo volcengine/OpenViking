@@ -3,8 +3,9 @@ import { useOvIdentity } from '../../client/provider.js';
 import { isOvClientError } from '../../client/errors.js';
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { scopeKeyOf } from './fs-scope.js';
-import { normalizeResourceUri, resourceUriIdentity } from './fs-uri.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
+import { resourceUriIdentity } from './fs-uri.js';
 
 const userRoot = /^viking:\/\/user\/[^/]+$/;
 const homeAlias = 'viking://~';

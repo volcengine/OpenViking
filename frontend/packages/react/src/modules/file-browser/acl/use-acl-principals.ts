@@ -1,4 +1,4 @@
-import { toError } from '../fs-errors.js';
+import { toError } from '../../../shared/request/fs-errors.js';
 import { localRequestErrors } from '../../../client/observe-errors.js';
 import { useEffect, useState } from 'react';
 import type { OvIdentityValue } from '../../../client/types.js';

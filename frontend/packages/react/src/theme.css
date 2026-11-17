@@ -508,6 +508,7 @@ html.dark .ov-file-browser-search {
   --ov-ui-editor-code-text-default: #000000;
   --ov-ui-editor-code-keyword-default: #0000ff;
   --ov-ui-editor-code-comment-default: #008000;
+  --ov-ui-editor-selection-default: #b9cbe1;
   --ov-ui-editor-markdown-link-default: #a31515;
   --ov-ui-editor-markdown-code-default: #001188;
   --ov-ui-editor-yaml-key-default: #008080;
@@ -530,6 +531,7 @@ html.dark .ov-file-preview {
   --ov-ui-editor-code-text-default: var(--ov-ui-text-1-default);
   --ov-ui-editor-code-keyword-default: #569cd6;
   --ov-ui-editor-code-comment-default: #6a9955;
+  --ov-ui-editor-selection-default: #264f78;
   --ov-ui-editor-markdown-link-default: #ce9178;
   --ov-ui-editor-markdown-code-default: #9cdcfe;
   --ov-ui-editor-yaml-key-default: #9cdcfe;

@@ -140,10 +140,11 @@
   border-left-color: var(--ov-ui-file-preview-text);
 }
 .ov-file-preview__code-editor .cm-selectionBackground,
+.ov-file-preview__code-editor .cm-content::selection,
 .ov-file-preview__code-editor .cm-content ::selection {
-  background: var(
-    --ov-ui-color-primary-light,
-    var(--ov-ui-primary-light-default)
+  background-color: var(
+    --ov-ui-color-editor-selection,
+    var(--ov-ui-editor-selection-default)
   );
 }
 .ov-file-preview__code-editor

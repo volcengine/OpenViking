@@ -2,7 +2,7 @@ import { OV_PATHS } from '../../client/paths.js';
 import { isRecord } from '../../client/response.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { resolveDashboardUri } from './dashboard-resource.js';
-import { normalizeResourceUri } from './fs-uri.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
 
 const CONFLICT_LIMIT = 100;
 const HIT_GROUPS = ['resources', 'memories', 'skills'] as const;

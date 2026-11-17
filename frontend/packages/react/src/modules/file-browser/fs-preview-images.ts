@@ -23,35 +23,43 @@ export function createPreviewImageResolver(
     const imageUri = `viking://${target.host}${path}`;
     const existing = pending.get(imageUri);
     if (existing) return existing;
-    const request = client
-      .request<Blob>({
-        method: 'GET',
-        path: OV_PATHS.contentDownload,
-        query: { uri: imageUri },
-        responseType: 'blob',
-        options,
-      })
-      .then(
-        (blob) =>
-          new Promise<string>((resolve, reject) => {
-            // A data URL does not leave an object URL alive after the tab is closed.
-            const reader = new FileReader();
-            reader.onload = () => {
-              if (typeof reader.result === 'string') resolve(reader.result);
-              else reject(new Error('Invalid image data'));
-            };
-            reader.onerror = () =>
-              reject(
-                new Error(reader.error?.message ?? 'Could not read image'),
-              );
-            reader.readAsDataURL(new Blob([blob], { type }));
-          }),
-      )
-      .catch((error: unknown) => {
+    const request = readPreviewImage(client, imageUri, type, options).catch(
+      (error: unknown) => {
         pending.delete(imageUri);
         throw error;
-      });
+      },
+    );
     pending.set(imageUri, request);
     return request;
   };
+}
+
+export function readPreviewImage(
+  client: OvClient,
+  uri: string,
+  type: string,
+  options: OvRequestOptions,
+): Promise<string> {
+  return client
+    .request<Blob>({
+      method: 'GET',
+      path: OV_PATHS.contentDownload,
+      query: { uri },
+      responseType: 'blob',
+      options,
+    })
+    .then(
+      (blob) =>
+        new Promise<string>((resolve, reject) => {
+          // A data URL does not leave an object URL alive after the tab is closed.
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === 'string') resolve(reader.result);
+            else reject(new Error('Invalid image data'));
+          };
+          reader.onerror = () =>
+            reject(new Error(reader.error?.message ?? 'Could not read image'));
+          reader.readAsDataURL(new Blob([blob], { type }));
+        }),
+    );
 }

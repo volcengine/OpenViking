@@ -21,7 +21,6 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
     toast.error({ id: 'copy-history', content: props.text.copyFailed });
   const [view, setView] = useState<'preview' | 'source'>('preview');
   const [copiedId, setCopiedId] = useState<string>();
-  const [restored, setRestored] = useState<'saved' | 'unchanged'>();
   const copy = usePreviewMutation(props.uri, props.requestOptions);
   const text = {
     ...props.text,
@@ -41,13 +40,6 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
   return (
     <>
       {toastHolder}
-      {restored ? (
-        <p className="ov-file-history__result" role="status">
-          {restored === 'unchanged'
-            ? text.rollbackUnchanged
-            : text.rollbackSaved}
-        </p>
-      ) : null}
       {props.canSaveSnapshot ? (
         <PreviewHistorySnapshot
           uri={props.uri}
@@ -149,7 +141,11 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
                     history.content.loading || Boolean(history.content.error)
                   }
                   onRestored={(unchanged) => {
-                    setRestored(unchanged ? 'unchanged' : 'saved');
+                    toast.success({
+                      content: unchanged
+                        ? text.rollbackUnchanged
+                        : text.rollbackSaved,
+                    });
                     history.query.retry();
                     props.onUpdated();
                   }}

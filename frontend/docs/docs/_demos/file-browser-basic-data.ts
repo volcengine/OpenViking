@@ -1,4 +1,8 @@
-import { nativePreviewDemoResponse } from '#file-browser-native-demo';
+import {
+  nativePreviewDemoResponse,
+  ok,
+  VIDEO_SEGMENT,
+} from '#file-browser-native-demo';
 import { image } from '#file-preview-console-data';
 import {
   dashboardDemoResponse,
@@ -42,6 +46,7 @@ const ENTITIES = `${MEMORIES}/entities`;
 const RESOURCES = `${USER}/resources`;
 const NOTES = `${RESOURCES}/notes`;
 export const DEMO_PREVIEW_FILE = `${NOTES}/rollout.md`;
+
 const DEMO_PREVIEW_IMAGE = `${NOTES}/cli.svg`;
 
 /**
@@ -87,7 +92,7 @@ const DIRS: Record<string, Entry[]> = {
   [NOTES]: [
     { uri: DEMO_PREVIEW_FILE },
     { uri: DEMO_PREVIEW_IMAGE },
-    { uri: `${NOTES}/demo.webm` },
+    { uri: `${VIDEO_SEGMENT}`, isDir: true },
   ],
 };
 
@@ -126,12 +131,6 @@ const SUMMARIES: Record<string, { l0: string; l1: string }> = {
     l1: 'Notes and retrospectives imported or written by the user.',
   },
 };
-
-const ok = (result: unknown) =>
-  new Response(JSON.stringify({ status: 'ok', result }), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  });
 
 /**
  * 按原生接口的路径与形状作答，不发出任何请求。

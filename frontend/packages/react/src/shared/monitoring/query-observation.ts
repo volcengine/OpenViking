@@ -1,13 +1,9 @@
 import type { OvClient } from '../../client/types.js';
-import { bindingOf } from '../../shared/monitoring/client.js';
-import { now } from '../../shared/monitoring/clock.js';
-import { tagModel } from '../../shared/monitoring/data.js';
-import {
-  beginWorkflow,
-  workflowsForData,
-  type Workflow,
-} from '../../shared/monitoring/workflow.js';
-import type { WorkflowTarget } from '../../shared/monitoring/workflows.js';
+import { bindingOf } from './client.js';
+import { now } from './clock.js';
+import { tagModel } from './data.js';
+import { beginWorkflow, workflowsForData, type Workflow } from './workflow.js';
+import type { WorkflowTarget } from './workflows.js';
 
 /** Each subscriber keeps its own observable lifetime when another consumer owns the shared fetch. */
 export class QueryObservation<T extends WorkflowTarget> {

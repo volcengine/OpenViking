@@ -724,3 +724,121 @@
   min-width: 0;
   min-height: 0;
 }
+
+.ov-file-preview__image-frame:has(> .ov-file-preview__media--video-details) {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.ov-file-preview__media--video-details {
+  flex: 0 0 52%;
+  min-height: 12rem;
+  padding: 8px 12px;
+}
+
+.ov-file-preview__video-details {
+  flex: 1;
+  min-height: 10rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.ov-file-preview__video-details > [role='tabpanel'] {
+  overflow: auto;
+}
+
+.ov-file-preview__video-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--ov-ui-file-preview-border);
+}
+
+.ov-file-preview__video-tabs button,
+.ov-file-preview__video-transcript button,
+.ov-file-preview__video-frames button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-file-preview__video-tabs button {
+  padding: 8px 12px;
+  border-bottom: 2px solid transparent;
+}
+
+.ov-file-preview__video-tabs button[aria-selected='true'] {
+  color: var(--ov-ui-file-preview-accent);
+  border-bottom-color: currentColor;
+}
+
+.ov-file-preview__video-transcript,
+.ov-file-preview__video-frames {
+  list-style: none;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.ov-file-preview__video-transcript button {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  border-radius: 4px;
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ov-file-preview__video-transcript button span {
+  display: block;
+  color: var(--ov-ui-file-preview-text-muted);
+  font-size: 12px;
+}
+
+.ov-file-preview__video-transcript button:hover,
+.ov-file-preview__video-transcript button[aria-current='true'] {
+  background: var(--ov-ui-file-preview-row-hover);
+}
+
+.ov-file-preview__video-frames {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(120px, 100%), 1fr));
+  gap: 8px;
+}
+
+.ov-file-preview__video-frames li {
+  display: grid;
+  place-items: center;
+  overflow-wrap: anywhere;
+}
+
+.ov-file-preview__video-frames button {
+  width: 100%;
+  padding: 0;
+  cursor: zoom-in;
+}
+
+.ov-file-preview__video-frames img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: var(--ov-ui-file-preview-surface);
+}
+
+.ov-file-preview__video-empty {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--ov-ui-file-preview-text-muted);
+}
+
+.ov-file-preview__frame-dialog {
+  box-sizing: border-box;
+  width: min(640px, 90vw);
+}
+
+.ov-file-preview__frame-dialog img {
+  width: 100%;
+}
