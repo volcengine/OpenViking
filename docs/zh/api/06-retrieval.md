@@ -681,6 +681,8 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 
 **L0 检索域**：`query`、`image_url`、`context_type`、`limit`、`score_threshold`、`filter`、`tags`、`since`/`until` 以及可选的 `events_time_decay_protection` 与 list 模式一致。`limit` 只约束 quota-free 检索；一旦 `purpose` 或显式 `quotas` 启用分桶检索，各分类配额之和就是候选上限。`target_uri` 在 context 模式下暂不支持（返回 400）；`level` 被忽略，档位由 `detail` 决定。
 
+可选的 `resource_uris` 将资源召回限定在 1–50 个 Viking 资源 URI 及其子路径，需与查询文本、图片或元数据过滤条件一起使用。该范围在选取候选之前生效，分桶配额和扩展查询也遵循它，并与已有的过滤条件和访问权限叠加。记忆和技能沿用原有召回范围。省略该字段时，资源沿用默认召回范围。
+
 **可选 Rerank**：开启 `retrieval.apply_rerank_to_context` 且 `rerank` 配置可用时，文本查询每个请求对合并、去重后的候选执行一次 Rerank，以原始 `query` 与各条扩展查询拼接后的文本打分，只由扩展查询召回的命中也按该扩展点明的主题评判。不设配额时为此召回 `2 × limit` 条候选；分桶检索每桶最多重排 `2 × quota` 条，候选不足的桶留出的名额让给其他桶。Skill 以其包摘要参与打分。参与重排的候选 `score` 变为 Rerank 分数，`other_peer_penalty` 仍在其上生效。`score_threshold` 随之改为过滤最终分数而非召回；未指定时，`rerank.threshold` 只过滤模型分数。模型未打分的候选（文本为空或 Rerank 调用失败）保留向量分数。图像查询不执行 Rerank。`stats.rerank` 报告 `used`、`candidates`（送入模型的数量）和 `capped`（被每桶上限排除的数量）
 
 **L1 查询理解**
@@ -741,7 +743,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -d '{"query":"这个分支改了什么","mode":"context","max_tokens":1600}'
 
-# 会话感知：查询扩展 + 跨轮去重
+# 指定项目资源范围，同时启用查询扩展和跨轮去重
 curl -X POST http://localhost:1933/api/v1/search/search \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
@@ -751,6 +753,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     "session_id":"cc-1a2b3c",
     "query_expansion":"auto",
     "dedup_turns":5,
+    "resource_uris":["viking://resources/my-project"],
     "purpose":"coding",
     "max_tokens":3000
   }'
@@ -761,6 +764,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -H "Authorization: Bearer $OPENVIKING_API_KEY" \
   -d '{"query":"档位设计","mode":"context","max_tokens":3000,"rewrite":true}'
 ```
+
+Python SDK 可以通过 `search_context(query, options={"resource_uris": ["viking://resources/my-project"]})` 传入相同的范围。
 
 **响应节选**
 

@@ -28,7 +28,11 @@ from openviking.retrieve.context_assembler.params import (
 from openviking.retrieve.rerank_scoring import Reranker, RerankScores
 from openviking.retrieve.skill_results import package_abstract, skill_root_uri
 from openviking.server.identity import RequestContext
-from openviking.utils.search_filters import merge_context_type_filter
+from openviking.utils.search_filters import (
+    has_context_type_filter,
+    merge_context_type_filter,
+    merge_resource_scope_filter,
+)
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.utils.logger import get_logger
@@ -216,6 +220,7 @@ async def gather_candidates(
     limit: int,
     score_threshold: Optional[float],
     filter: Optional[Dict[str, Any]] = None,
+    resource_uris: Sequence[str] = (),
     image_url: str | list[str] | None = None,
     events_time_decay_protection: Optional[str] = None,
     search_type: SearchType = "semantic",
@@ -340,6 +345,10 @@ async def gather_candidates(
             "skills": ContextType.SKILL,
         }.get(bucket, ContextType.MEMORY)
         bucket_filter = merge_context_type_filter(filter, context_type)
+        if bucket == "resources":
+            bucket_filter = merge_resource_scope_filter(
+                bucket_filter, resource_uris, include_non_resources=False
+            )
         if bucket == "skills":
             # Package retrieval pages until it holds `limit` distinct packages
             # and spans every root in one call, so one search per query is
@@ -423,23 +432,39 @@ async def gather_candidates(
         nonlocal rerank_stats
         # Rerank recalls past the cut, as search() does, so it can promote hits.
         width = limit * RERANK_CANDIDATE_MULTIPLIER if reranker is not None else limit
+        flat_filter = filter
+        if resource_uris:
+            # The scope's type predicate would mask the retriever's image default.
+            resources_only = bool(image_url) and not has_context_type_filter(filter)
+            if resources_only:
+                flat_filter = merge_context_type_filter(filter, ContextType.RESOURCE)
+            flat_filter = merge_resource_scope_filter(
+                flat_filter, resource_uris, include_non_resources=not resources_only
+            )
         searches = [
             _find(
                 query=query,
                 find_ctx=ctx,
                 target_uri="",
                 find_limit=_overfetch(width),
+                find_filter=flat_filter,
             )
             for query in planned
         ]
         peer_offset = len(searches)
         if peer_scope == "all":
+            # This sweep only serves memories. Keep resource hits outside the
+            # project from consuming its retrieval limit on scoped requests.
+            peer_filter = (
+                merge_context_type_filter(filter, ContextType.MEMORY) if resource_uris else filter
+            )
             searches.extend(
                 _find(
                     query=query,
                     find_ctx=open_ctx,
                     target_uri=f"{user_root}/peers",
                     find_limit=_overfetch(max(limit * OTHER_PEER_OVERFETCH, limit)),
+                    find_filter=peer_filter,
                 )
                 for query in planned
             )

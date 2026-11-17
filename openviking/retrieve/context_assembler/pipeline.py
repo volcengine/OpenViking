@@ -34,7 +34,7 @@ from openviking.retrieve.context_assembler.tiers import needs_content, prefetch_
 from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext
 from openviking.utils.time_decay import validate_event_time_decay_request
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -85,10 +85,10 @@ async def assemble_context(
     validate_event_time_decay_request(params.events_time_decay_protection)
     if params.search_type == "keywords":
         if params.image_url:
-            from openviking_cli.exceptions import InvalidArgumentError
-
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
         await service.search.ensure_keywords_search_supported(ctx)
+    if params.resource_uris and not (params.query.strip() or params.image_url or params.filter):
+        raise InvalidArgumentError("resource_uris requires a query, image_url, or metadata filter")
     quotas = normalize_quotas(params.quotas, params.purpose)
     penalties = normalize_penalties(params.other_peer_penalty)
 
@@ -150,6 +150,7 @@ async def assemble_context(
             limit=params.limit,
             score_threshold=params.score_threshold,
             filter=params.filter,
+            resource_uris=params.resource_uris,
             image_url=params.image_url,
             events_time_decay_protection=params.events_time_decay_protection,
             search_type=params.search_type,
@@ -198,9 +199,7 @@ async def assemble_context(
             rewrite_status = "failed"
     if plan.entries and rewrite_enabled:
         if resolver is None:
-            raise RuntimeError(
-                "Context assembly requires a VLM resolver for account-owned rewrite"
-            )
+            raise RuntimeError("Context assembly requires a VLM resolver for account-owned rewrite")
         try:
             planner = await resolver.get_query_planner(ctx.account_id)
         except Exception as exc:
