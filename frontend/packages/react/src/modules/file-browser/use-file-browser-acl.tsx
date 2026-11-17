@@ -17,7 +17,7 @@ import { AclTag } from './acl/acl-tag.js';
 import { aclLabels } from './acl/acl-labels.js';
 import { readPermission } from './acl/acl-client.js';
 import { isAclTarget } from './acl/acl-model.js';
-import { scopeKeyOf } from './fs-scope.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 
 export function useFileBrowserAcl({
   uri,

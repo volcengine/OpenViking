@@ -1,11 +1,15 @@
 import { useMemo, useRef, useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { Button, Checkbox, Input, TextArea } from '#demo-controls';
+import { OpenVikingProvider } from '@openviking/react/client';
 import { Console } from '@openviking/react/modules/console';
 import type { ConsoleHitlOptions } from '@openviking/react/modules/console';
 import type { VikingBotInteractionRenderContext } from '@openviking/react/components/viking-bot';
 import '@openviking/react/modules/console/style.css';
 import { createHitlDemo } from '#console-hitl-service';
+import { consoleTransport } from '#console-transport';
+
+const transport = consoleTransport();
 
 function InstructionEditor({
   context,
@@ -176,14 +180,16 @@ export default function ConsoleHitl() {
       <Checkbox checked={fail} onChange={setFail}>
         {zh ? '模拟答案发送失败' : 'Simulate answer send failure'}
       </Checkbox>
-      <div style={{ height: 720, marginTop: 12 }}>
-        <Console
-          locale={zh ? 'zh-CN' : 'en-US'}
-          modes={['conversation']}
-          chatOptions={{ service, hitl }}
-          conversation={{ onCopy: setCopied }}
-        />
-      </div>
+      <OpenVikingProvider fetch={transport}>
+        <div style={{ height: 720, marginTop: 12 }}>
+          <Console
+            locale={zh ? 'zh-CN' : 'en-US'}
+            modes={['conversation']}
+            chatOptions={{ service, hitl }}
+            conversation={{ onCopy: setCopied }}
+          />
+        </div>
+      </OpenVikingProvider>
       {copied ? <pre>{copied}</pre> : null}
     </>
   );

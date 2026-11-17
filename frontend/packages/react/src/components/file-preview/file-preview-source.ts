@@ -78,6 +78,7 @@ export function levelToFileTab(
     kind: 'file',
     key: `${tab.key}::${level.key}`,
     source: level.source,
+    emptyLabel: level.emptyLabel,
     resources: level.resources ?? tab.resources,
     resolveImage: tab.resolveImage,
     operations: tab.operations,

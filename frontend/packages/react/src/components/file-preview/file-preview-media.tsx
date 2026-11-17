@@ -1,12 +1,11 @@
-import { useImageDialogMonitoring } from './use-image-dialog-monitoring.js';
 import { opaqueIdentity } from '../../shared/monitoring/clock.js';
 import { useMediaMonitoring } from './use-media-monitoring.js';
 import { useRenderedMonitoring } from '../../shared/monitoring/context.js';
 import type { FileViewerState } from '@ark-design/ui/file-viewer/core';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
-import { Button } from '../../shared/primitives/button/button.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  FilePreviewFileTab,
   FilePreviewFileTabSlots,
   FilePreviewLabels,
   FilePreviewSource,
@@ -17,6 +16,8 @@ import {
   UnsupportedState,
 } from './file-preview-state.js';
 import { FilePreviewImageFrame } from './file-preview-image-frame.js';
+import { FilePreviewNativeImage } from './file-preview-native-image.js';
+import { FilePreviewVideoDetails } from './file-preview-video-details.js';
 
 export { mediaKind } from './media-kind.js';
 
@@ -24,6 +25,7 @@ export { mediaKind } from './media-kind.js';
 export function FilePreviewMedia({
   source,
   kind,
+  videoDetails,
   text,
   slots,
   reports = true,
@@ -37,6 +39,7 @@ export function FilePreviewMedia({
   ) => void;
   source: FilePreviewSource;
   kind: 'image' | 'video';
+  videoDetails?: FilePreviewFileTab['videoDetails'];
   text: Required<FilePreviewLabels>;
   slots?: FilePreviewFileTabSlots;
 }) {
@@ -65,7 +68,11 @@ export function FilePreviewMedia({
     error?: unknown;
   }>();
   const [attempt, setAttempt] = useState(0);
-  const dialog = useRef<HTMLDialogElement>(null);
+  const video = useRef<HTMLVideoElement>(null);
+  const [playhead, setPlayhead] = useState<{
+    owner: typeof owner;
+    ms: number;
+  }>();
   const enabled = useRenderedMonitoring();
   // Blob URLs belong to this committed source; release them on replacement/unmount.
   // URL sources are used directly and never revoked by the component.
@@ -106,7 +113,6 @@ export function FilePreviewMedia({
     status?.owner === owner ? status.error : undefined,
     { sourceIdentity, generation: attempt, bound: !!url },
   );
-  const imageDialog = useImageDialogMonitoring(dialog, identity, reports);
   if (failed)
     return typeof slots?.errorFallback === 'function'
       ? slots.errorFallback(retry)
@@ -123,20 +129,20 @@ export function FilePreviewMedia({
     setStatus({ owner, failed: true, error });
     onStateChange?.('error', error);
   };
-  const open = () => {
-    const closed = !dialog.current?.open;
-    dialog.current?.showModal();
-    if (closed) imageDialog.open();
-  };
   const ready = () => {
     setStatus({ owner, loaded: true });
     onStateChange?.('ready');
   };
+  const details = kind === 'video' && url ? videoDetails : undefined;
   return (
     <FilePreviewImageFrame>
       <div
         ref={exposure}
-        className="ov-file-preview__media"
+        className={
+          details
+            ? 'ov-file-preview__media ov-file-preview__media--video-details'
+            : 'ov-file-preview__media'
+        }
         aria-busy={!loaded}
       >
         {!loaded
@@ -144,47 +150,20 @@ export function FilePreviewMedia({
           : null}
         {url ? (
           kind === 'image' ? (
-            <>
-              <button
-                className="ov-file-preview__image-button"
-                type="button"
-                aria-label={`${text.previewImage}: ${source.fileName}`}
-                onClick={open}
-              >
-                <img
-                  key={`${url}:${attempt}`}
-                  data-ov-preview-image
-                  src={url}
-                  alt={source.fileName}
-                  onLoad={ready}
-                  onError={() => fail()}
-                />
-              </button>
-              <dialog
-                ref={dialog}
-                onClose={() => imageDialog.close()}
-                className="ov-file-preview__image-dialog"
-                aria-label={source.fileName}
-              >
-                <img
-                  ref={imageDialog.image}
-                  src={url}
-                  alt={source.fileName}
-                  onLoad={() => imageDialog.load()}
-                  onError={() => {
-                    if (!dialog.current?.open) return;
-                    fail(false);
-                    imageDialog.fail();
-                  }}
-                />
-                <Button size="small" onClick={() => dialog.current?.close()}>
-                  {text.closePreview}
-                </Button>
-              </dialog>
-            </>
+            <FilePreviewNativeImage
+              attempt={attempt}
+              identity={identity}
+              reports={reports}
+              fileName={source.fileName}
+              url={url}
+              text={text}
+              onReady={ready}
+              onFail={fail}
+            />
           ) : (
             // eslint-disable-next-line jsx-a11y/media-has-caption -- Caller-owned raw videos have no caption track in the source contract.
             <video
+              ref={video}
               key={`${url}:${attempt}`}
               src={url}
               controls
@@ -192,11 +171,31 @@ export function FilePreviewMedia({
               preload="metadata"
               aria-label={source.fileName}
               onLoadedMetadata={ready}
+              onTimeUpdate={
+                details
+                  ? (event) =>
+                      setPlayhead({
+                        owner,
+                        ms: event.currentTarget.currentTime * 1000,
+                      })
+                  : undefined
+              }
               onError={() => fail()}
             />
           )
         ) : null}
       </div>
+      {details && (
+        <FilePreviewVideoDetails
+          key={url}
+          details={details}
+          text={text}
+          timeMs={playhead?.owner === owner ? playhead.ms : 0}
+          onSeek={(ms) => {
+            if (video.current && loaded) video.current.currentTime = ms / 1000;
+          }}
+        />
+      )}
     </FilePreviewImageFrame>
   );
 }

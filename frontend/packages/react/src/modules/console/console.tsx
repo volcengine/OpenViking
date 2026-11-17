@@ -63,6 +63,7 @@ function ConsoleView({
   const managedConversation = useConversation(
     { conversation, chatOptions, scopeKey, requestOptions, locale, modes },
     state.setConversationDraft,
+    state.conversationDraft,
   );
   const { sessions, headerActions, feedback, ...conversationProps } =
     managedConversation;

@@ -155,11 +155,7 @@ async def _initialize_auth_plugin(
 
     plugin_cls = registry.get(effective_auth_mode)
     if plugin_cls is None:
-        logger.error(
-            "Unknown auth_mode: %r. No auth plugin registered. Registered modes: %s.",
-            effective_auth_mode,
-            ", ".join(registry.list_modes()),
-        )
+        logger.error("No auth plugin registered for the configured auth mode")
         raise RuntimeError(f"Unknown auth_mode: {effective_auth_mode}")
 
     plugin = plugin_cls()
@@ -432,11 +428,14 @@ def create_app(
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:  # noqa: BLE001
-                        logger.warning("OAuth GC loop error: %s", e)
+                        logger.info(
+                            "OAuth expiration cleanup failed; will retry",
+                            extra={"error_type": type(e).__name__},
+                        )
 
             oauth_gc_task = asyncio.create_task(_oauth_gc_loop(oauth_store))
             app.state.oauth_gc_task = oauth_gc_task
-            logger.info("OAuth 2.1 store initialized at %s", oauth_store._db_path)
+            logger.info("OAuth 2.1 store initialized")
 
         # Start TaskTracker cleanup loop
         task_tracker = get_task_tracker()
@@ -487,7 +486,7 @@ def create_app(
             try:
                 await oauth_store_state.close()
             except Exception as e:  # noqa: BLE001
-                logger.warning("OAuth store close failed: %s", e)
+                logger.info("OAuth store close failed", extra={"error_type": type(e).__name__})
         service_closed = not owns_service
         if owns_service and service:
             try:
@@ -505,7 +504,7 @@ def create_app(
             try:
                 await auth_plugin_state.shutdown()
             except Exception as e:  # noqa: BLE001
-                logger.warning("Auth plugin shutdown failed: %s", e)
+                logger.info("Auth plugin shutdown failed", extra={"error_type": type(e).__name__})
         if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
             await usage_reporter.close()
         from openviking.observability.reporting import stop_reporting
@@ -797,11 +796,14 @@ def create_app(
             app.routes.extend(sdk_routes)
             app.state.oauth_config = ov_cfg.oauth
             logger.info(
-                "OAuth 2.1 routes mounted (SDK + authorize-page + consent): %s",
-                [r.path for r in sdk_routes],
+                "OAuth 2.1 routes mounted",
+                extra={"total": len(sdk_routes)},
             )
     except Exception as e:  # noqa: BLE001
-        logger.warning("Skipping OAuth router registration: %s", e)
+        logger.info(
+            "OAuth router registration skipped",
+            extra={"error_type": type(e).__name__},
+        )
 
     # Favicon routes — always registered so /favicon.* and /mcp/favicon.* never
     # 404, even when web-studio isn't bundled. Source files live in

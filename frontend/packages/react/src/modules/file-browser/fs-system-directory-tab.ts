@@ -1,6 +1,6 @@
 import type { FilePreviewDirectoryTab } from '../../components/file-preview/index.js';
 import { directoryIcon } from './fs-icon.js';
-import { nameFromUri } from './fs-model.js';
+import { nameFromUri } from '../../shared/directory-tree/rows.js';
 
 /** Built-in directories keep their path and tab, but have no summary levels. */
 export function toSystemDirectoryTab(

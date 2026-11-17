@@ -21,8 +21,13 @@ export interface VikingBotReferences {
   rows: readonly FileTreeRow[];
   selected: readonly VikingBotReference[];
   onChange: (references: readonly VikingBotReference[]) => void;
+  onOpenChange?: (open: boolean) => void;
   onQueryChange?: (query: string) => void;
   onExpand?: (uri: string) => void;
+  /** Return the pending work to deduplicate repeated load requests. */
+  onLoadMore?: (parentId: string) => unknown;
+  /** Return the pending work to deduplicate repeated retries. */
+  onRetry?: (parentId?: string) => unknown;
   isLoading?: boolean;
   error?: string;
 }

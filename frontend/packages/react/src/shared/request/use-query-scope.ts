@@ -1,10 +1,7 @@
-import { beginWorkflow } from '../../shared/monitoring/workflow.js';
-import { now } from '../../shared/monitoring/clock.js';
-import { bindClient, bindingOf } from '../../shared/monitoring/client.js';
-import {
-  rawClient,
-  type BoundClient,
-} from '../../shared/monitoring/binding.js';
+import { beginWorkflow } from '../monitoring/workflow.js';
+import { now } from '../monitoring/clock.js';
+import { bindClient, bindingOf } from '../monitoring/client.js';
+import { rawClient, type BoundClient } from '../monitoring/binding.js';
 import {
   useCallback,
   useEffect,
@@ -39,6 +36,7 @@ export function useQueryScope(
   client: OvClient | null,
   options?: OvRequestOptions,
   target?: Parameters<typeof beginWorkflow>[1],
+  cacheScopeKey?: string,
 ) {
   const queryClient = useOvQueryClient();
   const inheritedSignal = useOvSignal();
@@ -58,6 +56,7 @@ export function useQueryScope(
   const input = useMemo(
     () => ({
       client,
+      cacheScopeKey,
       options: {
         baseURL: options?.baseURL,
         apiKey: options?.apiKey,
@@ -69,6 +68,7 @@ export function useQueryScope(
     }),
     [
       client,
+      cacheScopeKey,
       options?.baseURL,
       options?.apiKey,
       options?.accountId,

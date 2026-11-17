@@ -301,3 +301,31 @@ def test_log_field_transformations_omit_private_fields_and_hash_paths():
     assert safe["target_id"].startswith("viking://user/alice/hash/")
     assert safe_uri_for_log(safe["target_id"]) == safe["target_id"]
     assert "private-peer" not in str(safe) and "private-content" not in str(safe)
+
+
+def test_cpp_public_logging_uses_common_default(tmp_path):
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent("""
+        import sys
+        from openviking.storage.vectordb.engine import init_logging, ENGINE_VARIANT
+        from openviking.observability.log_safety import DEFAULT_LOG_FORMAT
+        if ENGINE_VARIANT == 'unavailable':
+            raise SystemExit(77)
+        init_logging('INFO', sys.argv[1])
+        init_logging('INFO', 'stderr')
+        init_logging('INFO', 'stdout', DEFAULT_LOG_FORMAT)
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "native.log")],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 77:
+        import pytest
+
+        pytest.skip("native engine is not built")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "native.log").exists()

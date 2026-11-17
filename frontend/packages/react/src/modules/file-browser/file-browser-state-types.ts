@@ -1,3 +1,4 @@
+import type { DirectorySummaryLabels } from './file-browser-labels.js';
 import type { ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/index.js';
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
@@ -16,6 +17,7 @@ import type { FileBrowserDashboardLabels, FileBrowserLabels } from './types.js';
 export interface FileBrowserApi {
   treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
   previewMonitoring?: Workflow<'file_browser_preview_load'>;
+  wikiSaving: boolean;
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
@@ -121,7 +123,7 @@ export interface UseFileBrowserOptions {
    * can fail; when it fails without a server message, `failure` is shown — it has to be
    * replaceable, or a host cannot localise it.
    */
-  summaryLabels?: { l0: string; l1: string; failure: string };
+  summaryLabels?: DirectorySummaryLabels;
   /** 字符数文案；省略时跟随语言。Character count copy; follows the resolved locale. */
   formatCharacterCount?: (count: number) => string;
   /** 首次加载后自动展开到的路径。Path to expand to after the first load. */

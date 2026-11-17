@@ -13,7 +13,8 @@ namespace {
 std::string quoted_message(const spdlog::string_view_t& value) {
   std::string result = "\"";
   constexpr char digits[] = "0123456789abcdef";
-  for (unsigned char byte : value) {
+  for (size_t offset = 0; offset < value.size();) {
+    const auto byte = static_cast<unsigned char>(value[offset]);
     if (byte == '"' || byte == '\\') {
       result += '\\';
       result += byte;
@@ -21,9 +22,32 @@ std::string quoted_message(const spdlog::string_view_t& value) {
       result += "\\u00";
       result += digits[byte >> 4];
       result += digits[byte & 15];
-    } else {
+    } else if (byte < 0x80) {
       result += byte;
+    } else {
+      const size_t width = byte >= 0xc2 && byte <= 0xdf ? 2
+                         : byte >= 0xe0 && byte <= 0xef ? 3
+                         : byte >= 0xf0 && byte <= 0xf4 ? 4 : 0;
+      bool valid = width != 0 && width <= value.size() - offset;
+      for (size_t index = 1; valid && index < width; ++index) {
+        valid = (static_cast<unsigned char>(value[offset + index]) & 0xc0) == 0x80;
+      }
+      if (valid) {
+        const auto second = static_cast<unsigned char>(value[offset + 1]);
+        // Reject overlong encodings, surrogate code points and values above U+10FFFF.
+        valid = !(byte == 0xe0 && second < 0xa0)
+             && !(byte == 0xed && second >= 0xa0)
+             && !(byte == 0xf0 && second < 0x90)
+             && !(byte == 0xf4 && second >= 0x90);
+      }
+      if (valid) {
+        result.append(value.data() + offset, width);
+        offset += width;
+        continue;
+      }
+      result += "\\ufffd";
     }
+    ++offset;
   }
   result += '"';
   return result;
@@ -94,7 +118,7 @@ void init_logging(const std::string& log_level, const std::string& log_output,
   logger->set_formatter(std::make_unique<CommonLogFormatter>());
   spdlog::set_default_logger(logger);
   spdlog::set_level(level);
-  spdlog::flush_on(spdlog::level::info);
+  spdlog::flush_on(spdlog::level::err);
   logger->debug("c++ logging initialized");
 }
 }  // namespace vectordb

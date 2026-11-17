@@ -1,7 +1,7 @@
 import { useCallback, useId, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { TabList } from '../../shared/primitives/tabs/tab-list.js';
-import { normalizeResourceUri } from './fs-uri.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
 import { resolveDashboardUri } from './dashboard-resource.js';
 import { readCompileCatalog } from './dashboard-data.js';
 import { useDashboardQuery } from './use-dashboard-query.js';

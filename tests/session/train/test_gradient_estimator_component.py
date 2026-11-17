@@ -275,4 +275,5 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
     assert captured["allowed_memory_types"] == {"experiences"}
     assert captured["prepare_messages_called"] is True
     assert captured["extract_loop_kwargs"]["vlm"] is vlm
+    assert captured["extract_loop_kwargs"].get("thinking") is None
     assert captured["extract_loop_kwargs"]["context_provider"]._isolation_handler is not None

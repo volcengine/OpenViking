@@ -75,6 +75,7 @@ class FakeViking:
         self.preferences = []
         self.entities = []
         self.skills = []
+        self.unavailable_reason = ""
 
     async def tools(self, key):
         self.tool_keys.append(key)

@@ -1,9 +1,9 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { useOvClient } from '../../client/provider.js';
 import type { OvRequestOptions } from '../../client/types.js';
-import { nameFromUri } from './fs-model.js';
-import { DirectoryQueries } from './directory-queries.js';
-import { useQueryScope } from './use-query-scope.js';
+import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { DirectoryQueries } from '../../shared/directory-tree/directory-queries.js';
+import { useQueryScope } from '../../shared/request/use-query-scope.js';
 
 const noSubscribe = () => () => {};
 const noSnapshot = () => undefined;

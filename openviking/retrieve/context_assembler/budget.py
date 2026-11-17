@@ -42,7 +42,7 @@ class BudgetPlan:
 
 
 def per_entry_cap(max_tokens: int, candidate_count: int) -> int:
-    """Twice the average share — the ceiling one entry may occupy."""
+    """Twice the average share, guiding the first pass rather than the total."""
     return max(1, max_tokens // max(1, candidate_count) * 2)
 
 
@@ -150,12 +150,18 @@ def plan_entries(
             if text is None:
                 continue
             entry = _make_entry(slot.candidate, target, text)
+            old_key = hash(slot.entry.text or slot.candidate.base_uri)
+            new_key = hash(entry.text or slot.candidate.base_uri)
+            if new_key != old_key and new_key in seen_bodies:
+                continue
             if respect_cap and not fits_cap(target, entry.tokens):
                 continue
             delta = entry.tokens - slot.entry.tokens
             if used + delta > max_tokens:
                 continue
             slot.entry = entry
+            seen_bodies.discard(old_key)
+            seen_bodies.add(new_key)
             slot.cost += delta
             used += delta
             upgraded += 1
@@ -166,9 +172,11 @@ def plan_entries(
     # observed 0.38-0.50 score band cannot support anyway.
     overview_upgrades = upgrade_pass("overview", respect_cap=True)
     full_upgrades = upgrade_pass("full", respect_cap=True)
-    # Leftover budget is worth spending: one more depth pass without the
-    # per-entry cap, still bounded by max_tokens.
+    # Preserve the existing full-tier pass before backfilling whole summaries.
     spare_upgrades = upgrade_pass("full", respect_cap=False)
+    # Resources/skills cannot reach full; use only the budget left afterwards.
+    spare_upgrades += upgrade_pass("abstract", respect_cap=False)
+    spare_upgrades += upgrade_pass("overview", respect_cap=False)
 
     entries = [slot.entry for slot in slots]
     tier_counts: Dict[str, int] = {}

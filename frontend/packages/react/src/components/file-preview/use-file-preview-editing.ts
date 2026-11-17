@@ -41,8 +41,10 @@ export function useFilePreviewEditing(activeTabKey: string) {
     resolve: (note: string | undefined) => void;
   }>(undefined);
   const [draft, setDraft] = useState('');
-  const [annotations, setAnnotations] =
-    useState<FilePreviewEditorDocument['annotations']>();
+  const [editorDetails, setEditorDetails] =
+    useState<
+      Pick<FilePreviewEditorDocument, 'annotations' | 'readOnlySuffix'>
+    >();
   const requestId = useRef(0);
   const loading = useRef(false);
   const pendingSave = useRef(false);
@@ -60,7 +62,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (saveFailure) setSaveFailure(undefined);
     if (versionNotCreated) setVersionNotCreated(false);
     if (draft) setDraft('');
-    if (annotations) setAnnotations(undefined);
+    if (editorDetails) setEditorDetails(undefined);
   }
 
   // Resolve a pending save confirmation when its tab goes away or unmounts.
@@ -91,7 +93,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     setSaveFailure(undefined);
     setVersionNotCreated(false);
     setDraft('');
-    setAnnotations(undefined);
+    setEditorDetails(undefined);
     if (wasEditing)
       analytics.current?.emit('file_preview_edit_cancel', () => ({}));
     if (wasEditing && tab.kind === 'file') tab.editing?.onCancel?.(discarded);
@@ -123,7 +125,10 @@ export function useFilePreviewEditing(activeTabKey: string) {
     setLoadingEdit(false);
     if (document) {
       setDraft(document.content);
-      setAnnotations(document.annotations);
+      setEditorDetails({
+        annotations: document.annotations,
+        readOnlySuffix: document.readOnlySuffix,
+      });
       setEditing(true);
       analytics.current?.emit('file_preview_edit_start', () => ({}));
     }
@@ -188,7 +193,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (current) {
       setEditing(false);
       setDraft('');
-      setAnnotations(undefined);
+      setEditorDetails(undefined);
       setVersionNotCreated(result?.warning === 'version-not-created');
     }
     capability.onSave?.(value);
@@ -206,7 +211,8 @@ export function useFilePreviewEditing(activeTabKey: string) {
     versionNoteOpen: versionNoteKey === activeTabKey && editing,
     finishVersionNote,
     draft,
-    annotations,
+    annotations: editorDetails?.annotations,
+    readOnlySuffix: editorDetails?.readOnlySuffix,
     discard,
     start,
     save,
