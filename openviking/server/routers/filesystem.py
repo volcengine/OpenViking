@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel, StrictBool, model_validator

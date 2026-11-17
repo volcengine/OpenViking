@@ -3,7 +3,9 @@
 
 import inspect
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 import openviking.server.mcp_endpoint as endpoint
 from openviking.core.item_search import SearchAsItemOptions
@@ -73,6 +75,42 @@ async def test_mcp_search_keeps_empty_item_options_and_no_default_threshold(
     assert '"items"' not in result
     assert search.await_args.kwargs["search_as_item"].aggregation == "max"
     assert search.await_args.kwargs["score_threshold"] is None
+
+
+@pytest.mark.parametrize("item_mode", [False, True])
+async def test_mcp_search_only_loads_a_session_for_ordinary_search(
+    request_context, monkeypatch, item_mode
+):
+    session = SimpleNamespace(load=AsyncMock())
+    factory = Mock(return_value=session)
+    search = AsyncMock(return_value=FindResult(memories=[], resources=[], skills=[]))
+    service = SimpleNamespace(
+        sessions=SimpleNamespace(session=factory),
+        search=SimpleNamespace(search=search, is_intent_enabled=lambda: True),
+    )
+    monkeypatch.setattr(endpoint, "get_service", lambda: service)
+    token = endpoint._mcp_ctx.set(request_context)
+    try:
+        result = await endpoint.mcp.call_tool(
+            "search",
+            {
+                "query": "find a Skill",
+                "session_id": "unused",
+                **({"search_as_item": {}} if item_mode else {}),
+            },
+        )
+    finally:
+        endpoint._mcp_ctx.reset(token)
+    assert isinstance(result, tuple)
+    search.assert_awaited_once()
+    if item_mode:
+        factory.assert_not_called()
+        session.load.assert_not_awaited()
+        assert search.await_args.kwargs["session"] is None
+    else:
+        factory.assert_called_once()
+        session.load.assert_awaited_once()
+        assert search.await_args.kwargs["session"] is session
 
 
 async def test_mcp_find_forwards_item_filter_without_legacy_threshold(request_context, monkeypatch):

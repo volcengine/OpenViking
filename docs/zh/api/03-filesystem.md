@@ -595,7 +595,11 @@ ov attrs batch-set-tags viking://resources/docs/api.md viking://resources/docs/g
 |------|------|------|--------|------|
 | uri | str | 是 | - | 新目录的 Viking URI |
 | description | str | 否 | `null` | 目录初始说明。未传入时使用目录名作为默认 L0；传入后使用该说明。两种情况都会写入 `.abstract.md` 并进入 L0 向量化队列。 |
+| as_item | bool | 否 | False | 将新目录声明为 Item；已有 Item 可幂等重试，存量普通目录不支持补声明 |
+| item_attrs | object | 否 | 省略 | 可选扁平字符串 KV，仅 `as_item=true` 可传；只属于声明根，不继承、不合并 |
 
+
+声明方式、UUID 生命周期和 `item_attrs` 限制见 [Item Search](06-retrieval.md#item-search预览)。 Item 模式的 HTTP 成功结果额外包含 `item_uuid` 和 `item_attrs`；Python SDK 的 `mkdir()` 仍返回 `None`。
 
 **Python SDK (HTTP)**
 

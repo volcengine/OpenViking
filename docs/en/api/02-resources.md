@@ -181,6 +181,8 @@ This endpoint is the core entry point for resource management. It supports vario
 | temp_file_id | string | No | - | Temporary upload file ID. Mutually exclusive with `path` |
 | to | string | No | - | Final location for this import. If the target already exists, it is refreshed. Mutually exclusive with `parent` |
 | parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
+| as_item | bool | No | False | Declare the resolved import root as an Item; existing Items support same-root updates, while ordinary roots cannot be promoted |
+| item_attrs | object | No | omitted | Optional flat string map; requires `as_item=true`. Attributes belong only to the declaration root and are not inherited or merged |
 | create_parent | bool | No | False | Automatically create parent directory if it does not exist (server-side flag) |
 | add_type | string | No | None | Explicit connector type; requires `path` and exact `to`, and cannot be combined with `parent` or `temp_file_id` |
 | source_name | string | No | None | Source display name; uploaded files use their original filename when omitted |
@@ -245,6 +247,8 @@ This endpoint is the core entry point for resource management. It supports vario
 - For a single-file input in `no_split` mode, when parsing produces exactly one visible file and `to` is omitted, that file is stored directly under the resolved parent (for example, `guide.md` becomes `viking://resources/guide.md`). No wrapper directory or directory-level `.abstract.md` / `.overview.md` is created. If parsing also produces images or other visible files, the wrapper directory is retained. An explicit `to` is always preserved as the exact final URI.
 - `no_split` changes only the stored Markdown layout. Semantic processing, file vectorization, and any internal embedding chunking remain unchanged. Relative Markdown links are resolved against the same no-split output layout, so links do not point to split-only paths. Understanding is not called for directory files in this mode.
 - To create or update plain text directly, use [content/write](12-content.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
+
+See [Item Search](06-retrieval.md#item-search-preview) for declaration examples, UUID lifecycle, and attribute restrictions.
 
 #### 3. Usage Examples
 

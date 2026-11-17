@@ -530,8 +530,12 @@ async def search(
 
     async def _search():
         session = None
-        # Intent off: skip session.load — SearchService will not scan session either.
-        if request.session_id and service.search.is_intent_enabled():
+        # Item mode does not consume session context, even when intent is enabled.
+        if (
+            request.search_as_item is None
+            and request.session_id
+            and service.search.is_intent_enabled()
+        ):
             session = service.sessions.session(_ctx, request.session_id)
             await session.load()
         return await service.search.search(
