@@ -459,7 +459,8 @@ async def test_large_image_is_compressed_without_changing_source_identity(runtim
     assert len(rendition) < len(original)
     assert len(rendition) <= VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
     assert result["sha256"] == content_hash(original)
-    assert Image.open(BytesIO(rendition)).size == (1800, 1000)
+    with Image.open(BytesIO(rendition)) as rendition_image:
+        assert rendition_image.size == (1800, 1000)
 
 
 @pytest.mark.asyncio
