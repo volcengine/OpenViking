@@ -286,12 +286,12 @@ export class Store {
       CREATE INDEX IF NOT EXISTS outbox_remote_message
         ON outbox(remote_message_id);
 
-      -- One model decision per accepted inbound event: a final delivery
-      -- ('delivered') or an explicit stay_silent ('silent'). Not a side effect:
-      -- no outbox or journal row, never synced to OpenViking. Every input needs
-      -- its own row: a decision on a newer input settles an earlier one only
-      -- when it names it (covers), and that row's covered_by is the deciding
-      -- event's id.
+      -- One terminal decision state per accepted inbound event: a final
+      -- delivery ('delivered'), an explicit stay_silent ('silent'), or
+      -- exhausted decision reminders ('missing'). Not a side effect: no outbox
+      -- or journal row, never synced to OpenViking. Every input needs its own
+      -- row: a decision on a newer input settles an earlier one only when it
+      -- names it (covers), and that row's covered_by is the deciding event's id.
       CREATE TABLE IF NOT EXISTS decisions (
         connector_instance TEXT NOT NULL,
         event_id TEXT NOT NULL,
@@ -1666,19 +1666,25 @@ export class Store {
   }
 
   // Records the model's decision on one accepted event (a connector_events
-  // row). A delivery always wins and replaces an earlier silence; silence never
-  // replaces anything. `coveredBy` is the event id of the decision that
-  // settled this one through covers (null for its own). `created` is false when
-  // the row was already there with this outcome (or silence met a delivery).
+  // row), or records that its reminders were exhausted. Outcome priority is
+  // delivered > silent > missing, so a late real decision replaces missing
+  // while missing never replaces a real decision. `coveredBy` is the event id
+  // of the decision that settled this one through covers (null for its own).
+  // `created` is false when the existing outcome has equal or higher priority.
   recordDecision({ row, outcome, coveredBy = null }, now = Date.now()) {
-    if (!['silent', 'delivered'].includes(outcome)) throw new Error(`unknown decision outcome: ${outcome}`);
+    if (!['missing', 'silent', 'delivered'].includes(outcome)) throw new Error(`unknown decision outcome: ${outcome}`);
+    if (!row?.connector_instance && row?.seq !== null && row?.seq !== undefined) {
+      row = this.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(row.seq);
+    }
+    if (!row?.connector_instance || !row?.event_id || !row?.scope_key) throw new Error('decision input is not an accepted inbound row');
     const previous = this.decisionFor(row.connector_instance, row.event_id);
     const result = this.db.prepare(`
       INSERT INTO decisions(connector_instance, event_id, seq, scope_key, outcome, decided_at_ms, covered_by)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(connector_instance, event_id) DO UPDATE SET
         outcome = excluded.outcome, decided_at_ms = excluded.decided_at_ms, covered_by = excluded.covered_by
-      WHERE excluded.outcome = 'delivered' AND decisions.outcome = 'silent'
+      WHERE (excluded.outcome = 'delivered' AND decisions.outcome IN ('silent', 'missing'))
+         OR (excluded.outcome = 'silent' AND decisions.outcome = 'missing')
     `).run(row.connector_instance, row.event_id, number(row.seq), row.scope_key, outcome, now, coveredBy);
     return {
       created: number(result.changes) > 0,
@@ -1692,8 +1698,8 @@ export class Store {
     return row ? { ...row, seq: number(row.seq), decided_at_ms: number(row.decided_at_ms) } : null;
   }
 
-  // The outcome of the decision recorded for this one input ('delivered' or
-  // 'silent'), or null. A decision on a newer input does not count unless it
+  // The terminal outcome recorded for this input ('delivered', 'silent', or
+  // 'missing'), or null. A decision on a newer input does not count unless it
   // covered this one.
   decisionOutcome(seq) {
     return this.db.prepare('SELECT outcome FROM decisions WHERE seq = ?').get(seq)?.outcome ?? null;

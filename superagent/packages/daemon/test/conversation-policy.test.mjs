@@ -81,6 +81,8 @@ describe('conversation policy assemble', () => {
   it('delivers only through the Core tools and keeps the final text internal', () => {
     const text = assembleConversationPolicy({ connectors: ['lark', 'weixin'] });
     assert.match(text, /`send_message`/);
+    assert.match(text, /`covers` lists every input the reply or silence handles\./);
+    assert.doesNotMatch(text, /leave it out when it handles `decision_id` alone/);
     assert.match(text, /never through a CLI or any other path/);
     assert.match(text, /Your final answer text, your thinking, and anything outside tool calls are internal telemetry that nobody sees/);
     assert.match(text, /If nothing is needed, call no delivery tool for it\./);

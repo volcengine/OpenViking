@@ -83,7 +83,7 @@ describe('turn-end decision settlement', () => {
   });
 
   it('reminds an input never attempted twice, with its original event= and seq, then records it missing', async (t) => {
-    const { activities, submitted, logs, ingest, turn } = setup(t);
+    const { store, activities, submitted, logs, ingest, turn } = setup(t);
     const row = ingest({ messageId: 'om_forgot1234567', chatId: 'oc_p2p12345678' });
     await turn([row.seq, null]);
     await turn([row.seq]);
@@ -102,16 +102,18 @@ describe('turn-end decision settlement', () => {
     await turn([row.seq]);
     assert.equal(submitted.length, 2);
     assert.deepEqual(activities.map(({ status }) => status), ['NUDGED', 'NUDGED', 'MISSING']);
+    assert.equal(store.decisionOutcome(row.seq), 'missing');
     await turn([]);
     assert.equal(activities.length, 3);
   });
 
   it('honors a zero reminder limit', async (t) => {
-    const { activities, submitted, ingest, turn } = setup(t, { decisionReminderLimit: 0 });
+    const { store, activities, submitted, ingest, turn } = setup(t, { decisionReminderLimit: 0 });
     const row = ingest({ messageId: 'om_noReminder123' });
     await turn([row.seq]);
     assert.deepEqual(submitted, []);
     assert.deepEqual(activities.map(({ status }) => status), ['MISSING']);
+    assert.equal(store.decisionOutcome(row.seq), 'missing');
   });
 
   it('asks every input of a burst for its own decision: three decisions, or one that covers the other two', async (t) => {

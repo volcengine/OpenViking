@@ -233,6 +233,7 @@ export class PersonalAgentDaemon {
         // inputs it holds go on (AgentRuntime.breakLoop).
         onNoProgress: (info) => this.agentRuntime?.breakLoop(info),
         onStaleDecision: (info) => this.decisionPolicy?.onStaleDecision(info),
+        beforeFinalFreshnessCheck: this.config.beforeFinalFreshnessCheck,
         logger: this.logger.child({ component: 'actions' }),
       });
       this.actionApi = await startActionApi({

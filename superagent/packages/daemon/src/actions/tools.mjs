@@ -47,7 +47,7 @@ const FENCE = {
 };
 const COVERS = {
   type: 'array', maxItems: 50, items: { type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH },
-  description: 'The event= values of the inputs this action handles and settles, decision_id included only if it handles that one too. Leave it out when you handle decision_id alone. Each must be from the same chat/thread or subject as decision_id and no newer; any other, an unknown one, or an empty list refuses the whole call. An input not settled here still needs its own decision.',
+  description: 'The event= values of every input this action handles and settles. Each must be from the same chat/thread or subject as decision_id and no newer; any other, an unknown one, or an empty list refuses the whole call. An input not settled here still needs its own decision.',
 };
 const DECISION_INSTANCE = {
   type: 'string', pattern: '^[a-z][a-z0-9-]{0,63}$',

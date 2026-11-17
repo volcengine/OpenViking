@@ -166,7 +166,7 @@ export class DecisionPolicy {
       const outcome = this.store.decisionOutcome(row.seq);
       if (outcome) {
         this.forget(row.seq);
-        counts[outcome === 'delivered' ? 'delivered' : 'silent'] += 1;
+        counts[outcome] += 1;
         continue;
       }
       if (!expected(row)) {
@@ -243,6 +243,7 @@ export class DecisionPolicy {
   }
 
   missing(row, status, runtime, reason = null) {
+    if (status === 'MISSING') this.store.recordDecision({ row, outcome: 'missing' });
     this.recordActivity('agent.decision_missing', {
       status,
       conversationKey: row.conversationKey,

@@ -34,7 +34,8 @@ const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url)
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
   ovTools = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
-  larkMessageAccess = 'owner', onNoProgress = null, onStaleDecision = null, connectors: given = null } = {}) {
+  larkMessageAccess = 'owner', onNoProgress = null, onStaleDecision = null, beforeFinalFreshnessCheck = null,
+  connectors: given = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -47,6 +48,7 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
       larkMessageAccess, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
     store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress, onStaleDecision,
+    beforeFinalFreshnessCheck,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
   t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -1762,6 +1764,28 @@ describe('stay_silent decisions', () => {
     // stay_silent is never stale.
     await call('stay_silent', { decision_id: 'message:om_fenceA1234567' });
     assert.deepEqual(stale, [older.seq]);
+  });
+
+  it('rechecks freshness after the test hook can accept a newer input', async (t) => {
+    let inject;
+    const stale = [];
+    const { call, inbound, connectors } = setupOn(t, {
+      onStaleDecision: (info) => stale.push(info.seq),
+      beforeFinalFreshnessCheck: async ({ action }) => {
+        if (action === 'message.reply') inject();
+      },
+    });
+    const older = inbound({ messageId: 'om_hookA12345678', chatId: 'oc_hook123456789' });
+    inject = () => inbound({ messageId: 'om_hookB12345678', chatId: 'oc_hook123456789' });
+
+    await assert.rejects(call('reply_message', {
+      message_id: 'om_hookA12345678',
+      markdown: 'late',
+      decision_id: 'message:om_hookA12345678',
+    }), (error) => error.code === 'stale_decision');
+
+    assert.deepEqual(stale, [older.seq]);
+    assert.equal(connectors.calls.filter(({ action }) => action === 'message.reply').length, 0);
   });
 
   it('records a requested retraction as the decision on the request, through the freshness fence', async (t) => {

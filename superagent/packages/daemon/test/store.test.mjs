@@ -590,7 +590,7 @@ describe('Store', () => {
 });
 
 describe('decision ledger', () => {
-  it('adds the table to an existing database, lets a delivery override silence, and prunes old decisions', (t) => {
+  it('adds the table to an existing database, applies decision outcome priority, and prunes old decisions', (t) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-decisions-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const file = path.join(directory, 'state.sqlite3');
@@ -603,13 +603,17 @@ describe('decision ledger', () => {
     const store = new Store(file, quietLogger);
     t.after(() => store.close());
     const row = store.db.prepare("SELECT * FROM connector_events WHERE event_id = 'evt-kept'").get();
+    assert.equal(store.recordDecision({ row, outcome: 'missing' }, 500).created, true);
+    assert.equal(store.decisionOutcome(row.seq), 'missing');
     assert.equal(store.recordDecision({ row, outcome: 'silent' }, 1_000).created, true);
     assert.equal(store.recordDecision({ row, outcome: 'silent' }, 1_000).created, false);
     assert.equal(store.decisionOutcome(row.seq), 'silent');
+    assert.equal(store.recordDecision({ row, outcome: 'missing' }, 1_500).created, false);
     assert.equal(store.decisionOutcome(row.seq + 1), null);
     const upgraded = store.recordDecision({ row, outcome: 'delivered' }, 2_000);
     assert.deepEqual([upgraded.created, upgraded.previous, upgraded.row.outcome], [true, 'silent', 'delivered']);
     assert.equal(store.recordDecision({ row, outcome: 'silent' }, 3_000).created, false);
+    assert.equal(store.recordDecision({ row, outcome: 'missing' }, 3_000).created, false);
     assert.equal(store.decisionOutcome(row.seq), 'delivered');
 
     assert.equal(store.prune(1_000, 2_500).decisions, 0);

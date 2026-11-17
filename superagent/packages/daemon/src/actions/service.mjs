@@ -143,12 +143,13 @@ export class ActionService {
     onPreferencesChanged = () => {},
     onNoProgress = null,
     onStaleDecision = null,
+    beforeFinalFreshnessCheck = null,
     loopBreakAfter = LOOP_BREAK_AFTER,
     logger,
   }) {
     Object.assign(this, {
       config, store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, timers, clock, onTimersChanged, onPreferencesChanged,
-      onNoProgress, onStaleDecision, loopBreakAfter, logger,
+      onNoProgress, onStaleDecision, beforeFinalFreshnessCheck, loopBreakAfter, logger,
     });
     // Loop guard: duplicate outcomes per input in the current turn, cleared
     // by resetLoopGuard() at every turn end.
@@ -738,6 +739,7 @@ export class ActionService {
     // message or a runtime switch could have landed meanwhile. Re-check right
     // before the reservation, with no await in between.
     if (caller.authority) {
+      await this.beforeFinalFreshnessCheck?.({ action, decision: fence });
       this.assertAuthority(caller.authority);
       if (fence) {
         if (!this.isTimerReminder(fence)) this.assertFresh(fence, caller);
