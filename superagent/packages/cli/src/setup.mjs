@@ -78,15 +78,15 @@ export const OWNER_MESSAGE_SCOPES = Object.freeze([
   'search:message', 'im:message:readonly', 'im:message.group_msg:get_as_user', 'im:message.p2p_msg:get_as_user',
 ]);
 
-// What the app and the owner's login ask for. `bot` (larkMessageAccess):
-// none of OWNER_MESSAGE_SCOPES, and search as the bot instead, which covers
+// What the app and the owner's login ask for. `bot` (larkMessageAccess) asks
+// for no user scopes at all, and searches as the bot instead, which covers
 // only the chats the bot has joined.
 export function larkScopes(access = 'owner') {
   const { scopes } = JSON.parse(fs.readFileSync(PERMISSIONS, 'utf8'));
   if (access !== 'bot') return { tenant: scopes.tenant, user: scopes.user };
   return {
     tenant: [...scopes.tenant, 'search:message'],
-    user: scopes.user.filter((scope) => !OWNER_MESSAGE_SCOPES.includes(scope)),
+    user: [],
   };
 }
 
@@ -122,23 +122,24 @@ const larkSources = () => [
       'when a scan cannot be used (not an owner or administrator, a test tenant); what the app lacks is added in the developer console') },
 ];
 
-// Whose visibility the bot reads with, asked for each app before its scans:
-// the permissions differ. What the owner grants an app stays with it, so the
-// choice is not offered again for the same app.
+// Which identity the app may use, asked for each scanned app before its scans.
+// What the owner grants an app stays with it, so the choice is not offered
+// again for the same app.
 const larkAccessChoices = () => [
-  { value: 'owner', label: t('允许', 'Allow'),
-    hint: t('能搜索和读取你在飞书里看得到的全部消息，包括它不在的群和你的单聊；授权后飞书不会收回，这个机器人以后改不回来',
-      'it can search and read every message you can see on Feishu/Lark, its chats or not, your direct chats too; Feishu/Lark keeps the grant, so this bot cannot be changed back later') },
-  { value: 'bot', label: t('不允许，只看它所在的会话', 'No, only the chats it is in'),
-    hint: t('搜索和读取都只限它加入的群和它的单聊', 'search and reading stay within the groups it has joined and its own direct chats') },
+  { value: 'owner', label: t('完整用户权限（默认）', 'Full user access (default)'),
+    hint: t('机器人权限 + 你的全部用户权限，可访问你能访问的文档、消息、日历、邮箱、任务等；会扫码两次',
+      'bot permissions plus all of your user permissions, for documents, messages, calendar, mail, tasks and more; requires two scans') },
+  { value: 'bot', label: t('仅机器人权限', 'Bot only'),
+    hint: t('不获取任何用户权限，只能访问明确授权给应用/机器人的资源和机器人所在会话；只扫码一次',
+      'requests no user permissions; limited to resources explicitly shared with the app/bot and chats the bot is in; requires one scan') },
 ];
 
-const larkAccessShown = (access) => (access === 'bot' ? t('只看它所在的会话', 'only the chats it is in') : null);
+const larkAccessShown = (access) => (access === 'bot' ? t('仅机器人权限', 'bot only') : null);
 
 async function askLarkAccess(prompter, initial) {
   const choices = larkAccessChoices();
-  return prompter.select(t('允许机器人以你的身份搜索和读取飞书消息？', 'Let the bot search and read Feishu/Lark messages as you?'), choices,
-    { initial: Math.max(0, choices.findIndex(({ value }) => value === initial)), label: t('以你的身份读消息', 'Reads as you') });
+  return prompter.select(t('授予 OpenViking SuperAgent 哪些飞书权限？', 'Which Feishu/Lark permissions may OpenViking SuperAgent use?'), choices,
+    { initial: Math.max(0, choices.findIndex(({ value }) => value === initial)), label: t('飞书权限', 'Feishu/Lark access') });
 }
 
 // How the instance gets its Feishu/Lark app: `keep` the one it has, or one
@@ -185,8 +186,8 @@ function needsShown({ missing, login }) {
 // scan changes it, on the platform's confirm page: the page adds what it
 // lacks and publishes, withdrawing a version under review first (seen in the
 // page's own code), and an app with a webhook keeps it.
-function existingAppNotes(source) {
-  const { tenant, user } = larkScopes();
+function existingAppNotes(source, access = 'owner') {
+  const { tenant, user } = larkScopes(access);
   return [
     ...(source === 'select' ? [t(
       `扫码后飞书的确认页会列出要给它补的权限（最多 ${tenant.length + user.length} 个）、消息事件和卡片回调，确认后发布一个新版本（企业可能要管理员审核）；它要是有版本正在审核，会先被撤回。不确认就什么都不改。`,
@@ -571,11 +572,16 @@ async function askLarkApp(ctx, state) {
       state.larkApp = null;
       break;
     }
-    // A new app: typed in, or one to scan; then whose visibility it reads
-    // with, which decides what both scans ask for.
+    // A new app: typed in, or one to scan; then which identity it may use,
+    // which decides whether a user authorization scan follows.
     try {
       const app = source === 'manual' ? await enterApp(ctx, { previous: state.larkApp?.app }) : null;
-      const access = await askLarkAccess(prompter, state.larkApp?.access ?? current?.larkMessageAccess ?? 'owner');
+      const access = source === 'manual' ? 'owner'
+        : await askLarkAccess(prompter, state.larkApp?.access ?? current?.larkMessageAccess ?? 'owner');
+      if (source === 'manual') note(ctx, t(
+        '手动填写凭据时要扫码授权用户身份来绑定主人；仅机器人权限请改用扫码新建或选择机器人。',
+        'Entering credentials by hand needs a user authorization scan to bind the owner; use a scan-created or selected bot for bot-only access.',
+      ));
       state.larkApp = { source, ...(app ? { app } : {}), access };
       break;
     } catch (error) {
@@ -583,7 +589,9 @@ async function askLarkApp(ctx, state) {
       prompter.rewind(mark);
     }
   }
-  if (state.larkApp && state.larkApp.source !== 'create') for (const text of existingAppNotes(state.larkApp.source)) note(ctx, text);
+  if (state.larkApp && state.larkApp.source !== 'create') {
+    for (const text of existingAppNotes(state.larkApp.source, state.larkApp.access)) note(ctx, text);
+  }
 }
 
 // The primary IM is its own question, Feishu unless it is left out; with a
@@ -910,10 +918,10 @@ async function enterApp({ prompter, fetchImpl = globalThis.fetch }, { previous =
 }
 
 const scanTitles = {
-  create: (minutes) => t(`第 1 次扫码：用飞书 App 扫码，创建机器人应用（${minutes} 分钟内有效）`,
-    `Scan 1 of 2: scan with the Feishu/Lark app to create the bot app (valid for ${minutes} minutes)`),
-  select: (minutes) => t(`第 1 次扫码：用飞书 App 扫码，选择已有的机器人应用（${minutes} 分钟内有效）`,
-    `Scan 1 of 2: scan with the Feishu/Lark app to pick an existing bot app (valid for ${minutes} minutes)`),
+  create: (minutes, _appId, single) => t(`${single ? '' : '第 1 次扫码：'}用飞书 App 扫码，创建机器人应用（${minutes} 分钟内有效）`,
+    `${single ? 'Scan with' : 'Scan 1 of 2: scan with'} the Feishu/Lark app to create the bot app (valid for ${minutes} minutes)`),
+  select: (minutes, _appId, single) => t(`${single ? '' : '第 1 次扫码：'}用飞书 App 扫码，选择已有的机器人应用（${minutes} 分钟内有效）`,
+    `${single ? 'Scan with' : 'Scan 1 of 2: scan with'} the Feishu/Lark app to pick an existing bot app (valid for ${minutes} minutes)`),
   update: (minutes, appId) => t(`用飞书 App 扫码，给应用 ${appId} 补上缺的权限和事件（${minutes} 分钟内有效）`,
     `Scan with the Feishu/Lark app to add what ${appId} lacks (valid for ${minutes} minutes)`),
 };
@@ -945,7 +953,7 @@ export async function registerApp({
       scan = showScan(prompter, {
         url,
         where: IM_LABELS.lark,
-        title: scanTitles[mode](Math.round(expiresIn / 60), appId),
+        title: scanTitles[mode](Math.round(expiresIn / 60), appId, scopes.user.length === 0),
         ...(mode === 'update' ? { stopKey: 's', stopLabel: t('跳过', 'skip') }
           : { stopKey: 'm', stopLabel: t('手动填 App ID', 'enter the App ID by hand') }),
         onBack: canGoBack ? () => wantBack() : null,
@@ -1052,11 +1060,11 @@ async function confirmUnshared({ prompter, larkCli, appId, others }) {
 }
 
 // The app from `source`: a scan, or `app` typed in with the questions. It is
-// checked against what OpenViking SuperAgent needs, written to the lark-cli profile, and the
-// owner authorizes as a user (the second scan). `access` is whose visibility
-// the bot reads with (larkScopes). `others` are the machine's other instances
-// with Feishu. Resolves with { profile, ownerOpenId, name }, name being the
-// app's own, when it could be read.
+// checked against what OpenViking SuperAgent needs and written to the
+// lark-cli profile. With full access the owner then authorizes as a user (the
+// second scan); bot-only uses the identity from the app scan and asks for no
+// user authorization. Resolves with { profile, ownerOpenId, name }, name being
+// the app's own, when it could be read.
 export async function connectLark({
   plan, prompter, larkCli, fetchImpl, profile, source = 'create', app: typed = null, access = 'owner', others = [], debug = false,
   canGoBack = false, register = null,
@@ -1067,6 +1075,10 @@ export async function connectLark({
   const app = typed ?? await registerApp({ plan, prompter, scopes, debug, canGoBack, mode: source, fetchImpl, register });
   // A scan always says who confirmed it; an app without that was typed in.
   const manual = !app.ownerOpenId;
+  if (manual && scopes.user.length === 0) {
+    throw new GoBack(t('仅机器人权限需要扫码新建或选择机器人，不能手动填写 App ID 和 App Secret。',
+      'Bot-only access requires creating or selecting the bot by scan; App ID and App Secret cannot be entered by hand.'));
+  }
   prompter.success(source === 'create' && !typed ? t(`已创建应用 ${app.appId}`, `Created the app ${app.appId}`)
     : t(`用应用 ${app.appId}`, `Using the app ${app.appId}`));
   let inspected = null;
@@ -1092,10 +1104,13 @@ export async function connectLark({
       : t('之后运行 ov-superagent setup 可以扫码补齐', 'ov-superagent setup can add it with a scan later'));
   }
   await larkCli.configureProfile({ profile, ...app });
+  if (scopes.user.length === 0) {
+    if (access === 'bot') await warnOwnerReads(prompter, larkCli, profile);
+    prompter.success(t('飞书已接好（仅机器人权限）', 'Feishu/Lark is connected (bot only)'));
+    return { profile, ownerOpenId: app.ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null };
+  }
   const login = await larkCli.beginUserLogin({ profile, scopes: grantedUserScopes(scopes, inspected) });
-  const what = access === 'bot'
-    ? t('授权 OpenViking SuperAgent 以你的身份用文档、日历等（不读你的消息）', 'let OpenViking SuperAgent use documents, calendar and more as you (not your messages)')
-    : t('授权 OpenViking SuperAgent 以你的身份读消息（用于搜索和读历史）', 'let OpenViking SuperAgent read messages as you (for search and history)');
+  const what = t('授权 OpenViking SuperAgent 使用你的完整用户权限', 'let OpenViking SuperAgent use your full user access');
   const scan = showScan(prompter, {
     url: login.url, where: IM_LABELS.lark, label: t('等待授权', 'Waiting for authorization'),
     title: source === 'manual' ? t(`扫码${what}`, `Scan to ${what}`) : t(`第 2 次扫码：${what}`, `Scan 2 of 2: ${what}`),
@@ -1111,7 +1126,6 @@ export async function connectLark({
     prompter.warn(t('两次扫码的不是同一个飞书账号；机器人会把第 2 次扫码的人当作主人。',
       'The two scans came from different Feishu/Lark accounts; the bot takes the second as its owner.'));
   }
-  if (access === 'bot') await warnOwnerReads(prompter, larkCli, profile);
   prompter.success(t('飞书已接好', 'Feishu/Lark is connected'));
   return { profile, ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null };
 }
@@ -1199,13 +1213,12 @@ export async function completeLarkApp({ agent, prompter, larkCli, scopes = larkS
 // The owner authorizes OpenViking SuperAgent as a user again (a scan), for the user scopes
 // the app has.
 export async function reauthorizeOwner({ agent, prompter, larkCli, scopes = larkScopes(agent.larkMessageAccess), inspected = null }) {
+  if (scopes.user.length === 0) return;
   const login = await larkCli.beginUserLogin({ profile: agent.profile, scopes: grantedUserScopes(scopes, inspected) });
   const scan = showScan(prompter, {
     url: login.url, where: IM_LABELS.lark, label: t('等待授权', 'Waiting for authorization'),
-    title: agent.larkMessageAccess === 'bot'
-      ? t(`扫码重新授权 ${agent.displayName}（${agent.profile}）以你的身份用文档、日历等（不读你的消息）`,
-        `Scan to let ${agent.displayName} (${agent.profile}) use documents, calendar and more as you again (not your messages)`)
-      : t(`扫码重新授权 ${agent.displayName}（${agent.profile}）以你的身份读消息`, `Scan to let ${agent.displayName} (${agent.profile}) read messages as you again`),
+    title: t(`扫码重新授权 ${agent.displayName}（${agent.profile}）使用你的完整用户权限`,
+      `Scan to let ${agent.displayName} (${agent.profile}) use your full user access again`),
   });
   try {
     await larkCli.finishUserLogin({ profile: agent.profile, deviceCode: login.deviceCode });
@@ -1652,10 +1665,11 @@ function table(prompter, title, rows) {
   prompter.write(`\n${title}${t('：', ':')}\n${rows.map(([key, value]) => `  ${padEnd(key, keyWidth)}  ${value}`).join('\n')}\n`);
 }
 
-// Feishu/Lark is one scan when the app is typed in: only the owner's authorization.
-const scansOf = (im, larkSource) => (im === 'lark' ? (larkSource === 'manual' ? 1 : 2) : 1);
+// Feishu/Lark is one scan for bot-only, or when the app is typed in and only
+// the owner's authorization remains.
+const scansOf = (im, larkSource, larkAccess) => (im === 'lark' ? (larkSource === 'manual' || larkAccess === 'bot' ? 1 : 2) : 1);
 
-function connectionSteps(prompter, connectors, { saving = false, larkSource = 'create' } = {}) {
+function connectionSteps(prompter, connectors, { saving = false, larkSource = 'create', larkAccess = 'owner' } = {}) {
   if (!connectors.length) return;
   const telegram = connectors.some((im) => TOKEN_IMS.includes(im));
   const steps = connectors.map((im) => {
@@ -1663,7 +1677,7 @@ function connectionSteps(prompter, connectors, { saving = false, larkSource = 'c
     if (im === 'qq') return t('QQ AppID / AppSecret + 私聊验证码绑定', 'QQ AppID / AppSecret + private-chat verification code');
     if (im === 'slack') return t('Slack 新建或选已有 App + 两个 token + 私聊口令绑定', 'Slack app (new or existing) + two tokens + a code in a direct message');
     if (im === 'onebot') return t(`${IM_LABELS.onebot} WebSocket 地址 + access token + 私聊口令绑定`, `${IM_LABELS.onebot} WebSocket address + access token + a code in a private message`);
-    const scans = scansOf(im, larkSource);
+    const scans = scansOf(im, larkSource, larkAccess);
     return t(`${IM_LABELS[im]} ${scans} 次`, `${IM_LABELS[im]} ${scans} ${scans === 1 ? 'scan' : 'scans'}`);
   });
   prompter.info(t(
@@ -1958,7 +1972,11 @@ async function setupFlow({
       [t('工作目录', 'Workspace'), shortenHome(state.workspace, homeDir)],
       [t('数据目录', 'Data'), shortenHome(state.dataDir, homeDir)],
     ]);
-    connectionSteps(prompter, ims(state), { saving: true, larkSource: larkSource(state, null) });
+    connectionSteps(prompter, ims(state), {
+      saving: true,
+      larkSource: larkSource(state, null),
+      larkAccess: state.larkApp?.access ?? 'owner',
+    });
     const go = ims(state).some((im) => TOKEN_IMS.includes(im)) ? t('开始接入？', 'Start connecting?')
       : ims(state).length ? t('开始扫码？', 'Start scanning?') : t('保存并启动？', 'Save and start?');
     if (await prompter.confirm(go)) return null;
@@ -1990,7 +2008,10 @@ async function setupFlow({
       const describe = () => describeChanges(current, build(), mailPlan(state), homeDir, state);
       if (!await editInstance(ctx, state, { describe, check: () => problem(build()), before: original, page })) return 0;
       out(`\n${t(`将修改 ${current.displayName}（${current.id}）：`, `Changing ${current.displayName} (${current.id}):`)}\n${describe().map((change) => `  ${change}\n`).join('')}`);
-      connectionSteps(prompter, toConnect(), { larkSource: larkSource(state, current) });
+      connectionSteps(prompter, toConnect(), {
+        larkSource: larkSource(state, current),
+        larkAccess: state.larkApp?.access ?? current?.larkMessageAccess ?? 'owner',
+      });
     } else if (await wizard(ctx, state, steps, run) === DECLINED) {
       return 1;
     }

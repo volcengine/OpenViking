@@ -984,16 +984,16 @@ test('← goes back a question with its answer kept, → takes the value shown, 
     ['Agent 运行时', RIGHT],
     ['接入哪些 IM', RIGHT],
     ['飞书机器人', RIGHT],
-    // ← on whose visibility the bot reads with is back at where the bot comes from.
-    ['允许机器人以你的身份', LEFT],
+    // ← on which Feishu identity may be used is back at where the bot comes from.
+    ['授予 OpenViking', LEFT],
     ['飞书机器人', RIGHT],
-    ['允许机器人以你的身份', RIGHT],
+    ['授予 OpenViking', RIGHT],
     ['开始扫码', LEFT],
     // Back at the last question asked, back once more into the section, then forward again.
     ['飞书机器人', LEFT],
     ['接入哪些 IM', RIGHT],
     ['飞书机器人', RIGHT],
-    ['允许机器人以你的身份', RIGHT],
+    ['授予 OpenViking', RIGHT],
     ['开始扫码', 'n', '\r'],
   ]);
   assert.equal(await setupCommand(h.options), 1);
@@ -1031,7 +1031,7 @@ test('a new instance\'s OV menu is a step like the others: ← leaves it, ← co
     // The CLI's own key: sharing its identity is a choice of its own.
     ['这个实例在 OpenViking 里的身份', '\r'],
     ['实例名称', RIGHT], ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
-    ['接入哪些 IM', '\r'], ['飞书机器人', '\r'], ['允许机器人以你的身份', '\r'], ['开始扫码', '\r'],
+    ['接入哪些 IM', '\r'], ['飞书机器人', '\r'], ['授予 OpenViking', '\r'], ['开始扫码', '\r'],
   ]);
   assert.equal(await setupCommand(h.options), 0);
   await driving;
@@ -1149,14 +1149,14 @@ test('setup asks for the full permission.json scope set', () => {
   assert.ok(scopes.tenant.length > 100 && scopes.user.length > 100);
 });
 
-test('a bot that reads only its own chats asks for none of the owner\'s message scopes, and searches as itself', () => {
+test('a bot-only app asks for no user scopes, and searches as itself', () => {
   const owner = larkScopes();
   const bot = larkScopes('bot');
   for (const scope of OWNER_MESSAGE_SCOPES) {
     assert.ok(owner.user.includes(scope), `${scope} is asked for by default`);
     assert.ok(!bot.user.includes(scope), `${scope} is not asked for`);
   }
-  assert.deepEqual(bot.user, owner.user.filter((scope) => !OWNER_MESSAGE_SCOPES.includes(scope)));
+  assert.deepEqual(bot.user, []);
   assert.ok(!owner.tenant.includes('search:message'));
   assert.deepEqual(bot.tenant, [...owner.tenant, 'search:message']);
 });
@@ -1282,13 +1282,14 @@ test('an instance with Feishu can switch to another app; the bot takes the app\'
   assert.deepEqual(kept.calls, []);
 });
 
-test('a new Feishu bot asks whether it may read as the owner; no keeps it to its own chats, and that is saved', async (t) => {
-  //                   name role ws  runtime IMs  feishu  reads-as-you: no  confirm
+test('a new Feishu bot asks for full or bot-only access; bot-only is saved', async (t) => {
+  //                   name role ws  runtime IMs  feishu  access: bot-only  confirm
   const h = harness(t, ['', '',  '', '1',    '1', '',     '2',              'y']);
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /允许机器人以你的身份搜索和读取飞书消息？[\s\S]*授权后飞书不会收回，这个机器人以后改不回来/);
-  assert.match(h.written(), /飞书机器人\s+扫码新建一个机器人（只看它所在的会话）/);
+  assert.match(h.written(), /授予 OpenViking SuperAgent 哪些飞书权限？[\s\S]*完整用户权限（默认）[\s\S]*仅机器人权限/);
+  assert.match(h.written(), /飞书机器人\s+扫码新建一个机器人（仅机器人权限）/);
+  assert.match(h.written(), /接下来扫码：飞书 1 次/);
   assert.deepEqual([given[0].source, given[0].access], ['create', 'bot']);
   assert.equal(h.manifest().agents[0].larkMessageAccess, 'bot');
 
@@ -1393,7 +1394,7 @@ test('on a terminal, setup asks the owner to reply on Feishu and waits; s skips 
     };
     const driving = h.drive([
       ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT], ['接入哪些 IM', RIGHT], ['飞书机器人', RIGHT],
-      ['允许机器人以你的身份', RIGHT], ['开始扫码', '\r'], ['确认它收得到你的消息', ...(arrives ? [] : ['s'])],
+      ['授予 OpenViking', RIGHT], ['开始扫码', '\r'], ['确认它收得到你的消息', ...(arrives ? [] : ['s'])],
     ]);
     assert.equal(await setupCommand(h.options), 0);
     await driving;
@@ -1447,7 +1448,7 @@ function pipePrompter(answers) {
   return { prompter: new Prompter({ input, output }), written: () => written };
 }
 
-test('connecting a bot that reads only its own chats: the scans ask for no message reading as the owner, and an old grant is named', async () => {
+test('connecting a bot-only app skips user authorization, and an old grant is named', async () => {
   const scopes = larkScopes('bot');
   const granted = [...scopes.tenant.map((scope) => ({ scope, token_types: ['tenant'] })),
     ...larkScopes().user.map((scope) => ({ scope, token_types: ['user'] }))];
@@ -1461,9 +1462,10 @@ test('connecting a bot that reads only its own chats: the scans ask for no messa
   await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
     profile: 'superagent-new', source: 'create', access: 'bot', register });
   assert.deepEqual(addons.scopes, scopes);
-  // The app still has the owner's message scopes; the login does not ask for them.
-  assert.deepEqual(larkCli.calls, [['profile', 'superagent-new', 'cli_old'], ['login', scopes.user]]);
-  assert.match(written(), /第 2 次扫码：授权 OpenViking SuperAgent 以你的身份用文档、日历等（不读你的消息）/);
+  // The app may still carry old user scopes, but setup does not start user OAuth.
+  assert.deepEqual(larkCli.calls, [['profile', 'superagent-new', 'cli_old']]);
+  assert.doesNotMatch(written(), /第 2 次扫码|等待授权/);
+  assert.match(written(), /飞书已接好（仅机器人权限）/);
   assert.doesNotMatch(written(), /用于搜索和读历史|以前允许过/);
 
   // The owner once let this app read their messages: Feishu keeps that, so they are told.
@@ -1559,7 +1561,7 @@ test('connecting an app typed in: no scan for it, and how its events arrive is l
   assert.match(output, /权限核对通过/);
   assert.match(output, /事件走长连接还是 webhook 读不到/);
   assert.match(output, /缺的在飞书开放平台给应用补上；你是应用的所有者或管理员的话，也可以之后运行 ov-superagent setup 扫码补齐/);
-  assert.match(output, /扫码授权 OpenViking SuperAgent 以你的身份读消息/);
+  assert.match(output, /扫码授权 OpenViking SuperAgent 使用你的完整用户权限/);
   assert.doesNotMatch(output, /第 1 次扫码|第 2 次扫码/);
 });
 
