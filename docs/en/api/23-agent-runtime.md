@@ -4,7 +4,7 @@ OpenViking owns Compile configuration, task submission, snapshots and recovery. 
 
 ## Compile configuration and execution
 
-A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain 1–64 ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique for each user within an account. Whitespace is rejected rather than trimmed. The first character cannot be a hyphen. Different users or accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
+A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain Han characters, ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique for each user within an account. Whitespace is rejected rather than trimmed. ASCII-only names allow up to 64 characters. A name containing any Han character allows up to 32 characters in total. The first character cannot be a hyphen. Different users or accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
 
 Ordinary Compile validates normalized directory URIs when creating or updating configuration and when submitting a new manual or scheduled execution:
 
@@ -207,7 +207,7 @@ The only Compile business files are:
 /local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-`configuration_directory` is the lowercase hexadecimal encoding of the name's ASCII bytes (`compile_name.encode("ascii").hex()`), with no prefix. This preserves case-sensitive names even on case-insensitive storage. Public APIs receive and return the original `compile_name`, not its directory encoding.
+ASCII names use their lowercase hexadecimal bytes as `configuration_directory`. Names containing Han characters use `u-` followed by the unpadded lowercase Base32 encoding of their UTF-8 bytes. Both directory formats preserve case distinctions on case-insensitive storage.
 
 Configurations are stored in account and user directories. Public APIs locate configurations by their original `compile_name`.
 

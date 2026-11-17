@@ -53,7 +53,7 @@ Check every 5 seconds for up to 5 minutes initially. Read outputs after `complet
 
 After compilation, the target directory should contain an index and a project page. See the [sample Wiki page](/quickstart/wiki-output-en-v1.txt) for content organization and source citations, then follow the checks below to review your output.
 
-The first run is full. Subsequent runs use the last successful baseline. The name is required, case-sensitive, and unique for the current user within an account; it contains 1–64 ASCII letters, digits, underscores, or hyphens. The first character cannot be a hyphen. Different users can use the same name. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
+The first run is full. Subsequent runs use the last successful baseline. The name is required, case-sensitive, and unique for the current user within an account; it contains Han characters, ASCII letters, digits, underscores, or hyphens. ASCII-only names allow up to 64 characters. A name containing any Han character allows up to 32 characters in total. The first character cannot be a hyphen. Different users can use the same name. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
 
 The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 
