@@ -153,6 +153,8 @@ class SkillProcessor:
         source_metadata: Optional[Dict[str, Any]] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
         lease_ref: Any = None,
+        request_id: Optional[str] = None,
+        before_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
@@ -192,6 +194,8 @@ class SkillProcessor:
             source_metadata=source_metadata,
             owner_lease_ref=owner_lease_ref,
             lease_ref=lease_ref,
+            request_id=request_id,
+            before_hash=before_hash,
         )
 
     async def process_prepared_skill(
@@ -206,6 +210,8 @@ class SkillProcessor:
         source_metadata: Optional[Dict[str, Any]] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
         lease_ref: Any = None,
+        request_id: Optional[str] = None,
+        before_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Store a prepared package and apply privacy changes under its write lease."""
         cleanup_path = preparation.cleanup_path
@@ -230,6 +236,19 @@ class SkillProcessor:
                 )
 
             await run_to_completion(acquire_package_lock)
+            from openviking.server.skill_history import (
+                read_skill_history,
+                record_skill_change,
+                skill_package_hash,
+            )
+
+            previous_history = await read_skill_history(viking_fs, ctx, skill_dir_uri)
+            skill_exists = await viking_fs.exists(f"{skill_dir_uri}/SKILL.md", ctx=ctx)
+            operation = "update" if skill_exists else "create"
+            if before_hash is None:
+                before_hash = (previous_history or {}).get("current_revision")
+                if before_hash is None and skill_exists:
+                    before_hash = await skill_package_hash(viking_fs, ctx, skill_dir_uri)
             # Privacy changes finish under the package lease even if installation is cancelled.
             if apply_privacy:
                 skill_dict = await run_to_completion(
@@ -284,6 +303,26 @@ class SkillProcessor:
                         viking_fs, ctx, result, source_metadata, lease_ref=lease
                     )
                 )
+            after_hash = await skill_package_hash(viking_fs, ctx, skill_dir_uri)
+            history = await record_skill_change(
+                viking_fs,
+                ctx,
+                skill_dir_uri,
+                operation=operation,
+                request_id=request_id,
+                before_hash=before_hash,
+                after_hash=after_hash,
+            )
+            result.update(
+                {
+                    "owner_user_id": history.get("owner_user_id"),
+                    "created_by": history.get("created_by"),
+                    "created_at": history.get("created_at"),
+                    "updated_by": history.get("updated_by"),
+                    "updated_at": history.get("updated_at"),
+                    "current_revision": after_hash,
+                }
+            )
             index_start = time.perf_counter()
 
             async def enqueue_package() -> None:
