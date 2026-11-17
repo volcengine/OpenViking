@@ -200,7 +200,8 @@ class ExtractLoop:
         Run the simplified ReAct loop for memory updates.
 
         Returns:
-            Tuple of (final operations, tools_used list)
+            Tuple of (final operations, tools_used list). Exhausted format errors
+            return None when no validated operations can be retained.
         """
         iteration = 0
         max_iterations = self.max_iterations
@@ -454,7 +455,6 @@ class ExtractLoop:
                 tracer.error(failure_message)
 
             # Preserve a valid first pass when only its resolution repair failed.
-            # Otherwise propagate failure so the archive is not marked completed.
             if not retry_remaining:
                 if pending_resolution_repair is not None:
                     final_operations, raw_links = pending_resolution_repair
@@ -465,6 +465,8 @@ class ExtractLoop:
                         console=True,
                     )
                     break
+                if failure_kind == "parse_error":
+                    return None, tools_used
                 raise RuntimeError(
                     "Final response could not be parsed as operations "
                     f"after {max_iterations} iterations "
