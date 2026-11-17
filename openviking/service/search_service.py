@@ -196,7 +196,7 @@ class SearchService:
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _validate_query(query, resolved_image_url, filter)
         _reject_system_targets(target_uri)
-        if search_type == "keywords":
+        if search_type == "keywords" and search_as_item is None:
             await self.ensure_keywords_search_supported(ctx)
         viking_fs = self._ensure_initialized()
 

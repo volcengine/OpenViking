@@ -716,7 +716,7 @@ async def find(
     search_as_item: Optional[SearchAsItemOptions] = None,
     filter: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. Pass search_as_item={} to return declared Item roots instead of chunks; aggregation supports max and sum. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. Pass search_as_item={} to return declared Item roots without summary/content reads; aggregation supports max (default) and sum. Item mode rejects read_content and event-time decay. Outside Item mode, context_type="skill" returns one hit per skill package, pointing at its SKILL.md. Without target_uri, skill-only queries search both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
     try:
         validate_event_time_decay_request(events_time_decay_protection)
         search_as_item = validate_item_search_request(
@@ -878,6 +878,9 @@ async def search(
     stored content; use ``read`` explicitly to execute a Live Context node.
     Pass ``search_as_item={}`` in list mode to return declared Item roots;
     ``{"aggregation": "sum"}`` selects sum instead of the default max.
+    Item mode ignores session_id without loading it, skips planning and reranking,
+    and rejects read_content, event-time decay, and context mode. Root content is
+    read separately with read.
     """
     try:
         validate_event_time_decay_request(events_time_decay_protection)
@@ -996,8 +999,8 @@ async def search(
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     session = None
-    # Intent off: skip session.load — SearchService will not scan session either.
-    if session_id and service.search.is_intent_enabled():
+    # Item mode does not consume session context, even when intent is enabled.
+    if search_as_item is None and session_id and service.search.is_intent_enabled():
         session = service.sessions.session(ctx, session_id)
         await session.load()
     result = await service.search.search(

@@ -589,16 +589,35 @@ class _SemanticMixin:
             datetime.now(timezone.utc) if events_time_decay_protection is not None else None
         )
         telemetry = get_current_telemetry()
-        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
-        from openviking.retrieve.intent_analyzer import IntentAnalyzer
-        from openviking_cli.retrieve import (
-            FindResult,
-            QueryPlan,
-            TypedQuery,
-        )
-
         real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        if search_as_item is not None:
+            try:
+                item_options = validate_item_search_request(
+                    search_as_item,
+                    events_time_decay_protection=events_time_decay_protection,
+                )
+            except ValueError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
+            assert item_options is not None
+            return await self._retrieve_items(
+                query=query,
+                ctx=real_ctx,
+                image_url=image_url,
+                target_directories=retrieval_targets.target_directories,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                level=level,
+                search_type=search_type,
+                options=item_options,
+                filter_only=filter_only,
+            )
+
+        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+        from openviking.retrieve.intent_analyzer import IntentAnalyzer
+        from openviking_cli.retrieve import FindResult, QueryPlan, TypedQuery
+
         primary_target_uri = retrieval_targets.first_explicit_directory
 
         session_summary = (
@@ -612,7 +631,7 @@ class _SemanticMixin:
 
         # When target_uri exists, read its abstract as optional query-planning context.
         target_abstract = ""
-        if primary_target_uri and search_as_item is None:
+        if primary_target_uri:
             try:
                 with telemetry.measure("search.target_abstract"):
                     target_abstract = await self.abstract(primary_target_uri, ctx=real_ctx)
@@ -644,11 +663,7 @@ class _SemanticMixin:
                     image_query=True,
                 )
             ]
-        elif (
-            search_as_item is None
-            and retrieval_config.enable_intent
-            and (session_summary or current_messages)
-        ):
+        elif retrieval_config.enable_intent and (session_summary or current_messages):
             try:
                 if self._vlm_resolver is None:
                     raise RuntimeError(
@@ -692,28 +707,6 @@ class _SemanticMixin:
         # Concurrent execution
         storage = self._get_vector_store()
         embedder = self._get_embedder(real_ctx)
-        if search_as_item is not None:
-            try:
-                item_options = validate_item_search_request(
-                    search_as_item,
-                    events_time_decay_protection=events_time_decay_protection,
-                )
-            except ValueError as exc:
-                raise InvalidArgumentError(str(exc)) from exc
-            assert item_options is not None
-            return await self._retrieve_items(
-                query=query,
-                ctx=real_ctx,
-                image_url=image_url,
-                target_directories=retrieval_targets.target_directories,
-                limit=limit,
-                score_threshold=score_threshold,
-                filter=filter,
-                level=level,
-                search_type=search_type,
-                options=item_options,
-                filter_only=filter_only,
-            )
         retriever = HierarchicalRetriever(
             storage=storage,
             embedder=embedder,

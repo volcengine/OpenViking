@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
 import pytest
@@ -417,6 +418,10 @@ async def test_item_groups_reuse_classified_results_without_content_reads(
     storage = service.viking_fs._get_vector_store()
     grouping = AsyncMock(side_effect=ordered_groups)
     monkeypatch.setattr(storage, "search_items_in_tenant", grouping)
+    embedder = Mock(side_effect=AssertionError("Filter-only Item queries need no embedder"))
+    monkeypatch.setattr(service.viking_fs, "_get_embedder", embedder)
+    scope = AsyncMock(wraps=service.viking_fs._ensure_retrieval_scope)
+    monkeypatch.setattr(service.viking_fs, "_ensure_retrieval_scope", scope)
     no_read = AsyncMock(side_effect=AssertionError("Item results must not read content"))
     monkeypatch.setattr(service.viking_fs, "read_file", no_read)
     monkeypatch.setattr(service.viking_fs, "_read_directory_summary", no_read)
@@ -455,6 +460,8 @@ async def test_item_groups_reuse_classified_results_without_content_reads(
                 assert "item_score" not in item
         assert grouping.await_args.kwargs["limit"] == limit
     assert grouping.await_count == 2
+    assert scope.await_count == 4  # Two targets per query, checked once each.
+    embedder.assert_not_called()
     no_read.assert_not_awaited()
     lookup.assert_not_awaited()
 
@@ -482,8 +489,6 @@ def test_classified_item_metadata_round_trip_keeps_ordinary_hits_unchanged():
 
 
 async def test_item_search_does_not_load_unused_session_context(service, monkeypatch):
-    from types import SimpleNamespace
-
     load_context = AsyncMock(
         side_effect=AssertionError("Item queries must not read session content")
     )
@@ -500,3 +505,39 @@ async def test_item_search_does_not_load_unused_session_context(service, monkeyp
     )
     assert result.to_dict() == {"memories": [], "resources": [], "skills": [], "total": 0}
     load_context.assert_not_awaited()
+
+
+@pytest.mark.parametrize("item_mode", [False, True])
+async def test_search_route_only_loads_a_session_for_ordinary_search(
+    client, service, monkeypatch, item_mode
+):
+    session = SimpleNamespace(load=AsyncMock())
+    factory = Mock(return_value=session)
+    monkeypatch.setattr(service.sessions, "session", factory)
+    monkeypatch.setattr(service.search, "is_intent_enabled", lambda: True)
+    search = AsyncMock(return_value={"memories": [], "resources": [], "skills": [], "total": 0})
+    monkeypatch.setattr(service.search, "search", search)
+    payload = {"query": "find a Skill", "session_id": "unused"}
+    if item_mode:
+        payload["search_as_item"] = {}
+    response = await client.post("/api/v1/search/search", json=payload)
+    assert response.status_code == 200, response.text
+    if item_mode:
+        factory.assert_not_called()
+        session.load.assert_not_awaited()
+        assert search.await_args.kwargs["session"] is None
+    else:
+        factory.assert_called_once()
+        session.load.assert_awaited_once()
+        assert search.await_args.kwargs["session"] is session
+
+
+async def test_item_keywords_do_not_probe_fulltext(client, service, monkeypatch):
+    fulltext = AsyncMock(side_effect=AssertionError("Item grouping does not use BM25"))
+    monkeypatch.setattr(service.viking_fs, "_collection_has_fulltext", fulltext)
+    response = await client.post(
+        "/api/v1/search/search",
+        json={"query": "a Skill", "search_type": "keywords", "search_as_item": {}},
+    )
+    assert response.status_code == 501, response.text
+    fulltext.assert_not_awaited()

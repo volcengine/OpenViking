@@ -27,23 +27,26 @@ Item Search returns declared Item roots instead of individual matching chunks. A
 
 Declare an Item with `as_item=true` and optional flat string metadata:
 
+**CLI**
+
 ```bash
-# CLI
 ov mkdir viking://resources/videos/V1 \
   --as-item --item-attrs '{"asset_id":"V1","kind":"video"}'
 ov add-resource ./video.mp4 --parent viking://resources/videos \
   --as-item --item-attrs '{"asset_id":"V2"}'
 ```
 
+**HTTP API**
+
 ```bash
-# HTTP
 curl -X POST http://localhost:1933/api/v1/fs/mkdir \
   -H 'Content-Type: application/json' \
   -d '{"uri":"viking://resources/videos/V1","as_item":true,"item_attrs":{"asset_id":"V1"}}'
 ```
 
+**Python SDK**
+
 ```python
-# Python SDK
 client.mkdir(
     "viking://resources/videos/V1",
     as_item=True,
@@ -70,8 +73,9 @@ Upgrade the open-source Python code and native engine together. Mixed binaries a
 
 Enable Item Search by passing an empty `search_as_item` object. Set `aggregation` to `sum` only when needed; the default is `max`:
 
+**CLI**
+
 ```bash
-# CLI: find and search both support Item mode
 ov find "boy on the beach" --uri viking://resources/videos --search-as-item
 ov search "boy on the beach" --uri viking://resources/videos \
   --search-as-item --aggregation sum
@@ -95,8 +99,9 @@ ov find --search-as-item \
 }
 ```
 
+**Python SDK**
+
 ```python
-# Python SDK
 items = client.find(
     "boy on the beach",
     target_uri="viking://resources/videos",
@@ -118,7 +123,7 @@ One `must` node follows the existing list-string filter semantics: multiple valu
 }
 ```
 
-HTTP/SDK responses keep `memories`, `resources`, `skills`, and `total`, without a separate `items` array. Each Item uses its declaration root's `context_type`, root `uri`, aggregate `score`, and root `level=0`. Optional extensions are `item_uuid`, `item_attrs`, and `item_extra_info` with only this request's `candidate_members_count` and `candidate_members_uri`. Each array preserves engine order; `limit` bounds the total Items before classification and `total` is the sum of the three array lengths. Empty results have three empty arrays. Ordinary hits do not gain Item fields.
+HTTP/SDK responses keep `memories`, `resources`, `skills`, and `total`, without a separate `items` array. Each Item uses its declaration root's `context_type`, root `uri`, aggregate `score`, and root `level=0`; `abstract` is currently an empty string. Optional extensions are `item_uuid`, `item_attrs`, and `item_extra_info` with only this request's `candidate_members_count` and `candidate_members_uri`. Each array preserves engine order; `limit` bounds the total Items before classification and `total` is the sum of the three array lengths. Empty results have three empty arrays. Ordinary hits do not gain Item fields.
 
 When member evidence is truncated, `item_extra_info.candidate_members_truncated` is `true`; the count still includes every candidate used in aggregation and may exceed the URI list length. Returning a root URI does not grant access to its contents. The local engine defaults to shadow inheritance. With union configured, it filters members before scoring all effective ancestor Items, each with its own attributes. Internal `item_uuids` and `item_attrs` are both `list<string>`; the OV API continues to expose `item_attrs` as a string map.
 
@@ -128,7 +133,9 @@ The local union implementation currently expands each `item_attrs` predicate to 
 
 Local filter-only Item queries cover all matching members and return a `score` of `0.0`. Semantic queries use a 1000-candidate recall budget independent of `limit`. The limit controls returned Item groups, with at most 1000 evidence members per group; truncating evidence does not change complete counts or `max`/`sum` aggregation scores.
 
-Item mode supports list results only. It rejects `read_content`, `include_provenance`, event-time decay, and `mode="context"`; it supports only `max` and `sum` aggregation and does not run custom/JEV reranking. `VikingDBCollection` does not yet implement the Catalog and Item grouping adapters. A configured storage backend without these interfaces returns `501 UNIMPLEMENTED` rather than emulating grouping in OpenViking.
+Item mode does not load the session named by `session_id`, perform intent analysis/query planning or reranking, or pre-read target abstracts, overviews, or content. Complete root metadata from the engine requires no additional UUID lookup. Filter-only Item queries do not initialize an embedder; semantic queries still need query vectors. Member authorization and grouping queries still run.
+
+Item mode supports list results only. It rejects `read_content`, `include_provenance`, event-time decay, and `mode="context"`; it supports only `max` and `sum` aggregation and does not run custom/JEV reranking. Item grouping with `search_type="keywords"` is currently unsupported and returns `501 UNIMPLEMENTED`. `VikingDBCollection` does not yet implement the Catalog and Item grouping adapters. A configured storage backend without these interfaces returns `501 UNIMPLEMENTED` rather than emulating grouping in OpenViking.
 
 ## Retrieval Pipeline
 
@@ -173,6 +180,7 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | query | str | No | "" | Search query string. May be omitted for an image query or a filter-only lookup |
 | image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
+| search_as_item | object \| null | No | null | Omit or pass `null` for ordinary retrieval; `{}` enables Item Search. Optional `aggregation`: `max` (default) or `sum`. List results only; see [Item Search](#item-search-preview) |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
@@ -187,6 +195,8 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
+
+With `search_as_item` enabled, `level` filters member tiers while returned roots use `level=0`. Combining it with `read_content`, `include_provenance`, or `events_time_decay_protection` is rejected. See [Item Search](#item-search-preview) for root URIs, aggregate scores, and candidate evidence.
 
 **Target resolution notes**:
 - With empty `target_uri`, non-ROOT retrieval searches the current user root (`viking://user/{user}`) and shared `viking://resources`.
@@ -224,6 +234,9 @@ class MatchedContext:
     category: str                    # Category
     score: float                     # Relevance score; scale depends on the retrieval pipeline
     match_reason: str                # Why this matched
+    item_uuid: Optional[str]         # Returned only for Item hits
+    item_attrs: Optional[Dict[str, str]]  # Item root attributes
+    item_extra_info: Optional[Dict]  # Candidate evidence for this aggregation
 ```
 
 `score` is not universally bounded to `[0, 1]`: its scale depends on the backend, metric and postprocessing. See [observer.vikingdb](18-observer.md#observer-vikingdb) for the runtime metric, pure-dense scale and its scope.
@@ -510,18 +523,19 @@ Semantic retrieval with optional session-aware query planning.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| query | str | No | "" | Search query string. Required unless `image_url` is provided |
+| query | str | No | "" | Search query string; may be omitted for image queries or for Item queries with a filter |
 | image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | search_type | `"semantic"` \| `"keywords"` | No | `"semantic"` | Retrieval type. `semantic` uses embeddings and vector recall; `keywords` uses BM25 keyword recall |
 | mode | `"list"` \| `"context"` | No | `"list"` | Return ranked hits or assembled context. CLI `--mode` maps to this field; context-specific parameters are described below |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
-| session_id | str | No | None | Session ID for context-aware search (HTTP) |
+| session_id | str | No | None | Session ID for context-aware search (HTTP); ignored without loading the session in Item mode |
+| search_as_item | object \| null | No | null | Omit or pass `null` for ordinary retrieval; `{}` enables Item Search. Optional `aggregation`: `max` (default) or `sum`. List results only; see [Item Search](#item-search-preview) |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | args | Dict | No | null | Advanced engine options for `search_type="keywords"` in `mode="list"`. Supported keys: `bm25_k1` (float > 0), `bm25_b` (float in `[0, 1]`), `post_process_input_limit` (int from the effective `limit`/`node_limit` up to `2000000`). Unknown keys are rejected |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
-| limit | int | No | 10 | Maximum results per planned query; list mode concatenates the results, so its total may exceed this value |
+| limit | int | No | 10 | Ordinary list retrieval: maximum per planned query, so the total may exceed it. Item mode: maximum total Items before classification |
 | node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -533,7 +547,11 @@ Semantic retrieval with optional session-aware query planning.
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query, does not support images, and requires a remote VikingDB backend with a full-text index. `args` is accepted only with `search_type="keywords"` in `mode="list"`; it keeps engine tuning options in one map instead of adding a top-level parameter per knob.
+With `search_as_item` enabled, `level` filters member tiers while returned roots use `level=0`. Combining it with `read_content`, `include_provenance`, or `events_time_decay_protection` is rejected. See [Item Search](#item-search-preview) for root URIs, aggregate scores, and candidate evidence.
+
+Item mode requires `mode="list"` and ignores `session`/`session_id`; `limit` bounds total Items across all buckets and `total` reports the actual returned count.
+
+`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query and a remote VikingDB backend with a full-text index. `args` accepts engine tuning options for `search_type="keywords"` in `mode="list"`. Keyword queries reject image input.
 
 Event time decay applies to results tagged `memory_type=events` in semantic `find()` and both `search(mode="list")` and `search(mode="context")`. Memory extraction writes this tag on user/peer event L2 records; retrieval identifies events by the tag rather than inferring the type from a URI or level. Untagged/non-event results, query-less filter-only `find()`, `recall`, `grep`, and `glob` are unaffected. During event recall, the vector engine multiplies the original vector score by `time_score`. List responses expose this recall-stage vector score as `origin_score` and the factor as `time_score`; `score` is the final retrieval score, which may come from model rerank. Context mode assembles its candidates with vector scores, or with the model score when `retrieval.apply_rerank_to_context` is on. The CLI labels list-result scores as semantic, time, and final scores. Inside the protection period `time_score` is 1, so the original score is unchanged. Time distance follows the VikingDB exponential decay operator, using the absolute difference from the request time. Time is read from the existing indexed `updated_at` field; no reindex or timestamp rewrite is required. Local fusion preserves the original score for missing or invalid timestamps; cloud fusion uses the indexed date-time field and the backend operator. The curve is owned by the server; callers only provide the per-request protection period. No `ov.conf` or `ovcli.conf` change is required.
 
