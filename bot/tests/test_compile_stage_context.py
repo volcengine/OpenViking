@@ -152,6 +152,9 @@ async def test_shuffle_preserves_hub_comparison_and_selected_history(pipeline, m
         )
     monkeypatch.setattr(Shuffle, "vectors", AsyncMock(return_value=[[1.0, 0.0]] * 4))
 
+    history_uri = pipeline.target + "/old.md"
+    monkeypatch.setattr(Shuffle, "candidates", AsyncMock(return_value=[{"uri": history_uri}]))
+
     async def decide(stage, system, data, response_type, validate, **kwargs):
         assert "different reader purposes" in system
         assert all("HIDDEN_DISPUTE" not in d["markdown"] for d in data["documents"])
@@ -167,13 +170,23 @@ async def test_shuffle_preserves_hub_comparison_and_selected_history(pipeline, m
                 if document == docs[0].workspace_path
                 else [docs[0].workspace_path]
             )
-            choices.append({"document": document, "related": related, "history": []})
+            choices.append(
+                {
+                    "document": document,
+                    "related": related,
+                    "history": [history_uri] if document == docs[0].workspace_path else [],
+                }
+            )
         result = RouteResponse.model_validate({"decisions": choices})
         validate(result)
         return result
 
     pipeline.model.ask = decide
-    groups = await Shuffle(pipeline).run(parse_plan(MERGE, pipeline.contract)[1], docs)
+    from dataclasses import replace
+
+    node = replace(parse_plan(MERGE, pipeline.contract)[1], against_target=True)
+    groups = await Shuffle(pipeline).run(node, docs)
+    assert groups[0].target_uris == [history_uri]
     assert len(groups) == 1 and {d.workspace_path for d in groups[0].documents} == {
         d.workspace_path for d in docs
     }
@@ -299,3 +312,9 @@ async def test_actual_agent_calls_record_injected_rules_not_every_loaded_attachm
         assert receipt["skill_attachment_chars"] == len("COMMON RULESMAP RULES")
         assert receipt["skill_context_policy"] == "staged-rules-v1"
     assert len(pipeline.resources.hashes) == 3
+
+
+def test_centered_comparison_accepts_iterable_document_ids():
+    assert group_related_documents(iter("abc"), [("a", "b"), ("a", "c")], centered=True) == [
+        ["a", "b", "c"]
+    ]

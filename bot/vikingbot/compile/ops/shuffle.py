@@ -137,6 +137,7 @@ def group_related_documents(keys, links, *, centered=False):
     Either link direction suffices. Unknown endpoints are rejected; input order
     determines first-fit assignment, and documents without links remain independent.
     """
+    keys = list(keys)
     neighbours = {key: set() for key in keys}
     directed = {tuple(link) for link in links}
     for left, right in directed:
