@@ -449,6 +449,7 @@ jobs:
               "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "$EMBEDDING_API_KEY",
@@ -475,6 +476,7 @@ jobs:
               "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "dummy-embedding-api-key",
@@ -526,6 +528,7 @@ jobs:
               "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "$env:EMBEDDING_API_KEY",
@@ -552,6 +555,7 @@ jobs:
               "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "dummy-embedding-api-key",
