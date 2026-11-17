@@ -12,7 +12,7 @@
 
 import { createFeishuClient } from './client.mjs';
 import { TaskCardActions } from './actions.mjs';
-import { fitCard } from './card.mjs';
+import { taskCard } from './card.mjs';
 
 const NOW = Date.UTC(2026, 10, 17, 9, 40);
 const send = process.argv.includes('--send');
@@ -55,7 +55,7 @@ const client = createFeishuClient({
   dryRun: !send, appId: process.env.FEISHU_APP_ID, appSecret: process.env.FEISHU_APP_SECRET,
 });
 
-const cardFor = (task) => fitCard(task, { now: NOW, footer: `最后更新 ${new Date(NOW).toISOString().slice(11, 16)}Z` });
+const cardFor = (task) => taskCard(task, { now: NOW, footer: `最后更新 ${new Date(NOW).toISOString().slice(11, 16)}Z` });
 const task = tasks.get('t331');
 const message = { id: null };
 
@@ -72,7 +72,7 @@ async function click({ value, operatorId, eventId }) {
   const result = await actions.handle({ value, operatorId, eventId, ownerId: 'ou_owner0001' });
   if (result.outcome === 'stopped') await render();
   if (result.outcome === 'retried') {
-    await client.patchCard({ messageId: message.id, card: fitCard(task, { now: NOW, settled: true, note: `已重新派发为 ${result.newTaskId}` }) });
+    await client.patchCard({ messageId: message.id, card: taskCard(task, { now: NOW, settled: true, note: `已重新派发为 ${result.newTaskId}` }) });
   }
   const shown = result.outcome === 'stopped' || result.outcome === 'retried'
     ? `${result.outcome}${result.newTaskId ? ` -> ${result.newTaskId}` : ''}`

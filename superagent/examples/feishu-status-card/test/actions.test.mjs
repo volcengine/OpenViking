@@ -39,6 +39,13 @@ describe('card button values', () => {
     assert.equal(mayActOnTask(task, { operatorId: 'ou_bystander0001', ownerId: OWNER }), false);
     assert.equal(mayActOnTask({ requesterId: null }, { operatorId: 'ou_x00000001', ownerId: OWNER }), false);
   });
+
+  it('reads the scheduler row, whose requester column is snake_case', async () => {
+    const tasks = new Map([['t331', { id: 't331', status: 'running', requester_id: REQUESTER }]]);
+    const actions = new TaskCardActions({ getTask: (id) => tasks.get(id) ?? null, stop: () => {}, retry: () => ({ id: 't332' }) });
+    assert.equal((await actions.handle({ value: value(), operatorId: REQUESTER })).outcome, 'stopped');
+    assert.equal((await actions.handle({ value: value(), operatorId: 'ou_bystander0001' })).reason, 'not_allowed');
+  });
 });
 
 describe('TaskCardActions', () => {
@@ -80,6 +87,45 @@ describe('TaskCardActions', () => {
     const other = setup('running');
     assert.deepEqual(await other.actions.handle({ value: value('retry'), operatorId: REQUESTER }),
       { outcome: 'ignored', reason: 'not_retryable', taskId: 't331' });
+  });
+
+  it('carries out one retry when two clicks arrive together', async () => {
+    let resolve;
+    const gate = new Promise((done) => { resolve = done; });
+    const tasks = new Map([['t331', { id: 't331', status: 'failed', requesterId: REQUESTER }]]);
+    let created = 0;
+    const actions = new TaskCardActions({
+      getTask: (id) => tasks.get(id) ?? null,
+      stop: () => {},
+      retry: async () => { created += 1; await gate; return { id: 't332' }; },
+    });
+    const first = actions.handle({ value: value('retry'), operatorId: REQUESTER, eventId: 'ev_a' });
+    const second = actions.handle({ value: value('retry'), operatorId: REQUESTER, eventId: 'ev_b' });
+    resolve();
+    const [one, two] = await Promise.all([first, second]);
+    assert.equal(one.outcome, 'retried');
+    assert.deepEqual(two, { outcome: 'ignored', reason: 'in_flight', taskId: 't331' });
+    assert.equal(created, 1, 'the second click must not start a second task');
+  });
+
+  it('prunes what is too old to decide anything', async () => {
+    let clock = NOW;
+    const tasks = new Map([['t331', { id: 't331', status: 'running', requesterId: REQUESTER }]]);
+    const actions = new TaskCardActions({
+      getTask: (id) => tasks.get(id) ?? null,
+      stop: () => {},
+      retry: () => ({ id: 't332' }),
+      now: () => clock,
+      settleTtlMs: 1_000,
+    });
+    await actions.handle({ value: value(), operatorId: REQUESTER, eventId: 'ev_1' });
+    assert.equal(actions.events.size, 1);
+    assert.equal(actions.settled.size, 1);
+    clock += 60_000;
+    tasks.get('t331').status = 'failed';
+    await actions.handle({ value: value('retry'), operatorId: REQUESTER, eventId: 'ev_2' });
+    assert.equal(actions.events.size, 1);
+    assert.deepEqual([...actions.events.keys()], ['ev_2']);
   });
 
   it('ignores cards that are not task cards and tasks it does not know', async () => {

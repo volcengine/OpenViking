@@ -21,7 +21,7 @@ test/         node:test, no network
 
 ```bash
 node demo.mjs                      # dry run: cards, clicks, and the calls that would be made
-node --test test/*.test.mjs        # 22 tests, no credentials needed
+node --test test/*.test.mjs        # 36 tests, no credentials needed
 ```
 
 Against a real app (a chat the app is already in):
@@ -37,7 +37,7 @@ callback handler is wired, which is the next section.
 
 Three points, in this order:
 
-1. **On task start.** Render `fitCard(task)` and send it. Keep the returned
+1. **On task start.** Render `taskCard(task)` and send it. Keep the returned
    `message_id` next to the task; that id is the handle for every later update.
 
    ```js
@@ -51,12 +51,19 @@ Three points, in this order:
    a progress list that changes per step should be throttled to a few seconds.
 
    ```js
-   await client.patchCard({ messageId, card: fitCard(task) });
+   await client.patchCard({ messageId, card: taskCard(task) });
    ```
 
 3. **On `card.action.trigger`.** The callback carries the button `value`, the
    operator's `open_id` (trusted) and an event id (for replay). Hand those to
    `TaskCardActions`; patch the card from the result.
+
+   In this daemon a card callback is only accepted for a card it registered
+   when it delivered it (`registerCard` in `card-messages.mjs`); an unknown
+   message id is refused before reaching this code. Wiring a status card in
+   therefore means registering it at delivery and handling its clicks off the
+   ingress queue, the way an approval card is (`event.question?.kind`), instead
+   of letting them reach the model as `[card action]` input.
 
    ```js
    const result = await actions.handle({
@@ -65,8 +72,13 @@ Three points, in this order:
      ownerId,
      eventId: event.event_id,
    });
-   if (result.outcome === 'stopped') await client.patchCard({ messageId, card: fitCard(task) });
+   if (result.outcome === 'stopped') await client.patchCard({ messageId, card: taskCard(task) });
    ```
+
+`getTask` returns the record the scheduler has. The card and the permission
+check read both the scheduler's snake_case columns (`requester_id`,
+`created_at_ms`, `summary`) and camelCase fields, so `manager.get` can be
+passed as is.
 
 `getTask`, `stop` and `retry` are injected:
 
@@ -80,17 +92,30 @@ const actions = new TaskCardActions({
 
 ## What the card guarantees
 
+- **Only text that cannot become markup.** A task title, a name or a progress
+  line is someone's words, not formatting, so every text element is
+  `plain_text`. As `lark_md`, a title containing `**` or a tick would restyle
+  the card, and escaping it with backslashes assumes an escape syntax the
+  renderer does not document (the result being visible backslashes).
 - **A button says what to do, never who may do it.** Authorisation compares the
   callback's operator with the task's requester (or the instance owner), so a
   bystander in a group cannot cancel someone else's work. The value on the
   button is treated as external input and re-validated.
 - **One click, one effect.** A redelivered callback is recognised by its event
-  id; a second click on the same card is ignored for a settling window, and a
-  card that was already used loses its buttons. `stop` on an ended task and
-  `retry` on a task that is still running are refused rather than guessed at.
-- **The card always fits.** Feishu accepts 30 KiB per card. `fitCard` drops the
-  oldest progress lines, then the note, then shortens the title, instead of
-  failing the update.
+  id; a second click on the same card is ignored for a settling window; two
+  callbacks that arrive together find the first still in flight and only one
+  action runs. A card whose retry was carried out loses its buttons. `stop` on an
+  ended task and `retry` on a task that is still running are refused rather
+  than guessed at — and refusing does not spend the card's one click.
+- **A dropped update is retried where that cannot duplicate anything.** A patch
+  is idempotent, so a 429 or 5xx is retried twice; a send is not, so it is
+  retried only when the platform refused it (429 / code 99991400), never on a
+  5xx that may have delivered the card already.
+- **The card cannot grow past the limit by itself.** Feishu accepts 30 KiB per
+  card. Every field is capped where it is read: six progress lines within
+  1,200 characters (newest kept), a 120-character title, 240-character note and
+  footer. A rendered card stays around 2 KiB, and `client.mjs` refuses anything
+  over 30 KiB rather than sending a card the platform will reject.
 - **`update_multi: true`.** Without it the patch is accepted and the card keeps
   its first rendering — the failure mode looks like "the status never changes".
 
