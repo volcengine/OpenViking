@@ -139,7 +139,7 @@ const messages: typeof enUS = {
     limit: '最多返回的条目数量',
     level: '筛选内容层级，例如 0,1,2',
     'compile-name':
-      '1–64 位 ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符',
+      '汉字、ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符。纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符',
     from: '已存在的来源目录 URI，可重复传入 --from，或用英文逗号分隔多个 URI',
     skill: '用于编译的 Skill URI',
     instruction: '编译的额外要求',

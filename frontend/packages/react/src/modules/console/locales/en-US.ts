@@ -143,7 +143,7 @@ const messages = {
     limit: 'Maximum number of results',
     level: 'Filter content levels, e.g. 0,1,2',
     'compile-name':
-      'A case-sensitive name of 1–64 ASCII letters, digits, underscores or hyphens, starting with a letter, digit or underscore',
+      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters.',
     from: 'Existing source directory URIs. Repeat --from or separate URIs with commas',
     skill: 'Compiler Skill URI',
     instruction: 'Additional compilation instructions',

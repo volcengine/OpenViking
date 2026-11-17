@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from openviking.server.auth import get_request_context
@@ -39,7 +40,7 @@ SOURCE = "viking://resources/source"
 TARGET = "viking://resources/wiki_output"
 SKILL = "viking://system/compile/example-skills/llm-wiki"
 INPUTS = {"from": [SOURCE], "to": TARGET, "skill": SKILL}
-SAVED_INPUTS = {**INPUTS, "compile_name": "research-summary"}
+SAVED_INPUTS = {**INPUTS, "compile_name": "研发周报"}
 
 
 @pytest.mark.parametrize("body", [b'{"error":{"message":"Ark unavailable"}}', b"unavailable"])
@@ -202,6 +203,7 @@ async def test_creation_requires_name_before_side_effects(service, app, client, 
     for body in (
         INPUTS,
         {**INPUTS, "compile_name": ""},
+        {**INPUTS, "compile_name": "a" * 32 + "汉"},
         {**INPUTS, "compile_name": "../state"},
     ):
         response = await client.post("/api/v1/compile/create", json=body)
@@ -212,6 +214,40 @@ async def test_creation_requires_name_before_side_effects(service, app, client, 
     assert not [
         record async for record in service.compile.lifecycle.store.iter_records(ctx.account_id)
     ]
+
+
+def test_compile_name_openapi_contract(app):
+    """Every named operation publishes a schema usable by independent JSON Schema clients."""
+    spec = app.openapi()
+    routes = spec["paths"]
+    schemas = []
+    for suffix in ("/config", "/configs", "/runs", "/runs/{task_id}", "/runs/{task_id}/outputs"):
+        params = routes["/api/v1/compile" + suffix]["get"]["parameters"]
+        parameter = next(p for p in params if p["name"] == "compile_name")
+        assert parameter["required"] is (suffix != "/configs")
+        schema = parameter["schema"]
+        assert "pattern" not in schema  # Swagger UI validates this field without Unicode mode.
+        schemas.append(schema)
+    for suffix in ("/create", "", "/config/update"):
+        body = routes["/api/v1/compile" + suffix]["post"]["requestBody"]
+        model = body["content"]["application/json"]["schema"]["$ref"].split("/")[-1]
+        schemas.append(spec["components"]["schemas"][model]["properties"]["compile_name"])
+
+    for schema in schemas:
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema)
+        for name in ("研发周报", "a" * 64, "𠀀" * 32, "a" * 31 + "〇"):
+            assert validator.is_valid(name), (schema, name)
+        for name in ("", "a" * 65, "汉" * 33, "a" * 32 + "汉", "-日报", "日报。", "日报\n", "😀"):
+            assert not validator.is_valid(name), (schema, name)
+
+
+async def test_compile_name_query_validation(client):
+    path = "/api/v1/compile/config"
+    response = await client.get(path, params={"compile_name": "汉" * 33})
+    assert response.status_code == 400, response.text
+    errors = response.json()["error"]["details"]["validation_errors"]
+    assert errors[0]["loc"] == ["query", "compile_name"]
 
 
 async def test_named_configuration_conflicts_and_lookup_permissions(
@@ -354,18 +390,20 @@ async def test_delegated_execution_owner_actor_and_retries(service, app, client,
 
 async def test_case_distinct_names_paginate(service, app, client, monkeypatch):
     await prepare(service, app, monkeypatch)
-    names = ["Research-summary", "research-summary"]
+    names = ["研发-Research", "研发-research", "研发-周报"]
     for name in names:
-        created = await client.post(
-            "/api/v1/compile/create", json={**INPUTS, "compile_name": name, "instruction": name}
-        )
+        created = await client.post("/api/v1/compile/create", json={**INPUTS, "compile_name": name})
         assert created.status_code == 200, created.text
+    store = service.compile.lifecycle.store
+    reads = AsyncMock(wraps=store.read_json)
+    monkeypatch.setattr(store, "read_json", reads)
     first = (await client.get("/api/v1/compile/configs", params={"limit": 1})).json()["result"]
     assert [config["compile_name"] for config in first["configs"]] == names[:1]
     assert first["next_cursor"] == names[0]
+    assert reads.await_count == 2
     second = (
         await client.get(
-            "/api/v1/compile/configs", params={"limit": 1, "cursor": first["next_cursor"]}
+            "/api/v1/compile/configs", params={"limit": 2, "cursor": first["next_cursor"]}
         )
     ).json()["result"]
     assert [config["compile_name"] for config in second["configs"]] == names[1:]
@@ -509,7 +547,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     inputs = {**SAVED_INPUTS, "to": TARGET.replace("_", " ")}
     created = await client.post("/api/v1/compile/create", json=inputs)
     assert created.status_code == 200, created.text
-    assert created.json()["result"] == {"compile_name": "research-summary"}
+    assert created.json()["result"] == {"compile_name": inputs["compile_name"]}
     compile_name = created.json()["result"]["compile_name"]
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert state["to"] == TARGET

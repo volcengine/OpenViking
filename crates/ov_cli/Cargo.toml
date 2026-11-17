@@ -38,6 +38,7 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 machine-uid = "0.5"
 termimad = "0.34"
 hex = "0.4"
+regex = "1"
 getrandom = "0.2"
 indicatif = "0.18"
 bytes = "1.0"
