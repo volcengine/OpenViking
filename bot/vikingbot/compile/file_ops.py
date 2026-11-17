@@ -94,8 +94,9 @@ class DocumentReader:
         "required": ["path"],
     }
 
-    def __init__(self, runtime, documents):
+    def __init__(self, runtime, documents, *, visible_only=False):
         self.runtime = runtime
+        self.visible_only = visible_only
         self.allowed = {d.workspace_path for d in documents}
 
     async def execute(self, path, offset=0, limit=8000):
@@ -110,6 +111,10 @@ class DocumentReader:
         ):
             raise ValueError("Invalid Markdown character range")
         content = (await self.runtime.files.sandbox.read_file_bytes(path)).decode("utf-8")
+        if self.visible_only:
+            from openviking.utils.markdown_visibility import without_conflict_comments
+
+            content = without_conflict_comments(content)
         if offset > len(content):
             raise ValueError("Offset is outside the document")
         end = min(len(content), offset + limit)

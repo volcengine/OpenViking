@@ -27,6 +27,7 @@ async def run(runtime, node, groups):
                     "inputs": [{"payload": {"source_ranges": refs}}],
                 },
                 refs,
+                skill_stage="reduce",
             )
         except BaseException:
             for ref in refs:
@@ -85,6 +86,7 @@ async def resolve_files(runtime, documents):
                         "inputs": [{"payload": {"source_ranges": refs}}],
                     },
                     refs,
+                    skill_stage="reduce",
                 )
                 if not outputs:
                     raise ValueError(f"No Markdown outputs resolve {path}")

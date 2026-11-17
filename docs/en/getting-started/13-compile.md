@@ -96,3 +96,39 @@ If filenames differ, use the tree and index to locate the body page. Check the i
 | Evidence missing | Actual read records and citations; refine the instruction and retry with a new target |
 
 Completion means a readable, navigable body page with evidence for key facts. See the [LLM Wiki example](../context-compilation/02-llm-wiki.md) for structures, page types, and visualization. To clean up, identify the demo target in Studio, preserve any needed output, and delete the directory.
+
+### Stage-specific Skill attachments
+
+A Skill may declare `compile_stage_resources` in its YAML frontmatter:
+
+```yaml
+compile_stage_resources:
+  map: [references/map.md]
+  reduce: [references/conflicts.md]
+```
+
+The complex Markdown pipeline authorizes and snapshots these bounded attachments
+once before planning, then injects the declared rules into generation workers. A Map draft omits
+final-generation rules only when conflict mode guarantees a later Reduce;
+ordinary Map keeps the union because it can publish directly or lose Reduce
+after stage review. Missing or invalid required files fail before model planning; no shorter
+fallback drops rules. Existing Skills without this declaration retain their full
+text. Standalone agents must follow the Skill's reference links themselves.
+The bundled LLM Wiki separates source-draft instructions from final conflict
+format/human-protection rules, and uses file tools inside isolated workers while
+retaining its script for standalone writing. No extra adjudication model is added. Planner instructions and stage-review
+revisions remain intact; attachment selection never substitutes a fixed Reduce task.
+Content-free call receipts identify the injected attachment paths and characters.
+
+When global conflict detection is enabled, semantic routing uses bounded one-hop
+comparison groups (at most 50 drafts) so a hub claim can be compared with related
+pages that serve different reader purposes. It does not close transitive chains
+or promise exhaustive recall. Normal routing, candidate windows, concurrency and
+model selection defaults remain unchanged. Whole-Skill snapshots already cover
+user Skill attachments. After upgrading bundled system Skills, start a full run
+before relying on an old named incremental baseline; system-Skill asset versions
+are not currently part of that baseline's identity.
+
+Reserved conflict comments are excluded from Markdown summary inputs and routing
+views before truncation. Raw source/draft bytes, citations, hashes and Reduce
+evidence remain intact; existing stored summaries are not automatically rebuilt.

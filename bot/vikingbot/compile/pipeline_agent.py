@@ -22,10 +22,11 @@ from vikingbot.providers.base import LLMProvider
 class ChildProvider(LLMProvider):
     """Route each child request through the task's bounded, metered provider calls."""
 
-    def __init__(self, model, stage="agent"):
+    def __init__(self, model, stage="agent", skill_context=None):
         super().__init__()
         self.model = model
         self.stage = stage
+        self.skill_context = skill_context
         self.failures = Counter()
 
     def get_default_model(self):
@@ -39,7 +40,11 @@ class ChildProvider(LLMProvider):
         """Retry truncated output without executing incomplete tool calls."""
         while True:
             response = await self.model.call(
-                self.stage, messages, tools, max_tokens=self.model.max_tokens
+                self.stage,
+                messages,
+                tools,
+                max_tokens=self.model.max_tokens,
+                **({"skill_context": self.skill_context} if self.skill_context is not None else {}),
             )
             if response.finish_reason not in {"length", "max_tokens"}:
                 return response
@@ -130,7 +135,9 @@ def agent_runner(loop, session_key, connection, limits):
             scoped.execute = search_target
             registry.register(scoped)
         child = copy(loop)
-        child.provider = ChildProvider(model, stage)
+        child.provider = ChildProvider(
+            model, stage, (data.get("runtime") or {}).get("skill_context")
+        )
         child.preview_hook = complete_tool_result
         if runtime.request.global_conflict_detection:
             # Match the actual AgentLoop preview owner; isolated workers cannot

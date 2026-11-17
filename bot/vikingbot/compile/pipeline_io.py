@@ -179,7 +179,7 @@ class JsonModel:
         self.resources = None
         self.agent_runner = None
 
-    async def call(self, stage, messages, tools, *, max_tokens):
+    async def call(self, stage, messages, tools, *, max_tokens, skill_context=None):
         """Measure one real request, including provider retries and semaphore waits.
 
         Diagnostics contain budgets, usage and failure categories, never reasoning.
@@ -213,6 +213,8 @@ class JsonModel:
             if self.resources and stage not in {"plan", "review", "route"}
             else 0,
         }
+        if skill_context is not None:
+            report.update(skill_context)
         self.metrics["estimated_input_tokens"] += cal_str_tokens(
             json.dumps([messages, tools], ensure_ascii=False), text_type="mixed"
         )

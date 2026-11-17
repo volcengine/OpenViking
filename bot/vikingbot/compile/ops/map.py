@@ -35,6 +35,7 @@ async def run(runtime, node, sources):
                     ]
                 },
                 refs,
+                skill_stage="map",
             )
         except BaseException:
             for ref in refs:
