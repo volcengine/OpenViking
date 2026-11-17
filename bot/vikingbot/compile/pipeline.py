@@ -140,9 +140,12 @@ class Pipeline:
         """Use the shared record owner; cached target reads are evidence, not new authority."""
         from openviking.storage.manual_conflicts import validate_compile_conflicts
 
+        previous = self.old.get(path)
+        if isinstance(previous, bytes):
+            raise ValueError("Historical Wiki is not UTF-8; retain the affected page")
         validate_compile_conflicts(
             content,
-            previous=self.old.get(path),
+            previous=previous,
             history=tuple(raw for raw in self.old.values() if isinstance(raw, str)),
         )
 

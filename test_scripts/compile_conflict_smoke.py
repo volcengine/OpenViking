@@ -2,7 +2,7 @@
 
 Set OV_TEST_VLM_CONFIG to a private OpenAI-compatible VLM JSON configuration,
 and optionally OV_COMPILE_SMOKE_OUTPUT to retain synthetic result receipts.
-No server Compile is submitted. These four cases are not a recall benchmark.
+No server Compile is submitted. These five cases are not a recall benchmark.
 """
 
 import json
@@ -42,6 +42,9 @@ CASES = {
         "Version v1: the export limit is 7 items.",
         "Version v2: the export limit is 9 items. The sources describe different versions.",
     ],
+    "history": [
+        "Production v2: the export limit is 9 items. No precedence over the existing Wiki is established."
+    ],
     "human": [
         "Production v2: the export limit is 9 items, contradicting the manually approved limit of 7."
     ],
@@ -70,6 +73,8 @@ async def test_real_worker_comparison(pipeline, agent_loop, case):
     ).read_text()
     pipeline.request.instruction = "For this isolated subject assignment, write topic.md about export limits. Root navigation is handled separately. Cite the actual source URIs. No external facts."
     old = _human_conflict_page() if case == "human" else None
+    if case == "history":
+        old = "# Limits\n\nProduction v2: the export limit is 7 items.\n\n<!-- CONFLICTS_CONTENT\n-->\n"
     uri = pipeline.target + "/topic.md"
 
     async def stat(target):
@@ -152,11 +157,13 @@ async def test_real_worker_comparison(pipeline, agent_loop, case):
     )
     if case in {"compatible", "versions"}:
         assert not records
-    elif case == "contradiction":
+    elif case in {"contradiction", "history"}:
         assert any(
             r.get("state") == "unfixed" and r.get("conflict_type") == "fact" for r in records
         )
         assert all(any(s.metadata["uri"] in body for body in contents.values()) for s in sources)
+        if case == "history":
+            assert uri in contents and "7 items" in contents[uri]
     else:
         assert any(
             r.get("state") == "unfixed" and r.get("conflict_type") == "human_conclusion"

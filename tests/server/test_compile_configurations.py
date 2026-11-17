@@ -507,6 +507,11 @@ async def test_compile_admission_rejects_invalid_inputs_before_publication(
 ):
     ctx, runtime = await prepare(service, app, monkeypatch)
     inputs = SAVED_INPUTS if endpoint.endswith("/create") else INPUTS
+    for invalid in ("true", "false", 0, 1, None, {}, []):
+        response = await client.post(
+            endpoint, json={**inputs, "args": {"global_conflict_detection": invalid}}
+        )
+        assert response.status_code == 400, response.text
     for target in (SOURCE, f"{SOURCE}/child", "viking://~/memories/experiences/project/"):
         response = await client.post(endpoint, json={**inputs, "to": target})
         assert response.status_code == 400, response.text
