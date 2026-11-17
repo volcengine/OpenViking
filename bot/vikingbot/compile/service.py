@@ -318,7 +318,11 @@ class BotCompileService:
                 task_id=task_id,
                 principal_scope=principal_scope,
                 sanitized_request=normalized_request,
-                meta={"mode": self.config.compile.mode},
+                meta={
+                    "mode": "complex"
+                    if normalized_request.global_conflict_detection
+                    else self.config.compile.mode
+                },
                 status="accepted",
                 stage="queued",
                 created_at=now,
@@ -495,7 +499,14 @@ class BotCompileService:
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
         args = request.args or {}
-        if args.keys() - {"changes"}:
+        conflict_detection = args.get("global_conflict_detection", False)
+        if type(conflict_detection) is not bool:
+            raise CompileFailure(
+                "INVALID_ARGUMENT",
+                "args.global_conflict_detection must be a boolean",
+                stage="queued",
+            )
+        if args.keys() - {"changes", "global_conflict_detection"}:
             raise CompileFailure(
                 "INVALID_ARGUMENT",
                 "VikingBot Compile does not implement provider-specific args.",
@@ -586,6 +597,12 @@ class BotCompileService:
                 await client.mkdir(raw_target, description="compile target folder")
                 target_stat = await client.stat(raw_target)
             target = str(target_stat.get("uri") or "").rstrip("/")
+            if conflict_detection and classify_uri(target).context_type != "resource":
+                raise CompileFailure(
+                    "INVALID_ARGUMENT",
+                    "Global conflict comparison requires a resource Wiki target",
+                    stage="queued",
+                )
             self._validate_target_directory(target, target_stat)
         except CompileFailure:
             raise
@@ -597,13 +614,14 @@ class BotCompileService:
             await client.close()
 
         instruction = (request.instruction or "").strip()
-        return SanitizedCompileRequest(
-            **{
+        return SanitizedCompileRequest.model_validate(
+            {
                 "from": sources,
                 "to": target,
                 "instruction": instruction or DEFAULT_COMPILE_INSTRUCTION,
                 "skill": canonical_skill,
                 "changes": changes,
+                "global_conflict_detection": conflict_detection,
             }
         )
 
@@ -1024,8 +1042,8 @@ class BotCompileService:
             preserve_workspace = preserve_workspace or bool(warnings)
             if output_file_count == 0:
                 warnings.append("No reliable output was produced from the supplied materials.")
-            result = CompileResult(
-                **{
+            result = CompileResult.model_validate(
+                {
                     "from": request.from_,
                     "to": request.to,
                     "skill": request.skill,
@@ -1223,6 +1241,16 @@ class BotCompileService:
                 page_count=len(set(published)),
                 link_count=rendered.link_count,
                 warnings=pipeline.warnings,
+                source_processing_complete=(
+                    not pipeline.failures
+                    and not conflicts
+                    and all(
+                        value in {"delivered", "empty"}
+                        for value in (await pipeline.files.get("inputs") or {}).values()
+                    )
+                    if request.global_conflict_detection
+                    else None
+                ),
             )
 
             def complete(task):

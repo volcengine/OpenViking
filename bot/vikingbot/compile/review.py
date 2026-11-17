@@ -45,6 +45,7 @@ async def run(
                     completed_names=completed_names,
                     completed_ops=completed_ops,
                 )
+                runtime.validate_plan(nodes, completed_ops)
                 accepted = (decision, nodes)
 
         decision = await runtime.model.ask(

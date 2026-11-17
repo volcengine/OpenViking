@@ -57,6 +57,28 @@ The first run is full. Subsequent runs use the last successful baseline. The nam
 
 The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 
+## Opt in to runtime conflict comparison
+
+Save `"global_conflict_detection": true` in the configuration's `args`, for example
+`--args '{"global_conflict_detection":true}'` on `ov compile create`. The value must
+be a JSON boolean. Missing values remain false, preserving the current executor and
+behavior for ordinary tasks. This option is intended for a resource Wiki with the
+conflict-aware LLM Wiki Skill; it does not apply to memory consolidation or Skill
+package generation.
+
+Enabled VikingBot tasks use complex execution independently of the service default.
+They retain Map, Shuffle and Reduce, and recall target candidates when the target has
+content. The same worker receives format/protection errors within its existing tool
+budget. Runtime publication preserves human records and their visible anchors.
+Custom Skills still own factual comparison and evidence quality.
+
+The effective option is frozen in the task. Changing it forces a full named run.
+A run without an explicit complete-processing receipt does not advance the incremental
+baseline. This receipt describes structural input processing and acknowledged delivery;
+it does not prove complete semantic coverage, exhaustive conflict recall or completed
+indexing. Check source citations and index state separately. Candidate bounds and
+concurrency defaults remain unchanged; additional comparison can increase model work.
+
 ## Open the body page
 
 ```bash

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from collections import Counter
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 from loguru import logger
@@ -61,6 +62,7 @@ class Pipeline:
         self.failures, self.warnings = [], []
         self.artifacts: list[Document] = []
         self.noop = False
+        self.target_has_content = False
 
     @property
     def output_format(self):
@@ -92,6 +94,17 @@ class Pipeline:
             f"Skill:\n{self.skill}\nUser instruction:\n{self.request.instruction}\n"
             f"Stage task:\n{instructions}\n{self.output_instructions}"
         )
+        if self.request.global_conflict_detection:
+            system += (
+                "\nConflict comparison is enabled. Compare related claims across input sources "
+                "and recalled target history. Distinguish versions, regions and conditions from "
+                "real contradictions. Read selected target pages fully before changing them. "
+                "Preserve exact existing human resolution records and their protected text. "
+                "Never fabricate a human decision. The final pages must follow the loaded "
+                "Skill's eleven-field CONFLICTS_CONTENT contract and cite the actual evidence. "
+                "Unresolved evidence is not permission to choose a value. Read failures and "
+                "retrieval misses do not prove that no conflict exists.\n"
+            )
         if self.changes:
             system += (
                 "\nSelected inputs may omit unchanged sources. Absence is not deletion. "
@@ -102,7 +115,13 @@ class Pipeline:
             system,
             {
                 **data,
-                "runtime": {"time": self.timestamp},
+                "runtime": {
+                    "time": self.timestamp,
+                    "unix_seconds": int(
+                        datetime.fromisoformat(self.timestamp.replace("Z", "+00:00")).timestamp()
+                    ),
+                    "global_conflict_detection": self.request.global_conflict_detection,
+                },
                 "changes": self.changes,
                 "to": self.target,
             },
@@ -110,6 +129,25 @@ class Pipeline:
             stage=stage,
             runtime=self,
         )
+        return await self.collect_outputs(
+            root,
+            source_refs,
+            stage,
+            check_conflicts=self.request.global_conflict_detection and bool(data.get("documents")),
+        )
+
+    def validate_conflict_output(self, path, content):
+        """Use the shared record owner; cached target reads are evidence, not new authority."""
+        from openviking.storage.manual_conflicts import validate_compile_conflicts
+
+        validate_compile_conflicts(
+            content,
+            previous=self.old.get(path),
+            history=tuple(raw for raw in self.old.values() if isinstance(raw, str)),
+        )
+
+    async def collect_outputs(self, root, source_refs, stage, *, check_conflicts=False):
+        """Collect one complete private directory for both worker feedback and final acceptance."""
         root = sanitize_relative_viking_path(root)
         if not root.startswith(COMPILE_DRAFT_ROOT + "/") or not root.endswith("/output"):
             raise ValueError("Invalid private worker output directory")
@@ -125,7 +163,26 @@ class Pipeline:
             documents.append(Document(path, entry.path, list(source_refs)))
         if not documents and not (has_directory_plan(self.changes) and self.changes.get("head")):
             raise ValueError(f"{stage}: worker completed without Markdown files")
+        if check_conflicts:
+            for document in documents:
+                content = (
+                    await self.files.sandbox.read_file_bytes(document.workspace_path)
+                ).decode("utf-8")
+                self.validate_conflict_output(document.path, content)
         return documents
+
+    def validate_plan(self, nodes, completed_ops=()):
+        """Prevent initial planning or advisory revisions from skipping opt-in comparison."""
+        if not self.request.global_conflict_detection:
+            return
+        if not {"shuffle", "reduce"} <= ({n.op for n in nodes} | set(completed_ops)):
+            raise ValueError("Conflict comparison requires Shuffle and Reduce")
+        if self.target_has_content:
+            for node in nodes:
+                if node.op == "shuffle" and not node.against_target:
+                    raise ValueError(
+                        "Conflict comparison requires against=target for existing history"
+                    )
 
     async def run(self, batches) -> RenderedBundle:
         """Prepare inputs, validate a plan, execute selected stages, and retain honest diagnostics."""
@@ -134,28 +191,49 @@ class Pipeline:
         try:
             sources = await self.seed(batches)
             self.timestamp = utc_now()
-            await self.files.put("runtime", {"time": self.timestamp, "skill": self.request.skill})
+            await self.files.put(
+                "runtime",
+                {
+                    "time": self.timestamp,
+                    "skill": self.request.skill,
+                    "global_conflict_detection": self.request.global_conflict_detection,
+                },
+            )
             self.metrics["input_ranges"] = len(sources)
+            self.target_has_content = bool(
+                await self.client.list_resources(self.target, node_limit=1)
+            )
             self.metrics["input_files"] = len({s.metadata["uri"] for s in sources})
             context = {
                 "skill": self.skill,
-                "runtime": {"time": self.timestamp},
+                "runtime": {
+                    "time": self.timestamp,
+                    "unix_seconds": int(
+                        datetime.fromisoformat(self.timestamp.replace("Z", "+00:00")).timestamp()
+                    ),
+                    "global_conflict_detection": self.request.global_conflict_detection,
+                },
                 "request": {"to": self.target, "instruction": self.request.instruction},
                 "source_summary": self.summarize_sources(sources),
-                "target_has_content": bool(
-                    await self.client.list_resources(self.target, node_limit=1)
-                ),
+                "target_has_content": self.target_has_content,
+                "global_conflict_detection": self.request.global_conflict_detection,
                 "changes": self.changes,
             }
 
             def validate(proposal):
-                parse_plan(proposal.plan, proposal.contract)
+                self.validate_plan(parse_plan(proposal.plan, proposal.contract))
                 if self.skill_target and proposal.contract.output_format != "files":
                     raise ValueError("Skill packages require output_format=files")
 
-            proposal = await self.model.ask(
-                "plan", _PLANNER + self.output_instructions, context, PlanProposal, validate
-            )
+            planning = _PLANNER + self.output_instructions
+            if self.request.global_conflict_detection:
+                planning += (
+                    "\nConflict comparison requires Map, Shuffle and Reduce. "
+                    "Route related claims for joint comparison; when the target has content, "
+                    "Shuffle must use against=target. Do not skip these stages in review. "
+                    "Use the selected Skill's conflict and human-protection contract.\n"
+                )
+            proposal = await self.model.ask("plan", planning, context, PlanProposal, validate)
             self.contract = proposal.contract
             nodes = parse_plan(proposal.plan, self.contract)
             program, position, revisions = proposal.plan, 0, 0

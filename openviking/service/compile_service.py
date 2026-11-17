@@ -122,6 +122,12 @@ class CompileInputs(BaseModel):
             self.instruction.strip() if self.instruction and self.instruction.strip() else None
         )
         self.args = dict(self.args) if self.args else None
+        args = self.args or {}
+        if (
+            "global_conflict_detection" in args
+            and type(args["global_conflict_detection"]) is not bool
+        ):
+            raise ValueError("args.global_conflict_detection must be a boolean")
         reserved = {"mode", "last_compile_time", "changes"}.intersection(self.args or {})
         if reserved:
             raise ValueError(
@@ -135,6 +141,8 @@ class CompileInputs(BaseModel):
         # every other skill still requires at least one --from directory.
         if not self.is_memory_mode and not self.from_:
             raise ValueError("from must contain at least one directory")
+        if self.is_memory_mode and (self.args or {}).get("global_conflict_detection") is True:
+            raise ValueError("Global conflict comparison requires a resource Wiki Compile")
         if self.is_memory_mode and self.from_:
             raise ValueError("--skill memory consolidates --to in place and takes no --from")
         return self

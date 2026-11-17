@@ -74,3 +74,20 @@ ov read viking://resources/onboarding-wiki-v1/entity/lighthouse.md
 | 正文缺少依据 | 检查实际读取记录和来源引用，补充编译指令后使用新目标重试 |
 
 完成标志是一篇可阅读、可导航且关键事实有来源支持的正文。文件结构、页面类型和可视化见 [LLM Wiki 示例](../context-compilation/02-llm-wiki.md)。清理时确认演示目标目录，保留需要的产物后在 Studio 中删除。
+
+## 启用运行时冲突比较
+
+在配置的 `args` 中保存 `"global_conflict_detection": true`，例如创建配置时传入
+`--args '{"global_conflict_detection":true}'`。值必须是 JSON 布尔值；缺省为 false，
+普通任务保留现有执行器和行为。此选项用于配合冲突感知 LLM Wiki Skill 的资源 Wiki，
+不适用于记忆整理或 Skill 包生成。
+
+启用后的 VikingBot 任务独立选择 complex 执行，不修改服务默认值。执行计划保留
+Map、Shuffle、Reduce；目标已有内容时召回历史候选。格式与人工记录保护错误反馈给
+同一个 worker，在原工具轮数预算内修复。发布边界保留人工记录及其可见正文锚点。
+事实比较与证据质量仍由 Skill 和模型负责。
+
+有效开关随任务冻结；切换开关后，命名配置执行全量处理。没有显式完整处理收据的运行
+不推进增量基线。该收据只说明结构性输入处理和已确认交付，不证明语义覆盖完整、
+冲突召回无遗漏或索引已完成；来源引用和索引状态须单独检查。候选数量及并发默认值
+保持不变，增加比较步骤可能增加模型工作量。

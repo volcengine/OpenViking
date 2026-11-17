@@ -7,6 +7,7 @@ import uuid
 from collections import Counter
 from copy import copy
 
+from vikingbot.agent.loop import _PlainTextDelivered, _PlainTextFinal
 from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -131,6 +132,36 @@ def agent_runner(loop, session_key, connection, limits):
         child = copy(loop)
         child.provider = ChildProvider(model, stage)
         child.preview_hook = complete_tool_result
+        if runtime.request.global_conflict_detection:
+            # Match the actual AgentLoop preview owner; isolated workers cannot
+            # follow shared spill-file pointers when evidence is truncated.
+            child._preview_tool_result = complete_tool_result
+
+        async def check_completion(context):
+            """Return validation feedback within this worker's existing tool-round budget."""
+            try:
+                await runtime.collect_outputs(
+                    output_root,
+                    sorted(evidence.allowed),
+                    stage,
+                    check_conflicts=runtime.request.global_conflict_detection
+                    and bool(data.get("documents")),
+                )
+            except ValueError as exc:
+                messages = child.context.add_assistant_message(context.messages, context.text, [])
+                messages.extend(
+                    [
+                        {
+                            "role": "user",
+                            "content": "Output validation: "
+                            + str(exc)[:2000]
+                            + "\nRepair the affected output using the existing evidence. Do not delete human decisions or invent facts.",
+                        },
+                    ]
+                )
+                return _PlainTextDelivered(messages=messages, tools_used=[])
+            return _PlainTextFinal()
+
         final, _, _, _, _ = await child._run_agent_loop(
             messages=[
                 {
@@ -155,6 +186,7 @@ def agent_runner(loop, session_key, connection, limits):
             openviking_connection=connection,
             allow_final_fallback=False,
             require_natural_completion=True,
+            on_plain_text=check_completion if runtime.request.global_conflict_detection else None,
             inject_write_experience=False,
             agent_id=child_id,
             context_compact_budget=None,

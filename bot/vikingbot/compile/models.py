@@ -76,6 +76,7 @@ class SanitizedCompileRequest(BaseModel):
     skill: str
     # The OV service freezes the directory plan before submitting this execution.
     changes: dict[str, Any] | None = None
+    global_conflict_detection: bool = Field(default=False, strict=True)
 
 
 def has_directory_plan(changes: dict[str, Any] | None) -> bool:
@@ -212,6 +213,8 @@ class CompileResult(BaseModel):
     page_count: int = 0
     link_count: int = 0
     warnings: list[str] = Field(default_factory=list)
+    # Structural processing/delivery receipt, never a claim of complete semantic recall.
+    source_processing_complete: bool | None = None
 
 
 class CompileTask(BaseModel):

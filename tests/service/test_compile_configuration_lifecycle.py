@@ -963,3 +963,48 @@ async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatc
         run = await setup.store.get_run("acme", "alice", registered[1], task.task_id)
         assert run["status"] == "failed"
         assert run["finished_at"] is not None and run["result"] == failed.result
+
+
+@pytest.mark.parametrize("receipt", [None, False, True])
+async def test_conflict_progress_requires_complete_processing_receipt(setup, receipt):
+    record = new_record({**PARAMS, "args": {"global_conflict_detection": True}})
+    name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    task = make_task(setup, compile_name=name, record=record)
+    await setup.lifecycle.record_queued(task)
+    assert await setup.lifecycle.on_start(task) == "proceed"
+    snapshot = ExternalTaskSnapshot(
+        status="completed", result={"source_processing_complete": receipt}
+    )
+    await setup.lifecycle.on_finish(task, snapshot)
+    current = await setup.store.get("acme", "alice", name)
+    if receipt is True:
+        assert current["progress"]["global_conflict_detection"] is True
+    else:
+        assert current["progress"] == {}
+    # Restarted finish replays the persisted fact, not a missing/late Runtime payload.
+    resumed = deepcopy(setup.tracker.tasks[task.task_id])
+    await CompileLifecycle(setup.store, setup.fs).on_finish(
+        resumed, ExternalTaskSnapshot(status="completed")
+    )
+    assert (await setup.store.get("acme", "alice", name))["progress"] == current["progress"]
+
+
+@pytest.mark.parametrize("old_flag,new_flag", [(False, True), (True, False)])
+async def test_conflict_switch_change_forces_full_baseline(setup, old_flag, new_flag):
+    record = new_record({**PARAMS, "args": {"global_conflict_detection": new_flag}})
+    record["progress"] = {
+        "source_commit": "a" * 40,
+        "processed_roots": [SOURCE],
+        "instruction": None,
+        "model_name": "",
+        "skill_snapshot": {"uri": SKILL, "snapshot_id": None},
+        "global_conflict_detection": old_flag,
+    }
+    name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    task = make_task(setup, compile_name=name, record=record)
+    await setup.lifecycle.record_queued(task)
+    assert await setup.lifecycle.on_start(task) == "proceed"
+    plan = await setup.lifecycle.runtime_changes(
+        task.meta["request"], "acme", task.task_id, "alice"
+    )
+    assert plan["execution"]["mode"] == "full" and plan["diff_dirs"] == []

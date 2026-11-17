@@ -107,6 +107,24 @@ python3 <skill-dir>/scripts/write_wiki.py <destination-uri> --from-file <page.md
 Keep the UTF-8 input file unchanged until the command exits. Report a nonzero
 exit as a failed write.
 
+## Runtime enforced comparison
+
+When the saved Compile configuration enables `args.global_conflict_detection`,
+VikingBot selects its complex executor for that task without changing the service
+mode for other tasks. Map drafts are grouped for Reduce, and existing target content
+is recalled for comparison. Use only the assigned evidence and permitted target reads.
+
+In an isolated file-tool worker, write complete deliverable Markdown through the
+provided file tools. The runtime validates and publishes the selected files; do not
+invoke the CLI save script from that worker. For ordinary local Skill execution,
+the save script remains the persistence entrypoint described above.
+
+Use the frozen runtime Unix timestamp for detection when one is provided. Validation
+feedback is a request to repair the same output using its evidence, never permission
+to remove human resolutions, manufacture facts or choose a disputed value. Unreadable
+human history must remain unchanged. Bounded candidate recall can miss relationships;
+never describe this mode as an exhaustive guarantee.
+
 ## Detect and handle conflicts
 
 ### Compare sources before drafting
