@@ -216,12 +216,32 @@ export function assembleWorkerPolicy(config = {}, { runtime = null } = {}) {
   ]);
 }
 
-// How a session uses its shell. Every runtime searches with the bundled rg.
-// On Pi a command without a timeout of its own is stopped after
-// PI_SHELL_DEFAULT_S (pi-mcp-extension.mjs), so the model must know to give
-// longer work its own; a workers router is capped shorter instead (workers.md).
+// Where this OpenViking SuperAgent lives. A release runs from
+// <install>/releases/<version>, and the install keeps every release (each
+// with its node_modules) and the instances' data: tens of GB, more than a
+// million files after a few months of upgrades. A source checkout is named
+// with the data directory beside it.
+const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+function ownDirectories(config) {
+  const project = config.projectDir || PACKAGE_DIR;
+  const install = path.basename(path.dirname(project)) === 'releases' ? path.dirname(path.dirname(project)) : project;
+  const inside = (dir, parent) => { const relative = path.relative(parent, dir); return !relative.startsWith('..') && !path.isAbsolute(relative); };
+  return [install, config.dataDir].filter(Boolean).map((dir) => path.resolve(dir))
+    .filter((dir, index, all) => all.indexOf(dir) === index && !all.some((other) => other !== dir && inside(dir, other)));
+}
+
+// How a session uses its shell. Every runtime searches with the bundled rg,
+// and only where the answer can be: one recursive search over a home
+// directory or the installation reads for many minutes, and holds the turn
+// until its timeout. On Pi a command without a timeout of its own is stopped
+// after PI_SHELL_DEFAULT_S (pi-mcp-extension.mjs), so the model must know to
+// give longer work its own; a workers router is capped shorter (workers.md).
 function shellSection(config, { runtime = null, worker = false } = {}) {
-  const lines = [`- Search file contents with ${cliCommandCode(ripgrepCommand(config))} rather than \`grep -r\`: it skips what .gitignore excludes, hidden files and binaries (\`-uu\` adds ignored and hidden files), and is much faster in a large tree.`];
+  const lines = [
+    `- Search file contents with ${cliCommandCode(ripgrepCommand(config))} rather than \`grep -r\`: it skips what .gitignore excludes, hidden files and binaries (\`-uu\` adds ignored and hidden files), and is much faster in a large tree.`,
+    `- Search only where the answer can be: ${worker ? 'your directory first, then the' : 'the'} repository or directory the request is about. Never search a whole home directory, \`/\`, or OpenViking SuperAgent's own installation and data (${ownDirectories(config).map((dir) => cliCommandCode(dir)).join(', ')}): they hold hundreds of thousands of files, and one search there runs for many minutes. When the request is about one of them, search the subdirectory it concerns.`,
+  ];
   if (runtime === 'pi' && (worker || config.scheduler !== 'workers')) {
     lines.push(`- A shell command without a \`timeout\` of its own is stopped after ${PI_SHELL_DEFAULT_S / 60} minutes, and none runs longer than ${PI_SHELL_MAX_S / 60}: give a build, test run or install that needs more its own \`timeout\` (in seconds).`);
   }
