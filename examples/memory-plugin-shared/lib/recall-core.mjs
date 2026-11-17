@@ -665,6 +665,57 @@ export async function postRecall(fetchJSON, body, opts = {}) {
   }, { actorPeerId });
 }
 
+/** Every `viking://` URI a recall block cites, in any rendering shape. */
+function recalledEntryUris(block) {
+  const uris = new Set();
+  for (const match of String(block || "").matchAll(/viking:\/\/[^\s"'<>]+/g)) {
+    uris.add(match[0]);
+  }
+  return uris;
+}
+
+/**
+ * Remove legacy entries whose URI the primary block already injected.
+ *
+ * The server renders `<memory uri="...">` elements; the local ranked path
+ * renders citation lines that pair a URI line with the entry's content line.
+ * Both shapes are stripped so the joined block keeps a single copy of each
+ * memory. Returns the stripped block and how many entries were removed.
+ */
+function stripRepeatedEntries(block, seenUris) {
+  let text = String(block || "");
+  let removed = 0;
+
+  text = text.replace(
+    /<memory\b[^>]*\buri="([^"]+)"[^>]*>[\s\S]*?<\/memory>/g,
+    (match, uri) => {
+      if (seenUris.has(uri)) {
+        removed += 1;
+        return "";
+      }
+      return match;
+    },
+  );
+
+  const lines = text.split("\n");
+  const kept = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const cited = line.match(/viking:\/\/[^\s"'<>]+/g);
+    if (cited && cited.every((uri) => seenUris.has(uri))) {
+      // A citation line pairs with the entry's content line; drop both.
+      const next = lines[i + 1];
+      if (next && /^-\s*\[[^\]]+\s+\d+%\]\s+/.test(next.trim()) && !/viking:\/\//.test(next)) {
+        i += 1;
+      }
+      removed += 1;
+      continue;
+    }
+    kept.push(line);
+  }
+  return { block: kept.join("\n").trim(), removed };
+}
+
 /**
  * Recall, plus whatever is still filed under the peer this workspace used
  * before the identity rule changed.
@@ -691,11 +742,24 @@ export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = 
   const legacy = await recallForPeer(fetchJSON, cfg, query, { ...options, actorPeerId: legacyPeerId });
   if (!legacy.block) return primary;
   log("recall_legacy_peer_hit", { legacyPeerId });
+
+  // User-scope memories satisfy both the actor query and the legacy-peer
+  // query, so the legacy block can repeat entries the primary block already
+  // injected. Drop those repeats before joining so each memory appears once.
+  const seenUris = recalledEntryUris(primary.block);
+  const { block: dedupedBlock, removed } = seenUris.size
+    ? stripRepeatedEntries(legacy.block, seenUris)
+    : { block: legacy.block, removed: 0 };
+  if (removed > 0) {
+    log("recall_legacy_peer_dedupe", { legacyPeerId, removed });
+    if (!dedupedBlock) return primary;
+  }
+
   return {
-    block: primary.block ? `${primary.block}\n${legacy.block}` : legacy.block,
+    block: primary.block ? `${primary.block}\n${dedupedBlock}` : dedupedBlock,
     contentCount: primary.contentCount + legacy.contentCount,
     hintCount: primary.hintCount + legacy.hintCount,
-    budgetUsed: primary.budgetUsed + legacy.budgetUsed,
+    budgetUsed: primary.budgetUsed + estimateTokens(dedupedBlock),
     stage: primary.block ? primary.stage : legacy.stage,
   };
 }

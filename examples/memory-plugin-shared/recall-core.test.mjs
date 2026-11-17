@@ -397,6 +397,70 @@ test("under actor scope, recall also asks the peer this workspace used before", 
   assert.match(block, /from -Users-x-src-r/);
 });
 
+test("under actor scope, memories the primary block already injected are not repeated from the legacy peer", async () => {
+  const fetchJSON = async (_path, _init, options) => {
+    const peer = options?.actorPeerId || "";
+    return {
+      ok: true,
+      result: {
+        rendered:
+          `<memory uri="viking://user/default/memories/style.md">shared</memory>` +
+          `<memory uri="viking://${peer}/a.md">from ${peer}</memory>`,
+        entries: [
+          { uri: "viking://user/default/memories/style.md" },
+          { uri: `viking://${peer}/a.md` },
+        ],
+        stats: {},
+      },
+    };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, { recallPeerScope: "actor" }, "hello", {
+    actorPeerId: "github.com-o-r",
+    legacyPeerId: "-Users-x-src-r",
+    legacyCachePath: await tempPath("context-face.json"),
+  });
+
+  assert.equal(block.match(/viking:\/\/user\/default\/memories\/style\.md/g).length, 1);
+  assert.match(block, /from github\.com-o-r/);
+  assert.match(block, /from -Users-x-src-r/);
+});
+
+test("the legacy peer block drops citation lines the primary block already injected", async () => {
+  const fetchJSON = async (path, _init, options) => {
+    const peer = options?.actorPeerId || "";
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/search/find") {
+      return {
+        ok: true,
+        result: {
+          memories: [
+            { uri: "viking://user/default/memories/entities/a.md", score: 0.9, abstract: "shared", level: 1 },
+            { uri: `viking://${peer}/b.md`, score: 0.9, abstract: "own", level: 1 },
+          ],
+          skills: [],
+        },
+      };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, {
+    recallPeerScope: "actor",
+    recallTokenBudget: 2000,
+    recallMaxContentChars: 500,
+  }, "hello", {
+    actorPeerId: "github.com-o-r",
+    legacyPeerId: "-Users-x-src-r",
+    legacyCachePath: await tempPath("context-face.json"),
+  });
+
+  assert.equal(block.match(/viking:\/\/user\/default\/memories\/entities\/a\.md/g).length, 1);
+  assert.match(block, /viking:\/\/github\.com-o-r\/b\.md/);
+  assert.match(block, /viking:\/\/-Users-x-src-r\/b\.md/);
+});
+
 test("under the default scope the server's own sweep covers it, so nothing extra is sent", async () => {
   const asked = [];
   const fetchJSON = async (_path, _init, options) => {
