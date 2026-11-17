@@ -1,3 +1,6 @@
+import { coreParameters } from './core-parameters.js';
+import filesystemParameters from './filesystem-parameters.js';
+import { SEARCH_PARAMETERS_ZH_CN } from './search-parameters.js';
 import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ConsoleLabels } from '../types.js';
 import type enUS from './en-US.js';
@@ -140,19 +143,21 @@ const messages: typeof enUS = {
     args: '以 JSON 对象提供解析参数',
     'compile-args':
       'JSON 对象，可保存 model_name、auto_update 和 update_schedule',
-    wait: '等待处理完成后返回',
     'target-uri': 'Skill 的目标根目录',
     content: '要写入记忆的纯文本',
     'session-id': '要写入并提交的会话 ID',
-    query: '用于语义检索的搜索词',
-    target_uri: '限制检索范围的 URI',
     limit: '最多返回的条目数量',
-    level: '筛选内容层级，例如 0,1,2',
     'compile-name':
       '1–64 位 ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符',
     from: '已存在的来源目录 URI，可重复传入 --from，或用英文逗号分隔多个 URI',
     skill: '用于编译的 Skill URI',
     instruction: '编译的额外要求',
+    'task-type': '按任务类型过滤，例如 add_resource、add_skill',
+    'task-status': '按任务状态过滤，例如 pending、running、completed、failed',
+    'task-id': '异步任务 ID',
+    ...coreParameters['zh-CN'],
+    ...filesystemParameters['zh-CN'],
+    ...SEARCH_PARAMETERS_ZH_CN,
   },
   commandGroups: {
     core: '核心流程',
