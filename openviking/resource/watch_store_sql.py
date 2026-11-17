@@ -102,7 +102,7 @@ _COLUMN_FIELDS = frozenset(
 
 
 class db_now(FunctionElement):
-    """Database clock in epoch seconds; every node compares against one clock."""
+    """Statement-stable database time in epoch seconds, shared by every node."""
 
     type = Float()
     inherit_cache = True
@@ -115,7 +115,8 @@ def _mysql_now(element: Any, compiler: Any, **kw: Any) -> str:
 
 @compiles(db_now, "postgresql")
 def _postgres_now(element: Any, compiler: Any, **kw: Any) -> str:
-    return "CAST(EXTRACT(EPOCH FROM clock_timestamp()) AS DOUBLE PRECISION)"
+    # A stable clock can be an index scan key and is identical across rows/expressions.
+    return "CAST(EXTRACT(EPOCH FROM statement_timestamp()) AS DOUBLE PRECISION)"
 
 
 def _hash(value: Optional[str]) -> str:

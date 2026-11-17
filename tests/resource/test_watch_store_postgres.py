@@ -5,6 +5,7 @@
 import asyncio
 import threading
 from contextlib import suppress
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -12,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 from openviking.resource.watch_store_postgres import PostgresWatchStore
 from openviking.resource.watch_store_sql import db_now, watch_tables
-from openviking.resource.watch_types import WatchAuthority, WatchPatch
+from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchRunResult
 from openviking_cli.utils.config.storage_config import StorageConfig, WatchStoreConfig
 from tests.resource.test_watch_store import (
     ACCOUNT,
@@ -104,7 +105,7 @@ def test_connection_preserves_password_and_tls_parameters():
         "sslkey": "/certs/client.key",
     }
     clock = str(select(db_now()).compile(dialect=postgresql.dialect()))
-    assert "clock_timestamp()" in clock
+    assert "statement_timestamp()" in clock
     assert "DOUBLE PRECISION" in clock
 
 
@@ -216,6 +217,117 @@ async def test_postgres_short_prefix_uses_expression_index(make_store):
 
     plan = await store._sql_runtime.run(explain)
     assert f"ix_{store._table_name}_target_prefix" in plan
+
+
+@pytest.mark.asyncio
+async def test_postgres_due_scan_uses_time_range_index_condition(make_store):
+    from sqlalchemy import event, text
+
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL due scan index contract")
+    future = await create(store, created_at=datetime.now() + timedelta(days=1))
+    due = await create(store, "viking://resources/due", due=True)
+    c = store._tasks.c
+    columns = ", ".join(f'"{name}"' for name in c.keys())
+    values = ", ".join(
+        "'future-' || n::text" if name == "task_id" else f'w."{name}"' for name in c.keys()
+    )
+
+    async def seed():
+        async with store._transaction() as session:
+            await session.execute(
+                text(
+                    f'INSERT INTO "{store._table_name}" ({columns}) '
+                    f'SELECT {values} FROM "{store._table_name}" AS w '
+                    "CROSS JOIN generate_series(1, 5000) AS n "
+                    "WHERE w.task_id = :task_id AND w.service_name = :service_name"
+                ),
+                {"task_id": future.task_id, "service_name": store._service_name},
+            )
+            await session.execute(text(f'ANALYZE "{store._table_name}"'))
+
+    await store._sql_runtime.run(seed)
+    statements = []
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith("SELECT") and "next_run_at <=" in statement:
+            statements.append((statement, parameters))
+
+    event.listen(store._engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        candidates = await store.due_candidates(1)
+    finally:
+        event.remove(store._engine.sync_engine, "before_cursor_execute", capture)
+    assert [candidate.task_id for candidate in candidates] == [due.task_id]
+    assert len(statements) == 1
+
+    async def explain():
+        async with store._transaction() as session:
+            await session.execute(text("SET LOCAL enable_seqscan = off"))
+            connection = await session.connection()
+            statement, parameters = statements[0]
+            result = await connection.exec_driver_sql(
+                "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + statement, parameters
+            )
+            return result.scalar_one()[0]["Plan"]
+
+    plan = await store._sql_runtime.run(explain)
+
+    def nodes(node):
+        yield node
+        for child in node.get("Plans", []):
+            yield from nodes(child)
+
+    scans = [
+        node for node in nodes(plan) if node.get("Index Name") == f"ix_{store._table_name}_due"
+    ]
+    assert scans, plan
+    assert "next_run_at <=" in scans[0].get("Index Cond", ""), plan
+    assert scans[0].get("Rows Removed by Filter", 0) == 0, plan
+
+
+@pytest.mark.asyncio
+async def test_postgres_running_rows_share_one_statement_clock(make_store):
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL statement clock contract")
+    for index in range(3):
+        task = await create(store, f"viking://resources/running/{index}", due=True)
+        assert await store.begin_run(await store.get_candidate(task.task_id)) is not None
+    running = await store.running()
+    assert len(running) == 3
+    assert len({row.now for row in running}) == 1
+
+
+@pytest.mark.asyncio
+async def test_postgres_settlement_uses_one_clock_for_all_timestamps(make_store):
+    from sqlalchemy import text
+
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL settlement clock contract")
+    task = await create(store, due=True)
+    run = await store.begin_run(await store.get_candidate(task.task_id))
+    assert run is not None
+    assert await store.attach_task(task.task_id, "execution", started_at=run.started_at)
+    assert await store.finish_run(task.task_id, "execution", WatchRunResult(status="completed"))
+
+    async def timestamps():
+        async with store._transaction() as session:
+            result = await session.execute(
+                text(
+                    f"SELECT last_execution_time, updated_at, next_run_at, watch_interval "
+                    f'FROM "{store._table_name}" WHERE service_name = :service_name '
+                    "AND task_id = :task_id"
+                ),
+                {"service_name": store._service_name, "task_id": task.task_id},
+            )
+            return result.one()
+
+    last, updated, next_run, interval = await store._sql_runtime.run(timestamps)
+    assert last == updated
+    assert next_run == last + interval * 60
 
 
 @pytest.mark.asyncio
