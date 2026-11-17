@@ -219,7 +219,8 @@ jobs:
            endsWith(github.run_number, '8')) &&
           '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
     container:
-      image: ubuntu:20.04
+      # The published Ubuntu 20 image is amd64; ARM keeps its native baseline.
+      image: ${{ matrix.arch == 'x86_64' && vars.CI_UBUNTU20_IMAGE || 'ubuntu:20.04' }}
       # Minimal Ubuntu images lack CA certificates before the first apt install.
       options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
     timeout-minutes: 60
@@ -237,6 +238,24 @@ jobs:
       env:
         UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
       run: |
+        packages=(
+          git ca-certificates cmake build-essential ccache tzdata curl
+          pkg-config unzip xz-utils python3 libicu66
+          libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
+          libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev
+          libncursesw5-dev tk-dev uuid-dev libexpat1-dev
+        )
+        ready=true
+        for package in "${packages[@]}"; do
+          if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+            ready=false
+            break
+          fi
+        done
+        if "$ready"; then
+          echo "System dependencies are already installed in the CI image."
+          exit 0
+        fi
         sed -i 's|http://|https://|g' /etc/apt/sources.list
         if [ -n "$UBUNTU_MIRROR" ]; then
           case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
@@ -249,21 +268,21 @@ jobs:
           -o APT::Update::Error-Mode=any update
         apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
           -o Acquire::Retries=2 -o Acquire::https::Timeout=20 install -y --no-install-recommends \
-          git ca-certificates cmake build-essential clang tzdata curl \
-          pkg-config unzip xz-utils python3 libicu66 \
-          libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
-          libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \
-          libncursesw5-dev tk-dev uuid-dev libexpat1-dev
+          "${packages[@]}"
         ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
         dpkg-reconfigure -f noninteractive tzdata
 
     - name: Select compiler toolchain (Linux)
       run: |
-        echo "CC=clang" >> "$GITHUB_ENV"
-        echo "CXX=clang++" >> "$GITHUB_ENV"
+        if [ "$(getconf GNU_LIBC_VERSION)" != "glibc 2.31" ]; then
+          echo "::error::Linux wheels require an Ubuntu 20.04 image with glibc 2.31."
+          exit 1
+        fi
+        echo "CC=gcc" >> "$GITHUB_ENV"
+        echo "CXX=g++" >> "$GITHUB_ENV"
         echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
-        clang --version
-        clang++ --version
+        gcc --version
+        g++ --version
 
     - uses: actions/checkout@v6
       with:
