@@ -181,6 +181,10 @@ async def resolve_identity(
         x_api_key = request.headers.get("X-API-Key")
     if authorization is None:
         authorization = request.headers.get("Authorization")
+    # Direct dependency callers may leave FastAPI Header() defaults unbound;
+    # keep the existing extractor's type filtering before parsing a scheme.
+    x_api_key = x_api_key if isinstance(x_api_key, str) else None
+    authorization = authorization if isinstance(authorization, str) else None
     x_openviking_account = _normalize_header_value(x_openviking_account)
     x_openviking_user = _normalize_header_value(x_openviking_user)
     plugin = _get_plugin(request)

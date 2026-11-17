@@ -352,12 +352,13 @@ async def test_chat_stream_logs_timeout_cause_and_request_metadata(monkeypatch):
     assert "must-not-leak" not in log_message
 
 
-def test_exception_log_details_redact_admin_delegation_credentials():
+@pytest.mark.parametrize("prefix", ["Rejected ", "authorization=", "Authorization: "])
+def test_exception_log_details_redact_admin_delegation_credentials(prefix):
     error = RuntimeError("transport wrapper")
-    error.__cause__ = RuntimeError("Rejected OpenViking-Delegate synthetic-admin-secret")
+    error.__cause__ = RuntimeError(prefix + "OpenViking-Delegate synthetic-admin-secret")
     rendered = vlm_adapter._exception_log_details(error)
     assert "synthetic-admin-secret" not in str(rendered)
-    assert "OpenViking-Delegate" in str(rendered)
+    assert "<redacted>" in str(rendered)
 
 
 def test_exception_log_details_include_redacted_upstream_error_body():
