@@ -16,11 +16,11 @@ test('preview footer shows real modification time, text count and a resource-onl
   const oldStat = deferred();
   const fetch = recordingFetch(({ path, uri }) => {
     if (path === '/api/v1/fs/ls') {
+      if (uri === directory) return ok([{ uri: nextFile, isDir: false }]);
       return ok([
         { uri: resource, isDir: false },
         { uri: directory, isDir: true },
         { uri: memory, isDir: false },
-        { uri: nextFile, isDir: false },
       ]);
     }
     if (path === '/api/v1/fs/stat') {

@@ -3,7 +3,7 @@
     "server": {
         "host": "0.0.0.0",
         "port": 1933,
-        "executor_threads": 0,
+        "executor_threads": 64,
         "timeout_keep_alive": 5,
         "root_api_key": null,
         "cors_origins": ["*"],
@@ -325,7 +325,7 @@
     },
     "log": {
         "level": "INFO",
-        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "format": "%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s",
         "output": "stdout",
         "rotation": true,
         "rotation_days": 3,

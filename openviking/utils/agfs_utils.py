@@ -13,6 +13,7 @@ from threading import Thread
 from typing import Any, Callable, Dict
 from urllib.parse import urlsplit
 
+from openviking.observability.log_safety import DEFAULT_LOG_FORMAT
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.config_utils import (
     DEFAULT_SERVICE_NAME,
@@ -279,6 +280,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     binding_log = {
         "level": log_level,
         "output": log_output,
+        "format": _get_config_value(log_config, "format", DEFAULT_LOG_FORMAT),
     }
 
     encryptor = _run_coro_blocking(bootstrap_encryption(_dump_openviking_config(config)))

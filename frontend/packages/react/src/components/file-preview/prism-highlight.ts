@@ -28,7 +28,24 @@ function decorations(text: string, grammar: Prism.Grammar) {
       ...classes,
       ...names.map((name) => `ov-file-preview__token--${name}`),
     ];
-    for (const child of [token.content].flat()) visit(child, next);
+    // The console colors Markdown front matter's bracketed lists as a unit.
+    let sequenceDepth = 0;
+    for (const child of [token.content].flat()) {
+      const bracket =
+        token.type === 'front-matter' &&
+        typeof child !== 'string' &&
+        child.type === 'punctuation'
+          ? child.content
+          : undefined;
+      if (bracket === '[') sequenceDepth += 1;
+      visit(
+        child,
+        sequenceDepth > 0
+          ? [...next, 'ov-file-preview__token--flow-sequence']
+          : next,
+      );
+      if (bracket === ']' && sequenceDepth > 0) sequenceDepth -= 1;
+    }
   };
   for (const token of Prism.tokenize(text, grammar)) visit(token, []);
   return Decoration.set(ranges);

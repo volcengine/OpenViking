@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Rule-specific Jev System One judgments."""
 
-import json
 import time
 from dataclasses import dataclass
 from typing import Dict, List, TypeVar
@@ -73,11 +72,11 @@ class _JevJudgeClient:
     def _request_answers(self, body: dict, *, item_count: int) -> dict | None:
         try:
             if self.log_payloads:
-                logger.warning(
-                    "[%s] Request items=%s payload=%s",
+                logger.debug(
+                    "judgment request summary operation=%s total=%d payload=true",
                     self.log_name,
                     item_count,
-                    json.dumps(body, ensure_ascii=False),
+                    extra={"operation": self.log_name, "payload": True, "total": item_count},
                 )
             started = time.monotonic()
             response = self._client.post(self.api_url, json=body)
@@ -85,28 +84,50 @@ class _JevJudgeClient:
             response.raise_for_status()
             data = response.json()
             if self.log_payloads:
-                logger.warning(
-                    "[%s] Response status=%s duration_ms=%.1f payload=%s",
+                logger.debug(
+                    "judgment response summary operation=%s http_status_code=%d duration_ms=%.1f payload=true",
                     self.log_name,
                     response.status_code,
                     duration_seconds * 1000,
-                    json.dumps(data, ensure_ascii=False),
+                    extra={
+                        "operation": self.log_name,
+                        "payload": True,
+                        "http_status_code": response.status_code,
+                        "duration_ms": duration_seconds * 1000,
+                    },
                 )
             answers = data.get("answers")
             if not isinstance(answers, dict):
-                logger.warning("[%s] Response has no answers object", self.log_name)
+                logger.info(
+                    "judgment answers missing; skipping judgment operation=%s degraded=true",
+                    self.log_name,
+                    extra={"operation": self.log_name, "degraded": True},
+                )
                 return None
             return answers
         except httpx.HTTPStatusError as error:
-            logger.error(
-                "[%s] API error: %s %s",
+            logger.info(
+                "judgment request rejected; skipping judgment operation=%s http_status_code=%d degraded=true",
                 self.log_name,
                 error.response.status_code,
-                error.response.text,
+                extra={
+                    "operation": self.log_name,
+                    "http_status_code": error.response.status_code,
+                    "degraded": True,
+                },
             )
             return None
         except Exception as error:
-            logger.error("[%s] Judgment failed: %s", self.log_name, error)
+            logger.info(
+                "judgment failed; skipping judgment operation=%s error_type=%s degraded=true",
+                self.log_name,
+                type(error).__name__,
+                extra={
+                    "operation": self.log_name,
+                    "error_type": type(error).__name__,
+                    "degraded": True,
+                },
+            )
             return None
 
     def close(self) -> None:
@@ -208,7 +229,11 @@ class RuleJevClient(_JevJudgeClient):
                 for index, rule in enumerate(rules)
             ]
         except Exception as error:
-            logger.error("[RuleJev] Invalid answers: %s", error)
+            logger.info(
+                "rule answers invalid; skipping judgment error_type=%s degraded=true",
+                type(error).__name__,
+                extra={"error_type": type(error).__name__, "degraded": True},
+            )
             return None
 
 
@@ -275,7 +300,11 @@ class ScenarioJevClient(_JevJudgeClient):
                 )
             return scores
         except Exception as error:
-            logger.error("[ScenarioJev] Invalid answers: %s", error)
+            logger.info(
+                "scenario answers invalid; preserving candidates error_type=%s degraded=true",
+                type(error).__name__,
+                extra={"error_type": type(error).__name__, "degraded": True},
+            )
             return None
 
 

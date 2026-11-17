@@ -30,10 +30,12 @@ function StatePanel({
 /** 空文件态：严格长度为 0。The empty-file state, for a strictly zero-length body. */
 export function EmptyFileState({
   text,
+  label,
 }: {
   text: Required<FilePreviewLabels>;
+  label?: string;
 }) {
-  return <StatePanel title={text.fileEmpty} />;
+  return <StatePanel title={label ?? text.fileEmpty} />;
 }
 
 /** 无可见内容态：正文存在但没有可渲染的文本。 */

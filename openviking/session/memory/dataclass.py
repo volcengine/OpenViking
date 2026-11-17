@@ -176,6 +176,7 @@ class MemoryOperationSource(BaseModel):
 class MemoryOperationSkipCode(str, Enum):
     """Stable reason codes for intentionally skipped memory operations."""
 
+    PARSE_ERROR = "parse_error"
     MEMORY_TYPE_FILTERED = "memory_type_filtered"
     SELF_MEMORY_DISABLED = "self_memory_disabled"
     PEER_MEMORY_DISABLED = "peer_memory_disabled"
@@ -255,6 +256,20 @@ class MemoryTypeSchema(BaseModel):
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"
     )
+
+    def requires_messages(self) -> bool:
+        """Whether rendering this type uses original conversation messages."""
+        return any(
+            TemplateUtils.requires_messages(template)
+            for template in (
+                self.directory,
+                self.filename_template,
+                self.content_template,
+                self.embedding_template,
+                self.overview_template,
+            )
+            if template
+        )
 
     def filename_has_variables(self):
         return "{{" in self.filename_template and "}}" in self.filename_template

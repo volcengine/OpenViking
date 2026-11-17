@@ -14,6 +14,7 @@ import aiohttp
 
 from .client import VikingClient, VikingError
 from .config import ENVIRONMENT_PREFIX, StandaloneGatewayConfig, normalize_url
+from .sinks import configure_logging
 from .standalone import build_encryptor, check_openviking, create_standalone_app
 
 CONFIG_ENVIRONMENT = ENVIRONMENT_PREFIX + "CONFIG_FILE"
@@ -44,7 +45,10 @@ def load_config() -> StandaloneGatewayConfig:
 
 def factory():
     """uvicorn factory: every worker rebuilds the configuration from the environment."""
-    return create_standalone_app(load_config())
+    config = load_config()
+    if config.log_path:
+        configure_logging(config.log_path)
+    return create_standalone_app(config)
 
 
 async def probe(url: str) -> dict:
@@ -160,6 +164,8 @@ def main():
         log_level="info",
         # Signed upload tokens live in query strings; log request metadata only.
         access_log=False,
+        # With a log file, uvicorn's own loggers reach the root handler factory() installs.
+        **({"log_config": None} if config.log_path else {}),
     )
 
 

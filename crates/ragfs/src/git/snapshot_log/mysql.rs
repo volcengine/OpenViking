@@ -130,11 +130,14 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         branch: &str,
         paths: &[String],
         max_id: i64,
+        offset: usize,
         limit: usize,
     ) -> Result<Vec<SnapshotLogHit>, SnapshotLogError> {
         if limit == 0 || paths.is_empty() {
             return Ok(Vec::new());
         }
+        let offset =
+            i64::try_from(offset).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
         let mut builder = QueryBuilder::<MySql>::new(
             "SELECT commit_oid, MAX(id) AS last_id FROM snapshot_log \
              WHERE account = ",
@@ -152,7 +155,9 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         builder
             .push_bind(max_id)
             .push(" GROUP BY commit_oid ORDER BY last_id DESC LIMIT ")
-            .push_bind(limit as i64);
+            .push_bind(limit as i64)
+            .push(" OFFSET ")
+            .push_bind(offset);
         let rows = builder
             .build_query_as::<(Vec<u8>, i64)>()
             .fetch_all(&self.pool)

@@ -33,6 +33,15 @@ ENCRYPTION_ACCOUNT = "_gateway"
 LEGACY_KEY_ENVIRONMENT = "OPENVIKING_GATEWAY_ENCRYPTION_KEY"
 
 
+try:
+    from redis.exceptions import RedisClusterException, RedisError
+except ImportError:
+    RedisClusterException = RedisError = None
+# What a failing state store raises: the request cannot be served until the store is back.
+# RedisClusterException does not derive from RedisError.
+STORE_ERRORS = (sqlite3.Error,) + ((RedisError, RedisClusterException) if RedisError else ())
+
+
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 

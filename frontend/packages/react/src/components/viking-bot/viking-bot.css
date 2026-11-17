@@ -81,7 +81,15 @@
   min-height: 0;
   height: 100%;
   color: var(--ov-viking-bot-text);
-  font-family: inherit;
+  font-family: var(
+    --ov-ui-font-family,
+    'PingFang SC',
+    'Noto Sans SC',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif
+  );
   font-size: 13px;
 }
 
@@ -92,9 +100,12 @@
 .ov-viking-bot,
 .ov-viking-bot__interaction {
   --color-text-1: var(--ov-viking-bot-text);
-  --color-text-2: var(--ov-viking-bot-text);
+  --color-text-2: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   --color-text-3: var(--ov-viking-bot-text-muted);
-  --color-text-4: var(--ov-viking-bot-text-muted);
+  --color-text-4: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default)
+  );
   --color-bg-1: var(--ov-viking-bot-bg);
   --color-bg-2: var(--ov-viking-bot-surface);
   --color-bg-3: var(--ov-viking-bot-surface);
@@ -273,7 +284,13 @@
 
 .ov-viking-bot__tool-name {
   color: var(--ov-viking-bot-text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(
+    --ov-ui-font-mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace
+  );
   font-weight: 500;
 }
 

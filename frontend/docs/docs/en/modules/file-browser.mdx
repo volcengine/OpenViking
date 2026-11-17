@@ -28,6 +28,8 @@ The stylesheet includes the styles of FileTree, FilePreview, FileBrowserActionBa
 
 Shows how the directory tree, search and preview work together, plus the Wiki and experience dashboards. The buttons below switch the previewed resource type, and the drop-down switches the preview actions mode. Dashboard actions stay pinned to the visible right edge of the tree during horizontal scrolling.
 
+Select “Preview video” to see the sample segment’s transcript and extracted frames. Select a transcript entry to seek the player or a frame to enlarge it.
+
 ```tsx file="../../_demos/file-browser-basic.tsx" preview
 
 ```
@@ -90,6 +92,10 @@ When host content fails to render, the block shows the default fallback: an illu
 
 ```
 
+FileBrowser manages the daily, weekly and disabled schedule choices. Weekly schedules include a weekday picker; enabled schedules accept a typed time or the time panel. Changing frequency preserves unsaved weekday and time values, and failed saves can be retried. Hover or focus directory and Skill paths to read their full values.
+
+History dialogs reserve their content height and show a centred loading indicator while reading files, versions and content. Compilation directory and Skill pickers remain busy from opening until their initial path has finished expanding.
+
 ## API
 
 ### FileBrowser
@@ -98,7 +104,8 @@ When host content fails to render, the block shows the default fallback: an illu
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------ |
 | uri                      | Controlled current resource URI: setting it (even to an empty string) hands the selection to your app, and an empty string selects nothing                                                  | `string`                                                                | -                              |
 | defaultUri               | Initial resource URI when uncontrolled; nothing is selected when omitted                                                                                                                    | `string`                                                                | -                              |
-| onUriChange              | Called after the selected resource changes, with the new URI; there is no way to deselect, so it never receives `null`                                                                      | `(uri: string \| null) => void`                                         | -                              |
+| onUriChange              | Reports resource selection from within the browser with the new URI                                                                                                                         | `(uri: string \| null) => void`                                         | -                              |
+| onSelect                 | Reports the entry selected by click or keyboard, including repeat selections. Read `row.type` to share directory references with VikingBot                                                  | `(row: FileTreeEntryRow) => void`                                       | -                              |
 | rootUri                  | Root of the tree; limits browsing and search to this subtree                                                                                                                                | `string`                                                                | `'viking://'`                  |
 | defaultExpandedUri       | Path to expand to after the first load, loading each level; only the root is expanded when omitted                                                                                          | `string`                                                                | -                              |
 | readOnly                 | Disables editing, import and deletion and makes the compile configuration view-only; the permission dialog is unaffected, so use `acl.readOnly` there                                       | `boolean`                                                               | `false`                        |
@@ -134,11 +141,11 @@ Each flag defaults to showing the action when the current resource supports it. 
 | Property    | Description                                                                                                                                                                                | Type      | Default |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | ------- |
 | copyPath    | The Copy path button beside the breadcrumb; shown when the preview has a path                                                                                                              | `boolean` | `true`  |
-| viewSwitch  | The Preview / Source switch; only for formats that support both views, so not for images, video or directories under `viking://system`                                                     | `boolean` | `true`  |
+| viewSwitch  | The Preview / Source switch; hidden while editing; only for formats that support both views, so not for images, video or directories under `viking://system`                               | `boolean` | `true`  |
 | edit        | The edit button; only for writable files in an editable format, never for experience files, `viking://system` resources or L0/L1 summaries                                                 | `boolean` | `true`  |
 | copyContent | The Copy content action, which copies the previewed text or directory summary (only the displayed part if truncated); hidden for binary media and `viking://system` directories            | `boolean` | `true`  |
 | download    | The Download action, which saves the original content of a file; shown for files only                                                                                                      | `boolean` | `true`  |
-| history     | The Version history action; shown for supported text files and Wiki directories                                                                                                            | `boolean` | `true`  |
+| history     | The Version history action; shown for Wiki outputs, Wiki directories and non-resource text files                                                                                           | `boolean` | `true`  |
 | configure   | The Compile configuration action; shown only on the root directory of a Wiki compile target, and still viewable when read-only                                                             | `boolean` | `true`  |
 | importPack  | The Import .ovpack action; shown only for writable directories under `viking://user` (including `viking://~`) or `viking://resources`                                                      | `boolean` | `true`  |
 | exportPack  | The Export .ovpack action; shown for files and directories under `viking://user` (including `viking://~`) or `viking://resources`, except internal control files such as `.relations.json` | `boolean` | `true`  |
@@ -156,7 +163,7 @@ Each item is a single action or an array of actions; see [FilePreview](../compon
 
 ### FileBrowserPreviewActionContext
 
-The context received by `previewSlots.actions` and by the function form of `previewSlots.actionItems`; you only read it and never build it. It contains every property of the `FilePreviewActions` of [FilePreview](../components/file-preview) (`source`, `path`, `viewMode`, `setViewMode`, `canSwitchView`, `editing`, `busy`, `canEdit`, `startEditing`, `saveEditing`, `cancelEditing`, `canCopyPath` and `copyPath`) and adds the three below.
+The context received by `previewSlots.actions` and by the function form of `previewSlots.actionItems`; you only read it and never build it. It contains every property of the `FilePreviewActions` of [FilePreview](../components/file-preview) (`source`, `path`, `viewMode`, `setViewMode`, `canSwitchView`, `editing`, `draft`, `busy`, `canEdit`, `startEditing`, `saveEditing`, `cancelEditing`, `canCopyPath` and `copyPath`) and adds the three below.
 
 | Property       | Description                                                                                                       | Type                     | Default |
 | -------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------ | ------- |
@@ -291,7 +298,7 @@ All fields are optional, and omitted fields follow `locale`.
 | deleteConfirm           | Confirm button of the delete confirmation                                                                                    | `string`                             | `'Delete'`                                                            |
 | l0Summary               | Tab name of the L0 summary in a directory preview                                                                            | `string`                             | `'L0 Summary'`                                                        |
 | l1Overview              | Tab name of the L1 overview in a directory preview                                                                           | `string`                             | `'L1 Overview'`                                                       |
-| summaryEmpty            | Message for a summary level not generated yet; the preview does not show it, so overriding it has no effect                  | `string`                             | `'No summary generated yet'`                                          |
+| summaryEmpty            | Overrides the empty message for both summary levels.                                                                         | `string`                             | Localized L0 and L1 messages                                          |
 | summaryFailed           | Message when a summary level fails to load and the server gives no message                                                   | `string`                             | `'The summary could not be loaded.'`                                  |
 | formatCharacterCount    | Character count text in the preview footer                                                                                   | `(count: number) => string`          | Formatted per `locale`, for example `'1,234 characters'`              |
 | formatPreviewUpdatedAt  | Update time text in the preview footer                                                                                       | `(time: string) => string`           | `'Updated on {time}'`                                                 |
@@ -320,38 +327,78 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 
 `labels.workflows` accepts any subset of these fields, and omitted fields follow `locale`.
 
-| Property          | Description                                                      | Type                         | Default                                                        |
-| ----------------- | ---------------------------------------------------------------- | ---------------------------- | -------------------------------------------------------------- |
-| configure         | Label of the compile configuration action, also the dialog title | `string`                     | `'Compile configuration'`                                      |
-| historyEmpty      | Message shown when there is no version history                   | `string`                     | `'No version history yet'`                                     |
-| historyLimit      | Message shown when the history reaches the 500-entry limit       | `string`                     | `'Showing up to 500 recent snapshots.'`                        |
-| snapshotNote      | Label for the snapshot note field                                | `string`                     | `'Describe this snapshot'`                                     |
-| saveSnapshot      | Button that saves a snapshot                                     | `string`                     | `'Save snapshot'`                                              |
-| snapshotSaved     | Message shown after a snapshot is saved                          | `string`                     | `'Snapshot saved.'`                                            |
-| snapshotUnchanged | Message shown when the file has no changes to snapshot           | `string`                     | `'The file has no changes to snapshot.'`                       |
-| version           | Text before the version number of a Wiki file                    | `string`                     | `'Version'`                                                    |
-| importFile        | Label of the file field in the import dialog                     | `string`                     | `'Package file'`                                               |
-| importHint        | Hint in the import dialog                                        | `string`                     | `'Choose an .ovpack package to import into this directory.'`   |
-| importSubmit      | Import button                                                    | `string`                     | `'Import'`                                                     |
-| imported          | Message shown after a successful import                          | `string`                     | `'Package imported.'`                                          |
-| saved             | Message shown after the compile configuration is saved           | `string`                     | `'Configuration saved.'`                                       |
-| cancel            | Cancel button                                                    | `string`                     | `'Cancel'`                                                     |
-| save              | Save button                                                      | `string`                     | `'Save'`                                                       |
-| failed            | Prefix of the message shown when an operation fails              | `string`                     | `'The operation failed.'`                                      |
-| sources           | Label of the source directories field                            | `string`                     | `'Source directories (one per line)'`                          |
-| skill             | Label of the skill field                                         | `string`                     | `'Skill URI'`                                                  |
-| instruction       | Label of the instructions field                                  | `string`                     | `'Instructions'`                                               |
-| automatic         | Label of the automatic updates checkbox                          | `string`                     | `'Automatic updates'`                                          |
-| schedule          | Label of the scheduled update select                             | `string`                     | `'Schedule'`                                                   |
-| noSchedule        | The "no scheduled update" option                                 | `string`                     | `'No scheduled update'`                                        |
-| daily             | The "daily" option                                               | `string`                     | `'Daily'`                                                      |
-| weekly            | The "weekly" option                                              | `string`                     | `'Weekly'`                                                     |
-| time              | Label of the run time field                                      | `string`                     | `'Run time (Beijing time)'`                                    |
-| weekday           | Label of the day of week select                                  | `string`                     | `'Day of week'`                                                |
-| failureTitle      | Formats an operation failure notification title                  | `(action: string) => string` | `` action => `${action} failed` ``                             |
-| copyFailed        | Toast text when clipboard copying fails                          | `string`                     | `'Could not copy. Check clipboard permissions and try again.'` |
-| sourcesRequired   | Toast text when no source directory is entered                   | `string`                     | `'Enter at least one source directory.'`                       |
-| skillRequired     | Toast text when the skill URI is empty                           | `string`                     | `'Enter the skill URI.'`                                       |
+| Property           | Description                                                           | Type                         | Default                                                                              |
+| ------------------ | --------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ |
+| configure          | Label of the compile configuration action, also the dialog title      | `string`                     | `'Compile configuration'`                                                            |
+| configuration      | Tab group for configurations sharing a target directory               | `string`                     | `'Compilation configuration'`                                                        |
+| configurationEmpty | Message when the current user has no configuration for this directory | `string`                     | `'No compilation configuration is available for this directory in your user scope.'` |
+| historyEmpty       | Message shown when there is no version history                        | `string`                     | `'No version history yet'`                                                           |
+| historyLimit       | Message shown when the history reaches the 500-entry limit            | `string`                     | `'Showing up to 500 recent snapshots.'`                                              |
+| snapshotPrompt     | Title of the post-save snapshot choice                                | `string`                     | `'Keep a snapshot?'`                                                                 |
+| snapshotChoice     | Explanation of the post-save snapshot choice                          | `string`                     | `'The file is saved. Would you like to keep a snapshot in version history?'`         |
+| keepSnapshot       | Button that opens the snapshot description                            | `string`                     | `'Keep a snapshot'`                                                                  |
+| skipSnapshot       | Button that skips snapshot creation                                   | `string`                     | `'Skip'`                                                                             |
+| snapshotFileSaved  | Reminder shown with the snapshot description                          | `string`                     | `'The file is saved. Describe this snapshot before saving it.'`                      |
+| done               | Button that closes the snapshot result                                | `string`                     | `'Done'`                                                                             |
+| snapshotNote       | Label for the snapshot note field                                     | `string`                     | `'Describe this snapshot'`                                                           |
+| saveSnapshot       | Button that saves a snapshot                                          | `string`                     | `'Save snapshot'`                                                                    |
+| snapshotSaved      | Message shown after a snapshot is saved                               | `string`                     | `'Snapshot saved.'`                                                                  |
+| snapshotUnchanged  | Message shown when the file has no changes to snapshot                | `string`                     | `'The file has no changes to snapshot.'`                                             |
+| version            | Text before the version number of a Wiki file                         | `string`                     | `'Version'`                                                                          |
+| importFile         | Label of the file field in the import dialog                          | `string`                     | `'Package file'`                                                                     |
+| importHint         | Hint in the import dialog                                             | `string`                     | `'Choose an .ovpack package to import into this directory.'`                         |
+| importSubmit       | Import button                                                         | `string`                     | `'Import'`                                                                           |
+| imported           | Message shown after a successful import                               | `string`                     | `'Package imported.'`                                                                |
+| saved              | Message shown after the compile configuration is saved                | `string`                     | `'Configuration saved.'`                                                             |
+| cancel             | Cancel button                                                         | `string`                     | `'Cancel'`                                                                           |
+| save               | Save button                                                           | `string`                     | `'Save'`                                                                             |
+| failed             | Prefix of the message shown when an operation fails                   | `string`                     | `'The operation failed.'`                                                            |
+| sources            | Label of the source directories field                                 | `string`                     | `'Source directories'`                                                               |
+| skill              | Label of the skill field                                              | `string`                     | `'Compilation Skill'`                                                                |
+| instruction        | Compatibility label; the dialog has no instruction editor             | `string`                     | `'Instructions'`                                                                     |
+| automatic          | Compatibility label; automatic updates use the frequency choices      | `string`                     | `'Automatic updates'`                                                                |
+| schedule           | Label of the update schedule field                                    | `string`                     | `'Update schedule'`                                                                  |
+| noSchedule         | The "no scheduled update" option                                      | `string`                     | `'Do not update'`                                                                    |
+| daily              | The "daily" option                                                    | `string`                     | `'Daily'`                                                                            |
+| weekly             | The "weekly" option                                                   | `string`                     | `'Weekly'`                                                                           |
+| time               | Label of the run time field                                           | `string`                     | `'Run time (Beijing time)'`                                                          |
+| weekday            | Label of the day of week select                                       | `string`                     | `'Day of week'`                                                                      |
+| frequency          | Frequency radio group label                                           | `string`                     | `'Update frequency'`                                                                 |
+| selectWeekday      | Empty weekday placeholder                                             | `string`                     | `'Weekday'`                                                                          |
+| weekdayRequired    | Required weekday feedback                                             | `string`                     | `'Select the day of the week to update.'`                                            |
+| hour               | Hour list label                                                       | `string`                     | `'Hour'`                                                                             |
+| minute             | Minute list label                                                     | `string`                     | `'Minute'`                                                                           |
+| timezone           | Beijing time description                                              | `string`                     | `'Runs in Beijing time (UTC+8), to the minute.'`                                     |
+| historyView        | History display mode label                                            | `string`                     | `'Historical version content view'`                                                  |
+| copyPath           | Copy file path action                                                 | `string`                     | `'Copy file path'`                                                                   |
+| rollbackConfirm    | Restore confirmation action                                           | `string`                     | `'Confirm restore'`                                                                  |
+| target             | Target directory                                                      | `string`                     | `'Target directory'`                                                                 |
+| selectSources      | Select source directories                                             | `string`                     | `'Select source directories'`                                                        |
+| selectSkill        | Select compilation Skill                                              | `string`                     | `'Select compilation Skill'`                                                         |
+| editSchedule       | Edit update schedule                                                  | `string`                     | `'Edit update schedule'`                                                             |
+| selectFile         | Select file                                                           | `string`                     | `'Select file'`                                                                      |
+| selectVersion      | Select historical version                                             | `string`                     | `'Select historical version'`                                                        |
+| comparisonVersion  | Compare with                                                          | `string`                     | `'Compare with'`                                                                     |
+| latest             | Latest                                                                | `string`                     | `'Latest'`                                                                           |
+| rollback           | Restore this version                                                  | `string`                     | `'Restore this version'`                                                             |
+| rollbackTitle      | Restore this version?                                                 | `string`                     | `'Restore this document to this version?'`                                           |
+| rollbackUnchanged  | The content is identical; no new version was created.                 | `string`                     | `'The content is identical; no new version was created.'`                            |
+| rollbackSaved      | File restored.                                                        | `string`                     | `'File restored.'`                                                                   |
+| importChoose       | Choose file                                                           | `string`                     | `'Choose file'`                                                                      |
+| importDrop         | Click to choose or drop a file                                        | `string`                     | `'Click to choose or drop a file'`                                                   |
+| importFormat       | .ovpack files supported                                               | `string`                     | `'.ovpack files supported'`                                                          |
+| compareChanges     | Show changes                                                          | `string`                     | `'Show changes'`                                                                     |
+| noChanges          | The selected versions have identical content.                         | `string`                     | `'The selected versions have identical content.'`                                    |
+| addedLines         | Added content                                                         | `string`                     | `'Added content'`                                                                    |
+| removedLines       | Removed content                                                       | `string`                     | `'Removed content'`                                                                  |
+| copyOriginal       | Copy source                                                           | `string`                     | `'Copy source'`                                                                      |
+| copied             | Copied                                                                | `string`                     | `'Copied'`                                                                           |
+| historyPreview     | Preview                                                               | `string`                     | `'Preview'`                                                                          |
+| historyMarkdown    | Markdown                                                              | `string`                     | `'Markdown'`                                                                         |
+| failureTitle       | Formats an operation failure notification title                       | `(action: string) => string` | `` action => `${action} failed` ``                                                   |
+| copyFailed         | Toast text when clipboard copying fails                               | `string`                     | `'Could not copy. Check clipboard permissions and try again.'`                       |
+| sourcesRequired    | Toast text when no source directory is entered                        | `string`                     | `'Enter at least one source directory.'`                                             |
+| skillRequired      | Toast text when the skill URI is empty                                | `string`                     | `'Enter the skill URI.'`                                                             |
 
 ### FileBrowserAclLabels
 
@@ -419,7 +466,7 @@ All fields are optional, and omitted fields follow `locale`.
 - Under the `viking://` root, directories appear in the order user, session, agent, resources, followed by the rest. With any other `rootUri`, the order the server returns is kept.
 - Click a file to preview its content; click a directory to expand and select it, and the preview shows its L0 summary and L1 overview.
 - Directories under `viking://system` show no summaries.
-- Setting `uri` only changes the previewed resource and does not expand the tree. Use `defaultExpandedUri` to start with the tree expanded to a location.
+- Set `defaultExpandedUri` to start with the tree expanded to a location. After the first render, changes to the controlled `uri` [open and reveal the resource](#open-and-reveal-a-resource).
 - Text files are read up to 2000 lines, and the preview says when the content is truncated.
 - Images, video, audio, PDF, Office documents and archives are read through the content download endpoint, chosen by file extension.
 - Editable formats are `.md`, `.json`, `.jsonl`, `.txt`, `.yaml` and `.yml`: editing reloads the full content, saving calls `POST /api/v1/content/write`, and the preview reloads afterwards.
@@ -428,13 +475,17 @@ All fields are optional, and omitted fields follow `locale`.
 - YAML scalar ranges preserve same-shaped value content, while separately appended trailers are still removed; the body is never reserialized.
 - Line boundaries, whitespace and word characters follow the server's Python semantics. A page that fills the preview cap triggers a full read before filtering and truncation, so a page end cannot be mistaken for a file end or expose partial metadata.
 - Wiki ownership follows compile targets and resource tags, independently of dashboard visibility. Trailing `CONFLICTS_CONTENT` comments are separated from the body and still supplied to the conflict dashboard parser. Invalid JSON stays out of the body while the dashboard retains its error and retry behavior.
-- Wiki saves use the native `resolve_conflicts: true` contract so the server preserves and updates conflict history; other text saves omit this flag.
+- When editing a Wiki file, unresolved conflicts with a unique body match highlight the matching lines. Hover over a highlighted line to see the conflict description and reason.
+- The dashboard tab is hidden while editing a file and returns after saving or cancelling.
+- Wiki saves send `use_snapshot: true` to preserve version history and `resolve_conflicts: true` so the server preserves and updates conflict records. Ordinary text saves leave snapshots disabled by default.
 - All YAML frontmatter, ordinary HTML comments and fenced Markdown examples survive. In a Markdown file with confirmed scope, an unclosed reserved trailer starting on its own line is hidden through the end of the file; markers quoted in YAML frontmatter, code fences or inline examples survive.
 - The refresh button reloads the expanded directories and the current preview.
 
 ### Open and reveal a resource
 
-`FileBrowser` accepts a React 18/19 ref. Call `openResource` for import results, search results, or file links; the module opens the preview, expands ancestors, loads additional pages until the target is found, selects the row and scrolls it into view. It preserves other expanded branches. Repeating a call for the same URI scrolls again.
+Pass a terminal link, search result, or import result URI to the mounted `FileBrowser` through `uri`. The browser opens the preview, expands ancestors, loads additional pages as needed, selects the target and scrolls it into view. Other expanded branches are preserved.
+
+`FileBrowser` accepts a React 18/19 ref for explicit navigation. Call `openResource` to reveal the current URI again, wait for navigation to finish, or open only the preview.
 
 ```tsx
 import { useRef } from 'react';
@@ -453,7 +504,7 @@ await browserRef.current?.openResource(directoryUri);
 
 Links ending in `/.abstract.md` or `/.overview.md` open the parent directory at L0 Summary or L1 Overview, respectively. Tree navigation and `onUriChange` use the parent URI. Opening another summary link in the same directory selects its requested level; manual level switching remains available.
 
-Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resolves to `true` once the request is issued. Ordinary `uri` prop changes do not expand or scroll the tree. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts.
+`openResource` reveals the target by default. With `{ reveal: false }`, it requests only a preview and resolves to `true` once it issues the request. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts.
 
 Directory targets automatically expand and refresh their children; file targets only expand their ancestors and never request children. Refresh keeps the old list visible and replaces it atomically after reloading the loaded range. A previously exhausted listing is reloaded through its new last page. If expanded child directories move beyond the loaded range, loading continues until they are found or the listing ends. Other directories keep their cached data and expansion state. Entries confirmed deleted by the refreshed listing are removed. A failed child refresh retains the old list and selection, with the existing directory error row and retry action; it does not turn successful navigation into failure.
 
@@ -482,14 +533,18 @@ Directory listings needed to locate the target, or required home alias lookups, 
 
 ### Preview actions
 
-- The right side of the header holds the Preview / Source switch, the edit button and the action menu. Copy path sits beside the breadcrumb, followed by the permission tag.
+- While browsing, the right side of the header holds the Preview / Source switch, the edit button and the action menu. Copy path sits beside the breadcrumb, followed by the permission tag.
+- Editing hides the Preview / Source switch. Save and Cancel stay visible, along with Version history, Copy content and Copy path when available for the current file.
 - The visibility flags only control whether a default button is shown, not the capability: `canDelete`, `deleteFile()` and the editing methods in the `previewSlots` context keep working.
+- Compilation settings display source directories, target directory, Skill and update schedule. Edit each field with its picker or schedule form; changes apply to future runs.
+- Ordinary resource files have no history action.
 - `readOnly` disables all writes, including saving the compile configuration. With `acl` on, editing, import and saving the compile configuration require `write` or `manage`, and deletion requires `manage`.
 - Copying content, downloading, exporting, viewing version history and viewing the compile configuration remain available regardless of `readOnly` and ACL settings.
 - Without `acl`, or for resources outside `viking://resources/`, the block does not probe permissions and the server enforces access.
-- Saving an ordinary file updates its content. To create a version of saved content, open **Version history**, enter a note, and select **Save snapshot**. The action requires an editable ordinary file and sends `POST /api/v1/snapshot/commit`.
-- Version history reads up to 500 snapshots with `GET /api/v1/snapshot/log`, or up to 100 retained versions with `GET /api/v1/snapshot/versions` for a Wiki compile output file. You can preview or copy historical text and compare it with the current file.
-- Compile configuration: `GET /api/v1/compile/config` reads it, and `POST /api/v1/compile/config/update` saves the source directories, skill, instructions, automatic updates and daily or weekly schedule.
+- After an editable non-resource text file saves, choose **Keep a snapshot** or **Skip**. Keeping it opens a required description field; **Save snapshot** sends `POST /api/v1/snapshot/commit`. Skipping or cancelling leaves the file saved. Failures keep the description for retry, and unchanged content shows a separate result. Wiki compile files retain their automatic versions.
+- The history dialog also lets you describe and save a non-resource text file snapshot. It captures the server’s current file at submission time; intervening writes may be included.
+- Wiki directories let users select a descendant file, preview historical content, compare two versions, and restore a single file through `POST /api/v1/snapshot/restore`. History pages native Git commits through `GET /api/v1/snapshot/versions` with `before_snapshot`, displays committer time, and reads content with the selected commit ID and current file path. Legacy version indexes remain supported; services without the versions endpoint fall back to the latest 500 entries from `GET /api/v1/snapshot/log`. The first version supports an added-file diff; turn off Show changes to read the full document.
+- Compile configuration: `GET /api/v1/compile/config` reads it, and `POST /api/v1/compile/config/update` saves source directories, Skill and the update schedule. The target directory is read-only, and existing instructions and execution arguments are preserved. When multiple configurations share a directory, tabs switch between their settings and edits, initially showing the first configuration. A single configuration opens directly without tabs. Reads and updates identify it by `compile_name`. An empty state appears when the current user has no associated configuration.
 - Import .ovpack: the file is first uploaded through `POST /api/v1/resources/temp_upload`, then `POST /api/v1/pack/import` imports it into the current directory. On failure the chosen file is kept, and a retry uploads it again.
 - Export .ovpack: `POST /api/v1/pack/export` returns the content, which is saved as `<name>.ovpack`; downloads use `GET /api/v1/content/download`.
 - Delete: after confirmation, `DELETE /api/v1/fs?uri=...&wait=true` runs. On failure the dialog stays open and can retry; on success the parent directory is selected and the tree is refreshed. Only files can be deleted, not directories.
@@ -519,7 +574,8 @@ Directory listings needed to locate the target, or required home alias lookups, 
 - The tag takes precedence over the compile configuration: a dashboard still shows when the configuration lacks the target.
 - The compile configuration (`GET /api/v1/compile/configs`) is read on demand: when a Wiki dashboard opens, or when a reserved Wiki trailer in the body needs an ownership check; ordinary browsing does not request it.
 - When `dashboardKinds` omits `'wiki'`, Wiki is no longer detected and the compile configuration is not read, so Wiki resources lose their Compile configuration and the Compile-specific history index.
-- Rows that have a dashboard show a dashboard icon in the tree; hover or focus it for an action hint, and click it to open the dashboard. The icon differs when a Wiki has pending conflicts.
+- Rows that have a dashboard show an icon in the tree. Hover or focus the icon for an action hint, and click it to open the dashboard.
+- Pending conflicts can mark the file and its ancestor Wiki directories, including collapsed directories. Refresh reloads the conflict markers. If a conflict lookup fails, unconfirmed statuses remain unknown.
 - The tabs in the preview switch between the content and the dashboard.
 - Ordinary resources have no Wiki tab, and a detected Wiki keeps its dashboard even with no conflicts.
 - A `viking://~/...` alias and the canonical URI of the same resource are detected the same way, and the `uri` passed to `renderDashboard` keeps the spelling it came with.
@@ -527,12 +583,15 @@ Directory listings needed to locate the target, or required home alias lookups, 
 
 ### Experience dashboard data source
 
-Pass host request functions through `experienceDataSource`. Omitted functions use the default OpenViking endpoints. Keep each callback reference stable and pass its `signal` to the underlying request. Reject on failure so the built-in dashboard can display the error and retry.
+Pass host request functions through `experienceDataSource`. Omitted functions use the default OpenViking endpoints, except for `sourceGroups`, `trajectoryMessages`, and `tests`. Keep each callback reference stable and pass its `signal` to the underlying request. Reject on failure so the built-in dashboard can display the error and retry.
 
 - `list({ uri, offset, limit, signal })` returns `{ items, hasMore, total? }`, with one page of experience files in `items`. Resolve to `undefined` to use the default listing for that URI.
 - `outcomes({ uri, startDate, endDate, signal })` returns an array of `{ outcome, count }` entries.
 - `trajectories({ uri, offset, limit, startDate, endDate, signal })` returns `{ items, hasMore, total }`, with one page of injection trajectories in `items`.
 - `sources({ uri, signal })` returns an array of source trajectories.
+- `sourceGroups({ uri, signal })` returns commit groups newest first, each with `id`, `updatedAt`, and `trajectories`. Takes precedence over `sources`.
+- `trajectoryMessages({ uri, signal })` receives a trajectory URI when its details open and returns `{ archiveUri?, items }`. FileBrowser reads the trajectory document.
+- `tests({ uri, offset, limit, signal })` returns `{ items, total }`, where `items` contains the test materials for that page. Supplying it enables the Test tab for an individual experience. The tab loads when opened.
 - The page `offset` starts at 0 and `limit` is 20. Dates use UTC `YYYY-MM-DD` and are omitted for the all-time range.
 
 ### Failure states

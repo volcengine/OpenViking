@@ -3,6 +3,12 @@ import type { FilePreviewLabels } from '../types.js';
 const messages = {
   previewImage: 'Enlarge image',
   closePreview: 'Close preview',
+  videoTranscript: 'Transcript',
+  videoFrames: (count: number) =>
+    count ? `Extracted frames (${count})` : 'Extracted frames',
+  videoSpeaker: 'Speaker',
+  videoNoTranscript: 'No transcript available',
+  videoNoFrames: 'No extracted frames available',
   showHiddenPath: 'Show hidden path levels',
   moreActions: 'More actions',
   actionFailed: 'The action failed',

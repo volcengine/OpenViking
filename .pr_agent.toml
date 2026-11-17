@@ -132,7 +132,7 @@ enable_review_labels_effort = true
 
 extra_instructions = """\
 You are reviewing OpenViking — an agent-native context database.
-Stack: Python 3.10+ core (FastAPI, pydantic, httpx, loguru), TypeScript bot
+Stack: Python 3.10+ core (FastAPI, pydantic, httpx, stdlib logging via get_logger), TypeScript bot
 (Vikingbot/OpenClaw plugin), Rust CLI, C++ extensions (AGFS).
 
 ## Severity Classification (exactly ONE per finding)
@@ -205,8 +205,11 @@ BECAUSE AGPL-3.0 compliance requires headers on all source files.
 
 R7. ERROR HANDLING
 WHEN code uses try/except
-THEN verify: no bare `except:` or `except Exception:` without logging (loguru)
-     or re-raising. Narrow exceptions to specific types where possible.
+THEN verify: no bare `except:` or silent `except Exception:`. Intermediate layers
+     propagate or wrap exceptions; the boundary deciding the final outcome logs
+     once through get_logger. A handled fallback/retry uses INFO, not a premature
+     ERROR. Do not require logging before every re-raise. Narrow exceptions to
+     specific types where possible; exception fields follow LOGGING.md section 4.8.
 BECAUSE PR #148f6e3 fixed overly broad `except Exception` to specific
      (ImportError, ModuleNotFoundError, AttributeError). Broad catches hide
      real bugs.
@@ -314,8 +317,22 @@ Focus suggestions on these OpenViking-specific anti-patterns:
    (the dependency exists in pyproject.toml). Inline f-string prompts over 5 lines
    should be templated.
 
-4. LOGGING: Replace `print()` with `logger = get_logger(__name__)` (loguru pattern
-   used throughout the codebase). Include structured context in log messages.
+4. LOGGING: Follow docs/repository/LOGGING.md (Chinese: LOGGING_CN.md), including
+   its distinction between target requirements and currently implemented APIs.
+   Python runtime logs use stdlib logging through get_logger(__name__); migrate
+   runtime-log print() calls, but preserve deliberate CLI display/protocol output.
+   Do not introduce independent loguru sinks, Rich handlers, or per-module formats.
+   For owned code: CRITICAL means the process cannot continue; ERROR is a final
+   failure needing a human; WARNING is audit-only; INFO covers fallback/retry,
+   lifecycle changes, and 4xx rejections; other business detail is DEBUG.
+   Preserve third-party severity semantics. Audit routing needs openviking.audit
+   and explicit event fields; audit schema/field handling follows sections 3–4.
+   Check lazy formatting, structured fields, and one final failure record at the
+   deciding boundary. Existing sanitize_error is not a complete sanitizer: prefer
+   exception types, stable error codes, and allowed fields over raw exception text.
+   Logging integration changes need the common server output and actual-stream
+   acceptance checks in section 8.10; do not demand an unimplemented helper import
+   or a repository-wide migration from an unrelated PR.
 
 5. VALIDATION: Prefer pydantic models for API request/response validation over raw
    dicts. The codebase already depends on pydantic>=2.0.0.

@@ -484,7 +484,8 @@ export function RequestDetails({
               </span>
             ) : null}
             {record.capture_status === 'retrying' ||
-            record.capture_status === 'paused' ? (
+            record.capture_status === 'paused' ||
+            record.capture_status === 'lost' ? (
               <DetailDocs section="savingStatus" />
             ) : null}
           </DetailItem>

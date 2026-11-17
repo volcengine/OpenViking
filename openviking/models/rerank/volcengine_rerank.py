@@ -129,37 +129,35 @@ class RerankClient(RerankBase):
             try:
                 result = response.json()
             except Exception:
-                logger.warning(
-                    "[RerankClient] Non-JSON response: status=%s body=%s",
+                logger.info(
+                    "rerank response invalid; using vector scores http_status_code=%d degraded=true",
                     response.status_code,
-                    response.text[:1000],
+                    extra={"http_status_code": response.status_code, "degraded": True},
                 )
                 return None
 
             if not isinstance(result, dict):
-                logger.warning(
-                    "[RerankClient] Unexpected response type: status=%s type=%s body=%s",
+                logger.info(
+                    "rerank response type invalid; using vector scores http_status_code=%d degraded=true",
                     response.status_code,
-                    type(result).__name__,
-                    str(result)[:1000],
+                    extra={"http_status_code": response.status_code, "degraded": True},
                 )
                 return None
 
             result_payload = result.get("result")
             if not isinstance(result_payload, dict):
-                logger.warning(
-                    "[RerankClient] Unexpected response payload: status=%s result_type=%s body=%s",
+                logger.info(
+                    "rerank result missing; using vector scores http_status_code=%d degraded=true",
                     response.status_code,
-                    type(result_payload).__name__,
-                    str(result)[:1000],
+                    extra={"http_status_code": response.status_code, "degraded": True},
                 )
                 return None
 
             if "data" not in result_payload:
-                logger.warning(
-                    "[RerankClient] Missing rerank data field: status=%s body=%s",
+                logger.info(
+                    "rerank data missing; using vector scores http_status_code=%d degraded=true",
                     response.status_code,
-                    str(result)[:1000],
+                    extra={"http_status_code": response.status_code, "degraded": True},
                 )
                 return None
 
@@ -176,10 +174,11 @@ class RerankClient(RerankBase):
             if not isinstance(data, list):
                 raise ValueError("Rerank data must be a list")
             if len(data) != len(documents):
-                logger.warning(
-                    "[RerankClient] Unexpected rerank result length: expected=%s actual=%s",
+                logger.info(
+                    "rerank result count mismatch; using vector scores total=%d returned=%d degraded=true",
                     len(documents),
                     len(data),
+                    extra={"total": len(documents), "degraded": True},
                 )
                 return None
             scores = [0.0] * len(documents)
@@ -200,11 +199,17 @@ class RerankClient(RerankBase):
                 seen.add(index)
                 scores[index] = score
 
-            logger.debug(f"[RerankClient] Reranked {len(documents)} documents")
+            logger.debug(
+                "rerank completed total=%d", len(documents), extra={"total": len(documents)}
+            )
             return scores
 
         except Exception as e:
-            logger.error(f"[RerankClient] Rerank failed: {e}")
+            logger.info(
+                "rerank failed; using vector scores error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
             return None
 
     @classmethod

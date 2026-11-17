@@ -5,31 +5,41 @@ package openviking
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 )
 
-// Compile returns a queued task, or saved settings when Args explicitly configure scheduling.
-func (c *Client) Compile(
-	ctx context.Context,
-	fromURIs []string,
-	to string,
-	skill string,
-	opts *CompileOptions,
-) (map[string]any, error) {
-	if opts == nil {
-		opts = &CompileOptions{}
+// CreateCompileTask saves a persistent configuration without starting a run.
+// compileName is required and returned unchanged as compile_name for subsequent runs.
+func (c *Client) CreateCompileTask(ctx context.Context, compileName string, input CompileInput) (map[string]any, error) {
+	if compileName == "" {
+		return nil, fmt.Errorf("compile_name is required")
 	}
-	payload := map[string]any{
-		"from":  fromURIs,
-		"to":    to,
-		"skill": skill,
+	payload := struct {
+		CompileName string `json:"compile_name"`
+		CompileInput
+	}{compileName, input}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/compile/create", nil, payload, &result)
+	return result, err
+}
+
+// Compile queues a named persistent execution or a full independent execution.
+// Exactly one of request.CompileName and request.Input must be provided.
+func (c *Client) Compile(ctx context.Context, request CompileRequest) (map[string]any, error) {
+	if (request.CompileName != "") == (request.Input != nil) {
+		return nil, fmt.Errorf("provide exactly one of CompileName and Input")
 	}
-	setString(payload, "instruction", opts.Instruction)
-	if len(opts.Args) > 0 {
-		payload["args"] = opts.Args
+	if request.Input != nil && request.Args != nil {
+		return nil, fmt.Errorf("full Compile arguments belong in Input.Args")
 	}
-	if err := mergeExtraProtected(payload, opts.Extra, "instruction", "args"); err != nil {
-		return nil, err
+	var payload any = request.Input
+	if request.CompileName != "" {
+		named := map[string]any{"compile_name": request.CompileName}
+		if request.Args != nil {
+			named["args"] = request.Args
+		}
+		payload = named
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/compile", nil, payload, &result)

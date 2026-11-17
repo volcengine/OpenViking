@@ -50,21 +50,29 @@ export function tokenize(input: string): CommandToken[] {
 
 export interface Argument {
   name: string;
-  kind?: 'uri' | 'integer' | 'boolean';
+  kind?: 'uri' | 'uri-list' | 'integer' | 'boolean';
+  placeholder?: string;
+  descriptionKey?: string;
   optional?: boolean;
   required?: boolean;
   alias?: string;
   defaultValue?: string;
   choices?: readonly string[];
+  pattern?: RegExp;
   min?: number;
 }
+
+export type ArgumentValues = Record<
+  string,
+  string | number | boolean | string[]
+>;
 
 export function parseArguments(
   tokens: readonly CommandToken[],
   positional: readonly Argument[],
   flags: readonly Argument[] = [],
 ) {
-  const result: Record<string, string | number | boolean> = {};
+  const result: ArgumentValues = {};
   let index = 0;
   let options = true;
   for (let cursor = 0; cursor < tokens.length; cursor++) {
@@ -82,7 +90,7 @@ export function parseArguments(
       ? flags.find((item) => token === `--${item.name}` || token === item.alias)
       : positional[index++];
     if (!argument) throw new ConsoleCommandError('unexpectedArgument', token);
-    if (Object.hasOwn(result, argument.name))
+    if (Object.hasOwn(result, argument.name) && argument.kind !== 'uri-list')
       throw new ConsoleCommandError('duplicateArgument', token);
     const next =
       flag && argument.kind !== 'boolean' ? tokens[++cursor] : current;
@@ -98,12 +106,24 @@ export function parseArguments(
     const value = flag && argument.kind === 'boolean' ? 'true' : next.value;
     if (argument.kind === 'uri' && !/^viking:\/\//.test(value))
       throw new ConsoleCommandError('expectedUri', value);
-    if (argument.choices && !argument.choices.includes(value))
+    if (
+      (argument.choices && !argument.choices.includes(value)) ||
+      (argument.pattern && !argument.pattern.test(value))
+    )
       throw new ConsoleCommandError(
         'invalidArgument',
         `${argument.name}: ${value}`,
       );
-    if (argument.kind === 'integer') {
+    if (argument.kind === 'uri-list') {
+      const uris = value.split(',').map((uri) => uri.trim());
+      const invalid = uris.find((uri) => !/^viking:\/\/.+/.test(uri));
+      if (invalid !== undefined)
+        throw new ConsoleCommandError('expectedUri', invalid);
+      const previous = result[argument.name];
+      result[argument.name] = [
+        ...new Set([...(Array.isArray(previous) ? previous : []), ...uris]),
+      ];
+    } else if (argument.kind === 'integer') {
       const number = Number(value);
       if (
         !/^-?\d+$/.test(value) ||

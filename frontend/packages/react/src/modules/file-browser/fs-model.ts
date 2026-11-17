@@ -1,3 +1,4 @@
+import type { DirectorySummaryLabels } from './file-browser-labels.js';
 import type { Workflow } from '../../shared/monitoring/workflow.js';
 import type {
   FilePreviewDirectoryTab,
@@ -170,7 +171,7 @@ export interface DirectorySummary {
 export function toDirectoryTab(
   uri: string,
   summary: DirectorySummary,
-  labels: { l0: string; l1: string; failure: string },
+  labels: DirectorySummaryLabels,
   openParent?: (uri: string) => Promise<void>,
   icon?: ReactNode,
 ): FilePreviewDirectoryTab {
@@ -205,6 +206,7 @@ export function toDirectoryTab(
       {
         key: 'l0',
         label: labels.l0,
+        emptyLabel: labels.l0Empty,
         source: {
           content: levelBody(summary.abstract, summary.abstractError),
           fileName: `${name}.md`,
@@ -215,6 +217,7 @@ export function toDirectoryTab(
       {
         key: 'l1',
         label: labels.l1,
+        emptyLabel: labels.l1Empty,
         source: {
           content: levelBody(summary.overview, summary.overviewError),
           fileName: `${name}.md`,

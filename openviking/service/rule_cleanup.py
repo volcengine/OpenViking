@@ -67,8 +67,11 @@ class RuleCleanupScheduler:
             started = time.monotonic()
             try:
                 await self._scan_once()
-            except Exception:
-                logger.exception("Archived-rule cleanup scan failed")
+            except Exception as exc:
+                logger.info(
+                    "Archived-rule cleanup scan failed; retrying next interval",
+                    extra={"error_type": type(exc).__name__},
+                )
             wait = self._interval - (time.monotonic() - started)
             if wait <= 0:
                 continue
@@ -89,12 +92,15 @@ class RuleCleanupScheduler:
             )
             try:
                 result = await self._rule_service.cleanup_archived_rules(ctx=ctx)
-            except Exception:
+            except Exception as exc:
                 failed += 1
-                logger.exception(
-                    "Archived-rule cleanup failed for account=%s user=%s",
-                    account_id,
-                    user_id,
+                logger.debug(
+                    "Archived-rule cleanup failed for a user",
+                    extra={
+                        "account_id": account_id,
+                        "user_id": user_id,
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 continue
             deleted += len(result["deleted"])
@@ -111,10 +117,15 @@ class RuleCleanupScheduler:
         agfs = self._get_agfs_client()
         try:
             account_entries = await agfs.ls(AGFS_ACCOUNT_ROOT)
-        except Exception:
-            logger.warning("Failed to scan accounts for archived-rule cleanup", exc_info=True)
+        except Exception as exc:
+            logger.info(
+                "Archived-rule account discovery failed; retrying next interval",
+                extra={"error_type": type(exc).__name__},
+            )
             return
 
+        failed_accounts = 0
+        failed_libraries = 0
         for account_entry in account_entries:
             account_id = str(account_entry.get("name") or "").strip()
             if not account_id or account_id == "_system" or not account_entry.get("isDir", False):
@@ -124,10 +135,10 @@ class RuleCleanupScheduler:
                 user_entries = await agfs.ls(users_root)
             except Exception as exc:
                 if not is_not_found_error(exc):
-                    logger.warning(
-                        "Failed to scan users for archived-rule cleanup: %s",
-                        users_root,
-                        exc_info=True,
+                    failed_accounts += 1
+                    logger.debug(
+                        "Archived-rule user discovery failed",
+                        extra={"error_type": type(exc).__name__},
                     )
                 continue
 
@@ -140,14 +151,22 @@ class RuleCleanupScheduler:
                     stat = await agfs.stat(rules_root)
                 except Exception as exc:
                     if not is_not_found_error(exc):
-                        logger.warning(
-                            "Failed to inspect rule library for cleanup: %s",
-                            rules_root,
-                            exc_info=True,
+                        failed_libraries += 1
+                        logger.debug(
+                            "Archived-rule library inspection failed",
+                            extra={"error_type": type(exc).__name__},
                         )
                     continue
                 if isinstance(stat, dict) and stat.get("isDir", False):
                     yield account_id, user_id
+
+        if failed_accounts or failed_libraries:
+            logger.info(
+                "Archived-rule cleanup discovery completed with errors account_failures=%d library_failures=%d",
+                failed_accounts,
+                failed_libraries,
+                extra={"failed": failed_accounts + failed_libraries},
+            )
 
     def _get_agfs_client(self) -> AsyncAGFSClient:
         if self._agfs_client is None:

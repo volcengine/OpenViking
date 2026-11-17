@@ -59,7 +59,12 @@ export const LOG_KINDS = [
 ] as const
 export type LogKind = (typeof LOG_KINDS)[number]
 
-export type CaptureStatus = 'active' | 'disabled' | 'retrying' | 'paused'
+export type CaptureStatus =
+  | 'active'
+  | 'disabled'
+  | 'retrying'
+  | 'paused'
+  | 'lost'
 
 type UpstreamSettings = {
   name: string

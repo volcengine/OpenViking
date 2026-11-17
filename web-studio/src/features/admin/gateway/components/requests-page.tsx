@@ -93,12 +93,13 @@ const SEGMENT_KINDS: Partial<Record<Segment, LogKind>> = {
 
 type KindFilter = LogKind | 'all'
 
-/** Degraded, saving retrying or paused, or an HTTP error. */
+/** Degraded, saving retrying, paused or lost, or an HTTP error. */
 function hasIssue(record: LogRecord): boolean {
   return (
     Boolean(record.degradation) ||
     record.capture_status === 'retrying' ||
     record.capture_status === 'paused' ||
+    record.capture_status === 'lost' ||
     (record.status ?? 0) >= 400
   )
 }

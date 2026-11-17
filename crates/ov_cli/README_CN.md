@@ -305,6 +305,10 @@ ov ls viking://resources/docs --tags team=search,env=prod --fields tags
 ov grep "TODO" --uri viking://resources/docs --tags team=search,env=prod
 ov glob "**/*.md" --uri viking://resources/docs --tags team=search,env=prod
 
+# 先保存但不建索引，之后再显式处理
+ov write viking://resources/docs/draft.md --content "# Draft" --defer-processing
+ov reindex viking://resources/docs/draft.md --wait
+
 # 临时通过 CLI 参数覆盖身份
 ov --account acme --user alice ls viking://
 

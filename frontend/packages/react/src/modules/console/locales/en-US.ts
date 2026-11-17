@@ -51,6 +51,12 @@ const messages = {
       | 'quickStart'
     >
   >,
+  taskCompletion: {
+    title: 'Task complete',
+    description: 'Background task completed.',
+    resource: 'The resource import is complete. Click to view the result.',
+    viewResult: 'View result',
+  },
   commands,
   commandGuides: {
     'add-resource': {
@@ -83,15 +89,40 @@ const messages = {
       description:
         'Save sources, destination, and Skill without starting compilation.',
       examples: [
-        'ov compile create --from viking://resources/source --to viking://resources/wiki',
+        'ov compile create --compile-name demo-wiki --from viking://resources/source --to viking://resources/wiki --skill viking://system/compile/example-skills/llm-wiki',
       ],
     },
     compile: {
-      description:
-        'Compile source material into a Wiki using the built-in llm-wiki Skill. Use --skill to choose another Skill.',
-      examples: [
-        'ov compile --from viking://resources/source --to viking://resources/wiki',
-      ],
+      description: 'Run a saved compilation configuration by name.',
+      examples: ['ov compile --compile-name demo-wiki'],
+      quickStart: {
+        documentation: {
+          label: 'Compilation guide',
+          href: 'https://docs.openviking.ai/en/context-compilation/01-overview',
+        },
+        steps: [
+          {
+            description:
+              'Verify that OpenViking is configured to run compilation.',
+          },
+          { description: 'Import the source material with add-resource.' },
+          {
+            description:
+              'Save the sources, destination, and Skill as a named configuration.',
+            command:
+              'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
+          },
+          {
+            description:
+              'Run the saved configuration with its sources, destination, Skill, instructions, model, and schedule.',
+            command: 'ov compile --compile-name <name>',
+          },
+          {
+            description: 'Check the run status with the returned task ID.',
+            command: 'ov task status <task_id>',
+          },
+        ],
+      },
     },
   } satisfies Partial<Record<keyof typeof commands, ConsoleCommandGuide>>,
   parameters: {
@@ -101,6 +132,8 @@ const messages = {
     'parent-auto-create': 'Create the parent directory if missing',
     reason: 'Reason for importing',
     args: 'Parser options as a JSON object',
+    'compile-args':
+      'JSON object for model_name, auto_update, and update_schedule',
     wait: 'Wait for processing to complete',
     'target-uri': 'Destination skills root',
     content: 'Plain text to remember',
@@ -109,7 +142,9 @@ const messages = {
     target_uri: 'Limit retrieval to this URI',
     limit: 'Maximum number of results',
     level: 'Filter content levels, e.g. 0,1,2',
-    from: 'Source URI to compile',
+    'compile-name':
+      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters.',
+    from: 'Existing source directory URIs. Repeat --from or separate URIs with commas',
     skill: 'Compiler Skill URI',
     instruction: 'Additional compilation instructions',
   },
@@ -132,6 +167,8 @@ const messages = {
     expectedUri: (value: string) => `Expected a Viking URI: ${value}`,
     invalidArgument: (value: string) => `Invalid ${value}`,
     missingArgument: (value: string) => `Missing ${value}`,
+    compileNamedRunInputs: () =>
+      'Use compile create to save inputs, then run compile with --compile-name alone.',
   },
 };
 export default messages;

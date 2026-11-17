@@ -1308,7 +1308,7 @@ Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 
 | `candidates_visible` | bool | 仅用于 Jev Noul；默认 `false`，每个候选隔离到自己的问题中。显式 `true` 可共享候选上下文；Choice 忽略此选项。 |
 | `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
-| `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |
+| `log_payloads` | bool | 仅用于 Jev：在 `log.level=DEBUG` 时记录安全的请求和响应摘要；不记录 query、文档和响应正文。默认：`false` |
 | `threshold` | float | Rerank 分数阈值，范围为 `0.0` 到 `1.0`。Rerank 后低于此值的结果会被过滤；它不过滤向量分数（未使用 Rerank 或 Rerank 失败时），请求中的 `score_threshold` 优先。默认：`0.1` |
 | `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |
 
@@ -1462,6 +1462,47 @@ Task/Work/Event 记录，用于隔离共用同一套表的多个 OpenViking 部�
 再按顺序执行变更脚本；升级使用旧 TaskStore 表的库前，先执行
 `openviking/service/sql/changes/0001_task_store_service_name.sql`。同一部署
 不要同时让 FileStore 和 MySQL 表作为写入端。
+
+也可以使用 PostgreSQL：设置 `"provider": "postgres"`，安装
+`openviking[postgres]`，并在启动服务前通过 `psql` 执行
+`openviking/service/sql/task_store_postgres_init.sql`。该脚本已包含
+`service_name`，不要对 PostgreSQL 执行 MySQL 的变更脚本。
+此后端不依赖 Redis，也不需要 pgvector 扩展：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "task_store": {
+      "provider": "postgres",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "table": "ov_tasks",
+        "sslmode": "prefer"
+      }
+    }
+  }
+}
+```
+
+PostgreSQL 必填 `user` 和 `database`；数据库认证方式允许时可省略 `password`。
+默认值为 `host=127.0.0.1`、`port=5432`、`maxsize=10`、
+`connect_timeout=10`、`sslmode=prefer`。`sslmode` 支持 libpq 的
+`disable`、`allow`、`prefer`、`require`、`verify-ca`、`verify-full`；
+按需配置 `sslrootcert`、`sslcert` 和 `sslkey`。
+需要验证 TLS 时，使用 `verify-full` 并配置服务器主机名和可信 CA。
+运行时数据库角色需要三张表的 SELECT/INSERT/UPDATE/DELETE 权限。
+
+PostgreSQL 表前缀沿用相同字符规则，但最多 37 个字符，以符合其
+63 字节标识符限制。自定义前缀含大写字母时，建表 SQL 中的标识符需要加双引号。
+Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改 Work 状态。
+持久化恢复、事件历史、活跃任务去重、服务与用户隔离语义与 MySQL 一致。
+共享任务的进程应使用稳定且相同的 `service_name`。切换 provider 不会自动迁移
+已有任务；生产部署切换前需安排数据迁移。
 
 #### watch_store
 
@@ -2246,6 +2287,7 @@ ov add-resource ./docs --exclude "*.tmp"
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://~/skills` 和 `viking://agent/skills`。 | `null` |
 | `user_config_defaults.memory_policy` | object | Session 和 User 都未显式配置策略时使用的部署级默认记忆抽取策略。 | `null` |
 | `user_config_defaults.auto_commit_policy` | object | 新建 Session 未显式指定策略时使用的部署级自动 Commit 默认策略。 | `null` |
+| `user_config_defaults.privacy` | object | 用户未显式配置时使用的部署级默认隐私处理策略。 | `mode=off`、`restore=true` |
 | `agent_evolution.enabled` | bool | Agent 进化的集群启动默认值，运行时可由 Account 或 Cluster Admin settings 覆盖。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭后已有记忆仍可读取和检索。 | `false` |
 
 MySQL Provider 默认保存高熵 API Key 的带版本 SHA-256 摘要，并通过独立摘要索引

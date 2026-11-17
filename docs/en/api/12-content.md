@@ -144,14 +144,14 @@ Read the complete text of an L0, L1, or L2 file.
 | uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` (returned by `stat()`) |
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
-| raw | bool | No | false | Skip default sanitization and MEMORY_FIELDS cleanup, and attempt placeholder restoration. In Python, use `client.read_raw(uri)`. |
+| raw | bool | No | false | Skip default sanitization and MEMORY_FIELDS cleanup, and restore Skill/Session placeholders according to Privacy settings. In Python, use `client.read_raw(uri)`. |
 
 **Notes**
 
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
 - Instead of a Viking URI, you may pass the 32-character hex `id` returned by `stat()` for a file. The server looks up the URI via the vector index and applies the same permission checks. Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup also fails if the corresponding vector record has been deleted. In both cases, the server returns `NOT_FOUND` and indicates that the data may not have been indexed yet or may have been deleted.
 - Public URI parameters accept `resources`, `user`, and `agent` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}/messages.jsonl` or the current user's `viking://~/sessions/{session_id}/messages.jsonl` home alias. The old `viking://session/...` scope and internal scopes such as `temp` and `queue` return `INVALID_URI`.
-- Sensitive information handling: default reads (`raw=false`) preserve existing placeholders and sanitize remaining registered plaintext values; `raw=true` skips default sanitization and returns the restored content. Restoration affects only the response, not stored files; see [Privacy Configs](../concepts/13-privacy.md).
+- Sensitive information handling: normal reads (`raw=false`) preserve existing placeholders and replace matching registered values with placeholders when enabled by `privacy.mode`. For files outside Skills and Sessions, automatic replacement is enabled only in `auto_strict` mode. Use `raw=true` to skip automatic replacement; Skill and Session placeholders are then restored if `privacy.restore=true`. Restoration affects only the returned content, not the stored file; see [Privacy Configs](../concepts/13-privacy.md).
 
 **Python SDK**
 
@@ -218,6 +218,8 @@ Write a file and automatically refresh related semantics and vectors.
 | content | str | Yes | - | New content to write |
 | mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` is a compatibility alias for `replace` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
+| use_snapshot | bool | No | `false` | Save the written file as a snapshot under the content lock|
+| defer_processing | bool | No | `false` | For indexed namespaces, save content without scheduling semantic or vector processing; FILE_ONLY processing is unchanged |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
 | tag_mode | string | No | `replace` | Tag update mode: `replace` overwrites tags, `append` merges by key, and `clear` removes existing tags without requiring `tags` |
@@ -229,6 +231,8 @@ Write a file and automatically refresh related semantics and vectors.
 - Creating a missing file with any mode only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
+- For indexed namespaces, `defer_processing=true` saves the content and, with `use_snapshot=true`, records a snapshot under the same write lock. It reports `semantic_status` and `vector_status` as `deferred`, and schedules no `ContentWrite`, `Semantic`, or `Embedding` QueueFS work. The persistent Task is completed directly: `wait=false` returns its already-terminal `task_id`, while `wait=true` reads the terminal result and omits `task_id`. Run `reindex()` for the URI before relying on search. Deferral cannot be combined with an effective tags/ACL update or `resolve_conflicts=true`.
+- FILE_ONLY namespaces such as `viking://system/` retain their existing processing behavior with either value of `defer_processing`: semantic/vector statuses are `skipped`, and a `ContentWrite` root message completes the Task without indexing. `wait=false` returns after enqueue; `wait=true` waits for that Task. FILE_ONLY namespaces do not support reindex. Existing namespace and parameter validation still applies.
 - Once file content is committed, a later semantic/vector enqueue failure does not roll it back. The request returns an error; retry the same write to resubmit derived maintenance. Explicit writes always recommit their final bytes, so retries remain safe while the vector index lags the file.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write automatically schedules related semantic and vector processing.
 - Parent L0/L1 refreshes for resource writes are best-effort: a parent lock conflict skips that directory refresh while preserving the file write and its own summary/vector work. Skipping L0/L1 persistence also skips directory vector updates; a later refresh is not guaranteed. Locks on the written file itself still raise conflicts. Contention detected before enqueueing returns `semantic_status: "skipped"`; skips during background execution are logged, and `wait=true` does not guarantee updated parent summaries.
@@ -348,10 +352,12 @@ Write multiple files below one Resource or Memory directory, then refresh the af
 | `root_uri` | string | Yes | - | Existing Resource or Memory directory containing every target |
 | `operations` | array | Yes | - | File writes to validate and apply |
 | `wait` | boolean | No | `true` | Wait for semantic/vector refresh |
+| `use_snapshot` | boolean | No | `false` | Save successful writes in one snapshot before releasing content locks |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | `telemetry` | boolean/object | No | `false` | Include operation telemetry |
 | `processing_mode` | string | No | `semantic_and_vectors` | One processing mode for the whole batch: `semantic_and_vectors` or `vectors_only` |
-| `defer_processing` | boolean | No | `false` | Save files without scheduling semantic or vector work; the caller schedules later processing |
+| `defer_processing` | boolean | No | `false` | For indexed namespaces, save files without scheduling semantic or vector work; the caller schedules later processing. FILE_ONLY processing is unchanged |
+| `skip_conflicts` | boolean | No | `false` | Preserve targets that fail revision or existence guards and return their conflict details while compatible operations continue |
 
 Each operation contains:
 
@@ -361,6 +367,9 @@ Each operation contains:
 | `content` | string | Conditional | UTF-8 text; exactly one of `content` and `content_base64` is required |
 | `content_base64` | string | Conditional | Base64-encoded bytes; not supported for Memory targets |
 | `mode` | string | No | `replace` (default), `append`, `create`, or `upsert` |
+| `expected_sha256` | string | No | Require the existing bytes to match this lowercase SHA-256 digest |
+| `if_absent` | boolean | No | Create only when the target does not exist; incompatible with `expected_sha256` and `append` |
+| `resolve_conflicts` | boolean | No | Treat this replacement as manual conflict resolution for an existing Resource Markdown file |
 | `tags` | string[] | No | - | Explicit retrieval tags for this file |
 | `tag_mode` | string | No | `replace` | Tag write mode for this file: `replace`, `append`, or `clear` |
 | `acl` | object | No | - | Direct ACL for this file; requires manage permission on the file |
@@ -373,11 +382,16 @@ Each operation contains:
 - `create`, `replace`, and `upsert` are compatible spellings for setting the requested final body: they overwrite an existing file and create a missing one. `append` appends when the file exists and creates it with the supplied body when it does not.
 - `processing_mode` applies to the whole batch; operations cannot mix semantic modes. `vectors_only` maintains changed-file vectors without refreshing parent semantics.
 - `tags`, `tag_mode`, and `acl` apply per operation. Tags travel with the file's first vector upsert; `clear` does not require `tags` and ignores supplied tag values.
+- `expected_sha256` and `if_absent` are checked while all target locks are held. With `skip_conflicts=true`, failed guards are returned in `conflicts` without overwriting those targets; permission, transport, and write failures remain errors.
+- `resolve_conflicts=true` compares the previous and edited Markdown, preserves conflict history, and updates `has_conflict` and `conflict_num` tags. It applies to `replace` and its `create` compatibility alias, requires text content, and cannot be combined with `defer_processing`; non-existing, non-Resource, non-Markdown, `append`, and `upsert` targets keep ordinary write behavior.
 - The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Without deferral, asynchronous processing retains the file locks until the associated work settles, refreshing the affected `.overview.md` and `.abstract.md` files together.
 - Resource parent refreshes use the same best-effort behavior as `write()`: L0/L1 lock conflicts skip the directory refresh and its vector updates while preserving file writes and file processing. A later refresh is not guaranteed.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.
 - Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.
 - In the response body, `semantic_status` (`queued`, `complete`, `deferred`, or `skipped`) reports grouped parent-directory aggregation. It is `skipped` only when no parent group was enqueued; one busy parent does not hide work enqueued for another. `vector_status` reports vector maintenance for changed files.
+- Every successful request creates one persistent `content_batch_write` Task. Without deferral, it enqueues one root message on the `ContentWrite` QueueFS queue; the default SQLite QueueFS backend persists that message, while `backend=memory` does not survive process exit. `wait=false` returns `task_id` after enqueue; `wait=true` waits for terminal completion and omits `task_id`.
+- For indexed namespaces, `defer_processing=true` creates no `ContentWrite`, `Semantic`, or `Embedding` QueueFS message: the Task is completed directly after the content commit. `wait=false` returns an already-terminal `task_id`; `wait=true` reads the same terminal result and omits `task_id`. With `use_snapshot=true`, successful writes are saved in one snapshot before the Task completes. The caller schedules later processing, for example with `reindex()`. Effective tags/ACL updates and `resolve_conflicts=true` are rejected in this mode.
+- FILE_ONLY batches keep their existing behavior with either value of `defer_processing`: semantic/vector statuses are `skipped`, and a `ContentWrite` root message completes the Task without indexing. `wait=false` returns after enqueue; `wait=true` waits for that Task. Namespace and parameter validation still applies, and FILE_ONLY targets do not support reindex.
 - If formal content commits but asynchronous refresh enqueue fails, the body is kept. Re-run with the final body using `replace`, `create`, or `upsert`; do not blindly replay an already-successful `append`, because it would append twice.
 
 **Python SDK**
@@ -394,7 +408,8 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# Updated page\n",
-            "mode": "upsert",
+            "mode": "replace",
+            "resolve_conflicts": True,
         },
     ],
     wait=True,

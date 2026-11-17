@@ -194,7 +194,7 @@ Rule 编译始终以 `thinking=true` 调用专用 Compiler 或回退的账户默
 | `model` | string / `null` | provider 默认值 | 模型名或 Endpoint ID；`custom` 必填 |
 | `timeout` | number | `30` | HTTP 请求超时秒数 |
 | `extra_headers` | object / `null` | `null` | 附加 HTTP 请求头 |
-| `log_payloads` | boolean | `false` | 是否记录完整请求和响应；日志可能包含任务与 Rule 内容 |
+| `log_payloads` | boolean | `false` | 在 `log.level=DEBUG` 时记录安全的请求和响应摘要；不记录任务、Rule 和响应正文 |
 
 | Provider | 默认请求 URL | 默认 model | 说明 |
 |---|---|---|---|
@@ -240,7 +240,7 @@ Compiler 会优先忠实提炼原文中的对象、操作、前提和场景，�
 | `mode` | `noul`、`choice` 或 `null` | `noul` | Jev Rerank 模式；`null` 同样使用 `noul` |
 | `threshold` | number | `0.1` | 判定结果相关的最低 Rerank 分数；只过滤模型产出的 Rerank 分数，不过滤向量分数；请求中的 `score_threshold` 优先 |
 | `max_input_tokens` | integer；`0` 或 `>= 128` | `0` | 每个 query-document pair 的最大估算 token；`0` 表示不截断 |
-| `log_payloads` | boolean | `false` | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容 |
+| `log_payloads` | boolean | `false` | 仅用于 Jev：在 `log.level=DEBUG` 时记录安全的请求和响应摘要；不记录 query、文档和响应正文 |
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 
@@ -496,6 +496,39 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 |---|---|---:|---|
 | `max_concurrent` | integer | `10` | 同时消费的外部异步任务数，必须大于 `0`；修改后需重启服务 |
 
+## 日志配置
+
+`log` 统一控制独立服务器的 Python、Rust 和 C++ 输出。默认级别为 `INFO`，
+便于看到兜底和重试；业务过程使用 `DEBUG`。第三方日志保留原级别语义。
+Bootstrap 启动结果和失败提示直接打印到 stdout/stderr，即使设置高日志阈值
+或文件输出也会显示。
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `level` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | `INFO` | 输出阈值；大小写不敏感，兼容 `WARN` 和 `FATAL` |
+| `format` | 公共格式字符串 | 见下文 | Python、Rust、C++ 使用同一日志头 |
+| `output` | `stdout`、`stderr`、`file` 或文件路径 | `stdout` | `file` 写入 `storage.workspace/log/openviking.log` |
+| `rotation` | boolean | `true` | Python 文件输出轮转，并通知 Rust 重开文件 |
+| `rotation_days` | integer | `3` | Python 保留的轮转文件数量 |
+| `rotation_interval` | `midnight`、`H`、`D`、`W0`–`W6` | `midnight` | Python 文件轮转周期；C++ 文件 sink 不参与轮转 |
+
+公共 `format` 的精确值：
+
+```text
+%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s
+```
+
+输出时间为 UTC 毫秒，消息及附加字符串按 JSON 规则转义，每条事件占一行，
+不含终端颜色。缺失的关联字段显示 `-`。升级时，旧内建格式
+`%(asctime)s - %(name)s - %(levelname)s - %(message)s` 自动转为公共格式；
+其他自定义格式和未知级别会导致配置校验失败。
+
+原生输出配置改变后需要重启服务；Python 重配不能代表原生组件已经更新。
+Rust 没有 `CRITICAL`，该阈值仍映射到 `ERROR`，输出仍标为 `ERROR`。
+已有 `server.observability.usage_audit` 配置管理用量及 HTTP 请求记录；
+安全操作审计落库记为独立功能待办。
+SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING_CN.md)。
+
 ## Compile API 配置
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -523,7 +556,7 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
     "host": "127.0.0.1",
     "port": 1933,
     "workers": 1,
-    "executor_threads": 0,
+    "executor_threads": 64,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -541,7 +574,7 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 | `host` | IP / hostname | `"127.0.0.1"` | HTTP 监听地址 |
 | `port` | integer | `1933` | HTTP 监听端口 |
 | `workers` | integer | `1` | 服务进程数量 |
-| `executor_threads` | 非负整数 | `0` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
+| `executor_threads` | 非负整数 | `64` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
 | `timeout_keep_alive` | integer（秒） | `5` | 空闲 HTTP keep-alive 超时；应调大到超过上游空闲连接寿命 |
 | `auth_mode` | `dev`、`api_key`、`trusted` / `null` | `null` | 鉴权模式；空值根据 `root_api_key` 自动判断 |
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |

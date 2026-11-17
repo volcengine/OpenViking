@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mount, ok } from './helpers/console-dom.mjs';
-import { click, type } from './helpers/command-console-dom.mjs';
+import { act, click, type } from './helpers/command-console-dom.mjs';
 
 test('slash palette uses the built-in group order and keeps cross-group commands selectable', async () => {
   const host = await mount(
@@ -33,11 +33,11 @@ test('slash palette uses the built-in group order and keeps cross-group commands
       'add-resource',
       'add-skill',
       'compile',
+      'compile create',
       'find',
       'read',
       'write',
       'add-memory',
-      'compile create',
     ]);
     assert.deepEqual(names(groups[1]), [
       'ls',
@@ -62,7 +62,31 @@ test('slash palette uses the built-in group order and keeps cross-group commands
       new Set(options.map((option) => option.id)).size,
       options.length,
     );
-    const searchFind = groups[2].querySelector('[role="option"]');
+    const compile = options.find(
+      (option) =>
+        option.querySelector('.ov-command-console__suggestion-name')
+          ?.textContent === 'compile',
+    );
+    await act(() => compile.focus());
+    const commands = [
+      ...host.container.querySelectorAll(
+        '.ov-command-console__hint-steps button',
+      ),
+    ];
+    assert.deepEqual(
+      commands.map((button) => button.textContent),
+      [
+        'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
+        'ov compile --compile-name <name>',
+        'ov task status <task_id>',
+      ],
+    );
+    await click(commands[0]);
+    assert.equal(host.input.value, commands[0].textContent);
+    await type(host.input, '/');
+    const searchFind = host.container
+      .querySelectorAll('.ov-command-console__suggestion-group')[2]
+      .querySelector('[role="option"]');
     await click(searchFind);
     assert.equal(host.input.value, 'ov find ');
     await host.execute('ov help');
