@@ -18,6 +18,7 @@ from openviking.service.task_work_index import (
     extract_task_metadata,
 )
 from openviking.storage.errors import HandoffRecoveryRequired
+from openviking.storage.pathlock_recovery import is_stale_compile_lease
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -90,7 +91,9 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                         if handoff:
                             try:
                                 await guard.adopt(handoff)
-                            except HandoffRecoveryRequired:
+                            except (HandoffRecoveryRequired, ValueError) as exc:
+                                if not is_stale_compile_lease(exc):
+                                    raise
                                 try:
                                     await self._fs._ensure_initialized().stat(
                                         payload["uri"], ctx=ctx, skip_count=True
@@ -130,6 +133,7 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
         failures = 0
         while True:
             await sleep(delay)
+            lease = guard.lease
             try:
                 async with timeout(ATTEMPT_TIMEOUT_SECONDS):
 
@@ -138,7 +142,7 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                             QueueManager.COMPILE_TARGET_TAG, payload
                         )
 
-                    if guard.lease is not None:
+                    if lease is not None:
                         payload["target_lock"] = await guard.to_handoff()
                         await guard.handoff_and_dispatch(payload["target_lock"], enqueue)
                     else:
@@ -150,6 +154,8 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                 return ProcessResult.cancelled()
             except Exception as exc:
                 self._warn(payload, failures, exc)
+                if lease is not None and guard.lease is lease and is_stale_compile_lease(exc):
+                    guard.detach()
                 failures += 1
                 delay = min(60.0, delay * 2)
 
