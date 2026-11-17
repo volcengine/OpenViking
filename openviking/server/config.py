@@ -392,7 +392,7 @@ class ServerConfig(BaseModel):
     port: int = 1933
     workers: int = 1
     executor_threads: int = Field(
-        default=0,
+        default=64,
         ge=0,
         description=(
             "Maximum number of threads in each server process's default asyncio "

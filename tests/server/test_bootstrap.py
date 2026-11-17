@@ -366,7 +366,7 @@ def test_configure_default_executor_keeps_python_default_when_zero(monkeypatch):
         lambda: pytest.fail("event loop should not be touched when the setting is zero"),
     )
 
-    app_module._configure_default_executor(ServerConfig())
+    app_module._configure_default_executor(ServerConfig(executor_threads=0))
 
 
 def test_restartable_server_drains_uvicorn_before_returning(monkeypatch):
