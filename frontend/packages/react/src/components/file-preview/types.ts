@@ -154,6 +154,8 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `file`.
    */
   kind: 'file';
+  /** Overrides the empty body label for this tab. */
+  emptyLabel?: string;
   /** Injected commands; no copy/download/delete commands are supplied by default. */
   actions?: FilePreviewActionSource;
   /**
@@ -336,6 +338,8 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
  * 目录的一级摘要。One summary level of a directory.
  */
 export interface FilePreviewDirectoryLevel {
+  /** Overrides the empty body label for this directory level. */
+  emptyLabel?: string;
   /**
    * 层级唯一标识，用于切换与受控状态。
    * Unique level key, used for switching and controlled state.

@@ -123,6 +123,7 @@ A tab that renders `source` by its format. It includes every field of `FilePrevi
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------- |
 | kind           | Tab kind, always `'file'`                                                                                                                                   | `'file'`                                                      | Required |
 | source         | The content and file information to preview; when `levels` has an enabled entry, the current level's `source` is rendered instead                           | `FilePreviewSource`                                           | Required |
+| emptyLabel     | Overrides the default empty body message.                                                                                                                   | `string`                                                      | -        |
 | loading        | The body is still being read: it shows a loading state while the tab row and path row stay, and `source` may be empty                                       | `boolean`                                                     | `false`  |
 | operations     | Asynchronous capabilities; a control whose method is missing is unavailable                                                                                 | `FilePreviewOperations`                                       | -        |
 | resources      | Companion resources matched by `key` against Markdown image targets, as relative paths or `viking://` URIs                                                  | `readonly FileViewerResource[]`                               | -        |
@@ -195,12 +196,13 @@ One level of a file tab's `levels`.
 
 One summary level of a directory tab's `levels`.
 
-| Property  | Description                                                                    | Type                            | Default  |
-| --------- | ------------------------------------------------------------------------------ | ------------------------------- | -------- |
-| key       | Unique identifier of the level, used for switching and controlled state        | `string`                        | Required |
-| label     | What the level switch tab shows, for example "L0 Abstract"                     | `ReactNode`                     | Required |
-| source    | The body source of this level, the same as a file tab's `source`               | `FilePreviewSource`             | Required |
-| resources | Companion resources of this level; the tab's `resources` are used when omitted | `readonly FileViewerResource[]` | -        |
+| Property   | Description                                                                    | Type                            | Default  |
+| ---------- | ------------------------------------------------------------------------------ | ------------------------------- | -------- |
+| key        | Unique identifier of the level, used for switching and controlled state        | `string`                        | Required |
+| label      | What the level switch tab shows, for example "L0 Abstract"                     | `ReactNode`                     | Required |
+| source     | The body source of this level, the same as a file tab's `source`               | `FilePreviewSource`             | Required |
+| emptyLabel | Overrides the default empty body message.                                      | `string`                        | -        |
+| resources  | Companion resources of this level; the tab's `resources` are used when omitted | `readonly FileViewerResource[]` | -        |
 
 ### FilePreviewOperations
 

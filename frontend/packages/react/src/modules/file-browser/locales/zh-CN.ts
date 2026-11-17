@@ -76,6 +76,8 @@ const messages = {
 
 export default messages;
 
+export const emptySummaries = { l0: '暂无 L0 摘要', l1: '暂无 L1 总览' };
+
 export const stackedEmpty = '从上方选中一个文件预览';
 
 export const renderErrors = {

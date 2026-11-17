@@ -558,6 +558,22 @@ html.dark .ov-file-browser-search {
   --ov-ui-preview-dot-default: rgb(255 255 255 / 12%);
 }
 
+.ov-experience-dashboard {
+  --ov-ui-test-message-surface-default: #fcfcfc;
+}
+
+html.dark .ov-experience-dashboard {
+  --ov-ui-test-message-surface-default: var(--ov-ui-bg-2-default);
+}
+
+.ov-experience-trajectory-detail {
+  --ov-ui-trajectory-message-surface-default: #f9f9f9;
+}
+
+html.dark .ov-experience-trajectory-detail {
+  --ov-ui-trajectory-message-surface-default: var(--ov-ui-bg-3-default);
+}
+
 /* Shared dashboards: mapped from the 2026-11-12 console release, with host-overridable semantics. */
 .ov-wiki-dashboard,
 .ov-experience-dashboard,

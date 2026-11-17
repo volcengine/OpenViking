@@ -296,7 +296,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | deleteConfirm           | 删除确认框的确认按钮                                                                          | `string`                             | `'删除'`                                 |
 | l0Summary               | 目录预览里 L0 摘要的页签名                                                                    | `string`                             | `'L0 摘要'`                              |
 | l1Overview              | 目录预览里 L1 总览的页签名                                                                    | `string`                             | `'L1 总览'`                              |
-| summaryEmpty            | 目录某一级摘要尚未生成时的提示；预览目前不显示它，覆盖不会生效                                | `string`                             | `'暂无生成内容'`                         |
+| summaryEmpty            | 同时覆盖两级摘要的空态提示                                                                    | `string`                             | 暂无 L0 摘要 / 暂无 L1 总览              |
 | summaryFailed           | 某一级摘要读取失败且服务端没有返回消息时的提示                                                | `string`                             | `'摘要加载失败。'`                       |
 | formatCharacterCount    | 预览底部字符数的文案                                                                          | `(count: number) => string`          | 按 `locale` 格式化，如 `'1,234 字符数'`  |
 | formatPreviewUpdatedAt  | 预览底部更新时间的文案                                                                        | `(time: string) => string`           | `'更新于 {time}'`                        |
@@ -581,12 +581,15 @@ await browserRef.current?.openResource(directoryUri);
 
 ### 经验看板数据源
 
-通过 `experienceDataSource` 注入宿主请求。未提供的函数走默认 OpenViking 接口。请保持函数引用稳定，并把请求参数中的 `signal` 传给底层请求。请求失败时抛错，内置看板会显示错误和重试。
+通过 `experienceDataSource` 注入宿主请求。除 `sourceGroups`、`trajectoryMessages` 和 `tests` 外，未提供的函数走默认 OpenViking 接口。请保持函数引用稳定，并把请求参数中的 `signal` 传给底层请求。请求失败时抛错，内置看板会显示错误和重试。
 
 - `list({ uri, offset, limit, signal })` 返回 `{ items, hasMore, total? }`，其中 `items` 是经验文件列表。返回 `undefined` 时，该 URI 走默认列表接口。
 - `outcomes({ uri, startDate, endDate, signal })` 返回任务结果分布，每项为 `{ outcome, count }`。
 - `trajectories({ uri, offset, limit, startDate, endDate, signal })` 返回 `{ items, hasMore, total }`，其中 `items` 是本页注入轨迹。
 - `sources({ uri, signal })` 返回来源轨迹。
+- `sourceGroups({ uri, signal })` 返回按更新时间倒序排列的提交分组，每组包含 `id`、`updatedAt` 和 `trajectories`。配置后优先使用此数据源。
+- `trajectoryMessages({ uri, signal })` 在打开轨迹详情时接收轨迹 URI，返回 `{ archiveUri?, items }`。轨迹正文由区块读取。
+- `tests({ uri, offset, limit, signal })` 返回 `{ items, total }`，其中 `items` 是本页测试素材。配置后，单条经验看板会显示「测试」页签，首次打开时加载。
 - 分页的 `offset` 从 0 开始，`limit` 为 20。时间参数采用 UTC `YYYY-MM-DD`，选择全部时间时省略日期。
 
 ### 失败状态

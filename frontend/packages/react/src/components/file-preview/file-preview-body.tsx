@@ -119,7 +119,8 @@ function FilePreviewBodyContent({
   if (fileTab.loading)
     return fileTab.slots?.loadingFallback ?? <LoadingState text={text} />;
 
-  if (isEmptyFile(fileTab.source)) return <EmptyFileState text={text} />;
+  if (isEmptyFile(fileTab.source))
+    return <EmptyFileState text={text} label={fileTab.emptyLabel} />;
 
   const media = mediaKind(fileTab.source);
   if (media)

@@ -13,7 +13,11 @@ import {
 } from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
-import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
+import {
+  resolveLabels,
+  resolvePreviewLabels,
+  resolveSummaryLabels,
+} from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js';
 import { useFileBrowser } from './use-file-browser.js';
@@ -93,12 +97,8 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   // 摘要文案只影响展示，不作为预览请求的依赖。
   // Summary copy changes presentation without restarting preview requests.
   const summaryLabels = useMemo(
-    () => ({
-      l0: text.l0Summary,
-      l1: text.l1Overview,
-      failure: text.summaryFailed,
-    }),
-    [text.l0Summary, text.l1Overview, text.summaryFailed],
+    () => resolveSummaryLabels(locale, labels),
+    [locale, labels],
   );
 
   // 宿主文案和语言未变时，保留预览覆盖对象的引用。
