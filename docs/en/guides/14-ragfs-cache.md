@@ -22,20 +22,29 @@ openviking-server init
 openviking-server doctor
 ```
 
-Configure the global top-level `cache` Provider, then select `backend=cache` under `storage.agfs.cachefs`:
+Configure named top-level `cache.instances`, then select an instance under
+`storage.agfs.cachefs`:
 
 ```json
 {
   "service_name": "openviking-server",
   "cache": {
-    "provider": "redis",
-    "params": {
-      "mode": "standalone",
-      "endpoints": ["redis://127.0.0.1:6379"],
-      "pool_size": 32,
-      "connect_timeout_ms": 1000,
-      "command_timeout_ms": 1000,
-      "default_ttl_seconds": 300
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "mode": "standalone",
+          "endpoints": ["redis://127.0.0.1:6379"],
+          "pool_size": 32,
+          "connect_timeout_ms": 1000,
+          "command_timeout_ms": 1000,
+          "default_ttl_seconds": 300
+        }
+      },
+      "locks": {
+        "provider": "redis",
+        "params": {"endpoints": ["redis://127.0.0.1:6379"]}
+      }
     }
   },
   "storage": {
@@ -43,10 +52,12 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
     "agfs": {
       "backend": "local",
       "cachefs": {
-        "backend": "cache"
+        "backend": "cache",
+        "instance": "default"
       },
       "pathlock": {
         "provider": "cache",
+        "instance": "locks",
         "lock_expire_secs": 30.0
       }
     }
@@ -92,7 +103,7 @@ Cache-backed PathLock only supports the built-in Redis Provider.
 
 Distributed PathLock can also use `provider="postgres"` to coordinate through a
 shared PostgreSQL primary without Redis or CacheRuntime. It is configured separately
-from `cache.provider` and does not enable CacheFS or change QueueFS. See
+from `cache.instances` and does not enable CacheFS or change QueueFS. See
 [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock). CachedFileSystem retains
 its single-writer requirement with either PathLock backend.
 
@@ -122,7 +133,7 @@ Legacy cache configuration is no longer accepted. Migrate before upgrading:
 
 | Removed configuration | Canonical replacement |
 |-----------------------|-----------------------|
-| `storage.agfs.cache` | top-level `cache.provider` + `cache.params`, plus `storage.agfs.cachefs.backend="cache"` |
+| `storage.agfs.cache` | `cache.instances`, plus `storage.agfs.cachefs.backend="cache"` |
 | `storage.agfs.queuefs.backend="redis"` and `queuefs.redis` | `storage.agfs.queuefs.backend="cache"`, plus the shared top-level `cache` section |
 | Redis `mode="singleton"` | `mode="standalone"` |
 | `tls_enabled=true` | use `rediss://` endpoints |
@@ -154,14 +165,16 @@ The top-level `cache` section is a sibling of `storage`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `provider` | str | none | Provider name; supports `redis` and `dynamic` |
-| `params` | object | `{}` | Provider-owned parameters |
+| `instances` | object | required for cache consumers | Named provider entries; `default` is mandatory |
+| `instances.<name>.provider` | str | none | Provider name; supports `redis` and `dynamic` |
+| `instances.<name>.params` | object | `{}` | Parameters owned by the selected provider |
 
 `storage.agfs.cachefs` controls CacheFS behavior:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `backend` | str | `"local"` | `local` preserves existing behavior; `cache` enables CachedFileSystem |
+| `instance` | str | `"default"` | Named Runtime used when `backend="cache"` |
 | `shared_redis_ttl_seconds` | int | `0` | TTL override for every query bucket when CacheFS shares a Redis service with QueueFS, cache-backed PathLock, or the expiry scheduler; `0` keeps the provider default |
 
 `shared_redis_ttl_seconds` applies uniformly to `stat`, `read_dir`, `tree_directory`, `glob_directory`, and `grep` buckets. It does not encode a per-file priority: after the query-driven CacheFS refactor, cached objects are query results rather than file bodies or directory entries. Set it lower than the provider's `default_ttl_seconds` to bound cache retention when stateful modules share the service. OpenViking ignores the option when CacheFS uses an isolated Redis service.
@@ -171,6 +184,7 @@ The top-level `cache` section is a sibling of `storage`:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `provider` | str | `"filesystem"` | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; see [SQLite setup](../configuration/01-server.md#storage) and [PostgreSQL setup](../configuration/01-server.md#postgresql-pathlock) |
+| `instance` | str | `"default"` | Named Redis Runtime used when `provider="cache"` |
 | `postgres_dsn_env` | str / null | `null` | Required for `postgres`; name of the server environment variable containing its DSN |
 | `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
 
@@ -194,20 +208,41 @@ With `command_timeout_ms=0`, CacheRuntime does not time out slow Redis commands.
 
 DynamicProvider configuration:
 
-OpenViking uses `cache.params.library` to load the dynamic library. All remaining fields are Provider-owned and passed to `create` as JSON. Use the schema documented by the Provider publisher.
+OpenViking uses `cache.instances.<name>.params.library` to load the dynamic
+library. All remaining fields are Provider-owned and passed to `create` as
+JSON. Use the schema documented by the Provider publisher.
 
 ```json
 {
   "cache": {
-    "provider": "dynamic",
-    "params": {
-      "library": "/opt/openviking/providers/libopenviking_cache_provider.so",
-      "endpoint": "127.0.0.1:31501",
-      "request_timeout_ms": 5000
+    "instances": {
+      "default": {
+        "provider": "dynamic",
+        "params": {
+          "library": "/opt/openviking/providers/libopenviking_cache_provider.so",
+          "endpoint": "127.0.0.1:31501",
+          "request_timeout_ms": 5000
+        }
+      }
     }
   }
 }
 ```
+
+### Named Runtime And Python API
+
+CacheFS, QueueFS, cache-backed PathLock, coordination, and multi-write each
+select `instance`, which defaults to `default`. Different names can still
+share Redis CPU and memory when they point to the same primary.
+Cache-backed PathLock requires its selected instance to use `redis`.
+
+`RAGFSBindingClient.cache_runtime(instance="default")` and
+`AsyncAGFSClient.cache_runtime(instance="default")` return the same in-process
+native Runtime handle. They do not call an HTTP API or create a Redis
+connection. The handle exposes KV, hash, set, sorted-set, and list operations,
+`register_script`, `execute_script`, `default_ttl_seconds`, and instance-wide
+`close()`. All I/O methods are awaitable; synchronous callers should own the
+outer `asyncio.run()` boundary.
 
 ## Architecture
 

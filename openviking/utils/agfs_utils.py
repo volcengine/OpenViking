@@ -51,6 +51,7 @@ class RagfsBindingConfig:
         queue_backend = getattr(queuefs, "backend", None)
         cachefs = getattr(self.agfs, "cachefs", None)
         cachefs_backend = getattr(cachefs, "backend", "local")
+        cachefs_instance = getattr(cachefs, "instance", "default")
         pathlock = self.agfs.pathlock.model_dump(mode="json", exclude_none=True)
         if pathlock.get("provider") == "sqlite":
             sqlite_path = pathlock.get("sqlite_path")
@@ -78,23 +79,49 @@ class RagfsBindingConfig:
             or coordination["provider"] == "cache"
             or _get_config_value(backups, "provider", "filesystem") == "cache"
         )
-        if (
-            pathlock_uses_cache
-            and self.cache is not None
-            and self.cache.provider.strip() != "redis"
-        ):
-            raise ValueError("cache-backed PathLock requires top-level cache.provider=redis")
-        if self.cache is not None and uses_runtime:
-            cache_config = _build_provider_cache_config(
+        if self.cache is not None:
+            if cachefs_backend == "cache":
+                _require_cache_instance(self.cache, cachefs_instance, "CacheFS")
+            if queue_backend == "cache":
+                _require_cache_instance(
+                    self.cache,
+                    getattr(queuefs, "instance", "default"),
+                    "QueueFS",
+                )
+            if pathlock_uses_cache:
+                pathlock_instance = pathlock.get("instance", "default")
+                pathlock_cache = _require_cache_instance(
+                    self.cache,
+                    pathlock_instance,
+                    "PathLock",
+                )
+                if _get_config_value(pathlock_cache, "provider").strip() != "redis":
+                    raise ValueError(
+                        f"cache-backed PathLock requires cache instance '{pathlock_instance}' "
+                        "to use provider='redis'"
+                    )
+            if coordination["provider"] == "cache":
+                _require_cache_instance(
+                    self.cache,
+                    coordination.get("instance", "default"),
+                    "Coordination",
+                )
+            if _get_config_value(backups, "provider", "filesystem") == "cache":
+                _require_cache_instance(
+                    self.cache,
+                    _get_config_value(backups, "instance", "default"),
+                    "multi-write",
+                )
+            cache_config = _build_named_cache_config(
                 self.cache,
                 cachefs_backend == "cache",
-                uses_runtime,
+                cachefs_instance,
                 self.service_name,
             )
             shared_redis_ttl = int(getattr(cachefs, "shared_redis_ttl_seconds", 0))
-            cache_config["shared_redis_ttl_seconds"] = shared_redis_ttl if self.shared_redis_backend else 0
-        elif self.cache is not None:
-            cache_config = _disabled_cache_config(self.service_name)
+            cache_config["cachefs"]["shared_redis_ttl_seconds"] = (
+                shared_redis_ttl if self.shared_redis_backend else 0
+            )
         else:
             if uses_runtime:
                 raise ValueError(
@@ -131,33 +158,54 @@ def _disabled_cache_config(service_name: str = DEFAULT_SERVICE_NAME) -> Dict[str
     return {
         "enabled": False,
         "runtime_enabled": False,
-        "provider": "redis",
+        "instances": {},
+        "cachefs": {
+            "enabled": False,
+            "instance": "default",
+            "service_name": service_name,
+            "shared_redis_ttl_seconds": 0,
+        },
     }
 
 
-def _build_provider_cache_config(
-    provider_config: Any,
+def _require_cache_instance(cache_config: Any, instance: str, consumer: str) -> Any:
+    """Return one configured cache instance or explain which consumer is invalid."""
+    instances = _get_config_value(cache_config, "instances", {})
+    configured = _get_config_value(instances, instance)
+    if configured is None:
+        raise ValueError(
+            f"{consumer} references unknown cache instance '{instance}'"
+        )
+    return configured
+
+
+def _build_named_cache_config(
+    named_config: Any,
     cachefs_enabled: bool,
-    runtime_enabled: bool,
+    cachefs_instance: str,
     service_name: str,
 ) -> Dict[str, Any]:
-    """Build a provider-backed cache config that shares the top-level service name."""
-    provider = provider_config.provider.strip()
-    params = dict(provider_config.params)
+    """Build named cache provider configs that share the top-level service name."""
+    instances = {}
+    for name, provider_config in _get_config_value(named_config, "instances", {}).items():
+        provider = _get_config_value(provider_config, "provider").strip()
+        params = dict(_get_config_value(provider_config, "params", {}))
+        instance_config: Dict[str, Any] = {"provider": provider}
+        if provider == "redis":
+            from openviking_cli.utils.config.agfs_config import RedisCacheConfig
+
+            instance_config["redis"] = RedisCacheConfig.model_validate(params).model_dump(mode="json")
+        else:
+            instance_config["dynamic"] = params
+        instances[name] = instance_config
     cache_config = _disabled_cache_config(service_name)
     cache_config.update({
         "enabled": cachefs_enabled,
-        "runtime_enabled": runtime_enabled,
-        "provider": provider,
+        "runtime_enabled": True,
+        "instances": instances,
     })
-    if provider == "redis":
-        from openviking_cli.utils.config.agfs_config import RedisCacheConfig
-
-        redis = RedisCacheConfig.model_validate(params)
-        cache_config["redis"] = redis.model_dump(mode="json")
-        return cache_config
-    if provider == "dynamic":
-        cache_config["dynamic"] = params
+    cache_config["cachefs"]["enabled"] = cachefs_enabled
+    cache_config["cachefs"]["instance"] = cachefs_instance
     return cache_config
 
 
@@ -219,21 +267,52 @@ def _redis_service_keys(endpoints: Any, *, tls: bool = False) -> set[str]:
 
 
 def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_config: Any) -> bool:
-    """Whether cache entries compete with stateful keys in the same Redis service.
+    """Whether the CacheFS-selected Redis service is shared with stateful users."""
+    if cache_config is None:
+        return False
+    cachefs = _get_config_value(agfs_config, "cachefs")
+    if _get_config_value(cachefs, "backend") != "cache":
+        return False
+    cachefs_instance = _get_config_value(cachefs, "instance", "default")
+    cachefs_config = _require_cache_instance(cache_config, cachefs_instance, "CacheFS")
+    if _get_config_value(cachefs_config, "provider") != "redis":
+        return False
+    cache_keys = _redis_service_keys(
+        _get_config_value(_get_config_value(cachefs_config, "params"), "endpoints")
+    )
+    if not cache_keys:
+        return False
 
-    QueueFS and PathLock reuse the top-level cache provider, so they always share
-    the cache backend. The expiry scheduler owns its own Redis connection and only
-    shares the backend when both configurations point at the same service.
-    """
+    def shares_instance(consumer: Any, consumer_name: str) -> bool:
+        """Compare CacheFS against the selected Redis instance for one consumer."""
+        instance = _get_config_value(consumer, "instance", "default")
+        selected = _require_cache_instance(cache_config, instance, consumer_name)
+        if _get_config_value(selected, "provider") != "redis":
+            return False
+        selected_keys = _redis_service_keys(
+            _get_config_value(_get_config_value(selected, "params"), "endpoints")
+        )
+        return bool(cache_keys & selected_keys)
+
     queuefs = _get_config_value(agfs_config, "queuefs")
-    if _get_config_value(queuefs, "backend") == "cache":
+    if _get_config_value(queuefs, "backend") == "cache" and shares_instance(queuefs, "QueueFS"):
         return True
     pathlock = _get_config_value(agfs_config, "pathlock")
-    if _get_config_value(pathlock, "provider") == "cache":
+    if _get_config_value(pathlock, "provider") == "cache" and shares_instance(pathlock, "PathLock"):
         return True
-    cache_params = _get_config_value(cache_config, "params")
+    coordination = _get_config_value(agfs_config, "coordination")
+    if _get_config_value(coordination, "provider") == "cache" and shares_instance(
+        coordination,
+        "Coordination",
+    ):
+        return True
+    backups = _get_config_value(agfs_config, "backups")
+    if _get_config_value(backups, "provider", "filesystem") == "cache" and shares_instance(
+        backups,
+        "multi-write",
+    ):
+        return True
     expiry_redis = _get_config_value(expiry_config, "redis")
-    cache_keys = _redis_service_keys(_get_config_value(cache_params, "endpoints"))
     expiry_keys = _redis_service_keys(
         _get_config_value(expiry_redis, "endpoints"),
         tls=bool(_get_config_value(expiry_redis, "tls", False)),
@@ -372,6 +451,7 @@ def _build_queuefs_plugin_config(
 
     if backend == "cache":
         plugin_config["service_name"] = service_name
+        plugin_config["instance"] = getattr(queuefs_config, "instance", "default")
 
     return plugin_config
 
