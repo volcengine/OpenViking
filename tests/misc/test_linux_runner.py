@@ -450,7 +450,13 @@ def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
 )
 @pytest.mark.parametrize("installed", [True, False])
 def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, file, name, installed):
-    step = next(step for step in jobs(file)[name]["steps"] if "packages=(" in step.get("run", ""))
+    job = jobs(file)[name]
+    step = next(step for step in job["steps"] if "packages=(" in step.get("run", ""))
+    shell = step.get("shell", job.get("defaults", {}).get("run", {}).get("shell"))
+    if shell and shell.startswith("${{"):
+        shell = labels(shell, {"os": "ubuntu-24.04"})[0]
+    # Container jobs default to sh, which cannot execute the package arrays.
+    assert shell == "bash"
     command_dir = tmp_path / "bin"
     command_dir.mkdir()
     apt_log = tmp_path / "apt.log"
@@ -471,7 +477,7 @@ def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, fil
         executable.write_text(script)
         executable.chmod(0o755)
     result = subprocess.run(
-        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+        [shell, "-e", "-o", "pipefail", "-c", step["run"]],
         env={
             **environ,
             "PATH": f"{command_dir}{pathsep}{environ['PATH']}",

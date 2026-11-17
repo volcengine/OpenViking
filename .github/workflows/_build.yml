@@ -224,6 +224,9 @@ jobs:
       # Minimal Ubuntu images lack CA certificates before the first apt install.
       options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
