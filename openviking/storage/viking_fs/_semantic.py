@@ -153,7 +153,8 @@ class _SemanticMixin:
         filter: Optional[Dict],
         level: Optional[List[int]],
         search_type: SearchType,
-        options: SearchAsItemOptions,
+        options: SearchAsItemOptions | Dict[str, Any],
+        events_time_decay_protection: Optional[str] = None,
         filter_only: bool = False,
     ) -> FindResult:
         """Ask the storage engine for ordered groups, then attach Item roots."""
@@ -161,6 +162,13 @@ class _SemanticMixin:
         from openviking.storage.catalog import decode_item_attrs
         from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 
+        try:
+            options = validate_item_search_request(
+                options, events_time_decay_protection=events_time_decay_protection
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+        assert options is not None
         storage = self._get_vector_store()
         if not storage:
             raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
@@ -207,12 +215,11 @@ class _SemanticMixin:
         if not isinstance(groups, list) or not groups:
             return FindResult(memories=[], resources=[], skills=[])
 
-        item_uuids = [str(group["entity_id"]) for group in groups]
         # New engines return each group's own root and attributes. Only legacy
         # responses need a UUID lookup; never read or merge ancestor attributes.
         legacy_uuids = [
-            item_uuid
-            for group, item_uuid in zip(groups, item_uuids, strict=True)
+            str(group["entity_id"])
+            for group in groups
             if not group.get("entity_uri") or "entity_attrs" not in group
         ]
         by_uuid = {}
@@ -226,7 +233,8 @@ class _SemanticMixin:
             raise RuntimeError(f"Item declaration roots are missing for {len(missing)} groups")
 
         root_uris = []
-        for group, item_uuid in zip(groups, item_uuids, strict=True):
+        for group in groups:
+            item_uuid = str(group["entity_id"])
             root_uri = str(group.get("entity_uri") or by_uuid[item_uuid]["uri"])
             if root_uri.startswith("/"):
                 root_uri = "viking://" + root_uri.lstrip("/")
@@ -239,11 +247,12 @@ class _SemanticMixin:
             ContextType.RESOURCE: [],
             ContextType.SKILL: [],
         }
-        for group, item_uuid, root_uri in zip(groups, item_uuids, root_uris, strict=True):
+        for group, root_uri in zip(groups, root_uris, strict=True):
             if access is not None and not access.get(root_uri, False):
                 continue
+            item_uuid = str(group["entity_id"])
             candidate_uris = [
-                str(uri) for uri in group.get("candidate_members_uri", []) if isinstance(uri, str)
+                uri for uri in group.get("candidate_members_uri", []) if isinstance(uri, str)
             ]
             count = int(
                 group.get("candidate_members_count", group.get("count", len(candidate_uris)))
@@ -360,14 +369,6 @@ class _SemanticMixin:
             )
 
         if search_as_item is not None:
-            try:
-                item_options = validate_item_search_request(
-                    search_as_item,
-                    events_time_decay_protection=events_time_decay_protection,
-                )
-            except ValueError as exc:
-                raise InvalidArgumentError(str(exc)) from exc
-            assert item_options is not None
             return await self._retrieve_items(
                 query=query,
                 image_url=image_url,
@@ -378,7 +379,8 @@ class _SemanticMixin:
                 filter=filter,
                 level=level,
                 search_type=search_type,
-                options=item_options,
+                options=search_as_item,
+                events_time_decay_protection=events_time_decay_protection,
                 filter_only=filter_only,
             )
 
@@ -590,14 +592,6 @@ class _SemanticMixin:
         real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
         if search_as_item is not None:
-            try:
-                item_options = validate_item_search_request(
-                    search_as_item,
-                    events_time_decay_protection=events_time_decay_protection,
-                )
-            except ValueError as exc:
-                raise InvalidArgumentError(str(exc)) from exc
-            assert item_options is not None
             return await self._retrieve_items(
                 query=query,
                 ctx=real_ctx,
@@ -608,7 +602,8 @@ class _SemanticMixin:
                 filter=filter,
                 level=level,
                 search_type=search_type,
-                options=item_options,
+                options=search_as_item,
+                events_time_decay_protection=events_time_decay_protection,
                 filter_only=filter_only,
             )
 

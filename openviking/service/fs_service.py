@@ -533,7 +533,8 @@ class FSService:
         # Authorize both namespace modes before the occupied-target shortcut.
         # VikingFS.mkdir rechecks permission after the Tree lock is acquired.
         await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
-        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+        file_only = namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY
+        if file_only:
             if acl is not None and not namespace_policy.supports_acl:
                 raise InvalidArgumentError(f"ACL is not supported for namespace: {directory_uri}")
             if description is not None:
@@ -541,65 +542,16 @@ class FSService:
                     f"directory descriptions are not supported for namespace: {directory_uri}"
                 )
 
-        # Reject occupied targets before acquiring a Tree lock, which may scan a
-        # large existing subtree. The backend mkdir still checks for races.
-        path = viking_fs._uri_to_path(directory_uri, ctx=ctx)
-        try:
-            await viking_fs._async_agfs.stat(path, bypass_cache=True)
-        except AGFSNotFoundError:
-            pass
-        else:
-            raise AGFSAlreadyExistsError(f"path already exists: {directory_uri}")
-
-        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
-            async with self._hold_watch_scope(
-                [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
-            ) as lease:
-                mkdir_options: dict[str, Any] = {"ctx": ctx, "lease_ref": lease}
-                if as_item:
-                    if await viking_fs.exists(directory_uri, ctx=ctx):
-                        await require_existing_item_root(
-                            viking_fs._get_vector_store(), directory_uri, ctx
-                        )
-                    mkdir_options["exist_ok"] = True
-                await viking_fs.mkdir(uri, **mkdir_options)
-                return await declare_item(
-                    viking_fs,
-                    directory_uri,
-                    ctx,
-                    as_item=as_item,
-                    item_attrs=item_attrs,
-                    is_dir=True,
-                )
-
-        async def create():
-            async with self._hold_watch_scope(
-                [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
-            ) as lease:
-                item_replay = as_item and await viking_fs.exists(directory_uri, ctx=ctx)
-                if item_replay:
-                    await require_existing_item_root(
-                        viking_fs._get_vector_store(), directory_uri, ctx
-                    )
-                acl_update = (
-                    await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
-                    if acl is not None
-                    else None
-                )
-                mkdir_options: dict[str, Any] = {"ctx": ctx, "lease_ref": lease}
-                if as_item:
-                    mkdir_options["exist_ok"] = True
-                await viking_fs.mkdir(uri, **mkdir_options)
-                declaration = await declare_item(
-                    viking_fs,
-                    directory_uri,
-                    ctx,
-                    as_item=as_item,
-                    item_attrs=item_attrs,
-                    is_dir=True,
-                )
-                await initialize(acl_update, lease, preserve_existing=item_replay)
-                return declaration
+        # Ordinary mkdir rejects occupied targets before the Tree lock can scan
+        # their subtree. Item replay must validate its declaration under the lock.
+        if not as_item:
+            path = viking_fs._uri_to_path(directory_uri, ctx=ctx)
+            try:
+                await viking_fs._async_agfs.stat(path, bypass_cache=True)
+            except AGFSNotFoundError:
+                pass
+            else:
+                raise AGFSAlreadyExistsError(f"path already exists: {directory_uri}")
 
         async def initialize(acl_update, lease, *, preserve_existing=False):
             abstract = self._normalize_directory_description(description)
@@ -649,7 +601,32 @@ class FSService:
                 include_overview=False,
             )
 
-        return await create()
+        async with self._hold_watch_scope(
+            [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+        ) as lease:
+            item_replay = as_item and await viking_fs.exists(directory_uri, ctx=ctx)
+            if item_replay:
+                await require_existing_item_root(viking_fs._get_vector_store(), directory_uri, ctx)
+            acl_update = (
+                await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
+                if acl is not None and not file_only
+                else None
+            )
+            mkdir_options: dict[str, Any] = {"ctx": ctx, "lease_ref": lease}
+            if as_item:
+                mkdir_options["exist_ok"] = True
+            await viking_fs.mkdir(uri, **mkdir_options)
+            declaration = await declare_item(
+                viking_fs,
+                directory_uri,
+                ctx,
+                as_item=as_item,
+                item_attrs=item_attrs,
+                is_dir=True,
+            )
+            if not file_only:
+                await initialize(acl_update, lease, preserve_existing=item_replay)
+            return declaration
 
     def _tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
         """Lock the target subtree, including when the target does not exist."""

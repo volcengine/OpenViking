@@ -72,9 +72,8 @@ class CatalogEngine::Impl {
   void index_node(const std::string& node_key, const std::string& value);
   JsonValue compile_filter(const std::string& scope, const JsonValue& filter,
                            JsonAllocator& allocator) const;
-  void commit(const std::map<std::string, std::string>& updates);
-  void commit_changes(const std::map<std::string, std::string>& updates,
-                      const std::vector<std::string>& deletes);
+  void commit(const std::map<std::string, std::string>& updates,
+              const std::vector<std::string>& deletes = {});
 };
 
 CatalogEngine::CatalogEngine(const std::string& path)
@@ -280,24 +279,6 @@ CatalogEngine::Impl::Impl(const std::string& path) {
 }
 
 void CatalogEngine::Impl::commit(
-    const std::map<std::string, std::string>& updates) {
-  std::vector<std::string> keys;
-  std::vector<std::string> values;
-  for (const auto& entry : updates) {
-    keys.push_back(entry.first);
-    values.push_back(entry.second);
-  }
-  if (store_->put_data(keys, values) != 0) {
-    throw std::runtime_error("Catalog persistence failed");
-  }
-  for (const auto& entry : updates) unindex_node(entry.first);
-  for (const auto& entry : updates) {
-    nodes_[entry.first] = entry.second;
-    index_node(entry.first, entry.second);
-  }
-}
-
-void CatalogEngine::Impl::commit_changes(
     const std::map<std::string, std::string>& updates,
     const std::vector<std::string>& deletes) {
   std::vector<StorageOp> operations;
@@ -753,7 +734,7 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       deletes.push_back(it->first);
     }
     const bool changed = legacy_mode_conflict_ || accumulate != collection_union_mode_;
-    if (!updates.empty() || !deletes.empty()) commit_changes(updates, deletes);
+    if (!updates.empty() || !deletes.empty()) commit(updates, deletes);
     collection_union_mode_ = accumulate;
     legacy_mode_conflict_ = false;
     if (changed) {
@@ -900,10 +881,10 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       const auto uri = canonical(
           std::string(value.GetString(), value.GetStringLength()));
       const auto items = resolve_items(scope, uri);
-      const auto item = resolve_item(scope, uri);
       JsonValue row(rapidjson::kObjectType);
       put_string(row, "uri", uri, allocator);
-      if (item.found) {
+      if (!items.empty()) {
+        const auto& item = items.front();
         put_string(row, "item_uuid", item.item_uuid, allocator);
         put_string(row, "item_root_uri", item.root_uri, allocator);
       }
@@ -1001,7 +982,7 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       updates[moved_key] = encode(node);
     }
     if (!source_keys.empty()) {
-      commit_changes(updates, source_keys);
+      commit(updates, source_keys);
       scope_revisions_[scope] = ++revision_;
     }
     result.AddMember("moved_nodes", static_cast<uint64_t>(source_keys.size()), allocator);
@@ -1077,7 +1058,7 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       }
       deletes.push_back(key(scope, uri));
     }
-    commit_changes(updates, deletes);
+    commit(updates, deletes);
     if (!updates.empty() || !deletes.empty()) {
       scope_revisions_[scope] = ++revision_;
     }

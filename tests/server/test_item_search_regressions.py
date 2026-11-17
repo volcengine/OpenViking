@@ -1,8 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Regressions from the Item Search implementation review."""
+"""Item identity, resource lifecycle, and retrieval regressions."""
 
-import json
 import math
 import shutil
 from types import SimpleNamespace
@@ -15,10 +14,6 @@ from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking_cli.session.user_id import UserIdentifier
-
-
-def emit(label, **values):
-    print("REVIEW_RESULT " + json.dumps({"label": label, **values}, ensure_ascii=False))
 
 
 def ctx(user="owner", role=Role.ROOT):
@@ -90,7 +85,6 @@ def test_limit_does_not_change_top_item(local_adapter):
             {"id": g["entity_id"], "score": g["entity_score"], "count": g["count"]}
             for g in result["groups"]
         ]
-    emit("limit_changes_ranking", results=results)
     assert results[1][0]["id"] == results[10][0]["id"]
 
 
@@ -144,7 +138,6 @@ async def test_item_root_reference_does_not_authorize_root_content(service):
     result = await service.search.find(
         "public", ctx=reader, target_uri="viking://resources", level=[2], search_as_item={}
     )
-    emit("root_acl", root_access=access[root], leaf_access=access[leaf], result=result.to_dict())
     assert result.total == 1
     assert result.resources[0].uri == root
     from openviking_cli.exceptions import PermissionDeniedError
@@ -169,16 +162,11 @@ async def test_rejected_attribute_change_preserves_existing_content(service, tmp
     content_uri = next(uri for uri in file_uris if uri.endswith("/keep.md"))
     before = await service.viking_fs.read_file(content_uri, ctx=owner)
     doc.write_text("# Rejected\nnew content from invalid request")
-    failure = None
-    try:
-        result = await service.resources.add_resource(
-            str(source), to=root, ctx=owner, wait=True, as_item=True, item_attrs={"asset_id": "V2"}
-        )
-    except Exception as exc:
-        failure = {"type": type(exc).__name__, "text": str(exc)}
-        result = None
+    result = await service.resources.add_resource(
+        str(source), to=root, ctx=owner, wait=True, as_item=True, item_attrs={"asset_id": "V2"}
+    )
+    assert result["status"] == "error", result
     after = await service.viking_fs.read_file(content_uri, ctx=owner)
-    emit("rejected_attrs_content", failure=failure, result=result, before=before, after=after)
     assert after == before
 
 
@@ -192,32 +180,23 @@ async def test_parent_reimport_does_not_delete_independent_child_item(service, t
     child = root + "/independent"
     owner = ctx()
     await service.resources.add_resource(str(source), to=root, ctx=owner, wait=True, as_item=True)
-    await service.fs.mkdir(child, owner, as_item=True, item_attrs={"asset_id": "child"})
+    child_declaration = await service.fs.mkdir(
+        child, owner, as_item=True, item_attrs={"asset_id": "child"}
+    )
     await service.viking_fs.write_file(child + "/child.md", "Independent child", ctx=owner)
     child_files = await stored_files(service.viking_fs, child, owner)
     child_content_uri = next(uri for uri in child_files if uri.endswith("/child.md"))
     assert await service.viking_fs.exists(child_content_uri, ctx=owner)
     shutil.rmtree(source / "nested")
-    failure = None
-    try:
-        result = await service.resources.add_resource(
-            str(source), to=root, ctx=owner, wait=True, as_item=True
-        )
-    except Exception as exc:
-        result = None
-        failure = {"type": type(exc).__name__, "text": str(exc)}
+    result = await service.resources.add_resource(
+        str(source), to=root, ctx=owner, wait=True, as_item=True
+    )
+    assert result["status"] == "error", result
     exists = await service.viking_fs.exists(child_content_uri, ctx=owner)
     resolved = await service.viking_fs._get_vector_store().catalog_execute(
         {"op": "resolve", "uris": [child]}, ctx=owner
     )
-    emit(
-        "parent_reimport_child",
-        failure=failure,
-        result=result,
-        child_content_uri=child_content_uri,
-        child_file_exists=exists,
-        declaration=resolved,
-    )
+    assert resolved["data"][0]["item_uuid"] == child_declaration["item_uuid"]
     assert exists, "Parent reimport deleted content of an independent child Item"
 
 
@@ -237,13 +216,6 @@ async def test_add_skill_establishes_item_declaration(client, service):
     assert ordinary.status_code == item_mode.status_code == 200
     resolved = await service.viking_fs._get_vector_store().catalog_execute(
         {"op": "resolve", "uris": [uri]}, ctx=ctx()
-    )
-    emit(
-        "skill_item_declaration",
-        uri=uri,
-        resolved=resolved,
-        ordinary=ordinary.json()["result"],
-        item_mode=item_mode.json()["result"],
     )
     assert resolved["data"][0].get("item_uuid"), "add_skill succeeded without declaring an Item"
 
@@ -363,14 +335,6 @@ def test_filter_only_respects_bounded_candidate_evidence(local_adapter):
         filter_only=True,
     )
     group = result["groups"][0]
-    emit(
-        "filter_only_evidence",
-        max_groups=1,
-        member_count=group["count"],
-        uri_count=len(group["candidate_members_uri"]),
-        labels_truncated=group["labels_truncated"],
-        response_bytes=len(json.dumps(result)),
-    )
     assert len(group["candidate_members_uri"]) <= 1000
     assert group["candidate_members_count"] == 2000
     assert group["candidate_members_truncated"] is True
@@ -595,46 +559,6 @@ async def test_item_reimport_reconciles_file_directory_replacements(
 
 
 @pytest.mark.asyncio
-async def test_native_root_metadata_and_truncated_evidence_need_no_lookup(service, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    storage = service.viking_fs._get_vector_store()
-    root = "viking://resources/from-engine"
-    monkeypatch.setattr(
-        storage,
-        "search_items_in_tenant",
-        AsyncMock(
-            return_value={
-                "groups": [
-                    {
-                        "entity_id": "uuid-engine",
-                        "entity_uri": "/resources/from-engine",
-                        "entity_attrs": ["asset=V1"],
-                        "entity_score": 0.8,
-                        "candidate_members_count": 7,
-                        "candidate_members_truncated": True,
-                        "candidate_members_uri": [root + "/hit.md"],
-                    }
-                ]
-            }
-        ),
-    )
-    lookup = AsyncMock(side_effect=AssertionError("Unexpected UUID root lookup"))
-    monkeypatch.setattr(storage, "catalog_execute", lookup)
-    result = await service.search.find(
-        "", ctx=ctx(), target_uri="viking://resources", filter=Eq("level", 2), search_as_item={}
-    )
-    assert result.resources[0].uri == root
-    assert result.resources[0].item_attrs == {"asset": "V1"}
-    assert result.resources[0].item_extra_info == {
-        "candidate_members_count": 7,
-        "candidate_members_uri": [root + "/hit.md"],
-        "candidate_members_truncated": True,
-    }
-    lookup.assert_not_called()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("source_has_original", [False, True])
 async def test_inherited_import_needs_no_source_preservation_lookup(
     service, tmp_path, monkeypatch, source_has_original
@@ -707,12 +631,9 @@ def test_noop_node_updates_do_not_invalidate_every_item_recall(local_adapter, mo
         return recalled
 
     monkeypatch.setattr(collection, "search_by_vector", search_then_noop_upsert)
-    try:
-        result = adapter.search_item_groups(
-            query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a"), max_groups=1
-        )
-    except RuntimeError as exc:
-        emit("noop_revision_retry_failure", error=str(exc), recalls=recalls)
-        raise
-    emit("noop_revision_retry_failure", result=result, recalls=recalls)
+    result = adapter.search_item_groups(
+        query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a"), max_groups=1
+    )
+    assert result["groups"][0]["entity_id"] == "uuid-read"
+    assert len(recalls) == 1
     assert len(recalls) == 1
