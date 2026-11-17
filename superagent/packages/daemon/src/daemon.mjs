@@ -14,6 +14,7 @@ import { formatInboundLine, resolveReplyTarget } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { executeCommand } from './commands.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
+import { executeTasksCommand, taskStatusLine } from './task-commands.mjs';
 import { ConnectorManager } from './connectors/process.mjs';
 import { ActionService } from './actions/service.mjs';
 import { startActionApi, stopActionApi } from './actions/api.mjs';
@@ -510,6 +511,8 @@ export class PersonalAgentDaemon {
         primary: (parsed) => executePrimaryCommand(parsed, {
           event, config: this.config, connectors: this.connectors,
         }),
+        tasks: (parsed) => executeTasksCommand(parsed, { event, connectors: this.connectors, tasks: this.tasks }),
+        statusExtra: () => taskStatusLine(this.tasks),
       });
     } catch (error) {
       outcome = { ok: false, text: `命令执行失败：${safeError(error)}` };

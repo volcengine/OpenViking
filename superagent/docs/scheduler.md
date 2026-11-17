@@ -283,6 +283,11 @@ the reply text, so a rewritten reply is a new message).
   action. Selected final reports still awaiting the inbox are delivered again
   through their idempotent receipt.
 
+The owner sees the tasks with `/tasks` in a direct chat (live ones, recent
+ended ones, slots, whether each result reached the requester), one task with
+`/tasks t12`, and stops one with `/tasks stop t12`; `/status` counts the tasks
+at work. The Core answers these without the model.
+
 Activities: `task.created` (with `parent`), `task.turn_started`,
 `task.turn_completed` (with usage), `task.reported`, `task.handed_back`,
 `task.report_unrelayed`, `task.ended`.

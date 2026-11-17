@@ -848,6 +848,59 @@ export class TaskManager {
     }
   }
 
+  // ---- owner command (/tasks) ------------------------------------------------
+
+  chatName(chatId) {
+    if (!chatId) return null;
+    try { return this.db.prepare('SELECT name FROM chat_sources WHERE chat_id = ?').get(chatId)?.name ?? null; } catch { return null; }
+  }
+
+  // A task as /tasks shows it: the row, when its running turn started, where
+  // it was asked, and what became of its latest final report.
+  facts(task) {
+    const report = this.db.prepare("SELECT * FROM task_reports WHERE task_id = ? AND state != 'progress' ORDER BY id DESC LIMIT 1").get(task.id) ?? null;
+    const delivery = report ? this.db.prepare('SELECT * FROM task_report_deliveries WHERE report_id = ?').get(report.id) ?? null : null;
+    return {
+      ...task,
+      turnStartedAt: this.running.get(task.id)?.startedAt ?? null,
+      chatName: this.chatName(task.origin_chat),
+      report: report ? { id: report.id, state: report.state, createdAt: report.created_at_ms,
+        delivery: !delivery ? null : delivery.settled_at_ms ? 'settled' : delivery.inbox_id ? 'offered' : 'pending' } : null,
+    };
+  }
+
+  overview({ recent = 5 } = {}) {
+    const live = this.db.prepare(`SELECT * FROM tasks WHERE status NOT IN ('done', 'dropped', 'failed', 'stopped')
+      ORDER BY created_at_ms`).all();
+    const ended = this.db.prepare(`SELECT * FROM tasks WHERE status IN ('done', 'dropped', 'failed', 'stopped')
+      ORDER BY ended_at_ms DESC LIMIT ?`).all(recent);
+    const reserved = [...this.running.values()].filter((slot) => slot.reserved).length;
+    return {
+      live: live.map((task) => this.facts(task)),
+      ended: ended.map((task) => this.facts(task)),
+      total: Number(this.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n),
+      slots: { used: this.running.size - reserved, of: this.slots, reserved, reservedOf: this.reservedSlots },
+    };
+  }
+
+  detail(taskId) {
+    const task = this.get(taskId);
+    if (!task) return null;
+    let lastError = null;
+    try {
+      lastError = this.db.prepare(`SELECT summary, occurred_at_ms FROM activities WHERE kind = 'task.turn_completed' AND status = 'failed'
+        AND detail_json LIKE ? ORDER BY id DESC LIMIT 1`).get(`%"task":"${task.id}"%`) ?? null;
+    } catch { /* no activity table (tests) */ }
+    return {
+      ...this.facts(task),
+      inputs: this.db.prepare('SELECT * FROM task_inputs WHERE task_id = ? ORDER BY id').all(task.id),
+      reports: this.db.prepare(`SELECT r.*, d.inbox_id, d.settled_at_ms, d.offers FROM task_reports r
+        LEFT JOIN task_report_deliveries d ON d.report_id = r.id WHERE r.task_id = ? ORDER BY r.id`).all(task.id),
+      children: this.db.prepare('SELECT id, title, status FROM tasks WHERE parent_id = ? ORDER BY created_at_ms').all(task.id),
+      lastError,
+    };
+  }
+
   // Worker turns in flight end with the daemon; their tasks stay `running`
   // and restore() starts them again.
   shutdown() {

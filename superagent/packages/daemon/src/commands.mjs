@@ -23,7 +23,7 @@ import {
 // Default vocabulary for callers; command validation uses current model metadata.
 export const EFFORT_LEVELS = getRuntimeDefinition(DEFAULT_RUNTIME_ID).efforts;
 
-const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary'];
+const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary', 'tasks'];
 
 function settingsAdjustmentText(result) {
   const lines = [];
@@ -85,6 +85,7 @@ export function helpText(snapshot) {
     '/status — 查看模型是否在工作以及持续时间',
     '/primary — 将当前 IM 设为主 IM（仅限 owner 私聊，无需重启）',
     '/primary status — 查看当前主 IM（仅限 owner 私聊）',
+    '/tasks [编号 | stop 编号] — 查看或停止后台任务（workers 调度，仅限 owner 私聊）',
     '/runtime [名称] — 查看或切换 Runtime（可简写 /run）',
     '/model [名称] — 查看或切换当前 Runtime 的模型，保留会话',
   ];
@@ -183,9 +184,12 @@ function modelMenuLines(models, runtime) {
 // Executes a runtime or Core command. Returns { ok, text }; the caller replies
 // on the incoming route and records the outcome. Core controls receive their
 // own event/config context and do not wait for or change the model session.
-export async function executeCommand(command, runtime, { primary } = {}) {
+export async function executeCommand(command, runtime, { primary, tasks, statusExtra = () => '' } = {}) {
   if (command.name === 'primary') {
     return primary ? primary(command) : { ok: false, text: '当前环境不支持 /primary。' };
+  }
+  if (command.name === 'tasks') {
+    return tasks ? tasks(command) : { ok: false, text: '当前环境不支持 /tasks。' };
   }
   const cached = await runtime.snapshot({ catalog: 'cached' });
   if (!command.name) {
@@ -197,7 +201,7 @@ export async function executeCommand(command, runtime, { primary } = {}) {
 
   if (command.name === 'help') return { ok: true, text: helpText(cached) };
 
-  if (command.name === 'status') return { ok: true, text: statusText(cached) };
+  if (command.name === 'status') return { ok: true, text: [statusText(cached), statusExtra()].filter(Boolean).join('\n') };
 
   if (command.name === 'new') {
     const result = await runtime.transition({ kind: 'new-session' });
