@@ -193,6 +193,8 @@ specific answer, and this is the order every memory plugin follows.
 
 `OPENVIKING_CLI_CONFIG_FILE` points the plugin at an `ovcli.conf` somewhere other than `~/.openviking/ovcli.conf`.
 
+After OpenCode compacts a session, the next message carries a short `<openviking-context source="session-history">` note, once per compaction: it names the session's OpenViking id (`oc-<id>`) and tells the model how to look up exact details the summary lost with the server's `session_history` MCP tool (`action="search"`, `"read"`, `"overview"`). OpenCode's MCP server is shared by every session it serves, so the proxy cannot fill the tool's `session` argument; the note tells the model to pass `session="oc-<id>"` explicitly. Subagent sessions and sessions with capture off get no note. Set `sessionHistoryPointer: false` or `OPENVIKING_SESSION_HISTORY_POINTER=0` to turn it off.
+
 ### Hook-only mode
 
 When OpenViking is already exposed through another MCP server, retain the lifecycle hooks while

@@ -1,10 +1,32 @@
+import { isCaptureEnabled } from "./shared/capture-utils.mjs"
 import { buildProfileBlock } from "./shared/profile-inject.mjs"
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createSessionInject({ config, sessionManager }) {
   const injectedSessions = new Set()
 
   async function buildSessionContext(input) {
+    const block = await buildStartContext(input)
+    const pointer = historyPointer(input)
+    return pointer ? [block, pointer].filter(Boolean).join("\n") : block
+  }
+
+  // The first message after a compaction. OpenCode's MCP server is shared by
+  // every session it serves, so the model has to name the session itself.
+  function historyPointer(input) {
+    if (!config.sessionHistoryPointer || !isCaptureEnabled(config)) return ""
+    if (!input.sessionID || !input.messageID) return ""
+    const ovSessionId = sessionManager.takeHistoryPointer?.(input.sessionID)
+    if (!ovSessionId || ovSessionId.includes("__subagent-")) return ""
+    log("INFO", "session-inject", "Injected OpenViking session-history pointer", {
+      opencode_session: input.sessionID,
+      openviking_session: ovSessionId,
+    })
+    return formatSessionHistoryPointer(ovSessionId, { sessionDefault: false })
+  }
+
+  async function buildStartContext(input) {
     if (config.noAutoInject) return false
     const sessionID = input.sessionID
     const messageID = input.messageID
