@@ -595,8 +595,22 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
             )
         return await tracker.get(task_id, **owner)
 
-    first = await execute({"compile_name": compile_name}, "compile-first-execution")
+    with monkeypatch.context() as counter:
+        reads = AsyncMock(wraps=store._agfs.read)
+        counter.setattr(store._agfs, "read", reads)
+        first = await execute({"compile_name": compile_name}, "compile-first-execution")
     assert first.status == "completed", first.error
+    state_path = store._record_path(ctx.account_id, ctx.user.user_id, compile_name)
+    run_path = store._run_path(ctx.account_id, ctx.user.user_id, compile_name, first.task_id)
+    # Include the first run lookup, which returns not found before registration.
+    assert [c.args[0] for c in reads.await_args_list if c.args[0] in (state_path, run_path)] == [
+        state_path,
+        run_path,  # acceptance
+        state_path,
+        run_path,  # start, including baseline selection
+        run_path,
+        state_path,  # finish
+    ]
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert state["task_first_create_time"] == state["last_run_time"] == first.created_at
     run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, first.task_id)
@@ -963,7 +977,11 @@ async def test_owned_run_metadata_and_output_permissions(service, app, client, m
     monkeypatch.setattr(service.viking_fs, "_can_access_many", AsyncMock(return_value={}))
 
     config = await compiler.get_config(name, ctx)
+    store = compiler.lifecycle.store
+    reads = AsyncMock(wraps=store._agfs.read)
+    monkeypatch.setattr(store._agfs, "read", reads)
     run = await compiler.get_run(name, task.task_id, ctx)
+    assert run == await store.get_run(ctx.account_id, ctx.user.user_id, name, task.task_id)
     history = await compiler.list_runs(name, ctx, limit=20, cursor=None)
     assert config["to"] == TARGET
     assert history["runs"] == [run]
@@ -978,6 +996,7 @@ async def test_owned_run_metadata_and_output_permissions(service, app, client, m
             assert response.status_code == 403
         else:
             assert response.json()["result"] == {"outputs": [], "next_cursor": None}
+    assert all(not call.args[0].endswith("/state.json") for call in reads.await_args_list)
 
 
 @pytest.mark.parametrize(
