@@ -176,7 +176,7 @@ So a task takes only what changes or answers the work it is doing:
 | `task_create` | A task from the named input lines (`trigger_ids`, the first one is the origin), a title, an optional note, and `follows` when it builds on a task. |
 | `task_route` | More lines for a working or waiting task: `owner` (changes, narrows or answers the work it is doing) or `context` (background). Refused for an ended task. |
 | `task_stop` | Stops a task and its worker; only when the requester or the owner asks. |
-| `task_list` | The working set (every live task and the 32 most recently ended), one task in detail, or a search over titles. |
+| `task_list` | The working set (every live task and the 32 most recently ended), one task in detail, the tasks one person asked for (`for_event`), or a search over titles. Each line says how long a task has been working and whether its latest result was sent (how long ago, as which message). |
 
 Routing an input to a task records it as decided (`decisions`, `silent`), so the
 turn-end check does not ask again; the relayed result records the delivery over
@@ -260,6 +260,16 @@ runtimes return when a router turn ends:
   replaces the old one.
 
 So a report is neither lost to a failed router turn nor relayed twice after one.
+The settlement records how (`settled_by`: the tool, or `unrelayed`) and, for a
+delivery, its outbox row, which is what `task_list` and `/tasks` show.
+
+**Progress questions.** "Is mine done?" is answered from `task_list` without new
+work: `for_event` with the question's `event=` lists what its sender asked for,
+newest first, ended tasks included. In a group that is only what they asked in
+that chat; in a direct chat, everything they asked for. A result already sent is
+pointed to (when, which message) and its conclusion restated; a draft that was
+never sent is sent then. Being the same person is not a routing signal (see the
+hint above): it only scopes this lookup.
 Settling on "the router turn succeeded" instead would do both: a turn that
 skipped a report would bury it, and a turn that relayed it and then failed would
 offer it again with nothing to say it was already sent (the outbox key includes

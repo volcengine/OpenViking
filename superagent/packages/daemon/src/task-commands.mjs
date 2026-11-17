@@ -16,7 +16,7 @@ const LIVE_SHOWN = 20;
 
 const STATUS = { queued: '排队', running: '运行', waiting: '等待回复', blocked: '受阻', done: '完成', dropped: '无需处理', failed: '失败', stopped: '已停止' };
 const STATE = { done: '完成', needs_user: '提问', blocked: '受阻', dropped: '无需处理', failed: '失败', progress: '进展' };
-const DELIVERY = { settled: '已了结', offered: '待 router 转发', pending: '待投递' };
+const DELIVERY = { sent: '已发出', silent: '未发（router 判定不必回复）', unrelayed: '未能转发', settled: '已了结', offered: '待 router 转发', pending: '待投递' };
 
 function since(ms, now) {
   const minutes = Math.max(0, Math.floor((now - ms) / 60_000));
@@ -118,7 +118,7 @@ function detailText(tasks, taskId, now) {
   if (reports.length) {
     lines.push('结果：');
     for (const report of reports.slice(-5)) {
-      const delivery = report.settled_at_ms ? '已了结' : report.inbox_id ? `待 router 转发${report.offers ? `（已重投 ${report.offers} 次）` : ''}` : report.relayed_at_ms === null && report.offers === null ? '未投递（被后续结果取代）' : '待投递';
+      const delivery = report.settled_at_ms ? DELIVERY[report.settled_by === 'stay_silent' ? 'silent' : report.settled_by === 'unrelayed' ? 'unrelayed' : report.settled_by ? 'sent' : 'settled'] : report.inbox_id ? `待 router 转发${report.offers ? `（已重投 ${report.offers} 次）` : ''}` : report.relayed_at_ms === null && report.offers === null ? '未投递（被后续结果取代）' : '待投递';
       lines.push(`  ${clock(report.created_at_ms)} ${STATE[report.state] ?? report.state} · ${delivery}：${oneLine(report.draft || report.question || report.summary, 80)}`);
     }
   }

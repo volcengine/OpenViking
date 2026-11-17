@@ -170,9 +170,47 @@ describe('TaskManager', () => {
     assert.match(brief, /^\[task t2\] 修 X\n/);
     assert.match(brief, /This task follows t1 "查 X" \(done\), earlier work it builds on\. Its request:\n\| \[chat=oc_a msg=om_\d+ event=e\d+\] 查一下 X/);
     assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nIts directory, with whatever it left there: .*tasks\/t1\n/);
-    assert.match(tasks.list()[0], /^t2 \[running\] "修 X" for unknown in chat=oc_a \(follows t1\)$/);
+    assert.match(tasks.list()[0], /^t2 \[running\] "修 X" for unknown in chat=oc_a \(follows t1\) · working for 0m$/);
     tasks.stop('t2', 'Alice said stop');
     assert.throws(() => tasks.route('t2', [row()], 'owner'), /has ended \(stopped\)/);
+  });
+
+  it('answers a progress question: what one person asked for, how long it has worked and what became of its result', async (t) => {
+    const { tasks, executor, db } = setup(t);
+    db.exec('ALTER TABLE outbox ADD COLUMN chat_id TEXT; ALTER TABLE outbox ADD COLUMN payload_json TEXT; ALTER TABLE outbox ADD COLUMN sent_at_ms INTEGER;');
+    tasks.create({ rows: [row({ content: '查一下 X' })], title: '查 X', runtime: 'pi' });
+    tasks.create({ rows: [row({ chat_id: 'oc_b', content: '查一下 Y' })], title: '查 Y', runtime: 'pi' });
+    tasks.create({ rows: [row({ sender_id: 'ou_bob', content: '查一下 Z' })], title: '查 Z', runtime: 'pi' });
+    const alice = (chatId, direct) => tasks.list({ requester: { id: 'ou_alice', chatId, direct } }).map((line) => line.split(' ')[0]);
+    assert.deepEqual(alice('oc_a', false), ['t1'], 'in a group, only what was asked there');
+    assert.deepEqual(alice('oc_dm', true), ['t2', 't1'], 'in a direct chat, all of theirs, newest first');
+    assert.match(tasks.list({ taskId: 't1' })[0], /^t1 \[running\] "查 X" .* · working for 0m\n/);
+
+    tasks.report('t1', { state: 'done', summary: 'X 慢在索引', draft: 'X 慢是因为缺索引' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.match(tasks.list({ taskId: 't1' })[0], /^t1 \[done\] .* · result not sent yet\n[\s\S]*\ndraft never sent:\n\| X 慢是因为缺索引\n/);
+    db.prepare('INSERT INTO outbox(id, remote_message_id, chat_id, payload_json, sent_at_ms) VALUES (7, ?, ?, ?, ?)')
+      .run('om_reply1', 'oc_a', JSON.stringify({ message_id: 'om_1', content: { type: 'markdown', text: 'X 慢是因为缺索引' } }), Date.now());
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], by: 'reply_message', outboxId: 7 }), 1);
+    const detail = tasks.list({ taskId: 't1' })[0];
+    assert.match(detail, /^t1 \[done\] .* · result sent 0m ago as msg=om_reply1\n/);
+    assert.match(detail, /\nsent \d{4}-\d\d-\d\dT\d\d:\d\dZ as msg=om_reply1: X 慢是因为缺索引\n/);
+    assert.doesNotMatch(detail, /draft never sent/);
+
+    tasks.report('t2', { state: 'needs_user', question: '看哪个环境？' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+    tasks.settleReports({ taskIds: ['t2'], by: 'stay_silent' });
+    assert.match(tasks.list({ taskId: 't2' })[0], /^t2 \[waiting\] .* · question not sent: you stayed silent on it\n/);
+
+    tasks.report('t3', { state: 'failed', summary: '没有权限', draft: '没有 Z 的权限' });
+    executor.turns[2].finish({ text: '' });
+    await settle();
+    const receipt = `task-report:${db.prepare("SELECT id FROM task_reports WHERE task_id = 't3'").get().id}`;
+    tasks.routerTurnEnded({ receiptIds: [receipt] });
+    tasks.routerTurnEnded({ receiptIds: [receipt] });
+    assert.match(tasks.list({ taskId: 't3' })[0], /^t3 \[failed\] .* · result never sent\n[\s\S]*draft never sent:\n\| 没有 Z 的权限/);
   });
 
   it('starts a task that follows another from that task\'s session, on the same runtime only', async (t) => {

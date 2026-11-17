@@ -2050,6 +2050,33 @@ describe('workers scheduler', () => {
     assert.match((await call('task_route', { task_id: 't1', trigger_ids: ['message:om_chatOwner12345'], role: 'owner' })).text, /^Routed 1 input/);
   });
 
+  it('answers a progress question from what its sender asked for, and where the result went', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    store.ingest(chatEvent({ messageId: 'om_progOrigin1234', chatType: 'group', chatId: 'oc_group12345678', content: '查一下 X 为什么慢' }));
+    await call('task_create', { trigger_ids: ['message:om_progOrigin1234'], title: '查 X' });
+    tasks.report('t1', { state: 'done', summary: 'X 慢在索引', draft: 'X 慢是因为缺索引' });
+    turns[0].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    await call('reply_message', { message_id: 'om_progOrigin1234', markdown: 'X 慢是因为缺索引', reply_in_thread: true,
+      decision_id: 'message:om_progOrigin1234', task_ids: ['t1'] });
+    const settled = store.db.prepare('SELECT settled_by, outbox_id FROM task_report_deliveries').get();
+    assert.equal(settled.settled_by, 'reply_message');
+    assert.ok(settled.outbox_id, 'the delivery is recorded with its outbox row');
+
+    store.ingest(chatEvent({ messageId: 'om_progAsk123456', chatType: 'group', chatId: 'oc_group12345678', content: '我那个问题怎么样了' }));
+    assert.match((await call('task_list', { for_event: 'message:om_progAsk123456' })).text, /^t1 \[done\] "查 X" .* · result sent 0m ago/);
+    assert.match((await call('task_list', { task_id: 't1' })).text, /\nsent \S+Z as msg=\S*: X 慢是因为缺索引\n/);
+    store.ingest(chatEvent({ messageId: 'om_progOther1234', chatType: 'group', chatId: 'oc_group12345678', senderId: 'ou_someoneElse12' }));
+    assert.equal((await call('task_list', { for_event: 'message:om_progOther1234' })).text, 'No tasks asked for by that person in this chat.');
+    store.ingest(chatEvent({ messageId: 'om_progElse12345', chatType: 'group', chatId: 'oc_otherGroup1234' }));
+    assert.equal((await call('task_list', { for_event: 'message:om_progElse12345' })).text, 'No tasks asked for by that person in this chat.',
+      'another group does not hear about it');
+    store.ingest(chatEvent({ messageId: 'om_progDirect1234', chatType: 'p2p', chatId: 'oc_aliceDm1234567' }));
+    assert.match((await call('task_list', { for_event: 'message:om_progDirect1234' })).text, /^t1 \[done\]/, 'a direct chat sees all of theirs');
+    await assert.rejects(call('task_list', { for_event: 'message:om_neverSeen12345' }), (error) => error.code === 'unknown_decision');
+  });
+
   it('settles a report on the delivery that names its task, and refuses one whose worker is working again', async (t) => {
     const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
     const { tasks, turns } = attachTasks(service, store, workspace);

@@ -286,7 +286,22 @@ export class ActionService {
   }
 
   async taskList(input) {
-    const lines = this.requireTasks().list({ taskId: input.task_id ?? null, query: input.query ?? '', includeEnded: Boolean(input.include_ended) });
+    const tasks = this.requireTasks();
+    let requester = null;
+    if (input.for_event) {
+      const found = this.inputEvents(input.for_event);
+      if (found.length !== 1) {
+        throw blocked(found.length ? 'decision_ambiguous' : 'unknown_decision',
+          `for_event must be the event= value of one accepted input (${input.for_event}). ${NO_ACTION}`);
+      }
+      // In a group, only what was asked there: tasks from other chats are not
+      // that group's to hear about.
+      requester = { id: found[0].sender_id, chatId: found[0].chat_id, direct: found[0].chat_type === 'p2p' };
+    }
+    const lines = tasks.list({ taskId: input.task_id ?? null, query: input.query ?? '', includeEnded: Boolean(input.include_ended), requester });
+    if (!lines.length && requester) {
+      return { text: `No tasks asked for by that person${requester.direct ? '' : ' in this chat'}.`, data: { count: 0 } };
+    }
     return { text: lines.length ? lines.join('\n') : 'No tasks.', data: { count: lines.length } };
   }
 
@@ -448,7 +463,8 @@ export class ActionService {
       }
       let result = await this[HANDLERS[name]](input, caller);
       if (this.tasks && SETTLING.has(name) && !trace.interim && !result.data?.dry_run) {
-        const settled = this.tasks.settleReports({ taskIds, seqs: [trace.decisionSeq, trace.responseSeq] });
+        const settled = this.tasks.settleReports({ taskIds, seqs: [trace.decisionSeq, trace.responseSeq],
+          by: name, outboxId: name === 'stay_silent' ? null : trace.outboxId ?? result.outbox_id ?? null });
         if (settled) trace.settledReports = settled;
       }
       // Only a call that changed nothing says STOP: a success after a refused

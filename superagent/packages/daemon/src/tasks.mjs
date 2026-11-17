@@ -40,6 +40,8 @@ export const WORKER_SLOTS = 3;
 export const RESERVED_SLOTS = 1;
 // Ended tasks kept in the working set the router is shown; live ones always are.
 export const RECENT_ENDED = 32;
+// Tasks task_list shows for one person (for_event), newest first.
+export const ASKER_TASKS = 10;
 // Worker turns in a row that may run to catch up with inputs that arrived
 // during the previous one before its report is relayed anyway.
 const CATCH_UP_TURNS = 3;
@@ -131,6 +133,10 @@ const COLUMNS = [
   ['task_inputs', 'seen_at_ms', 'INTEGER'],
   ['task_report_deliveries', 'settled_at_ms', 'INTEGER'],
   ['task_report_deliveries', 'offers', 'INTEGER NOT NULL DEFAULT 0'],
+  // How a report was settled: the tool that answered for it, or 'unrelayed';
+  // and the message a delivery sent.
+  ['task_report_deliveries', 'settled_by', 'TEXT'],
+  ['task_report_deliveries', 'outbox_id', 'INTEGER'],
 ];
 
 const RECEIPT = /^task-report:([0-9]+)$/;
@@ -252,23 +258,81 @@ export class TaskManager {
 
   card(task, { detail = false } = {}) {
     const where = task.origin_chat ? `chat=${chatTag(metadataTag(task.origin_chat), task.origin_thread)}` : `source=${task.origin_source}`;
-    const head = `${task.id} [${task.status}] "${oneLine(task.title)}" for ${task.requester_name ?? 'unknown'} in ${where}${task.parent_id ? ` (follows ${task.parent_id})` : ''}`;
+    const delivery = this.delivery(task);
+    const head = `${task.id} [${task.status}] "${oneLine(task.title)}" for ${task.requester_name ?? 'unknown'} in ${where}${task.parent_id ? ` (follows ${task.parent_id})` : ''}${this.progressNote(task, delivery)}`;
     if (!detail) return head;
+    const sent = delivery?.sent;
     return [head,
       `origin: msg=${metadataTag(task.origin_message ?? '')} event=${metadataTag(task.origin_event ?? '')}`,
       ...(task.summary ? [`summary: ${oneLine(clip(task.summary, SUMMARY_CHARS))}`] : []),
       ...(task.question ? [`question waiting: ${oneLine(clip(task.question, SUMMARY_CHARS))}`] : []),
       ...(JSON.parse(task.artifacts_json).length ? [`artifacts: ${JSON.parse(task.artifacts_json).map(oneLine).join(', ')}`] : []),
+      ...(sent ? [`sent ${new Date(sent.at).toISOString().slice(0, 16)}Z as msg=${metadataTag(sent.messageId ?? '')}: ${oneLine(clip(sent.text, SUMMARY_CHARS))}`] : []),
+      ...(delivery && !sent && ['offered', 'pending', 'unrelayed'].includes(delivery.state) && task.draft
+        ? [`draft never sent:\n${clip(task.draft, PARENT_DRAFT_CHARS).split('\n').map((line) => `| ${line}`).join('\n')}`] : []),
       `turns: ${task.turns}, updated ${new Date(task.updated_at_ms).toISOString().slice(0, 16)}Z`,
     ].join('\n');
   }
 
-  list({ taskId = null, query = '', includeEnded = false } = {}) {
+  ago(ms) {
+    const minutes = Math.max(0, Math.round((this.now() - ms) / 60_000));
+    return minutes < 60 ? `${minutes}m` : minutes < 48 * 60 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`;
+  }
+
+  // For a progress question: how long a task has been at work, and what
+  // became of its latest result.
+  progressNote(task, delivery) {
+    const parts = [];
+    const startedAt = this.running.get(task.id)?.startedAt;
+    if (task.status === 'running' && startedAt) parts.push(`working for ${this.ago(startedAt)}`);
+    if (delivery) {
+      const what = delivery.reportState === 'needs_user' ? 'question' : 'result';
+      if (delivery.state === 'sent') parts.push(`${what} sent ${this.ago(delivery.sent?.at ?? delivery.at)} ago${delivery.sent?.messageId ? ` as msg=${metadataTag(delivery.sent.messageId)}` : ''}`);
+      else if (delivery.state === 'silent') parts.push(`${what} not sent: you stayed silent on it`);
+      else if (delivery.state === 'unrelayed') parts.push(`${what} never sent`);
+      else if (delivery.state === 'settled') parts.push(`${what} handled ${this.ago(delivery.at)} ago`);
+      else parts.push(`${what} not sent yet`);
+    }
+    return parts.length ? ` · ${parts.join(' · ')}` : '';
+  }
+
+  // What became of a task's latest final report: sent (when, as which
+  // message, what it said), answered with silence, never relayed, or still on
+  // its way. 'settled' is a report settled before this was recorded.
+  delivery(task) {
+    const row = this.db.prepare(`SELECT r.id, r.state, r.created_at_ms, d.inbox_id, d.settled_at_ms, d.settled_by, d.outbox_id
+      FROM task_reports r LEFT JOIN task_report_deliveries d ON d.report_id = r.id
+      WHERE r.task_id = ? AND r.state != 'progress' ORDER BY r.id DESC LIMIT 1`).get(task.id);
+    if (!row) return null;
+    const state = row.settled_at_ms == null ? (row.inbox_id != null ? 'offered' : 'pending')
+      : row.settled_by === 'stay_silent' ? 'silent' : row.settled_by === 'unrelayed' ? 'unrelayed' : row.settled_by ? 'sent' : 'settled';
+    let sent = null;
+    if (state === 'sent' && row.outbox_id != null) {
+      try {
+        const out = this.db.prepare('SELECT remote_message_id, chat_id, payload_json, sent_at_ms FROM outbox WHERE id = ?').get(row.outbox_id);
+        if (out) {
+          const content = JSON.parse(out.payload_json || '{}').content;
+          // { type: 'markdown', text } for text; a card or a file shows as its type.
+          const text = typeof content === 'string' ? content : content?.text ?? (content?.type ? `[${content.type}]` : '');
+          sent = { at: out.sent_at_ms ?? row.settled_at_ms, messageId: out.remote_message_id, chatId: out.chat_id, text: String(text) };
+        }
+      } catch { /* no outbox table (tests) */ }
+    }
+    return { reportId: row.id, reportState: row.state, createdAt: row.created_at_ms, state, at: row.settled_at_ms, sent };
+  }
+
+  // requester: { id, chatId, direct } lists what one person asked for, ended
+  // tasks included: in a group only what was asked in that chat, in a direct
+  // chat everything they asked for.
+  list({ taskId = null, query = '', includeEnded = false, requester = null } = {}) {
     if (taskId) {
       const task = this.get(taskId);
       return task ? [this.card(task, { detail: true })] : [];
     }
-    let rows = includeEnded ? this.db.prepare('SELECT * FROM tasks ORDER BY created_at_ms DESC LIMIT 200').all() : this.workingSet();
+    let rows = requester
+      ? this.db.prepare(`SELECT * FROM tasks WHERE requester_id = ?${requester.direct ? '' : ' AND origin_chat = ?'}
+          ORDER BY created_at_ms DESC, rowid DESC LIMIT ?`).all(...[requester.id, ...(requester.direct ? [] : [requester.chatId]), ASKER_TASKS])
+      : includeEnded ? this.db.prepare('SELECT * FROM tasks ORDER BY created_at_ms DESC LIMIT 200').all() : this.workingSet();
     if (query) {
       const grams = bigrams(query);
       rows = rows.map((task) => ({ task, score: similarity(grams, bigrams(`${task.title} ${task.summary}`)) }))
@@ -763,15 +827,15 @@ export class TaskManager {
   // delivery or a silence), or with a delivery or silence on a task's origin.
   // Reports it was shown for them are settled. An answer to a later input of
   // a task settles nothing: it may be an acknowledgement.
-  settleReports({ taskIds = [], seqs = [] } = {}) {
+  settleReports({ taskIds = [], seqs = [], by = null, outboxId = null } = {}) {
     const ids = new Set(taskIds.filter((id) => this.get(id)));
     for (const seq of seqs.filter((value) => value != null)) {
       for (const row of this.db.prepare('SELECT id FROM tasks WHERE origin_seq = ?').all(seq)) ids.add(row.id);
     }
     let settled = 0;
-    const settle = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ? WHERE settled_at_ms IS NULL
-      AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ?)`);
-    for (const id of ids) settled += Number(settle.run(this.now(), id).changes);
+    const settle = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
+      WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ?)`);
+    for (const id of ids) settled += Number(settle.run(this.now(), by, outboxId ?? null, id).changes);
     return settled;
   }
 
@@ -792,7 +856,7 @@ export class TaskManager {
       if (!delivery || delivery.settled_at_ms != null || delivery.inbox_id == null) continue;
       const limit = ok ? 1 : REOFFERS_AFTER_FAILURE;
       if (delivery.offers >= limit) {
-        this.db.prepare('UPDATE task_report_deliveries SET settled_at_ms = ? WHERE report_id = ?').run(this.now(), id);
+        this.db.prepare("UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = 'unrelayed' WHERE report_id = ?").run(this.now(), id);
         const report = this.db.prepare('SELECT task_id FROM task_reports WHERE id = ?').get(id);
         this.logger?.warn('task_report_unrelayed', { report: id, task: report?.task_id });
         this.recordActivity('task.report_unrelayed', { summary: `${report?.task_id} report ${id} was never relayed`, status: 'FAILED',
@@ -858,14 +922,13 @@ export class TaskManager {
   // A task as /tasks shows it: the row, when its running turn started, where
   // it was asked, and what became of its latest final report.
   facts(task) {
-    const report = this.db.prepare("SELECT * FROM task_reports WHERE task_id = ? AND state != 'progress' ORDER BY id DESC LIMIT 1").get(task.id) ?? null;
-    const delivery = report ? this.db.prepare('SELECT * FROM task_report_deliveries WHERE report_id = ?').get(report.id) ?? null : null;
+    const delivery = this.delivery(task);
     return {
       ...task,
       turnStartedAt: this.running.get(task.id)?.startedAt ?? null,
       chatName: this.chatName(task.origin_chat),
-      report: report ? { id: report.id, state: report.state, createdAt: report.created_at_ms,
-        delivery: !delivery ? null : delivery.settled_at_ms ? 'settled' : delivery.inbox_id ? 'offered' : 'pending' } : null,
+      report: delivery ? { id: delivery.reportId, state: delivery.reportState, createdAt: delivery.createdAt,
+        delivery: delivery.state, sentAt: delivery.sent?.at ?? null } : null,
     };
   }
 
@@ -894,7 +957,7 @@ export class TaskManager {
     return {
       ...this.facts(task),
       inputs: this.db.prepare('SELECT * FROM task_inputs WHERE task_id = ? ORDER BY id').all(task.id),
-      reports: this.db.prepare(`SELECT r.*, d.inbox_id, d.settled_at_ms, d.offers FROM task_reports r
+      reports: this.db.prepare(`SELECT r.*, d.inbox_id, d.settled_at_ms, d.settled_by, d.offers FROM task_reports r
         LEFT JOIN task_report_deliveries d ON d.report_id = r.id WHERE r.task_id = ? ORDER BY r.id`).all(task.id),
       children: this.db.prepare('SELECT id, title, status FROM tasks WHERE parent_id = ? ORDER BY created_at_ms').all(task.id),
       lastError,
