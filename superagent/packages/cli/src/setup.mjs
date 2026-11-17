@@ -108,15 +108,14 @@ const imChoices = () => [
 // IMs connected by pasting tokens rather than scanning a code.
 const TOKEN_IMS = ['telegram', 'slack', 'qq', 'onebot'];
 
-// Where the Feishu/Lark bot app comes from. A scan can only pick an app the
-// scanner owns or administers, and a test tenant cannot scan at all; then the
-// App ID and App Secret are typed in, and the app's settings are the owner's
-// to complete in the developer console.
+// Where the Feishu/Lark bot app comes from. The same scan page can create an
+// app or pick one the scanner owns or administers. A test tenant cannot scan
+// at all; then the App ID and App Secret are typed in, and the app's settings
+// are the owner's to complete in the developer console.
 const larkSources = () => [
-  { value: 'create', label: t('扫码新建一个机器人', 'Scan to create a new bot'),
-    hint: t('一次扫码建好应用、开好权限并发布', 'one scan makes the app, grants its permissions and publishes it') },
-  { value: 'select', label: t('扫码选择已有的机器人', 'Scan to pick an existing bot'),
-    hint: t('你是所有者或管理员的应用；缺的权限和事件在确认页补上', 'an app you own or administer; what it lacks is added on the confirm page') },
+  { value: 'select', label: t('扫码创建或选择机器人', 'Scan to create or pick a bot'),
+    hint: t('可以新建应用，或选你是所有者/管理员的应用；权限和事件在确认页配好',
+      'create an app, or pick one you own/administer; its permissions and events are configured on the confirm page') },
   { value: 'manual', label: t('手动填 App ID 和 App Secret', 'Enter the App ID and App Secret'),
     hint: t('不是所有者或管理员、在测试企业等扫不了码时；缺的配置要去开放平台补',
       'when a scan cannot be used (not an owner or administrator, a test tenant); what the app lacks is added in the developer console') },
@@ -147,7 +146,7 @@ async function askLarkAccess(prompter, initial) {
 function larkSource(state, current) {
   if (!state.connectors.includes('lark')) return null;
   if (state.larkApp) return state.larkApp.source;
-  return current && connectorsOf(current).includes('lark') ? 'keep' : 'create';
+  return current && connectorsOf(current).includes('lark') ? 'keep' : 'select';
 }
 
 // The app as the settings list and the summaries show it; `needs` is what
@@ -920,8 +919,8 @@ async function enterApp({ prompter, fetchImpl = globalThis.fetch }, { previous =
 const scanTitles = {
   create: (minutes, _appId, single) => t(`${single ? '' : '第 1 次扫码：'}用飞书 App 扫码，创建机器人应用（${minutes} 分钟内有效）`,
     `${single ? 'Scan with' : 'Scan 1 of 2: scan with'} the Feishu/Lark app to create the bot app (valid for ${minutes} minutes)`),
-  select: (minutes, _appId, single) => t(`${single ? '' : '第 1 次扫码：'}用飞书 App 扫码，选择已有的机器人应用（${minutes} 分钟内有效）`,
-    `${single ? 'Scan with' : 'Scan 1 of 2: scan with'} the Feishu/Lark app to pick an existing bot app (valid for ${minutes} minutes)`),
+  select: (minutes, _appId, single) => t(`${single ? '' : '第 1 次扫码：'}用飞书 App 扫码，创建或选择机器人应用（${minutes} 分钟内有效）`,
+    `${single ? 'Scan with' : 'Scan 1 of 2: scan with'} the Feishu/Lark app to create or pick a bot app (valid for ${minutes} minutes)`),
   update: (minutes, appId) => t(`用飞书 App 扫码，给应用 ${appId} 补上缺的权限和事件（${minutes} 分钟内有效）`,
     `Scan with the Feishu/Lark app to add what ${appId} lacks (valid for ${minutes} minutes)`),
 };
@@ -1671,7 +1670,7 @@ function table(prompter, title, rows) {
 // the owner's authorization remains.
 const scansOf = (im, larkSource, larkAccess) => (im === 'lark' ? (larkSource === 'manual' || larkAccess === 'bot' ? 1 : 2) : 1);
 
-function connectionSteps(prompter, connectors, { saving = false, larkSource = 'create', larkAccess = 'owner' } = {}) {
+function connectionSteps(prompter, connectors, { saving = false, larkSource = 'select', larkAccess = 'owner' } = {}) {
   if (!connectors.length) return;
   const telegram = connectors.some((im) => TOKEN_IMS.includes(im));
   const steps = connectors.map((im) => {

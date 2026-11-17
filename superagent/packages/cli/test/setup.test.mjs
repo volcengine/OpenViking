@@ -1172,24 +1172,24 @@ function recordLark(h, result = {}) {
   return given;
 }
 
-test('a new instance can pick an existing Feishu bot: the scan is told so, and the owner is warned about sharing it', async (t) => {
-  //                   name role ws  runtime IMs  feishu: pick existing  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '2',                   '',           'y']);
+test('a new instance can create or pick a Feishu bot through one scan entry', async (t) => {
+  //                   name role ws  runtime IMs  feishu: create or pick  access  confirm
+  const h = harness(t, ['', '',  '', '1',    '1', '',                     '',     'y']);
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(given[0].source, 'select');
   assert.equal(given[0].app, null);
-  assert.match(h.written(), /飞书机器人\n  1\) 扫码新建一个机器人.*\n  2\) 扫码选择已有的机器人.*\n  3\) 手动填 App ID 和 App Secret/);
+  assert.match(h.written(), /飞书机器人\n  1\) 扫码创建或选择机器人.*\n  2\) 手动填 App ID 和 App Secret/);
   const { tenant, user } = larkScopes();
   assert.match(h.written(), new RegExp(`确认页会列出要给它补的权限（最多 ${tenant.length + user.length} 个）[^\\n]*它要是有版本正在审核，会先被撤回。不确认就什么都不改。`));
   assert.match(h.written(), /同一个飞书应用不能两处同时收消息[\s\S]*OpenViking SuperAgent 只接用长连接接收消息的机器人：用 webhook 的，先在开放平台「事件与回调」把事件和回调都改成长连接/);
-  assert.match(h.written(), /飞书机器人\s+扫码选择已有的机器人\n/);
+  assert.match(h.written(), /飞书机器人\s+扫码创建或选择机器人\n/);
   assert.match(h.written(), /接下来扫码：飞书 2 次/);
 });
 
 test('typing the App ID and App Secret is a question like the others: checked at once, one scan left', async (t) => {
   //                   name role ws  runtime IMs  feishu: by hand  App ID     secret  tenant  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '3',             'cli_abc', 'sec',  '2',    '',           'y']);
+  const h = harness(t, ['', '',  '', '1',    '1', '2',             'cli_abc', 'sec',  '2',    '',           'y']);
   const given = recordLark(h);
   const checked = [];
   h.options.fetchImpl = async (url, init) => {
@@ -1236,14 +1236,14 @@ test('changing the app to one whose account cannot run bots comes back to the li
   const before = existing(h, {});
   h.options.connect.lark = async () => { throw new GoBack('飞书不给应用 cli_doubao 发访问凭证'); };
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /⚠ 飞书不给应用 cli_doubao 发访问凭证\n[\s\S]*6\) 飞书应用\s+扫码新建一个机器人（已改）/);
+  assert.match(h.written(), /⚠ 飞书不给应用 cli_doubao 发访问凭证\n[\s\S]*6\) 飞书应用\s+扫码创建或选择机器人（已改）/);
   assert.match(h.written(), /已放弃，没有保存任何改动/);
   assert.deepEqual(h.manifest().agents, [before]);
 });
 
 test('an App ID typed in whose account cannot run bots is told so, not called wrong', async (t) => {
   //                   name role ws  runtime IMs  by hand  App ID        secret  tenant  again?
-  const h = harness(t, ['', '',  '', '1',    '1', '3',     'cli_doubao', 's',    '',     'n']);
+  const h = harness(t, ['', '',  '', '1',    '1', '2',     'cli_doubao', 's',    '',     'n']);
   h.options.fetchImpl = async () => ({ json: async () => ({ code: 21001, msg: 'access denied by access control policy' }) });
   await assert.rejects(setupCommand(h.options), { name: 'PromptAborted' });
   const output = h.written();
@@ -1253,13 +1253,13 @@ test('an App ID typed in whose account cannot run bots is told so, not called wr
 
 test('an instance with Feishu can switch to another app; the bot takes the app\'s name unless the owner keeps theirs', async (t) => {
   //                    change asd  飞书应用  pick existing  reads-as-you  save  call it 小助手
-  const h = harness(t, ['2',        '6',      '3',           '',           '11', 'y']);
+  const h = harness(t, ['2',        '6',      '2',           '',           '11', 'y']);
   const before = existing(h, {});
   fs.mkdirSync(path.join(h.home, '.ov-superagent'), { recursive: true });
   const given = recordLark(h, { name: '小助手' });
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /6\) 飞书应用\s+扫码选择已有的机器人（已改）/);
-  assert.match(h.written(), /将修改 ASD（asd）：\n  换飞书应用：扫码选择已有的机器人（需要扫码）\n/);
+  assert.match(h.written(), /6\) 飞书应用\s+扫码创建或选择机器人（已改）/);
+  assert.match(h.written(), /将修改 ASD（asd）：\n  换飞书应用：扫码创建或选择机器人（需要扫码）\n/);
   assert.match(h.written(), /接下来扫码：飞书 2 次/);
   assert.deepEqual([given[0].source, given[0].profile], ['select', 'superagent-asd']);
   assert.match(h.written(), /这个机器人在飞书里叫「小助手」，OpenViking SuperAgent 里也这么叫它？（选否就还叫「ASD」）/);
@@ -1267,7 +1267,7 @@ test('an instance with Feishu can switch to another app; the bot takes the app\'
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['lark', 'asd'], ['restart', 'asd'], ['greet', 'ou_owner']]);
 
   // A bot long called something else keeps that name.
-  const keeping = harness(t, ['2', '6', '3', '', '11', 'n']);
+  const keeping = harness(t, ['2', '6', '2', '', '11', 'n']);
   const kept0 = existing(keeping, {});
   recordLark(keeping, { name: '小助手' });
   assert.equal(await setupCommand(keeping.options), 0);
@@ -1288,9 +1288,9 @@ test('a new Feishu bot asks for full or bot-only access; bot-only is saved', asy
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
   assert.match(h.written(), /授予 OpenViking SuperAgent 哪些飞书权限？[\s\S]*完整用户权限（默认）[\s\S]*仅机器人权限/);
-  assert.match(h.written(), /飞书机器人\s+扫码新建一个机器人（仅机器人权限）/);
+  assert.match(h.written(), /飞书机器人\s+扫码创建或选择机器人（仅机器人权限）/);
   assert.match(h.written(), /接下来扫码：飞书 1 次/);
-  assert.deepEqual([given[0].source, given[0].access], ['create', 'bot']);
+  assert.deepEqual([given[0].source, given[0].access], ['select', 'bot']);
   assert.equal(h.manifest().agents[0].larkMessageAccess, 'bot');
 
   // Allowing it, the default, leaves the manifest as it always was.
@@ -1315,7 +1315,7 @@ test('an instance keeps how its app reads; another app is asked again, starting 
   assert.deepEqual(kept.manifest().agents, [{ ...before, displayName: 'Renamed' }]);
 
   //                         change asd  飞书应用  pick existing  reads-as-you (as it was)  save  call it 小助手
-  const switched = harness(t, ['2',        '6',      '3',           '',                       '11', 'n']);
+  const switched = harness(t, ['2',        '6',      '2',           '',                       '11', 'n']);
   const was = existing(switched, { larkMessageAccess: 'bot' });
   const given = recordLark(switched, { name: '小助手' });
   assert.equal(await setupCommand(switched.options), 0);
@@ -1323,7 +1323,7 @@ test('an instance keeps how its app reads; another app is asked again, starting 
   assert.deepEqual(switched.manifest().agents, [was]);
 
   // Allowed this time: the next app reads as the owner.
-  const widened = harness(t, ['2', '6', '3', '1', '11', 'n']);
+  const widened = harness(t, ['2', '6', '2', '1', '11', 'n']);
   existing(widened, { larkMessageAccess: 'bot' });
   recordLark(widened, { name: '小助手' });
   assert.equal(await setupCommand(widened.options), 0);
@@ -1331,8 +1331,8 @@ test('an instance keeps how its app reads; another app is asked again, starting 
 });
 
 test('ticking Feishu on an instance that had none asks where its bot comes from, right away', async (t) => {
-  //                    change asd  IMs  lark+weixin  pick existing  reads-as-you  save
-  const h = harness(t, ['2',        '5', '1,2',       '2',           '',           '11']);
+  //                    change asd  IMs  lark+weixin  create or pick  access  save
+  const h = harness(t, ['2',        '5', '1,2',       '1',             '',     '11']);
   const before = existing(h, { channel: 'weixin', connectors: ['weixin'], profile: undefined });
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
@@ -1343,7 +1343,7 @@ test('ticking Feishu on an instance that had none asks where its bot comes from,
 
 test('an App ID typed in for a bot on a webhook is refused there, and another one can be typed', async (t) => {
   //                   name role ws  runtime IMs  by hand  App ID      secret  tenant  another?  App ID      secret  tenant  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '3',     'cli_hook', 's1',   '',     'y',      'cli_good', 's2',   '',     '',           'y']);
+  const h = harness(t, ['', '',  '', '1',    '1', '2',     'cli_hook', 's1',   '',     'y',      'cli_good', 's2',   '',     '',           'y']);
   const given = recordLark(h);
   h.options.fetchImpl = async (url, init = {}) => ({ json: async () => {
     if (url.endsWith('/tenant_access_token/internal')) return { code: 0, tenant_access_token: `t-${JSON.parse(init.body).app_id}` };
