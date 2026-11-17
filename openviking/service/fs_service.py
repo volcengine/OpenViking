@@ -32,6 +32,7 @@ from openviking.core.namespace_policy import (
 )
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.restore import PrivacyRestorer
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
@@ -41,7 +42,7 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.user_config import ResolvedPrivacyConfig
-from openviking.service.task_tracker import TaskStatus, get_task_tracker, run_tracked_operation
+from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
@@ -823,7 +824,10 @@ class FSService:
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping delete refresh: %s", exc)
+            logger.info(
+                "QueueManager not available; skipping delete refresh",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             return decision.action
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
@@ -871,7 +875,10 @@ class FSService:
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping copy refresh: %s", exc)
+            logger.info(
+                "QueueManager not available; skipping copy refresh",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             return "skipped"
 
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -920,7 +927,10 @@ class FSService:
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping transfer rebuild: %s", exc)
+            logger.info(
+                "QueueManager not available; skipping transfer rebuild",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             return "skipped"
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
@@ -1042,10 +1052,13 @@ class FSService:
                     ctx=ctx,
                 )
             except Exception as exc:
-                logger.warning(
-                    "Copy committed but semantic rebuild failed for %s: %s",
-                    to_uri,
-                    exc,
+                logger.info(
+                    "Copy committed with failed semantic rebuild",
+                    extra={
+                        "target_id": safe_uri_for_log(to_uri),
+                        "error_type": type(exc).__name__,
+                        "degraded": True,
+                    },
                 )
                 result["semantic_status"] = "failed"
                 result["semantic_error"] = str(exc)
@@ -1068,10 +1081,13 @@ class FSService:
                 ctx=ctx,
             )
         except Exception as exc:
-            logger.warning(
-                "Copy committed but parent semantic refresh failed for %s: %s",
-                to_uri,
-                exc,
+            logger.info(
+                "Copy committed with failed parent semantic refresh",
+                extra={
+                    "target_id": safe_uri_for_log(to_uri),
+                    "error_type": type(exc).__name__,
+                    "degraded": True,
+                },
             )
             result["semantic_status"] = "failed"
             result["semantic_error"] = str(exc)
@@ -1164,16 +1180,15 @@ class FSService:
                                 "Watch move rollback did not restore every moved task"
                             )
                     except BaseException as rollback_error:
-                        logger.exception(
-                            "Watch move rollback failed after filesystem move failed: "
-                            "account_id=%s from=%s to=%s task_count=%d task_ids=%s "
-                            "filesystem_error=%r",
-                            watch_move_result.account_id,
-                            watch_move_result.from_uri,
-                            watch_move_result.to_uri,
-                            len(watch_move_result.task_ids),
-                            watch_move_result.task_ids[:20],
-                            move_error,
+                        logger.error(
+                            "Watch move rollback failed after filesystem move failure filesystem_error_type=%s",
+                            type(move_error).__name__,
+                            extra={
+                                "account_id": watch_move_result.account_id,
+                                "target_id": safe_uri_for_log(watch_move_result.to_uri),
+                                "total": len(watch_move_result.task_ids),
+                                "error_type": type(rollback_error).__name__,
+                            },
                         )
                         raise rollback_error from move_error
                     raise
@@ -1203,10 +1218,13 @@ class FSService:
                         ctx=ctx,
                     )
                 except Exception as exc:
-                    logger.warning(
-                        "Move committed but semantic rebuild failed for %s: %s",
-                        to_uri,
-                        exc,
+                    logger.info(
+                        "Move committed with failed semantic rebuild",
+                        extra={
+                            "target_id": safe_uri_for_log(to_uri),
+                            "error_type": type(exc).__name__,
+                            "degraded": True,
+                        },
                     )
         else:
             await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
@@ -1276,11 +1294,11 @@ class FSService:
                 transaction_task.result()
             except asyncio.CancelledError:
                 pass
-            except Exception:
+            except Exception as exc:
                 logger.error(
                     "Filesystem %s transaction failed while caller was cancelled",
                     operation,
-                    exc_info=True,
+                    extra={"error_type": type(exc).__name__},
                 )
             raise
 
@@ -1307,6 +1325,7 @@ class FSService:
         if target_parent_uri and refresh_target:
             refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
 
+        failed_refreshes = 0
         for parent_uri, changed_uri, change_kind, context_type in refreshes:
             try:
                 await self._enqueue_copy_refresh(
@@ -1318,12 +1337,21 @@ class FSService:
                     ctx=ctx,
                 )
             except Exception as exc:
-                logger.warning(
-                    "Move committed but %s parent semantic refresh failed for %s: %s",
+                failed_refreshes += 1
+                logger.debug(
+                    "Move parent semantic refresh failed change=%s",
                     change_kind,
-                    parent_uri,
-                    exc,
+                    extra={
+                        "target_id": safe_uri_for_log(parent_uri),
+                        "error_type": type(exc).__name__,
+                    },
                 )
+
+        if failed_refreshes:
+            logger.info(
+                "Move committed with incomplete parent semantic refresh",
+                extra={"total": len(refreshes), "failed": failed_refreshes, "degraded": True},
+            )
 
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":
@@ -1336,9 +1364,8 @@ class FSService:
         deactivated = await watch_manager.deactivate_tasks_under_uri_internal(uri, account_id)
         if deactivated:
             logger.info(
-                "Deactivated %d watch task(s) after deleting %s",
-                len(deactivated),
-                uri,
+                "Watch tasks deactivated after resource deletion",
+                extra={"total": len(deactivated), "target_id": safe_uri_for_log(uri)},
             )
 
     async def tree(
@@ -1938,7 +1965,13 @@ class FSService:
             except Exception as exc:
                 error = map_exception(exc, resource=uri)
                 if error is None:
-                    logger.exception("Batch tag update failed for %s", uri)
+                    logger.debug(
+                        "Batch tag update failed",
+                        extra={
+                            "target_id": safe_uri_for_log(uri),
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                     error = OpenVikingError("Tag update failed", code="INTERNAL")
                 return False, {
                     "uri": uri,
@@ -1946,6 +1979,14 @@ class FSService:
                 }
 
         results = await bounded_map(targets, update, concurrency=8)
+        unexpected_failures = sum(
+            not success and result["error"]["code"] == "INTERNAL" for success, result in results
+        )
+        if unexpected_failures:
+            logger.error(
+                "Batch tag update encountered internal failures",
+                extra={"total": len(results), "failed": unexpected_failures},
+            )
         return {
             "items": [result for success, result in results if success],
             "failed": [result for success, result in results if not success],
@@ -2325,7 +2366,7 @@ class FSService:
                     and exc.conflicting_owner.startswith(_COMPILE_TARGET_LOCK_OWNER_PREFIX)
                     and exc.conflicting_owner != owner
                 ):
-                    logger.warning("Compile target rejected: parent/child directory lock conflict")
+                    logger.info("Compile target rejected: parent/child directory lock conflict")
                 raise ResourceBusyError(
                     "Compile target is busy or its parent/child is already a Compile target. "
                     "Choose another directory or retry later.",
