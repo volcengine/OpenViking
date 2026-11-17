@@ -1645,3 +1645,63 @@ async def test_trusted_mode_admin_api_http_route_without_identity():
     assert response.json()["result"]["role"] == "root"
     assert response.json()["result"]["account_id"] == "trusted"
     assert response.json()["result"]["user_id"] == "trusted"
+
+
+@pytest.mark.parametrize("status", ["pass", "warn", "fail"])
+async def test_auth_health_output_is_safe_and_startup_remains_visible(
+    status, caplog, capsys, tmp_path, monkeypatch
+):
+    import builtins
+    import logging
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from openviking.server.auth import health_check as module
+
+    secret = "https://provider.test/peers/private-peer?password=private-value"
+    result = module.HealthCheckResult(
+        name="provider_connection",
+        status=module.HealthStatus(status),
+        message=secret,
+        error=RuntimeError(secret),
+        duration_seconds=0.25,
+    )
+    checker = SimpleNamespace(run_checks=AsyncMock(return_value=[result]))
+    monkeypatch.setattr(module, "get_checker", lambda mode: checker)
+    monkeypatch.setattr(module.logger, "handlers", [caplog.handler])
+    caplog.set_level(logging.DEBUG, logger=module.logger.name)
+    config = ServerConfig(host="127.0.0.1", auth_mode="dev")
+    report = await module.run_health_check(config)
+    assert report.to_dict()["checks"][0]["message"] == secret
+    assert report.overall_status == module.HealthStatus(status)
+    assert len([record for record in caplog.records if record.levelno >= logging.INFO]) == 1
+    for record in caplog.records:
+        assert secret not in repr(record.__dict__)
+        assert record.exc_info is None
+        assert record.levelno != logging.WARNING
+    handler = logging.FileHandler(tmp_path / "auth.log")
+    monkeypatch.setattr(module.logger, "handlers", [handler])
+    caplog.set_level(logging.CRITICAL, logger=module.logger.name)
+    console_print = Mock(wraps=builtins.print)
+    monkeypatch.setattr(module, "print", console_print, raising=False)
+    try:
+        if status == "fail":
+            with pytest.raises(SystemExit) as exc:
+                await module.run_startup_health_check_or_exit(config)
+            assert exc.value.code == 1
+        else:
+            await module.run_startup_health_check_or_exit(config)
+    finally:
+        handler.close()
+    output = capsys.readouterr()
+    assert "Running authentication health check" in output.out
+    assert secret not in output.out + output.err
+    if status == "fail":
+        assert "provider_connection: FAIL" in output.err
+        assert "FATAL: AUTHENTICATION HEALTH CHECK FAILED" in output.err
+    else:
+        assert f"provider_connection: {status.upper()}" in output.out
+        assert "Authentication health check passed" in output.out
+    assert console_print.call_args_list
+    assert all(call.kwargs.get("flush") is True for call in console_print.call_args_list)
+    assert (tmp_path / "auth.log").read_text() == ""

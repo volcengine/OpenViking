@@ -740,8 +740,8 @@ Land one module batch before starting the next. Refresh from upstream before eac
 | Batch | Scope | Status |
 | --- | --- | --- |
 | 1 | Model logs and safe payload summaries | Merged in #7769 |
-| 2 | Logging initialization, observability logs, Python/Rust/C++ output | Implemented; adds no audit capabilities |
-| 3 | Existing authentication, account, ACL, and ROOT-related logs | After batch 2 merges |
+| 2 | Logging initialization, observability logs, Python/Rust/C++ output | Merged in #7778; C++ compatibility fixes in #7794 |
+| 3 | Existing authentication, account, ACL, and ROOT-related logs | Implemented; existing logs only, no new audit capabilities |
 | 4 | Existing business service logs | After batch 3 merges |
 | 5 | Parsing, ingestion, and connectors | After batch 4 merges |
 | 6 | Storage and queues | After batch 5 merges |

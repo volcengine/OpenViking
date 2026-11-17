@@ -4841,3 +4841,42 @@ async def test_user_point_read_sees_peer_process_writes_without_a_list(
         assert rerole.json()["result"] == {"user_id": "bob", "role": "admin"}
     finally:
         await writer.close()
+
+
+@pytest.mark.parametrize("queued", [False, True])
+async def test_account_rollback_logs_summary_without_exception_text(queued, caplog, monkeypatch):
+    import logging
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from openviking.server.routers import admin as module
+
+    secret = "/workspace/acme/peers/private-peer/password=secret"
+    failure = RuntimeError(secret)
+    service = SimpleNamespace(
+        release_account_vector_resources=AsyncMock(side_effect=failure),
+        viking_fs=SimpleNamespace(_async_agfs=SimpleNamespace(rm=AsyncMock(side_effect=failure))),
+    )
+    manager = SimpleNamespace(delete_account=AsyncMock(side_effect=failure))
+    runtime_config = SimpleNamespace(delete_account=AsyncMock(side_effect=failure))
+    deletion_service = (
+        SimpleNamespace(delete_now=AsyncMock(side_effect=failure)) if queued else None
+    )
+    monkeypatch.setattr(module.logger, "handlers", [caplog.handler])
+    caplog.set_level(logging.DEBUG, logger=module.logger.name)
+    await module._rollback_account_creation(
+        service,
+        manager,
+        "acme",
+        runtime_config,
+        deletion_service=deletion_service,
+        actor=object() if queued else None,
+    )
+    summaries = [record for record in caplog.records if record.levelno >= logging.INFO]
+    assert len(summaries) == 1
+    assert summaries[0].levelno == (logging.INFO if queued else logging.ERROR)
+    if not queued:
+        assert summaries[0].failed == 4
+    for record in caplog.records:
+        assert secret not in repr(record.__dict__)
+        assert record.exc_info is None
