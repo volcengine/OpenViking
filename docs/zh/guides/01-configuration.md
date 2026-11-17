@@ -1609,10 +1609,12 @@ SELECT/INSERT/UPDATE/DELETE 权限，以及 schema 的 USAGE 权限。
 `python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`
 生成密钥，再通过部署的密钥配置注入。
 
-事务采用 READ COMMITTED 和 PostgreSQL 数据库时钟。URI 精确匹配和路径范围使用
+事务采用 READ COMMITTED；调度使用 PostgreSQL 的语句级稳定时钟 `statement_timestamp()`，
+同一语句内各行及表达式共享时间值，且该时钟可作为索引范围条件。URI 精确匹配和路径范围使用
 `"C"` 排序规则；前缀索引只覆盖前 128 个字符，实际匹配始终检查完整 URI 和 `/` 边界。
-更长前缀仍正确过滤，但不使用该前缀范围优化。列表分页使用 `list_all` 索引，
-另行过滤 account/user。公开列表在 SQL 层排除鉴权、Connector 状态和大型 checkpoint。
+更长前缀仍正确过滤，但不使用该前缀范围优化。非 root 分页使用 `list` 索引，
+通过账号/用户哈希等值条件及 `(created_at, task_id)` 游标范围扫描，并保留完整账号/用户校验。
+root 的全局分页使用 `list_all` 索引。公开列表在 SQL 层排除鉴权、Connector 状态和大型 checkpoint。
 File、MySQL 和 PostgreSQL 使用相同的鉴权、运行结算与 checkpoint 版本规则。
 
 此配置只切换 Watch 元数据，不切换 Task/Work、Account、PathLock、调度选主、文件或向量存储。

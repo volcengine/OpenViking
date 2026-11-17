@@ -41,6 +41,7 @@ from sqlalchemy import (
     literal,
     or_,
     select,
+    text,
     tuple_,
     update,
 )
@@ -58,6 +59,7 @@ from openviking.resource.watch_store import (
     parent_uri,
     target_conflict_message,
 )
+from openviking.resource.watch_store_postgres_schema import POSTGRES_WATCH_INDEX_KEYS
 from openviking.resource.watch_types import (
     PAYLOAD_FIELDS,
     PRIVATE_PATCH_FIELDS,
@@ -245,31 +247,29 @@ def watch_tables(
         Column("connector_states", Text, nullable=True),
         Column("created_at", Float, nullable=False),
         Column("updated_at", Float, nullable=False),
-        Index(f"ix_{table}_due", "service_name", "enabled", "next_run_at"),
-        Index(f"ix_{table}_run", "service_name", "run_started_at"),
-        Index(f"ix_{table}_target", "service_name", "account_id", "target_uri_hash"),
-        Index(f"ix_{table}_list_all", "service_name", "deleted", "created_at", "task_id"),
     )
     if dialect == "postgresql":
-        # Hash equality keys keep full-width identities below the B-tree entry limit.
+        for suffix, keys in POSTGRES_WATCH_INDEX_KEYS.items():
+            Index(
+                f"ix_{table}_{suffix}",
+                *(tasks.c[key] if key in tasks.c else text(key) for key in keys),
+            )
+    else:
+        Index(f"ix_{table}_due", tasks.c.service_name, tasks.c.enabled, tasks.c.next_run_at)
+        Index(f"ix_{table}_run", tasks.c.service_name, tasks.c.run_started_at)
         Index(
-            f"ix_{table}_list",
+            f"ix_{table}_target",
             tasks.c.service_name,
-            func.md5(tasks.c.account_id),
-            func.md5(tasks.c.user_id),
+            tasks.c.account_id,
+            tasks.c.target_uri_hash,
+        )
+        Index(
+            f"ix_{table}_list_all",
+            tasks.c.service_name,
             tasks.c.deleted,
             tasks.c.created_at,
             tasks.c.task_id,
         )
-        # Bound the UTF-8 index key even for maximum-width identity strings.
-        Index(
-            f"ix_{table}_target_prefix",
-            tasks.c.service_name,
-            tasks.c.account_id,
-            tasks.c.deleted,
-            func.substr(tasks.c.target_uri_key, 1, 128),
-        )
-    else:
         Index(
             f"ix_{table}_target_prefix",
             tasks.c.service_name,

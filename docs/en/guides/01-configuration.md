@@ -1625,11 +1625,15 @@ Generate a key once with
 `python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`
 and supply it through your deployment's secret configuration.
 
-Transactions use READ COMMITTED and PostgreSQL's database clock. Exact URI
+Transactions use READ COMMITTED. Scheduling uses PostgreSQL's statement-stable
+`statement_timestamp()` clock, shared by all rows and expressions in a statement
+and usable as an index range condition. Exact URI
 matching and path ranges use `"C"` collation; the prefix index uses the first
 128 characters while every match still checks the full URI and `/` boundary.
 Longer prefixes retain correct filtering without that prefix-range optimization.
-Pagination uses `list_all`, with account/user filtering applied separately.
+Non-root pagination uses `list` with account/user hash equality keys and a
+`(created_at, task_id)` cursor range, retaining full account/user equality checks.
+Root pagination across all visible Watches uses `list_all`.
 Public pages omit authentication, connector state and large checkpoints in SQL.
 File, MySQL and PostgreSQL have the same authorization, run settlement and
 checkpoint-version rules.

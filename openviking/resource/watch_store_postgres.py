@@ -9,6 +9,10 @@ from sqlalchemy import JSON, func, literal_column, text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from openviking.resource.watch_store_postgres_schema import (
+    POSTGRES_WATCH_INDEX_KEYS,
+    POSTGRES_WATCH_TARGET_PREFIX_CHARS,
+)
 from openviking.resource.watch_store_sql import SQLWatchStore
 
 logger = logging.getLogger(__name__)
@@ -18,7 +22,7 @@ _SCHEMA_SCRIPT = "openviking/service/sql/001_watch_tasks_postgres.sql"
 
 class PostgresWatchStore(SQLWatchStore):
     dialect_name = "postgresql"
-    target_prefix_index_chars = 128
+    target_prefix_index_chars = POSTGRES_WATCH_TARGET_PREFIX_CHARS
 
     @staticmethod
     def _is_duplicate_error(exc: IntegrityError) -> bool:
@@ -31,7 +35,11 @@ class PostgresWatchStore(SQLWatchStore):
     @property
     def _target_key_expression(self) -> Any:
         # Keep index constants literal so prepared generic plans can match the DDL.
-        return func.substr(self._tasks.c.target_uri_key, literal_column("1"), literal_column("128"))
+        return func.substr(
+            self._tasks.c.target_uri_key,
+            literal_column("1"),
+            literal_column(str(POSTGRES_WATCH_TARGET_PREFIX_CHARS)),
+        )
 
     async def _validate_schema(self, session: Any) -> None:
         try:
@@ -69,29 +77,9 @@ class PostgresWatchStore(SQLWatchStore):
         usable = {tuple(row["keys"]) for row in result.mappings() if row["usable"]}
         # pg_get_indexdef includes PostgreSQL's implicit varchar-to-text casts.
         # Compare definitions rather than names so equivalent renamed indexes work.
-        expected = {
-            "due": ("service_name", "enabled", "next_run_at"),
-            "run": ("service_name", "run_started_at"),
-            "target": ("service_name", "account_id", "target_uri_hash"),
-            "target_prefix": (
-                "service_name",
-                "account_id",
-                "deleted",
-                "substr(target_uri_key::text, 1, 128)",
-            ),
-            "list_all": ("service_name", "deleted", "created_at", "task_id"),
-            "list": (
-                "service_name",
-                "md5(account_id::text)",
-                "md5(user_id::text)",
-                "deleted",
-                "created_at",
-                "task_id",
-            ),
-        }
         missing = [
             f"ix_{self._tasks.name}_{suffix}"
-            for suffix, keys in expected.items()
+            for suffix, keys in POSTGRES_WATCH_INDEX_KEYS.items()
             if keys not in usable
         ]
         if missing:

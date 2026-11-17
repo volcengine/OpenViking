@@ -4,6 +4,7 @@
 
 import asyncio
 import logging
+import re
 import threading
 from contextlib import suppress
 from datetime import datetime, timedelta
@@ -11,8 +12,10 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.schema import CreateIndex, CreateTable
 
 from openviking.resource.watch_store_postgres import PostgresWatchStore
+from openviking.resource.watch_store_postgres_schema import POSTGRES_WATCH_INDEX_KEYS
 from openviking.resource.watch_store_sql import db_now, watch_tables
 from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchRunResult
 from openviking_cli.utils.config.storage_config import StorageConfig, WatchStoreConfig
@@ -20,6 +23,7 @@ from tests.resource.test_watch_store import (
     ACCOUNT,
     ENCRYPTION_KEY,
     OWNER,
+    POSTGRES_SCHEMA,
     create,
 )
 from tests.resource.test_watch_store import (
@@ -29,6 +33,38 @@ from tests.resource.test_watch_store import (
 make_store = _make_store
 
 PARAMS = {"user": "u", "database": "d", "credential_encryption_key": ENCRYPTION_KEY}
+
+
+@pytest.mark.parametrize("table_name", ["ov_watch_tasks", "custom_watch_tasks"])
+def test_postgres_metadata_and_deployment_ddl_share_index_definitions(table_name):
+    def definition(statement):
+        normalized = " ".join(str(statement).split()).rstrip(";")
+        match = re.fullmatch(r"CREATE INDEX (\w+) ON (\w+) \((.+)\)", normalized)
+        assert match, normalized
+        name, table, keys = match.groups()
+        # Deployment DDL can omit the implicit varchar-to-text casts.
+        return name, (table, "".join(keys.split()).replace("::text", ""))
+
+    ddl = POSTGRES_SCHEMA.read_text().replace("ov_watch_tasks", table_name)
+    ddl = "\n".join(line for line in ddl.splitlines() if not line.lstrip().startswith("--"))
+    deployed = dict(
+        definition(statement)
+        for statement in ddl.split(";")
+        if statement.strip().startswith("CREATE INDEX")
+    )
+    table = watch_tables(table_name, dialect="postgresql")
+    metadata = dict(
+        definition(CreateIndex(index).compile(dialect=postgresql.dialect()))
+        for index in table.indexes
+    )
+    expected = {
+        f"ix_{table_name}_{suffix}": (
+            table_name,
+            "".join(",".join(keys).split()).replace("::text", ""),
+        )
+        for suffix, keys in POSTGRES_WATCH_INDEX_KEYS.items()
+    }
+    assert metadata == deployed == expected
 
 
 def test_configuration_builds_postgres_watch_store(tmp_path):
@@ -608,6 +644,37 @@ async def test_postgres_initialization_checks_usable_index_definitions(
             assert list_index in warnings[0]
     assert store._engine is not None
     assert (await store.list_tasks_page(OWNER)).total == (2 if state == "invalid" else 0)
+
+
+@pytest.mark.asyncio
+async def test_postgres_metadata_schema_initializes_without_index_warnings(
+    make_store, caplog, monkeypatch
+):
+    import psycopg
+
+    from openviking.resource.watch_store_postgres import logger
+
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL metadata/DDL index contract")
+    await store.close()
+
+    def provision_metadata():
+        params = store._url.translate_connect_args(username="user", database="dbname")
+        with psycopg.connect(**params, **store._engine_options["connect_args"]) as connection:
+            connection.execute(f'DROP TABLE "{store._table_name}"')
+            connection.execute(str(CreateTable(store._tasks).compile(dialect=postgresql.dialect())))
+            for index in store._tasks.indexes:
+                connection.execute(str(CreateIndex(index).compile(dialect=postgresql.dialect())))
+
+    await asyncio.to_thread(provision_metadata)
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
+    caplog.set_level(logging.WARNING, logger=logger.name)
+    caplog.clear()
+    await store.initialize()
+    assert not [record for record in caplog.records if record.name == logger.name]
+    task = await create(store)
+    assert (await store.list_tasks_page(OWNER)).tasks[0]["task_id"] == task.task_id
 
 
 @pytest.mark.asyncio
