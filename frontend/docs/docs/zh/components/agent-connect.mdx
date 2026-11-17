@@ -31,19 +31,19 @@ import '@openviking/react/components/agent-connect/style.css';
 
 ### AgentConnect
 
-| 参数             | 说明                                                                                               | 类型                                        | 默认值                                                  |
-| ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
-| apiKey           | 写入接入说明的 API Key，界面脱敏显示，复制时使用原值                                               | `string`                                    | 必填                                                    |
-| baseUrl          | OpenViking 服务地址，替换接入说明里的默认地址                                                      | `string`                                    | `https://api.vikingdb.cn-beijing.volces.com/openviking` |
-| agreementUrl     | 用户协议链接，提供后页脚显示协议链接，省略时只显示数据访问提示                                     | `string`                                    | -                                                       |
-| showOverseasTag  | 「境外」标签的范围：省略时标记 Codex 和 Claude Code，`true` 标记全部适用的 Agent，`false` 隐藏标签 | `boolean`                                   | -                                                       |
-| activeTabId      | 受控的当前页签，省略时由组件维护                                                                   | `'mainstream' \| 'custom'`                  | `'mainstream'`                                          |
-| selectedId       | 受控的选中条目，取值为 `AgentConnectItem` 的 `id`，当前页签不含该条目时显示第一项                  | `string`                                    | 当前页签的第一项                                        |
-| onTabChange      | 选择页签时触发，点击、方向键、Home、End 都会触发                                                   | `(tabId: 'mainstream' \| 'custom') => void` | -                                                       |
-| onSelect         | 选择条目时触发                                                                                     | `(item: AgentConnectItem) => void`          | -                                                       |
-| onCopy           | 复制成功后触发，参数是实际复制的代码块或整段说明，包含原始 API Key                                 | `(text: string) => void`                    | -                                                       |
-| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                            | `'zh-CN' \| 'en-US'`                        | 继承上级，默认 `'en-US'`                                |
-| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                             | HTML 属性                                   | -                                                       |
+| 参数             | 说明                                                                                                            | 类型                                        | 默认值                                                  |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| apiKey           | 写入接入说明的 API Key，界面脱敏显示，复制时使用原值                                                            | `string`                                    | 必填                                                    |
+| baseUrl          | OpenViking 服务地址，替换接入说明里的默认地址                                                                   | `string`                                    | `https://api.vikingdb.cn-beijing.volces.com/openviking` |
+| agreementUrl     | 用户协议链接，提供后页脚显示协议链接，省略时只显示数据访问提示                                                  | `string`                                    | -                                                       |
+| showOverseasTag  | 「境外」标签的范围：省略时标记 Codex 和 Claude Code，`true` 标记 Codex、Claude Code 和 Cursor，`false` 隐藏标签 | `boolean`                                   | -                                                       |
+| activeTabId      | 受控的当前页签，省略时由组件维护                                                                                | `'mainstream' \| 'custom'`                  | `'mainstream'`                                          |
+| selectedId       | 受控的选中条目，取值为 `AgentConnectItem` 的 `id`，当前页签不含该条目时显示第一项                               | `string`                                    | 当前页签的第一项                                        |
+| onTabChange      | 选择页签时触发，点击、方向键、Home、End 都会触发                                                                | `(tabId: 'mainstream' \| 'custom') => void` | -                                                       |
+| onSelect         | 选择条目时触发                                                                                                  | `(item: AgentConnectItem) => void`          | -                                                       |
+| onCopy           | 复制成功后触发，参数是实际复制的代码块或整段说明，包含原始 API Key                                              | `(text: string) => void`                    | -                                                       |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                         | `'zh-CN' \| 'en-US'`                        | 继承上级，默认 `'en-US'`                                |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                          | HTML 属性                                   | -                                                       |
 
 ### AgentConnectItem
 
@@ -69,7 +69,7 @@ import '@openviking/react/components/agent-connect/style.css';
 - 切换条目、说明页签、语言、`apiKey` 或 `baseUrl` 后，密钥显示和复制反馈恢复初始状态。此前发起的复制完成后不再更新界面，也不调用 `onCopy`。
 - TRAE 的安装命令面向国际版。
 - Hermes 使用自定义 `baseUrl`（不同于默认地址）时，说明改用 Custom 连接步骤。
-- 「境外」标签显示在详情标签行的末尾，按 Agent 产品的归属标记，不根据它使用的模型推断部署地区。`showOverseasTag` 为 `true` 时，除 Codex 和 Claude Code 外，还标记 Cursor、OpenClaw、Hermes Agent、OpenCode 和 pi。
+- 「境外」标签显示在详情标签行的末尾。`showOverseasTag` 为 `true` 时，仅标记 Codex、Claude Code 和 Cursor。
 - 类型从 `@openviking/react/components/agent-connect` 导出，包根入口只导出组件和 `AgentConnectProps`。
 
 ## 埋点

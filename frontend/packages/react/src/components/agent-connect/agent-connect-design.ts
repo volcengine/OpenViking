@@ -39,14 +39,7 @@ const mainstream = [
 
 const defaultOverseasAgents = new Set(['codex', 'claude-code']);
 
-const overseasAgents = new Set([
-  ...defaultOverseasAgents,
-  'cursor',
-  'openclaw',
-  'hermes',
-  'opencode',
-  'pi',
-]);
+const overseasAgents = new Set([...defaultOverseasAgents, 'cursor']);
 
 const custom = [
   { id: 'mcp', Icon: McpIcon },
