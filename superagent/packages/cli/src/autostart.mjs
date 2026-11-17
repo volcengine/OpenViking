@@ -138,8 +138,8 @@ export async function autostartCommand([action, ...extra], {
     return 0;
   }
   const pathValue = env.PATH || '/usr/bin:/bin';
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   if (platform.loginService === 'launchd') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.mkdirSync(path.join(homeDir, '.ov-superagent', 'logs'), { recursive: true });
     fs.writeFileSync(file, launchAgent({ homeDir, pathValue }));
     await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
@@ -147,9 +147,6 @@ export async function autostartCommand([action, ...extra], {
     output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
     return 0;
   }
-  fs.writeFileSync(file, systemdUnit({ homeDir, pathValue }));
-  await execFileImpl('systemctl', ['--user', 'daemon-reload']);
-  await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
   const loginctlUser = String(uid ?? env.USER ?? '');
   const lingerArgs = loginctlUser ? ['show-user', loginctlUser, '--property=Linger', '--value'] : [];
   const lingerEnabled = async () => {
@@ -163,10 +160,14 @@ export async function autostartCommand([action, ...extra], {
     lingers = await lingerEnabled().catch(() => false);
   }
   if (!lingers) {
-    output.write(t('systemd 用户服务已启用，但开机自启还未完整开启。请运行 sudo loginctl enable-linger "$USER"，然后重试。\n',
-      'The systemd user service is enabled, but autostart is not fully on. Run sudo loginctl enable-linger "$USER", then retry.\n'));
+    output.write(t('无法开启 linger，未写入 systemd 用户服务。请运行 sudo loginctl enable-linger "$USER"，然后重试。\n',
+      'Could not enable linger; the systemd user service was not installed. Run sudo loginctl enable-linger "$USER", then retry.\n'));
     return 1;
   }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, systemdUnit({ homeDir, pathValue }));
+  await execFileImpl('systemctl', ['--user', 'daemon-reload']);
+  await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
   return 0;
 }

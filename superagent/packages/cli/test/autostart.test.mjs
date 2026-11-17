@@ -41,11 +41,11 @@ test('Linux: a systemd user unit that runs ov-superagent start with the enabling
   assert.match(unit, /Environment=PATH=\/opt\/agents\/bin:\/usr\/bin/);
   assert.match(unit, new RegExp(`PIDFile=${directory}/\\.ov-superagent/pm2/pm2\\.pid`));
   assert.deepEqual(enabled.calls, [
-    ['systemctl', '--user', 'daemon-reload'],
-    ['systemctl', '--user', 'enable', 'superagent.service'],
     ['loginctl', 'show-user', '501', '--property=Linger', '--value'],
     ['loginctl', 'enable-linger', '501'],
     ['loginctl', 'show-user', '501', '--property=Linger', '--value'],
+    ['systemctl', '--user', 'daemon-reload'],
+    ['systemctl', '--user', 'enable', 'superagent.service'],
   ]);
   assert.match(enabled.output, /开机自启已开启|Autostart is on/);
 
@@ -65,7 +65,7 @@ test('Linux: an already lingering user needs no enable-linger call', async (t) =
   ]);
 });
 
-test('Linux: autostart stays incomplete when enable-linger lacks permission', async (t) => {
+test('Linux: no systemd unit is installed when enable-linger lacks permission', async (t) => {
   const directory = home(t);
   const enabled = await run(directory, { ...posix, loginService: 'systemd' }, 'enable', async (command, args) => {
     if (command === 'loginctl' && args[0] === 'show-user') return { stdout: 'no\n' };
@@ -75,16 +75,19 @@ test('Linux: autostart stays incomplete when enable-linger lacks permission', as
   assert.equal(enabled.code, 1);
   assert.match(enabled.output, /sudo loginctl enable-linger "\$USER"/);
   assert.doesNotMatch(enabled.output, /开机自启已开启|Autostart is on/);
-  assert.equal(fs.existsSync(path.join(directory, '.config', 'systemd', 'user', 'superagent.service')), true);
+  assert.equal(fs.existsSync(path.join(directory, '.config', 'systemd', 'user', 'superagent.service')), false);
+  assert.equal(enabled.calls.some(([command]) => command === 'systemctl'), false);
 });
 
-test('Linux: enable-linger is only successful after Linger becomes yes', async (t) => {
+test('Linux: no systemd unit is installed until Linger becomes yes', async (t) => {
   const directory = home(t);
   const enabled = await run(directory, { ...posix, loginService: 'systemd' }, 'enable', async (command) => (
     command === 'loginctl' ? { stdout: 'no\n' } : { stdout: '' }
   ));
   assert.equal(enabled.code, 1);
   assert.match(enabled.output, /sudo loginctl enable-linger/);
+  assert.equal(fs.existsSync(path.join(directory, '.config', 'systemd', 'user', 'superagent.service')), false);
+  assert.equal(enabled.calls.some(([command]) => command === 'systemctl'), false);
 });
 
 test('macOS: a LaunchAgent bootstrapped into the user GUI domain', async (t) => {
