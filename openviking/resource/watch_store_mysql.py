@@ -8,6 +8,7 @@ from sqlalchemy import JSON, func
 from sqlalchemy.exc import IntegrityError
 
 from openviking.resource.watch_store_sql import SQLWatchStore
+from openviking.storage.mysql_config import mysql_connection_options
 
 
 class MySQLWatchStore(SQLWatchStore):
@@ -22,9 +23,7 @@ class MySQLWatchStore(SQLWatchStore):
 
     @staticmethod
     def _connection_options(values: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-        from openviking.service.task_store_mysql import MySQLTaskWorkStore
-
-        return MySQLTaskWorkStore._connection_options(values)
+        return mysql_connection_options(values)
 
     def _public_payload(self, names: Sequence[str]) -> Any:
         args: list[Any] = []

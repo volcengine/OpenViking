@@ -15,6 +15,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -76,9 +77,8 @@ from openviking.storage.sql_runtime import (
 )
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils.config.config_utils import normalize_service_name
-from openviking_cli.utils.logger import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _COLUMN_FIELDS = frozenset(
     {
@@ -661,7 +661,8 @@ class SQLWatchStore(WatchStore):
         run_id: Optional[str] = None,
     ) -> Optional[WatchTask]:
         """Apply explicit fields. With *run_id*, only the occupying run may write."""
-        values = patch.normalized()
+        # Validate even when the row is missing; resolve against the locked row below.
+        patch.normalized()
         c = self._tasks.c
         where = [self._scope, c.task_id == task_id, self._authority(authority)]
         where.append(c.deleted.is_(False) if run_id is None else c.current_run_id == run_id)

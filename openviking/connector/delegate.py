@@ -42,6 +42,11 @@ from openviking.connector.routing import (
     detect_connector_add_type,
     is_full_commit_sha,
 )
+from openviking.connector.watch_auth import (
+    WATCH_AUTH_PROVIDER,
+    WATCH_PLAINTEXT_AUTH_PROVIDER,
+    is_watch_auth_state,
+)
 from openviking.core.namespace import NamespaceShapeError
 from openviking.core.uri_validation import matches_content_kind
 from openviking.crypto.encryptor import MAGIC as ENCRYPTED_ENVELOPE_MAGIC
@@ -155,8 +160,8 @@ class ConnectorDelegate:
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_credential_encryptor: Any = None
 
-    _WATCH_AUTH_PROVIDER = "connector_encrypted"
-    _WATCH_PLAINTEXT_AUTH_PROVIDER = "connector_plaintext"
+    _WATCH_AUTH_PROVIDER = WATCH_AUTH_PROVIDER
+    _WATCH_PLAINTEXT_AUTH_PROVIDER = WATCH_PLAINTEXT_AUTH_PROVIDER
 
     def _watch_encryptor(self) -> Any:
         encryptor = getattr(self._viking_fs, "_encryptor", None)
@@ -210,10 +215,7 @@ class ConnectorDelegate:
 
     @classmethod
     def is_watch_auth_state(cls, auth_state: Optional[Dict[str, Any]]) -> bool:
-        return isinstance(auth_state, dict) and auth_state.get("provider") in {
-            cls._WATCH_AUTH_PROVIDER,
-            cls._WATCH_PLAINTEXT_AUTH_PROVIDER,
-        }
+        return is_watch_auth_state(auth_state)
 
     async def restore_watch_request(
         self,

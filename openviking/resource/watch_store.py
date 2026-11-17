@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
+from openviking.connector.watch_auth import is_watch_auth_state
 from openviking.resource.watch_types import (
     WatchAuthority,
     WatchCandidate,
@@ -34,9 +35,7 @@ def parent_uri(uri: str) -> Optional[str]:
 
 
 def is_connector(auth_state: Optional[dict[str, Any]]) -> bool:
-    from openviking.connector.delegate import ConnectorDelegate
-
-    return ConnectorDelegate.is_watch_auth_state(auth_state)
+    return is_watch_auth_state(auth_state)
 
 
 def target_conflict_message(uri: Optional[str]) -> str:

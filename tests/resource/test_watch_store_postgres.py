@@ -4,6 +4,7 @@
 
 import asyncio
 import threading
+from contextlib import suppress
 
 import pytest
 from sqlalchemy import select
@@ -18,8 +19,12 @@ from tests.resource.test_watch_store import (
     ENCRYPTION_KEY,
     OWNER,
     create,
-    make_store,  # noqa: F401
 )
+from tests.resource.test_watch_store import (
+    make_store as _make_store,
+)
+
+make_store = _make_store
 
 PARAMS = {"user": "u", "database": "d", "credential_encryption_key": ENCRYPTION_KEY}
 
@@ -151,7 +156,7 @@ async def test_cleanup_failure_preserves_initialization_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_postgres_long_unicode_paths_and_maximum_identity_width(make_store):  # noqa: F811
+async def test_postgres_long_unicode_paths_and_maximum_identity_width(make_store):
     store = await make_store()
     if store.provider != "postgres":
         pytest.skip("PostgreSQL B-tree width contract")
@@ -173,7 +178,7 @@ async def test_postgres_long_unicode_paths_and_maximum_identity_width(make_store
 
 
 @pytest.mark.asyncio
-async def test_postgres_operations_work_across_event_loops(make_store):  # noqa: F811
+async def test_postgres_operations_work_across_event_loops(make_store):
     store = await make_store()
     if store.provider != "postgres":
         pytest.skip("PostgreSQL pool loop-affinity contract")
@@ -185,7 +190,7 @@ async def test_postgres_operations_work_across_event_loops(make_store):  # noqa:
 
 
 @pytest.mark.asyncio
-async def test_postgres_short_prefix_uses_expression_index(make_store):  # noqa: F811
+async def test_postgres_short_prefix_uses_expression_index(make_store):
     from sqlalchemy import text
 
     store = await make_store()
@@ -214,7 +219,7 @@ async def test_postgres_short_prefix_uses_expression_index(make_store):  # noqa:
 
 
 @pytest.mark.asyncio
-async def test_postgres_requires_schema_and_recovers_after_initialize_failure(make_store):  # noqa: F811
+async def test_postgres_requires_schema_and_recovers_after_initialize_failure(make_store):
     from sqlalchemy.exc import ProgrammingError
 
     store = await make_store()
@@ -237,7 +242,7 @@ async def test_postgres_requires_schema_and_recovers_after_initialize_failure(ma
 
 
 @pytest.mark.asyncio
-async def test_postgres_cancellation_rolls_back_before_reusing_pool(make_store):  # noqa: F811
+async def test_postgres_cancellation_rolls_back_before_reusing_pool(make_store):
     from sqlalchemy import text, update
 
     store = await make_store()
@@ -262,13 +267,11 @@ async def test_postgres_cancellation_rolls_back_before_reusing_pool(make_store):
         assert await asyncio.to_thread(started.wait, 5)
         operation.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await operation
+            await asyncio.wait_for(operation, timeout=5)
         assert (await store.get_task(task.task_id)).last_error is None
         assert store._engine.pool.checkedout() == 0
     finally:
         if not operation.done():
             operation.cancel()
-            try:
-                await operation
-            except asyncio.CancelledError:
-                pass
+            with suppress(asyncio.CancelledError):
+                await asyncio.wait_for(operation, timeout=5)
