@@ -704,34 +704,14 @@ class CompileLifecycle:
         run = await self._store.get_run(
             task.account_id, self._owner_user_id(task), compile_name, task.task_id
         )
-        first = None
-        if locked_record["task_first_create_time"] is None or (
-            run is None and task.created_at == locked_record["task_first_create_time"]
-        ):
-            from openviking.service.task_tracker import get_task_tracker
-
-            accepted = await get_task_tracker()._store.list_durable(
-                task.account_id, task_type="compile"
-            )
-            # A prior Task can survive an interrupted configuration publication.
-            first = min(
-                [task]
-                + [
-                    prior
-                    for prior in accepted
-                    if self._compile_name(prior) == compile_name
-                    and self._owner_user_id(prior) == self._owner_user_id(task)
-                ],
-                key=lambda prior: (prior.created_at, prior.task_id),
-            )
-        # Writing the run first lets a replay repair times after interrupted state publication.
+        is_first = locked_record["task_first_create_time"] is None
         if run is None:
             run = new_run(task)
-            if first is not None and first.task_id == task.task_id:
+            if is_first:
                 run["meta"]["trigger"] = "initial"
             await self._store.put_run(task.account_id, self._owner_user_id(task), compile_name, run)
-        if locked_record["task_first_create_time"] is None:
-            locked_record["task_first_create_time"] = first.created_at
+        if is_first:
+            locked_record["task_first_create_time"] = task.created_at
         locked_record["last_run_time"] = max(
             locked_record["last_run_time"] or task.created_at, task.created_at
         )
