@@ -119,24 +119,68 @@ claims so the inputs can be replayed. `task_reports` is the append-only list of
 reports.
 
 Status: `queued` (waiting for a slot), `running`, `waiting` (a question for a
-person), `blocked`, and the ended `done`, `dropped`, `failed`, `stopped`. A
-requester's follow-up resumes an ended task, except a stopped one.
+person), `blocked`, and the ended `done`, `dropped`, `failed`, `stopped`.
+
+### A task is one piece of work, not a conversation
+
+A week of online traffic (221 tasks) showed what happens when a task takes
+whatever arrives near it: 307 of 398 follow-ups reopened a task that had
+already reported, some a day later, and a task became "the thread's worker".
+About a fifth of the follow-ups asked for another result (a PR after an
+assessment, a review of a new revision, an unrelated bug), and people's talk
+among themselves went to the worker as if it were the requester's. A follow-up
+sent to a task that was still working waited for that turn to end: four
+minutes at the median and over two hours at p90.
+
+So a task takes only what changes or answers the work it is doing:
+
+- **Owner input reaches a working task, nothing reaches an ended one.**
+  `task_route` refuses an ended task. More work on it is a new task that
+  **follows** it (`task_create` with `follows`, `parent_id`): its brief carries
+  that task's request, summary, last answer, artifacts and directory, so a
+  wrong split costs nothing, while a wrong merge makes a worker do unrelated
+  work and keeps the person waiting behind it. A follows task may take the
+  follow-up slot.
+- **The router decides by what an input asks for.** The `[daemon tasks]` line
+  lists the tasks near an input (same thread, a reply to their messages,
+  waiting for this person) and what each is doing (`working`, `waiting for
+  …`, `done 12m ago`); "same requester" is no longer a reason, and similar
+  words only rank what an exact signal found, or point the owner across chats.
+- **One request, one live task.** `task_create` refuses a line a live task
+  already holds as part of its request; `task_route` refuses lines from another
+  chat than the task's unless the owner wrote them.
+- **Live input for workers.** New task inputs reach a working worker within a
+  step instead of after its turn. Nothing is pushed: the worker's own runtime
+  pulls them (`task_check` under the worker's authority) at two points, after a
+  model step or tool call and when the run is about to end, and adds them to the
+  session; at the second point the run goes on instead of ending.
+  - Pi: `pi-mcp-extension.mjs` on `turn_end` and `agent_before_settle`.
+  - Claude Code and Codex: `task-input-hook.mjs` as a `PostToolUse` hook
+    (`additionalContext`) and a `Stop` hook (`decision: block`), the hook format
+    both CLIs share. Claude Code gets them in the worker's `--settings`; Codex as
+    `-c hooks.<event>=[…]` overrides for that run, which need
+    `--dangerously-bypass-hook-trust` (worker runs already bypass approvals and
+    the sandbox). Nothing is written to `~/.codex` or `~/.claude`.
+  Both points are where Pi's own `steer` delivers too; a long tool call still
+  finishes first.
+- **Workers hand back what is not theirs.** `task_handback` (worker) returns
+  routed lines that ask for something else; a task that fails or is stopped
+  hands back the follow-ups no turn ever took. Both reach the router as one
+  `[task handback]` inbox item with the original lines; it decides on them as
+  new inputs and never routes them back to that task.
 
 ### Router tools
 
 | Tool | Does |
 |---|---|
-| `task_create` | A task from the named input lines (`trigger_ids`, the first one is the origin), a title and an optional note. |
-| `task_route` | More lines for a task: `owner` (adds to, changes or answers the request; resumes an ended task) or `context` (background). |
+| `task_create` | A task from the named input lines (`trigger_ids`, the first one is the origin), a title, an optional note, and `follows` when it builds on a task. |
+| `task_route` | More lines for a working or waiting task: `owner` (changes, narrows or answers the work it is doing) or `context` (background). Refused for an ended task. |
 | `task_stop` | Stops a task and its worker; only when the requester or the owner asks. |
 | `task_list` | The working set (every live task and the 32 most recently ended), one task in detail, or a search over titles. |
 
 Routing an input to a task records it as decided (`decisions`, `silent`), so the
 turn-end check does not ask again; the relayed result records the delivery over
-it. A `[daemon tasks]` line on an input names the tasks it may belong to and why:
-same thread, a reply to the task's messages, a person the task is waiting for,
-the same requester, similar words (character-pair overlap, ranking only). Only
-the owner's lines are matched against tasks in other chats.
+it.
 
 ### Workers
 
@@ -198,8 +242,28 @@ and report-to-inbox receipt then commit in one transaction, before waking the
 router. The report ID is the idempotency key; consuming the inbox row does not
 erase its receipt. Failed writes retry automatically and pending deliveries are
 recovered at startup, without rerunning the worker. Task reports in the inbox
-do not expire under the incoming-event age limit. This guarantees the handoff
-to the inbox, not that the model ultimately sends the report to the requester.
+do not expire under the incoming-event age limit.
+
+A report is **settled** when the router answers for its task, not when it was
+shown: a final delivery or `stay_silent` that names the task (`task_ids`,
+offered on those tools only with this scheduler) or is made on its origin. An
+answer to a later input of the task settles nothing, since it may be an
+acknowledgement. Each report carries a receipt (`task-report:<id>`) that the
+runtimes return when a router turn ends:
+
+- a finished turn that left it unsettled offers it once more, marked
+  `undelivered=1`; past that it is logged as `task.report_unrelayed`;
+- a failed, abandoned or stopped turn offers it again as it was (up to three
+  times), and so does a restart after a turn that held it;
+- a delivery naming a task whose worker is working again (new input from the
+  requester's side came in after that report) is refused: its next report
+  replaces the old one.
+
+So a report is neither lost to a failed router turn nor relayed twice after one.
+Settling on "the router turn succeeded" instead would do both: a turn that
+skipped a report would bury it, and a turn that relayed it and then failed would
+offer it again with nothing to say it was already sent (the outbox key includes
+the reply text, so a rewritten reply is a new message).
 
 ### Interplay with the Core
 
@@ -219,5 +283,6 @@ to the inbox, not that the model ultimately sends the report to the requester.
   action. Selected final reports still awaiting the inbox are delivered again
   through their idempotent receipt.
 
-Activities: `task.created`, `task.turn_started`, `task.turn_completed` (with
-usage), `task.reported`, `task.ended`.
+Activities: `task.created` (with `parent`), `task.turn_started`,
+`task.turn_completed` (with usage), `task.reported`, `task.handed_back`,
+`task.report_unrelayed`, `task.ended`.

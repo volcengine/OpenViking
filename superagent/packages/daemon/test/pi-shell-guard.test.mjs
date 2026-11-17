@@ -3,6 +3,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import personalAgentMcp from '../src/pi-mcp-extension.mjs';
 
 // The extension's handlers, as Pi would register them.
@@ -50,5 +54,52 @@ describe('Pi router shell guard', () => {
 
   it('leaves the shell alone otherwise', () => {
     assert.equal(load({ PERSONAL_AGENT_SHELL_LIMIT_S: undefined }).has('tool_call'), false);
+  });
+});
+
+describe('Pi worker task inputs', () => {
+  // A daemon action socket that answers task_check with what the test queued.
+  async function actionSocket(t, answers) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-task-'));
+    const socketPath = path.join(dir, 'actions.sock');
+    const calls = [];
+    const server = http.createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => {
+        calls.push({ ...JSON.parse(body), authority: request.headers['x-agent-authority'] });
+        const text = answers.shift();
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true, result: text ? { text, data: { count: 1 } } : { text: 'No new inputs for your task.', data: { count: 0 } } }));
+      });
+    });
+    await new Promise((resolve) => server.listen(socketPath, resolve));
+    t.after(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    return { socketPath, calls };
+  }
+
+  it('brings what is routed to the task into a running worker, after a step and before its run settles', async (t) => {
+    const { socketPath, calls } = await actionSocket(t, [null, 'New inputs for your task, oldest first:\n[chat=oc_a msg=om_2 event=e2] 只看上周']);
+    const handlers = load({ PERSONAL_AGENT_TASK_INPUTS: '1' });
+    const saved = { ...process.env };
+    Object.assign(process.env, { PERSONAL_AGENT_SOCKET: socketPath, PERSONAL_AGENT_AUTHORITY: 'worker-token' });
+    t.after(() => { for (const key of ['PERSONAL_AGENT_SOCKET', 'PERSONAL_AGENT_AUTHORITY']) if (!(key in saved)) delete process.env[key]; });
+    assert.equal(await handlers.get('turn_end')({}), undefined, 'nothing new: the run goes on as it would');
+    const result = await handlers.get('agent_before_settle')({});
+    assert.equal(result.continue, true);
+    assert.equal(result.entries.length, 1);
+    assert.deepEqual({ ...result.entries[0], content: undefined }, { type: 'custom_message', customType: 'task_input', display: true, content: undefined });
+    assert.match(result.entries[0].content, /^\[task input\] New inputs for your task, oldest first:\n\[chat=oc_a msg=om_2 event=e2\] 只看上周\nHandle what changes or answers your task; hand back with task_handback what does not belong to it\.$/);
+    assert.deepEqual(calls.map((call) => [call.tool, call.authority]), [['task_check', 'worker-token'], ['task_check', 'worker-token']]);
+  });
+
+  it('is off for the router and when the daemon cannot be reached', async () => {
+    assert.equal(load({ PERSONAL_AGENT_TASK_INPUTS: undefined }).has('agent_before_settle'), false);
+    const handlers = load({ PERSONAL_AGENT_TASK_INPUTS: '1' });
+    const saved = process.env.PERSONAL_AGENT_SOCKET;
+    process.env.PERSONAL_AGENT_SOCKET = path.join(os.tmpdir(), 'no-such-daemon.sock');
+    try { assert.equal(await handlers.get('turn_end')({}), undefined); } finally {
+      if (saved === undefined) delete process.env.PERSONAL_AGENT_SOCKET; else process.env.PERSONAL_AGENT_SOCKET = saved;
+    }
   });
 });

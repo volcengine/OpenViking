@@ -115,6 +115,11 @@ describe('WorkerExecutor', () => {
     assert.match(one.argv.join(' '), /mcp_servers\.personal_agent\.args=\[.*"--authority","tok"\]/);
     assert.deepEqual(two.argv.slice(-3), ['resume', 'th_123', 'second']);
     assert.ok(two.argv.includes('gpt-6-astra'));
+    // New task inputs reach the running worker through this run's own hooks.
+    assert.ok(one.argv.includes('--dangerously-bypass-hook-trust'));
+    for (const event of ['PostToolUse', 'Stop']) {
+      assert.ok(one.argv.some((value) => value.startsWith(`hooks.${event}=[{hooks=[{type="command",command=`) && value.includes('task-input-hook.mjs')), event);
+    }
   });
 
   it('runs Claude Code with --print, resuming its session after the first turn', async (t) => {
@@ -133,6 +138,11 @@ describe('WorkerExecutor', () => {
     assert.equal(arg(two, '--resume'), task().session_id);
     const mcp = JSON.parse(fs.readFileSync(arg(one, '--mcp-config'), 'utf8'));
     assert.deepEqual(mcp.mcpServers.personal_agent.args.slice(-2), ['--authority', 'tok']);
+    // New task inputs reach the running worker through hooks in its settings.
+    const { hooks } = JSON.parse(arg(one, '--settings'));
+    assert.deepEqual(Object.keys(hooks), ['PostToolUse', 'Stop']);
+    assert.match(hooks.Stop[0].hooks[0].command, /task-input-hook\.mjs"$/);
+    assert.equal(hooks.Stop[0].hooks[0].type, 'command');
   });
 
   it('starts a fresh Claude session after an attempt without a successful session checkpoint', async (t) => {

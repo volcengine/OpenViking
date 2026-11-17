@@ -13,6 +13,22 @@ import { sanitizeCodexEnv } from './codex.mjs';
 import { PI_MCP_EXTENSION, piCommand } from './pi-runtime.mjs';
 import { claudeIsolationSettings, codexConfigFile, codexIsolationArgs, piIsolationArgs } from './ov-isolation.mjs';
 import { safeError } from './logger.mjs';
+import { TASK_INPUT_EVENTS, taskInputHookCommand } from './task-input-hook.mjs';
+
+// The hooks that bring new task inputs into a running Claude Code or Codex
+// worker (task-input-hook.mjs), in the format both CLIs share.
+function taskInputHooks() {
+  const command = taskInputHookCommand();
+  return Object.fromEntries(TASK_INPUT_EVENTS.map((event) => [event, [{ hooks: [{ type: 'command', command }] }]]));
+}
+
+// The same hooks as Codex -c overrides, for this run only. Codex runs a hook
+// that is not in its persisted trust store only with --dangerously-bypass-hook-trust.
+function codexTaskInputHookArgs() {
+  const command = taskInputHookCommand();
+  return ['--dangerously-bypass-hook-trust',
+    ...TASK_INPUT_EVENTS.flatMap((event) => ['-c', `hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(command)}}]}]`])];
+}
 
 // One worker turn is one run of the router's own runtime CLI in its
 // non-interactive mode, resuming the task's own session: `pi --mode json -p`,
@@ -76,6 +92,8 @@ const RUNTIMES = {
         ...agentToolServer(config, authority),
         timeout: Math.max(10, Math.ceil(config.sendTimeoutMs / 1_000) + 5),
       });
+      // New task inputs reach the running worker (pi-mcp-extension.mjs).
+      env.PERSONAL_AGENT_TASK_INPUTS = '1';
       const isolation = await piIsolationArgs(env, task.workdir);
       const args = [
         '--mode', 'json', '-p',
@@ -117,6 +135,7 @@ const RUNTIMES = {
       const tools = agentToolServer(config, authority);
       const args = [
         'exec', '--json', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '-C', task.workdir,
+        ...codexTaskInputHookArgs(),
         '-c', `developer_instructions=${JSON.stringify(policy)}`,
         '-c', 'features.plugins=false', '-c', 'features.tool_suggest=false', '-c', 'features.apps=false',
         ...codexIsolationArgs(codexConfigFile(process.env)),
@@ -156,7 +175,7 @@ const RUNTIMES = {
       const args = [
         '--print', '--dangerously-skip-permissions', '--permission-prompts', 'none', '--verbose', '--output-format', 'stream-json',
         '--mcp-config', mcpConfig,
-        '--settings', JSON.stringify(claudeIsolationSettings({ env: process.env, workspace: task.workdir })),
+        '--settings', JSON.stringify({ ...claudeIsolationSettings({ env: process.env, workspace: task.workdir }), hooks: taskInputHooks() }),
         '--disallowed-tools', 'EnterPlanMode,ExitPlanMode',
         '--append-system-prompt-file', policyFile,
         '--no-chrome',

@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { actionEndpoint, listTools } from './actions/client.mjs';
+import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
 import { PI_MCP_STATUS } from './pi-runtime.mjs';
 
 // Loaded explicitly only by the daemon's Pi process. Nothing is written to
@@ -44,6 +44,26 @@ export default function personalAgentMcp(pi) {
       return undefined;
     });
   }
+  // A worker (workers scheduler) gets what is routed to its task while it
+  // works, as the router gets its inputs: after each model step and before
+  // its run settles, new task inputs join the session as one message and the
+  // run goes on, so a follow-up never waits for the turn to end.
+  if (process.env.PERSONAL_AGENT_TASK_INPUTS === '1') {
+    const pull = async () => {
+      if (stopped) return undefined;
+      let result;
+      try { result = await callTool(actionEndpoint('mcp'), 'task_check', {}); } catch { return undefined; }
+      if (!result?.data?.count) return undefined;
+      return {
+        entries: [{ type: 'custom_message', customType: 'task_input', display: true,
+          content: `[task input] ${result.text}\nHandle what changes or answers your task; hand back with task_handback what does not belong to it.` }],
+        continue: true,
+      };
+    };
+    pi.on('turn_end', pull);
+    pi.on('agent_before_settle', pull);
+  }
+
   pi.on('session_start', (_event, ctx) => {
     stopped = false;
     // Other session_start handlers (including built-in MCP) must run before
