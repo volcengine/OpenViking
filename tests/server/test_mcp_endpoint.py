@@ -429,7 +429,23 @@ async def test_search_tools_expose_only_context_type_parameter():
     for tool_name in ("find", "search"):
         properties = tools[tool_name].inputSchema["properties"]
         assert "context_type" in properties
+        assert properties["tags"]["type"] == "array"
+        assert "include_tags" not in properties
         assert "filter" not in properties
+
+
+async def test_retrieval_tools_expose_tag_parameters_with_compatible_defaults():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    for tool_name in ("find", "search", "list", "tree", "grep"):
+        properties = tools[tool_name].inputSchema["properties"]
+        assert properties["tags"]["type"] == "array"
+        assert "tags" not in tools[tool_name].inputSchema.get("required", [])
+
+    for tool_name in ("list", "tree", "grep"):
+        properties = tools[tool_name].inputSchema["properties"]
+        assert properties["include_tags"]["type"] == "boolean"
+        assert properties["include_tags"]["default"] is False
 
 
 async def test_recall_tool_is_replaced_by_search_context_mode():
@@ -542,6 +558,43 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
         "field": "context_type",
         "conds": ["memory", "resource"],
     }
+
+
+async def test_find_tool_combines_context_type_and_tag_filters(service, monkeypatch):
+    captured = {}
+
+    async def fake_find(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            memories=[],
+            resources=[
+                SimpleNamespace(
+                    uri="viking://resources/guide.md",
+                    abstract="Guide",
+                    score=0.8,
+                    search_tags=["team=search", "env=prod"],
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    result = await mcp_endpoint.find(
+        query="guide",
+        context_type="resource",
+        tags=["Team=Search", "env=prod"],
+    )
+
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "context_type", "conds": ["resource"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
+    assert 'tags=["team=search", "env=prod"]' in result
 
 
 @pytest.mark.parametrize(
@@ -671,6 +724,7 @@ async def test_find_tool_collapses_several_hits_from_one_skill_package(service, 
 
     assert "Found 1 item(s)" in result
     assert "- [skill 71%] viking://agent/skills/deploy/SKILL.md" in result
+    assert "tags=[]" in result
     assert "How the deploy skill works" in result
 
 
@@ -698,6 +752,26 @@ async def test_find_tool_forwards_its_bounds_to_find_skills(service, monkeypatch
     assert captured["level"] == [0]
     # find_skills restricts by context type itself and takes no filter.
     assert "filter" not in captured
+
+
+async def test_find_tool_forwards_tags_to_find_skills(service, monkeypatch):
+    captured = {}
+
+    async def fake_find_skills(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
+
+    await mcp_endpoint.find(query="review", context_type="skill", tags=["team=search"])
+
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "context_type", "conds": ["skill"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+        ],
+    }
 
 
 async def test_find_tool_forwards_an_explicit_skill_target_to_find_skills(service, monkeypatch):
@@ -923,6 +997,7 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
         limit=4,
         min_score=0.1,
         context_type="skill",
+        tags=["team=search"],
     )
 
     assert result == "No matching context found."
@@ -936,9 +1011,11 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["limit"] == 4
     assert captured["score_threshold"] == 0.1
     assert captured["filter"] == {
-        "op": "must",
-        "field": "context_type",
-        "conds": ["skill"],
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "context_type", "conds": ["skill"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+        ],
     }
 
 
@@ -967,6 +1044,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
         exclude_uris=["viking://user/test_user/memories/events/old.md"],
         peer_scope="actor",
         other_peer_penalties={"events": 0.2},
+        tags=["team=search", "env=prod"],
         rewrite="auto",
         rewrite_max_bullets=4,
     )
@@ -986,6 +1064,13 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
     assert params.exclude_uris == ["viking://user/test_user/memories/events/old.md"]
     assert params.peer_scope == "actor"
     assert params.other_peer_penalty == {"events": 0.2}
+    assert params.filter == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
     assert params.rewrite is True
     assert params.rewrite_max_bullets == 4
 
@@ -1575,6 +1660,38 @@ async def test_list_reports_more_entries(service):
     result = await list_tool("viking://resources/test_list_limit", limit=1)
 
     assert "(more entries available;" in result
+
+
+async def test_list_forwards_and_renders_tags(service, monkeypatch):
+    captured = {}
+
+    async def fake_ls(uri, **kwargs):
+        captured.update(uri=uri, **kwargs)
+        return ListingPage(
+            entries=[
+                {
+                    "name": "guide.md",
+                    "uri": "viking://resources/guide.md",
+                    "isDir": False,
+                    "tags": ["team=search"],
+                },
+                {
+                    "name": "untagged.md",
+                    "uri": "viking://resources/untagged.md",
+                    "isDir": False,
+                    "tags": [],
+                },
+            ],
+            has_more=False,
+        )
+
+    monkeypatch.setattr(service.fs, "ls", fake_ls)
+
+    result = await list_tool("viking://resources", tags=["team=search"], include_tags=True)
+
+    assert captured["tags"] == ["team=search"]
+    assert captured["include_tags"] is True
+    assert result == '[file] guide.md tags=["team=search"]\n[file] untagged.md tags=[]'
 
 
 # ---------------------------------------------------------------------------
@@ -2784,6 +2901,36 @@ async def test_grep_case_insensitive(service):
     assert isinstance(result, str)
 
 
+async def test_grep_forwards_and_renders_tags(service, monkeypatch):
+    captured = {}
+
+    async def fake_grep(uri, pattern, **kwargs):
+        captured.update(uri=uri, pattern=pattern, **kwargs)
+        return {
+            "matches": [
+                {
+                    "uri": "viking://resources/guide.md",
+                    "line": 3,
+                    "content": "tagged text",
+                    "tags": ["team=search"],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(service.fs, "grep", fake_grep)
+
+    result = await grep(
+        uri="viking://resources",
+        pattern="tagged",
+        tags=["team=search"],
+        include_tags=True,
+    )
+
+    assert captured["tags"] == ["team=search"]
+    assert captured["include_tags"] is True
+    assert '\nviking://resources/guide.md tags=["team=search"]' in result
+
+
 # ---------------------------------------------------------------------------
 # glob tool
 # ---------------------------------------------------------------------------
@@ -3018,3 +3165,33 @@ async def test_tree_include_abstract_still_renders(service):
 
     result = await tree(uri="viking://resources/test_tree_abs", include_abstract=True)
     assert "\nnote.md (11 B)" in result
+
+
+async def test_tree_forwards_and_renders_tags(service, monkeypatch):
+    captured = {}
+
+    async def fake_tree(uri, **kwargs):
+        captured.update(uri=uri, **kwargs)
+        return ListingPage(
+            entries=[
+                {
+                    "rel_path": "guide.md",
+                    "isDir": False,
+                    "size": 12,
+                    "tags": ["team=search"],
+                }
+            ],
+            has_more=False,
+        )
+
+    monkeypatch.setattr(service.fs, "tree", fake_tree)
+
+    result = await tree(
+        uri="viking://resources",
+        tags=["team=search"],
+        include_tags=True,
+    )
+
+    assert captured["tags"] == ["team=search"]
+    assert captured["include_tags"] is True
+    assert '\nguide.md (12 B) tags=["team=search"]' in result
