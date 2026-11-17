@@ -2252,11 +2252,13 @@ impl HttpClient {
         &self,
         branch: &str,
         limit: u32,
+        offset: u32,
         paths: Option<&[String]>,
     ) -> Result<Value> {
         let mut params = vec![
             ("branch".to_string(), branch.to_string()),
             ("limit".to_string(), limit.to_string()),
+            ("offset".to_string(), offset.to_string()),
         ];
         if let Some(paths) = paths {
             for path in paths {

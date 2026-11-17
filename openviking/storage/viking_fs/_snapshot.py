@@ -759,12 +759,14 @@ class _SnapshotMixin:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back from ``branch``'s HEAD along ``parents[0]`` up to ``limit`` commits.
 
-        Returns a list of commit metadata dicts (same shape as ``show(target_ref)``).
+        Skip ``offset`` matching commits before collecting results. Returns a
+        list of commit metadata dicts (same shape as ``show(target_ref)``).
         """
         if limit <= 0:
             return []
@@ -786,6 +788,7 @@ class _SnapshotMixin:
             account=account,
             branch=branch,
             limit=limit,
+            offset=offset,
             paths=tree_paths,
         )
 
