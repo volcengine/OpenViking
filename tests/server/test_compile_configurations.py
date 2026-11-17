@@ -223,7 +223,9 @@ def test_compile_name_openapi_contract(app):
     schemas = []
     for suffix in ("/config", "/configs", "/runs", "/runs/{task_id}", "/runs/{task_id}/outputs"):
         params = routes["/api/v1/compile" + suffix]["get"]["parameters"]
-        schema = next(p["schema"] for p in params if p["name"] == "compile_name")
+        parameter = next(p for p in params if p["name"] == "compile_name")
+        assert parameter["required"] is (suffix != "/configs")
+        schema = parameter["schema"]
         assert "pattern" not in schema  # Swagger UI validates this field without Unicode mode.
         schemas.append(schema)
     for suffix in ("/create", "", "/config/update"):
