@@ -4,14 +4,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export function readWorkspaceFile(relative, workspace, maxBytes = 20 * 1024 * 1024) {
+export function resolveWorkspacePath(relative, workspace) {
   if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) || relative.includes('\0')
     || relative.includes('\\') || relative.split('/').includes('..') || /^[a-z][a-z0-9+.-]*:/i.test(relative)) {
     throw new Error('file_path must be relative to the workspace without traversal or URLs');
   }
   const root = fs.realpathSync(workspace);
-  const filename = fs.realpathSync(path.resolve(root, relative));
+  const requested = path.resolve(root, relative);
+  const filename = fs.realpathSync(requested);
   if (!filename.startsWith(root + path.sep)) throw new Error('file_path escapes the workspace');
+  return { root, requested, filename };
+}
+
+export function readWorkspaceFile(relative, workspace, maxBytes = 20 * 1024 * 1024) {
+  const { filename } = resolveWorkspacePath(relative, workspace);
   const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     const stat = fs.fstatSync(fd);

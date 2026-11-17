@@ -5,7 +5,7 @@
 ## 发送 Markdown、图片与文件
 
 - 普通文字使用 `markdown`，底层 `--markdown` 转成 post。
-- 本地附件使用 `file_path`，例如 `reports/result.pdf`；相对于 Agent workspace，非空且最多 20 MiB。jpg/png/gif/webp/bmp 作为图片发送，其他（PDF、Word、Excel 等）作为文件发送。不允许 URL、绝对路径、`..` 或逃出 workspace 的符号链接。上传使用经过校验的文件快照。
+- 本地附件使用 `file_path`，例如 `reports/result.pdf` 或 `reports`；相对于 Agent workspace，文件非空且最多 20 MiB。jpg/png/gif/webp/bmp 作为图片发送，其他（PDF、Word、Excel 等）作为文件发送。目录自动打成同名 ZIP 文件，保留顶层目录，ZIP 最多 20 MiB；空目录、目录内任何符号链接和特殊文件都会被拒绝。路径不允许 URL、绝对路径、`..` 或逃出 workspace 的符号链接。上传使用经过校验的文件快照，发送成功或失败后都会清理临时快照。
 - 已上传的 IM 文件可以使用可信工具返回的 `file_key`。它不是云文档 token。
 - 文件消息没有文字说明区，不能同时带 markdown 或 mentions。一次决策只发送所需附件。
 - 话题内使用 `reply_message`，设置 `reply_in_thread: true`。`send_message` 创建群内独立消息。
