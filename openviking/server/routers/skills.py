@@ -785,9 +785,6 @@ async def update_skill(
                     ),
                     timeout_secs=30.0,
                 )
-            await clear_skill_package_contents(
-                viking_fs, root_uri, ctx=_ctx, lease_ref=update_lease
-            )
 
         async def release_update_locks() -> None:
             try:
@@ -852,14 +849,18 @@ async def update_skill(
                 await run_to_completion(prepare_replacement)
                 # All synchronous configuration changes must finish before the
                 # package can produce background summary or embedding work.
-                await run_to_completion(
+                preparation.skill_dict = await run_to_completion(
                     lambda: service.resources._skill_processor.apply_skill_privacy(  # noqa: SLF001
                         preparation.skill_dict,
-                        preparation.privacy_values,
+                        preparation.privacy,
                         _ctx,
                         change_reason="auto-extracted from update_skill",
-                        delete_if_empty=True,
                         owner_lease_ref=privacy_lease,
+                    )
+                )
+                await run_to_completion(
+                    lambda: clear_skill_package_contents(
+                        viking_fs, root_uri, ctx=_ctx, lease_ref=update_lease
                     )
                 )
                 result = await service.resources.add_skill(
