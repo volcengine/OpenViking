@@ -128,8 +128,8 @@ claude mcp add --transport http openviking \
 |------|------|----------|
 | `find_mcp_tools` | 按用户意图语义检索已注册的上游 MCP 工具。返回按相关度排序的候选项，包含 `uri`、`score` 和完整 MCP `tool` 定义（含 `inputSchema` 与 annotations）。可直接将返回的 `uri` 作为 `invoke_mcp_tool.tool_uri`，无需额外调用 `read` | `query`, `limit`（默认 10） |
 | `invoke_mcp_tool` | 执行 `find_mcp_tools` 选出的工具。OpenViking 在服务端解析上游 Server 和凭证，并透明保留上游返回的 `content`、`structuredContent` 与 `isError`。上游工具可能产生外部副作用，调用不会自动重试 | `tool_uri`, `arguments`（可选，必须符合检索结果中的 `tool.inputSchema`） |
-| `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选) |
-| `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
+| `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `since`, `until`, `time_field`（可选）, `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选) |
+| `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `since`, `until`, `time_field`, `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
 | `rule_search` | 检索适用于具体任务上下文的已启用 Rule。调用方仍需依据已知事实判断每条 Rule 的 `applies_when` 与 `exception` | `task_context`, `rule_probability_threshold`（可选，默认 `0.65`） |
 | `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频；需要原始字节时用 `download` | `uri`（读一个文件）或 `uris`（数组，一次读多个文件）, `offset`, `limit`（文本行数） |
 | `download` | 返回一个短时有效、只能使用一次的 URL，用 `curl` 获取单个文件的原始字节（任意类型，包括 PDF、图片、压缩包、音频和视频）；不返回文件内容。不支持目录 | `uri` |
@@ -155,6 +155,8 @@ claude mcp add --transport http openviking \
 | `set_acl` | 设置共享资源 ACL；按修改前的权限校验 manage | `uri`, `acl` |
 
 </div>
+
+`find` 和 `search` 的两种模式都会在选取候选之前应用 `since` 和 `until`。时间边界支持 ISO 日期、时间戳和 `7d` 等相对时长。只填写日期时，起始或结束日期按 UTC 包含全天。`time_field` 默认为 `updated_at`。例如，把 `since` 设为 `7d`、`time_field` 设为 `created_at`，即可检索过去七天内创建的记录。
 
 在 MCP 工具中访问自己的工作区，请使用家目录别名 `viking://~`。它在所有控制面
 （REST API、`ov` CLI、SDK 和 MCP）上都会展开为 `viking://user/<当前用户>`，因此
