@@ -152,6 +152,7 @@ def test_prompt_manager_falls_back_to_bundled_templates_dir(monkeypatch):
     manager = PromptManager(enable_caching=False)
 
     assert manager.templates_dir == PromptManager._get_bundled_templates_dir()
+    assert "semantic.abstract_generation" in manager.list_prompts(category="semantic")
 
 
 def test_prompt_manager_falls_back_to_bundled_template_when_custom_dir_is_partial(
@@ -172,6 +173,8 @@ def test_prompt_manager_falls_back_to_bundled_template_when_custom_dir_is_partia
     assert manager.render("memory.profile") == "custom-profile-template"
     bundled_template = manager.load_template("vision.image_understanding")
     assert bundled_template.metadata.id == "vision.image_understanding"
+    directory_template = manager.load_template("semantic.abstract_generation")
+    assert directory_template.metadata.id == "semantic.abstract_generation"
 
 
 def test_default_memory_registry_reuses_templates_until_restart(tmp_path, monkeypatch):

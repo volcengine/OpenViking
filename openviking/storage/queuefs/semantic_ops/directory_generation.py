@@ -8,9 +8,19 @@ import json
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Mapping
 
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
 from openviking.prompts import render_prompt
 from openviking.storage.abstract_overview import AbstractOverviewDocument, markdown_safe_viking_uri
+from openviking.system_assets import BUILTIN_SEMANTIC_TEMPLATES_DIR
 from openviking_cli.utils.config.parser_config import SemanticConfig
+
+_OVERVIEW_TEMPLATES = Environment(
+    loader=FileSystemLoader(BUILTIN_SEMANTIC_TEMPLATES_DIR),
+    autoescape=False,
+    auto_reload=False,
+    undefined=StrictUndefined,
+)
 
 
 @dataclass(frozen=True)
@@ -33,29 +43,13 @@ def render_directory_overview(
     """Reserve space for navigation links before adding entry descriptions."""
     chinese = language.lower().startswith("zh")
     title = dir_uri.rstrip("/").rsplit("/", 1)[-1]
-    navigation_title = "目录导航" if chinese else "Directory navigation"
-    guide_title = "使用指引" if chinese else "Access guide"
-    guide = (
-        "已确定文件位置时，直接读取对应文件；位置不明确时，先在本目录内检索。"
-        "需要了解目录结构或查看更多条目时，可分页浏览目录。"
-        "可参考 `read`、`find`、`list` 等工具。"
-        if chinese
-        else "Read the file directly when its location is known; otherwise search within this "
-        "directory first. Browse directory entries with pagination to explore its structure or "
-        "find more entries. Tools such as `read`, `find`, and `list` can support these operations."
-    )
-    notice = (
-        "已展示部分条目，可在本目录内检索或分页浏览。"
-        if chinese
-        else "Only some entries are listed. Search within this directory or browse further pages."
-    )
-    prefix = f"# {title}\n\n{abstract.strip()}\n\n## {navigation_title}\n\n"
-    suffix = f"\n\n## {guide_title}\n\n{guide}"
+    abstract = abstract.strip()
+    template = _OVERVIEW_TEMPLATES.get_template("directory_overview.md.j2")
 
     def render(navigation: str, *, partial: bool) -> str:
-        if partial:
-            navigation += f"\n\n{notice}"
-        return prefix + navigation + suffix
+        return template.render(
+            title=title, abstract=abstract, navigation=navigation, partial=partial, chinese=chinese
+        )
 
     ordered = sorted(entries.items(), key=lambda item: (item[1]["kind"] != "directory", item[0]))
     candidates = ordered[: config.overview_sample_limit]
