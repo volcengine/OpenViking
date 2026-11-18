@@ -84,10 +84,10 @@ async def health_loop(app, interval, sleep=asyncio.sleep):
             await sleep(1)
 
 
-async def commit_loop(app, management):
+async def commit_loop(app):
     while True:
         try:
-            await app.state.kernel.capture.sweep(management)
+            await app.state.kernel.capture.sweep()
         except Exception:
             logger.exception("OpenViking Gateway could not look for overdue commits")
         await asyncio.sleep(SWEEP_SECONDS)
@@ -161,14 +161,14 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                     config.openviking_breaker_seconds,
                 )
                 app.state.kernel = MemoryKernel(
-                    store, app.state.viking, config.openviking_auto_commit
+                    store, app.state.viking, config.openviking_auto_commit, management
                 )
                 # The first probe runs in the background: an embedded server is not listening yet.
                 app.state.health = {"status": "starting"}
                 maintenance = [
                     asyncio.create_task(health_loop(app, config.health_interval_seconds)),
                     asyncio.create_task(cleanup_loop()),
-                    asyncio.create_task(commit_loop(app, management)),
+                    asyncio.create_task(commit_loop(app)),
                 ]
                 if config.snapshot_interval_seconds:
                     maintenance.append(

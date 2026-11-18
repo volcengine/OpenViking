@@ -104,12 +104,15 @@ class CapturePipeline:
     left is committed once no turn has ended for ``idle_seconds``. That wait is a
     timer in this process; the capture document records when it is due, so any
     process finds the commit in ``sweep`` if this one is gone by then or failed.
+    Whoever makes it reads the OpenViking key from the stored key record at that
+    time, so a key revoked meanwhile commits nothing.
     """
 
-    def __init__(self, store, viking=None, auto_commit=False):
+    def __init__(self, store, viking=None, auto_commit=False, management=None):
         self.store, self.viking, self.auto_commit = store, viking, auto_commit
-        # Idle commits waiting in this process and the ones running, by session, and
-        # every commit in flight.
+        self.management = management
+        # Idle commits waiting in this process with their due times and the ones
+        # running, by session, and every commit in flight.
         self.timers, self.running, self.tasks = {}, set(), set()
 
     async def open(self, request):
@@ -173,65 +176,71 @@ class CapturePipeline:
         if ended and not self.auto_commit:
             if (written or {}).get("pending_tokens", 0) >= policy.commit_tokens:
                 self.spawn(self.commit(key, session, policy.keep_recent_messages))
-            self.wait((request.scope, request.session), key, session, value["idle_at"])
+            self.wait((request.scope, request.session), value["idle_at"])
         return len(captured)
 
-    def wait(self, name, key, session, due):
-        """Commit everything ``session`` holds at ``due``; a later turn of ``name`` waits anew."""
+    def wait(self, name, due):
+        """Make the idle commit of ``name`` at ``due``; a later turn of it waits anew."""
         if name in self.timers:
             self.timers.pop(name)[0].cancel()
         timer = asyncio.get_running_loop().call_later(max(due - time.time(), 0), self.idle, name)
-        self.timers[name] = (timer, (name, key, session, due))
+        self.timers[name] = (timer, due)
 
     def idle(self, name):
-        self.spawn(self.idle_commit(*self.timers.pop(name)[1]))
+        self.spawn(self.idle_commit(name, self.timers.pop(name)[1]))
 
-    async def idle_commit(self, name, key, session, due):
-        """Commit everything, then clear the due time; a failure leaves it for ``sweep``."""
+    async def idle_commit(self, name, due):
+        """Commit everything with the stored key, then clear the due time.
+
+        A failed commit leaves the due time for ``sweep``. A key that was revoked, or
+        whose record expired, commits nothing: the conversation's next turn waits anew.
+        """
         self.running.add(name)
         try:
-            if not await self.due(name, session, due) or not await self.commit(key, session, 0):
+            doc = await self.due(name, due)
+            if not doc:
                 return
-            while doc := await self.due(name, session, due):
+            value = doc.value
+            key = await self.management.get(value["account"], "keys", value["credential_id"])
+            if key and not await self.commit(key["openviking_key"], value["ov_session"], 0):
+                return
+            while doc:
                 done = {k: v for k, v in doc.value.items() if k != "idle_at"}
                 if await self.store.swap(*name, doc, done):
                     return
+                doc = await self.due(name, due)
         except Exception as error:
             logger.warning(
-                "OpenViking Gateway could not commit %s: %s", session, type(error).__name__
+                "OpenViking Gateway could not make an idle commit: %s", type(error).__name__
             )
         finally:
             self.running.discard(name)
 
-    async def due(self, name, session, due):
-        """The document while this idle commit is still the one it waits for.
+    async def due(self, name, due):
+        """The document while it still waits for the idle commit due at ``due``.
 
-        Not once a later turn waits on its own timer, here or in another process, a
-        reset left the session behind, or another process committed it.
+        Not once a later turn waits anew, here or in another process, a reset left
+        the session behind, or another process made the commit.
         """
         doc = await self.store.get(*name)
-        mine = doc.value.get("ov_session") == session and doc.value.get("idle_at") == due
-        return doc if mine else None
+        return doc if doc.value.get("idle_at") == due else None
 
-    async def sweep(self, management):
-        """Run the idle commits that are overdue, one at a time, with their stored keys."""
+    async def sweep(self):
+        """Make the idle commits that are overdue, one at a time."""
         if self.viking.unavailable_reason:
             return
-        for name in await self.store.waiting(time.time() - SWEEP_SECONDS):
+        before = time.time() - SWEEP_SECONDS
+        for name in await self.store.waiting(before):
             if name in self.running:
                 continue
             try:
-                value = (await self.store.get(*name)).value
-                key = value.get("idle_at") and await management.get(
-                    value["account"], "keys", value["credential_id"]
-                )
-                if key:
-                    await self.idle_commit(
-                        name, key["openviking_key"], value["ov_session"], value["idle_at"]
-                    )
-                else:
-                    # Nothing is due any more, or its key is gone: the next turn waits anew.
+                due = (await self.store.get(*name)).value.get("idle_at")
+                if due is None:
+                    # An earlier version listed it, or its document expired.
                     await self.store.forget(*name)
+                elif due <= before:
+                    # Not one that a turn ending meanwhile set to a later time.
+                    await self.idle_commit(name, due)
             except Exception as error:
                 logger.warning(
                     "OpenViking Gateway could not look at an overdue commit: %s",

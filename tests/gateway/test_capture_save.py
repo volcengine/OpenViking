@@ -11,7 +11,6 @@ from test_review_regressions import history, prepare
 from openviking_gateway.capture import SWEEP_SECONDS, reset_capture
 from openviking_gateway.client import VikingError
 from openviking_gateway.kernel import MemoryKernel
-from openviking_gateway.storage import SQLiteManagementStore
 from openviking_gateway.tool_protocols import ResponseCapture, reply_chain
 
 # Later than any due time.
@@ -45,6 +44,22 @@ async def turn(kernel, credential, policy, messages, text="hello", **kwargs):
 
 def texts(viking):
     return [[m["parts"][0]["text"] for m in batch] for batch in viking.writes]
+
+
+class Keys:
+    """The stored key records an idle commit reads its OpenViking key from."""
+
+    def __init__(self, *credentials):
+        self.records = {(c["account"], c["id"]): c for c in credentials}
+
+    async def get(self, account, kind, identifier):
+        return self.records.get((account, identifier))
+
+
+@pytest.fixture
+def keys(setup_kernel, credential):
+    setup_kernel[0].capture.management = keys = Keys(credential)
+    return keys
 
 
 async def test_turn_is_written_when_its_reply_ends_it(setup_kernel, credential, policy):
@@ -82,7 +97,9 @@ async def settled(kernel):
         await asyncio.gather(*kernel.capture.tasks)
 
 
-async def test_gateway_commits_at_the_threshold_and_once_idle(setup_kernel, credential, policy):
+async def test_gateway_commits_at_the_threshold_and_once_idle(
+    setup_kernel, credential, policy, keys
+):
     kernel, store, viking, _ = setup_kernel
     policy.update(recall=False, commit_tokens=20, keep_recent_messages=1)
     _, messages, _ = await turn(kernel, credential, policy, [{"role": "user", "content": "hi"}])
@@ -115,7 +132,9 @@ async def test_idle_commit_is_left_to_a_later_turn(setup_kernel, credential, pol
     assert not viking.commits and await store.capture.waiting(FOREVER) == [name]
 
 
-async def test_cut_save_leaves_the_waiting_idle_commit_alone(setup_kernel, credential, policy):
+async def test_cut_save_leaves_the_waiting_idle_commit_alone(
+    setup_kernel, credential, policy, keys
+):
     kernel, store, viking, _ = setup_kernel
     policy.update(recall=False)
     request, messages, _ = await turn(
@@ -136,16 +155,14 @@ async def test_cut_save_leaves_the_waiting_idle_commit_alone(setup_kernel, crede
     assert viking.commits == [(viking.write_sessions[0], 0)]
 
 
-async def test_overdue_idle_commit_is_run_by_any_process(setup_kernel, credential, policy):
-    kernel, store, viking, encryption = setup_kernel
+async def test_overdue_idle_commit_is_run_by_any_process(setup_kernel, credential, policy, keys):
+    kernel, store, viking, _ = setup_kernel
     policy.update(recall=False)
     request, _, _ = await turn(kernel, credential, policy, [{"role": "user", "content": "hi"}])
-    management = SQLiteManagementStore(store.path.parent / "management.sqlite3", encryption)
-    await management.initialize()
     # The process that saved the turn is gone; another one looks for overdue commits.
     await kernel.capture.close()
-    other = MemoryKernel(store, viking)
-    await other.capture.sweep(management)
+    other = MemoryKernel(store, viking, management=keys)
+    await other.capture.sweep()
     assert not viking.commits
     await update_capture(store, request, idle_at=time.time() - 2 * SWEEP_SECONDS)
 
@@ -153,21 +170,74 @@ async def test_overdue_idle_commit_is_run_by_any_process(setup_kernel, credentia
         raise VikingError("openviking_http_503", 503)
 
     commit, viking.commit = viking.commit, down
-    await management.save("tenant", "keys", credential["id"], credential)
-    await other.capture.sweep(management)
+    await other.capture.sweep()
     # A failed commit stays due, and the next look runs it.
     assert len(await store.capture.waiting(FOREVER)) == 1
     viking.commit = commit
-    await other.capture.sweep(management)
+    await other.capture.sweep()
     assert viking.commits == [(viking.write_sessions[0], 0)]
     assert not await store.capture.waiting(FOREVER)
-    # Without its key record nothing can commit: the conversation's next turn waits anew.
-    request, _, _ = await turn(other, credential, policy, [{"role": "user", "content": "more"}])
+
+
+@pytest.mark.parametrize("stopped", [False, True], ids=["timer", "another process"])
+async def test_revoked_key_commits_nothing(setup_kernel, credential, policy, keys, stopped):
+    kernel, store, viking, _ = setup_kernel
+    policy.update(recall=False)
+    request, _, _ = await turn(kernel, credential, policy, [{"role": "user", "content": "hi"}])
+    name = (request.scope, request.session)
+    keys.records.clear()
+    if stopped:
+        await kernel.capture.close()
+        await update_capture(store, request, idle_at=time.time() - 2 * SWEEP_SECONDS)
+        await MemoryKernel(store, viking, management=keys).capture.sweep()
+    else:
+        kernel.capture.idle(name)
+        await settled(kernel)
+    # The turn stays saved and uncommitted; the conversation's next turn waits anew.
+    assert not viking.commits and not await store.capture.waiting(FOREVER)
+    assert "idle_at" not in (await store.capture.get(*name)).value
+
+
+async def test_turn_saved_while_a_revoked_key_is_looked_up_keeps_its_wait(
+    setup_kernel, credential, policy
+):
+    kernel, store, viking, _ = setup_kernel
+    policy.update(recall=False)
+    request, messages, _ = await turn(
+        kernel, credential, policy, [{"role": "user", "content": "hi"}]
+    )
+    name = (request.scope, request.session)
+    await kernel.capture.close()
     await update_capture(store, request, idle_at=time.time() - 2 * SWEEP_SECONDS)
-    await management.delete("tenant", "keys", credential["id"])
-    await other.capture.sweep(management)
-    assert len(viking.commits) == 1 and not await store.capture.waiting(FOREVER)
-    management.close()
+    renewed = {**credential, "id": "new-key"}
+    saver = MemoryKernel(store, viking, management=Keys(renewed))
+
+    class Looking(Keys):
+        async def get(self, account, kind, identifier):
+            # The conversation goes on under a new key while the revoked one is looked up.
+            await turn(saver, renewed, policy, [*messages, {"role": "user", "content": "more"}])
+            return None
+
+    await MemoryKernel(store, viking, management=Looking()).capture.sweep()
+    state = (await store.capture.get(*name)).value
+    assert state["credential_id"] == "new-key" and state["idle_at"] > time.time()
+    assert not viking.commits and await store.capture.waiting(FOREVER) == [name]
+    await saver.capture.close()
+
+
+async def test_sweep_leaves_a_wait_that_a_turn_just_renewed(setup_kernel, credential, policy, keys):
+    kernel, store, viking, _ = setup_kernel
+    policy.update(recall=False)
+    request, _, _ = await turn(kernel, credential, policy, [{"role": "user", "content": "hi"}])
+    name = (request.scope, request.session)
+
+    async def listed(before):
+        # Listed as overdue just before a turn ended and set a later time.
+        return [name]
+
+    store.capture.waiting = listed
+    await MemoryKernel(store, viking, management=keys).capture.sweep()
+    assert not viking.commits and "idle_at" in (await store.capture.get(*name)).value
 
 
 async def test_failed_commit_does_not_fail_the_save(setup_kernel, credential, policy):

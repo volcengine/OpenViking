@@ -136,9 +136,9 @@ class Budget:
 
 
 class MemoryKernel:
-    def __init__(self, store: KernelStore, viking, auto_commit=False):
+    def __init__(self, store: KernelStore, viking, auto_commit=False, management=None):
         self.store, self.viking = store, viking
-        self.capture = CapturePipeline(store.capture, viking, auto_commit)
+        self.capture = CapturePipeline(store.capture, viking, auto_commit, management)
 
     @staticmethod
     def degraded_body(body, protocol):
