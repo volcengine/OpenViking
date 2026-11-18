@@ -78,7 +78,7 @@ A [gateway key](#gateway-keys) is fixed once issued, but the conversations it st
 
 - **Keys cannot be edited.** To change a key's context profile, upstreams, allowed models, default peer or user, issue a new key and revoke the old one.
 - **Conversations belong to the user, not the key.** If the client sends the same session ID, a new key for the same user continues the existing [conversation](03-connect-clients.md#how-conversations-are-recognized), so replacing a key does not interrupt it.
-- **Revoking** a key (**Revoke** on the **Keys** tab, then **Revoke key**) stops it working at once. The user's conversation state and logs stay until they are explicitly deleted or expire. A request still running when the key is revoked does not save its turn; that turn is saved only if the conversation continues with a new key.
+- **Revoking** a key (**Revoke** on the **Keys** tab, then **Revoke key**) stops it working at once. The user's conversation state and logs stay until they are explicitly deleted or expire. A request still running when the key is revoked does not save its turn; that turn is saved only if the conversation continues with a new key. When the gateway [commits](08-context-profiles.md#save-conversations), an idle commit still waiting for one of the key's conversations is dropped too: the turns already saved stay in OpenViking, and are archived and turned into memories only if the conversation continues with a new key.
 
 ### One key per person {#one-key-per-person}
 

@@ -58,7 +58,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `openviking_breaker_failures` | 两者 | `0` | 0 及以上 | 某个账号的 OpenViking 调用连续这么多次没有应答后，它的请求在 `openviking_breaker_seconds` 内跳过 OpenViking，之后由一次试探调用决定是否恢复。`0` 表示关闭 |
 | `openviking_breaker_seconds` | 两者 | `30` | 大于 0 | 一个账号的 OpenViking 调用被跳过多久后进行试探调用 |
 | `health_interval_seconds` | 两者 | `60` | 1 及以上 | 检查 OpenViking 状态的间隔秒数 |
-| `openviking_auto_commit` | 两者 | `false` | `true`、`false` | 网关不提交保存的对话，改由 OpenViking 的会话自动提交按上下文配置的[保存对话](#profile-saving)设置提交。空闲提交需要 OpenViking Server 开启 `memory.session_auto_commit.enabled`；`false` 时由网关提交，任何 Server 都适用。见[保存对话](08-context-profiles.md#save-conversations) |
+| `openviking_auto_commit` | 两者 | `false` | `true`、`false` | 保存的对话不由网关提交，改由 OpenViking 的会话自动提交按上下文配置的[保存对话](#profile-saving)设置提交。空闲提交需要 OpenViking Server 开启 `memory.session_auto_commit.enabled`；`false` 时由网关提交，任何 Server 都适用。见[保存对话](08-context-profiles.md#save-conversations) |
 | `max_inflight_requests` | 两者 | `0` | 0 及以上 | 一个进程同时处理的模型请求数上限，超出的请求得到 HTTP 503 `gateway_overloaded`。`0` 表示不限制，见[扩展](../guides/22-gateway-operations.md#scaling) |
 | `client_rules` | 两者 | `{}`（只用内置规则） | 见[客户端规则](#client-rules) | 在网关内置的辅助请求和客户端插入消息识别规则上增删条目 |
 

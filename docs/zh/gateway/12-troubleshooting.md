@@ -19,7 +19,7 @@ description: 根据现象、Studio 标签或错误码，找到 OpenViking 网关
 | 某段对话没有召回，也没有保存 | 检测到 OpenViking 插件，网关把召回、保存和工具都让给了插件。 | 正常行为，避免同一份内容被补充、保存两次，见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)。 |
 | 请求不带记忆 | OpenViking 无法访问或超时、预算用完、没有相关内容等。 | [没有补充记忆](#no-memory-is-added) |
 | 请求的**保存**列显示**保存失败** | 结束这一轮的请求没能把它写入 OpenViking：OpenViking 无法访问、超时，或拒绝了写入。 | 网关不重试；OpenViking 恢复后，这段对话的下一轮结束时会补上缺的内容。一直失败时，修复原因。见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
-| 会话里有消息，却一直没有归档或提取出记忆 | 会话没有提交。默认由网关提交时：空闲提交时间还没到；提交一直失败（网关日志中有 `could not commit`，网关每分钟再试一次）；或者保存时用的密钥在提交之前被吊销或过期，而这次提交要靠存储的密钥记录补做，就不再执行。开启 `openviking_auto_commit` 时由 OpenViking 提交：对话达不到**提交阈值**，而 OpenViking Server 没有开启 `memory.session_auto_commit.enabled`。 | 见[会话出现了，记忆还没有](#conversations-do-not-appear-in-openviking)。 |
+| 会话里有消息，却一直没有归档或提取出记忆 | 会话没有提交。默认由网关提交时：空闲提交时间还没到；提交一直失败（网关日志中有 `could not commit`，网关每分钟再试一次）；或者保存时用的密钥在空闲提交执行之前被吊销或过期，这次提交就不再执行。开启 `openviking_auto_commit` 时由 OpenViking 提交：对话达不到**提交阈值**，而 OpenViking Server 没有开启 `memory.session_auto_commit.enabled`。 | 见[会话出现了，记忆还没有](#conversations-do-not-appear-in-openviking)。 |
 | 上下文配置开启了工具，对话里却没有 | 还没有能用工具的请求，加载工具清单失败（下一个能用工具的请求会重试），客户端没有回传完整历史，或者客户端自己接了 OpenViking 工具。 | 在请求日志里查看原因，见[什么时候不提供工具](04-openviking-tools.md#when-tools-are-not-offered)。客户端接了 OpenViking MCP 服务器时出现**客户端已接入 OpenViking 工具**（`tool_name_collision`）是正常的；`tools_unavailable` 在 OpenViking 恢复响应后会自行消失；其他原因修正后开始新对话。 |
 | **首次调用缓存命中率**下降，或者概览提示缓存连续未命中 | 记忆无法原样放回、对话换了上游，或者客户端、中转服务改动了请求开头的内容。 | [首次调用缓存命中率下降](#the-first-call-cache-hit-rate-dropped) |
 | 长对话被服务商以过长为由拒绝 | 网关不知道模型的实际窗口，压缩得太晚。 | [长对话超出上下文长度](#long-conversations-hit-the-context-limit) |
@@ -170,7 +170,7 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆，结束
 | 同一条用户消息出现两次，或者有两个版本的回答 | 客户端重新生成或编辑了回答、自己压缩了历史，网关从这一轮最新的用户消息开始继续写入同一个会话；之前写入的版本保留。一次写入的响应丢失时，下一轮也会把这些消息再写一次。 | 正常行为，见[对话什么时候保存](01-how-it-works.md#when-conversations-are-saved)。 |
 | 会话里只有部分对话 | 有人用了**重新同步对话…**（`manual_reset`），或者网关丢失了这段对话的保存进度时，下一轮结束时完整历史写入新的 `gateway-…` 会话，之前的轮次留在旧会话里。对话也可能在更早版本的网关中换过会话（例如原因为 `history_changed`）。 | 到旧会话里找，见[保存状态](10-overview-and-requests.md#saving-status)。 |
 | 完全看不到 `gateway-…` 会话 | 你查看时用的 OpenViking 用户，不是网关密钥背后的那个用户。 | 换成那个用户查看。 |
-| 会话出现了，记忆还没有 | OpenViking 在提交之后才在后台提取记忆。默认由网关提交：待提交内容达到**提交阈值**的一轮结束时立即提交；否则要等最后一轮结束后的**空闲提交时间**（默认 600 秒），网关在这期间重启只会让这次提交晚一两分钟。一直没有提交时，可能是提交失败，网关日志中会有 `could not commit` 警告及原因，网关每分钟再试一次；也可能是保存时用的密钥在提交之前被吊销或过期，补做提交时找不到这份密钥记录，就不再执行这次提交。开启 `openviking_auto_commit` 时由 OpenViking 提交，空闲提交只在 Server 开启 `memory.session_auto_commit.enabled` 时发生，最早也要 300 秒；Server 使用本地扫描（`local` 后端）时，最多再晚一个 `check_interval_seconds`（默认 600 秒）。 | 等提交和提取完成。提交失败时，修复日志中的原因；密钥被吊销或过期时，这段对话的下一轮结束后会重新计时。开启 `openviking_auto_commit` 时，在 Server 的 `ov.conf` 中设置 `memory.session_auto_commit.enabled: true` 并重启 Server。见[保存对话](08-context-profiles.md#save-conversations)。 |
+| 会话出现了，记忆还没有 | OpenViking 在提交之后才在后台提取记忆。默认由网关提交：待提交内容达到**提交阈值**的一轮结束时立即提交；否则要等最后一轮结束后的**空闲提交时间**（默认 600 秒），网关在这期间重启只会让这次提交晚一两分钟。一直没有提交时，可能是提交失败，网关日志中会有 `could not commit` 警告及原因，网关每分钟再试一次；也可能是保存时用的密钥在空闲提交执行之前被吊销或过期，提交时找不到这份密钥记录，就不再执行。开启 `openviking_auto_commit` 时由 OpenViking 提交，空闲提交只在 Server 开启 `memory.session_auto_commit.enabled` 时发生，最早也要 300 秒；Server 使用本地扫描（`local` 后端）时，最多再晚一个 `check_interval_seconds`（默认 600 秒）。 | 等提交和提取完成。提交失败时，修复日志中的原因；密钥被吊销或过期时，这段对话的下一轮结束后会重新计时。开启 `openviking_auto_commit` 时，在 Server 的 `ov.conf` 中设置 `memory.session_auto_commit.enabled: true` 并重启 Server。见[保存对话](08-context-profiles.md#save-conversations)。 |
 
 ## 首次调用缓存命中率下降 {#the-first-call-cache-hit-rate-dropped}
 
