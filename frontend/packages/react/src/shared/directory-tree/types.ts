@@ -37,5 +37,7 @@ export interface UseDirectoryTreeOptions {
    * Omitting it leaves only the root expanded.
    */
   defaultExpandedUri?: string;
+  defaultExpandedUris?: readonly string[];
+  onExpandedUrisChange?: (uris: readonly string[]) => void;
   requestOptions?: OvRequestOptions;
 }

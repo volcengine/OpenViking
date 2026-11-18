@@ -113,6 +113,16 @@ export function resolveSummaryLabels(
   };
 }
 
+export function resolvePaneLabels(
+  labels: FileBrowserLabels | undefined,
+  locale: Locale,
+) {
+  return {
+    summaryLabels: resolveSummaryLabels(locale, labels),
+    previewLabels: resolvePreviewLabels(resolveLabels(labels, locale)),
+  };
+}
+
 /** Private render-failure copy; independent of request errors and public label overrides. */
 export function useRenderErrors(locale?: Parameters<typeof useLocale>[0]) {
   return useLocale(locale) === 'zh-CN' ? renderZh : renderEn;

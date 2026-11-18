@@ -27,6 +27,7 @@ export function useFsTreeReveal({
   scope,
   dirs,
   initialLoad,
+  expanded,
   fetchPage,
   setExpanded,
   resolveHome,
@@ -36,6 +37,7 @@ export function useFsTreeReveal({
   scope: RequestScopeHandle;
   dirs: RefObject<Record<string, DirState>>;
   initialLoad: RefObject<Promise<void> | undefined>;
+  expanded: RefObject<ReadonlySet<string>>;
   fetchPage: (
     uri: string,
     offset: number,
@@ -54,7 +56,7 @@ export function useFsTreeReveal({
   // observe removal of the mounted tree; cleanup aborts the active navigation.
   useEffect(() => cancelReveal, [cancelReveal]);
   const reveal = useCallback(
-    async (resource: string) => {
+    async (resource: string, preserveExpansion = false) => {
       cancelReveal();
       const controller = new AbortController();
       active.current = controller;
@@ -96,9 +98,9 @@ export function useFsTreeReveal({
         await fetchPage(uri, 0, signal, true);
         return valid();
       };
-      if (target === root) return expand(rootUri);
+      if (target === root) return preserveExpansion || expand(rootUri);
       let parent = rootUri;
-      while (valid()) {
+      while (valid() && (!preserveExpansion || expanded.current.has(parent))) {
         const cached = dirs.current[parent];
         // A listing may omit virtual ancestors (e.g. viking://user) and return
         // a deeper directory directly. Follow actual rows rather than URI segments.
@@ -157,10 +159,11 @@ export function useFsTreeReveal({
         if (!entry || entry.access === 'denied') return false;
         if (identify(entry.uri) === identify(resource)) {
           if (entry.access === 'container') return false;
-          return entry.isDir ? expand(entry.uri) : true;
+          return entry.isDir && !preserveExpansion ? expand(entry.uri) : true;
         }
         if (!entry.isDir) return false;
-        setExpanded((previous) => new Set(previous).add(entry.uri));
+        if (!preserveExpansion)
+          setExpanded((previous) => new Set(previous).add(entry.uri));
         parent = entry.uri;
       }
       return false;
@@ -170,6 +173,7 @@ export function useFsTreeReveal({
       dirs,
       fetchPage,
       initialLoad,
+      expanded,
       rootUri,
       scope,
       setExpanded,

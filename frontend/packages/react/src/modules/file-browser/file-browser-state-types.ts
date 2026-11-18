@@ -70,7 +70,7 @@ export interface FileBrowserActions {
     uri: string,
     options?: FileBrowserOpenResourceOptions,
   ) => Promise<boolean>;
-  reveal: (uri: string) => Promise<boolean>;
+  reveal: (uri: string, preserveExpansion?: boolean) => Promise<boolean>;
   cancelReveal: () => void;
   openUri: (uri: string) => Promise<void>;
   openDashboard: (uri: string) => void;
@@ -128,6 +128,8 @@ export interface UseFileBrowserOptions {
   formatCharacterCount?: (count: number) => string;
   /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
   defaultExpandedUri?: string;
+  defaultExpandedUris?: readonly string[];
+  onExpandedUrisChange?: (uris: readonly string[]) => void;
   currentUri: string | null;
   requestOptions?: OvRequestOptions;
   onUriChange: (uri: string | null) => void;
