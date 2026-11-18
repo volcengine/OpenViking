@@ -14,6 +14,7 @@ import httpx
 
 from openviking.core.namespace import relative_uri_path
 from openviking_cli.exceptions import OpenVikingError
+from vikingbot.compile.conflict_visibility import without_conflict_comments
 from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.pipeline_io import bounded_jobs
@@ -130,16 +131,43 @@ def top_candidates(
     return result
 
 
-def group_related_documents(keys, links):
-    """Partition IDs into groups whose members all have direct candidate links.
+def group_related_documents(keys, links, *, centered=False):
+    """Partition IDs into cliques, or bounded one-hop comparison sets when opted in.
 
     Either link direction suffices. Unknown endpoints are rejected; input order
     determines first-fit assignment, and documents without links remain independent.
     """
     neighbours = {key: set() for key in keys}
+    directed = set()
     for left, right in links:
         neighbours[left].add(right)
         neighbours[right].add(left)
+        if centered:
+            directed.add((left, right))
+    if centered:
+        # Bounded one-hop comparison sets keep hub-to-leaf evidence together
+        # without requiring every pair of leaves to be related or closing chains.
+        keys = list(neighbours)
+        order = {key: index for index, key in enumerate(keys)}
+        mutual = {
+            key: sum((other, key) in directed and (key, other) in directed for other in values)
+            for key, values in neighbours.items()
+        }
+        remaining, groups = set(keys), []
+        for seed in sorted(keys, key=lambda key: (-mutual[key], -len(neighbours[key]), order[key])):
+            if seed not in remaining:
+                continue
+            members = sorted(
+                neighbours[seed] & remaining,
+                key=lambda key: (
+                    -int((seed, key) in directed and (key, seed) in directed),
+                    -len(neighbours[key] & neighbours[seed]),
+                    order[key],
+                ),
+            )[:49]
+            groups.append([seed, *members])
+            remaining.difference_update(groups[-1])
+        return groups
     groups = []
     for key in neighbours:
         for group in groups:
@@ -303,11 +331,16 @@ class Shuffle:
         if not documents:
             return []
         r = self.r
+        conflict_comparison = (
+            getattr(getattr(r, "request", None), "global_conflict_detection", False) is True
+        )
         rule = r.contract.routing
         bodies = [
             (await r.files.sandbox.read_file_bytes(d.workspace_path)).decode("utf-8")
             for d in documents
         ]
+        if conflict_comparison:
+            bodies = [without_conflict_comments(body) for body in bodies]
         # shortcut: candidate ranking uses Markdown prefixes; use chunked embeddings if long drafts miss matches.
         texts = [body[:8000] for body in bodies]
         histories = (
@@ -356,7 +389,9 @@ class Shuffle:
                 }
                 for i in indices
             ]
-            reader = DocumentReader(r, [documents[i] for i in selected])
+            reader = DocumentReader(
+                r, [documents[i] for i in selected], visible_only=conflict_comparison
+            )
 
             def validate(response):
                 expected = {item["document"]: item for item in assigned}
@@ -374,6 +409,14 @@ class Shuffle:
                 "route",
                 "Group Markdown drafts according to these criteria:\n"
                 + rule.instructions
+                + (
+                    "\nFor conflict comparison, compare the same or potentially same subject when "
+                    "scopes may overlap, including complementary claims and different reader purposes. "
+                    "Joint comparison can produce multiple pages; do not merge distinct identities. "
+                    "Versions and regions require evidence checks in Reduce. "
+                    if conflict_comparison
+                    else ""
+                )
                 + "\nUse the Markdown contents, not filenames alone. Read remaining text with read_document "
                 "when excerpts are insufficient. Similarity means joint consideration, not mandatory "
                 "merging. Preserve differing versions and applicability for Reduce to resolve. "
@@ -399,7 +442,7 @@ class Shuffle:
             for decision in batch:
                 links.extend((decision.document, other) for other in decision.related)
                 targets[decision.document] = decision.history
-        groups = group_related_documents(list(by_id), links)
+        groups = group_related_documents(list(by_id), links, centered=conflict_comparison)
         return [
             Group(
                 digest(keys)[:24],

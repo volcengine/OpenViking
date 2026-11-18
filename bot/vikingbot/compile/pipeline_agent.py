@@ -7,6 +7,7 @@ import uuid
 from collections import Counter
 from copy import copy
 
+from vikingbot.agent.loop import _PlainTextDelivered, _PlainTextFinal
 from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -21,10 +22,11 @@ from vikingbot.providers.base import LLMProvider
 class ChildProvider(LLMProvider):
     """Route each child request through the task's bounded, metered provider calls."""
 
-    def __init__(self, model, stage="agent"):
+    def __init__(self, model, stage="agent", skill_context=None):
         super().__init__()
         self.model = model
         self.stage = stage
+        self.skill_context = skill_context
         self.failures = Counter()
 
     def get_default_model(self):
@@ -38,7 +40,11 @@ class ChildProvider(LLMProvider):
         """Retry truncated output without executing incomplete tool calls."""
         while True:
             response = await self.model.call(
-                self.stage, messages, tools, max_tokens=self.model.max_tokens
+                self.stage,
+                messages,
+                tools,
+                max_tokens=self.model.max_tokens,
+                **({"skill_context": self.skill_context} if self.skill_context is not None else {}),
             )
             if response.finish_reason not in {"length", "max_tokens"}:
                 return response
@@ -129,8 +135,40 @@ def agent_runner(loop, session_key, connection, limits):
             scoped.execute = search_target
             registry.register(scoped)
         child = copy(loop)
-        child.provider = ChildProvider(model, stage)
+        child.provider = ChildProvider(
+            model, stage, (data.get("runtime") or {}).get("skill_context")
+        )
         child.preview_hook = complete_tool_result
+        if runtime.request.global_conflict_detection:
+            # Match the actual AgentLoop preview owner; isolated workers cannot
+            # follow shared spill-file pointers when evidence is truncated.
+            child._preview_tool_result = complete_tool_result
+
+        async def check_completion(context):
+            """Return validation feedback within this worker's existing tool-round budget."""
+            try:
+                await runtime.collect_outputs(
+                    output_root,
+                    sorted(evidence.allowed),
+                    stage,
+                    check_conflicts=runtime.request.global_conflict_detection
+                    and bool(data.get("documents")),
+                )
+            except ValueError as exc:
+                messages = child.context.add_assistant_message(context.messages, context.text, [])
+                messages.extend(
+                    [
+                        {
+                            "role": "user",
+                            "content": "Output validation: "
+                            + str(exc)[:2000]
+                            + "\nRepair the affected output using the existing evidence. Do not delete human decisions or invent facts.",
+                        },
+                    ]
+                )
+                return _PlainTextDelivered(messages=messages, tools_used=[])
+            return _PlainTextFinal()
+
         final, _, _, _, _ = await child._run_agent_loop(
             messages=[
                 {
@@ -155,6 +193,7 @@ def agent_runner(loop, session_key, connection, limits):
             openviking_connection=connection,
             allow_final_fallback=False,
             require_natural_completion=True,
+            on_plain_text=check_completion if runtime.request.global_conflict_detection else None,
             inject_write_experience=False,
             agent_id=child_id,
             context_compact_budget=None,

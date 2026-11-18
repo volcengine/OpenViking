@@ -76,6 +76,7 @@ class SanitizedCompileRequest(BaseModel):
     skill: str
     # The OV service freezes the directory plan before submitting this execution.
     changes: dict[str, Any] | None = None
+    global_conflict_detection: bool = Field(default=False, strict=True)
 
 
 def has_directory_plan(changes: dict[str, Any] | None) -> bool:

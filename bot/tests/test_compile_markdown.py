@@ -5,13 +5,16 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from fastapi import FastAPI
 from pydantic import ValidationError
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
+from vikingbot.channels.openapi import OpenAPIChannel
 from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.models import CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
@@ -22,7 +25,7 @@ from vikingbot.compile.plan import Contract, PlanProposal, Transform, parse_plan
 from vikingbot.compile.results import Document, Group, RouteResponse
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.sources import split_source
-from vikingbot.config.schema import Config, SessionKey
+from vikingbot.config.schema import Config, OpenAPIChannelConfig, SessionKey
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
@@ -465,3 +468,296 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
     )
     assert outputs == [] and pipeline.status["input"] == "failed"
     assert pipeline.failures
+
+
+@pytest.mark.parametrize("bad", ["true", "false", 0, 1, None, {}, []])
+async def test_shared_compile_keeps_args_opaque_and_vikingbot_validates_the_flag(bad):
+    from vikingbot.compile.models import CompileFailure, CompileRequest
+
+    from openviking.service.compile_service import CompileInputs
+
+    payload = {
+        "from": ["viking://resources/source"],
+        "to": "viking://resources/wiki",
+        "skill": "viking://agent/skills/wiki",
+        "args": {"global_conflict_detection": bad},
+    }
+    assert CompileInputs.model_validate(payload).args == payload["args"]
+    service = BotCompileService.__new__(BotCompileService)
+    with pytest.raises(CompileFailure, match="must be a boolean"):
+        await service._normalize_request(CompileRequest.model_validate(payload), connection={})
+
+
+async def test_vikingbot_rejects_non_wiki_target_before_creating_it(agent_loop, monkeypatch):
+    from vikingbot.compile.models import CompileFailure, CompileRequest
+
+    loop, _, _ = agent_loop
+    service = BotCompileService.__new__(BotCompileService)
+    service.config = loop.config
+    request = CompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://agent/skills",
+            "skill": "viking://agent/skills/wiki",
+            "args": {"global_conflict_detection": True},
+        }
+    )
+    client = SimpleNamespace(
+        attrs=AsyncMock(side_effect=lambda uri: {"uri": uri}),
+        stat=AsyncMock(
+            side_effect=[{"uri": request.skill, "isDir": True}, NotFoundError(request.to)]
+        ),
+        mkdir=AsyncMock(),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "vikingbot.compile.service.VikingClient.create", AsyncMock(return_value=client)
+    )
+    with pytest.raises(CompileFailure, match="requires a resource Wiki target"):
+        await service._normalize_request(request, connection={})
+    client.mkdir.assert_not_awaited()
+
+
+def _human_conflict_page(sentence="The approved limit is 7."):
+    record = {
+        "match_text": "The approved limit is 7.",
+        "state": "fixed",
+        "fix_plan": "用户手动解决内容冲突，修正后的内容如正文所示",
+        "resolution_basis": "人工修复",
+        "resolved_by": "synthetic-reviewer",
+        "begin_time": 1,
+        "fix_time": 2,
+    }
+    return (
+        "# Limits\n\n"
+        + sentence
+        + "\n\n<!-- CONFLICTS_CONTENT\n"
+        + json.dumps(record, ensure_ascii=False)
+        + "\n-->\n"
+    )
+
+
+@pytest.mark.parametrize("kind", ["changed-human", "malformed-history", "forged-human"])
+async def test_opt_in_final_publication_preserves_human_authority(pipeline, kind):
+    pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
+    old, new = _human_conflict_page(), _human_conflict_page("The approved limit is 99.")
+    if kind == "malformed-history":
+        old = "# Limits\n\n<!-- CONFLICTS_CONTENT\n{broken -->"
+    if kind == "forged-human":
+        old, new = "# Limits\n\nOriginal material.\n", _human_conflict_page()
+    pipeline.client.stat = AsyncMock(return_value={"isDir": False})
+    pipeline.client.download_bytes = AsyncMock(return_value=old.encode())
+    await TargetReader(pipeline).execute(path="topic.md")
+    await pipeline.files.sandbox.write_file("draft.md", new)
+    with pytest.raises(ValueError):
+        await finalize.run(pipeline, [Document("topic.md", "draft.md")])
+
+
+async def test_conflict_worker_repairs_inside_the_existing_agent_budget(pipeline, agent_loop):
+    loop, key, _ = agent_loop
+    pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
+    old = _human_conflict_page()
+    repaired = old.replace("# Limits\n", "# Limits\n\nAdditional compatible detail.\n", 1)
+    pipeline.client.stat = AsyncMock(return_value={"isDir": False})
+    pipeline.client.download_bytes = AsyncMock(return_value=old.encode())
+    replies = iter(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest("read", "read_target_file", {"path": "topic.md"}, 0)],
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write",
+                        "write_file",
+                        {
+                            "path": "topic.md",
+                            "content": _human_conflict_page("The approved limit is 99."),
+                        },
+                        0,
+                    )
+                ],
+            ),
+            LLMResponse(content="Ready"),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "repair", "write_file", {"path": "topic.md", "content": repaired}, 0
+                    )
+                ],
+            ),
+            LLMResponse(content="Ready"),
+        ]
+    )
+    pipeline.model.provider.chat = AsyncMock(side_effect=lambda **kwargs: next(replies))
+    pipeline.model.agent_runner = agent_runner(loop, key, None, pipeline.limits)
+    await pipeline.files.sandbox.write_file("input.md", old)
+    docs = await pipeline.generate(
+        "reduce-0",
+        "Merge evidence and protect human decisions",
+        {"documents": [vars(Document("topic.md", "input.md"))]},
+        [],
+    )
+    assert len(docs) == 1
+    bundle = await finalize.run(pipeline, docs)
+    assert bundle.operations[0]["content"] == repaired
+    assert pipeline.model.provider.chat.await_count == 5
+
+
+async def test_conflict_plan_and_snapshot_keep_comparison_on(pipeline):
+    pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
+    frozen = SanitizedCompileRequest.model_validate_json(pipeline.request.model_dump_json())
+    assert frozen.global_conflict_detection is True
+    pipeline.target_has_content = True
+    with pytest.raises(ValueError, match="Shuffle and Reduce"):
+        pipeline.validate_plan(parse_plan(MAP_ONLY, contract()))
+    with pytest.raises(ValueError, match="against=target"):
+        pipeline.validate_plan(parse_plan(MERGE, contract(True)))
+    pipeline.validate_plan(
+        parse_plan(
+            MERGE.replace("by=contract.routing", "by=contract.routing, against=target"),
+            contract(True),
+        )
+    )
+
+
+@pytest.mark.parametrize("flag", [None, False, True])
+async def test_conflict_admission_freezes_executor_without_changing_service_default(
+    agent_loop, pipeline, tmp_path, monkeypatch, flag
+):
+    loop, _, _ = agent_loop
+    loop.config.storage_workspace = str(tmp_path / "service")
+    loop.config.compile.mode = "simple"
+    client = SimpleNamespace(
+        attrs=AsyncMock(side_effect=lambda uri: {"uri": uri}),
+        stat=AsyncMock(side_effect=lambda uri: {"uri": uri, "isDir": True}),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "vikingbot.compile.service.VikingClient.create", AsyncMock(return_value=client)
+    )
+    service = BotCompileService(agent_loop=loop, limits=pipeline.limits)
+    monkeypatch.setattr(service, "_openviking_auth_mode", lambda: "dev")
+    # Admission and durable request are real; keep execution outside this assertion.
+    monkeypatch.setattr(service, "_run_admitted_task", AsyncMock())
+    config = SimpleNamespace(
+        gateway=SimpleNamespace(host="127.0.0.1", token="synthetic-gateway"),
+        ov_server=SimpleNamespace(
+            server_url="http://127.0.0.1:1933", effective_auth_mode="dev", api_key_type="user"
+        ),
+    )
+    channel = OpenAPIChannel(
+        OpenAPIChannelConfig(),
+        MessageBus(),
+        workspace_path=tmp_path,
+        global_config=config,
+        compile_service=service,
+    )
+    monkeypatch.setattr(
+        channel, "_assert_runtime_upstream_auth_mode", AsyncMock(return_value={"status": "ok"})
+    )
+    app = FastAPI()
+    app.include_router(channel.get_gateway_router())
+    payload = {
+        "from": ["viking://resources/source"],
+        "to": pipeline.target,
+        "skill": pipeline.request.skill,
+    }
+    if flag is not None:
+        payload["args"] = {"global_conflict_detection": flag}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+        ) as http:
+            accepted = await http.post(
+                "/runtime/v1/tasks",
+                headers={"X-Gateway-Token": config.gateway.token},
+                json={"task_type": "compile", "payload": payload},
+            )
+        assert accepted.status_code == 202, accepted.text
+        task = await service.store.get(accepted.json()["task_id"])
+        assert task.meta["mode"] == ("complex" if flag else "simple")
+        assert task.sanitized_request.global_conflict_detection is bool(flag)
+        assert loop.config.compile.mode == "simple"
+    finally:
+        await service.close()
+
+
+async def test_global_comparison_runs_map_shuffle_reduce_and_publishes_evidence(
+    pipeline, monkeypatch
+):
+    from vikingbot.compile.plan import Routing
+
+    pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
+    proposal = PlanProposal(contract=contract(True), plan=MERGE)
+    proposal.contract.routing = Routing(mode="all")
+
+    async def chat(**kwargs):
+        if kwargs["messages"][0]["content"].startswith("Choose"):
+            return LLMResponse(content=proposal.model_dump_json())
+        return LLMResponse(content='{"action":"continue"}')
+
+    pipeline.model.provider.chat = AsyncMock(side_effect=chat)
+    stages = []
+    sentence = (
+        "The same-version sources disagree: the limit is 7 or 9; no precedence is established."
+    )
+    record = {
+        "match_text": sentence,
+        "problem_description": "The same scope has two limits.",
+        "reason": "Source 0 specifies 7; source 1 specifies 9 under the same conditions.",
+        "severity": "medium",
+        "state": "unfixed",
+        "begin_time": 1794900000,
+        "fix_plan": "",
+        "fix_time": None,
+        "resolution_basis": "",
+        "conflict_type": "fact",
+        "resolved_by": "",
+    }
+
+    async def worker(system, data, model, *, stage, runtime):
+        stages.append(stage)
+        root = f"__compile_staging__/drafts/{stage}/output"
+        if data.get("documents"):
+            assert len(data["documents"]) == 2
+            for doc in data["documents"]:
+                assert "Source limit" in await runtime.files.sandbox.read_file(
+                    doc["workspace_path"]
+                )
+            body = (
+                "# Limits\n\n"
+                + sentence
+                + "\n\n## Sources\n"
+                + "\n".join(f"- [Source {i}](viking://resources/source/{i}.md)" for i in range(2))
+                + "\n\n<!-- CONFLICTS_CONTENT\n"
+                + json.dumps({**record, "begin_time": data["runtime"]["unix_seconds"]})
+                + "\n-->\n"
+            )
+        else:
+            ref = data["inputs"][0]["id"]
+            source = await runtime.files.get("sources/" + ref)
+            body = "# Source limit\n\n" + source["text"]
+        await runtime.files.sandbox.write_file(root + "/limits.md", body)
+        return root
+
+    pipeline.model.agent_runner = worker
+
+    async def contradictory_sources():
+        for index, limit in enumerate((7, 9)):
+            yield split_source(
+                f"viking://resources/source/{index}.md",
+                f"Source limit is {limit} under the same production conditions in v2.",
+                1000,
+            )
+
+    bundle = await pipeline.run(contradictory_sources())
+    assert len(stages) == 3 and stages[-1].startswith("files-")
+    assert len(bundle.operations) == 1 and sentence in bundle.operations[0]["content"]
+    ledger = await pipeline.files.get("runtime")
+    assert ledger["global_conflict_detection"] is True
+    outputs = (await pipeline.files.get("finalize"))["outputs"]
+    assert len(outputs["limits.md"]["source_refs"]) == 2

@@ -57,6 +57,16 @@ ov task status <cmp_task_id>
 
 直接传入 `ov compile --from … --to … --skill …` 的写法已弃用，仍可执行一次性全量编译。
 
+### 开源 VikingBot Runtime 的冲突对照
+
+使用 VikingBot 的 `/runtime/v1/tasks` 端点时，资料 Wiki Compile 可将
+`payload.args.global_conflict_detection` 设为 JSON 布尔值 `true`。VikingBot
+为该任务选择复杂执行器，分阶段比较相关输入草稿和召回的 Wiki 证据，并保护已有的人工裁决。
+历史召回有范围限制，需要据此决策时请看正文所引证据和未解决记录。
+
+开关默认关闭，对 VikingBot 实际收到的任务生效。命名 Compile 沿用原有增量计划，
+也可能在调用 Runtime 前跳过。当开启后需要覆盖全部来源时，请显式发起全量运行。
+
 ## 打开正文
 
 ```bash

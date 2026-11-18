@@ -318,7 +318,11 @@ class BotCompileService:
                 task_id=task_id,
                 principal_scope=principal_scope,
                 sanitized_request=normalized_request,
-                meta={"mode": self.config.compile.mode},
+                meta={
+                    "mode": "complex"
+                    if normalized_request.global_conflict_detection
+                    else self.config.compile.mode
+                },
                 status="accepted",
                 stage="queued",
                 created_at=now,
@@ -495,7 +499,14 @@ class BotCompileService:
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
         args = request.args or {}
-        if args.keys() - {"changes"}:
+        conflict_detection = args.get("global_conflict_detection", False)
+        if type(conflict_detection) is not bool:
+            raise CompileFailure(
+                "INVALID_ARGUMENT",
+                "args.global_conflict_detection must be a boolean",
+                stage="queued",
+            )
+        if args.keys() - {"changes", "global_conflict_detection"}:
             raise CompileFailure(
                 "INVALID_ARGUMENT",
                 "VikingBot Compile does not implement provider-specific args.",
@@ -582,11 +593,13 @@ class BotCompileService:
             except OpenVikingError as exc:
                 if exc.code != "NOT_FOUND":
                     raise
-                self._validate_target_directory(raw_target, {"isDir": True})
+                self._validate_target_directory(
+                    raw_target, {"isDir": True}, resource_only=conflict_detection
+                )
                 await client.mkdir(raw_target, description="compile target folder")
                 target_stat = await client.stat(raw_target)
             target = str(target_stat.get("uri") or "").rstrip("/")
-            self._validate_target_directory(target, target_stat)
+            self._validate_target_directory(target, target_stat, resource_only=conflict_detection)
         except CompileFailure:
             raise
         except OpenVikingError as exc:
@@ -597,18 +610,21 @@ class BotCompileService:
             await client.close()
 
         instruction = (request.instruction or "").strip()
-        return SanitizedCompileRequest(
-            **{
+        return SanitizedCompileRequest.model_validate(
+            {
                 "from": sources,
                 "to": target,
                 "instruction": instruction or DEFAULT_COMPILE_INSTRUCTION,
                 "skill": canonical_skill,
                 "changes": changes,
+                "global_conflict_detection": conflict_detection,
             }
         )
 
     @staticmethod
-    def _validate_target_directory(target: str, stat: Mapping[str, Any]) -> None:
+    def _validate_target_directory(
+        target: str, stat: Mapping[str, Any], *, resource_only: bool = False
+    ) -> None:
         if not stat.get("isDir"):
             raise CompileFailure(
                 "INVALID_ARGUMENT", "Compile target must be a directory", stage="queued"
@@ -620,6 +636,12 @@ class BotCompileService:
                 stage="queued",
             )
         classification = classify_uri(target)
+        if resource_only and classification.context_type != "resource":
+            raise CompileFailure(
+                "INVALID_ARGUMENT",
+                "Global conflict comparison requires a resource Wiki target",
+                stage="queued",
+            )
         parts = uri_parts(target)
         if classification.context_type == "skill":
             if not classification.is_skill_namespace or (
@@ -1024,8 +1046,8 @@ class BotCompileService:
             preserve_workspace = preserve_workspace or bool(warnings)
             if output_file_count == 0:
                 warnings.append("No reliable output was produced from the supplied materials.")
-            result = CompileResult(
-                **{
+            result = CompileResult.model_validate(
+                {
                     "from": request.from_,
                     "to": request.to,
                     "skill": request.skill,

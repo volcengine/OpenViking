@@ -28,6 +28,8 @@ async def run(runtime, documents):
         uri = safe_join_viking_uri(runtime.target, path)
         read_before = path in runtime.old
         old = await file_ops.load_old(runtime, path)
+        if runtime.request.global_conflict_detection:
+            runtime.validate_conflict_output(path, content)
         if old is not None and not read_before:
             # Create mode lets the server preserve an existing target as a reported conflict.
             mode = "create"

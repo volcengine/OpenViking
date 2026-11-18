@@ -57,6 +57,19 @@ The first run is full. Subsequent runs use the last successful baseline. The nam
 
 The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 
+### Conflict comparison in the open-source VikingBot Runtime
+
+When using VikingBot's `/runtime/v1/tasks` endpoint, a resource Wiki Compile can
+set `payload.args.global_conflict_detection` to the JSON boolean `true`. VikingBot
+selects its complex executor for that task and compares related input drafts and
+recalled Wiki evidence. The comparison preserves existing human resolutions and
+uses stage-specific worker rules. Target recall is bounded, so review the cited
+evidence and unresolved records when decisions depend on them.
+
+The flag defaults to false and applies to tasks received by VikingBot. Named
+Compile uses its existing incremental plan and can skip a run before calling the
+Runtime. To compare all sources after enabling the option, request a full run.
+
 ## Open the body page
 
 ```bash
