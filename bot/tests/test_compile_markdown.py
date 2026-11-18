@@ -486,7 +486,8 @@ async def test_alias_conflicts_retry_without_blocking_unrelated_publication(
     results = (
         [[first], [alias], [merged]] if collision == "other_worker" else [[first, alias], [merged]]
     )
-    pipeline.generate = AsyncMock(side_effect=results)
+    worker = AsyncMock(side_effect=results)
+    pipeline.generate = pipeline.generate_once = worker
     outputs = await reduce_op.resolve_files(pipeline, [*docs, unrelated])
     assert pipeline.generate.await_count == len(results)
     assert outputs == (
