@@ -129,7 +129,8 @@ class GatewayBackend:
 
 
 def initialize(
-    external_provider, monkeypatch, *, name="gateway", scope="peer", compress="off", **identity
+    external_provider, monkeypatch, *, name="gateway", scope="peer", compress="off", platform="telegram",
+    **identity
 ):
     from agent.memory_manager import MemoryManager
 
@@ -158,7 +159,7 @@ def initialize(
         manager.initialize_all(
             session_id="shared-group",
             hermes_home=str(home),
-            platform="telegram",
+            platform=platform,
             user_id="alice",
             **identity,
         )
@@ -609,3 +610,32 @@ def test_other_session_upload_is_not_blocked_by_paused_worker(external_provider,
     finally:
         release.set()
         manager.shutdown_all()
+
+
+@pytest.mark.parametrize("platform, commits", [("api_server", 1), ("telegram", 0)])
+def test_api_server_session_teardown_commits(external_provider, monkeypatch, platform, commits):
+    """Hermes' api_server parks one manager per session and closes it (gateway stop, idle or LRU
+    eviction) without on_session_end; other platforms end the session before shutdown."""
+    from gateway.platforms.api_server_memory_sessions import ApiServerMemorySessions
+
+    home, provider, _, manager, backend = initialize(external_provider, monkeypatch, platform=platform)
+    sessions = ApiServerMemorySessions(max_size=8, idle_ttl_secs=3600)
+    with profile_scope(home):
+        manager.sync_all(
+            "Region is zone-b now",
+            "Updated",
+            session_id="shared-group",
+            messages=[
+                {"role": "user", "content": "Region is zone-b now"},
+                {"role": "assistant", "content": "Updated"},
+            ],
+        )
+        assert manager.flush_pending(timeout=10)
+        assert provider._drain_writers("shared-group", timeout=10)
+        sessions.checkin(SimpleNamespace(_memory_manager=manager, session_id="shared-group"))
+        sessions.close_all()
+        marker = provider._state_path("pending", "shared-group")
+    assert [r.url.path for r, _ in backend.requests if r.url.path.endswith("/commit")] == (
+        ["/api/v1/sessions/shared-group/commit"] * commits
+    )
+    assert marker.exists() is (commits == 0)
