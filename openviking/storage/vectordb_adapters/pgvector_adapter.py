@@ -174,6 +174,46 @@ class PgvectorCollection(OpenGaussCollection):
             raise NotImplementedError("pgvector TTL writes are not supported")
         return super().upsert_data(data_list, ttl=0)
 
+    def _write_prepared_upserts(self, cursor, table_identifier, prepared_records):
+        """Use native conflict handling without changing the shared write owner.
+
+        Only consecutive rows with the same columns are grouped. A repeated ID
+        starts a new statement so PostgreSQL never affects a row twice within
+        one VALUES command, while later patches retain their original order.
+        """
+        from psycopg2.extras import execute_values
+
+        pending, ids, shape = [], set(), None
+
+        def flush():
+            if not pending:
+                return
+            columns, placeholders = shape
+            updates = [
+                f"{_quote_identifier(column)} = EXCLUDED.{_quote_identifier(column)}"
+                for column in columns
+                if column != "id"
+            ]
+            conflict = "DO UPDATE SET " + ", ".join(updates) if updates else "DO NOTHING"
+            sql = (
+                f"INSERT INTO {table_identifier} "
+                f"({', '.join(_quote_identifier(column) for column in columns)}) VALUES %s "
+                f"ON CONFLICT ({_quote_identifier('id')}) {conflict}"
+            )
+            execute_values(
+                cursor, sql, pending, template="(" + ", ".join(placeholders) + ")", page_size=100
+            )
+
+        for record_id, columns, placeholders, values in prepared_records:
+            current = (tuple(columns), tuple(placeholders))
+            if pending and (current != shape or record_id in ids or len(pending) == 100):
+                flush()
+                pending, ids = [], set()
+            shape = current
+            pending.append(values)
+            ids.add(record_id)
+        flush()
+
     def search_by_vector(
         self,
         index_name,

@@ -1561,6 +1561,75 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
     # ICollection: data operations
     # ------------------------------------------------------------------
 
+    def _write_prepared_upserts(self, cursor, table_identifier, prepared_records):
+        """Write prevalidated rows using the backend-compatible transaction path."""
+        for record_id, column_names, placeholders, values in prepared_records:
+            update_columns = [column_name for column_name in column_names if column_name != "id"]
+            update_placeholders = [
+                placeholder
+                for column_name, placeholder in zip(column_names, placeholders, strict=True)
+                if column_name != "id"
+            ]
+            update_set = ", ".join(
+                f"{_quote_identifier(column_name)} = {placeholder}"
+                for column_name, placeholder in zip(
+                    update_columns, update_placeholders, strict=True
+                )
+            )
+            update_values = [
+                value
+                for column_name, value in zip(column_names, values, strict=True)
+                if column_name != "id"
+            ] + [record_id]
+
+            if not update_set:
+                cursor.execute(
+                    f'UPDATE {table_identifier} SET "id" = "id" WHERE "id" = %s',
+                    [record_id],
+                )
+                updated = cursor.rowcount
+            else:
+                cursor.execute(
+                    f"UPDATE {table_identifier} SET {update_set} "
+                    f"WHERE {_quote_identifier('id')} = %s",
+                    update_values,
+                )
+                updated = cursor.rowcount
+            if updated == 0:
+                columns_sql = ", ".join(
+                    _quote_identifier(column_name) for column_name in column_names
+                )
+                insert_placeholders = ", ".join(placeholders)
+                cursor.execute("SAVEPOINT ov_upsert_insert")
+                try:
+                    cursor.execute(
+                        f"INSERT INTO {table_identifier} ({columns_sql}) "
+                        f"VALUES ({insert_placeholders})",
+                        values,
+                    )
+                except Exception as error:
+                    # Only a unique race is recoverable inside this transaction.
+                    # A disconnected cursor must not obscure the original failure.
+                    if getattr(error, "pgcode", None) != "23505":
+                        raise
+                    cursor.execute("ROLLBACK TO SAVEPOINT ov_upsert_insert")
+                    if update_set:
+                        cursor.execute(
+                            f"UPDATE {table_identifier} SET {update_set} "
+                            f"WHERE {_quote_identifier('id')} = %s",
+                            update_values,
+                        )
+                    else:
+                        cursor.execute(
+                            f'UPDATE {table_identifier} SET "id" = "id" WHERE "id" = %s',
+                            [record_id],
+                        )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError(
+                            f"openGauss concurrent upsert recovery failed for {record_id!r}"
+                        ) from error
+                cursor.execute("RELEASE SAVEPOINT ov_upsert_insert")
+
     def upsert_data(self, data_list: List[Dict[str, Any]], ttl: int = 0):
         if not data_list:
             return
@@ -1632,74 +1701,7 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
         with self._lock:
             cursor = self._cursor()
             try:
-                for record_id, column_names, placeholders, values in prepared_records:
-                    update_columns = [
-                        column_name for column_name in column_names if column_name != "id"
-                    ]
-                    update_placeholders = [
-                        placeholder
-                        for column_name, placeholder in zip(column_names, placeholders, strict=True)
-                        if column_name != "id"
-                    ]
-                    update_set = ", ".join(
-                        f"{_quote_identifier(column_name)} = {placeholder}"
-                        for column_name, placeholder in zip(
-                            update_columns, update_placeholders, strict=True
-                        )
-                    )
-                    update_values = [
-                        value
-                        for column_name, value in zip(column_names, values, strict=True)
-                        if column_name != "id"
-                    ] + [record_id]
-
-                    if not update_set:
-                        cursor.execute(
-                            f'UPDATE {table_identifier} SET "id" = "id" WHERE "id" = %s',
-                            [record_id],
-                        )
-                        updated = cursor.rowcount
-                    else:
-                        cursor.execute(
-                            f"UPDATE {table_identifier} SET {update_set} "
-                            f"WHERE {_quote_identifier('id')} = %s",
-                            update_values,
-                        )
-                        updated = cursor.rowcount
-                    if updated == 0:
-                        columns_sql = ", ".join(
-                            _quote_identifier(column_name) for column_name in column_names
-                        )
-                        insert_placeholders = ", ".join(placeholders)
-                        cursor.execute("SAVEPOINT ov_upsert_insert")
-                        try:
-                            cursor.execute(
-                                f"INSERT INTO {table_identifier} ({columns_sql}) "
-                                f"VALUES ({insert_placeholders})",
-                                values,
-                            )
-                        except Exception as error:
-                            # Only a unique race is recoverable inside this transaction.
-                            # A disconnected cursor must not obscure the original failure.
-                            if getattr(error, "pgcode", None) != "23505":
-                                raise
-                            cursor.execute("ROLLBACK TO SAVEPOINT ov_upsert_insert")
-                            if update_set:
-                                cursor.execute(
-                                    f"UPDATE {table_identifier} SET {update_set} "
-                                    f"WHERE {_quote_identifier('id')} = %s",
-                                    update_values,
-                                )
-                            else:
-                                cursor.execute(
-                                    f'UPDATE {table_identifier} SET "id" = "id" WHERE "id" = %s',
-                                    [record_id],
-                                )
-                            if cursor.rowcount != 1:
-                                raise RuntimeError(
-                                    f"openGauss concurrent upsert recovery failed for {record_id!r}"
-                                ) from error
-                        cursor.execute("RELEASE SAVEPOINT ov_upsert_insert")
+                self._write_prepared_upserts(cursor, table_identifier, prepared_records)
                 if maintain_sparse:
                     self._sync_sparse_postings_on_cursor(
                         cursor, [row[0] for row in prepared_records]
@@ -1709,11 +1711,15 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 try:
                     self._conn.rollback()
                 except Exception:
-                    logger.warning("openGauss upsert rollback failed during error cleanup", exc_info=True)
+                    logger.warning(
+                        "openGauss upsert rollback failed during error cleanup", exc_info=True
+                    )
                 try:
                     cursor.close()
                 except Exception:
-                    logger.warning("openGauss upsert cursor close failed during error cleanup", exc_info=True)
+                    logger.warning(
+                        "openGauss upsert cursor close failed during error cleanup", exc_info=True
+                    )
                 raise
             else:
                 cursor.close()
