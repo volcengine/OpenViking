@@ -1,3 +1,4 @@
+import type { FileBrowserExpansionSnapshot } from './types.js';
 import type { DirectorySummaryLabels } from './file-browser-labels.js';
 import type { ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/index.js';
@@ -71,7 +72,7 @@ export interface FileBrowserActions {
     uri: string,
     options?: FileBrowserOpenResourceOptions,
   ) => Promise<boolean>;
-  reveal: (uri: string) => Promise<boolean>;
+  reveal: (uri: string, preserveExpansion?: boolean) => Promise<boolean>;
   cancelReveal: () => void;
   openUri: (uri: string) => Promise<void>;
   openDashboard: (uri: string) => void;
@@ -129,6 +130,10 @@ export interface UseFileBrowserOptions {
   formatCharacterCount?: (count: number) => string;
   /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
   defaultExpandedUri?: string;
+  defaultExpandedUris?: readonly string[];
+  defaultExpansionSnapshot?: FileBrowserExpansionSnapshot;
+  onExpandedUrisChange?: (uris: readonly string[]) => void;
+  onExpansionSnapshotChange?: (snapshot: FileBrowserExpansionSnapshot) => void;
   currentUri: string | null;
   requestOptions?: OvRequestOptions;
   onUriChange: (uri: string | null) => void;

@@ -14,7 +14,7 @@ export interface FsTreeState extends ReturnType<typeof useTreeMetadata> {
   toggleExpand: (row: FileTreeEntryRow) => Promise<void>;
   open: (uri: string) => Promise<void>;
   openPath: (uri: string) => Promise<void>;
-  reveal: (uri: string) => Promise<boolean>;
+  reveal: (uri: string, preserveExpansion?: boolean) => Promise<boolean>;
   cancelReveal: () => void;
   loadMore: (parentId: string) => Promise<void>;
   retry: (parentId: string) => Promise<void>;

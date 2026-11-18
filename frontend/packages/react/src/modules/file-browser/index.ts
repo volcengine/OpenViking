@@ -4,6 +4,7 @@ export type {
   FileBrowserWorkflowLabels,
   FileBrowserDashboardLabels,
   FileBrowserProps,
+  FileBrowserExpansionSnapshot,
   FileBrowserComponent,
   FileBrowserHandle,
   FileBrowserOpenResourceOptions,
