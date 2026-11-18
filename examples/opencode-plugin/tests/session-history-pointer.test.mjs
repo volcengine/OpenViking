@@ -31,6 +31,7 @@ function setup({ endpoint, dir }, overrides = {}) {
     autoCapture: true,
     noAutoInject: true,
     sessionHistoryPointer: true,
+    mcp: { enabled: true },
     commitTokenThreshold: 20000,
     ...overrides,
   }
@@ -54,13 +55,21 @@ test("the first message after each compaction carries the pointer, once", async 
     const block = await nextMessage("ses_main")
     assert.match(block, /^<openviking-context source="session-history">/)
     assert.match(block, /full record of this session as oc-ses_main/)
-    // OpenCode's MCP server cannot tell which session calls it.
-    assert.match(block, /Pass session="oc-ses_main" with each call\./)
+    assert.match(block, /session defaults to this session/)
     assert.ok(!(await nextMessage("ses_main")))
 
     await new Promise((resolve) => setTimeout(resolve, 5))
     await sessionManager.handleEvent(compacted("ses_main"))
     assert.match(await nextMessage("ses_main"), /oc-ses_main/)
+  })
+})
+
+test("in hook-only mode the pointer tells the model to pass session", async () => {
+  await withOpenViking(async (server) => {
+    const { sessionManager, nextMessage } = setup(server, { mcp: { enabled: false } })
+    await sessionManager.init()
+    await sessionManager.handleEvent(compacted("ses_main"))
+    assert.match(await nextMessage("ses_main"), /Pass session="oc-ses_main" with each call\./)
   })
 })
 

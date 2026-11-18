@@ -12,8 +12,8 @@ export function createSessionInject({ config, sessionManager }) {
     return pointer ? [block, pointer].filter(Boolean).join("\n") : block
   }
 
-  // The first message after a compaction. OpenCode's MCP server is shared by
-  // every session it serves, so the model has to name the session itself.
+  // The first message after a compaction. The plugin fills `session` only for
+  // its bundled MCP server; in hook-only mode the model names it itself.
   function historyPointer(input) {
     if (!config.sessionHistoryPointer || !isCaptureEnabled(config)) return ""
     if (!input.sessionID || !input.messageID) return ""
@@ -23,7 +23,7 @@ export function createSessionInject({ config, sessionManager }) {
       opencode_session: input.sessionID,
       openviking_session: ovSessionId,
     })
-    return formatSessionHistoryPointer(ovSessionId, { sessionDefault: false })
+    return formatSessionHistoryPointer(ovSessionId, { sessionDefault: Boolean(config.mcp?.enabled) })
   }
 
   async function buildStartContext(input) {
