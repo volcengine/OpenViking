@@ -278,8 +278,8 @@ All fields are optional, and omitted fields follow `locale`.
 | searchIgnoreCase        | Case-insensitive matching                                                                                                    | `string`                             | `'Ignore case'`                                                       |
 | searchFilterUnsupported | Why a filter is unavailable in the current mode                                                                              | `string`                             | `'This filter is unavailable for the current mode'`                   |
 | searchResultCount       | Result count; receives the number                                                                                            | `(count: number) => string`          | `'N results'`                                                         |
-| searchVia               | Copy that follows the mode chip                                                                                              | `string`                             | `'Vector retrieval'`                                                  |
-| searchSwitchMode        | Entry that switches the retrieval mode                                                                                       | `string`                             | `'Switch'`                                                            |
+| searchVia               | Deprecated                                                                                                                   | `string`                             | `'Vector retrieval'`                                                  |
+| searchSwitchMode        | Accessible label for the retrieval mode selector                                                                             | `string`                             | `'Switch'`                                                            |
 | searchAdvancedLabel     | Accessible name of the advanced-filter button                                                                                | `string`                             | `'Advanced filters'`                                                  |
 | previewMode             | Preview in the Preview / Source switch                                                                                       | `string`                             | `'Preview'`                                                           |
 | sourceMode              | Source in the Preview / Source switch                                                                                        | `string`                             | `'Source'`                                                            |
@@ -519,7 +519,7 @@ Directory listings needed to locate the target, or required home alias lookups, 
 
 - The search box at the top of the left column opens the module's search dialog; `⌘K` is a real shortcut, and when a page mounts several instances only the one interacted with last responds.
 - Typing pauses for 400 ms before the request fires; there is no submit button. Closing the dialog cancels the in-flight request and clears the input and filters.
-- Four retrieval modes share one input and one result list. The result header offers “Switch” when the search returns matches:
+- The mode selector next to the search field is always available. Switching modes keeps the query and filters supported by the new mode.
 
 | Mode     | Endpoint                | Input              | Filters                                |
 | -------- | ----------------------- | ------------------ | -------------------------------------- |
