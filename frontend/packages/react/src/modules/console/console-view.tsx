@@ -28,6 +28,7 @@ export function ConsoleView({
   locale: localeProp,
   quickCommands,
   scopeKey,
+  commandHistoryKey,
   requestOptions,
   onModeChange,
   onOpenUri,
@@ -50,6 +51,7 @@ export function ConsoleView({
     defaultMode,
     locale,
     scopeKey,
+    commandHistoryKey,
     requestOptions,
     taskService,
     commandOptions,
@@ -98,7 +100,7 @@ export function ConsoleView({
               panelId={id}
               locale={locale}
               labels={labels}
-              records={state.records}
+              history={state.history}
               isExecuting={state.isExecuting}
               onModeChange={(next) => state.setMode(next)}
               onClear={() => {
@@ -163,6 +165,7 @@ export function ConsoleView({
               {slots?.commandHelp}
               <CommandConsole
                 records={commandRecords}
+                history={state.history}
                 value={state.command}
                 commands={state.commands}
                 commandGroups={consoleCommandGroups(locale)}

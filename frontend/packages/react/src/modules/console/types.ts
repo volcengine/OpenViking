@@ -100,6 +100,12 @@ export interface ConsoleCommandOptions {
   onPackImported?: (uri: string) => void;
 }
 
+export interface ConsoleHistoryEntry {
+  id: string;
+  command: string;
+  createdAtMs: number;
+}
+
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
   /** Task queries use native HTTP by default; hosts can adapt another backend. */
@@ -113,6 +119,8 @@ export interface ConsoleOptions {
   defaultMode?: ConsoleMode;
   /** Change with the identity when using dynamic credential/identity functions. */
   scopeKey?: string;
+  /** Opt in to tab-session command history. Provide a stable, credential-free key for the environment and identity. */
+  commandHistoryKey?: string;
   onModeChange?: (mode: ConsoleMode) => void;
   requestOptions?: OvRequestOptions;
 }
@@ -146,9 +154,10 @@ export interface ConsoleProps
   labels?: ConsoleLabels;
 }
 
-/** Local state. Records and drafts are never persisted by the module. */
+/** Terminal state with recall history separate from execution records. */
 export interface ConsoleState {
   records: readonly CommandConsoleRecord[];
+  history: readonly ConsoleHistoryEntry[];
   command: string;
   conversationDraft: string;
   isExecuting: boolean;
