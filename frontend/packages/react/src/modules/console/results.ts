@@ -82,7 +82,15 @@ export function formatResult(
                 ? 'submission_status'
                 : key
             ).replaceAll('_', ' ');
-            return `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}: ${text(value)}`;
+            const title = `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}`;
+            if (
+              /(?:^|_)uri$/i.test(key) &&
+              typeof value === 'string' &&
+              /^viking:\/\//i.test(value)
+            ) {
+              return { label: title, uri: value };
+            }
+            return `${title}: ${text(value)}`;
           })
         : data === null || data === undefined
           ? []

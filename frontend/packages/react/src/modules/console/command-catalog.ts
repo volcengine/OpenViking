@@ -7,6 +7,7 @@ import type {
 import type { Locale } from '../../shared/locale.js';
 import { COMMAND_SPECS, type CommandSpec } from './command-specs.js';
 import type { Argument } from './command-parser.js';
+import { resolveCommandUriArguments } from './command-uri-arguments.js';
 import { resolveConsoleLocale } from './labels.js';
 import type { ConsoleCommandGuide, ConsoleCommandOptions } from './types.js';
 import { parameterExamples } from './parameter-examples.js';
@@ -138,6 +139,8 @@ export function consoleCommands(
               flag.name,
           })),
           skeleton: spec.skeleton,
+          resolveUriArguments: (input) =>
+            resolveCommandUriArguments(input, spec.positional, spec.flags),
         },
       ] as const;
     }),
