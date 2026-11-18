@@ -218,6 +218,21 @@ MCP tools to its output.
 
 OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction, session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
 
+### Optional OpenViking reference for compaction (OpenCode v2)
+
+Set `plugin.opencode.takeoverEnabled` to `true` to let OpenViking supplement
+OpenCode's normal compaction. When the host asks for a summary, the plugin
+captures eligible messages from that session, commits them, and waits briefly
+for a completed OpenViking archive. It may add a bounded excerpt from the
+archive overview to the host's summary prompt. OpenCode still writes the
+summary using its own transcript and tools.
+
+Use capture-enabled sessions on a server that reports completed archives.
+Excluded sessions, incomplete archives, errors, and timeouts leave the native
+summary request unchanged. This option is off by default. It can cause an
+OpenViking commit earlier than usual, with the server's configured extraction
+and provider usage, even if no completed overview is ready in time.
+
 ## MCP Tools
 
 OpenCode sees the OpenViking MCP server as `openviking`, so tool names are namespaced with `openviking_`.
@@ -267,3 +282,38 @@ Registry failures stop the workflow instead of treating an unavailable registry 
 an unused version. Only upstream `main` can publish the official npm `latest` tag.
 Manual dispatch on `main` retries a failed release using the existing npm credentials
 or Trusted Publishing configuration.
+
+## Read-only diagnostics (OpenCode V2)
+
+Run `node scripts/ov-memory-doctor.mjs --json` from the installed plugin directory.
+Use `--offline` to skip server probes. The CLI resolves the same OpenViking configuration
+as the plugin, reads capture metadata without transcript bodies, and reuses the shared
+memory doctor's authenticated HTTP/MCP probes and verdicts. It never repairs configuration,
+replays pending writes, or commits a session. Native plugin/MCP/skill inventories require
+an active OpenCode host; the standalone CLI labels them `unsupported`.
+
+The V2 server registers RPC `openviking.controls` for a native TUI/client consumer:
+
+| Method | Input | Result |
+| --- | --- | --- |
+| `status`, `doctor` | `{ "offline": true }` (optional boolean) | `schemaVersion: 1`, installation, MCP, skills, connection, capture, effective config, findings (`sections`), `text`, `exitCode` |
+| `commit` | `{ "sessionID": "<current OpenCode session>" }` | `status`, `traceId` when available, `extraction` |
+
+Read methods return only selected configuration fields and redact credentials. Inventory
+states distinguish disabled, unsupported, missing and failed registration. In particular,
+connected MCP with missing bundled native skills is a diagnostic failure. Capture timestamps
+record local activity and commit acceptance; they do not prove completed extraction.
+
+Commit is an intentional write. The caller must pass its current OpenCode session ID,
+never an OpenViking session ID. The server checks location ownership, respects capture and
+child-session privacy settings, waits for serialized capture, sends current-session messages
+before committing, and refuses to overtake queued capture. `pending_capture` requires normal
+recovery before retrying. Auth/network errors remain failures (`operation_failed` over RPC),
+and HTTP acceptance returns `extraction: "not_verified"`, never completed extraction.
+Automatic lifecycle commits retain their existing retry behavior.
+
+Visible `/ov status`, `/ov doctor` and `/ov commit` controls require the TUI consumer.
+OpenCode V2 server command callbacks return no display value; writing a synthetic session
+message merely to show diagnostics would alter conversation history and contaminate capture.
+The server therefore exposes RPC rather than registering silent commands. The consumer
+should show read results in native UI and invoke `commit` only after intentional user action.

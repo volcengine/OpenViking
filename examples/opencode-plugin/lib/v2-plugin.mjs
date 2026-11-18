@@ -4,6 +4,8 @@ import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
 import { log } from "./utils.mjs"
+import { registerV2Controls } from "./v2-controls.mjs"
+import { createV2Compaction } from "./v2-compaction.mjs"
 
 const METADATA_KEY = "openviking"
 const CURSOR_KEY_PREFIX = "capture-cursor/"
@@ -26,6 +28,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     vikingUriGuard,
     vikingUriNotice,
   } = runtime
+  const controller = new AbortController()
   const captureCursors = new Map()
   const sessionOwnership = new Map()
   // Compaction hooks can run while lifecycle events are still flushing. Keep
@@ -37,6 +40,23 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     return task
   }
   const directory = ctx?.location?.project?.directory || ctx?.location?.directory
+
+  const compaction = createV2Compaction(ctx, config, sessionManager, {
+    signal: controller.signal,
+    captureAndCommit: (sessionID, expected, signal) => serializeSession(async () => {
+      signal.throwIfAborted()
+      await captureV2Context(ctx, sessionManager, captureCursors, sessionID, { signal })
+      if (sessionManager.getMappedSessionId(sessionID) === expected) {
+        return sessionManager.commitCurrentSession(sessionID, signal)
+      }
+    }),
+  })
+
+  await registerV2Controls(ctx, runtime, {
+    pluginRoot,
+    serializeSession,
+    captureCurrent: (sessionID, signal) => captureV2Context(ctx, sessionManager, captureCursors, sessionID, { signal }),
+  })
 
   if (config.mcp.enabled && ctx?.mcp?.transform) {
     let registered = false
@@ -105,21 +125,24 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     await ctx.session.hook("compaction", async (event) => {
       try {
         await runtime.ready
-        // context() drops the old transcript as soon as compaction completes.
-        // Capture it now; the ended event below owns the commit.
-        await serializeSession(() => captureV2Context(ctx, sessionManager, captureCursors, event.sessionID))
+        if (compaction.enabledFor(event)) {
+          await compaction.assist(event)
+        } else {
+          // Capture before context() drops the pre-compaction transcript.
+          await serializeSession(() => captureV2Context(ctx, sessionManager, captureCursors, event.sessionID))
+        }
       } catch (error) {
         logHookError("session.compaction.capture", error)
       }
     })
   }
 
-  const controller = new AbortController()
   let eventTask = Promise.resolve()
   if (ctx?.event?.subscribe) {
     eventTask = consumeEvents(ctx, controller.signal, async (event) => {
       const sessionID = event?.data?.sessionID ?? event?.data?.sessionId
       if (!LIFECYCLE_EVENTS.has(event?.type) || !sessionID) return
+      if (event.type === "session.deleted" || event.type === "session.execution.interrupted") compaction.cancel(sessionID)
       if (!(await ownsSession(ctx, sessionOwnership, event, sessionID))) return
       await serializeSession(async () => {
         await runtime.ready
@@ -278,15 +301,20 @@ function sameLocation(ref, location) {
   return !ref.workspaceID || !location.workspaceID || ref.workspaceID === location.workspaceID
 }
 
-export async function captureV2Context(ctx, sessionManager, cursors, sessionID) {
+export async function captureV2Context(ctx, sessionManager, cursors, sessionID, { signal } = {}) {
   const messages = await ctx.session.context({ sessionID })
-  if (!Array.isArray(messages)) return
+  signal?.throwIfAborted()
+  if (!Array.isArray(messages)) {
+    if (signal) throw new Error("Cannot read the current OpenCode session context")
+    return
+  }
   // The cursor lives in host storage because the session state file is shared
   // by every location instance and cannot prove what was already captured.
   const cursor = cursors.get(sessionID) ?? await readCursor(ctx, sessionID)
   const cursorIndex = cursor ? messages.findIndex((message) => message?.id === cursor) : -1
   const pending = cursorIndex >= 0 ? messages.slice(cursorIndex + 1) : messages
   for (const message of pending) {
+    signal?.throwIfAborted()
     for (const normalized of contextMessageEvents(sessionID, message)) {
       await sessionManager.handleEvent(normalized)
     }

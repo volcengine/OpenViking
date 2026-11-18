@@ -10,6 +10,7 @@ import {
 } from "./shared/session-model.mjs"
 import {
   enqueue,
+  hasPendingSessionWrites,
   replayPending,
 } from "./shared/pending-queue.mjs"
 import {
@@ -350,12 +351,35 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return commitOvSession(sessionId, { force: true, abortSignal, reason: "tool" })
   }
 
+  // User-requested commits must not hide failed capture behind offline replay.
+  // Existing lifecycle/tool commits retain their queueing behavior.
+  async function commitCurrentSession(opencodeSessionId, abortSignal) {
+    if (!isCaptureEnabled(config)) return { status: "disabled" }
+    const state = sessions.get(opencodeSessionId)
+    if (!state) return { status: "no_activity" }
+    if (shouldSkipSubagentSession(state)) return { status: "disabled" }
+    const run = (state.flushChain ?? Promise.resolve()).then(async () => {
+      // Previously queued messages are marked captured locally. Do not commit
+      // ahead of their delivery, or replay any unrelated session as a side effect.
+      if (await hasPendingSessionWrites(state.ovSessionId)) return { status: "pending_capture" }
+      abortSignal?.throwIfAborted()
+      await flushPendingMessages(opencodeSessionId, state, { strict: true, abortSignal })
+      abortSignal?.throwIfAborted()
+      const result = await commitOvSession(state.ovSessionId, { force: true, reason: "intentional", abortSignal, queueOnFailure: false })
+      await enqueueSave()
+      return result
+    })
+    state.flushChain = run.catch(() => {})
+    return run
+  }
+
   return {
     init,
     waitForBackground,
     handleEvent,
     getMappedSessionId,
     commitSession,
+    commitCurrentSession,
     flushAll,
     flushSession,
   }
@@ -445,7 +469,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return body
   }
 
-  async function flushPendingMessages(opencodeSessionId, state) {
+  async function flushPendingMessages(opencodeSessionId, state, { strict = false, abortSignal } = {}) {
     if (!isCaptureEnabled(config)) return 0
     // Recovery/replay paths (idle flush, dispose flushAll, tool commit, a
     // state file reloaded after a restart) come through here too, so the
@@ -465,8 +489,11 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (toSend.length === 0) return 0
 
     let added = 0
-    const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
-    if (!health.ok) {
+    abortSignal?.throwIfAborted()
+    const health = await fetchJSON(config, "/health", { signal: abortSignal }, { timeoutMs: 5000 })
+    abortSignal?.throwIfAborted()
+    if (!health.ok && strict) throw new Error("Capture failed before commit: OpenViking health check failed")
+    if (!health.ok && !strict) {
       for (const item of toSend) {
         const queued = await enqueue("addMessage", state.ovSessionId, item.body)
         if (!queued.ok) break
@@ -474,17 +501,31 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         added += 1
       }
     } else {
+      let sent = 0
       const res = await sendSessionMessages(
-        (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options }),
+        (endpoint, init = {}, options = {}) => {
+          abortSignal?.throwIfAborted()
+          return fetchJSON(config, endpoint, { ...init, signal: abortSignal }, { timeoutMs: 10000, ...options })
+        },
         state.ovSessionId,
         toSend.map((item) => item.body),
-        { enqueueOnRetryable: true },
+        {
+          enqueueOnRetryable: !strict,
+          onSent: strict ? (count) => {
+            for (const item of toSend.slice(sent, sent + count)) item.message.captured = true
+            sent += count
+            state.lastActivityAt = Date.now()
+            debouncedSaveState()
+          } : undefined,
+        },
       )
+      abortSignal?.throwIfAborted()
       added = res.sent + res.queued
       for (const item of toSend.slice(0, added)) {
         item.message.captured = true
       }
       if (res.failed > 0 || res.enqueueFailed > 0) {
+        if (strict) throw new Error(`Capture failed before commit: ${res.lastError?.message || JSON.stringify(res.lastError)}`)
         log("ERROR", "message", "Failed to add message to OpenViking session", {
           openviking_session: state.ovSessionId,
           status: res.lastError?.status,
@@ -516,7 +557,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return commitOvSession(state.ovSessionId, { force: true, reason: "threshold" })
   }
 
-  async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
+  async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal, queueOnFailure = true } = {}) {
+    abortSignal?.throwIfAborted()
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
     const body = { keep_recent_count: 0 }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
@@ -536,7 +578,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       })
       return { status: "accepted", result: res.result, traceId }
     }
-    if (isRetryableFailure(res)) {
+    abortSignal?.throwIfAborted()
+    if (queueOnFailure && isRetryableFailure(res)) {
       await enqueue("commitSession", ovSessionId, body)
       log("WARN", "session", "Queued OpenViking session commit", {
         openviking_session: ovSessionId,
