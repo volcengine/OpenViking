@@ -488,7 +488,8 @@ async def test_overlapping_save_after_a_changed_history_writes_all_of_its_turn(
     async def slow(key, session, batch):
         # The next turn ends, and saves, while this first write is in flight.
         if pending:
-            assert await kernel.save(pending.pop(), credential, reply("done")) == 2
+            saved = await kernel.save(pending.pop(), credential, reply("done"))
+            assert saved == 2
         return await write(key, session, batch)
 
     viking.write = slow
