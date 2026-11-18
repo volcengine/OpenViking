@@ -3,7 +3,7 @@ import { useMediaMonitoring } from './use-media-monitoring.js';
 import { useRenderedMonitoring } from '../../shared/monitoring/context.js';
 import type { FileViewerState } from '@ark-design/ui/file-viewer/core';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   FilePreviewFileTab,
   FilePreviewFileTabSlots,
@@ -134,7 +134,7 @@ export function FilePreviewMedia({
     onStateChange?.('ready');
   };
   const details = kind === 'video' && url ? videoDetails : undefined;
-  const media = (
+  const media = (toggle?: ReactNode) => (
     <div
       ref={exposure}
       className={
@@ -145,8 +145,8 @@ export function FilePreviewMedia({
       aria-busy={!loaded}
     >
       {!loaded && (slots?.loadingFallback ?? <LoadingState text={text} />)}
-      {url ? (
-        kind === 'image' ? (
+      {url &&
+        (kind === 'image' ? (
           <FilePreviewNativeImage
             attempt={attempt}
             identity={identity}
@@ -179,8 +179,8 @@ export function FilePreviewMedia({
             }
             onError={() => fail()}
           />
-        )
-      ) : null}
+        ))}
+      {toggle}
     </div>
   );
   return (
@@ -198,7 +198,7 @@ export function FilePreviewMedia({
           {media}
         </FilePreviewVideoLayout>
       ) : (
-        media
+        media()
       )}
     </FilePreviewImageFrame>
   );
