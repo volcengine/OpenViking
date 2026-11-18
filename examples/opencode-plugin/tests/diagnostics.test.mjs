@@ -78,6 +78,31 @@ test("RPC read controls never create messages or commit; intentional commit scop
 
 import { createServer } from "node:http"
 
+test("cancelling Doctor closes the active probe and does not start another", async () => {
+  const requests = []
+  let started, closed
+  const ready = new Promise((resolve) => { started = resolve })
+  const disconnected = new Promise((resolve) => { closed = resolve })
+  const server = createServer((req, res) => {
+    requests.push(req.url)
+    res.once("close", closed)
+    started()
+  })
+  await new Promise((resolve) => server.listen(0, "localhost", resolve))
+  try {
+    const controller = new AbortController()
+    const result = diagnoseOpenCode({ ctx, config: { ...config, baseUrl: `http://localhost:${server.address().port}` }, signal: controller.signal })
+    await ready
+    controller.abort()
+    await assert.rejects(result, { name: "AbortError" })
+    await disconnected
+    assert.deepEqual(requests, ["/health"])
+  } finally {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
 test("doctor probes authenticated MCP read operations and redacts effective config", async () => {
   const requests = []
   const server = createServer((req, res) => {

@@ -453,13 +453,13 @@ export function classifyFetchError(err) {
   return { kind: "other", hint: message };
 }
 
-export async function httpProbe({ url, method = "GET", headers = {}, body, timeoutMs = 5000 }) {
+export async function httpProbe({ url, method = "GET", headers = {}, body, timeoutMs = 5000, signal }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const t0 = Date.now();
   const out = { url, method, ok: false, status: 0, latencyMs: 0, text: "", json: null, headers: {}, error: "", errorKind: "", errorHint: "" };
   try {
-    const res = await fetch(url, { method, headers, body, signal: controller.signal, redirect: "manual" });
+    const res = await fetch(url, { method, headers, body, signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, redirect: "manual" });
     out.status = res.status;
     out.ok = res.ok;
     out.latencyMs = Date.now() - t0;
@@ -510,25 +510,31 @@ export function serverErrorMessage(probe) {
  *   fsLs          GET /api/v1/fs/ls?uri=viking://~/memories — tenant-data authorization + resolved user space
  *   mcp           POST /mcp tools/list             — what the MCP proxy forwards
  */
-export async function probeOpenViking(conn, { timeoutMs = 5000, mcp = true } = {}) {
+export async function probeOpenViking(conn, { timeoutMs = 5000, mcp = true, signal } = {}) {
+  const probe = async (params) => {
+    signal?.throwIfAborted();
+    const result = await httpProbe({ ...params, signal });
+    signal?.throwIfAborted();
+    return result;
+  };
   const base = String(conn.baseUrl || "").replace(/\/+$/, "");
   const out = {};
-  out.health = await httpProbe({ url: `${base}/health`, timeoutMs, headers: conn.userAgent ? { "User-Agent": conn.userAgent } : {} });
+  out.health = await probe({ url: `${base}/health`, timeoutMs, headers: conn.userAgent ? { "User-Agent": conn.userAgent } : {} });
   if (out.health.error && out.health.errorKind !== "other") {
     // Hard network failure: the rest of the ladder would fail identically.
     return out;
   }
   if (conn.apiKey || conn.account || conn.user || Object.keys(conn.extraHeaders ?? {}).length) {
-    out.healthAuth = await httpProbe({ url: `${base}/health`, timeoutMs, headers: authHeaders(conn) });
+    out.healthAuth = await probe({ url: `${base}/health`, timeoutMs, headers: authHeaders(conn) });
   }
-  out.systemStatus = await httpProbe({ url: `${base}/api/v1/system/status`, timeoutMs, headers: authHeaders(conn) });
-  out.fsLs = await httpProbe({
+  out.systemStatus = await probe({ url: `${base}/api/v1/system/status`, timeoutMs, headers: authHeaders(conn) });
+  out.fsLs = await probe({
     url: `${base}/api/v1/fs/ls?uri=${encodeURIComponent("viking://~/memories")}&output=original`,
     timeoutMs,
     headers: authHeaders(conn),
   });
   if (mcp) {
-    out.mcp = await httpProbe({
+    out.mcp = await probe({
       url: `${base}/mcp`,
       method: "POST",
       timeoutMs: Math.max(timeoutMs, 8000),
