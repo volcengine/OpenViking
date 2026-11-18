@@ -69,7 +69,7 @@ MCP 的 `add_resource` 工具暴露相同的 `as_item` 和 `item_attrs` 参数�
 
 `mkdir(as_item=true)` 的 HTTP 成功结果包含 `uri`、`item_uuid` 和 `item_attrs`，用于确认声明成功；普通 `mkdir` 仍只返回 `uri`，Python SDK 的返回值仍为 `None`。SDK／CLI 收到缺少 UUID 的旧服务端响应时会报 `FAILED_PRECONDITION`；旧服务端可能已创建普通目录，需核对目标 URI 后升级服务端，不会自动清理。确认复用已有声明结果，不增加探测请求或存储读取。普通 `mkdir` 保留忽略无关额外字段的既有行为，但拒绝外部指定 `item_uuid`／`item_uuids`。
 
-开源 Python 与原生引擎需配套升级。旧草稿 Item 数据的二进制混用和回滚尚未完成独立版本验证。
+开源 Python 与原生引擎需配套使用。Item Search 尚未上线，不提供早期草稿数据格式的兼容读取或迁移。
 
 传入空的 `search_as_item` 对象即可开启 Item Search。只有需要求和时才设置 `aggregation=sum`；默认聚合为 `max`：
 
@@ -125,9 +125,9 @@ MCP 的 `find` 和 `search` 工具都通过 `search_as_item: {}` 开启；可选
 
 HTTP／SDK 响应沿用 `memories`、`resources`、`skills` 和 `total`，不新增 `items`。各 Item 按声明根的 `context_type` 归类，`uri` 指向根，`score` 为聚合分，根层级为 `level=0`，`abstract` 当前为空字符串。条目可选扩展 `item_uuid`、`item_attrs`，以及只描述本次候选的 `item_extra_info.candidate_members_count` 和 `item_extra_info.candidate_members_uri`。各数组保留引擎顺序，`limit` 限制分类前的总 Item 数，`total` 等于三个数组的长度之和；空结果三个数组均为 `[]`。普通检索不增加 Item 字段。
 
-候选证据列表被截断时，`item_extra_info.candidate_members_truncated` 为 `true`，计数仍是本次参与聚合的候选总数，可以大于 URI 列表长度。返回根 URI 不授予根内容的读取权限。开源引擎默认使用 shadow；配置为 union 后，先过滤成员，再分别向全部有效祖先 Item 计分，每组仍返回自身属性。引擎内部的 `item_uuids` 和 `item_attrs` 均为 `list<string>`，OV API 的 `item_attrs` 仍为字符串 KV 对象。
+候选证据列表被截断时，`item_extra_info.candidate_members_truncated` 为 `true`，计数仍是本次参与聚合的候选总数，可以大于 URI 列表长度。后端未提供完整候选统计时，省略 `item_extra_info`，不将展示条数当作聚合总数。返回根 URI 不授予根内容的读取权限。开源引擎默认使用 union：先过滤成员，再分别向全部有效祖先 Item 计分，每组返回自身属性；可显式配置 shadow，此时每条命中只给最近 Item 计分。引擎内部的 `item_uuids` 和 `item_attrs` 均为 `list<string>`，OV API 的 `item_attrs` 仍为字符串 KV 对象。
 
-继承模式是 collection 内 `item_uuids` 字段的统一配置，适用于该 collection 的全部 account；声明和属性继续按 account 隔离。聚合按每条候选输入计数和计算 `max`／`sum`，不按成员 ID 去重。成员证据的选取和顺序由后端决定，不保证跨后端相同。
+继承模式是 collection 内 `item_uuids` 字段的统一配置，适用于该 collection 的全部 account；声明和属性继续按 account 隔离。开源引擎按每条候选输入计数和计算 `max`／`sum`，不按成员 ID 去重；VikingDB 的候选去重、证据选取和顺序由平台执行，不保证跨后端相同。
 
 开源 union 当前将每个 `item_attrs` 条件分别展开成成员范围后组合 AND／OR，因此不同条件可以由不同祖先 Item 分别满足；匹配成员仍向全部有效祖先 UUID 聚合，各组返回自身属性。
 
@@ -135,7 +135,15 @@ HTTP／SDK 响应沿用 `memories`、`resources`、`skills` 和 `total`，不新
 
 Item 模式不加载 `session_id` 对应的会话，不做意图分析、query planning 或 rerank，也不预读目标摘要、概述和正文。引擎返回完整根元数据时，不额外查询 UUID。纯过滤 Item 查询不初始化 embedder；语义查询仍需生成查询向量。成员权限检查和分组查询仍正常执行。
 
-Item 模式只支持 list 结果，不支持 `read_content`、`include_provenance`、事件时间衰减和 `mode="context"`；聚合只支持 `max`、`sum`，也不执行 custom/JEV rerank。当前不支持 `search_type="keywords"` 的 Item 分组，此组合返回 `501 UNIMPLEMENTED`。当前 `VikingDBCollection` 尚未实现 Catalog 和 Item 分组适配。配置的存储后端如果尚未支持这些接口，会返回 `501 UNIMPLEMENTED`，OpenViking 不会在服务层模拟聚合结果。
+Item 模式只支持 list 结果，不支持 `read_content`、`include_provenance`、事件时间衰减和 `mode="context"`；聚合只支持 `max`、`sum`，也不执行 custom/JEV rerank。当前不支持 `search_type="keywords"` 的 Item 分组，此组合返回 `501 UNIMPLEMENTED`。配置的存储后端如果尚未支持这些接口，会返回 `501 UNIMPLEMENTED`，OpenViking 不会在服务层模拟聚合结果。
+
+### VikingDB 接入
+
+`VikingDBCollection` 将 Catalog 声明管理映射到既有记录 API，将语义 Item 检索映射到平台 `group_by`，读取 `result.groups` 中的 `item_id`、`item_score`、`item_uri` 和根自身 `item_attrs`。OV 不直接调用引擎 UDF，也不聚合普通 TopK 结果。按聚合分应用 `score_threshold`，不改变平台组顺序。
+
+需要预建包含 OV 标准字段的 collection：`PartitionBy="account_id"`，`uri` 类型为 `path`，`item_uuids` 为挂载到 `uri` 的 `list<string>`，`item_attrs` 为普通、不继承的 `list<string>`。字段模式不能通过 find／search 按请求切换，也不会由 OV 自动修改旧 collection。声明管理支持 shadow／union；当前平台 `group_by` 协议仅接受 union，shadow 分组及纯过滤 Item 查询返回 `501 UNIMPLEMENTED`。
+
+普通查询不增加 Item 探测或存储请求；分片 collection 的检索和点操作透传 account 的 `partition_by`。无 `item_attrs` 条件时，Item 查询只发一次分组请求，不回查根 UUID、不读取成员正文。带属性条件时，仅查询该 account 的声明，将每个根属性条件转换为有效 UUID 条件，再交给平台过滤和计分；否定条件可能需要读取该 account 的全部声明。平台尚未提供候选总数和截断信息，因此当前不返回 `item_extra_info`，也不请求未使用的成员字段。
 
 ## 检索流程
 

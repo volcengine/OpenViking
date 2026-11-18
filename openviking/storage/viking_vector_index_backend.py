@@ -409,6 +409,11 @@ class _SingleAccountBackend:
             self._mode,
         )
 
+    def _partition_kwargs(self) -> Dict[str, Any]:
+        if getattr(self._adapter, "supports_partition_scope", False) is True:
+            return {"partition_by": self._bound_account_id}
+        return {}
+
     @asynccontextmanager
     async def operation(self):
         """Borrow across every I/O step, including nested backend operations."""
@@ -702,7 +707,9 @@ class _SingleAccountBackend:
 
         if options.partial_update:
             try:
-                existing_records = await self._async_adapter.call("get", [payload["id"]])
+                existing_records = await self._async_adapter.call(
+                    "get", [payload["id"]], **self._partition_kwargs()
+                )
                 if self._bound_account_id:
                     existing_records = [
                         record
@@ -795,7 +802,9 @@ class _SingleAccountBackend:
                 raise ValueError(f"Invalid context_type: {context_type}. Must be one of {allowed}")
 
             payload = await self._async_adapter.run(self._prepare_update_payload, payload)
-            ids = await self._async_adapter.call("update_data", [payload])
+            ids = await self._async_adapter.call(
+                "update_data", [payload], **self._partition_kwargs()
+            )
             normalized_ids = [str(item) for item in (ids or []) if item is not None]
             return UpdateResult(
                 ok=bool(normalized_ids),
@@ -831,7 +840,7 @@ class _SingleAccountBackend:
     @_backend_operation
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
-            records = await self._async_adapter.call("get", ids)
+            records = await self._async_adapter.call("get", ids, **self._partition_kwargs())
             if self._bound_account_id:
                 records = [r for r in records if r.get("account_id") == self._bound_account_id]
             return records
@@ -856,7 +865,7 @@ class _SingleAccountBackend:
     @_backend_operation
     async def get_strict(self, ids: List[str]) -> List[Dict[str, Any]]:
         """Fetch records without converting backend errors to misses."""
-        records = await self._async_adapter.call("get", ids)
+        records = await self._async_adapter.call("get", ids, **self._partition_kwargs())
         if self._bound_account_id:
             records = [r for r in records if r.get("account_id") == self._bound_account_id]
         return records
@@ -875,7 +884,9 @@ class _SingleAccountBackend:
             ids = valid_ids
         if not ids:
             return 0
-        return int(await self._async_adapter.call("delete", ids=ids) or 0)
+        return int(
+            await self._async_adapter.call("delete", ids=ids, **self._partition_kwargs()) or 0
+        )
 
     @_backend_operation
     async def strict_query(
@@ -918,7 +929,7 @@ class _SingleAccountBackend:
                     logger.warning("Attempted to delete records outside bound account")
                 ids = valid_ids
 
-            return await self._async_adapter.call("delete", ids=ids)
+            return await self._async_adapter.call("delete", ids=ids, **self._partition_kwargs())
         except Exception as e:
             logger.debug("Error deleting records: %s", type(e).__name__)
             raise
@@ -927,7 +938,9 @@ class _SingleAccountBackend:
     async def delete_by_filter(self, filter: FilterExpr) -> int:
         """Root-only: 直接通过 filter 删除"""
         try:
-            return await self._async_adapter.call("delete", filter=filter)
+            return await self._async_adapter.call(
+                "delete", filter=filter, **self._partition_kwargs()
+            )
         except Exception as e:
             logger.debug("Error deleting by filter: %s", type(e).__name__)
             raise
@@ -2110,6 +2123,8 @@ class VikingVectorIndexBackend:
             )
         except NotImplementedError as exc:
             raise UnimplementedError(str(exc)) from exc
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
 
     async def search_in_tenant(
         self,

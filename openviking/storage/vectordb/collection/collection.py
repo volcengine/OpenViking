@@ -678,7 +678,7 @@ class Collection:
             raise RuntimeError("Collection is closed")
         return self.__collection.upsert_data(data_list, ttl)
 
-    def update_data(self, data_list: List[Dict[str, Any]]) -> Any:
+    def update_data(self, data_list: List[Dict[str, Any]], **kwargs: Any) -> Any:
         """
         Update existing data in the collection using only explicitly provided fields.
 
@@ -691,9 +691,9 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.update_data(data_list)
+        return self.__collection.update_data(data_list, **kwargs)
 
-    def fetch_data(self, primary_keys: List[Any]) -> List[Dict[str, Any]]:
+    def fetch_data(self, primary_keys: List[Any], **kwargs: Any) -> List[Dict[str, Any]]:
         """
         Retrieve data documents from the collection using their primary keys.
 
@@ -706,9 +706,9 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.fetch_data(primary_keys)
+        return self.__collection.fetch_data(primary_keys, **kwargs)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], **kwargs: Any):
         """
         Delete specific data documents from the collection using their primary keys.
 
@@ -717,7 +717,7 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.delete_data(primary_keys)
+        return self.__collection.delete_data(primary_keys, **kwargs)
 
     def delete_all_data(self):
         """

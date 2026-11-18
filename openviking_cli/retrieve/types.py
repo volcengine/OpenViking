@@ -393,7 +393,8 @@ class FindResult:
         if ctx.item_uuid is not None:
             result["item_uuid"] = ctx.item_uuid
             result["item_attrs"] = ctx.item_attrs or {}
-            result["item_extra_info"] = ctx.item_extra_info or {}
+            if ctx.item_extra_info is not None:
+                result["item_extra_info"] = ctx.item_extra_info
         return result
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:

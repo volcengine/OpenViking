@@ -215,27 +215,21 @@ class _SemanticMixin:
         if not isinstance(groups, list) or not groups:
             return FindResult(memories=[], resources=[], skills=[])
 
-        # New engines return each group's own root and attributes. Only legacy
-        # responses need a UUID lookup; never read or merge ancestor attributes.
-        legacy_uuids = [
-            str(group["entity_id"])
+        if any(
+            not isinstance(group, dict)
+            or not group.get("entity_id")
+            or not group.get("entity_uri")
+            or "entity_attrs" not in group
+            or "entity_score" not in group
             for group in groups
-            if not group.get("entity_uri") or "entity_attrs" not in group
-        ]
-        by_uuid = {}
-        if legacy_uuids:
-            declarations = await proxy.catalog_execute(
-                {"op": "query_items", "item_uuids": legacy_uuids}
+        ):
+            raise RuntimeError(
+                "Item groups must include identity, score, root URI and own attributes"
             )
-            by_uuid = {str(row.get("item_uuid")): row for row in declarations.get("data", [])}
-        missing = [item_uuid for item_uuid in legacy_uuids if item_uuid not in by_uuid]
-        if missing:
-            raise RuntimeError(f"Item declaration roots are missing for {len(missing)} groups")
 
         root_uris = []
         for group in groups:
-            item_uuid = str(group["entity_id"])
-            root_uri = str(group.get("entity_uri") or by_uuid[item_uuid]["uri"])
+            root_uri = str(group["entity_uri"])
             if root_uri.startswith("/"):
                 root_uri = "viking://" + root_uri.lstrip("/")
             root_uris.append(root_uri)
@@ -254,25 +248,26 @@ class _SemanticMixin:
             candidate_uris = [
                 uri for uri in group.get("candidate_members_uri", []) if isinstance(uri, str)
             ]
-            count = int(
-                group.get("candidate_members_count", group.get("count", len(candidate_uris)))
-            )
-            truncated = bool(
-                group.get("candidate_members_truncated", group.get("labels_truncated", False))
-            )
-            if count < len(candidate_uris) or (not truncated and count != len(candidate_uris)):
-                raise RuntimeError("Item group candidate count does not match its URI list")
-            extra_info = {
-                "candidate_members_count": count,
-                "candidate_members_uri": candidate_uris,
-            }
-            if truncated:
-                extra_info["candidate_members_truncated"] = True
-            attrs = (
-                group["entity_attrs"]
-                if "entity_attrs" in group
-                else by_uuid[item_uuid].get("item_attrs")
-            )
+            extra_info = None
+            count = group.get("candidate_members_count", group.get("count"))
+            if count is not None:
+                truncated = group.get(
+                    "candidate_members_truncated", group.get("labels_truncated", False)
+                )
+                if (
+                    type(count) is not int
+                    or type(truncated) is not bool
+                    or count < len(candidate_uris)
+                    or (not truncated and count != len(candidate_uris))
+                ):
+                    raise RuntimeError("Item group candidate count does not match its URI list")
+                extra_info = {
+                    "candidate_members_count": count,
+                    "candidate_members_uri": candidate_uris,
+                }
+                if truncated:
+                    extra_info["candidate_members_truncated"] = True
+            attrs = group["entity_attrs"]
             # Classify the declaration root, never a representative member.
             # Root metadata needs no summary/content read or model invocation.
             context_type = ContextType(context_type_for_uri(root_uri))

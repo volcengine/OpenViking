@@ -3,7 +3,6 @@
 """Native Catalog and local Item grouping contract tests."""
 
 import gc
-import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -11,7 +10,8 @@ import pytest
 
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, TimeRange
-from openviking.storage.vectordb.engine import CatalogEngine, PersistStore
+from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
+from openviking.storage.vectordb.engine import CatalogEngine
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 
 
@@ -29,7 +29,7 @@ def nodes(engine, *uris, scope="a"):
 
 
 def declare(engine, uri, item_uuid, attrs=None, *, scope="a", include_attrs=True):
-    request = {"uri": uri, "item_uuid": item_uuid}
+    request = {"uri": uri, "item_uuids": [item_uuid]}
     if include_attrs:
         request["item_attrs"] = list(attrs or [])
     return call(engine, "declare_item", scope=scope, **request)
@@ -38,6 +38,7 @@ def declare(engine, uri, item_uuid, attrs=None, *, scope="a", include_attrs=True
 def test_declaration_is_shadowed_but_item_attrs_do_not_inherit():
     engine = CatalogEngine()
     assert call(engine, "capabilities")["enabled"] is False
+    call(engine, "configure", item_identity_mode="shadow")
     nodes(
         engine,
         "/resources/A",
@@ -98,6 +99,7 @@ def test_declaration_retries_reuse_uuid_and_attributes_are_immutable():
 def test_list_identity_protocol_and_persisted_union_mode(tmp_path):
     path = str(tmp_path / "union-catalog")
     engine = CatalogEngine(path)
+    assert call(engine, "capabilities")["item_identity_mode"] == "union"
     nodes(engine, "/resources/A/B", "/resources/elsewhere")
     call(
         engine, "declare_item", uri="/resources/A", item_uuids=["uuid-a"], item_attrs=["project=A"]
@@ -108,6 +110,11 @@ def test_list_identity_protocol_and_persisted_union_mode(tmp_path):
     assert declared["item_uuids"] == ["uuid-b"]
     with pytest.raises(ValueError, match="one item_uuids"):
         call(engine, "declare_item", uri="/resources/elsewhere", item_uuids=["x", "y"])
+    assert call(engine, "resolve", uris=["/resources/A/B/hit"])["data"][0]["item_uuids"] == [
+        "uuid-b",
+        "uuid-a",
+    ]
+    call(engine, "configure", item_identity_mode="shadow")
     assert call(engine, "resolve", uris=["/resources/A/B/hit"])["data"][0]["item_uuids"] == [
         "uuid-b"
     ]
@@ -139,6 +146,7 @@ def test_list_identity_protocol_and_persisted_union_mode(tmp_path):
 
 def test_shadow_filter_frontier_handles_prefix_siblings_and_deep_items():
     engine = CatalogEngine()
+    call(engine, "configure", item_identity_mode="shadow")
     nodes(engine, "/resources/A/B/C", "/resources/A-sibling")
     declare(engine, "/resources/A", "a", ["kind=asset"])
     declare(engine, "/resources/A-sibling", "sibling", ["kind=other"])
@@ -156,6 +164,7 @@ def test_shadow_filter_frontier_handles_prefix_siblings_and_deep_items():
 def test_identity_mode_is_collection_wide_but_declarations_and_revisions_are_scoped(tmp_path):
     path = str(tmp_path / "collection-mode")
     engine = CatalogEngine(path)
+    call(engine, "configure", item_identity_mode="shadow")
     for scope in ("a", "b"):
         nodes(engine, "/resources/A/B", scope=scope)
         declare(engine, "/resources/A", "parent", [f"account={scope}"], scope=scope)
@@ -201,55 +210,38 @@ def test_identity_mode_is_collection_wide_but_declarations_and_revisions_are_sco
         assert resolve(scope)["data"][0]["item_uuids"] == ["child"]
 
 
-@pytest.mark.parametrize("second_mode", ["union", "shadow", None])
-def test_legacy_modes_require_explicit_resolution_only_when_in_conflict(tmp_path, second_mode):
-    path = str(tmp_path / "legacy-mode")
-    rows = {"@catalog": {}, "@mode\0a": {"item_identity_mode": "union"}}
-    for scope in ("a", "b"):
-        rows[f"{scope}\0/resources/A"] = {
-            "uri": "/resources/A",
-            "node_type": "dir",
-            "item_uuids": [f"{scope}-parent"],
-            "item_attrs": [],
-        }
-    if second_mode is not None:
-        rows["@mode\0b"] = {"item_identity_mode": second_mode}
-    store = PersistStore(path)
-    assert store.put_data(list(rows), [json.dumps(row).encode() for row in rows.values()]) == 0
-    del store
+def test_new_catalog_persists_union_without_enabling_declarations(tmp_path):
+    path = str(tmp_path / "new-default")
+    engine = CatalogEngine(path)
+    assert call(engine, "capabilities")["enabled"] is False
+    assert call(engine, "capabilities")["item_identity_mode"] == "union"
+    del engine
     gc.collect()
+    engine = CatalogEngine(path)
+    assert call(engine, "capabilities")["enabled"] is False
+    assert call(engine, "capabilities")["item_identity_mode"] == "union"
 
-    engine = CatalogEngine(path)
-    if second_mode == "union":
-        for scope in ("a", "b", "new-account"):
-            assert call(engine, "capabilities", scope=scope)["item_identity_mode"] == "union"
-        revision = call(engine, "resolve", uris=["/resources/A/hit"])["revision"]
-        call(engine, "configure")  # Persist the shared mode without changing semantics.
-        assert call(engine, "resolve", uris=["/resources/A/hit"])["revision"] == revision
-    else:
-        assert call(engine, "capabilities")["configuration_required"] is True
-        for op, kwargs in [
-            ("resolve", {"uris": ["/resources/A/hit"]}),
-            ("compile_filter", {"filter": {"op": "and", "conds": []}}),
-            ("upsert_nodes", {"nodes": [{"uri": "/new", "node_type": "dir"}]}),
-            ("configure", {}),
-        ]:
-            with pytest.raises(ValueError, match="explicit collection-wide configure"):
-                call(engine, op, **kwargs)
-        call(engine, "configure", scope="b", item_identity_mode="union")
-    del engine
-    gc.collect()
-    engine = CatalogEngine(path)
-    for scope in ("a", "b", "new-account"):
-        assert call(engine, "capabilities", scope=scope)["item_identity_mode"] == "union"
-    for scope in ("a", "b"):
-        assert call(engine, "resolve", scope=scope, uris=["/resources/A/hit"])["data"][0][
-            "item_uuids"
-        ] == [f"{scope}-parent"]
-    del engine
-    gc.collect()
-    store = PersistStore(path)
-    assert store.get_data(["@mode\0a", "@mode\0b"]) == [b"", b""]
+
+def test_collection_default_union_survives_reload_before_activation(tmp_path):
+    path = tmp_path / "collection"
+    collection = get_or_create_local_collection(
+        CollectionSchemas.context_collection("context", 4), str(path)
+    )
+    collection.close()
+    collection = get_or_create_local_collection(path=str(path))
+    caps = collection.catalog_execute({"op": "capabilities", "scope": "a"})
+    assert caps["enabled"] is False
+    assert caps["item_identity_mode"] == "union"
+    assert not (path / "catalog").exists()
+    collection.catalog_execute({"op": "upsert_nodes", "scope": "a", "nodes": []})
+    collection.catalog_execute({"op": "configure", "scope": "a", "item_identity_mode": "shadow"})
+    collection.close()
+    collection = get_or_create_local_collection(path=str(path))
+    assert (
+        collection.catalog_execute({"op": "capabilities", "scope": "a"})["item_identity_mode"]
+        == "shadow"
+    )
+    collection.close()
 
 
 @pytest.mark.parametrize("mode", ["shadow", "union"])
@@ -321,6 +313,7 @@ def test_group_evidence_budget_does_not_truncate_scores_or_counts():
 
 def test_item_attrs_filter_uses_each_item_roots_own_values():
     engine = CatalogEngine()
+    call(engine, "configure", item_identity_mode="shadow")
     nodes(
         engine,
         "/resources/A",
@@ -425,6 +418,7 @@ def test_persistence_delete_and_account_scoped_revisions(tmp_path):
 
 def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
     engine = CatalogEngine()
+    call(engine, "configure", item_identity_mode="shadow")
     nodes(
         engine,
         "/resources/A",
@@ -579,7 +573,7 @@ def declare_adapter_item(adapter, uri, item_uuid, attrs):
             "op": "declare_item",
             "scope": "a",
             "uri": uri,
-            "item_uuid": item_uuid,
+            "item_uuids": [item_uuid],
             "item_attrs": attrs,
         }
     )
@@ -965,18 +959,14 @@ def test_item_root_type_is_validated_before_a_resource_replacement():
     declare(engine, "/resources/A", "stable")
     with pytest.raises(ValueError, match="Cannot change an Item root node type"):
         call(engine, "validate_resource_update", uri="/resources/A", node_type="file")
-    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuids"] == [
-        "stable"
-    ]
+    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuids"] == ["stable"]
 
 
 def test_resource_catalog_reset_preserves_declaration_and_rejects_independent_children():
     engine = CatalogEngine()
     nodes(engine, "/resources/A")
     declared = declare(engine, "/resources/A", "stable", ["kind=asset"])
-    call(
-        engine, "upsert_nodes", nodes=[{"uri": "/resources/A/swap", "node_type": "file"}]
-    )
+    call(engine, "upsert_nodes", nodes=[{"uri": "/resources/A/swap", "node_type": "file"}])
     reset = call(engine, "delete_subtree", uri="/resources/A", preserve_item_root=True)
     assert reset["revision"] == declared["revision"]
     nodes(engine, "/resources/A/swap/inner")  # The old file type no longer conflicts.
@@ -986,31 +976,10 @@ def test_resource_catalog_reset_preserves_declaration_and_rejects_independent_ch
     declare(engine, "/resources/A/swap", "independent")
     with pytest.raises(ValueError, match="independent child Items"):
         call(engine, "delete_subtree", uri="/resources/A", preserve_item_root=True)
-    assert call(engine, "resolve", uris=["/resources/A/swap/inner"])["data"][0][
-        "item_uuids"
-    ] == ["independent"]
-
-
-def test_resource_catalog_reset_checks_backend_capability_before_deletion(adapter, monkeypatch):
-    root = "viking://resources/item"
-    declare_adapter_item(adapter, root, "stable", [])
-    collection = adapter.get_collection()
-    execute = collection.catalog_execute
-
-    def old_capabilities(request):
-        response = execute(request)
-        if request["op"] == "capabilities":
-            response.pop("preserve_item_root", None)
-        return response
-
-    monkeypatch.setattr(collection, "catalog_execute", old_capabilities)
-    with pytest.raises(ValueError, match="engine upgrade required"):
-        adapter.catalog_execute(
-            {"op": "delete_subtree", "scope": "a", "uri": root, "preserve_item_root": True}
-        )
-    assert adapter.catalog_execute({"op": "query_items", "scope": "a", "item_uuids": ["stable"]})[
-        "data"
-    ][0]["uri"] == root
+    assert call(engine, "resolve", uris=["/resources/A/swap/inner"])["data"][0]["item_uuids"] == [
+        "independent",
+        "stable",
+    ]
 
 
 def test_uuid_collision_and_concurrent_declaration_replays_are_atomic(tmp_path):

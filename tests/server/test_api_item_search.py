@@ -389,9 +389,9 @@ async def test_add_resource_rejects_attrs_when_as_item_is_false(service, sample_
 
 
 @pytest.mark.parametrize("endpoint", ["find", "search"])
-@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize(("empty", "statistics"), [(False, True), (False, False), (True, True)])
 async def test_item_groups_reuse_classified_results_without_content_reads(
-    client, service, monkeypatch, endpoint, empty
+    client, service, monkeypatch, endpoint, empty, statistics
 ):
     roots = [
         "/user/test_user/memories/entities/M",
@@ -411,6 +411,10 @@ async def test_item_groups_reuse_classified_results_without_content_reads(
         }
         for i, root in enumerate(roots)
     ]
+    if not statistics:
+        for group in groups:
+            group.pop("candidate_members_count")
+            group.pop("candidate_members_truncated")
 
     async def ordered_groups(_ctx, **kwargs):
         return {"groups": [] if empty else groups[: kwargs["limit"]]}
@@ -456,11 +460,16 @@ async def test_item_groups_reuse_classified_results_without_content_reads(
                 assert item["score"] == 4.0 - i
                 assert item["level"] == 0 and item["abstract"] == ""
                 assert item["item_attrs"] == {"name": str(i)}
-                assert item["item_extra_info"] == {
-                    "candidate_members_count": 7,
-                    "candidate_members_uri": ["viking://" + roots[i].lstrip("/") + "/member.md"],
-                    "candidate_members_truncated": True,
-                }
+                if statistics:
+                    assert item["item_extra_info"] == {
+                        "candidate_members_count": 7,
+                        "candidate_members_uri": [
+                            "viking://" + roots[i].lstrip("/") + "/member.md"
+                        ],
+                        "candidate_members_truncated": True,
+                    }
+                else:
+                    assert "item_extra_info" not in item
                 assert "item_score" not in item
         assert grouping.await_args.kwargs["limit"] == limit
     assert grouping.await_count == 2

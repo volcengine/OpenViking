@@ -53,7 +53,7 @@ def declare(adapter, uri, uuid, attrs=None):
             "op": "declare_item",
             "scope": "a",
             "uri": uri,
-            "item_uuid": uuid,
+            "item_uuids": [uuid],
             "item_attrs": attrs or [],
         }
     )

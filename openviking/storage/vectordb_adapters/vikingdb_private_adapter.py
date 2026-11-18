@@ -25,6 +25,7 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
     _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
     USE_CONTENT_FIELD = True
     enable_path_glob = True
+    supports_partition_scope = True
 
     def __init__(
         self,
@@ -80,6 +81,7 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
                 host=self._host,
                 headers=self._headers,
                 meta_data=meta,
+                index_name=self._index_name,
             )
         )
 
@@ -126,9 +128,11 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return super()._normalize_record_for_read(record)
 
-    def update_data(self, data_list: List[Dict[str, Any]]):
+    def update_data(self, data_list: List[Dict[str, Any]], *, partition_by: str | None = None):
         data_list = [self._normalize_record_for_write(item) for item in data_list]
-        result = self.get_collection().update_data(data_list)
+        result = self.get_collection().update_data(
+            data_list, **({"partition_by": partition_by} if partition_by is not None else {})
+        )
         if isinstance(result, dict):
             for key in ("primary_keys", "ids"):
                 values = result.get(key)

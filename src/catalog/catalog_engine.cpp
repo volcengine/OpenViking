@@ -59,8 +59,7 @@ class CatalogEngine::Impl {
   uint64_t revision_ = 0;
   uint64_t mode_revision_ = 0;
   std::map<std::string, uint64_t> scope_revisions_;
-  bool collection_union_mode_ = false;
-  bool legacy_mode_conflict_ = false;
+  bool collection_union_mode_ = true;
 
   ResolvedItem resolve_item(const std::string& scope,
                             const std::string& uri) const;
@@ -253,29 +252,6 @@ CatalogEngine::Impl::Impl(const std::string& path) {
     collection_union_mode_ = read_mode(config->second);
     return;
   }
-  // Read draft per-account configuration without silently changing semantics.
-  // Existing accounts with no explicit configuration used shadow.
-  const auto legacy_prefix = key("@mode", "");
-  std::map<std::string, bool> legacy_modes;
-  std::set<std::string> scopes;
-  for (const auto& entry : nodes_) {
-    if (entry.first.rfind(legacy_prefix, 0) == 0) {
-      legacy_modes[entry.first.substr(legacy_prefix.size())] = read_mode(entry.second);
-    } else {
-      const auto separator = entry.first.find('\0');
-      if (separator != std::string::npos && separator + 1 < entry.first.size() &&
-          entry.first[separator + 1] == '/') {
-        scopes.insert(entry.first.substr(0, separator));
-      }
-    }
-  }
-  std::set<bool> modes;
-  for (const auto& entry : legacy_modes) modes.insert(entry.second);
-  for (const auto& scope : scopes) {
-    if (legacy_modes.count(scope) == 0) modes.insert(false);
-  }
-  legacy_mode_conflict_ = modes.size() > 1;
-  collection_union_mode_ = modes.count(true) != 0;
 }
 
 void CatalogEngine::Impl::commit(
@@ -332,9 +308,6 @@ void CatalogEngine::Impl::index_node(const std::string& node_key,
       throw std::invalid_argument("An Item root must declare one item_uuids string");
     }
     uuid.assign(ids[0].GetString(), ids[0].GetStringLength());
-  } else if (node.HasMember("item_uuid")) {
-    // Read collections created by the first implementation without a rebuild.
-    uuid = required_string(node, "item_uuid");
   } else {
     return;
   }
@@ -357,10 +330,6 @@ void CatalogEngine::Impl::index_node(const std::string& node_key,
 }
 
 bool CatalogEngine::Impl::union_mode() const {
-  if (legacy_mode_conflict_) {
-    throw std::invalid_argument(
-        "Conflicting legacy Item modes require explicit collection-wide configure");
-  }
   return collection_union_mode_;
 }
 
@@ -620,7 +589,6 @@ std::string CatalogEngine::Impl::aggregate_filter(
     throw std::invalid_argument("Catalog requires filter");
   }
   std::lock_guard<std::mutex> guard(mutex_);
-  union_mode();  // Reject ambiguous legacy configuration even for empty scans.
   JsonDoc result(rapidjson::kObjectType);
   auto& allocator = result.GetAllocator();
   JsonDoc dsl(rapidjson::kObjectType);
@@ -690,18 +658,13 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
   const auto op = required_string(req, "op");
   const auto scope = required_string(req, "scope");
   std::lock_guard<std::mutex> guard(mutex_);
-  if (op != "configure" && op != "capabilities") union_mode();
   JsonDoc result(rapidjson::kObjectType);
   auto& allocator = result.GetAllocator();
 
   if (op == "capabilities") {
     result.AddMember("enabled", nodes_.count("@catalog") != 0, allocator);
     result.AddMember("version", 1, allocator);
-    if (legacy_mode_conflict_) {
-      result.AddMember("configuration_required", true, allocator);
-    } else {
-      put_string(result, "item_identity_mode", union_mode() ? "union" : "shadow", allocator);
-    }
+    put_string(result, "item_identity_mode", union_mode() ? "union" : "shadow", allocator);
     JsonValue modes(rapidjson::kArrayType);
     modes.PushBack("shadow", allocator).PushBack("union", allocator);
     result.AddMember("item_identity_modes", modes, allocator);
@@ -727,16 +690,9 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     if (nodes_.count(kIdentityModeKey) == 0 || nodes_.at(kIdentityModeKey) != encoded) {
       updates[kIdentityModeKey] = encoded;
     }
-    const auto legacy_prefix = key("@mode", "");
-    std::vector<std::string> deletes;
-    for (auto it = nodes_.lower_bound(legacy_prefix);
-         it != nodes_.end() && it->first.rfind(legacy_prefix, 0) == 0; ++it) {
-      deletes.push_back(it->first);
-    }
-    const bool changed = legacy_mode_conflict_ || accumulate != collection_union_mode_;
-    if (!updates.empty() || !deletes.empty()) commit(updates, deletes);
+    const bool changed = accumulate != collection_union_mode_;
+    if (!updates.empty()) commit(updates);
     collection_union_mode_ = accumulate;
-    legacy_mode_conflict_ = false;
     if (changed) {
       // The same field configuration affects every account in the collection.
       mode_revision_ = ++revision_;
@@ -814,18 +770,15 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
   } else if (op == "declare_item") {
     const auto uri = canonical(required_string(req, "uri"));
     std::string generated_uuid;
-    if (req.HasMember("item_uuids")) {
-      const auto& ids = req["item_uuids"];
-      if (!ids.IsArray() || ids.Size() != 1 || !ids[0].IsString() ||
-          ids[0].GetStringLength() == 0) {
-        throw std::invalid_argument("An Item root must declare one item_uuids string");
-      }
-      generated_uuid.assign(ids[0].GetString(), ids[0].GetStringLength());
-      if (generated_uuid.find('\0') != std::string::npos) {
-        throw std::invalid_argument("item_uuids cannot contain NUL");
-      }
-    } else {
-      generated_uuid = required_string(req, "item_uuid");
+    if (!req.HasMember("item_uuids") || !req["item_uuids"].IsArray() ||
+        req["item_uuids"].Size() != 1 || !req["item_uuids"][0].IsString() ||
+        req["item_uuids"][0].GetStringLength() == 0) {
+      throw std::invalid_argument("An Item root must declare one item_uuids string");
+    }
+    const auto& id = req["item_uuids"][0];
+    generated_uuid.assign(id.GetString(), id.GetStringLength());
+    if (generated_uuid.find('\0') != std::string::npos) {
+      throw std::invalid_argument("item_uuids cannot contain NUL");
     }
     const auto found = nodes_.find(key(scope, uri));
     if (found == nodes_.end()) {

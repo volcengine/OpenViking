@@ -1123,8 +1123,9 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
                 item.update(
                     item_uuid=item_uuid,
                     item_attrs=m.item_attrs or {},
-                    item_extra_info=m.item_extra_info or {},
                 )
+                if m.item_extra_info is not None:
+                    item["item_extra_info"] = m.item_extra_info
             # Several files of one skill package can match; keep the best-scored hit.
             previous = seen.get(uri)
             if previous is not None:
@@ -1162,7 +1163,11 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         score = f"score {item['score']:g}" if "item_uuid" in item else f"{item['score'] * 100:.0f}%"
         line = f"- [{item['type']} {score}] {uri}{tag_suffix}\n    {abstract}"
         if "item_uuid" in item:
-            metadata = {key: item[key] for key in ("item_uuid", "item_attrs", "item_extra_info")}
+            metadata = {
+                key: item[key]
+                for key in ("item_uuid", "item_attrs", "item_extra_info")
+                if key in item
+            }
             line += "\n    " + json.dumps(metadata, ensure_ascii=False)
         origin_score = item["origin_score"]
         time_score = item["time_score"]
