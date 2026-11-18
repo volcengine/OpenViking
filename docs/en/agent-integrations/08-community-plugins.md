@@ -85,9 +85,9 @@ Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tr
 
 The Antigravity integration serves the Antigravity desktop app and the `agy` CLI, which load the same plugins from `~/.gemini/config/plugins/`:
 
-- **SessionStart** injects the user profile.
+- **SessionStart** injects the user profile and sweeps other sessions idle for more than 30 minutes in a detached worker.
 - **PreInvocation** recalls relevant memories on the first model call of each turn. Antigravity runs this hook before every model call, so later calls in a tool loop skip recall.
-- **Stop** captures the finished steps of the conversation transcript in a detached worker, then commits the OpenViking session.
+- **Stop** captures the finished steps of user conversations in a detached worker, then commits once `OPENVIKING_COMMIT_TURN_THRESHOLD` captured messages have accumulated (holding mid-turn `fullyIdle: false` yields until the turn finishes, up to twice the threshold). Subagent transcripts without a `USER_EXPLICIT` turn are not captured.
 
 Antigravity hooks use their own `hooks.json` format: each top-level key names a hook, and context is returned as `injectSteps` system messages. A Claude Code `hooks.json` therefore cannot be reused.
 
