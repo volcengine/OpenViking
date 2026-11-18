@@ -15,6 +15,7 @@ import {
   makeAgentFetchJSON,
   resolveNativeSessionId,
   runHookStage,
+  withAgentHookLock,
 } from "./lib/agent-hook-runtime.mjs";
 
 test("disabled Claude Code and Codex hooks make no requests or session writes", async (t) => {
@@ -473,4 +474,34 @@ test("captured messages carry the effective peer in the body, and none when peer
     ],
     [{ role: "user", content: "c" }],
   ]);
+});
+
+test("the session lock waits as long as asked, takes over a stale one, and a heartbeat keeps it fresh", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-hook-lock-"));
+  const saved = process.env.OPENVIKING_HOOK_STATE_DIR;
+  process.env.OPENVIKING_HOOK_STATE_DIR = dir;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  try {
+    let release;
+    const held = withAgentHookLock("test", "s", () => new Promise((resolve) => { release = resolve; }), {
+      staleMs: 300,
+      heartbeatMs: 50,
+    });
+    await sleep(20);
+    // Held past staleMs, but the heartbeat keeps it from looking stale.
+    assert.equal(await withAgentHookLock("test", "s", () => "second", { waitMs: 600, staleMs: 300 }), null);
+    // A waiter that outlasts the holder gets the lock.
+    setTimeout(() => release("first"), 200);
+    assert.equal(await withAgentHookLock("test", "s", () => "after", { waitMs: 2000 }), "after");
+    assert.equal(await held, "first");
+
+    // A holder that stopped touching its lock is taken over.
+    mkdirSync(join(dir, "test", "t.json.lock"), { recursive: true });
+    await sleep(150);
+    assert.equal(await withAgentHookLock("test", "t", () => "taken", { waitMs: 1000, staleMs: 100 }), "taken");
+  } finally {
+    if (saved === undefined) delete process.env.OPENVIKING_HOOK_STATE_DIR;
+    else process.env.OPENVIKING_HOOK_STATE_DIR = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

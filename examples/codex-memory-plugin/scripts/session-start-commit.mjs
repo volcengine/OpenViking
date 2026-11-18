@@ -3,13 +3,16 @@
 /**
  * SessionStart hook for Codex.
  *
- * Triggers (matcher = "clear|startup|resume" in hooks.json):
+ * Triggers (matcher = "clear|startup|resume|compact" in hooks.json):
  *   - source=startup → fresh codex CLI / `/new` / zouk daemon spawn-without-sessionId
  *   - source=clear   → `/clear` (orphans the current process's previous session)
  *   - source=resume  → `/resume` or short reconnect (no commit/sweep;
  *     may inject latest archive summary if the live OV session was already committed)
+ *   - source=compact → after Codex compacted the thread: only the session-history
+ *     pointer (OPENVIKING_SESSION_HISTORY_POINTER=0 turns it off), no state or
+ *     server work
  *
- * Every source injects the shared OpenViking profile block unless
+ * Every other source injects the shared OpenViking profile block unless
  * OPENVIKING_NO_AUTO_INJECT=1. The block contains profile.md plus
  * abstract-annotated indexes of preferences/ and entities/, capped by
  * OPENVIKING_PROFILE_TOKEN_BUDGET with the shared CJK-aware estimator.
@@ -64,6 +67,7 @@ import {
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { replayPending } from "./shared/pending-queue.mjs";
 import { buildProfileBlock, isRepeatInjection, truncateToBytes } from "./shared/profile-inject.mjs";
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 let cfg = loadConfig();
@@ -337,6 +341,13 @@ runHookStage({
   cfg = stage.cfg;
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
+  // PreCompact already committed; a Stop worker may still be writing the state
+  // file, so this source leaves it alone.
+  if (source === "compact") {
+    log("start", { source, newSessionId, bypassed });
+    if (bypassed || !cfg.sessionHistoryPointer || !cfg.autoCapture || newSessionId === "unknown") return;
+    return { contexts: [formatSessionHistoryPointer(deriveOvSessionId(newSessionId))] };
+  }
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   activePeerId = effectivePeer.peerId;
   if (!bypassed && newSessionId !== "unknown") {
