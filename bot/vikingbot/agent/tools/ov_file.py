@@ -755,8 +755,10 @@ class VikingGrepTool(OVFileTool):
     @property
     def description(self) -> str:
         return (
-            "Search Viking resources using a regex pattern (like grep)."
-            "Result: Only URIs and summaries are included here. To view the full content, use openviking_multi_read tool."
+            "Search Viking resources using a regex pattern (like grep). "
+            "Returns matching lines and URIs, with at most limit matches per scope (default: 10). "
+            "If the limit is reached, more matches may exist; increase limit or narrow the "
+            "scope/pattern. Use openviking_multi_read for full content. "
             "Avoid duplicate calls with the same intent in the same turn."
         )
 
@@ -774,6 +776,12 @@ class VikingGrepTool(OVFileTool):
                     "type": "string",
                     "description": "Rust regex syntax supports literals, character classes, groups, alternation, quantifiers and anchors, but not lookahead, lookbehind or backreferences.",
                 },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum matching lines per search scope; increase if results are capped.",
+                    "minimum": 1,
+                    "default": 10,
+                },
                 "case_insensitive": {
                     "type": "boolean",
                     "description": "Case-insensitive search",
@@ -789,12 +797,14 @@ class VikingGrepTool(OVFileTool):
         pattern: str,
         uri: str = "viking://",
         case_insensitive: bool = False,
+        limit: int = 10,
         **kwargs: Any,
     ) -> str:
         client = None
         try:
             client = await self._get_client(tool_context)
             matches = []
+            capped_scopes = []
             target_uris = self._fs_retrieval_uris(client, tool_context, uri)
             for target_uri in target_uris:
                 try:
@@ -802,6 +812,7 @@ class VikingGrepTool(OVFileTool):
                         target_uri,
                         pattern,
                         case_insensitive=case_insensitive,
+                        node_limit=limit,
                     )
                 except Exception as exc:
                     if len(target_uris) == 1:
@@ -809,9 +820,12 @@ class VikingGrepTool(OVFileTool):
                     logger.debug(f"Skip OpenViking grep target {target_uri}: {exc}")
                     continue
                 if isinstance(result, dict):
-                    matches.extend(result.get("matches", []))
+                    scope_matches = result.get("matches", [])
                 else:
-                    matches.extend(getattr(result, "matches", []))
+                    scope_matches = getattr(result, "matches", [])
+                matches.extend(scope_matches)
+                if len(scope_matches) >= limit:
+                    capped_scopes.append(target_uri)
 
             if not matches:
                 return f"No matches found for pattern: '{pattern}'"
@@ -843,6 +857,12 @@ class VikingGrepTool(OVFileTool):
                     result_lines.append(f"   Line {line}:")
                     result_lines.append(f"   {content}")
 
+            if capped_scopes:
+                result_lines.append(
+                    f"\nResult limit reached ({limit} matches per scope); more matches may exist. "
+                    "Increase limit or narrow the scope/pattern. "
+                    f"Capped scopes: {', '.join(capped_scopes)}"
+                )
             return "\n".join(result_lines)
         except Exception as e:
             return f"Error searching Viking with grep: {str(e)}"
