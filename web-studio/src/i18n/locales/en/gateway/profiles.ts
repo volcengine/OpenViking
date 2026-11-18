@@ -80,10 +80,15 @@ const profiles = {
       description:
         'Give the model your OpenViking profile when a conversation starts. This works independently of memory recall.',
     },
+    soul: {
+      label: 'Soul at conversation start',
+      description:
+        'Give the model your soul.md, the standing instructions you keep in OpenViking, when a conversation starts. The model is told to follow it. It is added whole and does not count against the opening context budget.',
+    },
     profileMaxTokens: {
       label: 'Opening context budget',
       description:
-        'Limit the profile and memory and skill catalogs provided at the start. Catalogs require the read tool. This budget is separate from recall; 0 omits all three.',
+        'Limit the profile and memory and skill catalogs provided at the start. Catalogs require the read tool. This budget is separate from recall; 0 omits all three. The soul is not counted.',
     },
     showRecall: {
       label: 'Show recall summary',

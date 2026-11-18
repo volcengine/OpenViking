@@ -45,7 +45,8 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 | Setting | Default | What it controls |
 | --- | --- | --- |
 | **User profile at conversation start** | On | Gives the model your OpenViking user profile when a conversation starts. |
-| **Opening context budget** | 4,000 tokens | The most the profile and the memory and skill catalogs may use at the start. |
+| **Soul at conversation start** | On | Gives the model your `soul.md`, the standing instructions you keep in OpenViking, when a conversation starts, and tells the model to follow it. The soul is added whole. |
+| **Opening context budget** | 4,000 tokens | The most the profile and the memory and skill catalogs may use at the start. The soul is not counted. |
 | **Show recall summary** | Off | Starts the reply with a one-line summary; see [Recall summary](#recall-summary). |
 | **Sources** | Memories, resources, skills | What recall searches. |
 | **Budget per message** | 1,600 tokens | The most memory added to one message. |
@@ -58,7 +59,7 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 
 How the settings work together:
 
-- **Opening context.** **User profile at conversation start** works independently of recall. When the OpenViking `read` tool (`openviking_read`) is offered, memory and skill catalogs are added at the start as well. Skills get at most a quarter of the **Opening context budget**, and 0 leaves all of it out. This budget does not count against the recall budget; see [The opening context](01-how-it-works.md#the-opening-context).
+- **Opening context.** **User profile at conversation start** and **Soul at conversation start** work independently of recall and of each other. When the OpenViking `read` tool (`openviking_read`) is offered, memory and skill catalogs are added at the start as well. Skills get at most a quarter of the **Opening context budget**, and 0 leaves the profile and catalogs out. The soul is added whole and is not counted against the budget; only its own switch leaves it out. This budget does not count against the recall budget; see [The opening context](01-how-it-works.md#the-opening-context).
 - **What is added.** OpenViking selects and formats the recalled content within the budget. It may also return just a URI for the model to read later.
 - **Search query.** The query is the user message with client noise removed, cut to **Query length** characters. Messages shorter than 3 characters are not searched.
 - **Budgets.** Each message gets at most the smaller of **Budget per message** and what is left of **Budget per context window**. With less than 64 tokens left, the search is skipped. The budget per context window starts over whenever the conversation is compacted, by the gateway or by the client. These token counts are conservative estimates, not the provider's billing counts.
@@ -72,11 +73,11 @@ How the settings work together:
 The recall summary is a short note at the start of the reply that names what OpenViking added to a new user message, or says why recall failed. It is off by default; turn on **Show recall summary** in the **Recall memory** section of the [context profile](#context-profiles). The model never sees it. For example:
 
 ```text
-> OpenViking context: user profile, memory index, skill list, earlier sessions
+> OpenViking context: soul, user profile, memory index, skill list, earlier sessions
 > OpenViking recall: 4 items (3 memories, 1 resource) — booking_duplicate_handling, user_lang_pref, +2 more
 ```
 
-- The `context` line appears only in the first reply of a conversation. It lists what the opening actually contained: the user profile, the memory catalog, the skill catalog, and where earlier parts of the conversation are stored in OpenViking.
+- The `context` line appears only in the first reply of a conversation. It lists what the opening actually contained: the soul, the user profile, the memory catalog, the skill catalog, and where earlier parts of the conversation are stored in OpenViking.
 - The `recall` line counts the recalled entries by kind and names up to three. If the search fails, it gives the reason instead, for example `> OpenViking recall failed: OpenViking unavailable`. It is left out when nothing was found, recall is off or the budget is used up, so after the first reply such messages get no summary.
 - Tool steps and other follow-up requests show no summary. When the client retries the same message, the summary is the same as the first time.
 - In Anthropic Messages the summary is its own text block, in Responses its own assistant message, and in Chat Completions the start of the reply text. Requests that ask for structured output, and Chat Completions requests with `n` above 1, get no summary.

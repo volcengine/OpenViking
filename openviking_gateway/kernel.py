@@ -627,11 +627,10 @@ class MemoryKernel:
             hint = history_hint(
                 credential["user_id"], lineage(request.capture.value), tools, policy.capture
             )
+            note = gateway_note(policy, tools, "soul" in profile["parts"])
             text = block(
                 "gateway-session-start",
-                "\n\n".join(
-                    part for part in (gateway_note(policy, tools), hint, profile["text"]) if part
-                ),
+                "\n\n".join(part for part in (note, hint, profile["text"]) if part),
             )
             return text, [*profile["parts"], *(["history"] if hint else [])]
 

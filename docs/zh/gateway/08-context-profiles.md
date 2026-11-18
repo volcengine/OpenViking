@@ -45,7 +45,8 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 | 设置 | 默认值 | 控制什么 |
 | --- | --- | --- |
 | **会话开头提供用户画像** | 开启 | 新对话开始时，向模型提供你的 OpenViking 用户画像。 |
-| **开头内容预算** | 4,000 token | 开头的用户画像、记忆目录和技能目录最多占用多少。 |
+| **会话开头提供 soul.md** | 开启 | 新对话开始时，向模型提供你保存在 OpenViking 的 `soul.md`，也就是你给模型的长期指令，并告诉模型遵循它。soul 全文提供。 |
+| **开头内容预算** | 4,000 token | 开头的用户画像、记忆目录和技能目录最多占用多少。soul 不计入。 |
 | **显示召回摘要** | 关闭 | 在回复开头加一行摘要，见[召回摘要](#recall-summary)。 |
 | **检索范围** | 记忆、资源、技能 | 召回时检索哪些内容。 |
 | **单条消息预算** | 1,600 token | 一条消息最多附加多少记忆。 |
@@ -58,7 +59,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 
 这些设置如何配合：
 
-- **开头内容。** **会话开头提供用户画像**独立于召回。提供 OpenViking 的 `read` 工具（`openviking_read`）时，开头还会提供记忆目录和技能目录。技能最多占**开头内容预算**的四分之一，预算设为 0 时全部省略。这份预算不占召回预算，见[对话开头的内容](01-how-it-works.md#the-opening-context)。
+- **开头内容。** **会话开头提供用户画像**和**会话开头提供 soul.md** 独立于召回，彼此也互不影响。提供 OpenViking 的 `read` 工具（`openviking_read`）时，开头还会提供记忆目录和技能目录。技能最多占**开头内容预算**的四分之一，预算设为 0 时省略画像和目录。soul 全文提供，不计入这份预算，只有它自己的开关能关掉它。这份预算不占召回预算，见[对话开头的内容](01-how-it-works.md#the-opening-context)。
 - **补充什么。** 召回内容由 OpenViking 在预算内选取和排版，也可能只给出 URI，供模型之后读取。
 - **检索文本。** 检索文本是去掉客户端噪声后的用户消息，最多取**检索文本长度**个字符。少于 3 个字符的消息不检索。
 - **预算。** 每条消息最多补充**单条消息预算**和**单个上下文窗口预算**剩余额度中较小的那个；剩余额度不足 64 token 时跳过检索。无论是网关还是客户端压缩了对话，单个上下文窗口预算都重新计算。这里的 token 数是偏保守的估算，不是服务商的计费数。
@@ -72,11 +73,11 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 召回摘要是回复开头的一段简短说明，写明 OpenViking 为这条新用户消息补充了什么，或者召回为什么失败。它默认关闭，在[上下文配置](#context-profiles)的**召回记忆**部分开启**显示召回摘要**即可。模型看不到摘要。示例：
 
 ```text
-> OpenViking context: user profile, memory index, skill list, earlier sessions
+> OpenViking context: soul, user profile, memory index, skill list, earlier sessions
 > OpenViking recall: 4 items (3 memories, 1 resource) — booking_duplicate_handling, user_lang_pref, +2 more
 ```
 
-- `context` 行只出现在对话的第一条回复里，列出开头实际提供的内容：用户画像、记忆目录、技能目录，以及这段对话较早部分在 OpenViking 中的位置。
+- `context` 行只出现在对话的第一条回复里，列出开头实际提供的内容：soul、用户画像、记忆目录、技能目录，以及这段对话较早部分在 OpenViking 中的位置。
 - `recall` 行按类别统计召回条数，最多列出三个条目名。检索失败时改为说明原因，例如 `> OpenViking recall failed: OpenViking unavailable`。没有找到内容、召回已关闭或预算用完时不显示这一行，所以第一条回复之后，这类消息没有摘要。
 - 工具步骤等后续请求不显示摘要；客户端重试同一条消息时，摘要和第一次相同。
 - 摘要在 Anthropic Messages 中单独占一个文本块，在 Responses 中单独占一条助手消息，在 Chat Completions 中位于回复文本开头。要求结构化输出的请求，以及 `n` 大于 1 的 Chat Completions 请求，不显示摘要。

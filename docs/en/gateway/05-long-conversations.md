@@ -71,7 +71,7 @@ Where the cut falls depends on the request:
 | New user message | Right before that message | The system and developer messages, the summary as one user message, and the new message |
 | Tool step | After the latest tool result | The system and developer messages and the summary, from which it continues the task |
 
-The summary message starts by saying that the gateway replaced the earlier part of the conversation and that the user did not write it. It ends with the conversation's opening gateway note and user profile, so these survive compaction.
+The summary message starts by saying that the gateway replaced the earlier part of the conversation and that the user did not write it. It ends with the conversation's opening gateway note, soul and user profile, so these survive compaction.
 
 Every later request that resends this history, including housekeeping and token-count requests, gets the same replacement; sub-agents usually send their own separate history and are not affected. Each compaction costs one provider cache miss at the cut, and caching works normally after that.
 

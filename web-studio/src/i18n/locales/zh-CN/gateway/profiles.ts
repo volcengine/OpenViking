@@ -76,10 +76,15 @@ const profiles = {
       description:
         '新对话开始时，向模型提供你的 OpenViking 用户画像。此设置独立于记忆召回。',
     },
+    soul: {
+      label: '会话开头提供 soul.md',
+      description:
+        '新对话开始时，向模型提供你保存在 OpenViking 的 soul.md，也就是你给模型的长期指令，并告诉模型遵循它。soul.md 全文提供，不占开头内容预算。',
+    },
     profileMaxTokens: {
       label: '开头内容预算',
       description:
-        '限制开头的画像、记忆目录和技能目录总量。目录需要启用读取工具。这份预算独立于召回，设为 0 时三项都不提供。',
+        '限制开头的画像、记忆目录和技能目录总量。目录需要启用读取工具。这份预算独立于召回，设为 0 时三项都不提供。soul.md 不计入。',
     },
     showRecall: {
       label: '显示召回摘要',

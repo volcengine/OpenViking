@@ -279,6 +279,36 @@ async def test_profile_is_frozen_separately_from_recall(setup_kernel, credential
     assert len(viking.profile_requests) == requests and not viking.recalls
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_soul_opens_the_session_as_instructions(setup_kernel, credential, policy, enabled):
+    kernel, _, viking, _ = setup_kernel
+    viking.soul, viking.profile = "Answer in haiku.", "Alice maintains the gateway."
+    policy.update(recall=False, capture=False, soul=enabled, show_recall=True)
+    body = {"messages": [{"role": "user", "content": "Hello there"}]}
+    one = await prepare(kernel, body, credential, policy)
+    [opening] = context_blocks(one.body["messages"][0])
+    soul = (
+        '<agent-soul uri="viking://user/alice/memories/soul.md">\nAnswer in haiku.\n</agent-soul>'
+    )
+    note = "- The <agent-soul> section below is the soul.md file"
+    assert (soul in opening) == (note in opening) == enabled
+    assert opening.startswith(
+        '<openviking-context source="gateway-session-start">\n'
+        + ("The OpenViking Gateway, a proxy" if enabled else "<user-profile")
+    )
+    notice = one.records["injection", one.chain[0]]["notice"]
+    assert notice == f"> OpenViking context: {'soul, ' if enabled else ''}user profile\n\n"
+    if enabled:
+        assert opening.index(note) < opening.index(soul) < opening.index("<user-profile")
+    viking.soul = "Changed soul"
+    body["messages"] += [
+        {"role": "assistant", "content": "Hello"},
+        {"role": "user", "content": "Continue"},
+    ]
+    two = await prepare(kernel, body, credential, policy)
+    assert one.body["messages"][0] == two.body["messages"][0]
+
+
 @pytest.mark.parametrize("read", [False, True])
 async def test_recall_uses_server_rendered_and_uri_only_entries(
     setup_kernel, credential, policy, read

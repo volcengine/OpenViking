@@ -116,6 +116,7 @@ export type ProfileSettings = {
   name: string
   recall: boolean
   profile: boolean
+  soul: boolean
   profile_max_tokens: number
   capture: boolean
   context_types: ContextType[]
