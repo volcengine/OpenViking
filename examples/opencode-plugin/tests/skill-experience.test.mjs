@@ -114,6 +114,19 @@ test("errors, empty bodies, unavailable identity and timeouts fail open with no 
   assert.equal(hook.calls.length, 1)
 })
 
+test("empty searches do not exhaust the token budget for a later skill", async () => {
+  const hook = fixture({ recallTokenBudget: 300 }, (path, init) => ({ ok: true,
+    result: path.endsWith("status") ? { user: "alice" } : path.endsWith("find")
+      ? { memories: JSON.parse(init.body).query.includes("deploy") ? [{ uri, score: 0.84 }] : [] }
+      : "Verify the rollout before switching traffic",
+  }))
+  await hook.after(event("missing-one"))
+  await hook.after(event("missing-two"))
+  const later = event("deploy")
+  await hook.after(later)
+  assert.match(later.result.content.at(-1).text, /Verify the rollout/)
+})
+
 test("session token/attempt budgets, disposal and deletion bound concurrent retrieval", async () => {
   const hook = fixture({ recallTokenBudget: 200 })
   const events = Array.from({ length: 30 }, (_, i) => event(`skill-${i}`))

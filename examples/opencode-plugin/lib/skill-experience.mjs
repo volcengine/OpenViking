@@ -25,6 +25,7 @@ export function createSkillExperience({ config, directory, request = (path, init
     state.seen.add(name) // Reserve before awaiting: concurrent duplicate loads do not race.
     const budget = Math.min(800, state.remaining)
     state.remaining -= budget // Reserve the per-session budget across concurrent skills.
+    let used = 0
     const deadline = Date.now() + Math.min(5000, config.timeoutMs || 5000)
     let active = true
     let timer
@@ -38,15 +39,18 @@ export function createSkillExperience({ config, directory, request = (path, init
         new Promise((resolve) => { timer = setTimeout(() => resolve(""), Math.max(0, deadline - Date.now())) }),
       ])
       if (!block || disposed || !active || sessions.get(event.sessionID) !== state) return
-      if (estimateTokens(block) > budget) return
+      const tokens = estimateTokens(block)
+      if (tokens > budget) return
       const content = event.result?.content
       if (typeof content === "string") event.result = { ...event.result, content: `${content}\n\n${block}` }
       else if (Array.isArray(content)) event.result = { ...event.result, content: [...content, { type: "text", text: block }] }
       else return
+      used = tokens
     } catch {
       // Authentication, timeout, malformed results and optional retrieval errors
       // must leave the successful original result untouched.
     } finally {
+      state.remaining += budget - used
       active = false
       clearTimeout(timer)
     }

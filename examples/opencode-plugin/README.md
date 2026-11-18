@@ -227,7 +227,7 @@ file. A hint is attempted once per skill and session. The plugin keeps the
 original tool result and adds a separately labelled text block.
 
 Hints come from the authenticated user's OpenViking Experience memories and
-are limited to three results per skill and a short request budget. If lookup
+use `skillExperienceLimit` up to three results per skill and a short request budget. Empty or failed lookups do not spend the session hint token budget. If lookup
 fails, the original skill is still available. Receiving a hint does not
 establish that the model used it.
 
