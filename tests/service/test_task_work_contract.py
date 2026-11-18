@@ -81,11 +81,28 @@ async def _provision_task_schema(admin, params, schema_names):
                     await connection.exec_driver_sql(statement)
 
 
-@pytest.fixture(params=["file", "mysql", "postgres"])
+@pytest.fixture(params=["file", "mysql", "postgres", "redis"])
 async def task_stores(request):
     if request.param == "file":
         store = PersistentTaskStore(_FakeAgfs())
         yield store, store
+        return
+    if request.param == "redis":
+        from openviking.service.task_store_redis import RedisTaskWorkStore
+
+        url = os.environ.get("OV_TEST_TASK_REDIS_URL")
+        if not url:
+            pytest.skip("Set OV_TEST_TASK_REDIS_URL for real Redis contracts")
+        params = {"url": url, "namespace": f"ov-contract-{uuid4().hex}"}
+        first, second = [RedisTaskWorkStore(params=params) for _ in range(2)]
+        try:
+            await first.load()
+            await second.load()
+            yield first, second
+        finally:
+            await first._client.delete(first._key)
+            await first.close()
+            await second.close()
         return
     sqlalchemy, store_class, params, schema_names = _relational_backend(request.param)
     first = store_class(params=params)

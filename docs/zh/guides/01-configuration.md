@@ -1504,6 +1504,60 @@ Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改
 共享任务的进程应使用稳定且相同的 `service_name`。切换 provider 不会自动迁移
 已有任务；生产部署切换前需安排数据迁移。
 
+
+### 可选 Redis Task/Work 权威存储
+
+安装 `openviking[redis]` 后，可显式选择单主 Redis 后端：
+
+```json
+{
+  "service_name": "my-deployment",
+  "storage": {
+    "task_store": {
+      "provider": "redis",
+      "params": {
+        "url": "redis://127.0.0.1:6379/0",
+        "namespace": "openviking:task-work:v1",
+        "socket_timeout": 10,
+        "max_connections": 16
+      }
+    }
+  }
+}
+```
+
+默认仍为 `file`，MySQL、PostgreSQL 可独立选择。`namespace` 默认
+`openviking:task-work:v1`，允许 1–128 位 ASCII 字母、数字、冒号、点、下划线和连字符。
+顶层 `service_name` 隔离部署；协作进程必须选择相同 service 与 namespace。
+应用未提供 service 时才使用 `params.service_name`。URL 不允许查询参数，数据库编号写在
+路径中；`rediss://` 使用 Redis TLS 的默认证书校验。连接、命令和连接池等待使用正数
+`socket_timeout`（默认 10 秒），连接数上限 `max_connections` 默认 16。
+
+实现复用现有 Task/Work 状态转换，持久保存 Work、事件和取消状态，遵循当前
+TaskWorkStore 结果类型。加载存储的事件循环负责全部调用；该循环运行期间，跨线程调用
+会转发到此处。关闭先等待已开始的操作。业务准入与记录更新在一次 Lua CAS 中完成；
+列表扫描同一个带版本 Redis Hash 中的权威记录，消除“记录已写入、索引尚未发布”的
+崩溃窗口。快照 token 阻止旧写入覆盖删除后重建的同 ID 任务，不依赖可过期的分布式
+存储锁。这不改变 QueueFS 投递、队列租约、PathLock 或 Python/Rust 协议；多进程仍须
+配置兼容的共享队列及文件存储。
+
+Redis 必须按权威存储管理：禁止这些 key 被淘汰，限制管理写入，并选择满足需求的持久化。
+错误直接传播，不回退到内存或文件；未知或无版本格式拒绝启动且不清空。中断的写入可能
+结果未知，客户端禁止自动重放命令。应先读取已知任务 ID，再决定恢复动作；超时不代表
+没有提交。此后端不保证队列恰好执行一次。异步复制/故障切换仍可能丢失已确认写入；
+本轮单主验收不证明 Cluster、Sentinel 或故障切换安全。
+
+首版每次更新写入完整 Task/Work 聚合，列表过滤扫描保留记录。大历史或大扇出工作负载
+优先使用关系数据库；不宣称吞吐收益。同步任务指标与 SQL 后端一样不远程读取快照。
+保留清理使用有界增量扫描，并在 CAS 时复核过期和未完成 Work。
+
+不自动迁移文件、SQL 或本地下游 Redis 格式。不要让不兼容 writer 共用 namespace。
+应先停止准入、排空旧任务和队列、保留导出/备份并验证，再使用新 namespace 启动兼容
+writer。仅回退镜像不能迁移数据。OAuth、上传、聊天及 Watch 存储不受此配置控制。
+
+真实后端验收通过 `OV_TEST_TASK_REDIS_URL` 指向隔离 Redis；fixture 只删除自己的随机
+namespace。测试见 `tests/service/test_task_store_redis.py` 与共享 Task/Work 契约。
+
 #### watch_store
 
 默认的 `file` provider 与旧版本一样，把 Watch 任务保存在内部控制文件

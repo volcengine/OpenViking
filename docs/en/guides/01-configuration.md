@@ -1505,6 +1505,75 @@ deduplication, and service/owner isolation as MySQL. Keep `service_name` stable
 across processes sharing tasks. Changing providers does not migrate existing
 tasks; plan the data migration before switching a deployed store.
 
+
+### Optional Redis Task/Work authority
+
+Install `openviking[redis]` to select the optional single-primary Redis backend:
+
+```json
+{
+  "service_name": "my-deployment",
+  "storage": {
+    "task_store": {
+      "provider": "redis",
+      "params": {
+        "url": "redis://127.0.0.1:6379/0",
+        "namespace": "openviking:task-work:v1",
+        "socket_timeout": 10,
+        "max_connections": 16
+      }
+    }
+  }
+}
+```
+
+The default remains `file`; MySQL and PostgreSQL remain independent alternatives.
+`namespace` defaults to `openviking:task-work:v1` (1–128 ASCII letters, digits,
+colon, dot, underscore or hyphen). Top-level `service_name` separates deployments;
+all cooperating processes must select the same service and namespace. `params.service_name`
+is a fallback when no service is supplied by the application. URL query options are
+rejected; select the database with the URL path. `rediss://` enables Redis TLS with
+its certificate verification defaults. Connection and pool waits use the positive
+`socket_timeout` (default 10 seconds), with at most `max_connections` (default 16).
+
+The backend implements the existing TaskWorkStore contract. It reuses the current
+Task/Work transition rules and stores durable Work history, event history and
+cancellation state. All calls run on the event loop that loads the store; foreign
+thread callers are dispatched there while that loop is running. Close drains
+started operations before disconnecting. Business admission and record mutation
+share a Lua CAS. Record discovery scans authoritative records in that same versioned
+Redis hash, so a process cannot commit a Task and crash before publishing an index.
+Snapshot tokens also fence stale writers after deletion and recreation of a task ID.
+No distributed storage lease can expire while permitting a stale snapshot write.
+This does not change QueueFS delivery, queue leases, PathLock, or Python/Rust wire
+protocols. Multiple processes still need shared compatible queue and file storage.
+
+Configure Redis as authoritative storage: disable eviction for these keys, restrict
+administrative writes, and choose persistence appropriate to your durability needs.
+Redis errors propagate; no memory/file fallback is attempted. Unknown or unversioned
+schema layouts fail without reset. An interrupted write can have an unknown outcome:
+the client disables automatic command retries. Read the known task ID before deciding
+a recovery action; a timeout is not proof that nothing committed. This backend does
+not add an exactly-once queue execution guarantee. Asynchronous replication/failover
+can lose acknowledged Redis writes; Cluster, Sentinel and failover safety are not
+certified by the single-primary acceptance tests.
+
+This first implementation writes the whole Task/Work aggregate per mutation and
+scans retained records for list/filter operations. Prefer a relational backend for
+large histories or high fan-out workloads; no throughput improvement is claimed.
+Synchronous task metrics, as for SQL stores, return no remote snapshot. Retention
+uses bounded incremental scanning and rechecks open Work and expiry at CAS time.
+
+There is no automatic import from file, SQL, or a downstream Redis layout. Never
+point incompatible writers at this namespace. Select a fresh namespace only after
+stopping admission, draining the old tasks/queues, retaining an export/backup and
+verifying it. Resume only compatible writers; reverting an image alone does not
+migrate data. This option does not change OAuth, uploads, chat or Watch storage.
+
+Real-backend acceptance uses `OV_TEST_TASK_REDIS_URL` with a disposable Redis;
+fixtures delete only their own random namespace. See
+`tests/service/test_task_store_redis.py` and the shared Task/Work contracts.
+
 #### watch_store
 
 The default `file` provider keeps Watch tasks in the internal control file
