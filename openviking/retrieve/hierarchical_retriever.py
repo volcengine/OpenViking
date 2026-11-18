@@ -18,6 +18,7 @@ from openviking.models.embedder.base import (
 )
 from openviking.models.rerank import RerankClient
 from openviking.observability.log_safety import safe_uri_for_log, short_hash
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.retrieve.rerank_scoring import RerankScores, finite_score, rerank_scores
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
@@ -173,7 +174,10 @@ class HierarchicalRetriever:
             # cached embedder resource (no I/O, no model call, nothing borrowed).
             if image_query and not await embedder_supports_multimodal(self.embedder):
                 raise InvalidArgumentError("Image search requires a multimodal embedding model.")
-            with telemetry.measure("search.embed_query"):
+            with (
+                telemetry.measure("search.embed_query"),
+                bind_dashboard_token_source_type("semantic_search"),
+            ):
                 embedding_input = getattr(query, "embedding_input", None) or query.query
                 result: EmbedResult = await embed_compat(
                     self.embedder,

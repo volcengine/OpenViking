@@ -13,7 +13,7 @@ import shutil
 import tempfile
 import time
 import zipfile
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +27,10 @@ from openviking.config.vlm import VLMHandle, VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.observability.reporting.token_sources import (
+    bind_dashboard_token_source_type,
+    get_dashboard_token_source_type,
+)
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import parse_privacy_field_reference
 from openviking.privacy.rules import PrivacyMatch, find_privacy_matches
@@ -571,13 +575,14 @@ class SkillProcessor:
                         content, ctx=ctx, uri=skill_uri, settings=settings
                     )
                 ).content
-            extraction = await extract_skill_privacy_values(
-                skill_name=skill_dict["name"],
-                skill_description=skill_dict.get("description", ""),
-                content=protected_content,
-                vlm=await self._vlm_resolver.get_vlm(ctx.account_id),
-                settings=settings,
-            )
+            with bind_dashboard_token_source_type(get_dashboard_token_source_type() or "add_skill"):
+                extraction = await extract_skill_privacy_values(
+                    skill_name=skill_dict["name"],
+                    skill_description=skill_dict.get("description", ""),
+                    content=protected_content,
+                    vlm=await self._vlm_resolver.get_vlm(ctx.account_id),
+                    settings=settings,
+                )
             matches = await asyncio.to_thread(
                 find_skill_privacy_matches, content, extraction.values.values()
             )
