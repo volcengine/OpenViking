@@ -13,8 +13,20 @@ const compileName: Argument = {
   required: true,
 };
 const compileInputs: readonly Argument[] = [
-  { name: 'from', kind: 'uri-list', placeholder: 'source-uri', required: true },
-  { name: 'to', kind: 'uri', placeholder: 'target-uri', required: true },
+  {
+    name: 'from',
+    kind: 'uri-list',
+    placeholder: 'source-uri',
+    descriptionKey: 'compile-from',
+    required: true,
+  },
+  {
+    name: 'to',
+    kind: 'uri',
+    placeholder: 'target-uri',
+    descriptionKey: 'compile-to',
+    required: true,
+  },
   { name: 'skill', kind: 'uri', placeholder: 'skill-uri', required: true },
   { name: 'instruction', placeholder: 'text' },
 ];
