@@ -38,7 +38,6 @@ from urllib.request import url2pathname
 
 from agent.memory_provider import MemoryProvider, spawn_context_thread
 from agent.secret_scope import get_secret
-from agent.skill_commands import extract_user_instruction_from_skill_message
 from hermes_cli import __version__ as _HERMES_VERSION
 from hermes_constants import get_hermes_home, get_process_hermes_home
 from tools.registry import tool_error
@@ -52,6 +51,13 @@ except ModuleNotFoundError as exc:
     if exc.name != "agent.message_content":
         raise
     from session_rules.turns import flatten_message_text
+
+try:
+    from agent.skill_commands import extract_user_instruction_from_skill_message
+except ImportError as exc:
+    if exc.name != "agent.skill_commands":
+        raise
+    from session_rules.turns import extract_user_instruction_from_skill_message
 
 try:
     import fcntl
