@@ -218,6 +218,21 @@ MCP tools to its output.
 
 OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction, session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
 
+### Optional OpenViking reference for compaction (OpenCode v2)
+
+Set `plugin.opencode.takeoverEnabled` to `true` to let OpenViking supplement
+OpenCode's normal compaction. When the host asks for a summary, the plugin
+captures eligible messages from that session, commits them, and waits briefly
+for a completed OpenViking archive. It may add a bounded excerpt from the
+archive overview to the host's summary prompt. OpenCode still writes the
+summary using its own transcript and tools.
+
+Use capture-enabled sessions on a server that reports completed archives.
+Excluded sessions, incomplete archives, errors, and timeouts leave the native
+summary request unchanged. This option is off by default. It can cause an
+OpenViking commit earlier than usual, with the server's configured extraction
+and provider usage, even if no completed overview is ready in time.
+
 ## MCP Tools
 
 OpenCode sees the OpenViking MCP server as `openviking`, so tool names are namespaced with `openviking_`.
