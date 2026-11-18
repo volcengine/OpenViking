@@ -55,7 +55,7 @@ openviking-server --config /path/to/ov.conf
 | `default_user` | string | `"default"` | Service context 使用的默认用户 |
 | `embedding` | object | 内置本地 Dense 模型 | 向量化模型和稀疏/混合检索配置；默认使用 `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
-| `query_planner` | object / `null` | `null` | 检索意图分析和召回改写使用的模型。未配置或为空时回退到 `vlm`；`auto` 模式的召回改写要求配置集群级 `query_planner`，或账户级 `query_planner` / `vlm` 覆盖项 |
+| `query_planner` | object / `null` | `null` | 检索意图分析使用的模型。未配置或为空时回退到 `vlm`；配置该项会启用 `auto` 模式的召回改写，实际重写由主 `vlm` 完成。账户级 `query_planner` 或 `vlm` 覆盖项也会启用 `auto` 模式 |
 | `rerank` | object | disabled | 检索结果重排模型 |
 | `rules` | object | 空配置 | 规则编译和适用性判断使用的可选专用模型 |
 | `retrieval` | object | 见下表 | 检索排序和意图分析策略 |

@@ -1014,7 +1014,7 @@ Compile inherits the model's thinking and reasoning settings. Model requests use
 
 ### query_planner
 
-Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm` for `search()` intent analysis, query expansion, and optional server recall-digest rewriting. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.
+Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm` for `search()` intent analysis and query expansion. A configured `query_planner` also enables optional server recall-digest rewriting in `auto` mode, but the main `vlm` performs the rewrite. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for retrieval planning compatibility.
 
 > In `openviking-server init` you can optionally enable a local lightweight query planner; the wizard pulls the Ollama model and writes the `query_planner` config for you. For recognized query-planner models, `search()` selects the matching bundled prompt at runtime. Models not in the mapping keep using `retrieval.intent_analysis`.
 

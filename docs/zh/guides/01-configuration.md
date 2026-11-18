@@ -1002,7 +1002,7 @@ Compile 继承模型的 thinking 和 reasoning 配置。模型请求使用有效
 
 ### query_planner
 
-可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，用于 `search()` 的意图分析、query expansion，以及可选的服务端 recall 摘要重写。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。
+可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，用于 `search()` 的意图分析和 query expansion。配置 `query_planner` 也会启用 `auto` 模式下的可选服务端 recall 摘要重写，但实际重写由主 `vlm` 完成。未配置或配置为空时，OpenViking 会回退到 `vlm` 进行检索规划，以保持兼容。
 
 > 在 `openviking-server init` 里可勾选启用本地轻量 query planner，向导会自动拉取 Ollama 模型并写入 `query_planner` 配置。对于已知的 query planner 模型，`search()` 会在运行时自动选择匹配的内置 prompt；不在映射表中的模型继续使用 `retrieval.intent_analysis`。
 
