@@ -13,8 +13,6 @@ Changes in stable releases of `@openviking/react`.
 
 - 128b63d: AgentConnect accepts `isEnterprise` to show English or Chinese team onboarding instructions for agents supported by the official installer, preserving API key masking and copying. Existing instructions remain the default.
 
-- 1c25783: Add the named compile workflow and its CLI guide. FileBrowser now reports selected tree entries so hosts can add directory references to VikingBot, whose send button uses a rounded square.
-
 - 196fad5: Add OpenViking CLI session, file download, and OVPack commands to Console. Local inputs use the browser file picker. Administrator-only backup and restore require opting in through `commandOptions.allowAdminCommands`.
 
   With `--read-content`, Console search results display multiline file content and fall back to the abstract when content is unavailable or blank. Search result items support an optional `content` field for the multiline body.
@@ -47,11 +45,13 @@ Changes in stable releases of `@openviking/react`.
 
 - b90eb2e: Make selected text stand out in the file editor, including on Wiki conflict lines.
 
-- 1c25783: Hide the Preview / Source switch during editing. FileBrowser keeps version history available and copies the current editor draft.
-
 - 85b3666: Hide in-progress resource import notifications in Console. Import progress stays visible in the command result, and Console still shows completion and failure notifications.
 
-- 85b3666: Reveal the first conflict when opening the Wiki editor, align the VikingBot reference picker with the file tree's root order, and close a submitted clarification when the bot resumes.
+- 85b3666: Reveal the first conflict when opening the Wiki editor.
+
+- 85b3666: Align the VikingBot reference picker with the file tree's root order.
+
+- 85b3666: Close a submitted clarification when VikingBot resumes.
 
 - b90eb2e: Enable the Load more and Retry buttons in the VikingBot reference picker so users can continue browsing directory pages and recover from listing errors.
 
@@ -61,11 +61,7 @@ Changes in stable releases of `@openviking/react`.
 
   Dismiss pending rename and delete confirmations when the session account or service changes. Standalone VikingBot hosts can provide `sessions.scopeKey` to identify their session scope.
 
-- 1c25783: Replace the file path in Wiki conflict rows with a compact pencil button. File Browser opens the editor directly for pending conflicts when editing is allowed.
-
 - b90eb2e: Show a progress notification while FileBrowser saves Wiki changes, including conflict resolutions.
-
-- 1c25783: Use tagged data-plane search to list Wiki conflicts and mark directories with pending conflicts, even when the matching files are collapsed. Refresh conflict status after saving a Wiki file. Accept the current and legacy Compile registry response fields.
 
 - 1c25783: Highlight unresolved Wiki conflicts in the FileBrowser editor and show their explanations on hover. Conflict metadata stays out of the draft.
 

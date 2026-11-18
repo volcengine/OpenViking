@@ -17,17 +17,6 @@
 <!-- /release-note:zh-CN -->
 <!-- release-note:en-US -->
 
-- 1c25783: Add the named compile workflow and its CLI guide. FileBrowser now reports selected tree entries so hosts can add directory references to VikingBot, whose send button uses a rounded square.
-
-<!-- /release-note:en-US -->
-
-<!-- release-note:zh-CN -->
-
-- 1c25783: 新增按名称创建和执行编译的流程及 CLI 指引。FileBrowser 支持上报选中的目录树条目，宿主可将目录引用传给 VikingBot，发送按钮采用圆角方形。
-
-<!-- /release-note:zh-CN -->
-<!-- release-note:en-US -->
-
 - 196fad5: Add OpenViking CLI session, file download, and OVPack commands to Console. Local inputs use the browser file picker. Administrator-only backup and restore require opting in through `commandOptions.allowAdminCommands`.
 
   With `--read-content`, Console search results display multiline file content and fall back to the abstract when content is unavailable or blank. Search result items support an optional `content` field for the multiline body.
@@ -182,17 +171,6 @@
 <!-- /release-note:zh-CN -->
 <!-- release-note:en-US -->
 
-- 1c25783: Hide the Preview / Source switch during editing. FileBrowser keeps version history available and copies the current editor draft.
-
-<!-- /release-note:en-US -->
-
-<!-- release-note:zh-CN -->
-
-- 1c25783: 编辑态隐藏「预览 / 源码」切换。文件浏览区块保留版本历史，复制正文时取当前编辑草稿。
-
-<!-- /release-note:zh-CN -->
-<!-- release-note:en-US -->
-
 - 85b3666: Hide in-progress resource import notifications in Console. Import progress stays visible in the command result, and Console still shows completion and failure notifications.
 
 <!-- /release-note:en-US -->
@@ -204,13 +182,21 @@
 <!-- /release-note:zh-CN -->
 <!-- release-note:en-US -->
 
-- 85b3666: Reveal the first conflict when opening the Wiki editor, align the VikingBot reference picker with the file tree's root order, and close a submitted clarification when the bot resumes.
+- 85b3666: Reveal the first conflict when opening the Wiki editor.
+
+- 85b3666: Align the VikingBot reference picker with the file tree's root order.
+
+- 85b3666: Close a submitted clarification when VikingBot resumes.
 
 <!-- /release-note:en-US -->
 
 <!-- release-note:zh-CN -->
 
-- 85b3666: 打开 Wiki 编辑器时定位首个冲突，统一 VikingBot 引用选择器与文件树的根目录顺序，Bot 继续运行后关闭已提交的澄清弹窗。
+- 85b3666: 打开 Wiki 编辑器时定位首个冲突。
+
+- 85b3666: 统一 VikingBot 引用选择器与文件树的根目录顺序。
+
+- 85b3666: VikingBot 继续运行后关闭已提交的澄清弹窗。
 
 <!-- /release-note:zh-CN -->
 <!-- release-note:en-US -->
@@ -252,17 +238,6 @@
 <!-- /release-note:zh-CN -->
 <!-- release-note:en-US -->
 
-- 1c25783: Replace the file path in Wiki conflict rows with a compact pencil button. File Browser opens the editor directly for pending conflicts when editing is allowed.
-
-<!-- /release-note:en-US -->
-
-<!-- release-note:zh-CN -->
-
-- 1c25783: Wiki 冲突列表将文件路径替换为铅笔图标按钮。有编辑权限时，可从文件浏览器的待确认冲突直接进入编辑。
-
-<!-- /release-note:zh-CN -->
-<!-- release-note:en-US -->
-
 - b90eb2e: Show a progress notification while FileBrowser saves Wiki changes, including conflict resolutions.
 
 <!-- /release-note:en-US -->
@@ -270,17 +245,6 @@
 <!-- release-note:zh-CN -->
 
 - b90eb2e: FileBrowser 保存 Wiki 改动时显示进度通知，包括冲突解决后的保存。
-
-<!-- /release-note:zh-CN -->
-<!-- release-note:en-US -->
-
-- 1c25783: Use tagged data-plane search to list Wiki conflicts and mark directories with pending conflicts, even when the matching files are collapsed. Refresh conflict status after saving a Wiki file. Accept the current and legacy Compile registry response fields.
-
-<!-- /release-note:en-US -->
-
-<!-- release-note:zh-CN -->
-
-- 1c25783: 通过数据面标签检索列出 Wiki 冲突，即使冲突文件所在分支处于收起状态，也能标记待确认冲突目录。保存 Wiki 文件后更新冲突状态，同时兼容当前和旧版的编译配置响应字段。
 
 <!-- /release-note:zh-CN -->
 <!-- release-note:en-US -->
