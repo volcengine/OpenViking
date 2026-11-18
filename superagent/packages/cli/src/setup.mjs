@@ -60,7 +60,7 @@ import { connectOneBot, groupDefault, policyPath } from './onebot.mjs';
 const PERMISSIONS = new URL('../../../permission.json', import.meta.url);
 
 function resolveLarkCli(env) {
-  const bundled = bundledLarkCli();
+  const bundled = bundledLarkCli({ env });
   return bundled === 'lark-cli' ? which('lark-cli', env) : bundled;
 }
 

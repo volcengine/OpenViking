@@ -4,6 +4,8 @@
 
 This reference covers running the daemon. For the product overview, read the [README](../README.md).
 
+Native Termux arm64 uses the POSIX installer with existing native Node and lark-cli instead of the bundled Linux binaries. See [Termux installation and service setup](termux.md).
+
 ## One-command installation
 
 Both platforms use the same [installation and setup guide](../install.md).

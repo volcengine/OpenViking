@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 # SPDX-License-Identifier: AGPL-3.0
 
 # OpenViking SuperAgent installer.
@@ -10,13 +10,15 @@
 # Installs the release for this machine under ~/.ov-superagent (releases/<version>,
 # the `current` link, bin/ov-superagent) and then runs `ov-superagent setup` when the machine
 # has no instance yet. Needs only sh, curl, tar and sha256sum or shasum: the
-# release brings its own Node, pm2 and lark-cli, so nothing else on the
-# machine is used or changed.
+# desktop release brings its own Node, pm2 and lark-cli. Native Termux arm64
+# reuses the linux-arm64 archive with Node >=22.19 and lark-cli from PATH;
+# the installer does not install or change Termux packages.
 #
 # Options: --version <v> (default: latest), --file <archive>, --no-setup,
 # --lang <zh|en>.
 # Environment: OV_SUPERAGENT_DOWNLOAD_BASE overrides where releases are downloaded from;
 # OV_SUPERAGENT_LANG picks the language; NO_COLOR turns the colours off.
+# Native Termux: LARK_CLI_BIN may select an absolute executable instead of PATH.
 set -eu
 # Always ${NAME} before non-ASCII text: macOS /bin/sh (bash 3.2) counts
 # UTF-8 lead bytes as name characters, so "$VERSION（" names another variable.
@@ -74,8 +76,23 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Android and PRoot guests share a kernel and may inherit Termux variables.
+# Identify this shell's libc instead; guest glibc/musl takes precedence even
+# when host Bionic loader mappings are still present.
+NATIVE_TERMUX=0
+NATIVE_NODE=""
+LAUNCHER_SH=/bin/sh
 case "$(uname -s)" in
-  Linux) os=linux ;;
+  Linux)
+    os=linux
+    [ -r "/proc/$$/maps" ] || die 'Cannot identify Linux/Android userspace: /proc must be available'
+    if ! grep -Eq '/(libc[.]so[.][0-9]+|libc-[0-9.]+[.]so|(ld-|libc[.])musl-[^ /]+[.]so[.]1)([[:space:]]|$)' "/proc/$$/maps" \
+      && grep -Eq '/libc[.]so([[:space:]]|$)' "/proc/$$/maps"; then
+      [ -n "${TERMUX_VERSION:-}" ] || { [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/termux-info" ]; } \
+        || die 'Native Android requires Termux'
+      NATIVE_TERMUX=1
+    fi
+    ;;
   Darwin) os=darwin ;;
   *) die "$(m "不支持 $(uname -s)；Windows 请用 install-preview.ps1（预览包），或在 WSL2 里安装" "$(uname -s) is not supported; on Windows, use install-preview.ps1 (the preview package), or install inside WSL2")" ;;
 esac
@@ -84,7 +101,26 @@ case "$(uname -m)" in
   aarch64|arm64) arch=arm64 ;;
   *) die "$(m "不支持 CPU 架构 $(uname -m)" "the $(uname -m) CPU architecture is not supported")" ;;
 esac
-if [ "$os" = linux ]; then
+if [ "$NATIVE_TERMUX" = 1 ]; then
+  [ "$arch" = arm64 ] || die 'Only native Termux arm64 is supported'
+  NATIVE_NODE=$(command -v node 2>/dev/null || true)
+  case "$NATIVE_NODE" in /*) ;; *) die 'Native Termux Node >=22.19.0 must be installed on PATH' ;; esac
+  "$NATIVE_NODE" -e 'const [a,b]=process.versions.node.split(".").map(Number); if(process.platform!=="android"||process.arch!=="arm64"||a<22||(a===22&&b<19))process.exit(1); new(require("node:sqlite").DatabaseSync)(":memory:").close()' >/dev/null 2>&1 \
+    || die 'Native Termux Node >=22.19.0 (process.platform android, process.arch arm64) with node:sqlite is required; Linux/glibc Node is unsupported'
+  LAUNCHER_SH=$(command -v sh 2>/dev/null || true)
+  case "$LAUNCHER_SH" in /*) [ -x "$LAUNCHER_SH" ] || die 'Native Termux sh must be executable' ;; *) die 'Native Termux sh must be an absolute path on PATH' ;; esac
+  NATIVE_LARK=${LARK_CLI_BIN:-$(command -v lark-cli 2>/dev/null || true)}
+  [ -n "$NATIVE_LARK" ] || die 'Native Termux lark-cli must be installed on PATH (or set LARK_CLI_BIN)'
+  case "$NATIVE_LARK" in /*) [ -f "$NATIVE_LARK" ] && [ -x "$NATIVE_LARK" ] || die 'Native Termux LARK_CLI_BIN must be an executable file' ;; *) die 'Native Termux LARK_CLI_BIN must be an absolute path' ;; esac
+  # Match the runtime: explicit override wins; otherwise use PATH, never the
+  # archive's desktop CLI. This export also reaches checks and immediate setup.
+  LARK_CLI_BIN=$NATIVE_LARK
+  export LARK_CLI_BIN
+  LARK_VERSION=$("$NATIVE_LARK" --version 2>/dev/null) \
+    && printf '%s\n' "$LARK_VERSION" | grep -Eq '(^|[[:space:]])v?[0-9]+[.][0-9]+[.][0-9]+([[:space:]+-]|$)' \
+    || die 'Native Termux lark-cli --version failed or returned an invalid version'
+fi
+if [ "$os" = linux ] && [ "$NATIVE_TERMUX" = 0 ]; then
   # The release's Node is linked against glibc; it does not start on musl (Alpine).
   if (ldd --version 2>&1 || true) | grep -qi musl; then die "$(m '不支持 musl（Alpine 等）系统' 'musl systems (Alpine and others) are not supported')"; fi
 fi
@@ -105,10 +141,12 @@ size_of() {
 TMP=$(mktemp -d)
 LOCK=""
 BUSY=""
+PENDING=""
 cleanup() {
   [ -z "$BUSY" ] || kill "$BUSY" 2>/dev/null || true
   [ "$FANCY" = 0 ] || printf '%s[?25h' "$ESC" >&2
   rm -rf "$TMP"
+  [ -z "$PENDING" ] || rm -rf "$PENDING"
   [ -z "$LOCK" ] || rmdir "$LOCK" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -265,6 +303,30 @@ stop_legacy_instances() {
       fi
       mv -f "$legacy_plist" "$legacy_plist.disabled" 2>/dev/null || true
     fi
+    # Native Termux only: disable narrowly named legacy runit services whose
+    # run script refers to this legacy home. Never inspect/stop ov-superagent
+    # or follow service/run/down symlinks into unrelated paths.
+    if [ "$NATIVE_TERMUX" = 1 ]; then
+      legacy_service_root=${SVDIR:-${PREFIX:-}/var/service}
+      case "$legacy_service_root" in
+        /*)
+          legacy_service="$legacy_service_root/$legacy_name"
+          legacy_run="$legacy_service/run"
+          if [ -d "$legacy_service" ] && [ ! -L "$legacy_service" ] \
+            && [ -f "$legacy_run" ] && [ ! -L "$legacy_run" ] && [ ! -L "$legacy_service/down" ] \
+            && grep -Fq "$legacy_home/" "$legacy_run" \
+            && ! grep -Fq "$OV_SUPERAGENT_HOME/" "$legacy_run"; then
+            # The down marker persists across supervisor restarts. Only ask sv
+            # when already supervised, avoiding a wait on inactive services.
+            if { : > "$legacy_service/down"; } 2>/dev/null; then
+              if [ -e "$legacy_service/supervise/ok" ] && command -v sv >/dev/null 2>&1; then
+                sv -w 5 down "$legacy_service" >/dev/null 2>&1 || true
+              fi
+            fi
+          fi
+          ;;
+      esac
+    fi
     # The legacy release's own pm2, else one on PATH, against the legacy PM2_HOME.
     [ -d "$legacy_home/pm2" ] || continue
     legacy_pm2=""
@@ -280,7 +342,6 @@ stop_legacy_instances() {
     done
   done
 }
-stop_legacy_instances
 
 mkdir -p "$OV_SUPERAGENT_HOME/releases"
 # The updater takes the same lock while it upgrades.
@@ -298,13 +359,42 @@ case "$DIR" in
 esac
 VERSION=${DIR#superagent-}
 VERSION=${VERSION%-"$PLATFORM"}
-# Run the new release's own Node before anything points at it: a glibc or
-# CPU mismatch surfaces here and the existing install is left untouched.
+if [ "$NATIVE_TERMUX" = 1 ]; then
+  # Never execute the archive's glibc Node on Bionic, including self-checks.
+  if ! rm -f "$PENDING/$DIR/node/bin/node" || ! ln -s "$NATIVE_NODE" "$PENDING/$DIR/node/bin/node"; then
+    rm -rf "$PENDING"
+    die 'Cannot replace the release Node with native Termux Node'
+  fi
+  # pm2 is a shell wrapper too. Keep its body (which uses node/bin/node),
+  # replacing only the desktop shebang before the release can be activated.
+  if ! { printf '#!%s\n' "$LAUNCHER_SH"; tail -n +2 "$PENDING/$DIR/bin/pm2"; } > "$TMP/pm2"; then
+    rm -rf "$PENDING"
+    die 'Cannot adapt the release pm2 launcher for Termux'
+  fi
+  if ! cp "$TMP/pm2" "$PENDING/$DIR/bin/pm2" || ! chmod 755 "$PENDING/$DIR/bin/pm2"; then
+    rm -rf "$PENDING"
+    die 'Cannot replace the release pm2 launcher for Termux'
+  fi
+fi
+# Run the selected Node before anything points at it: runtime failures leave
+# the existing install untouched (Termux uses only the validated PATH Node).
 if ! "$PENDING/$DIR/node/bin/node" "$PENDING/$DIR/packages/cli/bin/ov-superagent.mjs" --version >/dev/null 2>&1; then
   rm -rf "$PENDING"
   die "$(m '这台机器运行不了这个版本（系统库太旧或 CPU 不匹配）' 'this machine cannot run this release (its system libraries are too old, or the CPU differs)')"
 fi
-ok "$(m '自检' 'Check   ')  ${GRAY}$(m '自带的 Node 能在这台机器上运行' 'the bundled Node runs on this machine')${RESET}"
+if [ "$NATIVE_TERMUX" = 1 ]; then
+  # Exercise the actual pinned runtimes on Bionic before current/rollback or
+  # launchers change. Missing check scripts also fail closed. No npm or package
+  # download hooks are run; the archive must already contain the dependencies.
+  for check in check-pi.mjs check-durable.mjs; do
+    if ! (cd "$PENDING/$DIR" && "$NATIVE_NODE" "packages/daemon/scripts/$check"); then
+      die "Native Termux $check failed; the installed release was not changed"
+    fi
+  done
+  ok "$(m '自检' 'Check   ')  ${GRAY}$(m '原生 Termux Node 能运行此版本' 'native Termux Node runs this release')${RESET}"
+else
+  ok "$(m '自检' 'Check   ')  ${GRAY}$(m '自带的 Node 能在这台机器上运行' 'the bundled Node runs on this machine')${RESET}"
+fi
 
 CONFIG_FILE="${OV_SUPERAGENT_CONFIG:-$OV_SUPERAGENT_HOME/config.json}"
 if [ ! -f "$CONFIG_FILE" ] && [ "$RUN_SETUP" = 1 ] && [ -t 1 ] && { : </dev/tty; } 2>/dev/null; then SETUP_NEXT=1; else SETUP_NEXT=0; fi
@@ -318,6 +408,10 @@ if [ "$SETUP_NEXT" = 0 ]; then
   fi
   ok "$(m 'OpenViking 已就绪' 'OpenViking is ready')"
 fi
+
+# Do not disable a working legacy service until all staged checks succeeded
+# and we own the deployment lock. A refused install must leave it running.
+stop_legacy_instances
 
 # Physical paths: /home may be a symlink, and the updater links real paths.
 physical() { (cd "$1" 2>/dev/null && pwd -P) || true; }
@@ -341,8 +435,15 @@ fi
 if [ -n "$LANG_FLAG" ]; then printf '%s\n' "$LANG_FLAG" > "$OV_SUPERAGENT_HOME/language"; fi
 
 mkdir -p "$OV_SUPERAGENT_HOME/bin"
-cat > "$OV_SUPERAGENT_HOME/bin/ov-superagent" <<'LAUNCHER'
-#!/bin/sh
+printf '#!%s\n' "$LAUNCHER_SH" > "$OV_SUPERAGENT_HOME/bin/ov-superagent"
+if [ "$NATIVE_TERMUX" = 1 ]; then
+  # Persist the selected system dependency for fresh sessions, not only this
+  # installer's child environment. Rewritten on every successful install;
+  # rollback changes the release, not this system-owned dependency default.
+  quoted_lark=$(printf '%s' "$NATIVE_LARK" | sed "s/'/'\\\\''/g")
+  printf 'if [ -z "${LARK_CLI_BIN:-}" ]; then LARK_CLI_BIN=\047%s\047; fi\nexport LARK_CLI_BIN\n' "$quoted_lark" >> "$OV_SUPERAGENT_HOME/bin/ov-superagent"
+fi
+cat >> "$OV_SUPERAGENT_HOME/bin/ov-superagent" <<'LAUNCHER'
 # Always the installed release: `current` moves on upgrade, this file does not.
 exec "$HOME/.ov-superagent/current/node/bin/node" "$HOME/.ov-superagent/current/packages/cli/bin/ov-superagent.mjs" "$@"
 LAUNCHER

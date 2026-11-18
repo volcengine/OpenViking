@@ -19,6 +19,7 @@ import { configureOpenViking } from '../src/ov-setup.mjs';
 import { detectOpenViking, savedOVConfigPath } from '../src/ov.mjs';
 import { updateManifest } from '../../daemon/src/deployment-manifest.mjs';
 import { rolePresetText } from '../../daemon/src/conversation-policy.mjs';
+import { capabilities } from '../../daemon/src/capabilities.mjs';
 
 const RUNTIMES = [
   { id: 'codex', label: 'Codex', model: 'codex:', bin: '/opt/codex/bin/codex', binEnv: 'CODEX_BIN', available: true, note: '已登录' },
@@ -156,7 +157,7 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     ['weixin', dataDir],
     ['start', 'primary'],
     ['restart', 'web'],
-    ['start', 'updater'],
+    ...(capabilities.updater ? [['start', 'updater']] : []),
     ['greet', 'ou_owner'],
   ]);
   // Feishu gets a hello; Weixin delivers nothing until the owner writes, so the owner is told to.
@@ -521,7 +522,7 @@ test('mixed Telegram setup describes each authorization method and keeps email a
   assert.deepEqual(h.manifest().agents[0].connectors, ['lark', 'weixin', 'telegram', 'email']);
   assert.equal(h.manifest().agents[0].channel, 'telegram');
   assert.match(h.written(), /接下来接入：飞书 2 次，微信 1 次，Telegram Bot token \+ Start 绑定/);
-  assert.deepEqual(h.calls.map(([kind]) => kind), ['email', 'lark', 'weixin', 'telegram', 'start', 'restart', 'start', 'greet']);
+  assert.deepEqual(h.calls.map(([kind]) => kind), ['email', 'lark', 'weixin', 'telegram', 'start', 'restart', ...(capabilities.updater ? ['start'] : []), 'greet']);
 });
 
 test('a second instance keeps the shared env and the default instance', async (t) => {
@@ -555,7 +556,7 @@ test('declining before the scans writes nothing; a Weixin-only instance has no p
   // OV is required and one IM leaves no primary-channel choice.
   assert.match(weixin.written(), /OpenViking 已就绪/);
   assert.doesNotMatch(weixin.written(), /没有检测到 OpenViking|主渠道是/);
-  assert.deepEqual(weixin.calls.map(([kind]) => kind), ['weixin', 'start', 'restart', 'start']);
+  assert.deepEqual(weixin.calls.map(([kind]) => kind), ['weixin', 'start', 'restart', ...(capabilities.updater ? ['start'] : [])]);
 });
 
 test('mailboxes come with an IM, are checked before the scans and saved with the manifest', async (t) => {
@@ -578,7 +579,7 @@ test('mailboxes come with an IM, are checked before the scans and saved with the
   assert.equal(JSON.parse(fs.readFileSync(file('email-qq'), 'utf8')).address, '10001@qq.com');
   assert.equal(fs.statSync(file('email-gmail')).mode & 0o777, 0o600);
   assert.match(h.written(), /邮箱\s+alice\.example@gmail\.com、10001@qq\.com\n/);
-  assert.deepEqual(h.calls.map(([kind]) => kind), ['email', 'email', 'weixin', 'start', 'restart', 'start']);
+  assert.deepEqual(h.calls.map(([kind]) => kind), ['email', 'email', 'weixin', 'start', 'restart', ...(capabilities.updater ? ['start'] : [])]);
 
   const declined = harness(t, ['', '', '', '1', '1,3', '', '', 'n', 'n']);
   assert.equal(await setupCommand(declined.options), 1);
@@ -805,7 +806,7 @@ test('setup stops early when no runtime can run, and reports a start failure aft
   assert.equal(await setupCommand(webDown.options), 1);
   assert.match(webDown.written(), /superagent-web 没有起来：port 3737 is in use/);
   assert.match(webDown.written(), /配置已保存，但启动没有完成：\n\s+port 3737 is in use/);
-  assert.deepEqual(webDown.calls.map(([kind]) => kind), ['lark', 'start', 'start']);
+  assert.deepEqual(webDown.calls.map(([kind]) => kind), ['lark', 'start', ...(capabilities.updater ? ['start'] : [])]);
 
   const failing = harness(t, ['', '', '', '1', '1', '', '', 'y'], { failStart: true });
   assert.equal(await setupCommand(failing.options), 1);
@@ -1227,7 +1228,7 @@ test('Feishu is offered with the account it needs; a scan by one that cannot run
   // Said after the screen comes back to the confirmation, then asked again.
   assert.match(output, new RegExp(`⚠ ${notice}\\n[\\s\\S]*将添加实例 primary[\\s\\S]*开始扫码？`));
   assert.equal(h.manifest().agents[0].displayName, '小V');
-  assert.deepEqual(h.calls.map((call) => call[0]), ['lark', 'lark', 'start', 'restart', 'start', 'greet']);
+  assert.deepEqual(h.calls.map((call) => call[0]), ['lark', 'lark', 'start', 'restart', ...(capabilities.updater ? ['start'] : []), 'greet']);
 });
 
 test('changing the app to one whose account cannot run bots comes back to the list, saying why, with nothing saved', async (t) => {
@@ -1398,7 +1399,7 @@ test('on a terminal, setup asks the owner to reply on Feishu and waits; s skips 
     assert.equal(await setupCommand(h.options), 0);
     await driving;
     const screen = stripAnsi(h.screen());
-    assert.deepEqual(h.calls.map(([kind]) => kind), ['lark', 'start', 'restart', 'start', 'listen', 'greet']);
+    assert.deepEqual(h.calls.map(([kind]) => kind), ['lark', 'start', 'restart', ...(capabilities.updater ? ['start'] : []), 'listen', 'greet']);
     assert.deepEqual(h.calls.find(([kind]) => kind === 'listen'), ['listen', 3738]);
     assert.match(screen, /在飞书里回它一句（说什么都行），确认它收得到你的消息/);
     if (arrives) {
@@ -1591,8 +1592,13 @@ test('the ov-superagent command prints usage, and upgrade lists the configured t
       beta: { app: 'superagent-beta', readyUrl: 'http://127.0.0.1:3740/ready', upgradeSharedWeb: false },
     }) },
   });
-  assert.equal(upgrade.status, 2);
-  assert.equal(upgrade.stderr, 'usage: ov-superagent upgrade <beta|all>\n');
+  if (capabilities.updater) {
+    assert.equal(upgrade.status, 2);
+    assert.equal(upgrade.stderr, 'usage: ov-superagent upgrade <beta|all>\n');
+  } else {
+    assert.equal(upgrade.status, 1);
+    assert.equal(upgrade.stderr, 'Automatic release upgrades are not available on this platform. Stop OpenViking SuperAgent and update the installation manually.\n');
+  }
 });
 
 test('when the scan confirmation never arrives, m switches to typing the App ID and Secret, checked with the platform', async () => {

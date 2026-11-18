@@ -756,17 +756,17 @@ test('a second updater cannot unlink the live updater socket', async (t) => {
   assert.equal(response.status, 200);
 });
 
-test('CLI upgrade command reaches the updater over the Unix socket', async (t) => {
+test('CLI upgrade reaches the updater only on artifact-supported platforms', async (t) => {
+  const { capabilities } = await import('../../daemon/src/capabilities.mjs');
   const root = await fixtureTempRoot('superagent-updater-cli-test-');
   const socketPath = path.join(root, 'updater.sock');
+  let upgradeCalls = 0;
   const updater = await createUpdaterServer({
     socketPath,
-    upgrade: async (target) => ({
-      target,
-      app: 'superagent-beta',
-      release: '/release/current',
-      status: 'ready',
-    }),
+    upgrade: async (target) => {
+      upgradeCalls += 1;
+      return { target, app: 'superagent-beta', release: '/release/current', status: 'ready' };
+    },
   });
   t.after(() => updater.close());
 
@@ -793,9 +793,14 @@ test('CLI upgrade command reaches the updater over the Unix socket', async (t) =
     child.once('error', reject);
     child.once('exit', resolve);
   });
-  assert.equal(exitCode, 0, Buffer.concat(stderr).toString('utf8'));
-  assert.equal(
-    Buffer.concat(stdout).toString('utf8'),
-    'superagent-beta is ready (/release/current)\n',
-  );
+  assert.equal(upgradeCalls, capabilities.updater ? 1 : 0);
+  if (capabilities.updater) {
+    assert.equal(exitCode, 0, Buffer.concat(stderr).toString('utf8'));
+    assert.equal(Buffer.concat(stdout).toString('utf8'), 'superagent-beta is ready (/release/current)\n');
+  } else {
+    assert.equal(exitCode, 1);
+    assert.equal(Buffer.concat(stdout).toString('utf8'), '');
+    assert.equal(Buffer.concat(stderr).toString('utf8'),
+      'Automatic release upgrades are not available on this platform. Stop OpenViking SuperAgent and update the installation manually.\n');
+  }
 });
