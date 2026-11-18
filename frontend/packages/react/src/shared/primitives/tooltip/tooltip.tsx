@@ -218,14 +218,15 @@ export function Tooltip({
       if (trigger === 'hover') hide();
     },
     onFocus: (event: React.FocusEvent) => {
-      (childProps.onFocus as React.FocusEventHandler | undefined)?.(event);
-      if (trigger !== 'hover') return;
-      const { currentTarget, target } = event;
+      (childProps.onFocus as ((e: React.FocusEvent) => void) | undefined)?.(
+        event,
+      );
       if (
-        !focusVisibleOnly ||
-        (currentTarget.contains(target) && target.matches(':focus-visible'))
-      )
+        trigger === 'hover' &&
+        (!focusVisibleOnly || event.currentTarget.matches(':focus-visible'))
+      ) {
         show();
+      }
     },
     onBlur: (event: React.FocusEvent) => {
       (childProps.onBlur as ((e: React.FocusEvent) => void) | undefined)?.(

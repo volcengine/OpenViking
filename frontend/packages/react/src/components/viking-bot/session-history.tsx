@@ -120,7 +120,7 @@ export function SessionHistory({
   );
   return (
     <>
-      <Tooltip content={labels.sessionHistory} disabled={open} focusVisibleOnly>
+      <Tooltip content={labels.sessionHistory} disabled={open}>
         <span className="ov-viking-bot__popover-anchor">
           {managed ? (
             <Dropdown
