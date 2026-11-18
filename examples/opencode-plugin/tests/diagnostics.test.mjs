@@ -26,6 +26,7 @@ test("disabled, unsupported and failed native inventories remain distinct", asyn
   assert.equal(disabled.capture.state, "disabled")
   const unsupported = await diagnoseOpenCode({ config, offline: true })
   assert.equal(unsupported.skills.state, "unsupported")
+  assert.deepEqual(unsupported, JSON.parse(JSON.stringify(unsupported)), "native RPC output must contain only JSON values")
   const failed = await diagnoseOpenCode({ ctx: { ...ctx, skill: { list: async () => { throw new Error("permission denied secret-fixture-key") } } }, config, offline: true })
   assert.equal(failed.skills.state, "error")
   assert.match(failed.skills.error, /permission denied/)

@@ -72,7 +72,7 @@ export async function diagnoseOpenCode({ ctx, config, pluginRoot = "", offline =
   function sanitize(value) {
     if (typeof value === "string") return redact(value)
     if (Array.isArray(value)) return value.map(sanitize)
-    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, sanitize(v)]))
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).map(([key, v]) => [key, sanitize(v)]))
     return value
   }
   return sanitize(result)
