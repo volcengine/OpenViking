@@ -22,6 +22,17 @@ export function FileBrowserSearchModeMenu({
         if (mode) onSelect(mode);
       }}
       popupClassName="ov-file-browser-search__menu"
+      renderValue={() => text.searchSwitchMode}
+      renderTrigger={({ triggerRef, triggerProps, content }) => (
+        <button
+          {...triggerProps}
+          ref={triggerRef}
+          type="button"
+          className="ov-file-browser-search__switch"
+        >
+          {content}
+        </button>
+      )}
     >
       {SEARCH_MODES.map((mode) => (
         <SelectOption

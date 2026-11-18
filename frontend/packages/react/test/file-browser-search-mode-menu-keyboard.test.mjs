@@ -12,7 +12,7 @@ const find = '/api/v1/search/find';
 const uri = 'viking://resources/profile.md';
 const modeSwitch = () =>
   document.querySelector(
-    '.ov-file-browser-search__header button[role="combobox"]',
+    '.ov-file-browser-search__summary button[role="combobox"]',
   );
 const items = () => [
   ...document.querySelectorAll('.ov-file-browser-search__menu-item'),
@@ -87,7 +87,7 @@ test('the mode menu takes focus on open and returns it on close', async () => {
     await settle();
     assert.equal(items().length, 0);
     assert.equal(document.activeElement, modeSwitch());
-    assert.equal(modeSwitch().textContent, 'grep');
+    assert.match(modeSwitch().getAttribute('aria-label'), /grep/);
 
     await key(modeSwitch(), 'ArrowDown');
     await settle();
