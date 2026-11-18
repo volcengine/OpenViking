@@ -213,9 +213,13 @@ export class LarkClient {
   }
 
   // The owner is the user this profile is logged in as (the identity
-  // search_messages reads with). Without a user login there is no owner, and
-  // the Core refuses to notify one; the Connector itself still runs.
+  // search_messages reads with). A bot-only instance has no user login, so
+  // setup keeps who confirmed the app's scan (agents[].larkOwnerOpenId).
+  // Without either there is no owner, and the Core refuses to notify one;
+  // the Connector itself still runs.
   async owner(prefix) {
+    const configured = this.config.larkOwnerOpenId;
+    if (configured) return { id: configured, target: { user_id: configured } };
     const status = await this.registry.run(this.config.larkCliBin, [...prefix, 'auth', 'status', '--json'], {
       timeoutMs: 10_000,
     });

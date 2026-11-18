@@ -606,6 +606,31 @@ test('Lark message access is the owner\'s unless an instance keeps to the bot\'s
   });
 });
 
+test('a bot-only instance\'s owner is pinned in its daemon env, and never leaks into another instance', () => {
+  const manifest = validManifest();
+  Object.assign(manifest.agents[1], { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_owner12345678' });
+  withManifest(manifest, (manifestPath) => {
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_LARK_OWNER_OPEN_ID: 'ou_stale12345678' };
+    const deployment = loadDeploymentManifest(env);
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID, 'ou_owner12345678');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').larkOwnerOpenId, null);
+    assert.equal(env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID, undefined);
+  });
+  const wrong = validManifest();
+  wrong.agents[0].larkOwnerOpenId = 'someone';
+  withManifest(wrong, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.larkOwnerOpenId must be a Feishu\/Lark open_id/);
+  });
+  const elsewhere = validManifest();
+  Object.assign(elsewhere.agents[2], { channel: 'weixin', connectors: ['weixin'], larkOwnerOpenId: 'ou_owner12345678' });
+  delete elsewhere.agents[2].profile;
+  withManifest(elsewhere, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[2\]\.larkOwnerOpenId is only used by the lark connector/);
+  });
+});
+
 test('meeting notes are opt-in for one Feishu/Lark instance at most, and always pinned in the daemon env', () => {
   const manifest = validManifest();
   manifest.agents[1].meetingNotes = true;
@@ -634,6 +659,13 @@ test('meeting notes are opt-in for one Feishu/Lark instance at most, and always 
   broken.agents[0].meetingNotes = 'yes';
   withManifest(broken, (manifestPath) => {
     assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.meetingNotes must be a boolean/);
+  });
+  // Meeting notes are read as the owner, which a bot-only instance cannot.
+  const botOnly = validManifest();
+  Object.assign(botOnly.agents[1], { larkMessageAccess: 'bot', meetingNotes: true });
+  withManifest(botOnly, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }),
+      /agents\[1\]\.meetingNotes needs the owner's user access, which larkMessageAccess bot does not have/);
   });
 });
 

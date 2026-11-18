@@ -98,6 +98,7 @@ const AGENT_FIELDS = Object.freeze([
   'connectors',
   'profile',
   'larkMessageAccess',
+  'larkOwnerOpenId',
   'port',
   'dataDir',
   'tempDir',
@@ -123,8 +124,9 @@ const AGENT_FIELDS = Object.freeze([
 // The roles shipped with the release (packages/daemon/agent/roles/<name>.md),
 // which setup can seed the instance's soul in OpenViking with.
 const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
-// agents[].larkMessageAccess: `owner` reads with the owner's visibility,
-// `bot` only in the chats the bot has joined.
+// agents[].larkMessageAccess: `owner` adds the owner's user access to the
+// bot's; `bot` has no user access, only what is shared with the app and the
+// chats the bot has joined.
 const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
 // agents[].soulUri: where the instance's soul is kept (a viking:// address or an
 // absolute local file path), when not
@@ -330,14 +332,21 @@ function parseAgent(value, index, ignored) {
   if (!connectors.includes('lark') && value.profile !== undefined) {
     throw new Error(`${label}.profile is only used by the lark connector`);
   }
-  // Whose visibility Lark reads use: the owner's (search and history across
-  // their chats, the default) or only the bot's own chats. Chosen when the app
-  // is connected; the permissions it asks for follow it.
+  // Whether the bot also has the owner's user access (the default) or only its
+  // own. Chosen when the app is connected; the permissions it asks for follow it.
   if (!connectors.includes('lark') && value.larkMessageAccess !== undefined) {
     throw new Error(`${label}.larkMessageAccess is only used by the lark connector`);
   }
   if (value.larkMessageAccess !== undefined && !LARK_MESSAGE_ACCESS.includes(value.larkMessageAccess)) {
     throw new Error(`${label}.larkMessageAccess must be ${LARK_MESSAGE_ACCESS.join(' or ')}`);
+  }
+  // The owner of a bot-only bot, which has no user login to tell them by.
+  if (!connectors.includes('lark') && value.larkOwnerOpenId !== undefined) {
+    throw new Error(`${label}.larkOwnerOpenId is only used by the lark connector`);
+  }
+  if (value.larkOwnerOpenId !== undefined
+    && (typeof value.larkOwnerOpenId !== 'string' || !/^ou_[A-Za-z0-9_-]+$/.test(value.larkOwnerOpenId))) {
+    throw new Error(`${label}.larkOwnerOpenId must be a Feishu/Lark open_id (ou_...)`);
   }
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
@@ -368,6 +377,10 @@ function parseAgent(value, index, ignored) {
   if (value.meetingNotes && !connectors.includes('lark')) {
     throw new Error(`${label}.meetingNotes requires the lark connector`);
   }
+  // Meeting notes are read as the owner; a bot-only instance has no user access.
+  if (value.meetingNotes && value.larkMessageAccess === 'bot') {
+    throw new Error(`${label}.meetingNotes needs the owner's user access, which larkMessageAccess bot does not have`);
+  }
   const dshHomeMode = value.dshHomeMode ?? 'isolated';
   if (!['isolated', 'shared'].includes(dshHomeMode)) {
     throw new Error(`${label}.dshHomeMode must be isolated or shared`);
@@ -390,6 +403,7 @@ function parseAgent(value, index, ignored) {
     connectors: Object.freeze(connectors),
     profile: connectors.includes('lark') ? manifestString(value.profile, `${label}.profile`) : null,
     larkMessageAccess: connectors.includes('lark') ? value.larkMessageAccess ?? 'owner' : null,
+    larkOwnerOpenId: connectors.includes('lark') ? value.larkOwnerOpenId ?? null : null,
     port: value.port,
     dataDir: manifestAbsolutePath(value.dataDir, `${label}.dataDir`),
     tempDir: value.tempDir == null ? null : manifestAbsolutePath(value.tempDir, `${label}.tempDir`),
@@ -627,6 +641,9 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
     delete env.LARKSUITE_CLI_PROFILE;
     delete env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS;
   }
+  // Set or removed, so another instance's owner never leaks in.
+  if (agent.larkOwnerOpenId) env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID = agent.larkOwnerOpenId;
+  else delete env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID;
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.OV_SUPERAGENT_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';

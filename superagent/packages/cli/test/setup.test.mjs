@@ -985,16 +985,16 @@ test('← goes back a question with its answer kept, → takes the value shown, 
     ['Agent 运行时', RIGHT],
     ['接入哪些 IM', RIGHT],
     ['飞书机器人', RIGHT],
-    // ← on whose visibility the bot reads with is back at where the bot comes from.
-    ['允许机器人以你的身份', LEFT],
+    // ← on which Feishu identity may be used is back at where the bot comes from.
+    ['授予 OpenViking', LEFT],
     ['飞书机器人', RIGHT],
-    ['允许机器人以你的身份', RIGHT],
+    ['授予 OpenViking', RIGHT],
     ['开始扫码', LEFT],
     // Back at the last question asked, back once more into the section, then forward again.
     ['飞书机器人', LEFT],
     ['接入哪些 IM', RIGHT],
     ['飞书机器人', RIGHT],
-    ['允许机器人以你的身份', RIGHT],
+    ['授予 OpenViking', RIGHT],
     ['开始扫码', 'n', '\r'],
   ]);
   assert.equal(await setupCommand(h.options), 1);
@@ -1032,7 +1032,7 @@ test('a new instance\'s OV menu is a step like the others: ← leaves it, ← co
     // The CLI's own key: sharing its identity is a choice of its own.
     ['这个实例在 OpenViking 里的身份', '\r'],
     ['实例名称', RIGHT], ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT],
-    ['接入哪些 IM', '\r'], ['飞书机器人', '\r'], ['允许机器人以你的身份', '\r'], ['开始扫码', '\r'],
+    ['接入哪些 IM', '\r'], ['飞书机器人', '\r'], ['授予 OpenViking', '\r'], ['开始扫码', '\r'],
   ]);
   assert.equal(await setupCommand(h.options), 0);
   await driving;
@@ -1150,14 +1150,14 @@ test('setup asks for the full permission.json scope set', () => {
   assert.ok(scopes.tenant.length > 100 && scopes.user.length > 100);
 });
 
-test('a bot that reads only its own chats asks for none of the owner\'s message scopes, and searches as itself', () => {
+test('a bot-only app asks for no user scopes, and searches as itself', () => {
   const owner = larkScopes();
   const bot = larkScopes('bot');
   for (const scope of OWNER_MESSAGE_SCOPES) {
     assert.ok(owner.user.includes(scope), `${scope} is asked for by default`);
     assert.ok(!bot.user.includes(scope), `${scope} is not asked for`);
   }
-  assert.deepEqual(bot.user, owner.user.filter((scope) => !OWNER_MESSAGE_SCOPES.includes(scope)));
+  assert.deepEqual(bot.user, []);
   assert.ok(!owner.tenant.includes('search:message'));
   assert.deepEqual(bot.tenant, [...owner.tenant, 'search:message']);
 });
@@ -1173,24 +1173,24 @@ function recordLark(h, result = {}) {
   return given;
 }
 
-test('a new instance can pick an existing Feishu bot: the scan is told so, and the owner is warned about sharing it', async (t) => {
-  //                   name role ws  runtime IMs  feishu: pick existing  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '2',                   '',           'y']);
+test('a new instance can create or pick a Feishu bot through one scan entry', async (t) => {
+  //                   name role ws  runtime IMs  feishu: create or pick  access  confirm
+  const h = harness(t, ['', '',  '', '1',    '1', '',                     '',     'y']);
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(given[0].source, 'select');
   assert.equal(given[0].app, null);
-  assert.match(h.written(), /飞书机器人\n  1\) 扫码新建一个机器人.*\n  2\) 扫码选择已有的机器人.*\n  3\) 手动填 App ID 和 App Secret/);
+  assert.match(h.written(), /飞书机器人\n  1\) 扫码创建或选择机器人.*\n  2\) 手动填 App ID 和 App Secret/);
   const { tenant, user } = larkScopes();
   assert.match(h.written(), new RegExp(`确认页会列出要给它补的权限（最多 ${tenant.length + user.length} 个）[^\\n]*它要是有版本正在审核，会先被撤回。不确认就什么都不改。`));
   assert.match(h.written(), /同一个飞书应用不能两处同时收消息[\s\S]*OpenViking SuperAgent 只接用长连接接收消息的机器人：用 webhook 的，先在开放平台「事件与回调」把事件和回调都改成长连接/);
-  assert.match(h.written(), /飞书机器人\s+扫码选择已有的机器人\n/);
+  assert.match(h.written(), /飞书机器人\s+扫码创建或选择机器人\n/);
   assert.match(h.written(), /接下来扫码：飞书 2 次/);
 });
 
 test('typing the App ID and App Secret is a question like the others: checked at once, one scan left', async (t) => {
   //                   name role ws  runtime IMs  feishu: by hand  App ID     secret  tenant  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '3',             'cli_abc', 'sec',  '2',    '',           'y']);
+  const h = harness(t, ['', '',  '', '1',    '1', '2',             'cli_abc', 'sec',  '2',    '',           'y']);
   const given = recordLark(h);
   const checked = [];
   h.options.fetchImpl = async (url, init) => {
@@ -1237,14 +1237,14 @@ test('changing the app to one whose account cannot run bots comes back to the li
   const before = existing(h, {});
   h.options.connect.lark = async () => { throw new GoBack('飞书不给应用 cli_doubao 发访问凭证'); };
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /⚠ 飞书不给应用 cli_doubao 发访问凭证\n[\s\S]*6\) 飞书应用\s+扫码新建一个机器人（已改）/);
+  assert.match(h.written(), /⚠ 飞书不给应用 cli_doubao 发访问凭证\n[\s\S]*6\) 飞书应用\s+扫码创建或选择机器人（已改）/);
   assert.match(h.written(), /已放弃，没有保存任何改动/);
   assert.deepEqual(h.manifest().agents, [before]);
 });
 
 test('an App ID typed in whose account cannot run bots is told so, not called wrong', async (t) => {
   //                   name role ws  runtime IMs  by hand  App ID        secret  tenant  again?
-  const h = harness(t, ['', '',  '', '1',    '1', '3',     'cli_doubao', 's',    '',     'n']);
+  const h = harness(t, ['', '',  '', '1',    '1', '2',     'cli_doubao', 's',    '',     'n']);
   h.options.fetchImpl = async () => ({ json: async () => ({ code: 21001, msg: 'access denied by access control policy' }) });
   await assert.rejects(setupCommand(h.options), { name: 'PromptAborted' });
   const output = h.written();
@@ -1254,13 +1254,13 @@ test('an App ID typed in whose account cannot run bots is told so, not called wr
 
 test('an instance with Feishu can switch to another app; the bot takes the app\'s name unless the owner keeps theirs', async (t) => {
   //                    change asd  飞书应用  pick existing  reads-as-you  save  call it 小助手
-  const h = harness(t, ['2',        '6',      '3',           '',           '11', 'y']);
+  const h = harness(t, ['2',        '6',      '2',           '',           '11', 'y']);
   const before = existing(h, {});
   fs.mkdirSync(path.join(h.home, '.ov-superagent'), { recursive: true });
   const given = recordLark(h, { name: '小助手' });
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /6\) 飞书应用\s+扫码选择已有的机器人（已改）/);
-  assert.match(h.written(), /将修改 ASD（asd）：\n  换飞书应用：扫码选择已有的机器人（需要扫码）\n/);
+  assert.match(h.written(), /6\) 飞书应用\s+扫码创建或选择机器人（已改）/);
+  assert.match(h.written(), /将修改 ASD（asd）：\n  换飞书应用：扫码创建或选择机器人（需要扫码）\n/);
   assert.match(h.written(), /接下来扫码：飞书 2 次/);
   assert.deepEqual([given[0].source, given[0].profile], ['select', 'superagent-asd']);
   assert.match(h.written(), /这个机器人在飞书里叫「小助手」，OpenViking SuperAgent 里也这么叫它？（选否就还叫「ASD」）/);
@@ -1268,7 +1268,7 @@ test('an instance with Feishu can switch to another app; the bot takes the app\'
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['lark', 'asd'], ['restart', 'asd'], ['greet', 'ou_owner']]);
 
   // A bot long called something else keeps that name.
-  const keeping = harness(t, ['2', '6', '3', '', '11', 'n']);
+  const keeping = harness(t, ['2', '6', '2', '', '11', 'n']);
   const kept0 = existing(keeping, {});
   recordLark(keeping, { name: '小助手' });
   assert.equal(await setupCommand(keeping.options), 0);
@@ -1283,15 +1283,18 @@ test('an instance with Feishu can switch to another app; the bot takes the app\'
   assert.deepEqual(kept.calls, []);
 });
 
-test('a new Feishu bot asks whether it may read as the owner; no keeps it to its own chats, and that is saved', async (t) => {
-  //                   name role ws  runtime IMs  feishu  reads-as-you: no  confirm
+test('a new Feishu bot asks for full or bot-only access; bot-only is saved', async (t) => {
+  //                   name role ws  runtime IMs  feishu  access: bot-only  confirm
   const h = harness(t, ['', '',  '', '1',    '1', '',     '2',              'y']);
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /允许机器人以你的身份搜索和读取飞书消息？[\s\S]*授权后飞书不会收回，这个机器人以后改不回来/);
-  assert.match(h.written(), /飞书机器人\s+扫码新建一个机器人（只看它所在的会话）/);
-  assert.deepEqual([given[0].source, given[0].access], ['create', 'bot']);
+  assert.match(h.written(), /授予 OpenViking SuperAgent 哪些飞书权限？[\s\S]*完整用户权限（默认）[\s\S]*仅机器人权限/);
+  assert.match(h.written(), /飞书机器人\s+扫码创建或选择机器人（仅机器人权限）/);
+  assert.match(h.written(), /接下来扫码：飞书 1 次/);
+  assert.deepEqual([given[0].source, given[0].access], ['select', 'bot']);
   assert.equal(h.manifest().agents[0].larkMessageAccess, 'bot');
+  // No user login tells the daemon its owner: who confirmed the scan does.
+  assert.equal(h.manifest().agents[0].larkOwnerOpenId, 'ou_owner');
 
   // Allowing it, the default, leaves the manifest as it always was.
   const allowed = harness(t, ['', '', '', '1', '1', '', '', 'y']);
@@ -1299,6 +1302,7 @@ test('a new Feishu bot asks whether it may read as the owner; no keeps it to its
   assert.equal(await setupCommand(allowed.options), 0);
   assert.equal(allowedGiven[0].access, 'owner');
   assert.equal('larkMessageAccess' in allowed.manifest().agents[0], false);
+  assert.equal('larkOwnerOpenId' in allowed.manifest().agents[0], false);
 
   // Without Feishu there is nothing to ask.
   const weixin = harness(t, ['', '', '', '1', '2', 'y']);
@@ -1309,30 +1313,32 @@ test('a new Feishu bot asks whether it may read as the owner; no keeps it to its
 test('an instance keeps how its app reads; another app is asked again, starting from the current answer', async (t) => {
   // Kept: nothing is asked, and it still reads only its own chats.
   const kept = harness(t, ['2', '1', 'Renamed', '11']);
-  const before = existing(kept, { larkMessageAccess: 'bot' });
+  const before = existing(kept, { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_kept' });
   assert.equal(await setupCommand(kept.options), 0);
   assert.doesNotMatch(kept.written(), /以你的身份搜索和读取/);
   assert.deepEqual(kept.manifest().agents, [{ ...before, displayName: 'Renamed' }]);
 
+  // Another app: its owner is whoever confirmed that app's scan.
   //                         change asd  飞书应用  pick existing  reads-as-you (as it was)  save  call it 小助手
-  const switched = harness(t, ['2',        '6',      '3',           '',                       '11', 'n']);
-  const was = existing(switched, { larkMessageAccess: 'bot' });
+  const switched = harness(t, ['2',        '6',      '2',           '',                       '11', 'n']);
+  const was = existing(switched, { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_kept' });
   const given = recordLark(switched, { name: '小助手' });
   assert.equal(await setupCommand(switched.options), 0);
   assert.equal(given[0].access, 'bot');
-  assert.deepEqual(switched.manifest().agents, [was]);
+  assert.deepEqual(switched.manifest().agents, [{ ...was, larkOwnerOpenId: 'ou_owner' }]);
 
-  // Allowed this time: the next app reads as the owner.
-  const widened = harness(t, ['2', '6', '3', '1', '11', 'n']);
-  existing(widened, { larkMessageAccess: 'bot' });
+  // Allowed this time: the next app reads as the owner, whose login names them.
+  const widened = harness(t, ['2', '6', '2', '1', '11', 'n']);
+  existing(widened, { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_kept' });
   recordLark(widened, { name: '小助手' });
   assert.equal(await setupCommand(widened.options), 0);
   assert.equal('larkMessageAccess' in widened.manifest().agents[0], false);
+  assert.equal('larkOwnerOpenId' in widened.manifest().agents[0], false);
 });
 
 test('ticking Feishu on an instance that had none asks where its bot comes from, right away', async (t) => {
-  //                    change asd  IMs  lark+weixin  pick existing  reads-as-you  save
-  const h = harness(t, ['2',        '5', '1,2',       '2',           '',           '11']);
+  //                    change asd  IMs  lark+weixin  create or pick  access  save
+  const h = harness(t, ['2',        '5', '1,2',       '1',             '',     '11']);
   const before = existing(h, { channel: 'weixin', connectors: ['weixin'], profile: undefined });
   const given = recordLark(h);
   assert.equal(await setupCommand(h.options), 0);
@@ -1343,7 +1349,7 @@ test('ticking Feishu on an instance that had none asks where its bot comes from,
 
 test('an App ID typed in for a bot on a webhook is refused there, and another one can be typed', async (t) => {
   //                   name role ws  runtime IMs  by hand  App ID      secret  tenant  another?  App ID      secret  tenant  reads-as-you  confirm
-  const h = harness(t, ['', '',  '', '1',    '1', '3',     'cli_hook', 's1',   '',     'y',      'cli_good', 's2',   '',     '',           'y']);
+  const h = harness(t, ['', '',  '', '1',    '1', '2',     'cli_hook', 's1',   '',     'y',      'cli_good', 's2',   '',     '',           'y']);
   const given = recordLark(h);
   h.options.fetchImpl = async (url, init = {}) => ({ json: async () => {
     if (url.endsWith('/tenant_access_token/internal')) return { code: 0, tenant_access_token: `t-${JSON.parse(init.body).app_id}` };
@@ -1394,7 +1400,7 @@ test('on a terminal, setup asks the owner to reply on Feishu and waits; s skips 
     };
     const driving = h.drive([
       ['机器人名字', RIGHT], ['它的角色', RIGHT], ['工作目录', RIGHT], ['Agent 运行时', RIGHT], ['接入哪些 IM', RIGHT], ['飞书机器人', RIGHT],
-      ['允许机器人以你的身份', RIGHT], ['开始扫码', '\r'], ['确认它收得到你的消息', ...(arrives ? [] : ['s'])],
+      ['授予 OpenViking', RIGHT], ['开始扫码', '\r'], ['确认它收得到你的消息', ...(arrives ? [] : ['s'])],
     ]);
     assert.equal(await setupCommand(h.options), 0);
     await driving;
@@ -1420,9 +1426,11 @@ function fakeLarkCli(profiles = []) {
     calls,
     profiles: async () => profiles,
     configureProfile: async ({ profile, appId }) => { calls.push(['profile', profile, appId]); },
+    logoutUser: async ({ profile }) => { calls.push(['logout', profile]); },
     beginUserLogin: async ({ scopes }) => { calls.push(['login', scopes]); return { url: 'https://accounts.feishu.cn/x', deviceCode: 'd' }; },
     finishUserLogin: async () => {},
     userOpenId: async () => 'ou_owner',
+    userScopes: async () => null,
   };
 }
 
@@ -1448,7 +1456,7 @@ function pipePrompter(answers) {
   return { prompter: new Prompter({ input, output }), written: () => written };
 }
 
-test('connecting a bot that reads only its own chats: the scans ask for no message reading as the owner, and an old grant is named', async () => {
+test('reconnecting a full-user profile as bot-only clears its old login before reconfiguring it', async () => {
   const scopes = larkScopes('bot');
   const granted = [...scopes.tenant.map((scope) => ({ scope, token_types: ['tenant'] })),
     ...larkScopes().user.map((scope) => ({ scope, token_types: ['user'] }))];
@@ -1457,27 +1465,68 @@ test('connecting a bot that reads only its own chats: the scans ask for no messa
     addons = options.addons;
     return { client_id: 'cli_old', client_secret: 's', user_info: { open_id: 'ou_owner' } };
   };
-  const larkCli = { ...fakeLarkCli(), userScopes: async () => [] };
+  let login = larkScopes().user;
+  const larkCli = {
+    ...fakeLarkCli(),
+    userScopes: async () => login,
+    logoutUser: async ({ profile }) => { larkCli.calls.push(['logout', profile]); login = null; },
+  };
   const { prompter, written } = pipePrompter([]);
   await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
-    profile: 'superagent-new', source: 'create', access: 'bot', register });
+    profile: 'superagent-asd', source: 'select', access: 'bot', register });
   assert.deepEqual(addons.scopes, scopes);
-  // The app still has the owner's message scopes; the login does not ask for them.
-  assert.deepEqual(larkCli.calls, [['profile', 'superagent-new', 'cli_old'], ['login', scopes.user]]);
-  assert.match(written(), /第 2 次扫码：授权 OpenViking SuperAgent 以你的身份用文档、日历等（不读你的消息）/);
-  assert.doesNotMatch(written(), /用于搜索和读历史|以前允许过/);
+  // The app may still carry old user scopes, but setup removes the saved user
+  // login before writing the selected app to the profile.
+  assert.deepEqual(larkCli.calls, [
+    ['logout', 'superagent-asd'], ['profile', 'superagent-asd', 'cli_old'], ['logout', 'superagent-asd'],
+  ]);
+  assert.equal(login, null);
+  assert.doesNotMatch(written(), /第 2 次扫码|等待授权/);
+  assert.match(written(), /已删除 superagent-asd 本地保存的用户登录/);
+  assert.match(written(), /飞书已接好（仅机器人权限）/);
+  assert.doesNotMatch(written(), /用于搜索和读历史/);
+});
 
-  // The owner once let this app read their messages: Feishu keeps that, so they are told.
-  const once = { ...fakeLarkCli(), userScopes: async () => ['docx:document:readonly', 'search:message', 'im:message.group_msg:get_as_user'] };
-  const told = pipePrompter([]);
-  await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: told.prompter, larkCli: once, fetchImpl: pickedApp(granted),
-    profile: 'superagent-new', source: 'select', access: 'bot', register });
-  assert.match(told.written(), /你以前允许过这个应用以你的身份读消息（search:message、im:message\.group_msg:get_as_user），飞书不会收回[\s\S]*换一个新建的机器人/);
+test('a new bot-only profile also clears a user login inherited from the selected app', async () => {
+  const scopes = larkScopes('bot');
+  const granted = [...scopes.tenant.map((scope) => ({ scope, token_types: ['tenant'] })),
+    ...larkScopes().user.map((scope) => ({ scope, token_types: ['user'] }))];
+  let configured = false;
+  let sharedLogin = larkScopes().user;
+  const larkCli = {
+    ...fakeLarkCli(),
+    userScopes: async () => (configured ? sharedLogin : null),
+    configureProfile: async ({ profile, appId }) => { larkCli.calls.push(['profile', profile, appId]); configured = true; },
+    logoutUser: async ({ profile }) => {
+      larkCli.calls.push(['logout', profile]);
+      if (configured) sharedLogin = null;
+    },
+  };
+  const register = async () => ({ client_id: 'cli_old', client_secret: 's', user_info: { open_id: 'ou_owner' } });
+  const { prompter, written } = pipePrompter([]);
+  await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
+    profile: 'superagent-fresh', source: 'select', access: 'bot', register });
+  assert.deepEqual(larkCli.calls, [
+    ['logout', 'superagent-fresh'], ['profile', 'superagent-fresh', 'cli_old'], ['logout', 'superagent-fresh'],
+  ]);
+  assert.equal(sharedLogin, null);
+  assert.match(written(), /已删除 superagent-fresh 本地保存的用户登录/);
+});
 
-  // Reading as the owner never looks for an old grant.
-  const owner = { ...fakeLarkCli(), userScopes: async () => { throw new Error('not asked'); } };
-  await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter: pipePrompter([]).prompter, larkCli: owner, fetchImpl: pickedApp(granted),
-    profile: 'superagent-new', source: 'create', register });
+test('bot-only is not reported while a user login is still there after the logout', async () => {
+  const scopes = larkScopes('bot');
+  const granted = scopes.tenant.map((scope) => ({ scope, token_types: ['tenant'] }));
+  const larkCli = {
+    ...fakeLarkCli(),
+    // lark-cli says the logout went through, yet the profile still has a user login.
+    userScopes: async () => larkScopes().user,
+    logoutUser: async ({ profile }) => { larkCli.calls.push(['logout', profile]); return true; },
+  };
+  const register = async () => ({ client_id: 'cli_old', client_secret: 's', user_info: { open_id: 'ou_owner' } });
+  const { prompter, written } = pipePrompter([]);
+  await assert.rejects(connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
+    profile: 'superagent-asd', source: 'select', access: 'bot', register }), /superagent-asd 的用户登录没有删掉/);
+  assert.doesNotMatch(written(), /飞书已接好/);
 });
 
 test('connecting a picked app: another instance on it is a warning, what it lacks is named, and only its user scopes are asked for', async () => {
@@ -1560,7 +1609,7 @@ test('connecting an app typed in: no scan for it, and how its events arrive is l
   assert.match(output, /权限核对通过/);
   assert.match(output, /事件走长连接还是 webhook 读不到/);
   assert.match(output, /缺的在飞书开放平台给应用补上；你是应用的所有者或管理员的话，也可以之后运行 ov-superagent setup 扫码补齐/);
-  assert.match(output, /扫码授权 OpenViking SuperAgent 以你的身份读消息/);
+  assert.match(output, /扫码授权 OpenViking SuperAgent 使用你的完整用户权限/);
   assert.doesNotMatch(output, /第 1 次扫码|第 2 次扫码/);
 });
 
@@ -1768,6 +1817,35 @@ test('meeting notes: on for the first assistant or colleague on Feishu, off for 
   const qa = harness(t, ['', '3',    '',       '3',    '1', '',    '',          'y']);
   assert.equal(await setupCommand(qa.options), 0);
   assert.equal(qa.manifest().agents[0].meetingNotes, false);
+});
+
+test('meeting notes are read as the owner, so a bot-only Feishu/Lark bot never stores them', async (t) => {
+  // A new colleague is off by default when it is bot-only.
+  //                   name role workspace runtime IMs feishu access:bot-only confirm
+  const h = harness(t, ['', '',  '',       '3',    '1', '',    '2',             'y']);
+  recordLark(h);
+  assert.equal(await setupCommand(h.options), 0);
+  assert.equal(h.manifest().agents[0].larkMessageAccess, 'bot');
+  assert.equal(h.manifest().agents[0].meetingNotes, false);
+  assert.doesNotMatch(h.written(), /开着：[^\n]*会议纪要入库/);
+
+  // Switching them on is refused, and nothing changes.
+  //                          change asd  other  notes  done  discard
+  const refused = harness(t, ['2',        '10',  '4',   '5',  '12']);
+  const before = existing(refused, { larkMessageAccess: 'bot' });
+  assert.equal(await setupCommand(refused.options), 0);
+  assert.match(refused.written(), /会议纪要要以你的身份读取：仅机器人权限下不能开\n[\s\S]*4\) 会议纪要入库\s+关 · /);
+  assert.deepEqual(refused.manifest().agents, [before]);
+  assert.deepEqual(refused.calls, []);
+
+  // An instance that stores them and moves to a bot-only app switches them off.
+  //                        change asd  飞书应用  pick  bot-only  save  call it 小助手
+  const moved = harness(t, ['2',        '6',      '2',  '2',      '11', 'n']);
+  const was = existing(moved, { meetingNotes: true });
+  recordLark(moved, { name: '小助手' });
+  assert.equal(await setupCommand(moved.options), 0);
+  assert.match(moved.written(), /仅机器人权限不能读取会议纪要，会议纪要入库随之关掉/);
+  assert.deepEqual(moved.manifest().agents, [{ ...was, larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_owner', meetingNotes: false }]);
 });
 
 test('会议纪要入库 is one instance\'s: refused while another has it, switched on like any other setting', async (t) => {

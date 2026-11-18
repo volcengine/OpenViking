@@ -192,6 +192,15 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /OV_SUPERAGENT_LARK_MESSAGE_ACCESS must be one of: owner, bot/);
     setEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', undefined);
   });
+  it('knows a bot-only owner only by a well-formed open_id', () => {
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', undefined);
+    assert.equal(getConfig().larkOwnerOpenId, null);
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', 'ou_owner12345678');
+    assert.equal(getConfig().larkOwnerOpenId, 'ou_owner12345678');
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', 'someone');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_LARK_OWNER_OPEN_ID must be a Feishu\/Lark open_id/);
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', undefined);
+  });
   it('stores meeting notes only on an instance that opts in and has Feishu/Lark', () => {
     setEnv('OV_SUPERAGENT_MEETING_NOTES', undefined);
     assert.equal(getConfig().meetingNotes, false);
