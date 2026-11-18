@@ -54,11 +54,14 @@ function expected(row) {
 export class DecisionPolicy {
   constructor({
     store, harness, logger, recordActivity, explicitSilence = true, decisionReminderLimit = 3,
-    notifyFailure = null, isStopping = () => false,
+    notifyFailure = null, claimFor = () => null, isStopping = () => false,
   }) {
-    Object.assign(this, { store, harness, logger, recordActivity, explicitSilence, decisionReminderLimit, notifyFailure, isStopping });
+    Object.assign(this, {
+      store, harness, logger, recordActivity, explicitSilence, decisionReminderLimit, notifyFailure, claimFor, isStopping,
+    });
     this.nudged = new Map();
     this.recovered = new Set();
+    this.released = new Set();
   }
 
   onTurnSucceeded({ inboundSeqs = [] } = {}) {
@@ -87,7 +90,8 @@ export class DecisionPolicy {
 
   settle({ inboundSeqs, runtime }) {
     const scopes = this.newestPerScope(inboundSeqs);
-    const counts = { delivered: 0, silent: 0, superseded: 0, expected_unsettled: 0, optional_unsettled: 0, nudged: 0 };
+    const counts = { delivered: 0, silent: 0, superseded: 0, claimed: 0,
+      expected_unsettled: 0, optional_unsettled: 0, nudged: 0 };
     for (const [scopeKey, row] of scopes) {
       const outcome = this.store.coveringDecision(scopeKey, row.seq);
       if (outcome) {
@@ -97,6 +101,14 @@ export class DecisionPolicy {
       // The newer input is checked when its own turn ends.
       if (this.store.newerAcceptedSeq(scopeKey, row.seq) !== null) {
         counts.superseded += 1;
+        continue;
+      }
+      // task_inputs is the durable claim: creating/routing the task and its
+      // claim commit together. A worker turn has no bearing on reminders; the
+      // task keeps the input until its report is settled or the task releases
+      // it after a failure/stop.
+      if (this.claimFor(row.seq)) {
+        counts.claimed += 1;
         continue;
       }
       if (!expected(row)) {
@@ -143,7 +155,7 @@ export class DecisionPolicy {
 
   recoverStopped(inboundSeqs, runtime) {
     const scopes = this.newestPerScope(inboundSeqs);
-    const counts = { decided: 0, superseded: 0, redelivered: 0, missing: 0 };
+    const counts = { decided: 0, superseded: 0, claimed: 0, redelivered: 0, missing: 0 };
     for (const [scopeKey, row] of scopes) {
       if (this.store.coveringDecision(scopeKey, row.seq)) {
         counts.decided += 1;
@@ -151,6 +163,10 @@ export class DecisionPolicy {
       }
       if (this.store.newerAcceptedSeq(scopeKey, row.seq) !== null) {
         counts.superseded += 1;
+        continue;
+      }
+      if (this.claimFor(row.seq)) {
+        counts.claimed += 1;
         continue;
       }
       if (this.recovered.has(row.seq)) {
@@ -166,6 +182,49 @@ export class DecisionPolicy {
       counts.redelivered += 1;
     }
     if (scopes.size > 0) this.logger.info('stopped_turn_settlement', counts);
+    return counts;
+  }
+
+  // A task that failed, timed out or was stopped no longer owns its request.
+  // Put the original accepted inputs back through the normal router path. This
+  // is deliberately task-level recovery: worker turns themselves never run
+  // the decision reminder policy.
+  onClaimsReleased({ inboundSeqs = [], claim = null } = {}) {
+    if (this.isStopping()) return;
+    try {
+      this.recoverReleased(inboundSeqs, this.store.getCognitionState().runtime, claim);
+    } catch (error) {
+      this.logger.warn('task_claim_recovery_failed', { error: safeError(error) });
+    }
+  }
+
+  recoverReleased(inboundSeqs, runtime, claim = null) {
+    const scopes = this.newestPerScope(inboundSeqs);
+    const counts = { decided: 0, superseded: 0, reclaimed: 0, redelivered: 0, repeated: 0 };
+    for (const [scopeKey, row] of scopes) {
+      if (this.store.coveringDecision(scopeKey, row.seq)) {
+        counts.decided += 1;
+        continue;
+      }
+      if (this.store.newerAcceptedSeq(scopeKey, row.seq) !== null) {
+        counts.superseded += 1;
+        continue;
+      }
+      if (this.claimFor(row.seq)) {
+        counts.reclaimed += 1;
+        continue;
+      }
+      const release = `${claim ?? 'unknown'}:${row.seq}`;
+      if (this.released.has(release)) {
+        counts.repeated += 1;
+        continue;
+      }
+      this.remember(release, this.released);
+      this.harness.redeliverUndecided(row, { seq: row.seq, undecided: this.explicitSilence });
+      this.missing(row, 'NUDGED', runtime, 'task_released');
+      counts.redelivered += 1;
+    }
+    if (scopes.size > 0) this.logger.info('task_claim_recovery', counts);
     return counts;
   }
 

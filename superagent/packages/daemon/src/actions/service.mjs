@@ -212,18 +212,6 @@ export class ActionService {
     return [...new Map(rows.map((row) => [row.seq, row])).values()].sort((a, b) => a.seq - b.seq);
   }
 
-  // Routing an input to a task is the router's decision on it: the turn-end
-  // check must not ask for another. The relayed result later records the
-  // delivery over it.
-  routedDecisions(rows) {
-    if (!this.config.explicitSilence) return;
-    for (const row of rows) {
-      try { this.store.recordDecision({ row, outcome: 'silent' }); } catch (error) {
-        this.logger.warn('decision_record_failed', { error: safeError(error) });
-      }
-    }
-  }
-
   requireTasks() {
     if (!this.tasks) throw blocked('unsupported', `There are no workers on this instance. ${NO_ACTION}`);
     return this.tasks;
@@ -247,7 +235,6 @@ export class ActionService {
     if (input.follows && !tasks.get(input.follows)) throw blocked('unknown_task', `No task ${input.follows} to follow. ${NO_ACTION}`);
     const requester = senderLabel(this.store.inboundBySeq(rows[0].seq));
     const task = tasks.create({ rows, title: input.title, note: input.note ?? '', requester, runtime, parent: input.follows ?? null });
-    this.routedDecisions(rows);
     return {
       text: `Created ${task.id}${task.parent_id ? `, following ${task.parent_id}` : ''}: ${task.status === 'running' ? 'a worker is on it' : 'it waits for a free worker'}. Tell the requester once that you are on it; the result comes back as a [task report] input.`,
       data: { task_id: task.id, status: task.status },
@@ -269,7 +256,6 @@ export class ActionService {
     try { task = tasks.route(input.task_id, rows, input.role); } catch (error) {
       throw blocked(error.code ?? 'unknown_task', `${error.message}. ${NO_ACTION}`);
     }
-    this.routedDecisions(rows);
     return {
       text: `Routed ${rows.length} input(s) to ${task.id} as ${input.role}; status ${task.status}.`,
       data: { task_id: task.id, status: task.status },

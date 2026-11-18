@@ -347,6 +347,7 @@ export class PersonalAgentDaemon {
           },
           logger: this.logger.child({ component: 'tasks' }),
           recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
+          releaseClaims: (seqs, claim) => this.decisionPolicy?.onClaimsReleased({ inboundSeqs: seqs, claim }),
         });
         this.actions.attachTasks(this.tasks, { runtime: () => this.agentRuntime.runtime, supports: (id) => executor.supports(id) });
       }
@@ -411,6 +412,7 @@ export class PersonalAgentDaemon {
         explicitSilence: Boolean(this.config.explicitSilence),
         decisionReminderLimit: this.config.decisionReminderLimit,
         notifyFailure: (info) => this.failurePolicy.notifyTurnFailure(info),
+        claimFor: (seq) => this.tasks?.decisionClaim(seq) ?? null,
         isStopping: () => this.shuttingDown,
       });
       this.meeting.attachHarness({ runtime: this.agentRuntime });

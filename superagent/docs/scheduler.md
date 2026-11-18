@@ -178,9 +178,12 @@ So a task takes only what changes or answers the work it is doing:
 | `task_stop` | Stops a task and its worker; only when the requester or the owner asks. |
 | `task_list` | The working set (every live task and the 32 most recently ended), one task in detail, the tasks one person asked for (`for_event`), or a search over titles. Each line says how long a task has been working and whether its latest result was sent (how long ago, as which message). |
 
-Routing an input to a task records it as decided (`decisions`, `silent`), so the
-turn-end check does not ask again; the relayed result records the delivery over
-it.
+Routing an input to a task claims it in `task_inputs`, in the same transaction
+that creates or updates the task. The turn-end reminder skips a claim while its
+task is active, and while a successful final report is waiting for the router;
+the relayed delivery or `stay_silent` records the final decision. A failed,
+timed-out or stopped task releases its claims and offers the original inputs to
+the router again. Startup reconciliation does the same for an orphaned claim.
 
 ### Workers
 
