@@ -118,7 +118,14 @@
       white-space: nowrap;
     }
 
+    .ov-file-history__version-badge {
+      box-sizing: border-box;
+      color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+      background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+    }
+
     i {
+      box-sizing: border-box;
       flex: none;
       height: 18px;
       padding: 0 6px;

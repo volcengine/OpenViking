@@ -4,6 +4,14 @@ import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import type { Locale } from '../../shared/locale.js';
 import { resolveConsoleLocale } from './labels.js';
 
+const builtInPrompts = new Set(
+  (['en-US', 'zh-CN'] as const).flatMap((locale) =>
+    Object.values(resolveConsoleLocale(locale).compileQuickInputs).map(
+      ({ prompt }) => prompt,
+    ),
+  ),
+);
+
 export function compileQuickInputProps({
   conversation,
   locale,
@@ -42,8 +50,7 @@ export function compileQuickInputProps({
       ((input) => {
         const draft = conversation?.draft ?? managedDraft;
         if (busy || draft === input.prompt) return;
-        if (draft && !quickInputs.some(({ prompt }) => prompt === draft))
-          return;
+        if (draft && !builtInPrompts.has(draft)) return;
         if (conversation?.draft === undefined) setDraft(input.prompt);
         conversation?.onDraftChange?.(input.prompt);
       }),

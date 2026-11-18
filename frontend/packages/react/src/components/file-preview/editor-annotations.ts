@@ -2,6 +2,7 @@ import {
   RangeSet,
   StateEffect,
   StateField,
+  type EditorState,
   type Text,
 } from '@codemirror/state';
 import {
@@ -195,13 +196,21 @@ export function editorAnnotations(
     },
   );
 
-  return [
-    rows,
-    hovered,
-    hover,
-    tooltips({
-      position: 'absolute',
-      tooltipSpace: (view) => view.dom.getBoundingClientRect(),
-    }),
-  ];
+  return {
+    extensions: [
+      rows,
+      hovered,
+      hover,
+      tooltips({
+        position: 'absolute',
+        tooltipSpace: (view) => view.dom.getBoundingClientRect(),
+      }),
+    ],
+    firstLine(state: EditorState) {
+      let first: number | undefined;
+      for (const pos of state.field(rows).keys())
+        if (first === undefined || pos < first) first = pos;
+      return first;
+    },
+  };
 }

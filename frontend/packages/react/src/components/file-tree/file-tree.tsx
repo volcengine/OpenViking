@@ -3,10 +3,10 @@ import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
 
+import { orderContextRoots } from '../../shared/context-tree-root-order.js';
 import { resolveFileTreeLabels } from './file-tree-labels.js';
 import { FileTreeBody } from './file-tree-body.js';
 import { handleRowKeyDown } from './file-tree-keyboard.js';
-import { orderContextRoots } from './file-tree-root-order.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { FileTreeToolbar } from './file-tree-toolbar.js';
 import type {
@@ -18,10 +18,10 @@ import { FILE_TREE_ROW_ATTRIBUTE } from './types.js';
 import { useFileTreeActions } from './use-file-tree-actions.js';
 
 export { FileTreeSpinner } from './file-tree-spinner.js';
+export { splitVikingUri } from '../../shared/viking-uri.js';
 export {
   resolveFileTreeInfoKey,
   showsInlineDescription,
-  splitVikingUri,
 } from './file-tree-info.js';
 export {
   DEFAULT_INFO_LABELS,
