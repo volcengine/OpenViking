@@ -105,13 +105,14 @@ handoff prepared meanwhile carries the rows before it.
 `ov_session_sync` binds each epoch's session to the namespace the connection
 writes to (server, and the account and user OV authenticated; rotating a key
 for the same user keeps it), and persists the acknowledged sequence, uncertain
-append intent and finalization watermark. Recall and the archive tool use only
+append intent, pending asynchronous Task receipt and finalization watermark. Recall and the archive tool use only
 sessions of the current namespace (`ovSessionFor`). Changing the connection's
 identity starts the current epoch over in a fresh session, replaying its journal;
 an old identity's pending write is never reconciled against the new connection,
 and older epochs and archives stay under the identity they were created in. At
 first binding, a row from before rows were bound is this namespace's only if its
-session is found here under the same URI; any other is logged once
+session is found here under the same URI (or its exact session ID is verified
+when the legacy row has no URI); any other is logged once
 (`ov_epochs_left_behind`) and left alone. Older epochs that were never mirrored
 are not imported: their identity is unknown.
 SQLite's cognition journal remains the durable source for this
@@ -136,16 +137,19 @@ still counts against the context budget before it is dropped. The daemon disable
 OV reports 24,000 pending tokens, it commits with `retention_mode=turn_budget`,
 keeping the newest complete turns, up to 24,000 tokens, live as raw messages.
 Assembly requests 48,000 tokens, so the live session fits whole. OV's pending
-tokens decide commits of the active epoch, and a commit with an unknown outcome
-is safe to repeat, because one that landed leaves nothing pending. A commit
+tokens decide commits of the active epoch. A synchronous commit with a lost
+response can be retried because one that landed leaves nothing pending; an
+accepted asynchronous commit instead resumes its original Task. A commit
 runs only after a complete sync, so an uncertain append is reconciled before it
 can be archived.
 
 After `/new`, the idle checkpoint also syncs retired epochs and commits them in
 full (`keep_recent_count=0`), even below the token threshold or if they were
 never mirrored, so a short conversation still reaches memory extraction. The
-watermark advances only after OV acknowledges the archive (retrying a lost
-response commits an empty session, a no-op); failures are retried on later
+watermark advances only after OV acknowledges the archive (a completed Task or
+the Core's `archived: true` result; background memory extraction need not finish).
+An accepted Task is resumed, while retrying a lost synchronous response commits
+an empty session, a no-op; failures are retried on later
 checks and after restart, and logged with their cause
 (`ov_epoch_finalize_failed`). Retired epochs have a queue of their own, started
 after the current epoch's queued work: OV answers a full commit only once the
@@ -156,12 +160,51 @@ check. This protocol assumes exclusive
 daemon ownership of these sessions: do not append or commit them from another
 client.
 
-A write timeout preserves its source ID. Before retrying, the next sync scans
-OV live messages and avoids re-appending an observed ID. OV currently has no
+A write timeout without an acceptance receipt preserves its source ID. Before
+retrying, the next sync scans OV live messages and avoids re-appending an observed ID. OV currently has no
 idempotent append API: an original write arriving after reconciliation can still
 duplicate a source. This is not an exactly-once remote transport guarantee.
 External deliveries (Lark, Weixin) use the Core `outbox` idempotency ledger
 independently.
+
+## Synchronous and asynchronous session writes
+
+`OVSessionClient` interprets the actual response, not the endpoint's domain or
+version. A complete synchronous result returns immediately. `accepted: true`
+(or HTTP 202) is only admission: a Task ID is required and queried through the
+same authenticated `/api/v1/tasks/{id}` endpoint. Creation returns only after
+the session's exact ID and URI have been verified by GET; an existing fixed ID
+or `ALREADY_EXISTS` is recovered by that same check, never by constructing a URI.
+
+Before polling, `ov_session_sync.pending_task` stores the operation, target
+sequence and receipt, alongside the epoch and authenticated namespace. It is
+cleared together with the acknowledged cursor or finalization watermark. Polls
+are bounded (200 ms interval, by default the connection's 15 s timeout). Timeout,
+query failure, malformed acceptance and missing Tasks do not advance cursors or
+resubmit writes. Restart resumes the original receipt before a later write or
+context read. Known terminal failures retain the journal intent for a later
+retry and report a business error code without private server error bodies.
+
+An expired create Task can be recovered by verifying the exact session. For an
+append or commit whose Task disappeared, the result remains unresolved: absence
+from live messages does not prove a queued append failed, and the client cannot
+prove a specific commit from an empty session alone. Restore Task visibility or
+reconcile the remote operation with explicit evidence before clearing its
+receipt. This conservative behavior prevents blind duplicate submission; it
+does not claim an exactly-once guarantee for a lost HTTP response before any
+receipt was obtained. No server dispatch settings or SDK replacement is needed.
+
+Pending appends are resumed before choosing the next journal row, even if their
+source was cancelled by normal temporary-reaction cleanup or the journal head
+has moved backwards. Resume uses only the saved receipt; it never re-posts a
+cancelled message. Completion clears the receipt and acknowledges its original
+sequence atomically. Retired epochs with outstanding receipts remain eligible
+for recovery even when all their journal rows have been cancelled. A failed Task
+is reported without advancing the cursor; subsequent sync can then skip the
+cancelled source and continue with later messages.
+
+Regression tests: `node --test packages/daemon/test/ov-session-*.test.mjs`
+from `superagent/`.
 
 `read_openviking_session_context` exposes read-only context, archive listing,
 archive reading (the original messages) and grep. Archives are read from their

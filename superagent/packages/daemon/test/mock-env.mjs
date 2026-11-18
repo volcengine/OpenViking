@@ -408,10 +408,14 @@ export async function startMockEnv({
       check: ovCheck,
       namespace: 'mock-namespace',
       messages: new Map(),
-      async create(sessionId) { return { session_id: sessionId, uri: `viking://session/${sessionId}` }; },
+      async create(sessionId) { this.messages.set(sessionId, []); return { session_id: sessionId, uri: `viking://session/${sessionId}` }; },
       async append(id, message) { const rows = this.messages.get(id) || []; rows.push({ ...message, parts: [{ type: 'text', text: message.content }] }); this.messages.set(id, rows); },
       async context(id) { return { latest_archive_overview: '', messages: this.messages.get(id) || [], stats: { totalArchives: 0 } }; },
-      async request() { return { pending_tokens: 0 }; },
+      async request(route) {
+        const id = decodeURIComponent(route.slice('/sessions/'.length));
+        if (!this.messages.has(id)) throw Object.assign(new Error('Session not found'), { httpStatus: 404 });
+        return { session_id: id, uri: `viking://session/${id}`, pending_tokens: 0 };
+      },
       ...ovClient,
     },
   });

@@ -22,14 +22,17 @@ function setup(t) {
     // The namespace an authenticated connection writes to (OVSessionClient.check).
     namespace: 'test-namespace',
     messages: [], archives: 0, failed: 0, writes: 0, commits: 0, pending: 0,
-    async create(id) { return { session_id: id, uri: `viking://session/${id}` }; },
+    async create(id) { this.sessionId = id; return { session_id: id, uri: `viking://session/${id}` }; },
     async append(id, message) {
       this.writes++;
       this.messages.push({ ...message, parts: [{ type: 'text', text: message.content }] });
       if (this.timeout) { this.timeout = false; throw new Error('timeout'); }
     },
     async read() { return this.messages.map((m) => JSON.stringify(m)).join('\n'); },
-    async request() { return { pending_tokens: this.pending }; },
+    async request(route) {
+      if (!this.sessionId || route !== `/sessions/${this.sessionId}`) throw new OVUnavailableError('Session not found', 404);
+      return { session_id: this.sessionId, uri: `viking://session/${this.sessionId}`, pending_tokens: this.pending };
+    },
     async commit() {
       this.commits++;
       if (this.commitTimeout) { this.commitTimeout = false; throw new OVUnavailableError('timeout'); }
@@ -185,7 +188,7 @@ test('OV HTTP client pins auth, disables auto commits, retains a token tail, and
   let request;
   const client = new OVSessionClient(config, { fetch: async (url, options) => {
     request = { url, options };
-    return new Response(JSON.stringify({ status: 'ok', result: { session_id: 'test' } }));
+    return new Response(JSON.stringify({ status: 'ok', result: { session_id: 'test', uri: 'viking://user/test/sessions/test' } }));
   } });
   await client.create('test');
   assert.equal(request.url, 'https://ov.invalid/api/v1/sessions');

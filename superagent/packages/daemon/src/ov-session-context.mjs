@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { createHash, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { formatCognitionJournalLine } from './cognition.mjs';
 import { safeError } from './logger.mjs';
-import { OVConnection, OVUnavailableError, readOVConfig } from './ov-connection.mjs';
+import { OVConnection, OVUnavailableError, OV_HTTP_STATUS, readOVConfig } from './ov-connection.mjs';
 
 // A commit keeps the newest complete turns, up to RETAINED_TOKENS, live as raw
 // messages and runs once COMMIT_TOKENS more are pending, so the live session
@@ -16,6 +17,26 @@ const CONTEXT_TOKENS = RETAINED_TOKENS + COMMIT_TOKENS;
 // The identity of a sync row from before rows were bound whose session this
 // connection did not find as its own (bindIdentity).
 const FOREIGN = 'foreign';
+const TASK_OPERATIONS = { create_session: 'create_session', append: 'add_message', commit: 'session_commit' };
+
+export class OVSessionTaskError extends Error {
+  constructor(code, { terminal = false, alreadyExists = false } = {}) {
+    // Task bodies may contain credentials or private messages. Expose a stable
+    // business error code, never the untrusted error message/body.
+    super(`OpenViking session task ${code}`);
+    this.name = 'OVSessionTaskError';
+    this.code = code;
+    this.terminal = terminal;
+    this.alreadyExists = alreadyExists;
+  }
+}
+
+const validateSession = (session, id) => {
+  if (session?.session_id !== id || typeof session.uri !== 'string' || !session.uri.startsWith('viking://')) {
+    throw new Error('OV returned an invalid session identity');
+  }
+  return session;
+};
 
 // No response and no timeout: OV was not reached, so any other request fails
 // as well. One request that ran out of time says nothing about the others.
@@ -69,6 +90,8 @@ export class OVSessionClient extends OVConnection {
   constructor(configPath, options) {
     super(readOVConfig(configPath), options);
     this.namespace = null;
+    this.taskTimeoutMs = options?.taskTimeoutMs ?? this.timeoutMs;
+    this.taskPollMs = options?.taskPollMs ?? 200;
   }
 
   // Also settles which namespace this connection writes to: the server, and
@@ -85,23 +108,90 @@ export class OVSessionClient extends OVConnection {
   }
 
   async request(route, body) {
-    return (await this.json(`/api/v1${route}`, body)).result;
+    const response = await this.json(`/api/v1${route}`, body);
+    // A 202 write cannot silently become a successful synchronous append if a
+    // buggy server omits accepted/task_id. Preserve it as unresolved acceptance.
+    return response[OV_HTTP_STATUS] === 202 && body !== undefined
+      ? { ...response.result, accepted: true } : response.result;
   }
 
-  create(sessionId) {
-    return this.request('/sessions', { session_id: sessionId, auto_commit_policy: {
+  async create(sessionId, options = {}) {
+    const result = await this.write('create_session', sessionId, '/sessions', { session_id: sessionId, auto_commit_policy: {
       pending_token_threshold: 0, message_count_threshold: 0, idle_timeout_seconds: 0,
-    }, memory_policy: { memory_types: [...OV_MEMORY_TYPES] } });
+    }, memory_policy: { memory_types: [...OV_MEMORY_TYPES] } }, options);
+    return validateSession(result, sessionId);
   }
-  append(sessionId, message) { return this.request(`/sessions/${encodeURIComponent(sessionId)}/messages`, message); }
+  append(sessionId, message, options) {
+    return this.write('append', sessionId, `/sessions/${encodeURIComponent(sessionId)}/messages`, message, options);
+  }
+
+  // Responses, not URL/version switches, select the protocol. A pre-generated
+  // URI in an acceptance still does not prove execution. Persist before polling.
+  async write(operation, sessionId, route, body, { pending, onAccepted = () => {}, stopped = () => false } = {}) {
+    const result = pending ?? await this.request(route, body);
+    if (result?.accepted !== true) return result;
+    // Even malformed acceptance is an ambiguous write: retain it rather than
+    // submitting again on every idle checkpoint.
+    if (!pending) onAccepted(result);
+    if (typeof result.task_id !== 'string' || !result.task_id.trim()
+      || (result.session_id != null && result.session_id !== sessionId)
+      || (result.operation != null && result.operation !== TASK_OPERATIONS[operation])) {
+      throw new OVSessionTaskError('PROTOCOL_ERROR');
+    }
+    const task = await this.waitForTask(result.task_id, sessionId, stopped, operation);
+    if (operation === 'create_session') return this.request(`/sessions/${encodeURIComponent(sessionId)}`);
+    return task.result;
+  }
+
+  async waitForTask(taskId, sessionId, stopped, operation) {
+    const deadline = Date.now() + this.taskTimeoutMs;
+    while (true) {
+      if (stopped()) throw new Error('OV sync stopped');
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new OVSessionTaskError('RESULT_UNKNOWN');
+      let task;
+      try {
+        task = (await this.json(`/api/v1/tasks/${encodeURIComponent(taskId)}`, undefined,
+          { timeoutMs: Math.min(this.timeoutMs, remaining) })).result;
+      } catch (error) {
+        if (error.httpStatus === 404) throw new OVSessionTaskError('TASK_NOT_FOUND');
+        throw error;
+      }
+      if (stopped()) throw new Error('OV sync stopped');
+      if (task?.task_id !== taskId || typeof task.status !== 'string'
+        || (task.resource_id != null && task.resource_id !== sessionId
+          && !String(task.resource_id).endsWith(`/sessions/${sessionId}`))) {
+        throw new OVSessionTaskError('PROTOCOL_ERROR');
+      }
+      if (task.task_type != null && task.task_type !== TASK_OPERATIONS[operation]) {
+        throw new OVSessionTaskError('PROTOCOL_ERROR');
+      }
+      // Commit archiving and memory extraction are distinct stages. The Core
+      // archived:true result means the archive is durable even if its extraction
+      // Task is still consuming. Access acceptance alone never carries this proof.
+      if (task.status === 'completed' || (operation === 'commit' && task.result?.archived === true)) return task;
+      if (['failed', 'cancelled'].includes(task.status)) {
+        const detail = task.error;
+        const alreadyExists = detail?.code === 'ALREADY_EXISTS'
+          || /(?:resource|session).*already exists/i.test(typeof detail === 'string' ? detail : detail?.message ?? '');
+        const code = alreadyExists ? 'ALREADY_EXISTS'
+          : (typeof detail?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(detail.code) ? detail.code : 'FAILED');
+        throw new OVSessionTaskError(code, { terminal: true, alreadyExists });
+      }
+      if (!['submitted', 'pending', 'consuming', 'running'].includes(task.status)) {
+        throw new OVSessionTaskError('PROTOCOL_ERROR');
+      }
+      await delay(Math.min(this.taskPollMs, Math.max(1, deadline - Date.now())));
+    }
+  }
   context(sessionId) {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${CONTEXT_TOKENS}`);
   }
   // The turn count is OV's maximum, so only the token budget binds.
-  commit(sessionId, { final = false } = {}) {
-    return this.request(`/sessions/${encodeURIComponent(sessionId)}/commit`, final ? { keep_recent_count: 0 } : {
+  commit(sessionId, { final = false, ...options } = {}) {
+    return this.write('commit', sessionId, `/sessions/${encodeURIComponent(sessionId)}/commit`, final ? { keep_recent_count: 0 } : {
       retention_mode: 'turn_budget', keep_recent_turn_count: 10_000, retained_message_token_budget: RETAINED_TOKENS,
-    });
+    }, options);
   }
   // An archive's original messages, read from storage. OV's archive API adds
   // the Working Memory where a release still writes one, and up to v0.4.23
@@ -155,6 +245,7 @@ export class OVSessionContext {
     const columns = new Set(store.db.prepare('PRAGMA table_info(ov_session_sync)').all().map(({ name }) => name));
     if (!columns.has('identity')) store.db.exec('ALTER TABLE ov_session_sync ADD COLUMN identity TEXT');
     if (!columns.has('finalized_seq')) store.db.exec('ALTER TABLE ov_session_sync ADD COLUMN finalized_seq INTEGER NOT NULL DEFAULT -1');
+    if (!columns.has('pending_task')) store.db.exec('ALTER TABLE ov_session_sync ADD COLUMN pending_task TEXT');
     // The epoch's session in the namespace this connection writes to, once
     // it exists there; null before binding and for another connection's.
     // Recall and the archive tool use nothing else, so neither reaches into
@@ -215,13 +306,66 @@ export class OVSessionContext {
       state = this.store.db.prepare('SELECT * FROM ov_session_sync WHERE epoch=?').get(epoch);
     }
     if (!state.uri) {
-      const remote = await this.client.create(state.session_id);
+      let remote;
+      if (!state.pending_task) {
+        try {
+          remote = validateSession(await this.client.request(`/sessions/${encodeURIComponent(state.session_id)}`), state.session_id);
+        } catch (error) {
+          if (error.httpStatus !== 404) throw error;
+        }
+      }
+      if (!remote) {
+        try { remote = await this.write(state, 'create', 0, (options) => this.client.create(state.session_id, options)); }
+        catch (error) {
+          if (!error.alreadyExists && error.httpStatus !== 409 && error.code !== 'TASK_NOT_FOUND') throw error;
+          remote = validateSession(await this.client.request(`/sessions/${encodeURIComponent(state.session_id)}`), state.session_id);
+        }
+      }
       if (this.stopped) throw new Error('OV sync stopped');
-      if (!remote?.uri || remote.session_id !== state.session_id) throw new Error('OV returned an invalid session identity');
-      this.store.db.prepare('UPDATE ov_session_sync SET uri=? WHERE epoch=?').run(remote.uri, epoch);
+      validateSession(remote, state.session_id);
+      this.store.db.prepare('UPDATE ov_session_sync SET uri=?,pending_task=NULL WHERE epoch=? AND identity=?')
+        .run(remote.uri, epoch, this.identity);
       state.uri = remote.uri;
+      state.pending_task = null;
+    }
+    // Finish a previously accepted commit before any later append/context. The
+    // final watermark uses the original target, not a newer journal head.
+    if (state.pending_task) {
+      const pending = JSON.parse(state.pending_task);
+      if (['commit', 'finalize'].includes(pending.operation)) await this.commit(state, pending.operation === 'finalize', pending.seq);
     }
     return state;
+  }
+
+  // Intent lives beside the namespace-bound cursor; neither timeout nor restart
+  // discards it. Clear only after the caller atomically acknowledges the write.
+  async write(state, operation, seq, submit) {
+    const saved = state.pending_task ? JSON.parse(state.pending_task) : null;
+    if (saved && (saved.operation !== operation || saved.seq !== seq)) {
+      throw new OVSessionTaskError('PENDING_OPERATION_CONFLICT');
+    }
+    try {
+      return await submit({ pending: saved?.acceptance, stopped: () => this.stopped,
+        onAccepted: (acceptance) => {
+          // Cancellation can restore a previously checked journal head; an
+          // accepted write still requires another checkpoint in that case.
+          this.checked.delete(state.epoch);
+          state.pending_task = JSON.stringify({ operation, seq, acceptance: {
+            accepted: true, task_id: acceptance.task_id, session_id: acceptance.session_id, operation: acceptance.operation,
+          } });
+          this.store.db.prepare('UPDATE ov_session_sync SET pending_task=? WHERE epoch=? AND identity=?')
+            .run(state.pending_task, state.epoch, this.identity);
+        } });
+    } catch (error) {
+      if (error.terminal) this.clearTask(state);
+      throw error;
+    }
+  }
+
+  clearTask(state) {
+    this.store.db.prepare('UPDATE ov_session_sync SET pending_task=NULL WHERE epoch=? AND identity=?')
+      .run(state.epoch, this.identity);
+    state.pending_task = null;
   }
 
   // Binds sync rows to the namespace this connection writes to, once per
@@ -236,13 +380,13 @@ export class OVSessionContext {
     const foreign = [];
     for (const row of legacy) {
       let ours = false;
-      if (row.uri) {
-        try {
-          ours = (await this.client.request(`/sessions/${encodeURIComponent(row.session_id)}`))?.uri === row.uri;
-        } catch (error) {
-          // Absent or out of reach here: another namespace's session.
-          if (error.httpStatus !== 404 && error.httpStatus !== 403) throw error;
-        }
+      try {
+        const remote = await this.client.request(`/sessions/${encodeURIComponent(row.session_id)}`);
+        ours = remote?.session_id === row.session_id && typeof remote.uri === 'string'
+          && remote.uri.startsWith('viking://') && (!row.uri || remote.uri === row.uri);
+      } catch (error) {
+        // Absent or out of reach here: another namespace's session.
+        if (error.httpStatus !== 404 && error.httpStatus !== 403) throw error;
       }
       this.store.db.prepare('UPDATE ov_session_sync SET identity=? WHERE epoch=?').run(ours ? identity : FOREIGN, row.epoch);
       if (!ours) foreign.push(row.epoch);
@@ -282,6 +426,21 @@ export class OVSessionContext {
   // Returns false when an unsettled local delivery stops the cursor; a later
   // checkpoint continues from it once it settles.
   async sync(state, epoch, throughSeq) {
+    // The journal is mutable: clearing a temporary reaction cancels its row,
+    // and can even move head behind the accepted append. Its durable receipt
+    // still owns the write. Resolve it before selecting/skipping journal rows;
+    // resuming needs no body and must never submit the cancelled source again.
+    if (state.pending_task) {
+      const pending = JSON.parse(state.pending_task);
+      if (pending.operation !== 'append' || pending.acceptance?.accepted !== true
+        || !Number.isSafeInteger(pending.seq) || pending.seq <= 0) {
+        throw new OVSessionTaskError('PROTOCOL_ERROR');
+      }
+      await this.write(state, 'append', pending.seq,
+        (options) => this.client.append(state.session_id, undefined, options));
+      if (this.stopped) throw new Error('OV sync stopped');
+      this.acknowledgeAppend(state, Math.max(state.synced_seq, pending.seq));
+    }
     // Bounded DB reads; no epoch-sized array of bodies is materialized.
     while (state.synced_seq < throughSeq) {
       if (this.stopped) throw new Error('OV sync stopped');
@@ -303,19 +462,25 @@ export class OVSessionContext {
         if (!item) throw new Error('OV sync source record is unavailable');
         this.store.db.prepare('UPDATE ov_session_sync SET pending_seq=? WHERE epoch=?').run(row.seq, epoch);
         state.pending_seq = row.seq;
-        await this.client.append(state.session_id, {
+        await this.write(state, 'append', row.seq, (options) => this.client.append(state.session_id, {
           ...ovAttribution(item),
           content: formatCognitionJournalLine(item),
           created_at: new Date(item.atMs).toISOString(),
           source_message_ids: [sourceId],
-        });
+        }, options));
       }
       if (this.stopped) throw new Error('OV sync stopped');
-      this.store.db.prepare('UPDATE ov_session_sync SET synced_seq=?,pending_seq=NULL WHERE epoch=?').run(row.seq, epoch);
-      state.synced_seq = row.seq;
-      state.pending_seq = null;
+      this.acknowledgeAppend(state, row.seq);
     }
     return true;
+  }
+
+  acknowledgeAppend(state, seq) {
+    this.store.db.prepare('UPDATE ov_session_sync SET synced_seq=?,pending_seq=NULL,pending_task=NULL WHERE epoch=? AND identity=?')
+      .run(seq, state.epoch, this.identity);
+    state.synced_seq = seq;
+    state.pending_seq = null;
+    state.pending_task = null;
   }
 
   // OV's recent raw history for a fresh native session. Older history stays in
@@ -381,18 +546,20 @@ export class OVSessionContext {
       WHERE j.epoch<? AND j.status IN ('PENDING','COMMITTED','UNCERTAIN')
         AND (s.identity=? OR (s.epoch IS NULL AND j.epoch>=?))
       GROUP BY j.epoch HAVING MAX(j.seq)>COALESCE(s.finalized_seq,-1)
-      ORDER BY j.epoch`).all(this.store.getCognitionState().epoch, this.identity, this.firstEpoch);
+      UNION
+      SELECT s.epoch, COALESCE((SELECT MAX(j.seq) FROM cognition_journal j
+        WHERE j.epoch=s.epoch AND j.status IN ('PENDING','COMMITTED','UNCERTAIN')),0) AS head
+      FROM ov_session_sync s WHERE s.epoch<? AND s.identity=? AND s.pending_task IS NOT NULL
+      ORDER BY epoch`).all(this.store.getCognitionState().epoch, this.identity, this.firstEpoch,
+        this.store.getCognitionState().epoch, this.identity);
     for (const row of retired) {
       if (this.stopped) throw new Error('OV sync stopped');
       try {
         const state = await this.session(row.epoch);
+        if (!state.pending_task && state.finalized_seq >= row.head) continue;
         if (!await this.sync(state, row.epoch, row.head)) continue;
         // No retained tail: this session will receive no more user turns.
-        // OV archives synchronously before returning, and retrying after
-        // an ambiguous response is safe (an empty session is a no-op).
-        await this.client.commit(state.session_id, { final: true });
-        if (this.stopped) throw new Error('OV sync stopped');
-        this.store.db.prepare('UPDATE ov_session_sync SET finalized_seq=? WHERE epoch=?').run(row.head, row.epoch);
+        await this.commit(state, true, row.head);
       } catch (error) {
         if (this.stopped) throw error;
         this.logger.warn('ov_epoch_finalize_failed', { epoch: row.epoch, error: safeError(error) });
@@ -403,12 +570,22 @@ export class OVSessionContext {
     }
   }
 
-  // Keeps no local commit state. A commit with an unknown outcome is safe to
-  // repeat: one that landed leaves nothing pending to trigger another.
+  async commit(state, final, seq) {
+    await this.write(state, final ? 'finalize' : 'commit', seq,
+      (options) => this.client.commit(state.session_id, { final, ...options }));
+    if (this.stopped) throw new Error('OV sync stopped');
+    this.store.db.prepare(`UPDATE ov_session_sync SET pending_task=NULL${final ? ',finalized_seq=?' : ''}
+      WHERE epoch=? AND identity=?`).run(...(final ? [seq] : []), state.epoch, this.identity);
+    state.pending_task = null;
+    if (final) state.finalized_seq = seq;
+  }
+
+  // Accepted commits remain durable until archiving completes. A synchronous
+  // lost response retains the existing no-op-on-empty retry behavior.
   async maybeCommit(state) {
     const meta = await this.client.request(`/sessions/${encodeURIComponent(state.session_id)}`);
     if (this.stopped) throw new Error('OV sync stopped');
-    if ((meta.pending_tokens ?? 0) >= COMMIT_TOKENS) await this.client.commit(state.session_id);
+    if ((meta.pending_tokens ?? 0) >= COMMIT_TOKENS) await this.commit(state, false, state.synced_seq);
   }
 
   stop() { this.stopped = true; }
