@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
@@ -7,27 +7,26 @@ import type {
   VikingBotReference,
   VikingBotReferences,
 } from '../../components/viking-bot/index.js';
+import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import {
   mentionPattern,
   mentionSearchRows,
   MENTION_ROOT,
-  normalizeMentionQuery,
 } from './mention-search.js';
-import type { ConsoleChatOptions } from './types.js';
 
 const emptyReferences: readonly VikingBotReference[] = [];
 
 export function useConversationReferences({
   enabled,
-  selection,
   requestOptions,
   scopeKey,
+  selection,
 }: {
   enabled: boolean;
-  selection?: ConsoleChatOptions['references'];
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
+  selection?: ConsoleChatOptions['referenceSelection'];
 }) {
   const inheritedClient = useOvClient('local');
   const inheritedSignal = useOvSignal();
@@ -68,19 +67,11 @@ export function useConversationReferences({
     (items: readonly VikingBotReference[]) => setSelected({ scope, items }),
     [scope],
   );
-  // Follow-up sends finish asynchronously and must preserve newer selections.
-  const latest = useRef({ scope, selection });
-  latest.current = { scope, selection };
+  const onSelectionChange = enabled ? selection?.onChange : undefined;
   const clearReferences = useCallback(
     (sent?: readonly VikingBotReference[]) => {
-      if (latest.current.scope !== scope) return;
-      const controlled = latest.current.selection;
-      if (controlled) {
-        const items = sent
-          ? controlled.selected.filter((item) => !sent.includes(item))
-          : emptyReferences;
-        if (items.length !== controlled.selected.length)
-          controlled.onChange(items);
+      if (onSelectionChange) {
+        if (!sent) onSelectionChange([]);
         return;
       }
       setSelected((current) => {
@@ -92,14 +83,19 @@ export function useConversationReferences({
           : { scope, items };
       });
     },
-    [scope],
+    [scope, onSelectionChange],
   );
   const [openCount, setOpenCount] = useState(0);
   const onOpenChange = useCallback((open: boolean) => {
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
   }, []);
   const [query, setQuery] = useState('');
-  const keyword = normalizeMentionQuery(query);
+  const keyword = query
+    .trim()
+    .replace(/^viking:\/\//i, '')
+    .split('/')
+    .filter(Boolean)
+    .join('/');
   const opened = enabled && openCount > 0;
   const tree = useDirectoryTree({
     client: opened ? client : null,
@@ -176,7 +172,7 @@ export function useConversationReferences({
     selected:
       selection?.selected ??
       (selected?.scope === scope ? selected.items : emptyReferences),
-    onChange: selection?.onChange ?? onChange,
+    onChange: onSelectionChange ?? onChange,
     onOpenChange,
     onQueryChange: setQuery,
     onExpand: (uri) => {

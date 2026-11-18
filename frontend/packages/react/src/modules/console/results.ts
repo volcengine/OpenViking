@@ -123,6 +123,10 @@ export function formatResult(
             typeof item.score === 'number' ? item.score.toFixed(3) : undefined,
           preview:
             typeof item.abstract === 'string' ? item.abstract : undefined,
+          content:
+            values.read_content === true && typeof item.content === 'string'
+              ? item.content
+              : undefined,
         });
       }
     }

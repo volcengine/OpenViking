@@ -137,51 +137,15 @@
   overflow: hidden;
 }
 
-/* ── 计数行与模式切换 ─────────────────────────────────────────────── */
+/* ── 计数行 ─────────────────────────────────────────────── */
 
 /* 计数行比结果行再缩进 12，与行内文字左对齐（行自身左右各留 12）。 */
 .ov-file-browser-search__summary {
-  display: flex;
   flex: none;
-  align-items: center;
-  gap: 8px;
   padding-left: 12px;
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
-}
-
-.ov-file-browser-search__mode-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
-  border: 0.5px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
-  border-radius: 4px;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 20px;
-}
-
-.ov-file-browser-search__switch {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-  font: inherit;
-  font-size: 13px;
-  line-height: 22px;
-  cursor: pointer;
-}
-
-.ov-file-browser-search__switch:hover {
-  text-decoration: underline;
-}
-
-.ov-file-browser-search__switch:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline-offset: 2px;
 }
 
 /* ── 模式下拉 ─────────────────────────────────────────────────────── */

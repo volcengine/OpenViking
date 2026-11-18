@@ -1,17 +1,25 @@
 import { useExposure } from '../../shared/analytics/use-exposure.js';
-import type { RefObject } from 'react';
 import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
-import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
-import type { SearchHit, SearchMode } from './search-types.js';
+import type { SearchHit } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
-/** The mode stays selectable while an active search changes state. */
+/**
+ * 结果区：计数行与列表，另有空态、加载骨架与失败三态。
+ *
+ * 计数行只在有结果时出现——没搜过的时候它没有可数的东西，画一条「检索到 0 条」
+ * 反而像搜索失败了。
+ *
+ * The result area: the count line and the list, plus the empty, loading and failure
+ * states.
+ *
+ * The count line only appears when there are results: before a search there is nothing
+ * to count, and "0 results" reads as a failure.
+ */
 export interface FileBrowserSearchResultsProps {
   open: boolean;
-  mode: SearchMode;
   listId: string;
   activeIndex: number;
   query: string;
@@ -23,9 +31,6 @@ export interface FileBrowserSearchResultsProps {
   /** 是否已经搜过；`false` 时显示空态。Whether a search has run; `false` shows the empty state. */
   searched: boolean;
   text: ResolvedLabels;
-  /** Focus returns to the search input after a mode is selected. */
-  fallbackFocusRef?: RefObject<HTMLElement | null>;
-  onSelectMode: (mode: SearchMode) => void;
   onOpen: (uri: string) => void;
 }
 
@@ -33,30 +38,6 @@ export interface FileBrowserSearchResultsProps {
 const SKELETON_WIDTHS = [368, 348, 319, 359, 335, 316, 368, 351];
 
 export function FileBrowserSearchResults({
-  mode,
-  fallbackFocusRef,
-  onSelectMode,
-  ...results
-}: FileBrowserSearchResultsProps) {
-  const showMode =
-    results.query.length > 0 || results.loading || results.searched;
-  return (
-    <>
-      {showMode ? (
-        <FileBrowserSearchModeRow
-          mode={mode}
-          count={results.hits.length || undefined}
-          text={results.text}
-          fallbackFocusRef={fallbackFocusRef}
-          onSelectMode={onSelectMode}
-        />
-      ) : null}
-      <SearchResultsBody {...results} />
-    </>
-  );
-}
-
-function SearchResultsBody({
   open,
   listId,
   activeIndex,
@@ -69,10 +50,7 @@ function SearchResultsBody({
   searched,
   text,
   onOpen,
-}: Omit<
-  FileBrowserSearchResultsProps,
-  'mode' | 'fallbackFocusRef' | 'onSelectMode'
->) {
+}: FileBrowserSearchResultsProps) {
   const exposure = useExposure(
     hits.length
       ? 'file_browser_search_results_show'
@@ -150,6 +128,9 @@ function SearchResultsBody({
     <>
       {failure}
       {loading ? <p role="status">{text.searchLoading}</p> : null}
+      <div className="ov-file-browser-search__summary">
+        {text.searchResultCount(hits.length)}
+      </div>
       <ul
         ref={exposure}
         id={listId}

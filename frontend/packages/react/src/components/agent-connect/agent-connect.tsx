@@ -26,6 +26,7 @@ function AgentConnectView({
   apiKey,
   locale: localeProp,
   baseUrl = DEFAULT_BASE_URL,
+  isEnterprise = false,
   agreementUrl,
   showOverseasTag,
   activeTabId: controlledTabId,
@@ -157,6 +158,7 @@ function AgentConnectView({
             apiKey={apiKey}
             locale={locale}
             baseUrl={baseUrl}
+            isEnterprise={isEnterprise}
             agreementUrl={agreementUrl}
             onCopy={onCopy}
           />

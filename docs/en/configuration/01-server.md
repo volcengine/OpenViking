@@ -303,7 +303,11 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
+| `cache.instances` | object | required when a cache consumer is enabled | Named CacheRuntime providers; must include `default` |
+| `agfs.cachefs.instance` | instance name | `"default"` | Runtime used when `cachefs.backend="cache"` |
+| `agfs.queuefs.instance` | instance name | `"default"` | Runtime used when `queuefs.backend="cache"` |
 | `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `postgres`, `cache` | `filesystem` | Path lock storage; `postgres` uses PostgreSQL directly, `cache` uses Redis |
+| `agfs.pathlock.instance` | instance name | `"default"` | Runtime used when `pathlock.provider="cache"`; it must use Redis |
 | `agfs.pathlock.sqlite_path` | absolute local file path | `{workspace}/_system/pathlock/pathlock.db` for `sqlite` | Shared SQLite lock database; optional override |
 | `agfs.pathlock.postgres_dsn_env` | environment variable name / `null` | `null` | Required for `postgres`; names the server environment variable containing the PostgreSQL DSN |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb`, `opengauss`, `pgvector` | `local` | Vector database backend; see [pgvector setup](../guides/25-pgvector.md) |
@@ -435,7 +439,8 @@ requirement, local vector storage's process lock, or other backend concurrency l
 #### Redis PathLock
 
 For Redis coordination,
-set `storage.agfs.pathlock.provider="cache"` and top-level `cache.provider="redis"`.
+set `storage.agfs.pathlock.provider="cache"` and select a Redis entry from
+`cache.instances` with `storage.agfs.pathlock.instance`.
 All replicas must use the same Redis deployment, top-level `service_name`, and
 lock expiry setting. See the [shared Redis configuration example](../guides/01-configuration.md).
 With either PathLock provider, shared QueueFS must also use a backend suitable for that deployment, such as

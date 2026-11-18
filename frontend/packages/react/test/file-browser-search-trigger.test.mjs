@@ -29,7 +29,9 @@ const trigger = () =>
 const dialog = () => document.querySelector('.ov-file-browser-search');
 const input = () => dialog().querySelector('.ov-file-browser-search__input');
 const modeSwitch = () =>
-  dialog().querySelector('.ov-file-browser-search__switch');
+  dialog().querySelector(
+    '.ov-file-browser-search__header button[role="combobox"]',
+  );
 const calls = (fetch) => fetch.calls.filter((call) => call.path === find);
 async function open() {
   await act(async () => {
@@ -71,7 +73,7 @@ test('search runs as you type, keeps the scope, and survives a locale change', a
       'Search files and content',
     );
     assert.equal(document.activeElement, input());
-    assert.equal(modeSwitch(), null);
+    assert.equal(modeSwitch().textContent, 'find');
 
     await type('  profile  ');
     assert.equal(calls(fetch).length, 0);
@@ -122,7 +124,7 @@ test('search runs as you type, keeps the scope, and survives a locale change', a
 
     await type('');
     await waitForDebounce();
-    assert.equal(modeSwitch(), null);
+    assert.equal(modeSwitch().textContent, 'find');
     assert.equal(calls(fetch).length, 1);
   } finally {
     await view.unmount();
@@ -166,7 +168,7 @@ test('failed searches expose the reason and can retry the same query', async () 
       dialog().querySelector('[role="alert"]').textContent,
       /demo search failed/,
     );
-    assert.ok(modeSwitch());
+    assert.equal(modeSwitch().textContent, 'find');
 
     available = true;
     await act(async () =>
@@ -178,7 +180,7 @@ test('failed searches expose the reason and can retry the same query', async () 
     assert.equal(calls(fetch).length, 3);
     assert.equal(calls(fetch)[2].body.query, 'profile');
     assert.match(dialog().textContent, /No matching resources/);
-    assert.ok(modeSwitch());
+    assert.equal(modeSwitch().textContent, 'find');
   } finally {
     await view.unmount();
   }
@@ -196,7 +198,7 @@ test('closing cancels the pending search, clears the draft and restores focus', 
     await waitForDebounce();
     const signal = calls(fetch)[0].init.signal;
     assert.ok(dialog().querySelector('[aria-busy="true"]'));
-    assert.ok(modeSwitch());
+    assert.equal(modeSwitch().textContent, 'find');
 
     await act(async () => dialog().querySelector('.ov-modal__close').click());
     await settle();

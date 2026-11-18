@@ -1,6 +1,5 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { downloadBlob } from '../../shared/download-blob.js';
 import type { CompileConfig } from './preview-workflow-types.js';
 
 export function savePreviewSnapshot(
@@ -54,6 +53,16 @@ export async function importPreviewPack(
   });
 }
 
+export function savePreviewBlob(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  // Let the browser acquire the URL before releasing it.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export async function downloadPreview(
   client: OvClient,
   uri: string,
@@ -79,5 +88,5 @@ export async function downloadPreview(
   );
   if (options.signal?.aborted) return;
   const name = uri.split('/').pop() || 'resource';
-  downloadBlob(blob, pack ? `${name}.ovpack` : name);
+  savePreviewBlob(blob, pack ? `${name}.ovpack` : name);
 }

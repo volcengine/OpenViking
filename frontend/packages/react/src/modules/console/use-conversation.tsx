@@ -19,17 +19,12 @@ import type { ConsoleProps } from './types.js';
 
 /** Console owns chat requests and sessions. */
 export function useConversation(
-  {
-    conversation,
-    chatOptions,
-    scopeKey,
-    requestOptions,
-    locale,
-    modes,
-  }: ConsoleProps,
+  props: ConsoleProps,
   setDraft: (value: SetStateAction<string>) => void,
   managedDraft = '',
 ): Partial<VikingBotProps> & { feedback?: ReactNode } {
+  const { conversation, chatOptions, scopeKey, requestOptions, locale, modes } =
+    props;
   const conversationLocale = useLocale(conversation?.locale ?? locale);
   const feedbackLocale = useLocale(chatOptions?.locale ?? locale);
   const validation = useLocalDraftValidation(
@@ -48,13 +43,11 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
-  const referenceSelection = chatOptions?.references;
   const { references, clearReferences } = useConversationReferences({
-    enabled:
-      enabled && Boolean(referenceSelection || !conversation?.references),
-    selection: referenceSelection,
+    enabled: enabled && !conversation?.references,
     requestOptions: options.requestOptions,
     scopeKey: options.scopeKey,
+    selection: chatOptions?.referenceSelection,
   });
   const hitl = useHitl(
     chat,
@@ -72,7 +65,7 @@ export function useConversation(
     chat.signal,
   );
   const clearUploads = uploads.clear;
-  const { sessionId, reset, selectSession, status } = chat;
+  const { sessionId, reset, selectSession } = chat;
   const activeId = useRef(sessionId);
   activeId.current = sessionId;
   const selection = useMemo(
@@ -138,8 +131,8 @@ export function useConversation(
   const switching = Boolean(
     selectedId && selection.prop !== selectedId && sessionId !== selectedId,
   );
-  const isSending = switching || status === 'streaming' || status === 'loading';
-  const canCancel = chat.canInterrupt && status === 'streaming';
+  const isSending =
+    switching || chat.status === 'streaming' || chat.status === 'loading';
   return {
     ...conversation,
     ...uploads.props,
@@ -150,7 +143,7 @@ export function useConversation(
       busy: isSending || chat.isSubmitting,
       setDraft,
     }),
-    references: references ?? conversation?.references,
+    references: conversation?.references ?? references,
     messages: hitl.messages,
     messageList:
       conversation?.messageList === undefined
@@ -161,15 +154,15 @@ export function useConversation(
     listKey: `${scopeKey ?? ''}:${chat.sessionId ?? 'new'}`,
     isSending,
     canSendWhileStreaming:
-      chat.canSteer && status === 'streaming' && Boolean(sessionId),
+      chat.canSteer && chat.status === 'streaming' && Boolean(chat.sessionId),
     isSubmitting: chat.isSubmitting,
     onSend: (draft) => {
       if (!validation.validate(draft)) return;
       const token = ++submission.current;
-      const followingUp = status === 'streaming';
+      const followingUp = chat.status === 'streaming';
       if (!followingUp) {
         if (uploads.props) uploads.removeSent(draft.attachments);
-        if (!referenceSelection) clearReferences(draft.references ?? []);
+        clearReferences(draft.references ?? []);
       }
       setDraft((current) =>
         current.trim() === draft.text.trim() ? '' : current,
@@ -182,12 +175,16 @@ export function useConversation(
           return;
         }
         if (followingUp && uploads.props) uploads.removeSent(draft.attachments);
-        if (followingUp || referenceSelection)
-          clearReferences(draft.references ?? []);
+        if (followingUp) clearReferences(draft.references ?? []);
         if (!followingUp) void sessions.refresh();
       });
     },
-    onCancel: canCancel ? () => void chat.abort() : undefined,
+    onCancel:
+      chat.canInterrupt && chat.status === 'streaming'
+        ? () => {
+            void chat.abort();
+          }
+        : undefined,
     sessions: conversationSessions({
       host: hostSessions,
       sessions,

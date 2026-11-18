@@ -1,6 +1,7 @@
 export interface FilePreviewLabels {
   previewImage?: string;
   closePreview?: string;
+  expandVideo?: string;
   videoTranscript?: string;
   videoFrames?: (count: number) => string;
   videoSpeaker?: string;

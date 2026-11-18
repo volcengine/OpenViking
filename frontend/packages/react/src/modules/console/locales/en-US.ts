@@ -1,10 +1,11 @@
+import { transferErrors, transferSession } from './transfer-session.en-US.js';
 import { coreParameters } from './core-parameters.js';
 import filesystemParameters from './filesystem-parameters.js';
-import { transferCommands } from './transfer-commands.js';
 import { SEARCH_PARAMETERS_EN_US } from './search-parameters.js';
 import type { ConsoleCommandGuide, ConsoleLabels } from '../types.js';
 
 const commands = {
+  ...transferSession,
   'add-resource': 'Add a resource from a URL',
   'add-skill': 'Install a Skill',
   'add-memory': 'Add memory directly',
@@ -30,7 +31,6 @@ const commands = {
   mv: 'Move a resource',
   rm: 'Remove a resource',
   write: 'Write text content',
-  ...transferCommands['en-US'],
   'task list': 'List background tasks',
   'task status': 'Inspect a background task',
   'task cancel': 'Request task cancellation',
@@ -168,17 +168,18 @@ const messages = {
     ...filesystemParameters['en-US'],
     ...SEARCH_PARAMETERS_EN_US,
   },
-  downloadedFile: (filename: string) => `Downloaded ${filename}`,
   commandGroups: {
+    transfer: 'File transfer',
+    session: 'Sessions',
     core: 'Core workflow',
     filesystem: 'Filesystem',
     search: 'Search & context',
     status: 'Config & status',
-    transfers: 'Transfers & sessions',
   },
   messages: {
     cancelled: () =>
       'Request cancelled; the server may still process an accepted operation.',
+    ...transferErrors,
     unknownCommand: () =>
       'Unknown command. Enter ov help for available commands.',
     shellSyntax: () => 'Shell syntax is not supported.',

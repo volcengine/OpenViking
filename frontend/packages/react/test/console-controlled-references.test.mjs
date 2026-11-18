@@ -18,7 +18,7 @@ const [{ useConversation }, { OpenVikingProvider }] = await Promise.all([
   privateEntry('provider'),
 ]);
 
-test('directory selection shares the built-in picker and submitted draft', async () => {
+test('host-controlled directory selection shares the built-in picker and submitted draft', async () => {
   const directory = {
     uri: 'viking://resources',
     type: 'directory',
@@ -55,8 +55,10 @@ test('directory selection shares the built-in picker and submitted draft', async
     selectReferences = onChange;
     view = useConversation(
       {
-        chatOptions: { service, references: { selected, onChange } },
-        conversation: { references: { selected, onChange, rows: [] } },
+        chatOptions: {
+          service,
+          referenceSelection: { selected, onChange },
+        },
       },
       setDraft,
       draft,
@@ -95,6 +97,8 @@ test('directory selection shares the built-in picker and submitted draft', async
       input = await sent.promise;
     });
     assert.deepEqual(input.references, [directory, file]);
+    assert.deepEqual(view.references.selected, [directory, file]);
+    await act(() => selectReferences([]));
     assert.deepEqual(view.references.selected, []);
     assert.ok(view.references.rows.some((row) => row.uri === file.uri));
   } finally {

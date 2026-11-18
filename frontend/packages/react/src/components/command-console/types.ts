@@ -74,6 +74,11 @@ export interface CommandConsoleSearchResultItem {
    */
   preview?: string;
   /**
+   * 多行正文，提供时取代摘录。
+   * Multiline body shown in place of the excerpt when provided.
+   */
+  content?: string;
+  /**
    * 该结果对应的资源 URI，可用于打开。
    * URI of the result, which can be opened.
    */
