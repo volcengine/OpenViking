@@ -209,3 +209,68 @@ async def test_cancel_during_pending_processing_uses_existing_rollback_owner(set
     assert result.status == "cancelled"
     setup.fs.restore.assert_awaited_once()
     assert (await setup.store.get("acme", "alice", name))["progress"] == {}
+
+
+@pytest.mark.parametrize("registered_run", [True, False])
+@pytest.mark.parametrize("status", [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED])
+@pytest.mark.parametrize("later", ["expired", "contradictory_callback"])
+async def test_settled_processing_proof_survives_snapshot_failure_and_restart(
+    setup, registered, registered_run, status, later
+):
+    from tests.service.test_compile_configuration_lifecycle import make_task
+
+    _, name, saved_task = registered
+    task = saved_task if registered_run else make_task(setup)
+    await setup.lifecycle.on_start(task)
+    dependency(setup, status=status)
+    commit = setup.fs.commit
+
+    async def fail_commit(**kwargs):
+        raise OSError("synthetic output snapshot temporarily unavailable")
+
+    setup.fs.commit = fail_commit
+    with pytest.raises(OSError, match="output snapshot temporarily unavailable"):
+        await setup.lifecycle.on_finish(
+            task, ExternalTaskSnapshot(status="completed", result={"publication": PUBLICATION})
+        )
+    persisted = await setup.lifecycle._read_run(task)
+    expected = "complete" if status == TaskStatus.COMPLETED else "failed"
+    assert persisted["finished_at"] is None
+    assert persisted["meta"]["publication"]["state"] == expected
+    setup.fs.commit = commit
+    if later == "expired":
+        setup.tracker.tasks.pop("write-exact")
+    else:
+        dependency(
+            setup, status=TaskStatus.FAILED if expected == "complete" else TaskStatus.COMPLETED
+        )
+    restored = deepcopy(setup.tracker.tasks[task.task_id])
+    lifecycle = CompileLifecycle(setup.store, setup.fs)
+    result = await lifecycle.on_finish(restored, ExternalTaskSnapshot(status="completed"))
+    assert result.result["publication"]["state"] == expected
+    final = await lifecycle._read_run(restored)
+    assert final["meta"]["publication_settled"] is True
+    if registered_run:
+        assert bool((await setup.store.get("acme", "alice", name))["progress"]) == (
+            expected == "complete"
+        )
+    else:
+        assert restored.auth["compile_execution"]["snapshots"]["publication_settled"] is True
+
+
+async def test_runtime_cannot_claim_a_server_settled_processing_proof(setup, registered):
+    _, name, task = registered
+    await setup.lifecycle.on_start(task)
+    dependency(setup)
+    result = await setup.lifecycle.on_finish(
+        task,
+        ExternalTaskSnapshot(
+            status="completed",
+            result={
+                "publication_settled": True,
+                "publication": {**PUBLICATION, "publication_settled": True, "state": "complete"},
+            },
+        ),
+    )
+    assert result.status == "running" and result.stage == "indexing"
+    assert (await setup.store.get("acme", "alice", name))["progress"] == {}

@@ -751,6 +751,7 @@ class CompileLifecycle:
                             "finish_snapshot",
                             "skill_snapshot_id",
                             "publication",
+                            "publication_settled",
                         )
                         if key in run["meta"]
                     },
@@ -1121,14 +1122,20 @@ class CompileLifecycle:
                     )
                 # Capture the exact receipt set before resolving any background dependency.
                 await self._save_run(task, run)
-                meta["publication"] = await resolve_publication(
-                    meta["publication"],
-                    tracker=get_task_tracker(),
-                    account_id=task.account_id,
-                    user_id=task.user_id,
-                    target=target,
-                    ctx=ctx,
-                )
+                if meta.get("publication_settled") is not True:
+                    meta["publication"] = await resolve_publication(
+                        meta["publication"],
+                        tracker=get_task_tracker(),
+                        account_id=task.account_id,
+                        user_id=task.user_id,
+                        target=target,
+                        ctx=ctx,
+                    )
+                    # This marker belongs to the server run, never Runtime input.
+                    # Persist the conclusion with it before snapshot/lease retries:
+                    # the dependency may expire while output publication recovers.
+                    meta["publication_settled"] = meta["publication"]["state"] != "pending"
+                    await self._save_run(task, run)
                 if meta["publication"]["state"] == "pending":
                     run["status"] = "committing"
                     await self._save_run(task, run)
