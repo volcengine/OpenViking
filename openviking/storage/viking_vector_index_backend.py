@@ -2316,12 +2316,13 @@ class VikingVectorIndexBackend:
         include_direct_children: bool = False,
         expected_levels: Optional[Mapping[str, set[int]]] = None,
     ) -> Dict[str, Dict[str, Any]]:
-        """Scan once by timestamp, recover missing known URIs, and verify the count.
+        """Read incremental inventory by timestamp and recover missing known URIs.
 
         The timestamp is an inclusive lower bound; offset only skips records
         already visited at that timestamp. Ties can still reorder, so known
         file/directory levels identify URIs to read again with an exact query.
-        A remaining count mismatch (including an unseen orphan) fails closed.
+        The records returned by these reads are authoritative. A separate count
+        can observe a different index state and must not gate incremental writes.
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -2346,7 +2347,6 @@ class VikingVectorIndexBackend:
             ]
         )
         what = f"Incremental inventory under {canonical_uri}"
-        expected_count = await self._strict_transfer_count(ctx, scope)
         backend = await self._get_backend_for_context(ctx)
         page_fields = list(dict.fromkeys([*projection, "updated_at"]))
         records: Dict[str, Dict[str, Any]] = {}
@@ -2400,10 +2400,6 @@ class VikingVectorIndexBackend:
                         "md5": str(record.get("md5") or ""),
                     }
                 )
-            if len(records) > expected_count:
-                raise RuntimeError(
-                    f"{what} returned {len(records)} unique records but count was {expected_count}"
-                )
             if len(page) < batch_size:
                 break
             last_timestamp = page[-1]["updated_at"]
@@ -2413,7 +2409,7 @@ class VikingVectorIndexBackend:
                 timestamp = last_timestamp
                 offset = sum(record["updated_at"] == timestamp for record in page)
 
-        if len(records) < expected_count and expected_levels:
+        if expected_levels:
             found_levels: Dict[str, set[int]] = {}
             for record in records.values():
                 found_levels.setdefault(record["uri"], set()).add(record["level"])
@@ -2437,10 +2433,6 @@ class VikingVectorIndexBackend:
             for uri_records in recovered.values():
                 for record_id, record in uri_records.items():
                     records.setdefault(record_id, record)
-        if len(records) != expected_count:
-            raise RuntimeError(
-                f"{what} returned {len(records)} unique records but count was {expected_count}"
-            )
         return records
 
     async def get_reindex_inventory_under_uri(
