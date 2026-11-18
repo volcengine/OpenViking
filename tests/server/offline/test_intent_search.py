@@ -3,80 +3,12 @@
 
 """Offline session-aware search through the real HTTP and retrieval stack.
 
-Run: pytest tests/server/test_api_intent_search_offline.py
+Run: pytest tests/server/offline/
 Only model calls are replaced; query planning and vector retrieval run normally.
 """
 
 import json
 from unittest.mock import AsyncMock
-
-import httpx
-import pytest
-import pytest_asyncio
-
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-
-
-@pytest.fixture
-def temp_dir(tmp_path):
-    return tmp_path
-
-
-@pytest.fixture
-def sample_markdown_file(temp_dir):
-    path = temp_dir / "oauth.md"
-    path.write_text("# OAuth authentication\n\nUse OAuth authorization codes to authenticate.\n")
-    return path
-
-
-@pytest.fixture(autouse=True)
-def offline_config(temp_dir, monkeypatch):
-    config = {
-        "enable_watch_scheduler": False,
-        "storage": {
-            "workspace": str(temp_dir / "data"),
-            "agfs": {"backend": "local"},
-            "vectordb": {"backend": "local"},
-        },
-        "embedding": {
-            "dense": {
-                "provider": "openai",
-                "model": "offline-embedding",
-                "api_key": "unused-offline-key",
-                "dimension": 2048,
-            }
-        },
-    }
-    config_path = temp_dir / "ov.conf"
-    config_path.write_text(json.dumps(config))
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
-    OpenVikingConfigSingleton.reset_instance()
-    OpenVikingConfigSingleton.initialize(config_path=str(config_path))
-    yield
-    OpenVikingConfigSingleton.reset_instance()
-
-
-@pytest.fixture(autouse=True)
-def reject_external_http(monkeypatch):
-    def reject_request(*args, **kwargs):
-        pytest.fail("Offline intent search must not send an external HTTP request")
-
-    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", reject_request)
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", reject_request)
-
-
-@pytest_asyncio.fixture
-async def client_with_resource(client, sample_markdown_file, upload_temp_dir):
-    response = await client.post(
-        "/api/v1/resources",
-        json={"temp_file_id": sample_markdown_file.name, "wait": True},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["status"] == "ok", body
-    root_uri = body["result"]["root_uri"]
-    assert root_uri, body
-    return client, root_uri
 
 
 async def test_search_expands_session_context_and_retrieves_imported_resource(

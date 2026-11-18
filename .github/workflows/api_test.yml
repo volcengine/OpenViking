@@ -415,8 +415,8 @@ jobs:
           cd tests/api_test
           uv pip install -r requirements.txt
 
-      - name: Run offline intent search regression
-        run: uv run --no-sync python -m pytest -q -o addopts='' tests/server/test_api_intent_search_offline.py
+      - name: Run offline API contract regressions
+        run: uv run --no-sync python -m pytest -q -o addopts='' tests/server/offline/
 
       - name: Create OpenViking config file (Unix)
         if: runner.os != 'Windows'
@@ -700,18 +700,26 @@ jobs:
             echo "Running serial tests (filesystem + resource operations)..."
             uv run --no-sync python -m pytest filesystem/ scenarios/resources_retrieval/ -v --tb=short \
               --ignore=filesystem/slow/ --ignore=scenarios/resources_retrieval/slow/ \
+              --ignore=filesystem/test_fs_cp.py \
+              --ignore=filesystem/test_fs_read_write.py \
+              --ignore=scenarios/resources_retrieval/test_delete_sync.py \
+              --ignore=scenarios/resources_retrieval/test_resource_swap.py \
+              --ignore=scenarios/resources_retrieval/test_pack_consistency.py \
               --ignore=scenarios/resources_retrieval/test_intent_extended_search.py
             echo "Running full test suite with VLM/Embedding (parallel, excluding serial and slow tests)..."
             uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
               --ignore=scenarios/resources_retrieval_slow/ --ignore=filesystem/ --ignore=scenarios/resources_retrieval/ \
               --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ \
               --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ \
+              --ignore=skills/test_add_skill.py --ignore=retrieval/test_find.py \
+              --ignore=retrieval/test_search.py --ignore=resources/test_add_resource.py \
               --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
           else
             echo "Running filesystem tests (serial)..."
             uv run --no-sync python -m pytest filesystem/ -v --tb=short \
               --ignore=retrieval/ --ignore=resources/ --ignore=admin/ --ignore=skills/ --ignore=system/ --ignore=scenarios/ \
-              --ignore=filesystem/slow/
+              --ignore=filesystem/slow/ --ignore=filesystem/test_fs_cp.py \
+              --ignore=filesystem/test_fs_read_write.py
             echo "Running basic tests only (parallel, excluding filesystem and slow tests)..."
             uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
@@ -731,7 +739,7 @@ jobs:
           
           if ($env:HAS_SECRETS -eq "true") {
             Write-Host "Running full test suite with VLM/Embedding (Windows: skipping filesystem and slow tests)"
-            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=scenarios/resources_retrieval/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
+            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=scenarios/resources_retrieval/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ --ignore=skills/test_add_skill.py --ignore=retrieval/test_find.py --ignore=retrieval/test_search.py --ignore=resources/test_add_resource.py --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
           } else {
             Write-Host "Running basic tests only (mock embedding and VLM, Windows: skipping filesystem and slow tests)"
             uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ -k "not test_observer"
