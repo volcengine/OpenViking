@@ -86,6 +86,58 @@ _CODE_KINDS = {
 _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
 _TRANSIENT_NETWORK_STATUS = {408, 504}
 
+# Billing states that do not heal when an RPM/TPM window rolls over. They need
+# an operator recharge or a raised spend limit, so queue work must keep failing
+# terminally instead of being re-enqueued forever.
+#
+# The set is derived from the classifier rather than hand-maintained: every code
+# ``_CODE_KINDS`` maps to ``QUOTA_EXHAUSTED`` is a billing state except the ones
+# listed as window-scoped below. Hand-listing it drifts — #7308 added
+# ``CREDITBALANCEEXHAUSTED`` to the classifier and that silently turned an
+# unfunded account back into an endlessly re-enqueued transient failure.
+_WINDOW_QUOTA_CODES = frozenset(
+    {
+        # Provider window quota: Gemini reports HTTP 429 QUOTA_EXCEEDED as
+        # "wait and retry", and Ark's account/model quota codes reset with the
+        # window. These heal on their own, so they stay re-enqueueable.
+        "QUOTAEXCEEDED",
+        "ACCOUNTQUOTAEXCEEDED",
+        "MODELQUOTAEXCEEDED",
+    }
+)
+
+_TERMINAL_BILLING_CODES = frozenset(
+    {code for code, kind in _CODE_KINDS.items() if kind is ModelErrorKind.QUOTA_EXHAUSTED}
+    - _WINDOW_QUOTA_CODES
+    # ``BILLINGDISABLED`` never reaches the top-level code table: Gemini reports
+    # it as a structured ``details[].reason``, so it is pinned here explicitly.
+    | {"BILLINGDISABLED"}
+)
+
+
+def is_terminal_billing_error(error: BaseException) -> bool:
+    """Return True when the failure is an unfunded or hard-capped billing state.
+
+    ``QUOTA_EXHAUSTED`` aggregates two very different conditions: a spend limit
+    that needs an operator recharge (``insufficient_quota``, hard billing caps,
+    an exhausted credit balance, overdue accounts) and a provider window quota
+    that heals on its own (Gemini reports HTTP 429 ``QUOTA_EXCEEDED`` for "wait
+    and retry"). Only the former is terminal: re-enqueueing it would cycle
+    forever against an account that cannot pay, so callers must keep failing it
+    instead of treating it as transient.
+    """
+    for item in _exception_chain(error):
+        codes: set[str] = set()
+        normalized = _normalized_code(_error_code(item))
+        if normalized:
+            codes.add(normalized)
+        # Gemini carries its structured reason under ``details`` rather than a
+        # top-level code, so classification reads that path too.
+        codes |= _structured_reasons(getattr(item, "details", None))
+        if codes & _TERMINAL_BILLING_CODES:
+            return True
+    return False
+
 
 def _exception_chain(error: BaseException) -> list[BaseException]:
     chain: list[BaseException] = []
