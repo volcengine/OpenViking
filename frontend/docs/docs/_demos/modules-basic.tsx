@@ -11,8 +11,9 @@ import { consoleTransport } from '#console-transport';
 
 const ROOT = 'viking://resources';
 const entries: readonly VikingBotReference[] = [
-  { uri: `${ROOT}/handbook`, name: 'handbook', type: 'directory' },
-  { uri: `${ROOT}/research`, name: 'research', type: 'directory' },
+  ...['handbook', 'research', 'guides', 'reports', 'examples', 'notes'].map(
+    (name) => ({ uri: `${ROOT}/${name}`, name, type: 'directory' as const }),
+  ),
   { uri: `${ROOT}/README.md`, name: 'README.md', type: 'file' },
 ];
 const rows = entries.map((entry) => ({
@@ -46,15 +47,9 @@ export default function ModulesBasic() {
   const locale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const browser = useRef<FileBrowserHandle>(null);
   const [mode, setMode] = useState<ConsoleMode>('conversation');
-  const [directory, setDirectory] = useState<VikingBotReference>();
-  const [manual, setManual] = useState<readonly VikingBotReference[]>([]);
+  const [selected, setSelected] = useState<readonly VikingBotReference[]>([]);
   const [draft, setDraft] = useState('');
   const [sent, setSent] = useState<readonly VikingBotReference[]>();
-  const automatic =
-    directory && !manual.some((item) => item.uri === directory.uri)
-      ? directory
-      : undefined;
-  const selected = automatic ? [automatic, ...manual] : manual;
   return (
     <OpenVikingProvider baseURL="https://demo.invalid" fetch={demoFetch}>
       <div className="ov-demo-modules">
@@ -66,10 +61,8 @@ export default function ModulesBasic() {
           dashboardKinds={[]}
           style={{ height: 460 }}
           onSelect={({ uri, name, type }) => {
-            if (mode !== 'conversation') return;
-            setDirectory(
-              type === 'directory' ? { uri, name, type } : undefined,
-            );
+            if (mode === 'conversation' && type === 'directory')
+              setSelected([{ uri, name, type }]);
           }}
         />
         <Console
@@ -85,20 +78,12 @@ export default function ModulesBasic() {
             references: {
               rows,
               selected,
-              onChange: (next) => {
-                if (
-                  directory &&
-                  !next.some((item) => item.uri === directory.uri)
-                )
-                  setDirectory(undefined);
-                setManual(next.filter((item) => item.uri !== automatic?.uri));
-              },
+              onChange: setSelected,
             },
             onSend: ({ references }) => {
               setDraft('');
               setSent(references ?? []);
-              setDirectory(undefined);
-              setManual([]);
+              setSelected([]);
             },
           }}
         />
