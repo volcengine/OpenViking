@@ -16,7 +16,9 @@ export const OPENVIKING_CONTROLS = {
 
 export async function registerV2Controls(ctx, runtime, { pluginRoot, serializeSession, captureCurrent }) {
   if (!ctx?.rpc?.register) return
-  const diagnose = async (input = {}) => diagnoseOpenCode({ ctx, config: runtime.config, pluginRoot, offline: input.offline === true })
+  const diagnose = async (input = {}, { signal } = {}) => diagnoseOpenCode({
+    ctx, config: runtime.config, pluginRoot, offline: input.offline === true, signal,
+  })
   await ctx.rpc.register(OPENVIKING_CONTROLS, {
     status: diagnose,
     doctor: diagnose,
