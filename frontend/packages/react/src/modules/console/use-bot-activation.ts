@@ -49,12 +49,10 @@ function createBotActivation({
       'collection-error';
     const readStatus = async () => {
       failure = 'collection-error';
-      const collection = await activation.getCollection(signal);
+      const eligible = await activation.isEligible(signal);
       signal.throwIfAborted();
       failure = 'load-error';
-      return collection.EnableVikingBot === true
-        ? activation.getStatus(signal)
-        : 'disabled';
+      return eligible === true ? activation.getStatus(signal) : 'disabled';
     };
     update({ status: operation === 'load' ? 'checking' : 'starting' });
     try {

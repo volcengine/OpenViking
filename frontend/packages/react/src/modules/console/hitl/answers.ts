@@ -1,7 +1,7 @@
 import type { VikingBotInteractionAnswer } from '../../../components/viking-bot/index.js';
 import type { HitlCard, HitlGroup } from './types.js';
 import {
-  isCompileDataNamespaceRoot,
+  compileTargetError,
   parseCompileUri,
   parseSourceUris,
   splitSourceLines,
@@ -31,13 +31,11 @@ function wireValue(card: HitlCard, answer: VikingBotInteractionAnswer) {
     if (!sources?.length) throw new Error('Invalid compile source directories');
     return sources;
   }
-  if (
-    card.cardType === 'compile_target' &&
-    answer.kind === 'text' &&
-    !card.options?.createRequest
-  ) {
+  if (card.cardType === 'compile_target' && answer.kind === 'text') {
     const target = parseCompileUri(answer.value);
-    if (!target || isCompileDataNamespaceRoot(target))
+    // Host text may carry presets, while valid URI answers keep canonical wire formatting.
+    if (card.options?.createRequest) return target ?? answer.value;
+    if (!target || compileTargetError(target))
       throw new Error('Invalid compile output directory');
     return target;
   }

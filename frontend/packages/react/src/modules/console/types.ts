@@ -29,8 +29,8 @@ export type ConsoleBotActivationStatus = 'not-started' | 'ready';
 
 /** Optional lifecycle managed by the host for the current library and identity. */
 export interface ConsoleBotActivation {
-  /** Read the current library. Only an explicit true enables its Bot tab. */
-  getCollection(signal: AbortSignal): Promise<{ EnableVikingBot?: boolean }>;
+  /** Confirm whether the current scope allows Bot access. Only true enables its tab. */
+  isEligible(signal: AbortSignal): Promise<boolean>;
   /** Read runtime readiness after the library has allowed access. */
   getStatus(signal: AbortSignal): Promise<ConsoleBotActivationStatus>;
   /** Start the Bot after the user selects Enable. Console checks status again after it resolves. */

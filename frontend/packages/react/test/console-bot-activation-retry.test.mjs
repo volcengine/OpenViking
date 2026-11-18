@@ -7,16 +7,16 @@ import {
   mountActivation,
 } from './helpers/console-bot-activation.mjs';
 
-test('collection lookup failures block access until retry confirms eligibility', async () => {
+test('eligibility lookup failures block access until retry confirms eligibility', async () => {
   const error = new Error('Could not read the library');
   let collections = 0;
   let reads = 0;
   const host = await mountActivation({
     enabled: true,
     activation: {
-      async getCollection() {
+      async isEligible() {
         if (++collections === 1) throw error;
-        return { EnableVikingBot: true };
+        return true;
       },
       async getStatus() {
         reads++;
@@ -48,8 +48,8 @@ test('retry preserves the failed stage and does not start again after a refresh 
   let starts = 0;
   let reads = 0;
   const activation = {
-    async getCollection() {
-      return { EnableVikingBot: true };
+    async isEligible() {
+      return true;
     },
     async getStatus() {
       reads++;
@@ -100,9 +100,9 @@ for (const actualStatus of ['ready', 'disabled']) {
     let starts = 0;
     const refreshed = deferred();
     const activation = {
-      async getCollection() {
-        if (++collections === 1) return { EnableVikingBot: true };
-        return { EnableVikingBot: (await refreshed.promise) === 'ready' };
+      async isEligible() {
+        if (++collections === 1) return true;
+        return (await refreshed.promise) === 'ready';
       },
       async getStatus() {
         return reads++ === 0 ? 'not-started' : 'ready';

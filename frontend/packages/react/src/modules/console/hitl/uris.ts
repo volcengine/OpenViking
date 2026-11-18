@@ -70,6 +70,16 @@ export function isCompileDataNamespaceRoot(uri: string) {
   );
 }
 
+export function compileTargetError(uri: string) {
+  const [scope, ...path] = uri.slice(scheme.length).split('/');
+  if (scope === 'system') return 'targetReadOnly';
+  if (isCompileDataNamespaceRoot(uri)) return 'targetNamespaceRoot';
+  const content = scope === 'user' ? path.slice(1) : path;
+  const skillNamespace =
+    ['agent', 'user', '~'].includes(scope ?? '') && content[0] === 'skills';
+  if (skillNamespace && content.length !== 1) return 'targetSkillNamespace';
+}
+
 export function overlapsSource(
   target: string,
   sources: readonly string[],

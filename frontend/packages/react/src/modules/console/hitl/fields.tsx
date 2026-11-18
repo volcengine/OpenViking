@@ -15,7 +15,7 @@ import {
 import { TargetField } from './target-field.js';
 import { checkDestination } from './directory-validation.js';
 import {
-  isCompileDataNamespaceRoot,
+  compileTargetError,
   overlapsSource,
   parseCompileUri,
   parseSourceUris,
@@ -32,7 +32,8 @@ function FieldError({
     | 'targetReadOnly'
     | 'targetCheckFailed'
     | 'targetOverlap'
-    | 'targetNamespaceRoot';
+    | 'targetNamespaceRoot'
+    | 'targetSkillNamespace';
 }) {
   return hitlLabels(useLocale())[code];
 }
@@ -119,8 +120,8 @@ function cardFields(
         const path = singleUri ? parseCompileUri(value) : undefined;
         if (singleUri && !path) return <FieldError code="uriInvalid" />;
         if (cardType === 'compile_target' && path) {
-          if (isCompileDataNamespaceRoot(path))
-            return <FieldError code="targetNamespaceRoot" />;
+          const namespaceError = compileTargetError(path);
+          if (namespaceError) return <FieldError code={namespaceError} />;
           if (overlapsSource(path, sources, userId))
             return <FieldError code="targetOverlap" />;
           if (scope.client) {
@@ -132,8 +133,10 @@ function cardFields(
             );
             if (checked && 'error' in checked)
               return <FieldError code={checked.error} />;
-            if (checked && isCompileDataNamespaceRoot(checked.uri))
-              return <FieldError code="targetNamespaceRoot" />;
+            const checkedNamespaceError =
+              checked && compileTargetError(checked.uri);
+            if (checkedNamespaceError)
+              return <FieldError code={checkedNamespaceError} />;
             if (checked && overlapsSource(checked.uri, sources, userId))
               return <FieldError code="targetOverlap" />;
           }

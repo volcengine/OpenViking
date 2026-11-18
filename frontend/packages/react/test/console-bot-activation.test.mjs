@@ -12,9 +12,9 @@ test('activation is opt-in and a command-only Console does not check or start it
   let statusReads = 0;
   let starts = 0;
   const activation = {
-    async getCollection() {
+    async isEligible() {
       reads++;
-      return { EnableVikingBot: reads === 1 ? false : undefined };
+      return false;
     },
     async getStatus() {
       statusReads++;
@@ -35,7 +35,11 @@ test('activation is opt-in and a command-only Console does not check or start it
     assert.equal(host.lifecycle.state.status, 'disabled');
     await act(async () => host.lifecycle.start());
     assert.deepEqual([reads, statusReads, starts], [1, 0, 0]);
-    await host.render({ enabled: true, activation, scopeKey: 'missing-flag' });
+    await host.render({
+      enabled: true,
+      activation,
+      scopeKey: 'another-ineligible-scope',
+    });
     assert.equal(host.lifecycle.state.status, 'disabled');
     assert.deepEqual([reads, statusReads, starts], [2, 0, 0]);
   } finally {
@@ -50,8 +54,8 @@ test('user startup is exclusive and chat waits for the authoritative status refr
   const signals = [];
   let reads = 0;
   const activation = {
-    async getCollection() {
-      return { EnableVikingBot: true };
+    async isEligible() {
+      return true;
     },
     async getStatus(signal) {
       signals.push(signal);
@@ -94,8 +98,8 @@ test('scope replacement aborts startup and ignores its late completion', async (
   let startSignal;
   let reads = 0;
   const activation = {
-    async getCollection() {
-      return { EnableVikingBot: true };
+    async isEligible() {
+      return true;
     },
     async getStatus() {
       return reads++ === 0 ? 'not-started' : 'ready';

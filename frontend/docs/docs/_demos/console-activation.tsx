@@ -40,7 +40,10 @@ function mockActivation(scenario: Scenario): ConsoleBotActivation {
     return { Status: running ? 'running' : 'not_started' };
   }
   return {
-    getCollection: getOpenVikingCollection,
+    async isEligible(signal) {
+      const collection = await getOpenVikingCollection(signal);
+      return collection.EnableVikingBot === true;
+    },
     async getStatus(signal) {
       return (await getVikingBotStatus(signal)).Status === 'running'
         ? 'ready'

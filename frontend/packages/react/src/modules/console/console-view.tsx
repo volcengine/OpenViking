@@ -70,7 +70,11 @@ export function ConsoleView(props: ConsoleProps) {
   const showConversation =
     visibleModes.includes('conversation') ||
     (status === 'checking' && !visibleModes.length);
-  const state = useConsole({ ...props, modes: visibleModes, locale });
+  const state = useConsole(
+    { ...props, modes: visibleModes, locale },
+    chatOptions?.activation,
+    chatOptions?.scopeKey,
+  );
   const commandRecords = useMemo(
     () => state.records.map(formatConsoleTaskResult),
     [state.records],

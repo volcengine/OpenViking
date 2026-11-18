@@ -60,7 +60,7 @@ Use `chatOptions.activation` when the current library controls access to VikingB
 
 ```
 
-In a Volcengine host, call `GetOpenVikingCollection` in `getCollection` and return the current library's `EnableVikingBot` field. Console allows the conversation tab and calls `getStatus` only when the field is `true`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the `start` callback, where the host calls `startBot`. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes.
+Implement `isEligible` to confirm whether the current scope allows Bot access. Console shows the conversation tab and calls `getStatus` after it returns `true`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
 
 Keep the adapter stable for the current library and identity. All three callbacks receive an `AbortSignal` and should throw on failure. Pass `media` to replace the illustration with your introduction media.
 
@@ -153,6 +153,15 @@ When host content fails to render, the block shows the default fallback: an illu
 | memoryCommit       | Hide the session commit action                          | `false`                                               | Enabled when supported |
 
 Every adapter method receives an `AbortSignal`, must honor cancellation, and throws on failure. Omit `saveMessage` when the backend persists messages automatically. Set `interrupted: true` on known interrupted replies in `loadMessages` so they do not offer Commit session after reopening.
+
+### ConsoleBotActivation
+
+| Property   | Description                                                                           | Type                                                         | Default               |
+| ---------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------- |
+| isEligible | Confirm whether the current scope allows Bot access; false keeps the tab hidden       | `(signal: AbortSignal) => Promise<boolean>`                  | Required              |
+| getStatus  | Read the runtime state after eligibility is confirmed                                 | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>` | Required              |
+| start      | Start the runtime after the user selects Enable; Console rechecks its state afterward | `(signal: AbortSignal) => Promise<void>`                     | Required              |
+| media      | Introductory media shown in the activation card                                       | `ReactNode`                                                  | Built-in illustration |
 
 ### ConsoleHitlOptions
 

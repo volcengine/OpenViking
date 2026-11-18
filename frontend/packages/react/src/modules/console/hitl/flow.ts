@@ -1,6 +1,6 @@
 import type { VikingBotInteractionAnswer } from '../../../components/viking-bot/index.js';
 import {
-  isCompileDataNamespaceRoot,
+  compileTargetError,
   parseCompileUri,
   parseSourceUris,
 } from './uris.js';
@@ -103,9 +103,7 @@ export function outputDirectories(
   return [
     ...new Set([
       ...(path ? [`viking://resources${path}`, `${personal}${path}`] : []),
-      ...(suggested && !isCompileDataNamespaceRoot(suggested)
-        ? [suggested]
-        : []),
+      ...(suggested && !compileTargetError(suggested) ? [suggested] : []),
     ]),
   ];
 }

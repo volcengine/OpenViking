@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   VikingBot,
   type VikingBotLabels,
@@ -63,6 +63,8 @@ export function ConsoleConversationPanel({
   labels: VikingBotLabels;
 }) {
   const { state } = activation;
+  const [visited, setVisited] = useState(active);
+  if (active && !visited) setVisited(true);
   const failed =
     state.status === 'load-error' || state.status === 'start-error';
   return (
@@ -71,7 +73,7 @@ export function ConsoleConversationPanel({
       className="ov-console__panel ov-console__panel--conversation"
       hidden={!active}
     >
-      {active && state.status === 'ready' ? (
+      {visited && state.status === 'ready' ? (
         <VikingBot
           {...conversation}
           onOpenUri={conversation.onOpenUri ?? onOpenUri}
