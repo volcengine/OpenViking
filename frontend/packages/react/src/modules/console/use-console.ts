@@ -21,6 +21,7 @@ export function useConsole({
   defaultMode = 'conversation',
   locale: localeProp,
   scopeKey,
+  commandHistoryKey,
   onModeChange,
   requestOptions = {},
   taskService,
@@ -62,6 +63,7 @@ export function useConsole({
       },
       tracking.track,
       analytics,
+      commandHistoryKey,
     );
   }, [
     client,
@@ -72,6 +74,7 @@ export function useConsole({
     resourceId,
     signal,
     scopeKey,
+    commandHistoryKey,
     tracking.track,
     analytics,
   ]);
@@ -79,6 +82,7 @@ export function useConsole({
   // Effect necessity: commands keep network requests alive after user events.
   // Their lifetime follows this client/identity instance, which events cannot
   // observe on unmount or disable; cleanup aborts requests and invalidates late results.
+  // Starting also restores this controller's tab-session history after client mount.
   useEffect(
     () => (commandEnabled ? controller.start() : undefined),
     [controller, commandEnabled],

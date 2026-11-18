@@ -15,6 +15,16 @@ import { formatResult } from './results.js';
 import { browserCommandFiles, type CommandExecution } from './command-files.js';
 import type { ConsoleCommandOptions } from './types.js';
 
+const commandSpecsBySpecificity = [...COMMAND_SPECS].sort(
+  (a, b) => b.name.length - a.name.length,
+);
+
+export function resolveCommandSpec(tokens: ReturnType<typeof tokenize>) {
+  return commandSpecsBySpecificity.find((spec) =>
+    spec.name.split(' ').every((part, index) => tokens[index]?.value === part),
+  );
+}
+
 export async function executeCommand(
   input: string,
   client: OvClient,
@@ -27,13 +37,7 @@ export async function executeCommand(
   telemetry?: Record<string, unknown>;
 }> {
   const tokens = tokenize(input);
-  const spec = [...COMMAND_SPECS]
-    .sort((a, b) => b.name.length - a.name.length)
-    .find((item) =>
-      item.name
-        .split(' ')
-        .every((part, index) => tokens[index]?.value === part),
-    );
+  const spec = resolveCommandSpec(tokens);
   if (!spec) throw new ConsoleCommandError('unknownCommand');
   if (spec.admin && !commandOptions?.allowAdminCommands)
     throw new ConsoleCommandError('unavailableCommand', spec.name);
