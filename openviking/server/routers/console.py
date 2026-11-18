@@ -135,3 +135,42 @@ async def audit_logs(
         page_size=page_size,
     )
     return _ok_response(result)
+
+
+@router.get("/performance")
+async def performance(
+    request: Request,
+    start: str = Query(...),
+    end: str = Query(...),
+    view: str = Query("summary", pattern="^(summary|series|workflows|details)$"),
+    workflow_id: Optional[str] = Query(None, max_length=256),
+    user_id: Optional[str] = Query(None, max_length=256),
+    model: Optional[str] = Query(None, max_length=256),
+    status: Optional[str] = Query(None, max_length=64),
+    task_id: Optional[str] = Query(None, max_length=256),
+    request_id: Optional[str] = Query(None, max_length=256),
+    page_size: int = Query(50, ge=1, le=100),
+    cursor: Optional[str] = Query(None, max_length=2048),
+    observed_before: Optional[str] = Query(None, max_length=64),
+    _ctx: RequestContext = require_role(Role(Role.ROOT), Role(Role.ADMIN), Role(Role.USER)),
+):
+    service = _runtime_service(request)
+    if service is None:
+        return _disabled_response()
+    return _ok_response(
+        await service.performance(
+            _ctx,
+            start=start,
+            end=end,
+            view=view,
+            workflow_id=workflow_id,
+            user_id=user_id,
+            model=model,
+            status=status,
+            task_id=task_id,
+            request_id=request_id,
+            page_size=page_size,
+            cursor=cursor,
+            observed_before=observed_before,
+        )
+    )

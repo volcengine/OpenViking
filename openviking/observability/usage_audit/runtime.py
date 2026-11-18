@@ -62,6 +62,9 @@ async def init_usage_audit_from_server_config(
 ) -> UsageAuditRuntime | None:
     """Initialize Usage/Audit store, worker, and event subscriber."""
     usage_config = config.observability.usage_audit
+    from openviking.observability.performance import configure_performance
+
+    configure_performance(False)
     unregister_event_subscriber(_SUBSCRIBER_NAME)
 
     if not usage_config.enabled:
@@ -69,13 +72,30 @@ async def init_usage_audit_from_server_config(
             app.state.usage_audit_runtime = None
         return None
 
-    store = SQLiteUsageAuditStore(
-        _resolve_sqlite_path(config),
-        usage_retention_days=usage_config.usage_retention_days,
-        audit_retention_days=usage_config.audit_retention_days,
-        audit_retention_per_account=usage_config.audit_retention_per_account,
-    )
+    retention = {
+        "performance_enabled": usage_config.performance_enabled,
+        "performance_retention_days": usage_config.performance_retention_days,
+        "usage_retention_days": usage_config.usage_retention_days,
+        "audit_retention_days": usage_config.audit_retention_days,
+        "audit_retention_per_account": usage_config.audit_retention_per_account,
+    }
+    store: UsageAuditStore
+    if usage_config.backend == "postgres":
+        from .postgres_store import PostgresUsageAuditStore
+
+        pg = usage_config.postgres
+        assert pg is not None  # Validated at the configuration boundary.
+        store = PostgresUsageAuditStore(
+            pg.dsn.get_secret_value(),
+            schema=pg.schema_name,
+            connect_timeout_seconds=pg.connect_timeout_seconds,
+            statement_timeout_seconds=pg.statement_timeout_seconds,
+            **retention,
+        )
+    else:
+        store = SQLiteUsageAuditStore(_resolve_sqlite_path(config), **retention)
     await store.initialize()
+    configure_performance(usage_config.performance_enabled)
 
     worker = UsageAuditWorker(
         store,
@@ -103,13 +123,16 @@ async def init_usage_audit_from_server_config(
     )
     if app is not None:
         app.state.usage_audit_runtime = runtime
-    logger.info("Usage/Audit store initialized with sqlite backend")
+    logger.info("Usage/Audit store initialized with %s backend", usage_config.backend)
     return runtime
 
 
 async def shutdown_usage_audit(*, app: Any = None) -> None:
     """Shutdown Usage/Audit runtime if it is attached to the FastAPI app."""
     unregister_event_subscriber(_SUBSCRIBER_NAME)
+    from openviking.observability.performance import configure_performance
+
+    configure_performance(False)
     runtime = getattr(getattr(app, "state", None), "usage_audit_runtime", None)
     if runtime is None:
         return
@@ -118,3 +141,22 @@ async def shutdown_usage_audit(*, app: Any = None) -> None:
     finally:
         await runtime.store.close()
         app.state.usage_audit_runtime = None
+
+
+async def init_bot_usage_audit(config_path, *, app):
+    """Opt an independent Bot process into the same configured projection owner.
+
+    No second consumer is created by Compile or a model adapter. Off remains
+    off. For cross-Pod reads use the explicit shared PostgreSQL configuration.
+    """
+    from openviking.server.config import load_server_config
+    from openviking_cli.utils.config.config_loader import load_json_config
+
+    data = load_json_config(Path(config_path))
+    usage = data.get("server", {}).get("observability", {}).get("usage_audit", {})
+    if not usage.get("performance_enabled", False):
+        return None
+    config = load_server_config(str(config_path))
+    if not config.observability.usage_audit.performance_enabled:
+        return None
+    return await init_usage_audit_from_server_config(config, app=app)

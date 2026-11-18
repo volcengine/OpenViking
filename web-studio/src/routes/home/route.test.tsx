@@ -37,6 +37,9 @@ vi.mock('#/features/workbench/home/lib/api', () => ({
   fetchConsoleTokenSeries: state.tokens,
   fetchConsoleContextCommits: state.commits,
 }))
+vi.mock('#/features/workbench/home/lib/performance-api', () => ({
+  fetchPerformance: async () => ({ enabled: false }),
+}))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))

@@ -543,7 +543,10 @@ def gateway(
         logging.basicConfig(level=logging.DEBUG)
 
     bus = MessageBus()
-    path = Path(config_path).expanduser() if config_path is not None else None
+    # Freeze one file for Bot configuration and observability initialization.
+    path = (
+        Path(config_path).expanduser() if config_path is not None else get_config_path()
+    ).resolve()
     config = ensure_config(path)
     from vikingbot.utils.startup import report_startup
 
@@ -626,6 +629,9 @@ def gateway(
             report_startup("ready")
 
         try:
+            from openviking.observability.usage_audit.runtime import init_bot_usage_audit
+
+            await init_bot_usage_audit(path, app=fastapi_app)
             await runtime.start(manager)
             await compile_service.start()
             server_task = asyncio.create_task(server.serve())
@@ -663,8 +669,15 @@ def gateway(
                     if manager is not None:
                         await manager.cleanup_all()
                 finally:
-                    await runtime.stop()
-                    signal.signal(signal.SIGTERM, previous_sigterm)
+                    try:
+                        await runtime.stop()
+                    finally:
+                        from openviking.observability.usage_audit import shutdown_usage_audit
+
+                        try:
+                            await shutdown_usage_audit(app=fastapi_app)
+                        finally:
+                            signal.signal(signal.SIGTERM, previous_sigterm)
 
     try:
         asyncio.run(run())

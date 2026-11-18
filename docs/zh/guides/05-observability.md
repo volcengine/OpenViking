@@ -402,7 +402,7 @@ OpenViking 将信号级别的可观测性配置统一放在 `server.observabilit
 - `server.observability.traces`：trace 导出配置
 - `server.observability.logs`：log 导出配置
 - `server.observability.dump_body`：把 HTTP 请求/响应 body（按 content-type 过滤、按字节截断）作为属性挂到当前 trace span 上，便于在 trace UI 中调试。默认关闭，因为 body 可能含密钥/高基数内容
-- `server.observability.usage_audit`：按请求记录用量/成本审计日志，使用 SQLite 存储。`sqlite_path` 可覆盖数据库位置（多实例部署时设为每实例独立的本地路径）；`timezone` 控制时间戳的时区本地化。默认开启
+- `server.observability.usage_audit`：用量及 HTTP 请求投影。默认开启并使用本地 SQLite；设置 `backend: "postgres"` 可共享 PostgreSQL 存储。`timezone` 控制查看者的日期边界。
 
 示例：
 
@@ -625,3 +625,49 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 - [操作级 Telemetry 参考](07-operation-telemetry.md) - 请求级结构化追踪
 - [系统 API](../api/07-system.md) - 系统与 observer 接口参考
 - [指标](../concepts/12-metrics.md) - 时序指标与配置
+
+### 共享 Usage/Audit 存储
+
+安装 `openviking[postgres]`，为所有实例配置相同的独立数据库 schema：
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "dsn": "postgresql://ov_usage:${OV_USAGE_DB_PASSWORD}@db.example/observability?sslmode=verify-full",
+          "schema_name": "openviking_usage_audit",
+          "connect_timeout_seconds": 10,
+          "statement_timeout_seconds": 30
+        }
+      }
+    }
+  }
+}
+```
+
+现有 Console dashboard、Token 趋势、context commit 热力图和请求审计 API
+读取各实例写入的同一份保留数据，账户／用户权限及查看者时区语义不变。
+此设置仅共享用量及请求记录；资源数量仍由已有 inventory provider 提供。
+
+默认仍是 SQLite，应使用每实例本地路径，不能把 SQLite 文件放到共享 NFS。
+PostgreSQL 每个 runtime 使用一个连接，连接和语句都有超时；数据库账号需要创建、
+使用独立 schema 的权限，不允许 `public`、`pg_*` 和 `information_schema`。
+多实例启动的 DDL 会串行化，不支持的 schema 版本会报错而不会删表重建。
+共享同一 schema 的实例必须采用相同保留配置：默认用量 14 天、审计 7 天，
+每账户最多 1,000 条审计记录。沿用现有 UTC 保留语义，没有新增迟到事件接收截止线。
+
+切换后端会切换可见历史，不自动复制 SQLite 数据或迁移已有 PostgreSQL 结构；
+切换前请备份。启动失败不会静默退回 SQLite。运行时写入失败由已有 worker 记录，
+尽力采集事件可能丢失；不自动重放提交结果未知的批次，也没有持久化事件队列。
+数据库恢复后需重新初始化／重启失效连接。取消时会等待正在执行的数据库操作结束
+再关闭连接，该操作受 PostgreSQL 语句超时约束。保留投影用于运行统计，不是完整账单。
+
+使用隔离数据库运行测试（测试会创建、删除随机 schema）：
+
+```bash
+OV_TEST_USAGE_POSTGRES_DSN=postgresql://postgres@localhost/test_db \
+  pytest tests/observability/test_usage_audit_store.py tests/observability/test_usage_audit_postgres.py
+```

@@ -403,7 +403,7 @@ OpenViking groups signal-level observability configuration under `server.observa
 - `server.observability.traces`: trace export configuration
 - `server.observability.logs`: log export configuration
 - `server.observability.dump_body`: attaches HTTP request/response bodies (filtered by content-type, truncated by bytes) as attributes on the active trace span so they can be inspected in trace UIs. Off by default — bodies may contain secrets and high-cardinality content
-- `server.observability.usage_audit`: per-request usage/cost audit log, stored in SQLite. `sqlite_path` overrides the database location (use a per-instance local path for multi-instance deployments); `timezone` controls timestamp localization. Enabled by default
+- `server.observability.usage_audit`: usage and HTTP request projections. Enabled by default with local SQLite; `backend: "postgres"` selects shared PostgreSQL persistence. `timezone` controls viewer-local date boundaries.
 
 Example:
 
@@ -641,3 +641,58 @@ in `reporting`, including any Kafka credentials.
 - [Operation Telemetry Reference](07-operation-telemetry.md) - request-level structured tracing
 - [System API](../api/07-system.md) - system and observer API reference
 - [Metrics](../concepts/12-metrics.md) - time-series metrics and configuration
+
+### Shared Usage/Audit persistence
+
+Install `openviking[postgres]` and configure every server instance with the same
+dedicated database schema:
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "dsn": "postgresql://ov_usage:${OV_USAGE_DB_PASSWORD}@db.example/observability?sslmode=verify-full",
+          "schema_name": "openviking_usage_audit",
+          "connect_timeout_seconds": 10,
+          "statement_timeout_seconds": 30
+        }
+      }
+    }
+  }
+}
+```
+
+The Console dashboard, token series, context-commit heatmap and request audit API
+read the same retained projections from all instances. Account/user access scopes
+and viewer timezone behavior are unchanged. This shares usage/audit data only;
+context inventory still uses the existing resource inventory provider.
+
+SQLite remains the default and must use an instance-local path, not a shared NFS
+file. PostgreSQL keeps one connection per runtime, with bounded connection and
+statement timeouts. It requires permission to create and use its dedicated schema;
+`public`, `pg_*` and `information_schema` are rejected. Initialization is serialized
+across instances and unsupported schema versions fail without dropping data. All
+instances sharing a schema must use the same retention settings: usage 14 days,
+audit 7 days and 1,000 audit rows per account by default. The existing UTC retention
+semantics are retained; this backend adds no acceptance horizon for late events.
+
+Switching backends selects a different history; it does not copy SQLite rows or
+migrate an existing PostgreSQL layout. Back up existing data before changing
+backends. Startup failures do not silently fall back to local SQLite. Runtime
+persistence failures remain visible in the existing worker log and may lose
+best-effort events; there is no automatic replay of ambiguous commits or durable
+event queue. Reinitialize/restart a failed connection after restoring the database.
+Cancellation waits for the in-flight database operation before closing its
+connection; PostgreSQL's statement timeout bounds that operation. These retained
+projections are operational statistics, not a complete billing ledger.
+
+Run the shared backend tests against a disposable database (the tests create and
+drop random schemas):
+
+```bash
+OV_TEST_USAGE_POSTGRES_DSN=postgresql://postgres@localhost/test_db \
+  pytest tests/observability/test_usage_audit_store.py tests/observability/test_usage_audit_postgres.py
+```

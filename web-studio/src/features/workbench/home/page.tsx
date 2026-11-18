@@ -12,6 +12,7 @@ import {
   TodayRetrievalsPanel,
   TodayTokensPanel,
 } from '#/features/workbench/home/components/metric-panels'
+import { PerformancePanel } from '#/features/workbench/home/components/performance-panel'
 import { TokenTrendPanel } from '#/features/workbench/home/components/token-trend-panel'
 import {
   fetchConsoleContextCommits,
@@ -116,6 +117,12 @@ export function HomePage() {
         />
       </div>
 
+      <PerformancePanel
+        key={JSON.stringify(metricsScopeKey)}
+        enabled={canQueryMetrics}
+        scope={metricsScopeKey}
+        t={t}
+      />
       <TokenTrendPanel
         data={tokenSeries.data}
         disabled={identityUnavailable}

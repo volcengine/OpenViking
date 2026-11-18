@@ -199,8 +199,8 @@ def _create_v4_usage_audit_db(db_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
-    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
+async def test_usage_audit_store_aggregates_dashboard_data(usage_store_factory):
+    store = usage_store_factory()
     await store.initialize()
     try:
         await store.record_batch(
@@ -354,9 +354,7 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
             bucket="hour",
             tz=UTC,
         )
-        assert any(
-            row["hour"] == 1 and row["session_add_message"] == 2 for row in account_commits
-        )
+        assert any(row["hour"] == 1 and row["session_add_message"] == 2 for row in account_commits)
         assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
         audit = await store.query_audit_logs(account_id="acct-1")
         assert audit["total"] == 4
@@ -556,9 +554,8 @@ async def test_sqlite_usage_audit_store_rejects_unhandled_future_migration_witho
 
 
 @pytest.mark.asyncio
-async def test_sqlite_usage_audit_store_handles_malformed_error_details(tmp_path):
-    db_path = tmp_path / "usage.sqlite3"
-    store = SQLiteUsageAuditStore(db_path)
+async def test_usage_audit_store_handles_malformed_error_details(usage_store_factory):
+    store = usage_store_factory()
     await store.initialize()
     try:
         assert store._conn is not None
@@ -593,9 +590,8 @@ async def test_sqlite_usage_audit_store_handles_malformed_error_details(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_sqlite_usage_audit_store_trims_audit_per_account(tmp_path):
-    store = SQLiteUsageAuditStore(
-        tmp_path / "usage.sqlite3",
+async def test_usage_audit_store_trims_audit_per_account(usage_store_factory):
+    store = usage_store_factory(
         audit_retention_per_account=2,
     )
     await store.initialize()
@@ -623,8 +619,8 @@ async def test_sqlite_usage_audit_store_trims_audit_per_account(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_sqlite_usage_audit_store_success_filter_includes_3xx(tmp_path):
-    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
+async def test_usage_audit_store_success_filter_includes_3xx(usage_store_factory):
+    store = usage_store_factory()
     await store.initialize()
     try:
         await store.record_batch(
@@ -682,7 +678,7 @@ async def test_sqlite_usage_audit_store_success_filter_includes_3xx(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_today_tokens_rebuckets_for_utc_plus_8(tmp_path):
+async def test_today_tokens_rebuckets_for_utc_plus_8(usage_store_factory):
     """A UTC+8 user querying "today" must include UTC events that fall inside
     their local day, even when they span two UTC dates.
 
@@ -690,7 +686,7 @@ async def test_today_tokens_rebuckets_for_utc_plus_8(tmp_path):
     in Asia/Shanghai. From the SH viewer's perspective on 2026-05-13 both
     events belong to "today"; from a UTC viewer they straddle two days.
     """
-    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
+    store = usage_store_factory()
     await store.initialize()
     try:
         await store.record_batch(
@@ -748,10 +744,10 @@ async def test_today_tokens_rebuckets_for_utc_plus_8(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_token_series_rebuckets_to_user_tz_days(tmp_path):
+async def test_token_series_rebuckets_to_user_tz_days(usage_store_factory):
     """An event at 03:00 UTC must land in `2026-05-11` for an America/New_York
     viewer (UTC-4 with DST in May = 23:00 of the previous day local)."""
-    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
+    store = usage_store_factory()
     await store.initialize()
     try:
         await store.record_batch(
@@ -785,10 +781,10 @@ async def test_token_series_rebuckets_to_user_tz_days(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_context_heatmap_rebuckets_hour_for_shanghai(tmp_path):
+async def test_context_heatmap_rebuckets_hour_for_shanghai(usage_store_factory):
     """A context commit at 23:30 UTC must show up at hour 7 of the next day in
     Asia/Shanghai (UTC+8)."""
-    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
+    store = usage_store_factory()
     await store.initialize()
     try:
         await store.record_batch(

@@ -718,7 +718,19 @@ class BotCompileService:
             acquired = True
 
             try:
-                await self._execute_task(task_id, request, connection)
+                from openviking.observability.performance import performance_stage
+                from openviking.service.task_work_index import bind_task_context
+
+                user_id = (
+                    "default"
+                    if self._openviking_auth_mode() == "dev"
+                    else str(connection.get("user_id") or "")
+                )
+                # Connection was resolved by the Runtime auth owner. This context
+                # is diagnostic only and never supplies authorization headers.
+                with bind_task_context(task_id, account_id, user_id, task_type="compile"):
+                    with performance_stage("compile.execution"):
+                        await self._execute_task(task_id, request, connection)
             except CompileFailure as exc:
                 await self._fail(task_id, exc)
             except Exception as exc:

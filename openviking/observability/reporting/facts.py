@@ -118,6 +118,11 @@ def bind_embedding_purpose(purpose):
 
 def event_context(name):
     """Use the existing Task context, including after queue delivery/restart."""
+    if name == "queue.processed":
+        # NamedQueue emits after Task middleware unwinds. Only its verified
+        # invocation-local delivery scope may fill these fields; an inherited
+        # request/first batch Task is not authority for this observation.
+        return dict.fromkeys(("account_id", "user_id", "task_id", "work_id", "request_id"), "")
     if name not in {
         "http.request",
         "vlm.call",
@@ -126,6 +131,7 @@ def event_context(name):
         "file_mutation",
         "skill_mutation",
         "task_terminal",
+        "workflow.stage",
     }:
         return {}
     memory_task_id = _memory_task_id.get()
@@ -183,7 +189,10 @@ def event_context(name):
     fields: dict[str, str | None] = {}
     if context is not None:
         fields.update(
-            task_id=context.task_id, account_id=context.account_id, user_id=context.user_id
+            task_id=context.task_id,
+            account_id=context.account_id,
+            user_id=context.user_id,
+            work_id=context.work_id,
         )
         if context.task_type:
             fields.update(task_type=context.task_type, mode=context.mode)
