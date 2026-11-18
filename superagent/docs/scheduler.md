@@ -266,8 +266,11 @@ when the last task that worked there ended:
 Past `OV_SUPERAGENT_TASK_DIR_BUDGET_GB` (20 by default) for all task
 directories, dependency folders go first and whole directories after, the
 directory that ended longest ago first. 0 turns each limit off. A directory a
-live task works in, or reads as its parent's, is never touched, and neither is
-anything outside `<workspace>/tasks/t<n>`; links are not followed. A task that
+live task works in, or reads as its parent's, is never touched, nor are those
+of a stopped task until its worker process has exited, nor anything outside
+`<workspace>/tasks/t<n>`. Links are never followed: a folder is deleted only
+if it is still a real directory reached with no link on the way, and the trash
+is removed as a whole, so a link in its place goes as a link. A task that
 follows one whose directory was deleted starts from its report, as when its
 session cannot be forked; one that works on in a directory whose dependencies
 were deleted is told to install again what it needs.
@@ -275,7 +278,8 @@ were deleted is told to install again what it needs.
 The daemon sweeps a minute after it starts and every hour. Measuring runs in
 the background; choosing what to delete and moving it to a trash folder next
 to it happen in one step, so a task never starts in, or reads, a directory
-being deleted, and the trash is emptied after. `/tasks` shows how much the task
+being deleted, and the trash is emptied after. A directory a task used while
+it was being measured waits for the next sweep. `/tasks` shows how much the task
 directories took at the last sweep, and a task's detail which tasks share its
 directory. Claude Code and Codex keep their own session files in their homes;
 those are not swept.

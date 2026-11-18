@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chatTag, metadataTag, oneLine } from './runtime-input.mjs';
 import { safeError } from './logger.mjs';
-import { emptyTrash, formatBytes, isDirectory, moveToTrash, scanDir, TRASH } from './task-dirs.mjs';
+import { emptyTrash, formatBytes, isDirectory, isDirectoryWithin, moveToTrash, scanDir, TRASH } from './task-dirs.mjs';
 
 // Workers (agents[].scheduler = workers). The main session is the router: it
 // reads every input (through the inbox), answers what is quick, and hands
@@ -1007,18 +1007,14 @@ export class TaskManager {
       ON CONFLICT(path) DO UPDATE SET ${column} = excluded.${column}`).run(dir, this.now());
   }
 
-  // Directories a task may still use: a live task's own, the one a live
-  // task's parent worked in (its brief points there), and that of any worker
-  // still running (a stopped one until its process is gone).
+  // Directories a task may still use: a live task's own and the one its
+  // parent worked in (its brief points there), and the same two of any worker
+  // whose process has not exited (a stopped task's, until it has).
   heldDirs() {
+    const ids = [...this.running.keys()];
     const rows = this.db.prepare(`SELECT t.workdir AS own, p.workdir AS parent FROM tasks t LEFT JOIN tasks p ON p.id = t.parent_id
-      WHERE t.status NOT IN ('done', 'dropped', 'failed', 'stopped')`).all();
-    const held = new Set(rows.flatMap((row) => [row.own, row.parent]).filter(Boolean));
-    for (const id of this.running.keys()) {
-      const task = this.get(id);
-      if (task) held.add(task.workdir);
-    }
-    return held;
+      WHERE t.status NOT IN ('done', 'dropped', 'failed', 'stopped')${ids.length ? ` OR t.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(...ids);
+    return new Set(rows.flatMap((row) => [row.own, row.parent]).filter(Boolean));
   }
 
   // Only directories this manager made: <workspace>/tasks/<task id>.
@@ -1056,23 +1052,26 @@ export class TaskManager {
       for (const trash of trashes) await emptyTrash(trash);
       const dirs = this.db.prepare('SELECT DISTINCT workdir FROM tasks').all().map((row) => row.workdir)
         .filter((dir) => this.ownDir(dir) && isDirectory(dir));
+      // What a task used while the scan ran may have changed under it: it
+      // counts toward the budget, and waits for the next sweep.
+      const busy = this.heldDirs();
       const sizes = new Map();
       for (const dir of dirs) {
         if (this.stopped) return null;
         sizes.set(dir, await scanDir(dir, { stopped: () => this.stopped }));
       }
       if (this.stopped) return null;
-      const result = this.cleanDirs(sizes);
+      const result = this.cleanDirs(sizes, busy);
       for (const trash of trashes) await emptyTrash(trash);
       return result;
     })().finally(() => { this.sweeping = null; });
     return this.sweeping;
   }
 
-  cleanDirs(sizes) {
+  cleanDirs(sizes, busy = new Set()) {
     const { pruneMs, removeMs, budget } = this.dirLimits();
     const now = this.now();
-    const held = this.heldDirs();
+    const held = new Set([...busy, ...this.heldDirs()]);
     const endedAt = new Map(this.db.prepare(`SELECT workdir, MAX(COALESCE(ended_at_ms, updated_at_ms)) AS at FROM tasks
       GROUP BY workdir`).all().map((row) => [row.workdir, row.at]));
     const left = new Map([...sizes].map(([dir, scan]) => [dir, scan.bytes]));
@@ -1085,7 +1084,7 @@ export class TaskManager {
     const prune = (dir) => {
       if (!left.has(dir)) return;
       const moved = sizes.get(dir).dependencies.filter((folder) => {
-        if (!isDirectory(folder)) return false;
+        if (!isDirectoryWithin(folder, dir)) return false;
         try { moveToTrash(folder, trash); return true; } catch (error) {
           this.logger?.warn('task_dir_prune_failed', { dir: folder, error: safeError(error) });
           return false;

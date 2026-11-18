@@ -18,7 +18,8 @@ const DEPENDENCY_DIRS = new Set([
   '.gradle', '.next', '.nuxt', '.turbo', '.parcel-cache',
 ]);
 // Build output only next to the manifest of the tool that writes it there.
-const BUILD_DIRS = { target: ['Cargo.toml', 'pom.xml'] };
+// A Map: a folder may have any name, `constructor` included.
+const BUILD_DIRS = new Map([['target', ['Cargo.toml', 'pom.xml']]]);
 
 export const TRASH = '.trash';
 
@@ -53,7 +54,7 @@ export async function scanDir(root, { stopped = () => false } = {}) {
         continue;
       }
       const dependency = DEPENDENCY_DIRS.has(entry.name)
-        || BUILD_DIRS[entry.name]?.some((manifest) => names.has(manifest))
+        || (BUILD_DIRS.get(entry.name) ?? []).some((manifest) => names.has(manifest))
         || await fs.promises.access(path.join(child, 'pyvenv.cfg')).then(() => true, () => false);
       const childBytes = await walk(child, { inside: dependency || entry.name === '.git' });
       if (dependency) {
@@ -70,25 +71,37 @@ export async function scanDir(root, { stopped = () => false } = {}) {
 
 // Move a directory out of the way in one step: whatever runs next finds it
 // either whole or gone. The contents are deleted later (emptyTrash). The
-// trash must be on the directory's own file system.
+// trash must be on the directory's own file system, and a real directory:
+// never moved into through a link.
 export function moveToTrash(target, trash) {
-  fs.mkdirSync(trash, { recursive: true, mode: 0o700 });
+  try { fs.mkdirSync(trash, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  if (!fs.lstatSync(trash).isDirectory()) throw new Error(`${trash} is not a directory of its own`);
   const destination = path.join(trash, `${path.basename(target)}-${randomUUID().slice(0, 8)}`);
   fs.renameSync(target, destination);
   return destination;
 }
 
+// The trash goes as a whole: removing a path never follows a link, so a link
+// in its place is removed, not what it points to.
 export async function emptyTrash(trash) {
-  let entries;
-  try { entries = await fs.promises.readdir(trash); } catch { return; }
-  for (const name of entries) {
-    await fs.promises.rm(path.join(trash, name), { recursive: true, force: true, maxRetries: 2 }).catch(() => {});
-  }
+  await fs.promises.rm(trash, { recursive: true, force: true, maxRetries: 2 }).catch(() => {});
 }
 
 // A real directory (not a link to one) that still exists.
 export function isDirectory(target) {
   try { return fs.lstatSync(target).isDirectory(); } catch { return false; }
+}
+
+// A real directory reached from root with no link on the way: what a scan
+// found there may since sit behind a link to somewhere else.
+export function isDirectoryWithin(target, root) {
+  const relative = path.relative(root, target);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
+  try {
+    return fs.lstatSync(target).isDirectory() && fs.realpathSync(target) === path.join(fs.realpathSync(root), relative);
+  } catch {
+    return false;
+  }
 }
 
 export function formatBytes(bytes) {

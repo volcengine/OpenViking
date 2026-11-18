@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { TaskManager } from '../src/tasks.mjs';
 import { MessageInbox } from '../src/inbox.mjs';
+import { moveToTrash, scanDir } from '../src/task-dirs.mjs';
 
 // A worker that finishes when the test says so, after doing what the test
 // scripted for that turn (a report, an input arriving mid-turn, ...).
@@ -225,8 +226,8 @@ describe('TaskManager', () => {
     const dir = tasks.get('t1').workdir;
     const gone = [['repo', 'node_modules', 'x', 'index.js'], ['repo', 'env', 'lib', 'site.py'], ['rust', 'target', 'debug', 'bin']]
       .map((parts) => path.join(dir, ...parts));
-    const kept = [['repo', 'src', 'a.js'], ['repo', 'target', 'notes.md'], ['repo', '.git', 'node_modules', 'pack'], ['rust', 'Cargo.toml']]
-      .map((parts) => path.join(dir, ...parts));
+    const kept = [['repo', 'src', 'a.js'], ['repo', 'target', 'notes.md'], ['repo', '.git', 'node_modules', 'pack'], ['rust', 'Cargo.toml'],
+      ['repo', 'src', 'constructor', 'index.js'], ['repo', 'src', 'hasOwnProperty', 'index.js']].map((parts) => path.join(dir, ...parts));
     for (const file of [...gone, ...kept, path.join(dir, 'repo', 'env', 'pyvenv.cfg'), path.join(dataDir, 'workers', 't1', 'session.jsonl')]) write(file);
     fs.symlinkSync(path.dirname(outside), path.join(dir, 'repo', 'src', 'node_modules'));
     await tasks.sweepDirs();
@@ -243,7 +244,7 @@ describe('TaskManager', () => {
     assert.deepEqual(gone.filter((file) => fs.existsSync(file)), []);
     assert.deepEqual(kept.filter((file) => !fs.existsSync(file)), [], 'sources, a target without its manifest, .git');
     assert.ok(fs.lstatSync(path.join(dir, 'repo', 'src', 'node_modules')).isSymbolicLink() && fs.existsSync(outside), 'a link is never followed');
-    assert.deepEqual(fs.readdirSync(path.join(workspace, 'tasks', '.trash')), []);
+    assert.equal(fs.existsSync(path.join(workspace, 'tasks', '.trash')), false, 'the trash is emptied');
     assert.equal(activities.at(-1).kind, 'task.dirs_cleaned');
 
     // A task that follows it works on there, told its dependencies are gone,
@@ -264,8 +265,7 @@ describe('TaskManager', () => {
     const removed = await tasks.sweepDirs();
     assert.deepEqual(removed.removed, ['t1']);
     assert.equal(fs.existsSync(dir), false);
-    assert.deepEqual(fs.readdirSync(path.join(dataDir, 'workers')).sort(), ['.trash']);
-    assert.deepEqual(fs.readdirSync(path.join(dataDir, 'workers', '.trash')), []);
+    assert.deepEqual(fs.readdirSync(path.join(dataDir, 'workers')), []);
     assert.ok(fs.existsSync(outside));
     assert.equal(tasks.get('t1').status, 'done', 'the task records stay');
     tasks.create({ rows: [row()], title: 'C', runtime: 'pi', parent: 't2' });
@@ -284,6 +284,58 @@ describe('TaskManager', () => {
     executor.turns[3].finish({ text: '' });
     await settle();
     assert.deepEqual((await tasks.sweepDirs()).removed, ['t3']);
+  });
+
+  it('never deletes through a link: a trash that is one, or a folder that sits behind one since the scan', async (t) => {
+    const { tasks, executor, workspace } = setup(t);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-outside-'));
+    t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+    const precious = [path.join(outside, 'keep.txt'), path.join(outside, 'node_modules', 'dep.js')];
+    for (const file of precious) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'x'); }
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    const dir = tasks.get('t1').workdir;
+    fs.mkdirSync(path.join(dir, 'repo', 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'repo', 'node_modules', 'dep.js'), 'x');
+    tasks.report('t1', { state: 'done', draft: 'a' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    // A scan found repo/node_modules; then repo became a link to a directory outside.
+    const scan = await scanDir(dir);
+    fs.rmSync(path.join(dir, 'repo'), { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, 'repo'));
+    tasks.config.taskDirBudgetGb = 1e-12;
+    const result = tasks.cleanDirs(new Map([[dir, scan]]));
+    assert.deepEqual([result.pruned, result.removed], [[], ['t1']], 'the directory goes, with the link in it');
+    // A trash that is a link: nothing is moved into it, and it goes as a link.
+    const trash = path.join(workspace, 'tasks', '.trash');
+    fs.rmSync(trash, { recursive: true, force: true });
+    fs.symlinkSync(outside, trash);
+    const kept = path.join(workspace, 'tasks', 'kept');
+    fs.mkdirSync(kept);
+    assert.throws(() => moveToTrash(kept, trash), /not a directory of its own/);
+    assert.ok(fs.existsSync(kept));
+    await tasks.sweepDirs();
+    assert.equal(fs.existsSync(trash), false);
+    assert.deepEqual(precious.filter((file) => !fs.existsSync(file)), []);
+  });
+
+  it('keeps the directories a stopped worker used until its process has exited', async (t) => {
+    const { tasks, executor } = setup(t);
+    const start = executor.start.bind(executor);
+    executor.start = (args) => ({ ...start(args), stop: () => {} });
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
+    for (const id of ['t1', 't2']) fs.writeFileSync(path.join(tasks.get(id).workdir, 'notes.md'), id);
+    tasks.report('t1', { state: 'done', draft: 'a' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    tasks.stop('t2', 'owner asked');
+    assert.equal(tasks.get('t2').status, 'stopped');
+    tasks.config.taskDirBudgetGb = 1e-12;
+    assert.deepEqual((await tasks.sweepDirs()).removed, [], 'its own, and t1\'s it reads, while it runs');
+    executor.turns[1].finish({ text: '', error: 'stopped' });
+    await settle();
+    assert.deepEqual((await tasks.sweepDirs()).removed.sort(), ['t1', 't2']);
   });
 
   it('past the disk budget deletes dependency folders first, then whole directories, the longest ended first', async (t) => {
