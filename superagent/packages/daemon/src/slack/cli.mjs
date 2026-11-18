@@ -7,9 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SlackError, validToken } from './api.mjs';
+import { findExecutable, hostPlatformId, systemEnvironmentKeys } from '../platform/index.mjs';
 
 export const SLACK_CLI_VERSION = '4.10.0';
-export const bundledSlackCli = () => fileURLToPath(new URL('../../../../bin/slack', import.meta.url));
+export const bundledSlackCli = ({ host = hostPlatformId, env = process.env } = {}) => host.startsWith('termux-')
+  ? findExecutable('slack', env) || 'slack'
+  : fileURLToPath(new URL('../../../../bin/slack', import.meta.url));
 const READ_METHODS = new Set(['users.conversations', 'conversations.history', 'conversations.replies',
   'conversations.members', 'users.info']);
 
@@ -27,7 +30,7 @@ export class SlackCli {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-slack-cli-'));
     const env = {};
     for (const key of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
-      'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy']) {
+      'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', ...systemEnvironmentKeys]) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
     Object.assign(env, { SLACK_BOT_TOKEN: this.token, SLACK_DISABLE_TELEMETRY: 'true', NO_COLOR: '1' });

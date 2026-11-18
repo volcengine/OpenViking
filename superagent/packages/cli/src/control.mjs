@@ -82,7 +82,7 @@ export function appsFor(target, targets = loadTargets()) {
   const web = { id: 'web', ...SHARED_WEB };
   const updater = { id: 'updater', app: UPDATER_APP };
   if (target === undefined) return [...instances, web, ...(capabilities.updater ? [updater] : [])];
-  if (target === 'updater' && !capabilities.updater) throw new Error('Windows source installations do not support the release updater.');
+  if (target === 'updater' && !capabilities.updater) throw new Error('The release updater is not available on this platform.');
   if (target === 'web') return [web];
   if (target === 'updater') return [updater];
   const instance = instances.find((spec) => spec.id === target);

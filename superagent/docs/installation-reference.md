@@ -4,6 +4,8 @@
 
 This reference covers running the daemon. For the product overview, read the [README](../README.md).
 
+Native Termux arm64 has an initial runtime-only path using native Node and lark-cli from PATH, not the bundled Linux binaries. See [Termux setup and limitations](termux.md); dedicated Termux artifacts and CI builds are deferred.
+
 ## One-command installation
 
 Both platforms use the same [installation and setup guide](../install.md).

@@ -9,7 +9,7 @@ import test from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PLATFORMS } from '../../updater/src/artifacts.mjs';
-import { binName } from '../src/platform/index.mjs';
+import { binName, findExecutable, hostPlatformId } from '../src/platform/index.mjs';
 import { bundledRipgrep, RIPGREP_VERSION } from '../src/ripgrep-bin.mjs';
 import { extractRipgrepBinary, installRipgrepBinary, RIPGREP_ASSETS } from '../../../scripts/release/ripgrep.mjs';
 
@@ -23,7 +23,10 @@ test('ripgrep is pinned for every release platform and the Windows preview, at t
   assert.deepEqual(Object.keys(RIPGREP_ASSETS).sort(), Object.keys(PLATFORMS).sort());
   for (const [, sha256] of Object.values(RIPGREP_ASSETS)) assert.match(sha256, /^[0-9a-f]{64}$/);
   const root = fileURLToPath(new URL('../../../', import.meta.url));
-  assert.equal(bundledRipgrep(), path.join(root, 'bin', binName('rg')));
+  assert.equal(bundledRipgrep({ host: 'linux-x64' }), path.join(root, 'bin', binName('rg')));
+  assert.equal(bundledRipgrep(), hostPlatformId.startsWith('termux-')
+    ? findExecutable('rg') || 'rg'
+    : path.join(root, 'bin', binName('rg')));
 });
 
 test('ripgrep installer refuses unverified archives before replacing the binary', async (t) => {

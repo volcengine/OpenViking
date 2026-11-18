@@ -12,7 +12,9 @@ import { fileURLToPath } from 'node:url';
 
 const INSTALLER = fileURLToPath(new URL('../../../scripts/install.sh', import.meta.url));
 const WINDOWS_INSTALLER = fileURLToPath(new URL('../../../scripts/windows/install-preview.ps1', import.meta.url));
-const PLATFORM = `${process.platform}-${process.arch}`;
+const PLATFORM = `${process.platform === 'android' ? 'linux' : process.platform}-${process.arch}`;
+const SH = execFileSync('sh', ['-c', 'command -v sh'], { encoding: 'utf8' }).trim();
+const GREP = execFileSync('sh', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
 
 test('installer headers use the OpenViking SuperAgent brand', () => {
   for (const installer of [INSTALLER, WINDOWS_INSTALLER]) {
@@ -24,20 +26,39 @@ test('installer headers use the OpenViking SuperAgent brand', () => {
 
 // A home directory, a fake pm2 that records any call, and a release archive
 // laid out like build-release.mjs makes them.
-function machine(t) {
+function machine(t, { userspace = 'glibc', arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64', nodeVersion = '22.19.0', nodePlatform = 'android', nodeArch = 'arm64', sqliteWorks = true, larkVersion = 'lark-cli version v1.0.96-2-g1da5768f', larkStatus = 0 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-install-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
   const bin = path.join(root, 'bin');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(bin);
+  const script = (name, body) => fs.writeFileSync(path.join(bin, name), `#!${SH}\n${body}\n`, { mode: 0o755 });
+  // Use real grep against synthetic shell maps: exercise libc precedence without
+  // requiring Android hardware or treating inherited TERMUX_* as ABI evidence.
+  const maps = path.join(root, 'maps');
+  fs.writeFileSync(maps, userspace === 'bionic' ? '/apex/lib64/bionic/libc.so\n'
+    : userspace === 'musl' ? '/lib/ld-musl-aarch64.so.1\n/apex/lib64/bionic/libc.so\n'
+      : '/lib/libc.so.6\n/apex/lib64/bionic/libc.so\n');
+  script('grep', `case "$*" in */proc/*/maps) exec '${GREP}' "$1" "$2" '${maps}' ;; esac\nexec '${GREP}' "$@"`);
+  script('uname', `case "$1" in -s) echo '${process.platform === 'darwin' && userspace === 'glibc' ? 'Darwin' : 'Linux'}' ;; -m) echo '${arch}' ;; esac`);
+  script('ldd', `echo '${userspace === 'musl' ? 'musl libc' : 'glibc'}'`);
+  if (userspace === 'bionic') {
+    fs.symlinkSync(SH, path.join(bin, 'sh'));
+    const prelude = `const realProcess=globalThis.process; const process={platform:${JSON.stringify(nodePlatform)},arch:${JSON.stringify(nodeArch)},versions:{node:${JSON.stringify(nodeVersion)}},exit:(n)=>realProcess.exit(n)}; const realRequire=require; require=(id)=>{if(id!=="node:sqlite")return realRequire(id); if(!${sqliteWorks})throw Error("SQLite unavailable"); return {DatabaseSync:class {close(){}}}};`;
+    script('node', `echo "$*" >> '${root}/native-node-calls'\nif [ "$1" = -e ]; then exec '${process.execPath}' -e '${prelude}'"$2"; fi\ncase "$1" in */check-ov.mjs) exit "\${TEST_OV_STATUS:-0}" ;; esac\nexit "\${TEST_NODE_STATUS:-0}"`);
+    script('lark-cli', `printf '%s\\n' '${larkVersion}'\nexit ${larkStatus}`);
+  }
   fs.writeFileSync(path.join(bin, 'pm2'), `#!/bin/sh\necho "$@" >> "${root}/pm2-calls"\n`, { mode: 0o755 });
   const archive = (version, { platform = PLATFORM, nodeWorks = true, ovWorks = true } = {}) => {
     const work = fs.mkdtempSync(path.join(root, 'build-'));
     const directory = path.join(work, `superagent-${version}-${platform}`);
     fs.mkdirSync(path.join(directory, 'node', 'bin'), { recursive: true });
     fs.mkdirSync(path.join(directory, 'packages', 'cli', 'bin'), { recursive: true });
+    fs.mkdirSync(path.join(directory, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(directory, 'bin', 'pm2'), '#!/bin/sh\nROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)\nexec "$ROOT/node/bin/node" "$ROOT/node_modules/pm2/bin/pm2" "$@"\n', { mode: 0o755 });
     fs.writeFileSync(path.join(directory, 'node', 'bin', 'node'), `#!/bin/sh
+echo bundled >> '${root}/bundled-node-calls'
 case "$1" in */check-ov.mjs) exit ${ovWorks ? 0 : 1} ;; esac
 exit ${nodeWorks ? 0 : 1}
 `, { mode: 0o755 });
@@ -51,12 +72,123 @@ exit ${nodeWorks ? 0 : 1}
     const env = typeof args.at(-1) === 'object' ? args.pop() : {};
     return spawnSync('sh', [INSTALLER, '--no-setup', ...args], {
       encoding: 'utf8',
-      env: { HOME: home, SHELL: '/bin/bash', PATH: `${bin}:${process.env.PATH}`, ...env },
+      env: { HOME: home, SHELL: '/bin/bash', PATH: `${bin}:${process.env.PATH}`, TERMUX_VERSION: 'test', PREFIX: root, ...env },
     });
   };
   const superagent = path.join(home, '.ov-superagent');
-  return { root, home, superagent, archive, install, pm2Calls: () => fs.existsSync(path.join(root, 'pm2-calls')) };
+  return { root, home, bin, superagent, archive, install, pm2Calls: () => fs.existsSync(path.join(root, 'pm2-calls')) };
 }
+
+test('native Termux arm64 reuses linux-arm64 with PATH Node, native launchers and no desktop Node execution', (t) => {
+  const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
+  const result = m.install('--lang', 'en', '--file', m.archive('0.5.0', { platform: 'linux-arm64', nodeWorks: false }));
+  assert.equal(result.status, 0, result.stderr);
+  const release = path.join(m.superagent, 'current');
+  assert.equal(fs.readlinkSync(path.join(release, 'node/bin/node')), path.join(m.bin, 'node'));
+  assert.equal(fs.existsSync(path.join(m.root, 'bundled-node-calls')), false);
+  for (const launcher of [path.join(m.superagent, 'bin/ov-superagent'), path.join(release, 'bin/pm2')]) {
+    assert.equal(fs.readFileSync(launcher, 'utf8').split('\n')[0], `#!${m.bin}/sh`);
+    const run = spawnSync(launcher, ['--version'], { encoding: 'utf8', env: { HOME: m.home, PATH: `${m.bin}:${process.env.PATH}` } });
+    assert.equal(run.status, 0, run.stderr);
+  }
+  const calls = fs.readFileSync(path.join(m.root, 'native-node-calls'), 'utf8');
+  assert.match(calls, /check-ov\.mjs/);
+  assert.match(calls, /node_modules\/pm2\/bin\/pm2 --version/);
+  assert.equal(fs.existsSync(path.join(m.superagent, 'deploy.lock')), false);
+});
+
+for (const [name, options, message] of [
+  ['old Node', { nodeVersion: '22.18.0' }, /Node >=22\.19/],
+  ['older major Node', { nodeVersion: '20.99.0' }, /Node >=22\.19/],
+  ['glibc Node on PATH', { nodePlatform: 'linux' }, /process.platform android/],
+  ['non-arm64 Node on PATH', { nodeArch: 'x64' }, /process.arch arm64/],
+  ['Node without working SQLite', { sqliteWorks: false }, /with node:sqlite is required/],
+  ['broken lark-cli', { larkStatus: 1 }, /lark-cli --version failed/],
+  ['invalid lark-cli version', { larkVersion: 'not-a-version' }, /invalid version/],
+  ['unsupported Android CPU', { arch: 'x86_64' }, /Only native Termux arm64/],
+]) {
+  test(`native Termux refuses ${name} before activation`, (t) => {
+    const m = machine(t, { userspace: 'bionic', arch: 'aarch64', ...options });
+    const result = m.install('--file', m.archive('0.5.0', { platform: 'linux-arm64' }));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, message);
+    assert.equal(fs.existsSync(path.join(m.superagent, 'current')), false);
+    assert.equal(fs.existsSync(path.join(m.root, 'bundled-node-calls')), false);
+  });
+}
+
+for (const [binary, message] of [['node', /Node >=22\.19\.0 must be installed on PATH/], ['lark-cli', /lark-cli must be installed on PATH/]]) {
+  test(`native Termux requires ${binary} on PATH`, (t) => {
+    const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
+    const archive = m.archive('0.5.0', { platform: 'linux-arm64' });
+    fs.unlinkSync(path.join(m.bin, binary));
+    // No fallback to any Node/lark-cli installed on the test host.
+    const result = m.install('--file', archive, { PATH: m.bin });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, message);
+    assert.equal(fs.existsSync(path.join(m.superagent, 'current')), false);
+  });
+}
+
+test('native Termux preserves checksum, deployment lock, runtime and OV activation gates', (t) => {
+  const m = machine(t, { userspace: 'bionic', arch: 'aarch64', nodeVersion: '24.0.0' });
+  const archive = m.archive('0.5.0', { platform: 'linux-arm64' });
+  assert.equal(m.install('--file', archive).status, 0);
+  const active = fs.realpathSync(path.join(m.superagent, 'current'));
+  const next = m.archive('0.6.0', { platform: 'linux-arm64' });
+  for (const [env, message] of [
+    [{ TEST_NODE_STATUS: '1' }, /运行不了这个版本/],
+    [{ TEST_OV_STATUS: '1' }, /OpenViking 检查未通过/],
+  ]) {
+    const failed = m.install('--file', next, env);
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, message);
+    assert.equal(fs.realpathSync(path.join(m.superagent, 'current')), active);
+    assert.deepEqual(fs.readdirSync(path.join(m.superagent, 'releases')), ['0.5.0']);
+    assert.equal(fs.existsSync(path.join(m.superagent, 'deploy.lock')), false);
+  }
+  fs.mkdirSync(path.join(m.superagent, 'deploy.lock'));
+  assert.match(m.install('--file', next).stderr, /另一个安装或升级正在进行/);
+  fs.rmdirSync(path.join(m.superagent, 'deploy.lock'));
+  fs.writeFileSync(`${next}.sha256`, `${'0'.repeat(64)}  x\n`);
+  assert.match(m.install('--file', next).stderr, /校验失败/);
+  assert.equal(fs.realpathSync(path.join(m.superagent, 'current')), active);
+  assert.equal(fs.existsSync(path.join(m.root, 'bundled-node-calls')), false);
+});
+
+for (const [command, message] of [['ln', /Cannot replace the release Node/], ['cp', /Cannot replace the release pm2 launcher/], ['chmod', /Cannot replace the release pm2 launcher/]]) {
+  test(`native Termux cleans pending release when ${command} replacement fails`, (t) => {
+    const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
+    assert.equal(m.install('--file', m.archive('0.5.0', { platform: 'linux-arm64' })).status, 0);
+    const active = fs.realpathSync(path.join(m.superagent, 'current'));
+    const archive = m.archive('0.6.0', { platform: 'linux-arm64' });
+    const realCommand = execFileSync('sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(m.bin, command), `#!${SH}\ncase "$*" in *releases/.pending-*) exit 1 ;; esac\nexec '${realCommand}' "$@"\n`, { mode: 0o755 });
+    const result = m.install('--file', archive);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, message);
+    assert.equal(fs.realpathSync(path.join(m.superagent, 'current')), active);
+    assert.deepEqual(fs.readdirSync(path.join(m.superagent, 'releases')), ['0.5.0']);
+    assert.equal(fs.existsSync(path.join(m.superagent, 'deploy.lock')), false);
+    assert.equal(fs.existsSync(path.join(m.root, 'bundled-node-calls')), false);
+  });
+}
+
+test('inherited Termux variables and Bionic mappings do not misclassify a glibc guest', (t) => {
+  const m = machine(t);
+  const result = m.install('--file', m.archive('0.5.0'));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.lstatSync(path.join(m.superagent, 'current/node/bin/node')).isSymbolicLink(), false);
+  assert.equal(fs.readFileSync(path.join(m.superagent, 'bin/ov-superagent'), 'utf8').split('\n')[0], '#!/bin/sh');
+  assert.ok(fs.existsSync(path.join(m.root, 'bundled-node-calls')));
+});
+
+test('musl guests retain rejection even with Termux variables and Bionic mappings', (t) => {
+  const m = machine(t, { userspace: 'musl' });
+  const result = m.install('--file', m.archive('0.5.0'));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /musl/);
+});
 
 test('installs a release under ~/.ov-superagent, adds the launcher and PATH, and never touches pm2', (t) => {
   const m = machine(t);
