@@ -34,6 +34,57 @@ fn topology_endpoints(variable: &str) -> Option<Vec<String>> {
 }
 
 #[tokio::test]
+async fn redis_cluster_mget_preserves_positions_and_non_string_values() {
+    let Some(endpoints) = topology_endpoints("REDIS_CLUSTER_TEST_URLS") else {
+        return;
+    };
+    let runtime = CacheRuntime::redis(RedisProviderConfig {
+        mode: "cluster".into(),
+        endpoints,
+        connect_timeout_ms: 10_000,
+        command_timeout_ms: 3_000,
+        default_ttl_seconds: 60,
+        ..RedisProviderConfig::default()
+    })
+    .await
+    .unwrap();
+    let one = key("mget", "{slot-a}:one");
+    let two = key("mget", "{slot-b}:two");
+    let list = key("mget", "{slot-a}:list");
+    let missing = key("mget", "{slot-b}:missing");
+    runtime
+        .set(&one, Bytes::from_static(b"one"), SetOptions::default())
+        .await
+        .unwrap();
+    runtime
+        .set(&two, Bytes::from_static(b"two"), SetOptions::default())
+        .await
+        .unwrap();
+    runtime
+        .lpush(&list, vec![Bytes::from_static(b"item")])
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .mget(&[two.clone(), missing, one.clone(), list.clone(), two.clone()])
+            .await
+            .unwrap(),
+        vec![
+            Some(Bytes::from_static(b"two")),
+            None,
+            Some(Bytes::from_static(b"one")),
+            None,
+            Some(Bytes::from_static(b"two")),
+        ]
+    );
+    assert!(runtime.mget(&[]).await.unwrap().is_empty());
+    for key in [one, two, list] {
+        runtime.del(&[key]).await.unwrap();
+    }
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn redis_runtime_preserves_primitive_and_batch_semantics() {
     let Some(config) = config() else {
         return;
