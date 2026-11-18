@@ -1,9 +1,14 @@
 """Prepare safe Markdown writes from the selected completed stage."""
 
+from openviking.core.namespace import classify_uri
 from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
-from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
+from vikingbot.compile.renderer import (
+    RenderedBundle,
+    validate_declared_okf_markdown,
+    validate_relative_file_path,
+)
 
 
 async def run(runtime, documents):
@@ -14,18 +19,26 @@ async def run(runtime, documents):
     """
     bundle = RenderedBundle()
     contents, outputs = {}, {}
+    seen_paths: set[str] = set()
     for document in documents:
         path = validate_relative_file_path(document.path)
-        if path in contents:
+        if path in seen_paths:
             raise ValueError(f"Multiple output writers claim {path}")
+        seen_paths.add(path)
         content = (await runtime.files.sandbox.read_file_bytes(document.workspace_path)).decode(
             "utf-8"
         )
         if not path.lower().endswith(".md") or not content.strip():
             raise ValueError(f"Output must be nonempty UTF-8 Markdown: {path}")
+        uri = safe_join_viking_uri(runtime.target, path)
+        if classify_uri(uri).context_type == "resource":
+            try:
+                validate_declared_okf_markdown(uri, content.encode("utf-8"))
+            except ValueError as exc:
+                runtime.warnings.append(str(exc))
+                continue
         contents[path] = content
         outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
-        uri = safe_join_viking_uri(runtime.target, path)
         read_before = path in runtime.old
         old = await file_ops.load_old(runtime, path)
         if old is not None and not read_before:
