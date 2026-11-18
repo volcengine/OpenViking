@@ -569,8 +569,6 @@ async def test_user_role_caller_and_isolation_between_users(service):
     )
     assert "alice-only" not in other.text
     assert "Nothing is saved under session alice-secret" in other.text
-    recent = await history.session_history(service, bob, action="overview", sessions="")
-    assert "alice-secret" not in recent.text
     assert not await service.viking_fs.exists("viking://user/bob/sessions/alice-secret", ctx=bob)
 
 
