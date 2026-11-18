@@ -416,7 +416,7 @@ def test_api_consumers_inherit_the_trusted_native_producer_pool(number, source, 
     )[0]
     selected_image = image or "ubuntu:24.04"
     assert labels(native["container"]["image"], {}, ubuntu24_image=image) == [selected_image]
-    assert container == (selected_image if environment == "self-hosted" else "")
+    assert container == selected_image
     contexts = {
         "needs.native-runtime.outputs.test_runner": json.dumps(destination),
         "needs.native-runtime.outputs.test_container": container,
@@ -452,19 +452,22 @@ def test_api_consumers_inherit_the_trusted_native_producer_pool(number, source, 
         ("api_test.yml", "api-tests"),
         ("api_test.yml", "database-tests"),
         ("_test_lite.yml", "test-lite"),
+        ("_test_full.yml", "test"),
+        ("_codeql.yml", "analyze"),
+        ("api_test_effect.yml", "effect-tests"),
     ],
 )
-def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
+def test_linux_test_containers_bootstrap_and_cleanup(file, name):
     job = jobs(file)[name]
     steps = job["steps"]
     bootstrap = steps[0]
-    assert bootstrap["if"] == "runner.environment == 'self-hosted'"
+    assert bootstrap["if"] == "runner.os == 'Linux'"
     assert "Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt" in bootstrap["run"]
     assert "APT::Update::Error-Mode=any" in bootstrap["run"]
     assert "git ca-certificates curl python3 cmake build-essential" in bootstrap["run"]
     assert "ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro" in job["container"]["options"]
     cleanup = next(step for step in steps if step.get("uses") == "./.github/actions/linux-test-env")
-    assert cleanup["if"] == "runner.environment == 'self-hosted'"
+    assert cleanup["if"] == "runner.os == 'Linux'"
     assert steps.index(cleanup) < next(
         index for index, step in enumerate(steps) if step.get("uses") == "actions/setup-python@v6"
     )
@@ -479,6 +482,9 @@ def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
         ("api_test.yml", "api-tests"),
         ("api_test.yml", "database-tests"),
         ("_test_lite.yml", "test-lite"),
+        ("_test_full.yml", "test"),
+        ("_codeql.yml", "analyze"),
+        ("api_test_effect.yml", "effect-tests"),
     ],
 )
 @pytest.mark.parametrize("installed", [True, False])
@@ -534,6 +540,49 @@ def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, fil
         if file == "_build.yml":
             assert {"gcc-10", "g++-10"} <= set(calls[1].split())
             assert "missing required packages: gcc-10; falling back to apt" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "file,name",
+    [
+        ("_test_lite.yml", "test-lite"),
+        ("_test_full.yml", "test"),
+        ("_codeql.yml", "analyze"),
+        ("api_test_effect.yml", "effect-tests"),
+    ],
+)
+@pytest.mark.parametrize("image", ["", "ghcr.io/volcengine/openviking-ci-ubuntu24:tested"])
+def test_hosted_linux_checks_use_ci_image_with_stock_fallback(file, name, image):
+    job = jobs(file)[name]
+    contexts = {"inputs.linux_container": ""}
+    assert labels(
+        job["container"]["image"],
+        {"os": "ubuntu-24.04"},
+        ubuntu24_image=image,
+        contexts=contexts,
+    ) == [image or "ubuntu:24.04"]
+    if file != "_codeql.yml":
+        for os in ["macos-15", "windows-latest"]:
+            assert labels(
+                job["container"]["image"], {"os": os}, ubuntu24_image=image, contexts=contexts
+            ) == [""]
+    assert all("sudo apt-get" not in step.get("run", "") for step in job["steps"])
+    bootstrap = next(step for step in job["steps"] if "packages=(" in step.get("run", ""))
+    packages = re.search(r"packages=\((.*?)\)", bootstrap["run"], re.DOTALL).group(1).split()
+    dockerfile = (WORKFLOWS.parent / "images/ubuntu24-ci.Dockerfile").read_text()
+    installed = re.search(
+        r"install -y --no-install-recommends(.*?)&&", dockerfile, re.DOTALL
+    ).group(1)
+    assert set(packages) <= set(installed.replace("\\", "").split())
+
+
+def test_lite_explicit_image_override_takes_precedence():
+    assert labels(
+        jobs("_test_lite.yml")["test-lite"]["container"]["image"],
+        {"os": "ubuntu-24.04"},
+        ubuntu24_image="configured-image",
+        contexts={"inputs.linux_container": "producer-image"},
+    ) == ["producer-image"]
 
 
 @pytest.mark.parametrize("container", ["", "ubuntu:24.04"])
