@@ -8,10 +8,7 @@ import {
 } from 'react';
 import type { Components } from 'react-markdown';
 import { CommandConsoleUriText } from './command-console-uri-text.js';
-import {
-  COMMAND_CONSOLE_URI_PATTERN,
-  getCommandConsoleSafeHref,
-} from './command-console-text.js';
+import { getCommandConsoleSafeHref } from './command-console-text.js';
 import { CommandConsoleCodeBlock } from './command-console-code-block.js';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
 
@@ -58,17 +55,17 @@ function LinkedText({ children }: { children?: ReactNode }) {
 function MarkdownCode({ children }: ComponentPropsWithoutRef<'code'>) {
   const options = useContext(CommandConsoleMarkdownContext)!;
   const insideLink = useContext(InsideLink);
-  if (insideLink) return <code>{children}</code>;
-
-  const text = textOf(children);
   return (
     <code>
-      <CommandConsoleUriText
-        text={text}
-        mode="literal"
-        wholeUri={text.match(COMMAND_CONSOLE_URI_PATTERN)?.length === 1}
-        onOpenUri={options.onOpenUri}
-      />
+      {insideLink ? (
+        children
+      ) : (
+        <CommandConsoleUriText
+          text={textOf(children)}
+          mode="literal"
+          onOpenUri={options.onOpenUri}
+        />
+      )}
     </code>
   );
 }
