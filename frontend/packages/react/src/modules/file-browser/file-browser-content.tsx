@@ -48,6 +48,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     rootUri = 'viking://',
     defaultExpandedUri,
     defaultExpandedUris,
+    defaultExpansionSnapshot,
     locale: localeProp,
     agentConnect,
     agentConnectOpen,
@@ -61,6 +62,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     onUriChange,
     onSelect,
     onExpandedUrisChange,
+    onExpansionSnapshotChange,
     onImportResources,
     renderImportResources,
     previewSlots,
@@ -109,7 +111,9 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     accessLabels: text,
     defaultExpandedUri,
     defaultExpandedUris,
+    defaultExpansionSnapshot,
     onExpandedUrisChange,
+    onExpansionSnapshotChange,
     currentUri,
     requestOptions,
     onUriChange: changeUri,
@@ -132,7 +136,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     uri,
     reportedUri,
     pack.choosePackFile,
-    defaultExpandedUris !== undefined,
+    defaultExpansionSnapshot !== undefined || defaultExpandedUris !== undefined,
   );
 
   const search = useFileBrowserSearchDialog(layoutRef);

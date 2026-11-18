@@ -100,33 +100,35 @@ import '@openviking/react/modules/file-browser/style.css';
 
 ### FileBrowser
 
-| 参数                     | 说明                                                                                                               | 类型                                                                    | 默认值                   |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------ |
-| uri                      | 受控的当前资源 URI：传入（包括空字符串）后由宿主决定，空字符串表示不选中资源                                       | `string`                                                                | -                        |
-| defaultUri               | 非受控时的初始资源 URI，省略时不选中资源                                                                           | `string`                                                                | -                        |
-| onUriChange              | 浏览器内部选中资源时触发，参数是新的 URI                                                                           | `(uri: string \| null) => void`                                         | -                        |
-| onSelect                 | 点击或键盘选中目录树条目时上报完整条目，重复选中仍触发。可根据 `row.type` 向 VikingBot 提供目录引用                | `(row: FileTreeEntryRow) => void`                                       | -                        |
-| onExpandedUrisChange     | 初始化完成后上报目录展开快照，不含根目录                                                                           | `(uris: readonly string[]) => void`                                     | -                        |
-| rootUri                  | 目录树的根，把浏览和搜索的范围限定在这个子树内                                                                     | `string`                                                                | `'viking://'`            |
-| defaultExpandedUri       | 未传入快照时逐级展开到该路径，默认只展开根目录。                                                                   | `string`                                                                | -                        |
-| defaultExpandedUris      | 初始展开目录快照。只要传入快照，就优先于 `defaultExpandedUri`。空数组只展开根目录。                                | `readonly string[]`                                                     | -                        |
-| readOnly                 | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
-| acl                      | 开启共享资源的权限显示与授权管理，类型见下方 `FileBrowserAclOptions`                                               | `boolean \| FileBrowserAclOptions`                                      | `false`                  |
-| agentConnect             | 显示「连接 Agent」按钮，点击后从右侧打开接入抽屉，参数见 [AgentConnect](../components/agent-connect)；省略时不显示 | `AgentConnectProps`                                                     | -                        |
-| agentConnectOpen         | 传入 `agentConnect` 后可从外层控制内置抽屉；见[受控示例](../components/file-browser-action-bar#从其他入口打开)     | `boolean`                                                               | -                        |
-| onAgentConnectOpenChange | 用户请求打开或关闭内置抽屉时触发；宿主直接改属性时不触发                                                           | `(open: boolean) => void`                                               | -                        |
-| onImportResources        | 点击「导入资源」按钮时触发，传入后显示该按钮                                                                       | `() => void`                                                            | -                        |
-| renderImportResources    | 包装或替换「导入资源」按钮，返回 `null` 隐藏，用法见 [FileBrowserActionBar](../components/file-browser-action-bar) | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                        |
-| previewActions           | 显示或隐藏内置的预览操作，类型见下方 `FileBrowserPreviewActions`                                                   | `FileBrowserPreviewActions`                                             | -                        |
-| previewSlots             | 追加、替换或隐藏预览操作区，看板页签不受影响，类型见下方 `FileBrowserPreviewSlots`                                 | `FileBrowserPreviewSlots`                                               | -                        |
-| dashboardKinds           | 启用的看板类型，空数组关闭看板；例如 `['experience']` 只保留经验看板，并且不再读取编译配置                         | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']` |
-| experienceDataSource     | 按需替换内置经验看板的请求，保留原有界面、分页和重试                                                               | `FileBrowserExperienceDataSource`                                       | -                        |
-| renderDashboard          | 自定义看板页签的内容，返回 `null` 或 `undefined` 时使用内置看板，类型见下方 `FileBrowserDashboard`                 | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                        |
-| slots                    | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`   | -                        |
-| labels                   | 覆盖界面文案，类型见下方 `FileBrowserLabels`                                                                       | `FileBrowserLabels`                                                     | -                        |
-| locale                   | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
-| requestOptions           | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
-| className、style         | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                               | -                        |
+| 参数                      | 说明                                                                                                               | 类型                                                                    | 默认值                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------ |
+| uri                       | 受控的当前资源 URI：传入（包括空字符串）后由宿主决定，空字符串表示不选中资源                                       | `string`                                                                | -                        |
+| defaultUri                | 非受控时的初始资源 URI，省略时不选中资源                                                                           | `string`                                                                | -                        |
+| onUriChange               | 浏览器内部选中资源时触发，参数是新的 URI                                                                           | `(uri: string \| null) => void`                                         | -                        |
+| onSelect                  | 点击或键盘选中目录树条目时上报完整条目，重复选中仍触发。可根据 `row.type` 向 VikingBot 提供目录引用                | `(row: FileTreeEntryRow) => void`                                       | -                        |
+| onExpandedUrisChange      | 初始化完成后上报目录展开快照，不含根目录                                                                           | `(uris: readonly string[]) => void`                                     | -                        |
+| rootUri                   | 目录树的根，把浏览和搜索的范围限定在这个子树内                                                                     | `string`                                                                | `'viking://'`            |
+| defaultExpandedUri        | 未传入快照时逐级展开到该路径，默认只展开根目录。                                                                   | `string`                                                                | -                        |
+| defaultExpandedUris       | 初始展开目录快照。只要传入快照，就优先于 `defaultExpandedUri`。空数组只展开根目录。                                | `readonly string[]`                                                     | -                        |
+| defaultExpansionSnapshot  | 恢复本次挂载的展开路径和手动折叠记录。优先于 `defaultExpandedUris`。                                               | `FileBrowserExpansionSnapshot`                                          | -                        |
+| onExpansionSnapshotChange | 上报 `expandedUris` 和 `collapsedUris`，供宿主保存，包括别名身份仍待确认的展开和折叠操作。                         | `(snapshot: FileBrowserExpansionSnapshot) => void`                      | -                        |
+| readOnly                  | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
+| acl                       | 开启共享资源的权限显示与授权管理，类型见下方 `FileBrowserAclOptions`                                               | `boolean \| FileBrowserAclOptions`                                      | `false`                  |
+| agentConnect              | 显示「连接 Agent」按钮，点击后从右侧打开接入抽屉，参数见 [AgentConnect](../components/agent-connect)；省略时不显示 | `AgentConnectProps`                                                     | -                        |
+| agentConnectOpen          | 传入 `agentConnect` 后可从外层控制内置抽屉；见[受控示例](../components/file-browser-action-bar#从其他入口打开)     | `boolean`                                                               | -                        |
+| onAgentConnectOpenChange  | 用户请求打开或关闭内置抽屉时触发；宿主直接改属性时不触发                                                           | `(open: boolean) => void`                                               | -                        |
+| onImportResources         | 点击「导入资源」按钮时触发，传入后显示该按钮                                                                       | `() => void`                                                            | -                        |
+| renderImportResources     | 包装或替换「导入资源」按钮，返回 `null` 隐藏，用法见 [FileBrowserActionBar](../components/file-browser-action-bar) | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                        |
+| previewActions            | 显示或隐藏内置的预览操作，类型见下方 `FileBrowserPreviewActions`                                                   | `FileBrowserPreviewActions`                                             | -                        |
+| previewSlots              | 追加、替换或隐藏预览操作区，看板页签不受影响，类型见下方 `FileBrowserPreviewSlots`                                 | `FileBrowserPreviewSlots`                                               | -                        |
+| dashboardKinds            | 启用的看板类型，空数组关闭看板；例如 `['experience']` 只保留经验看板，并且不再读取编译配置                         | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']` |
+| experienceDataSource      | 按需替换内置经验看板的请求，保留原有界面、分页和重试                                                               | `FileBrowserExperienceDataSource`                                       | -                        |
+| renderDashboard           | 自定义看板页签的内容，返回 `null` 或 `undefined` 时使用内置看板，类型见下方 `FileBrowserDashboard`                 | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                        |
+| slots                     | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`   | -                        |
+| labels                    | 覆盖界面文案，类型见下方 `FileBrowserLabels`                                                                       | `FileBrowserLabels`                                                     | -                        |
+| locale                    | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
+| requestOptions            | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
+| className、style          | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                               | -                        |
 
 ### FileBrowserOpenResourceOptions
 
@@ -460,7 +462,7 @@ import '@openviking/react/modules/file-browser/style.css';
 ### 请求与布局
 
 - FileBrowser 的高度是父容器的 100%，父容器需要有明确的高度；组件没有外框和背景，由宿主决定。
-- `rootUri` 或 `requestOptions` 变化时，目录树从根目录重新加载，进行中的请求被中止。`requestOptions` 变化还会重新加载预览。只有挂载时未传入 `defaultExpandedUris`，更新 `defaultExpandedUri` 才会重新加载目录树。
+- `rootUri` 或 `requestOptions` 变化时，目录树从根目录重新加载，进行中的请求被中止。`requestOptions` 变化还会重新加载预览。只有挂载时既未传入 `defaultExpandedUris`，也未传入 `defaultExpansionSnapshot`，更新 `defaultExpandedUri` 才会重新加载目录树。
 - 内联的 `requestOptions` 对象在每次渲染时都是新的，请在组件外定义或用 `useMemo` 保持引用稳定。
 - `acl.resolvePermission` 和 `acl.listPrincipals` 同理：引用变化会重新请求权限和成员，请在组件外定义或用 `useCallback` 保持稳定。
 - 类型从 `@openviking/react/modules/file-browser` 导出，包根入口只导出 `FileBrowser` 和 `FileBrowserProps`。
@@ -472,8 +474,8 @@ import '@openviking/react/modules/file-browser/style.css';
 - 点击文件预览正文；点击目录展开并选中它，预览区显示该目录的 L0 摘要和 L1 总览。
 - `viking://system` 下的目录保留页签和路径，不显示摘要；目录中的文件仍可预览。
 - 单独设置 `defaultExpandedUri`，可在挂载时将目录树展开到一个指定位置。挂载后更新受控 `uri` 会[打开并定位资源](#打开并定位资源)。
-- 刷新后恢复目录展开状态时，按作用域保存 `onExpandedUrisChange` 上报的列表，并在下次挂载时传入 `defaultExpandedUris`。初始受控 URI 在恢复展开的目录范围内定位。
-- 恢复期间列表请求失败时，保留已保存的快照。初始化结束后，折叠可见目录或更新受控 `uri` 并展开目录时，会上报新的快照。快照保留其他仍展开分支中尚未加载的路径，包括根目录后续页请求失败时尚未加载的目录。恢复尚未结束时点击重试，错误会保留到当前恢复完成后再重试。若手动折叠的目录可能与已保存路径对应，而服务端暂时无法解析 `viking://~`，FileBrowser 会在确认路径身份后再上报快照。点击刷新可重试查询。
+- 要在重新挂载后恢复目录树状态，请按账号和根目录保存 `onExpansionSnapshotChange` 上报的完整快照，下次挂载时传给 `defaultExpansionSnapshot`。请保存两个数组。身份待确认时，折叠记录可能与同一目录的展开 URI 同时存在，确认后以折叠记录为准。初始受控 URI 在恢复展开的目录范围内定位。
+- 恢复期间列表请求失败时，保留已保存的快照。初始化结束后，折叠可见目录或更新受控 `uri` 并展开目录时，会上报新的快照。快照保留其他仍展开分支中尚未加载的路径，包括根目录后续页请求失败时尚未加载的目录。恢复尚未结束时点击重试，错误会保留到当前恢复完成后再重试。使用仅返回 URI 列表的 `onExpandedUrisChange` 时，可能匹配已保存路径的折叠操作会等主目录身份确认后再上报。点击刷新可重试查询。
 - 文本文件最多读取 2000 行，超出时提示内容被截断。
 - 图片、视频、音频、PDF、Office 文档和压缩包按扩展名通过内容下载接口读取。
 - 可编辑的格式有 `.md`、`.json`、`.jsonl`、`.txt`、`.yaml`、`.yml`：进入编辑时重新读取完整内容，保存调用 `POST /api/v1/content/write`，成功后重新加载预览。

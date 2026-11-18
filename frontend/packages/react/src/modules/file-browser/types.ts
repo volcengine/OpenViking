@@ -1,3 +1,4 @@
+import type { DirectoryExpansionSnapshot } from '../../shared/directory-tree/types.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 export type {
@@ -204,6 +205,9 @@ export interface FileBrowserLabels {
  * The module includes the file tree, file preview and top action bar. The command panel
  * belongs to `console`.
  */
+/** Serializable expansion state for one FileBrowser root and identity scope. */
+export type FileBrowserExpansionSnapshot = DirectoryExpansionSnapshot;
+
 export interface FileBrowserProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onSelect' | 'children'
@@ -261,6 +265,8 @@ export interface FileBrowserProps extends Omit<
    * when provided. An empty array expands only the root.
    */
   defaultExpandedUris?: readonly string[];
+  /** Initial snapshot for this mount. Takes precedence over defaultExpandedUris. */
+  defaultExpansionSnapshot?: FileBrowserExpansionSnapshot;
   /**
    * 内置接入抽屉的配置；传入后显示连接入口，省略时隐藏。
    * Configuration of the built-in connection drawer; enables its entry when provided.
@@ -300,6 +306,8 @@ export interface FileBrowserProps extends Omit<
    * When restoration fails, it preserves unresolved paths in open branches.
    */
   onExpandedUrisChange?: (uris: readonly string[]) => void;
+  /** Reports expansion and explicit collapses, including unresolved alias edits. */
+  onExpansionSnapshotChange?: (snapshot: FileBrowserExpansionSnapshot) => void;
   /** Host gateway/view override; nullish values retain the native dashboard. */
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**

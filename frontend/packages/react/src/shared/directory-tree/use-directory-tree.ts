@@ -29,7 +29,9 @@ export function useDirectoryTree({
   cacheScopeKey,
   defaultExpandedUri,
   defaultExpandedUris,
+  defaultExpansionSnapshot,
   onExpandedUrisChange,
+  onExpansionSnapshotChange,
   requestOptions,
 }: UseDirectoryTreeOptions) {
   const {
@@ -59,6 +61,7 @@ export function useDirectoryTree({
     rootUri,
     cacheScopeKey,
     defaultExpandedUris,
+    defaultExpansionSnapshot,
   });
   const { expanded, isExpanded, edit } = expansion;
   const {
@@ -139,12 +142,13 @@ export function useDirectoryTree({
       retryExpansion,
     ],
   );
-  const rows = useDirectoryRows({
+  const { rows, reconciling } = useDirectoryRows({
     session,
     rootUri,
     dirs,
     expanded,
     identifyUri: expansion.identifyUri,
+    resolveHome: expansion.resolveHome,
     initializing,
   });
   const monitoring = useDirectoryMonitoring(
@@ -169,7 +173,9 @@ export function useDirectoryTree({
     rows,
     unresolved,
     expansion,
+    reconciling,
     onExpandedUrisChange,
+    onExpansionSnapshotChange,
   );
   return {
     monitoring,

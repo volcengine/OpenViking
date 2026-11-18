@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject, SetStateAction } from 'react';
 import { normalizeResourceUri, resourceUriIdentity } from '../resource-uri.js';
 import type { QueryRequest } from '../request/use-query-scope.js';
 import { useResourceUriIdentity } from '../request/use-resource-uri-identity.js';
 import type { DirectoryQueries } from './directory-queries.js';
 import { expansionPath } from './expansion-path.js';
+import type { DirectoryExpansionSnapshot } from './types.js';
 
 interface ExpansionState {
   expanded: ReadonlySet<string>;
@@ -17,6 +18,12 @@ function matchesIdentity(uri: string, home?: string) {
   return (candidate: string) => resourceUriIdentity(candidate, home) === key;
 }
 
+function underCollapse(uri: string, collapsed: ReadonlySet<string>) {
+  return [...collapsed].some(
+    (fold) => uri === fold || uri.startsWith(`${fold}/`),
+  );
+}
+
 export function useDirectoryExpansion({
   session,
   activeSession,
@@ -24,6 +31,7 @@ export function useDirectoryExpansion({
   rootUri,
   cacheScopeKey,
   defaultExpandedUris,
+  defaultExpansionSnapshot,
 }: {
   session: DirectoryQueries | undefined;
   activeSession: RefObject<DirectoryQueries | undefined>;
@@ -31,6 +39,7 @@ export function useDirectoryExpansion({
   rootUri: string;
   cacheScopeKey?: string;
   defaultExpandedUris?: readonly string[];
+  defaultExpansionSnapshot?: DirectoryExpansionSnapshot;
 }) {
   const { identifyUri, readHome, resolveHome } = useResourceUriIdentity(
     request?.client ?? null,
@@ -43,20 +52,31 @@ export function useDirectoryExpansion({
     session: DirectoryQueries | undefined;
     state: ExpansionState;
   }>();
-  const [savedExpansion] = useState(defaultExpandedUris);
-  const initial = useMemo<ExpansionState>(
-    () => ({
-      expanded: new Set([
-        rootUri,
-        ...(savedExpansion ?? [])
-          .map(normalizeResourceUri)
-          .filter((uri) => expansionPath(rootUri, uri).length > 0),
-      ]),
-      collapsed: new Set(),
+  const [legacySnapshot] = useState(defaultExpandedUris);
+  const [structuredSnapshot] = useState(defaultExpansionSnapshot);
+  const seedSession = useRef<DirectoryQueries>(undefined);
+  // Bind the host's mount snapshot to the first committed query scope. A later
+  // root or identity can use the same alias for a different directory.
+  useEffect(() => {
+    if (session) seedSession.current ??= session;
+  }, [session]);
+  const seed =
+    !seedSession.current || seedSession.current === session
+      ? structuredSnapshot
+      : undefined;
+  const savedExpansion = seed?.expandedUris ?? legacySnapshot;
+  const savedCollapses = seed?.collapsedUris;
+  const initial = useMemo<ExpansionState>(() => {
+    const inRoot = (uris: readonly string[] = []) =>
+      uris
+        .map(normalizeResourceUri)
+        .filter((uri) => expansionPath(rootUri, uri).length);
+    return {
+      expanded: new Set([rootUri, ...inRoot(savedExpansion)]),
+      collapsed: new Set(inRoot(savedCollapses)),
       edited: false,
-    }),
-    [rootUri, savedExpansion],
-  );
+    };
+  }, [rootUri, savedExpansion, savedCollapses]);
   const state = local && local.session === session ? local.state : initial;
   const current = useRef(state);
   current.current = state;
@@ -86,11 +106,17 @@ export function useDirectoryExpansion({
   );
   const isExpanded = useCallback(
     (uri: string) => {
-      const matches = matchesIdentity(uri, readHome());
+      const home = readHome();
+      const matches = matchesIdentity(uri, home);
       const { collapsed, expanded } = current.current;
       return (
-        ![...collapsed].some(matches) &&
-        (expanded.has(uri) || [...expanded].some(matches))
+        (expanded.has(uri) || [...expanded].some(matches)) &&
+        !underCollapse(
+          resourceUriIdentity(uri, home),
+          new Set(
+            [...collapsed].map((fold) => resourceUriIdentity(fold, home)),
+          ),
+        )
       );
     },
     [readHome],
@@ -136,7 +162,9 @@ export function useDirectoryExpansion({
     if (!state.collapsed.size) return state.expanded;
     const collapsed = new Set([...state.collapsed].map(identifyUri));
     return new Set(
-      [...state.expanded].filter((uri) => !collapsed.has(identifyUri(uri))),
+      [...state.expanded].filter(
+        (uri) => !underCollapse(identifyUri(uri), collapsed),
+      ),
     );
   }, [state.expanded, state.collapsed, identifyUri]);
   return {

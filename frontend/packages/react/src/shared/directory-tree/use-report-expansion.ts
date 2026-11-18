@@ -9,6 +9,7 @@ import { expansionPath } from './expansion-path.js';
 import type { UnresolvedExpansion } from './restore-expansion.js';
 import type { DirectoryRow } from './rows.js';
 import type { useDirectoryExpansion } from './use-directory-expansion.js';
+import type { DirectoryExpansionSnapshot } from './types.js';
 
 function homeRelativePath(uri: string) {
   return normalizeResourceUri(uri).replace(
@@ -27,6 +28,16 @@ function mayBeFolded(uri: string, collapsed: ReadonlySet<string>) {
   });
 }
 
+function sameUris(
+  left: readonly string[] | undefined,
+  right: readonly string[],
+) {
+  return (
+    left?.length === right.length &&
+    right.every((uri, index) => left[index] === uri)
+  );
+}
+
 export function useReportExpansion(
   session: DirectoryQueries | undefined,
   ready: boolean,
@@ -35,18 +46,25 @@ export function useReportExpansion(
   unresolved: UnresolvedExpansion,
   {
     collapsed,
+    expanded,
     identifyUri,
   }: Pick<
     ReturnType<typeof useDirectoryExpansion>,
-    'collapsed' | 'identifyUri'
+    'collapsed' | 'expanded' | 'identifyUri'
   >,
+  reconciling: boolean,
   onChange?: (uris: readonly string[]) => void,
+  onSnapshotChange?: (snapshot: DirectoryExpansionSnapshot) => void,
 ) {
-  const last = useRef<{ session: DirectoryQueries; uris: string[] }>(undefined);
+  const last = useRef<{
+    session: DirectoryQueries;
+    legacy?: readonly string[];
+    snapshot?: DirectoryExpansionSnapshot;
+  }>(undefined);
   // Sync the committed tree with the host's storage, including changes after
   // asynchronous directory loads. There is no subscription to dispose.
   useEffect(() => {
-    if (!session || !ready || !onChange) return;
+    if (!session || !ready || (!onChange && !onSnapshotChange)) return;
     const visible = new Map<string, string>();
     for (const row of rows) {
       if (row.kind === 'entry' && row.type === 'directory' && row.expanded)
@@ -67,24 +85,38 @@ export function useReportExpansion(
           saved.set(key, uri);
       }
     }
+    if (reconciling) {
+      // The replacement listing is not ready to settle the old expansion.
+      for (const uri of expanded) {
+        const key = identifyUri(uri);
+        if (key !== root && !saved.has(key)) saved.set(key, uri);
+      }
+    }
+
     const uris = [...saved.values()];
-    // Keep the fold in this session and defer publication until Refresh or
-    // another home lookup can establish which canonical branch it affected.
+    const previous =
+      last.current?.session === session ? last.current : { session };
+    last.current = previous;
+    if (onSnapshotChange) {
+      const snapshot = { expandedUris: uris, collapsedUris: [...collapsed] };
+      if (
+        !sameUris(previous.snapshot?.expandedUris, snapshot.expandedUris) ||
+        !sameUris(previous.snapshot?.collapsedUris, snapshot.collapsedUris)
+      ) {
+        previous.snapshot = snapshot;
+        onSnapshotChange(snapshot);
+      }
+    }
+
+    // The URI-only callback cannot carry a fold across an unresolved alias.
+    if (!onChange || reconciling || sameUris(previous.legacy, uris)) return;
     if (
       collapsed.size &&
       identifyUri(HOME_URI) === HOME_URI &&
       uris.some((uri) => mayBeFolded(uri, collapsed))
     )
       return;
-    const previous = last.current;
-    if (
-      previous?.session === session &&
-      previous.uris.length === uris.length &&
-      uris.every((uri, index) => uri === previous.uris[index])
-    ) {
-      return;
-    }
-    last.current = { session, uris };
+    previous.legacy = uris;
     onChange(uris);
   }, [
     session,
@@ -93,7 +125,10 @@ export function useReportExpansion(
     rows,
     unresolved,
     collapsed,
+    expanded,
     identifyUri,
+    reconciling,
     onChange,
+    onSnapshotChange,
   ]);
 }

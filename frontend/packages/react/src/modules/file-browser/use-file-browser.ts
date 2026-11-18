@@ -36,13 +36,11 @@ export function useFileBrowser({
   summaryLabels,
   accessLabels,
   formatCharacterCount,
-  defaultExpandedUri,
-  defaultExpandedUris,
-  onExpandedUrisChange,
   currentUri,
   requestOptions,
   onUriChange,
   onSelect,
+  ...expansionOptions
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
   const text = resolveLabels(accessLabels, locale);
@@ -51,10 +49,8 @@ export function useFileBrowser({
   const tree = useFsTree({
     client,
     rootUri,
-    defaultExpandedUri,
-    defaultExpandedUris,
-    onExpandedUrisChange,
     requestOptions,
+    ...expansionOptions,
   });
   const {
     actions: treeActions,
