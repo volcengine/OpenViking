@@ -1808,6 +1808,13 @@ class ResourceService:
         **kwargs,
     ) -> Dict[str, Any]:
         """Accept and route a new resource-add request."""
+        if reason:
+            logger.warning(
+                "[TemporaryVectorsOnly] clearing add_resource reason path=%s to=%s",
+                path,
+                to or parent or "-",
+            )
+            reason = ""
         internal_fields = sorted(set(kwargs).intersection(_INTERNAL_INGESTION_FIELDS))
         if internal_fields:
             raise InvalidArgumentError(
