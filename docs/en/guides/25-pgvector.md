@@ -37,6 +37,53 @@ and `sslrootcert` can be supplied here:
 export OV_POSTGRES_DSN='host=127.0.0.1 port=5432 dbname=openviking user=ov password=CHANGE_ME'
 ```
 
+DSN mode is the default connection method (`dsn_env` defaults to
+`"OV_POSTGRES_DSN"`). When the password contains special characters (`@`, `:`,
+`/`, spaces, single quotes, etc.), you must escape or percent-encode them
+within the DSN string according to the PostgreSQL DSN specification.
+
+### Split-field mode (recommended)
+
+pgvector also accepts split-field connection parameters, aligned with the
+openGauss backend. The password is passed via a config field and reaches
+PostgreSQL verbatim, requiring no escaping or encoding. String values in the
+config file (such as `password`) may use `${ENV_VAR}` references that are
+expanded at load time, suiting K8s/container deployments where each field
+maps to a separate Secret environment variable.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "pgvector",
+      "name": "context",
+      "dimension": 4096,
+      "distance_metric": "cosine",
+      "pgvector": {
+        "host": "${OV_PG_HOST}",
+        "port": 5432,
+        "user": "${OV_PG_USER}",
+        "password": "${OV_PG_PASSWORD}",
+        "db_name": "openviking",
+        "sslmode": "require",
+        "index_type": "flat"
+      }
+    }
+  }
+}
+```
+
+Split fields and `dsn_env` are mutually exclusive: both cannot be explicitly
+configured at the same time. When no split fields are provided, DSN mode is
+used by default, preserving full backward compatibility.
+
+| Aspect | DSN mode | Split-field mode |
+| --- | --- | --- |
+| Password carrier | Inside the DSN string | `password` field |
+| Special-character passwords | Manual escaping/encoding required | Passed verbatim, no encoding |
+| Env var expansion | Not supported (DSN lives in env) | `${VAR}` expanded at config load |
+| `sslmode` | Configured inside the DSN string | `sslmode` field |
+
 Merge this fragment into the existing OpenViking configuration, keeping the
 embedding dimension equal to the vector dimension:
 
@@ -66,7 +113,13 @@ accept only `http`, `volcengine` and `vikingdb`.
 
 | Setting in `pgvector` | Default | Meaning |
 | --- | --- | --- |
-| `dsn_env` | `OV_POSTGRES_DSN` | Environment variable containing the connection DSN |
+| `dsn_env` | `OV_POSTGRES_DSN` | Environment variable containing the connection DSN (DSN mode) |
+| `host` | `127.0.0.1` | PostgreSQL host address (split-field mode) |
+| `port` | `5432` | PostgreSQL port |
+| `user` | `postgres` | Database user |
+| `password` | `""` | Database password, passed verbatim, supports `${ENV_VAR}` expansion |
+| `db_name` | `openviking` | Database name |
+| `sslmode` | `None` | libpq SSL mode (`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`) |
 | `index_type` | `flat` | Exact dense search or native `hnsw` ANN |
 | `connection_pool_min_size` | `1` | Minimum connections per adapter |
 | `connection_pool_max_size` | `10` | Maximum connections per adapter; must be at least the minimum |
