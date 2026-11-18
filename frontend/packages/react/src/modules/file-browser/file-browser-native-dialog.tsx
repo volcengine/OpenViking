@@ -17,6 +17,7 @@ export function FileBrowserNativeDialog({
   showContent,
   directory,
   onSelectPackFile,
+  packConfirmationPending,
   ...props
 }: Omit<PreviewWorkflowProps, 'text' | 'onUpdated'> & {
   kind: 'history' | 'importPack' | 'configure';
@@ -28,6 +29,7 @@ export function FileBrowserNativeDialog({
   showContent: boolean;
   directory: boolean;
   onSelectPackFile?: (file: File) => void;
+  packConfirmationPending?: boolean;
   onUpdated?: () => void;
 }) {
   const exposure = useExposure(
@@ -81,6 +83,7 @@ export function FileBrowserNativeDialog({
           {...common}
           canWrite={canWrite}
           onSelectPackFile={onSelectPackFile}
+          packConfirmationPending={packConfirmationPending}
         />
       ) : (
         <PreviewCompileConfig

@@ -18,9 +18,11 @@ export function PreviewPackImport({
   onUpdated,
   onClose,
   onSelectPackFile,
+  packConfirmationPending,
 }: PreviewWorkflowProps & {
   canWrite: boolean;
   onSelectPackFile?: (file: File) => void;
+  packConfirmationPending?: boolean;
 }) {
   const id = useId();
   const [file, setFile] = useState<File>();
@@ -43,7 +45,9 @@ export function PreviewPackImport({
     [formatError, text.importInvalidFormat],
   );
   const mutation = usePreviewMutation(uri, requestOptions);
+  const pending = packConfirmationPending || mutation.pending;
   async function changeFile(input: HTMLInputElement) {
+    if (!canWrite || pending) return;
     const picked = input.files?.[0];
     setFile(undefined);
     setFormatError(undefined);
@@ -63,7 +67,7 @@ export function PreviewPackImport({
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        if (!canWrite || !file) return;
+        if (!canWrite || !file || pending) return;
         if (onSelectPackFile) onSelectPackFile(file);
         else
           void mutation.run(
@@ -83,7 +87,7 @@ export function PreviewPackImport({
           required
           aria-label={text.importFile}
           aria-describedby={`${id}-hint`}
-          disabled={!canWrite || mutation.pending}
+          disabled={!canWrite || pending}
           onChange={(event) => void changeFile(event.currentTarget)}
         />
         <label htmlFor={id}>
@@ -116,8 +120,8 @@ export function PreviewPackImport({
           size="small"
           type="primary"
           htmlType="submit"
-          loading={mutation.pending}
-          disabled={!canWrite || !file || mutation.succeeded}
+          loading={pending}
+          disabled={!canWrite || !file || pending || mutation.succeeded}
         >
           {text.importSubmit}
         </Button>

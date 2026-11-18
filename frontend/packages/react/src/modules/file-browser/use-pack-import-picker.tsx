@@ -25,6 +25,7 @@ export function usePackImportPicker(
   { checkWrite }: { checkWrite: CheckWrite },
 ) {
   const [selection, setSelection] = useState<PackSelection>();
+  const [confirmingId, setConfirmingId] = useState<number>();
   const active = useRef<PackSelection | undefined>(undefined);
   const nextId = useRef(0);
   const permissionError = text.workflow.importWriteRequired;
@@ -53,6 +54,7 @@ export function usePackImportPicker(
           if (active.current === next) {
             active.current = undefined;
             setSelection(undefined);
+            setConfirmingId(undefined);
           }
           complete();
         };
@@ -67,6 +69,7 @@ export function usePackImportPicker(
           confirm(file) {
             if (controller.signal.aborted || confirming) return;
             confirming = true;
+            setConfirmingId(next.id);
             void verify().then(() => next.finish(file), fail);
           },
         };
@@ -113,6 +116,7 @@ export function usePackImportPicker(
           triggerRef={triggerRef}
           onClose={() => selection.finish()}
           onSelectPackFile={selection.confirm}
+          packConfirmationPending={selection.id === confirmingId}
         />
       ) : null,
   };

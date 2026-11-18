@@ -127,11 +127,15 @@ function SearchRow({
                 : 'ov-command-console__search-preview'
             }
           >
-            <CommandConsoleUriText
-              text={preview}
-              mode={hasContent ? 'literal' : 'prose'}
-              onOpenUri={onOpenUri}
-            />
+            {hasContent ? (
+              preview
+            ) : (
+              <CommandConsoleUriText
+                text={preview}
+                mode="prose"
+                onOpenUri={onOpenUri}
+              />
+            )}
           </span>
         ) : null}
         {item.metaLabel ? (

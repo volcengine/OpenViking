@@ -104,3 +104,45 @@ for (const importTarget of ['viking://resources', 'viking://resources/qa']) {
     }
   });
 }
+
+for (const cancel of [false, true]) {
+  test(`Console pack picker locks confirmation during an ACL check (cancel=${cancel})`, async () => {
+    const ref = { current: null };
+    const importTarget = 'viking://resources/qa';
+    let checks = 0;
+    let finishCheck;
+    const fetch = fixture(target, true, (call) => {
+      if (!call.path.endsWith('/fs/stat') || call.uri !== importTarget) return;
+      if (++checks === 1) return ok({ isDir: true, access: 'write' });
+      return new Promise((resolve) => {
+        finishCheck = resolve;
+      });
+    });
+    const view = await mount(tree(fetch, target, { ref, acl: true }));
+    try {
+      let selected;
+      await act(() => {
+        selected = ref.current.choosePackFile(importTarget);
+      });
+      const file = await selectFile();
+      await submit();
+      assert.equal(
+        workflow().querySelector('input[type="file"]').disabled,
+        true,
+      );
+      assert.equal(button('Import', workflow()).disabled, true);
+      assert.equal(button('Cancel', workflow()).disabled, false);
+      await submit();
+      assert.equal(checks, 2);
+
+      if (cancel) await click(button('Cancel', workflow()));
+      await act(async () =>
+        finishCheck(await ok({ isDir: true, access: 'write' })),
+      );
+      assert.equal(await selected, cancel ? undefined : file);
+      assert.equal(workflow(), null);
+    } finally {
+      await view.unmount();
+    }
+  });
+}
