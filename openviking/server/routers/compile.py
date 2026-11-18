@@ -190,15 +190,18 @@ class CompileEmbeddingRequest(BaseModel):
 async def compile_embeddings(
     request: CompileEmbeddingRequest,
     _ctx: RequestContext = Depends(get_request_context),
+    allow_partial_451: Annotated[bool, Query()] = False,
 ):
     """Embed task-local routing candidates without indexing or retaining their content.
 
     Target validation uses the same tenant identity and ACL checks as file reads.
     The configured embedder supplies provider concurrency/rate controls. Only model
     identity and vectors cross the Bot/Server boundary; credentials never do.
+    Opted-in clients can receive a null slot for an individual bare HTTP 451.
     """
     from openviking.core.namespace import classify_uri
     from openviking.models.embedder.base import embed_compat
+    from openviking.models.model_error import ModelErrorKind, model_error_from_exception
 
     target = validate_request_viking_uri(resolve_path_variables(request.target_uri), _ctx)
     classification = classify_uri(target)
@@ -213,15 +216,35 @@ async def compile_embeddings(
     model = (await get_service().embedding_provider.get_status(_ctx.account_id)).fingerprint
     if request.expected_model and request.expected_model != model:
         raise InvalidArgumentError("Compile embedding model changed during the task")
+
+    async def embed_one(text):
+        try:
+            result = await embed_compat(embedder, text)
+        except Exception as exc:
+            if not allow_partial_451:
+                raise
+            error = model_error_from_exception(exc)
+            if error is not None and error.request_kind == ModelErrorKind.CONTENT_SAFETY:
+                if (
+                    error.status_code == 451
+                    and error.kind == ModelErrorKind.UNKNOWN
+                    and error.code is None
+                ):
+                    return None
+                raise InvalidArgumentError("Embedding provider refused a Compile input") from exc
+            raise
+        vector = result.dense_vector
+        if not vector or len(vector) > 8192 or not all(math.isfinite(x) for x in vector):
+            raise InvalidArgumentError("Compile requires finite dense embedding vectors")
+        return vector
+
     # Small chunks also bound providers whose embed_async implementation has no limiter.
     vectors = []
     for start in range(0, len(request.texts), 4):
-        batch = await asyncio.gather(
-            *(embed_compat(embedder, text) for text in request.texts[start : start + 4])
+        vectors.extend(
+            await asyncio.gather(*(embed_one(t) for t in request.texts[start : start + 4]))
         )
-        for result in batch:
-            vector = result.dense_vector
-            if not vector or len(vector) > 8192 or not all(math.isfinite(x) for x in vector):
-                raise InvalidArgumentError("Compile requires finite dense embedding vectors")
-            vectors.append(vector)
-    return Response(status="ok", result={"model": model, "vectors": vectors}).model_dump()
+    response = {"model": model, "vectors": vectors}
+    if any(vector is None for vector in vectors):
+        response["partial_reason"] = "http_451"
+    return Response(status="ok", result=response).model_dump()

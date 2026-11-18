@@ -549,6 +549,7 @@ class VikingClient:
         response = await self.client._request(
             "POST",
             "/api/v1/compile/embeddings",
+            params={"allow_partial_451": "true"},
             json={"texts": texts, "target_uri": target_uri, "expected_model": expected_model},
         )
         return self.client._handle_response_data(response).get("result", {})
