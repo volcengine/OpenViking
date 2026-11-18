@@ -24,6 +24,21 @@ import type {
 
 export type ConsoleMode = 'conversation' | 'command';
 
+/** Whether the Bot runtime is ready for an eligible library. */
+export type ConsoleBotActivationStatus = 'not-started' | 'ready';
+
+/** Optional lifecycle managed by the host for the current library and identity. */
+export interface ConsoleBotActivation {
+  /** Read the current library. Only an explicit true enables its Bot tab. */
+  getCollection(signal: AbortSignal): Promise<{ EnableVikingBot?: boolean }>;
+  /** Read runtime readiness after the library has allowed access. */
+  getStatus(signal: AbortSignal): Promise<ConsoleBotActivationStatus>;
+  /** Start the Bot after the user selects Enable. Console checks status again after it resolves. */
+  start(signal: AbortSignal): Promise<void>;
+  /** Optional introduction media. Console renders an illustration by default. */
+  media?: ReactNode;
+}
+
 export interface ConsoleCommandGuide {
   description: string;
   examples: readonly [string, ...string[]];
@@ -63,6 +78,8 @@ export type ConsoleChatOptions = Omit<
   'enabled' | 'sessionId' | 'initialMessages'
 > & {
   service?: VikingBotChatService & VikingBotSessionService;
+  /** Gate chat on a host-managed Bot lifecycle. Keep the adapter stable for the current scope. */
+  activation?: ConsoleBotActivation;
   hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
   /** Set false to hide the built-in session commit action. */
   memoryCommit?: false;

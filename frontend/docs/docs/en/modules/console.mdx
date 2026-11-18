@@ -52,6 +52,18 @@ This example uses simulated services, including native capabilities and the curr
 
 Click the toolbar `@` or type `@` in the draft to browse, search and reference files or directories. The built-in picker uses `/api/v1/fs/ls` and `/api/v1/search/glob` in the current request scope and loads only when opened. Pass `{ selected, onChange }` in `chatOptions.referenceSelection` to share the selection with a file tree while keeping the built-in picker. The host removes sent references, and Console clears the selection when the conversation resets. Set `conversation.references` to supply your own candidates and selection in place of the built-in picker. Custom chat services receive the chosen items in the `references` field.
 
+### Bot activation
+
+Use `chatOptions.activation` when the current library controls access to VikingBot and the host starts its runtime. The example simulates an eligible library, a library with Bot disabled, and a start error.
+
+```tsx file="../../_demos/console-activation.tsx" preview
+
+```
+
+In a Volcengine host, call `GetOpenVikingCollection` in `getCollection` and return the current library's `EnableVikingBot` field. Console allows the conversation tab and calls `getStatus` only when the field is `true`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the `start` callback, where the host calls `startBot`. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes.
+
+Keep the adapter stable for the current library and identity. All three callbacks receive an `AbortSignal` and should throw on failure. Pass `media` to replace the illustration with your introduction media.
+
 ### Human input
 
 Send a message to try the built-in Wiki questions, or send “daily report” to try scheduled updates. Enable host form customizations to try asynchronous name validation, a custom output directory picker, a replacement instruction card and a schedule limited to 09:00–18:00. Enable “Simulate answer send failure” to check retained input, error clearing and retry.
@@ -134,6 +146,7 @@ When host content fails to render, the block shows the default fallback: an illu
 | persist            | Save completed messages                                 | `boolean`                                             | `true`                 |
 | scopeKey           | Isolation key for dynamic identities                    | `string`                                              | Inherited from Console |
 | service            | Chat and session adapter; keep its reference stable     | `VikingBotChatService & VikingBotSessionService`      | Native service         |
+| activation         | Check library access and start the Bot from Console     | `ConsoleBotActivation`                                | Optional               |
 | requestOptions     | Conversation request settings                           | `OvRequestOptions`                                    | Inherited from Console |
 | hitl               | Automatic questions, field validation and custom cards  | `ConsoleHitlOptions \| false`                         | Built-in cards enabled |
 | referenceSelection | Controlled selection for the built-in `@` picker        | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | Optional               |

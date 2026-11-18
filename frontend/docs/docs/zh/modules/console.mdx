@@ -52,6 +52,18 @@ import '@openviking/react/modules/console/style.css';
 
 点击底部的 `@`，或在输入框中键入 `@`，可浏览、搜索并引用文件和目录。内置选择器使用当前请求作用域下的 `/api/v1/fs/ls` 和 `/api/v1/search/glob`，打开时才加载。通过 `chatOptions.referenceSelection` 传入 `{ selected, onChange }`，可以让目录树与内置 `@` 选择器共享已选引用。发送后由宿主移除已发送的引用，重置会话时由 Console 清空已选引用。设置 `conversation.references` 可自行提供候选项和已选引用，替代内置选择器。自定义对话服务可通过发送参数中的 `references` 读取已选引用。
 
+### 启用 VikingBot
+
+库决定 VikingBot 是否可用且由宿主启动运行时，可以传入 `chatOptions.activation`。示例模拟了允许启用、库未开启 Bot 和首次启用失败三种情况。
+
+```tsx file="../../_demos/console-activation.tsx" preview
+
+```
+
+火山宿主在 `getCollection` 中调用 `GetOpenVikingCollection` 并返回当前库的 `EnableVikingBot`。字段为 `true` 才允许显示对话标签页，并通过 `getStatus` 查询 Bot 是否已就绪。尚未启动时，用户点击「启用 VikingBot」会触发 `start` 回调，由宿主调用 `startBot`。Console 会再次确认状态，就绪后加载对话和会话历史。切换库或身份时，更新 `scopeKey` 或传入对应的 `activation`。
+
+当前库和身份不变时保持适配器引用稳定。三个回调都接收 `AbortSignal`，失败时应抛出错误。可通过 `media` 用介绍视频或封面替换默认插图。
+
 ### 待确认交互
 
 发送一条消息体验内置的 Wiki 澄清流程，或发送「日报」体验定时更新。勾选「启用宿主自定义表单」可体验名称异步校验、自定义输出目录选择器、替换指令卡片以及 09:00–18:00 的更新时段限制。勾选「模拟答案发送失败」可检查输入保留、错误清理与重试。
@@ -134,6 +146,7 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 | persist            | 保存已完成的消息                                    | `boolean`                                             | `true`           |
 | scopeKey           | 动态身份的隔离键                                    | `string`                                              | 继承 Console     |
 | service            | 对话与会话适配器，保持引用稳定                      | `VikingBotChatService & VikingBotSessionService`      | 原生服务         |
+| activation         | 检查库是否允许使用 Bot，并在 Console 内启动         | `ConsoleBotActivation`                                | 可选             |
 | requestOptions     | 对话请求配置                                        | `OvRequestOptions`                                    | 继承 Console     |
 | hitl               | 自动问题组、字段校验与自定义卡片配置                | `ConsoleHitlOptions \| false`                         | 自动启用内置卡片 |
 | referenceSelection | 内置 `@` 选择器的受控引用状态                       | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | 可选             |
