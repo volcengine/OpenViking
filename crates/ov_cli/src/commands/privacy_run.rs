@@ -117,6 +117,85 @@ fn spawn_child(command: &mut Command) -> Result<tokio::process::Child> {
         .map_err(|error| Error::Client(format!("Could not start the child command: {error}")))
 }
 
+#[cfg(unix)]
+async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Result<i32> {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    use tokio::signal::unix::{SignalKind, signal};
+
+    // POSIX functions from the C library that std already links; pid_t is i32 on Unix.
+    unsafe extern "C" {
+        safe fn kill(pid: i32, sig: i32) -> i32;
+        safe fn getpgrp() -> i32;
+        safe fn tcgetpgrp(fd: i32) -> i32;
+    }
+    const SIGKILL: i32 = 9;
+
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut hangup = signal(SignalKind::hangup())?;
+    // With a terminal, the child stays in the shell's job so it can read the terminal and
+    // follow Ctrl-Z and fg. Without one, its own group lets ov signal the whole command.
+    let terminal = std::fs::File::open("/dev/tty").ok();
+    if terminal.is_none() {
+        command.process_group(0);
+    }
+    let mut child = spawn_child(command)?;
+    let pid = child.id().expect("just spawned") as i32;
+    // A SIGKILL sent to ov's group cannot reach the command's own group, and ov cannot catch it.
+    // This shell joins the command's group and ends it when ov exits without writing a newline.
+    let mut guard = if terminal.is_some() {
+        None
+    } else {
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "trap '' INT TERM HUP; read line || kill -s KILL 0"])
+            .process_group(pid)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()
+    };
+    let wait = async {
+        relay_child_output(child.stdout.take(), child.stderr.take(), masker).await?;
+        child.wait().await.map(exit_code)
+    };
+    tokio::pin!(wait);
+    loop {
+        let sig = tokio::select! {
+            biased;
+            status = &mut wait => {
+                if status.is_err() && terminal.is_none() {
+                    kill(-pid, SIGKILL);
+                }
+                if let Some(stdin) = guard.as_mut().and_then(|guard| guard.stdin.as_mut()) {
+                    let _ = stdin.write_all(b"\n");
+                }
+                return Ok(status?);
+            }
+            _ = interrupt.recv() => SignalKind::interrupt(),
+            _ = terminate.recv() => SignalKind::terminate(),
+            _ = hangup.recv() => SignalKind::hangup(),
+        };
+        let target = match &terminal {
+            None => -pid,
+            // Ctrl-C reaches every process in the terminal's foreground job, the child included.
+            // A SIGINT sent only to a foreground ov is therefore not forwarded.
+            Some(tty)
+                if sig == SignalKind::interrupt() && tcgetpgrp(tty.as_raw_fd()) == getpgrp() =>
+            {
+                continue;
+            }
+            Some(_) => pid,
+        };
+        // A child that already exited is reported by the wait above.
+        kill(target, sig.as_raw_value());
+    }
+}
+
+#[cfg(not(unix))]
 async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Result<i32> {
     let mut child = spawn_child(command)?;
     let output = relay_child_output(child.stdout.take(), child.stderr.take(), masker);

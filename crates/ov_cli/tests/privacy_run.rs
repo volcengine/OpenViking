@@ -249,3 +249,209 @@ async fn forwards_child_flags_and_exit_status_with_or_without_the_separator() {
         assert_eq!(output.stdout, b"<help><--compact><false><-c><-->");
     }
 }
+
+/// POSIX calls for the signal tests, declared here so the crate needs no extra dependency.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod posix {
+    use std::ffi::{CStr, c_char, c_int, c_ulong};
+    use std::fs::{File, OpenOptions};
+    use std::os::fd::FromRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    unsafe extern "C" {
+        pub safe fn kill(pid: c_int, sig: c_int) -> c_int;
+        pub safe fn setsid() -> c_int;
+        pub fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+        safe fn posix_openpt(flags: c_int) -> c_int;
+        safe fn grantpt(fd: c_int) -> c_int;
+        safe fn unlockpt(fd: c_int) -> c_int;
+        fn ptsname(fd: c_int) -> *const c_char;
+    }
+    pub const SIGINT: c_int = 2;
+    pub const SIGKILL: c_int = 9;
+    #[cfg(target_os = "linux")]
+    pub const TIOCSCTTY: c_ulong = 0x540E;
+    #[cfg(target_os = "macos")]
+    pub const TIOCSCTTY: c_ulong = 0x2000_7461;
+    #[cfg(target_os = "linux")]
+    const O_NOCTTY: c_int = 0o400;
+    #[cfg(target_os = "macos")]
+    const O_NOCTTY: c_int = 0x2_0000;
+
+    /// Returns the master and slave of a new pseudo-terminal, both closed on exec.
+    pub fn openpty() -> (File, File) {
+        let fd = posix_openpt(2 | O_NOCTTY);
+        assert!(fd >= 0 && grantpt(fd) == 0 && unlockpt(fd) == 0);
+        // SAFETY: fd is a fresh descriptor owned here; ptsname returns a NUL-terminated path.
+        let (opened, path) = unsafe {
+            let path = CStr::from_ptr(ptsname(fd)).to_str().unwrap().to_owned();
+            (File::from_raw_fd(fd), path)
+        };
+        // try_clone sets close-on-exec, so a failed test cannot leave the terminal open.
+        let master = opened.try_clone().unwrap();
+        let slave = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(O_NOCTTY)
+            .open(path)
+            .unwrap();
+        (master, slave)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn a_terminal_interrupts_once_and_stays_readable_with_redirected_stdin() {
+    use std::{io::Write, os::fd::AsRawFd, process::Stdio};
+
+    let dir = tempfile::tempdir().unwrap();
+    for redirected in [false, true] {
+        let (mut master, slave) = posix::openpty();
+        let stdin = if redirected {
+            Stdio::null()
+        } else {
+            slave.try_clone().unwrap().into()
+        };
+        let mut command = privacy(dir.path(), "http://127.0.0.1:1");
+        command.stdin(stdin).stdout(Stdio::piped()).args([
+            "run",
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"
+                count=0
+                trap 'count=$((count + 1))' INT
+                echo ready
+                while [ "$count" -eq 0 ]; do :; done
+                echo interrupted
+                IFS= read -r answer </dev/tty || exit 7
+                printf '%s %s\n' "$answer" "$count"
+            "#,
+        ]);
+        let slave_fd = slave.as_raw_fd();
+        // SAFETY: setsid and ioctl are async-signal-safe; the slave stays open through spawn.
+        unsafe {
+            command.pre_exec(move || {
+                if posix::setsid() < 0 || posix::ioctl(slave_fd, posix::TIOCSCTTY, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        timeout(Duration::from_secs(8), async {
+            let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+            assert_eq!(lines.next_line().await.unwrap().as_deref(), Some("ready"));
+            master.write_all(b"\x03").unwrap();
+            assert_eq!(
+                lines.next_line().await.unwrap().as_deref(),
+                Some("interrupted")
+            );
+            master.write_all(b"answer\n").unwrap();
+            assert_eq!(
+                lines.next_line().await.unwrap().as_deref(),
+                Some("answer 1")
+            );
+            // The child handled Ctrl-C and exited normally, so ov reports its real status.
+            assert_eq!(child.wait().await.unwrap().code(), Some(0));
+        })
+        .await
+        .expect("the terminal job did not finish");
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let value = "interactive-fixture";
+    let (url, server) = resolver([(TOKEN, Some(value.into()))]).await;
+    let mut command = privacy(dir.path(), &url);
+    command
+        .args([
+            "run",
+            "--env",
+            &format!("TOKEN={TOKEN}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"(printf 'ready?'; IFS= read -r line; printf '%s\n' "$line"; exec sleep 20) | cat"#,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    // Detach from any terminal, as in CI, so a PID-directed SIGINT is forwarded to the group.
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+
+    timeout(Duration::from_secs(10), async {
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut prompt = [0; 6];
+        stdout.read_exact(&mut prompt).await.unwrap();
+        assert_eq!(&prompt, b"ready?");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!("{value}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut echo = String::new();
+        stdout.read_line(&mut echo).await.unwrap();
+        assert_eq!(echo, format!("{TOKEN}\n"));
+
+        assert_eq!(posix::kill(child.id().unwrap() as i32, posix::SIGINT), 0);
+        assert_eq!(child.wait().await.unwrap().code(), Some(130));
+    })
+    .await
+    .expect("the prompt or pipeline cancellation did not complete");
+    server.await.unwrap();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn killing_the_process_group_without_a_terminal_leaves_no_command_behind() {
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut command = privacy(dir.path(), "http://127.0.0.1:1");
+    command
+        .args(["run", "--", "/bin/sh", "-c", "echo started; exec sleep 30"])
+        .stdout(Stdio::piped());
+    // Agent harnesses start commands without a terminal and SIGKILL their group on timeout.
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    stdout.read_line(&mut line).await.unwrap();
+    assert_eq!(line, "started\n");
+
+    // setsid made ov the leader of its own group.
+    assert_eq!(
+        posix::kill(-(child.id().unwrap() as i32), posix::SIGKILL),
+        0
+    );
+    // The pipe closes only after every process holding it, sleep included, has exited.
+    timeout(Duration::from_secs(5), stdout.read_to_end(&mut Vec::new()))
+        .await
+        .expect("the command outlived ov")
+        .unwrap();
+    child.wait().await.unwrap();
+}
