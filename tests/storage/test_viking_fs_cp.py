@@ -148,6 +148,9 @@ class _DirectoryCopyAGFS(_CopyAGFS):
         self.events.append(("cp", source, target, recursive, fs_ctx))
         self.files[target] = self.files[source]
 
+    async def _copy_file(self, source, target, *, fs_ctx=None):
+        await self.cp(source, target, fs_ctx=fs_ctx)
+
     async def cat(self, path, offset=0, size=-1, stream=False, fs_ctx=None):
         del stream, fs_ctx
         content = self.files[path]
@@ -380,6 +383,25 @@ async def test_cp_directory_preserves_empty_hidden_and_binary_entries(monkeypatc
             "viking://resources/source/empty",
         ],
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+async def test_directory_transfer_lists_each_source_directory_once(monkeypatch, operation):
+    agfs = _DirectoryCopyAGFS()
+    fs = _viking_fs(monkeypatch, agfs)
+
+    await getattr(fs, operation)(
+        "viking://resources/source",
+        "viking://resources/target",
+        ctx=_ctx(),
+        **({"recursive": True} if operation == "cp" else {}),
+    )
+
+    listed = [event[1] for event in agfs.events if event[0] == "ls"]
+    assert listed == ["/local/acct/resources/source", "/local/acct/resources/source/empty"]
+    first_write = next(i for i, event in enumerate(agfs.events) if event[0] in {"mkdir", "cp"})
+    assert all(event[0] != "ls" for event in agfs.events[first_write:])
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.core.namespace import (
     resolve_uri,
     uri_parts,
@@ -2332,6 +2333,46 @@ class VikingVectorIndexBackend:
             }
         return records
 
+    async def _timestamp_scan_pages(
+        self,
+        ctx: RequestContext,
+        scope: FilterExpr,
+        *,
+        batch_size: int,
+        output_fields: List[str],
+        timestamp_bounds: bool = True,
+    ) -> AsyncIterator[List[Dict[str, Any]]]:
+        """Share the inclusive timestamp/offset walk used by AddResource inventory."""
+        backend = await self._get_backend_for_context(ctx)
+        page_fields = list(dict.fromkeys([*output_fields, "updated_at"]))
+        timestamp = None
+        offset = 0
+        while True:
+            page = await backend.strict_query(
+                filter=scope
+                if timestamp is None
+                else And([scope, Range("updated_at", gte=timestamp)]),
+                limit=batch_size,
+                offset=offset,
+                output_fields=page_fields,
+                order_by="updated_at",
+                order_desc=False,
+            )
+            yield page
+            if len(page) < batch_size:
+                return
+            if not timestamp_bounds:
+                offset += len(page)
+                continue
+            last_timestamp = page[-1].get("updated_at")
+            # Historical raw records can lack a timestamp. Walk their leading
+            # pages by offset until a valid timestamp boundary is available.
+            if last_timestamp in (None, "") or last_timestamp == timestamp:
+                offset += len(page)
+            else:
+                timestamp = last_timestamp
+                offset = sum(record.get("updated_at") == timestamp for record in page)
+
     async def get_incremental_inventory_under_uri(
         self,
         uri: str,
@@ -2374,22 +2415,10 @@ class VikingVectorIndexBackend:
             ]
         )
         what = f"Incremental inventory under {canonical_uri}"
-        backend = await self._get_backend_for_context(ctx)
-        page_fields = list(dict.fromkeys([*projection, "updated_at"]))
         records: Dict[str, Dict[str, Any]] = {}
-        timestamp = None
-        offset = 0
-        while True:
-            page = await backend.strict_query(
-                filter=scope
-                if timestamp is None
-                else And([scope, Range("updated_at", gte=timestamp)]),
-                limit=batch_size,
-                offset=offset,
-                output_fields=page_fields,
-                order_by="updated_at",
-                order_desc=False,
-            )
+        async for page in self._timestamp_scan_pages(
+            ctx, scope, batch_size=batch_size, output_fields=projection
+        ):
             for record in page:
                 record_id = str(record.get("id") or "")
                 record_uri = str(record.get("uri") or "")
@@ -2427,15 +2456,6 @@ class VikingVectorIndexBackend:
                         "md5": str(record.get("md5") or ""),
                     }
                 )
-            if len(page) < batch_size:
-                break
-            last_timestamp = page[-1]["updated_at"]
-            if last_timestamp == timestamp:
-                offset += len(page)
-            else:
-                timestamp = last_timestamp
-                offset = sum(record["updated_at"] == timestamp for record in page)
-
         if expected_levels:
             found_levels: Dict[str, set[int]] = {}
             for record in records.values():
@@ -2798,6 +2818,72 @@ class VikingVectorIndexBackend:
             )
         return list(records.values()), len(entries)
 
+    async def _read_transfer_inventory(
+        self, ctx: RequestContext, scope: FilterExpr, *, what: str
+    ) -> List[Dict[str, Any]]:
+        """Read a complete lightweight transfer scope using AddResource pagination."""
+        expected_count = await self._strict_transfer_count(ctx, scope)
+        records: Dict[str, Dict[str, Any]] = {}
+        for timestamp_bounds in (True, False):
+            async for page in self._timestamp_scan_pages(
+                ctx,
+                scope,
+                batch_size=100,
+                output_fields=["id", "uri"],
+                timestamp_bounds=timestamp_bounds,
+            ):
+                for record in page:
+                    record_id = str(record.get("id") or "")
+                    if not record_id or not isinstance(record.get("uri"), str) or not record["uri"]:
+                        raise RuntimeError(f"{what} returned an invalid vector record")
+                    previous = records.get(record_id)
+                    if previous is not None and previous["uri"] != record["uri"]:
+                        raise RuntimeError(
+                            f"{what} returned a changed vector identity: {record_id}"
+                        )
+                    records.setdefault(record_id, record)
+                if len(records) > expected_count:
+                    raise RuntimeError(
+                        f"{what} returned more records than count was {expected_count}"
+                    )
+            if len(records) == expected_count:
+                break
+            # SQL NULLS LAST records are excluded by timestamp ranges. Recover
+            # them once using the original scope, then verify its original count.
+        if len(records) != expected_count:
+            raise RuntimeError(
+                f"{what} returned {len(records)} unique records but count was {expected_count}"
+            )
+        return list(records.values())
+
+    async def _fetch_transfer_records(
+        self, ctx: RequestContext, inventory: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        async def fetch(chunk: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            expected = {str(record["id"]): record["uri"] for record in chunk}
+            records = await self._strict_transfer_get(ctx, list(expected))
+            by_id: Dict[str, Dict[str, Any]] = {}
+            for record in records:
+                record_id = str(record.get("id") or "")
+                if (
+                    record_id not in expected
+                    or record_id in by_id
+                    or record.get("uri") != expected[record_id]
+                    or record.get("account_id") not in {None, ctx.account_id}
+                ):
+                    raise RuntimeError(f"Vector fetch identity mismatch for record: {record_id}")
+                by_id[record_id] = record
+            if len(by_id) != len(expected):
+                raise RuntimeError("Failed to fetch complete vector transfer records")
+            return [by_id[record_id] for record_id in expected]
+
+        pages = await bounded_map(
+            (inventory[start : start + 100] for start in range(0, len(inventory), 100)),
+            fetch,
+            concurrency=FILE_TASK_CONCURRENCY,
+        )
+        return [record for page in pages for record in page]
+
     async def _scan_uri_transfer_scope(
         self,
         ctx: RequestContext,
@@ -2953,7 +3039,24 @@ class VikingVectorIndexBackend:
             for uri in (source_uris if source_uris is not None else [source_uri])
         }
         use_entry_queries = source_uris is not None or not recursive
-        if not use_entry_queries:
+        use_manifest_scan = recursive and source_uris is not None
+        if use_manifest_scan:
+            inventory = await self._read_transfer_inventory(
+                ctx,
+                And([Eq("account_id", ctx.account_id), PathScope("uri", source_uri, depth=-1)]),
+                what=f"Vector transfer scan under {source_uri}",
+            )
+            if any(
+                not uri_in_transfer_scope(record["uri"], source_uri, recursive=True)
+                for record in inventory
+            ):
+                raise RuntimeError("Vector transfer scan returned a URI outside source scope")
+            source_records = await self._fetch_transfer_records(
+                ctx, [record for record in inventory if record["uri"] in selected_source_uris]
+            )
+            # Keep the filesystem API's existing per-entry diagnostic count.
+            batches = len(selected_source_uris)
+        elif not use_entry_queries:
             # Direct vector callers without a filesystem manifest retain subtree scans.
             source_records, batches = await self._scan_uri_transfer_scope(
                 ctx, source_uri, recursive=recursive, include_full_records=True
@@ -3012,7 +3115,31 @@ class VikingVectorIndexBackend:
             }
         # Query only overwritten entries, never destination-only subtrees.
         affected_target_ids: List[str] = []
-        if use_entry_queries:
+        if use_manifest_scan:
+            target_entries = sorted(replacement_target_uris)
+
+            async def read_target(entries: List[str]) -> List[Dict[str, Any]]:
+                records = await self._read_transfer_inventory(
+                    ctx,
+                    And(
+                        [Eq("account_id", ctx.account_id), Or([Eq("uri", uri) for uri in entries])]
+                    ),
+                    what=f"Vector transfer target scan under {target_uri}",
+                )
+                if any(record["uri"] not in entries for record in records):
+                    raise RuntimeError("Vector transfer target scan returned an unrelated URI")
+                return records
+
+            target_pages = await bounded_map(
+                (
+                    target_entries[start : start + 100]
+                    for start in range(0, len(target_entries), 100)
+                ),
+                read_target,
+                concurrency=FILE_TASK_CONCURRENCY,
+            )
+            target_records = [record for page in target_pages for record in page]
+        elif use_entry_queries:
             target_records, _ = await self._read_uri_transfer_entries(
                 ctx, list(replacement_target_uris), include_full_records=False
             )

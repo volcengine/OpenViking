@@ -83,9 +83,8 @@ async def seed_vector(backend, uri, content):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("directory", [False, True])
-@pytest.mark.parametrize("phase", ["source", "target"])
-async def test_transfer_uses_queries_without_count_or_sort(
-    indexed_fs, monkeypatch, operation, directory, phase
+async def test_transfer_uses_complete_directory_scan_and_legacy_file_reads(
+    indexed_fs, monkeypatch, operation, directory
 ):
     fs, backend = indexed_fs
     ctx = root_ctx()
@@ -97,28 +96,30 @@ async def test_transfer_uses_queries_without_count_or_sort(
     await seed_vector(backend, source_file, "new")
     await seed_vector(backend, target_file, "old")
     adapter = (await backend._get_backend_for_context(ctx))._adapter
-    original_count, original_query = adapter.count, adapter.query
+    original_count, original_query = backend._strict_transfer_count, adapter.query
     count_calls, queries = [], []
 
-    def stale_count(*args, **kwargs):
+    async def count(*args, **kwargs):
         count_calls.append(True)
-        count = original_count(*args, **kwargs)
-        return count + (len(count_calls) == (1 if phase == "source" else 2))
+        return await original_count(*args, **kwargs)
 
     def query(**kwargs):
         queries.append(kwargs)
         return original_query(**kwargs)
 
-    monkeypatch.setattr(adapter, "count", stale_count)
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
     monkeypatch.setattr(adapter, "query", query)
     await getattr(fs, operation)(
         source, target, ctx=ctx, **({"recursive": directory} if operation == "cp" else {})
     )
 
-    assert not count_calls
+    assert len(count_calls) == (2 if directory else 0)
     assert len(queries) >= 2  # Both source reads and target replacement use this path.
     assert all(
-        q.get("order_by") is None and q["offset"] == 0 and q["limit"] == 100 for q in queries
+        q.get("order_by") == ("updated_at" if directory else None)
+        and q["offset"] == 0
+        and q["limit"] == 100
+        for q in queries
     )
     assert await fs.read_file_bytes(target_file, ctx=ctx) == b"new"
     records = await backend.get([vector_record_id(ctx.account_id, target_file, 2)], ctx=ctx)
@@ -129,7 +130,7 @@ async def test_transfer_uses_queries_without_count_or_sort(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("disappear_all", [False, True])
-async def test_transfer_skips_source_record_disappearing_before_fetch(
+async def test_directory_transfer_rejects_source_record_disappearing_before_fetch(
     indexed_fs, monkeypatch, operation, disappear_all
 ):
     fs, backend = indexed_fs
@@ -149,16 +150,14 @@ async def test_transfer_skips_source_record_disappearing_before_fetch(
         return await original_get(ctx, ids)
 
     monkeypatch.setattr(backend, "_strict_transfer_get", get_after_delete)
-    result = await getattr(fs, operation)(
-        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
-    )
-    assert result["vectors"]["written"] == (0 if disappear_all else 1)
-    assert await fs.read_file_bytes(target + "/b.md", ctx=ctx) == b"new"
+    with pytest.raises(RuntimeError, match="fetch complete"):
+        await getattr(fs, operation)(
+            source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+        )
+    assert await fs.exists(source, ctx=ctx)
     records = await backend.get([target + "/b.md"], ctx=ctx)
     assert [record["abstract"] for record in records] == ["old target index"]
-    assert bool(
-        await backend.get([vector_record_id(ctx.account_id, target + "/a.md", 2)], ctx=ctx)
-    ) == (not disappear_all)
+    assert not await backend.get([vector_record_id(ctx.account_id, target + "/a.md", 2)], ctx=ctx)
 
 
 @pytest.mark.asyncio
@@ -329,7 +328,8 @@ async def test_directory_transfer_reads_all_exact_entries_with_native_storage(
     assert result["vectors"]["scanned"] == result["vectors"]["written"] == len(names)
     assert result["vectors"]["batches"] >= 3
     assert set(source_uris + old_targets).issubset(read_ids)
-    assert not set(untouched).intersection(read_ids)
+    # Source prefix inventory sees orphan IDs; target-only URIs stay out of the query.
+    assert not set(untouched[2:]).intersection(read_ids)
     target_ids = [vector_record_id(ctx.account_id, uri, 2) for uri in old_targets]
     assert {record["uri"] for record in await backend.get(target_ids, ctx=ctx)} == set(old_targets)
     assert not await backend.get(old_targets, ctx=ctx)

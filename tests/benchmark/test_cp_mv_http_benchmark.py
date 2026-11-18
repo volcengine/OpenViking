@@ -158,3 +158,74 @@ def test_benchmark_both_orders_combines_abba_samples():
     assert order == ["baseline", "candidate", "candidate", "baseline"]
     assert len(result["baseline"]["cp"]["samples_seconds"]) == 2
     assert len(result["candidate"]["mv"]["samples_seconds"]) == 2
+
+
+def test_indexed_benchmark_builds_vectors_before_timing_and_checks_copy():
+    benchmark = _load_benchmark()
+
+    class IndexedClient(_FakeClient):
+        def batch_write(self, root_uri, operations, *, indexed=False):
+            assert indexed
+            self.calls.append(("index", root_uri))
+            super().batch_write(root_uri, operations)
+
+        def cp(self, source, target):
+            result = super().cp(source, target)
+            result["vectors"] = {"written": 3}
+            return result
+
+    client = IndexedClient()
+    ticks = iter(range(4))
+    result = benchmark.benchmark_endpoint(
+        client,
+        label="indexed",
+        file_count=3,
+        file_size=4,
+        setup_batch_size=3,
+        warmups=0,
+        runs=1,
+        name_suffix="test",
+        indexed=True,
+        timer=lambda: next(ticks),
+    )
+    reindex_position = next(i for i, call in enumerate(client.calls) if call[0] == "index")
+    first_copy = next(i for i, call in enumerate(client.calls) if call[0] == "cp")
+    assert reindex_position < first_copy
+    assert all(
+        operation["uri"].endswith(".txt")
+        for _, batch in client.batch_payloads
+        for operation in batch
+    )
+    assert all(
+        operation.get("content") == "xxxx"
+        for _, batch in client.batch_payloads
+        for operation in batch
+    )
+    assert result["cp"]["samples_seconds"] == [1]
+
+    class MissingVectors(IndexedClient):
+        def cp(self, source, target):
+            return _FakeClient.cp(self, source, target)
+
+    with pytest.raises(benchmark.BenchmarkError, match="vectors"):
+        benchmark.benchmark_endpoint(
+            MissingVectors(),
+            label="indexed",
+            file_count=3,
+            file_size=4,
+            setup_batch_size=3,
+            warmups=0,
+            runs=1,
+            name_suffix="bad",
+            indexed=True,
+        )
+
+
+def test_indexed_batch_setup_requests_synchronous_processing(monkeypatch):
+    benchmark = _load_benchmark()
+    client = benchmark.OpenVikingHttpClient("http://unused.invalid")
+    requests = []
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: requests.append(kwargs))
+    client.batch_write("viking://resources/source", [], indexed=True)
+    assert requests[0]["payload"]["wait"] is True
+    assert requests[0]["payload"]["defer_processing"] is False

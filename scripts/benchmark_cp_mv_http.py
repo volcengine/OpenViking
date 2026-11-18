@@ -12,7 +12,8 @@ Run the pre-change and changed servers with separate storage workspaces, then:
       --output /tmp/openviking-cp-mv-benchmark.json
 
 Setup uses batch-write with deferred processing, and setup, validation, and
-cleanup time is excluded from the reported cp/mv latency.
+cleanup time is excluded from the reported cp/mv latency. Pass --indexed to
+prepare text files and complete indexing before measuring existing-vector transfers.
 """
 
 from __future__ import annotations
@@ -107,15 +108,17 @@ class OpenVikingHttpClient:
     def mkdir(self, uri: str) -> None:
         self._request("POST", "/api/v1/fs/mkdir", payload={"uri": uri})
 
-    def batch_write(self, root_uri: str, operations: list[dict[str, Any]]) -> None:
+    def batch_write(
+        self, root_uri: str, operations: list[dict[str, Any]], *, indexed: bool = False
+    ) -> None:
         self._request(
             "POST",
             "/api/v1/content/batch-write",
             payload={
                 "root_uri": root_uri,
                 "operations": operations,
-                "wait": False,
-                "defer_processing": True,
+                "wait": indexed,
+                "defer_processing": not indexed,
             },
         )
 
@@ -209,6 +212,12 @@ def _assert_transfer_count(result: dict[str, Any], expected: int, operation: str
         )
 
 
+def _assert_vector_count(result: dict[str, Any], expected: int) -> None:
+    written = result.get("vectors", {}).get("written", 0)
+    if not isinstance(written, int) or written < expected:
+        raise BenchmarkError(f"indexed cp wrote {written!r} vectors, expected at least {expected}")
+
+
 def benchmark_endpoint(
     client: Any,
     *,
@@ -219,17 +228,19 @@ def benchmark_endpoint(
     warmups: int,
     runs: int,
     name_suffix: str,
+    indexed: bool = False,
     timer: Callable[[], float] = time.perf_counter,
 ) -> dict[str, dict[str, Any]]:
     benchmark_root = f"viking://resources/cp-mv-perf-{label}-{name_suffix}"
     template = f"{benchmark_root}/template"
-    sentinel_name = "000000.bin"
+    extension = "txt" if indexed else "bin"
+    sentinel_name = f"000000.{extension}"
     expected_entries = file_count + 1  # template directory plus its files
     payload = base64.b64encode(b"x" * file_size).decode("ascii")
     operations = [
         {
-            "uri": f"{template}/{index:06d}.bin",
-            "content_base64": payload,
+            "uri": f"{template}/{index:06d}.{extension}",
+            **({"content": "x" * file_size} if indexed else {"content_base64": payload}),
             "mode": "create",
         }
         for index in range(file_count)
@@ -240,7 +251,13 @@ def benchmark_endpoint(
         client.mkdir(benchmark_root)
         client.mkdir(template)
         for start in range(0, len(operations), setup_batch_size):
-            client.batch_write(template, operations[start : start + setup_batch_size])
+            client.batch_write(
+                template,
+                operations[start : start + setup_batch_size],
+                **({"indexed": True} if indexed else {}),
+            )
+        if indexed:
+            client.wait()
 
         samples: dict[str, list[float]] = {"cp": [], "mv": []}
         total_iterations = warmups + runs
@@ -254,6 +271,8 @@ def benchmark_endpoint(
             elapsed = timer() - started
             client.wait()
             _assert_transfer_count(cp_result, expected_entries, "cp")
+            if indexed:
+                _assert_vector_count(cp_result, file_count)
             if client.stat_status(f"{cp_target}/{sentinel_name}") != 200:
                 raise BenchmarkError(f"cp target sentinel is missing: {cp_target}/{sentinel_name}")
             if measured:
@@ -262,7 +281,10 @@ def benchmark_endpoint(
 
             mv_source = f"{benchmark_root}/mv-source-{phase}-{index}"
             mv_target = f"{benchmark_root}/mv-target-{phase}-{index}"
-            _assert_transfer_count(client.cp(template, mv_source), expected_entries, "mv setup cp")
+            mv_setup_result = client.cp(template, mv_source)
+            _assert_transfer_count(mv_setup_result, expected_entries, "mv setup cp")
+            if indexed:
+                _assert_vector_count(mv_setup_result, file_count)
             client.wait()
             started = timer()
             client.mv(mv_source, mv_target)
@@ -290,11 +312,7 @@ def benchmark_endpoint(
 def _combine_results(*results: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {
         operation: summarize_samples(
-            [
-                sample
-                for result in results
-                for sample in result[operation]["samples_seconds"]
-            ]
+            [sample for result in results for sample in result[operation]["samples_seconds"]]
         )
         for operation in ("cp", "mv")
     }
@@ -359,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--setup-batch-size", type=_positive_int, default=32)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--runs", type=_positive_int, default=5)
+    parser.add_argument("--indexed", action="store_true", help="Build source vectors before timing")
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--output", type=Path, help="Optional JSON result path")
     return parser
@@ -407,6 +426,7 @@ def main() -> int:
         "warmups": args.warmups,
         "runs": args.runs,
         "name_suffix": suffix,
+        "indexed": args.indexed,
     }
 
     print(f"Benchmarking ABBA order: {args.baseline_url} <-> {args.candidate_url}")
@@ -420,6 +440,7 @@ def main() -> int:
     result = {
         "config": {
             "files": args.files,
+            "indexed": args.indexed,
             "file_size": args.file_size,
             "warmups": args.warmups,
             "runs": args.runs,
