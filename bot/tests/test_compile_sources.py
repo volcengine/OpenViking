@@ -5,6 +5,9 @@
 import asyncio
 import base64
 import json
+import random
+import threading
+import time
 from dataclasses import asdict
 from io import BytesIO
 from types import SimpleNamespace
@@ -13,7 +16,7 @@ from unittest.mock import AsyncMock, Mock, call
 
 import httpx
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from pydantic import BaseModel
 from vikingbot.agent.loop import AgentLoop, _inline_media_bytes
 from vikingbot.agent.tools.base import MultimodalToolResult, ToolContext
@@ -435,15 +438,28 @@ async def test_memory_image_reader_rejects_changed_original(runtime):
     assert "base64," not in result
 
 
-@pytest.mark.asyncio
-async def test_large_image_is_compressed_without_changing_source_identity(runtime):
-    import random
-
-    pipeline, _ = runtime
+@pytest.fixture(scope="module")
+def large_png():
     image = Image.frombytes("RGB", (1800, 1000), random.Random(6713).randbytes(1800 * 1000 * 3))
     output = BytesIO()
     image.save(output, format="PNG")
-    original = output.getvalue()
+    return output.getvalue()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transparent", [False, True])
+async def test_large_image_is_compressed_without_changing_source_identity(
+    runtime, large_png, transparent
+):
+    pipeline, _ = runtime
+    original = large_png
+    if transparent:
+        with Image.open(BytesIO(original)) as image:
+            image = image.convert("RGBA")
+            image.paste((0, 0, 0, 0), (0, 0, 100, 100))
+            output = BytesIO()
+            image.save(output, format="PNG")
+            original = output.getvalue()
     assert len(original) > VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
     pipeline.client.stat.return_value = {"size": len(original)}
     pipeline.client.download_bytes.return_value = original
@@ -459,6 +475,8 @@ async def test_large_image_is_compressed_without_changing_source_identity(runtim
     assert result["sha256"] == content_hash(original)
     with Image.open(BytesIO(rendition)) as rendition_image:
         assert rendition_image.size == (1800, 1000)
+        if transparent:
+            assert rendition_image.getpixel((50, 50)) == (255, 255, 255)
 
 
 @pytest.mark.asyncio
@@ -481,6 +499,58 @@ async def test_image_download_budget_and_inline_passthrough(runtime, monkeypatch
     result = await VikingMultiReadTool._read_image(pipeline.client, URI)
     assert result["success"]
     assert base64.b64decode(result["image"]["image_url"]["url"].split(",", 1)[1]) == png
+
+
+@pytest.mark.asyncio
+async def test_image_pixel_budget_precedes_decode(runtime, large_png, monkeypatch):
+    pipeline, _ = runtime
+    pipeline.client.stat.return_value = {"size": len(large_png)}
+    pipeline.client.download_bytes.return_value = large_png
+    monkeypatch.setattr("openviking.utils.image_input.MAX_IMAGE_INPUT_DECODE_PIXELS", 1)
+
+    def unexpected_load(*args, **kwargs):
+        raise AssertionError("Pixel budget must be checked before decoding")
+
+    monkeypatch.setattr("PIL.PngImagePlugin.PngImageFile.load", unexpected_load)
+    with pytest.raises(ValueError, match="pixel decode budget"):
+        await VikingMultiReadTool._read_image(pipeline.client, URI)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_image_reads_share_conversion_budget(runtime, large_png, monkeypatch):
+    from vikingbot.agent.tools import ov_file
+
+    pipeline, _ = runtime
+    pipeline.client.stat.return_value = {"size": len(large_png)}
+    pipeline.client.download_bytes.return_value = large_png
+    compress, transpose = ov_file.compress_image_input, ImageOps.exif_transpose
+    ready, lock = threading.Barrier(2), threading.Lock()
+    active = peak = 0
+
+    def synchronized_compress(*args):
+        ready.wait(timeout=5)
+        return compress(*args)
+
+    def observed_transpose(image):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.02)
+            return transpose(image)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(ov_file, "compress_image_input", synchronized_compress)
+    monkeypatch.setattr(ImageOps, "exif_transpose", observed_transpose)
+    results = await asyncio.gather(
+        VikingMultiReadTool._read_image(pipeline.client, URI),
+        VikingMultiReadTool._read_image(pipeline.client, URI),
+    )
+    assert all(result["success"] for result in results)
+    assert peak == 1
 
 
 @pytest.mark.asyncio
