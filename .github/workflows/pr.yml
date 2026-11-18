@@ -180,7 +180,9 @@ jobs:
             tests/misc/test_abi3_packaging_config.py \
             tests/misc/test_release_tag_selection.py \
             tests/misc/test_linux_runner.py \
-            tests/misc/test_macos_wheel_cache.py
+            tests/misc/test_macos_wheel_cache.py \
+            tests/misc/test_cli_model_query_retry.py \
+            tests/misc/test_cache_maintenance.py
 
   build:
     needs: check-deps
