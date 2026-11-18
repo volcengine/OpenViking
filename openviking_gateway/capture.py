@@ -90,6 +90,11 @@ async def reset_capture(store, scope, session, reason):
             return value
 
 
+def anchor_of(captured):
+    """The anchor of the message a captured message was made from."""
+    return captured["source_message_ids"][0].removeprefix(SOURCE)
+
+
 def segment(value, messages, chain, start, stop):
     """messages[start:stop] as OpenViking messages, the users' naming their peers."""
     peers = peer_anchors(value.get("peers"), messages[:stop], chain[:stop])
@@ -151,33 +156,42 @@ class CapturePipeline:
             return 0
         key, session = credential["openviking_key"], value["ov_session"]
         committer = "openviking" if self.auto_commit else "gateway"
+        sent = 0
         # The reply is out, or a summary call took the time: the request's budget is over.
         with without_deadline():
             # Also after the setting changed: the session then gets the other policy.
             if value.get("created") != committer:
                 await self.viking.create_session(key, session, policy, self.auto_commit)
-            for offset in range(0, len(captured), BATCH):
-                batch = captured[offset : offset + BATCH]
+            while captured:
+                batch, captured = captured[:BATCH], captured[BATCH:]
                 written = await self.viking.write(key, session, batch)
-                anchor = batch[-1]["source_message_ids"][0].removeprefix(SOURCE)
+                sent += len(batch)
                 mark = {"created": committer}
                 if self.auto_commit:
                     mark["idle_at"] = None
-                elif ended and offset + BATCH >= len(captured):
+                elif ended and not captured:
                     mark.update(
                         idle_at=time.time() + policy.idle_seconds,
                         account=credential["account"],
                         credential_id=credential["id"],
                     )
-                doc = await self.moved(request, doc, value, anchor or value["delivered"], mark)
+                anchor = anchor_of(batch[-1]) or value["delivered"]
+                doc = await self.moved(request, doc, value, positions, cursor, anchor, mark)
                 if doc is None:
-                    return offset + len(batch)
+                    return sent
                 request.capture, value = doc, doc.value
+                # What another save of this history wrote meanwhile is not written again.
+                reached = positions.get(value["delivered"], -1)
+                captured = [
+                    m for m in captured if positions.get(anchor_of(m), reached + 1) > reached
+                ]
         if ended and not self.auto_commit:
             if (written or {}).get("pending_tokens", 0) >= policy.commit_tokens:
                 self.spawn(self.commit(key, session, policy.keep_recent_messages))
-            self.wait((request.scope, request.session), value["idle_at"])
-        return len(captured)
+            # Not when another save wrote this one's last messages: that one waits.
+            if mark.get("idle_at"):
+                self.wait((request.scope, request.session), mark["idle_at"])
+        return sent
 
     def wait(self, name, due):
         """Make the idle commit of ``name`` at ``due``; a later turn of it waits anew."""
@@ -274,20 +288,33 @@ class CapturePipeline:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
 
-    async def moved(self, request, doc, value, anchor, mark):
-        """Store the cursor after a write, unless a reset or another save moved it meanwhile.
+    async def moved(self, request, doc, value, positions, begun, anchor, mark):
+        """Store ``mark`` and move the cursor to ``anchor`` after a write, never back.
 
-        Returns None then: a save that began earlier must not take the cursor back.
+        ``begun`` is the cursor this save started from and ``positions`` where each
+        message of its history stands. Another save may have moved the cursor
+        meanwhile. One of this history that got less far is passed; one that got
+        further keeps its cursor. Returns None when this save has nothing to add:
+        after a reset, or when the cursor left this history through a save that began
+        where this one did, and so wrote these messages. A save that began at its own
+        turn, because its history lacked the cursor, goes on and leaves the cursor.
         """
-        session, cursor = value["ov_session"], value["delivered"]
+        session = value["ov_session"]
         while True:
+            cursor = value["delivered"]
+            if value["ov_session"] != session:
+                return None
+            if cursor != begun:
+                ahead = positions.get(cursor)
+                if ahead is None and (not begun or begun in positions):
+                    return None
+                if ahead is None or ahead > positions.get(anchor, -1):
+                    anchor = cursor
             value = {**value, "delivered": anchor, **mark}
             if await self.store.swap(request.scope, request.session, doc, value):
                 return Document(value, doc.version + 1)
             doc = await self.store.get(request.scope, request.session)
             value = current(doc.value)
-            if value["ov_session"] != session or value["delivered"] != cursor:
-                return None
 
     async def save_cut(self, request, credential, anchor):
         """Write the history up to a gateway cut inside a turn, without waiting for its end.

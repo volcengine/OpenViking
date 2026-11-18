@@ -408,6 +408,79 @@ async def test_overlapping_saves_never_move_the_cursor_back(setup_kernel, creden
     assert state["delivered"] == reply_chain(later, reply().output)[-1]
 
 
+@pytest.mark.parametrize("turns", [49, 75], ids=["one batch then two", "two batches each"])
+async def test_overlapping_save_of_a_longer_history_writes_what_is_missing(
+    setup_kernel, credential, policy, turns
+):
+    kernel, store, viking, _ = setup_kernel
+    policy.update(recall=False)
+    older = [*history(turns), {"role": "user", "content": "older"}]
+    newer = [
+        *older,
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "newer"},
+    ]
+    early = await prepare(kernel, credential, policy, older)
+    later = await prepare(kernel, credential, policy, newer)
+    write, pending = viking.write, [early]
+
+    async def slow(key, session, batch):
+        # The earlier turn's save runs to its end while this first write is in flight.
+        if pending:
+            await kernel.save(pending.pop(), credential, reply())
+        return await write(key, session, batch)
+
+    viking.write = slow
+    # The batch in flight, then only what the earlier save did not write.
+    assert await kernel.save(later, credential, reply("done")) == 102
+    written = [m["parts"][0]["text"] for batch in viking.writes for m in batch]
+    assert written.count("newer") == written.count("done") == 1
+    assert len(written) == len(newer) + 1 + 100
+    state = (await store.capture.get(later.scope, later.session)).value
+    assert state["delivered"] == reply_chain(later, reply("done").output)[-1]
+    # The wait of the turn that ended last is the one that stands.
+    assert kernel.capture.timers[later.scope, later.session][1] == state["idle_at"]
+
+
+async def test_overlapping_save_after_a_changed_history_writes_all_of_its_turn(
+    setup_kernel, credential, policy
+):
+    kernel, store, viking, _ = setup_kernel
+    policy.update(recall=False)
+    steps = [
+        message
+        for i in range(120)
+        for message in (
+            {"role": "assistant", "content": f"step {i}", "tool_calls": [call(f"c{i}")]},
+            {"role": "tool", "tool_call_id": f"c{i}", "content": "ok"},
+        )
+    ]
+    older = [{"role": "user", "content": "task"}, *steps]
+    newer = [
+        *older,
+        {"role": "assistant", "content": "finished"},
+        {"role": "user", "content": "next"},
+    ]
+    early = await prepare(kernel, credential, policy, older)
+    later = await prepare(kernel, credential, policy, newer)
+    # The client rewrote its history: each save starts at its own turn's user message.
+    await update_capture(store, early, delivered="gone")
+    write, pending = viking.write, [later]
+
+    async def slow(key, session, batch):
+        # The next turn ends, and saves, while this first write is in flight.
+        if pending:
+            assert await kernel.save(pending.pop(), credential, reply("done")) == 2
+        return await write(key, session, batch)
+
+    viking.write = slow
+    assert await kernel.save(early, credential, reply("finished")) == 122
+    written = [m["parts"][0]["text"] for batch in viking.writes for m in batch]
+    assert written.count("step 119") == written.count("finished") == 1
+    state = (await store.capture.get(early.scope, early.session)).value
+    assert state["delivered"] == reply_chain(later, reply("done").output)[-1]
+
+
 async def test_manual_reset_writes_the_whole_history_to_a_new_session(
     setup_kernel, credential, policy
 ):
