@@ -21,13 +21,27 @@ const SECURITY_HEADERS = Object.freeze({
 });
 
 const STATIC_FILES = Object.freeze({
-  '/': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
+  '/': { file: 'console/index.html', contentType: 'text/html; charset=utf-8' },
+  '/console': { file: 'console/index.html', contentType: 'text/html; charset=utf-8' },
+  '/console/': { file: 'console/index.html', contentType: 'text/html; charset=utf-8' },
   '/activity': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
   '/activity.css': { file: 'activity.css', contentType: 'text/css; charset=utf-8' },
   '/activity.js': { file: 'activity.js', contentType: 'text/javascript; charset=utf-8' },
 });
 
 const PROXY_PATHS = new Set(['/api/activity', '/health', '/ready']);
+const V1_INSTANCE_ROUTES = Object.freeze({
+  overview: new Set(),
+  health: new Set(),
+  runtime: new Set(),
+  'runtime/models': new Set(['refresh']),
+  sessions: new Set(['before', 'limit']),
+  tasks: new Set(['status', 'runtime', 'q', 'before', 'limit']),
+  activities: new Set(['epoch', 'taskId', 'kind', 'category', 'severity', 'before', 'after', 'limit']),
+  metrics: new Set(['window']),
+});
+const V1_TASK_ROUTES = new Set(['inputs', 'reports', 'events']);
+const V1_QUERY_KEYS = new Set(['before', 'after', 'limit']);
 const INSTANCE_QUERY_KEY = 'instance';
 const EPOCH_QUERY_KEY = 'epoch';
 const PAGE_QUERY_KEYS = new Set([INSTANCE_QUERY_KEY, EPOCH_QUERY_KEY]);
@@ -127,6 +141,16 @@ function loadStaticFiles(publicDirectory) {
     result.set(route, {
       body: fs.readFileSync(absolutePath),
       contentType: asset.contentType,
+    });
+  }
+  // Vite emits content-hashed files. Only that immutable build directory is
+  // exposed; source files and arbitrary paths remain unreachable.
+  const assetsDirectory = path.join(publicDirectory, 'console', 'assets');
+  for (const file of fs.readdirSync(assetsDirectory)) {
+    if (!/^[a-zA-Z0-9._-]+\.(?:js|css)$/.test(file)) continue;
+    result.set(`/console/assets/${file}`, {
+      body: fs.readFileSync(path.join(assetsDirectory, file)),
+      contentType: file.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8',
     });
   }
   return result;
@@ -243,6 +267,27 @@ export class ActivityWebServer {
       return;
     }
 
+    if (url.pathname === '/api/v1/instances' && url.search === '') {
+      sendJson(response, 200, {
+        defaultInstance: this.config.defaultInstance,
+        items: [...this.instances.values()].map(({ id, label }) => ({
+          id, label, default: id === this.config.defaultInstance, ready: null,
+        })),
+        generatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const v1Route = this.v1Route(url);
+    if (v1Route) {
+      if (v1Route.error) {
+        sendJson(response, v1Route.status, { error: { code: v1Route.error, message: 'Invalid read-only console request.', retryable: false } });
+        return;
+      }
+      await this.proxy(request, response, v1Route.instance, v1Route.upstreamPath);
+      return;
+    }
+
     if (PROXY_PATHS.has(url.pathname)) {
       const selected = this.selectInstance(url);
       if (selected.error) {
@@ -260,9 +305,42 @@ export class ActivityWebServer {
     sendJson(response, 404, { error: 'not_found' });
   }
 
+  v1Route(url) {
+    if (url.pathname === '/api/v1/capabilities') {
+      if ([...url.searchParams.keys()].some((key) => key !== INSTANCE_QUERY_KEY)) {
+        return { error: 'invalid_argument', status: 400 };
+      }
+      const selected = this.selectInstance(url);
+      if (selected.error) return selected;
+      return { instance: selected.instance, upstreamPath: '/api/v1/capabilities' };
+    }
+    const match = /^\/api\/v1\/instances\/([^/]+)(?:\/([^/]+(?:\/[^/]+){0,2}))?$/.exec(url.pathname);
+    if (!match) return null;
+    let id;
+    try { id = decodeURIComponent(match[1]); } catch { return { error: 'invalid_argument', status: 400 }; }
+    if (id.includes('/') || !this.instances.has(id)) return { error: 'not_found', status: 404 };
+    const suffix = match[2] ?? '';
+    let allowed;
+    if (Object.hasOwn(V1_INSTANCE_ROUTES, suffix)) allowed = V1_INSTANCE_ROUTES[suffix];
+    else if (/^sessions\/[^/]+$/.test(suffix)) allowed = new Set();
+    else if (/^tasks\/[^/]+$/.test(suffix)) allowed = new Set();
+    else {
+      const task = /^tasks\/[^/]+\/(inputs|reports|events)$/.exec(suffix);
+      if (!task || !V1_TASK_ROUTES.has(task[1])) return { error: 'not_found', status: 404 };
+      allowed = V1_QUERY_KEYS;
+    }
+    if ([...url.searchParams.keys()].some((key) => key !== INSTANCE_QUERY_KEY && !allowed.has(key))) {
+      return { error: 'invalid_argument', status: 400 };
+    }
+    const selected = this.selectInstance(url);
+    if (selected.error) return selected;
+    if (selected.instance.id !== id) return { error: 'invalid_argument', status: 400 };
+    return { instance: selected.instance, upstreamPath: `${url.pathname}${url.search}` };
+  }
+
   isSafePageQuery(url) {
     if (url.search === '') return true;
-    if (url.pathname !== '/' && url.pathname !== '/activity') return false;
+    if (!['/', '/console', '/console/', '/activity'].includes(url.pathname)) return false;
     const keys = [...url.searchParams.keys()];
     if (keys.some((key) => !PAGE_QUERY_KEYS.has(key))) return false;
     const instances = url.searchParams.getAll(INSTANCE_QUERY_KEY);
