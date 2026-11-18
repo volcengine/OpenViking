@@ -25,7 +25,7 @@ from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.server.routers import content as content_router
 from openviking.server.routers import resources as resources_router
 from openviking.server.upload_token_store import download_token_store, upload_token_store
-from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
+from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError, ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
 TARGET = "viking://resources/specs/design.pdf"
@@ -226,3 +226,26 @@ async def test_access_is_rechecked_at_fetch(client, fake_fs):
     response = await client.get("/api/v1/content/download", params={"token": token})
     assert response.status_code == 403
     assert fake_fs.reads == []
+
+
+async def test_signed_download_limit_keeps_bound_uri_and_single_use(client, fake_fs, monkeypatch):
+    limits = []
+    read = fake_fs.read_file_bytes
+
+    async def bounded_read(uri, ctx, *, max_bytes=None):
+        limits.append((uri, max_bytes, ctx.user))
+        data = await read(uri, ctx)
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ResourceExhaustedError("Download exceeds limit")
+        return data
+
+    monkeypatch.setattr(fake_fs, "read_file_bytes", bounded_read)
+    token = await _mint()
+    response = await client.get(
+        "/api/v1/content/download", params={"token": token, "uri": OTHER, "max_bytes": 1}
+    )
+    assert response.status_code == ERROR_CODE_TO_HTTP_STATUS["RESOURCE_EXHAUSTED"], response.text
+    assert limits == [(TARGET, 1, UserIdentifier("acct", "user"))]
+    # The limit changes neither URI scope nor the existing single-use contract.
+    response = await client.get("/api/v1/content/download", params={"token": token})
+    assert response.status_code == 401

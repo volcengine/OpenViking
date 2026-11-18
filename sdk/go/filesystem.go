@@ -6,8 +6,10 @@ package openviking
 import (
 	"context"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 // List lists directory contents.
@@ -217,7 +219,23 @@ func (c *Client) Read(ctx context.Context, uri string, offset int, limit int) (s
 
 // DownloadBytes downloads raw stored bytes.
 func (c *Client) DownloadBytes(ctx context.Context, uri string) ([]byte, error) {
+	return c.downloadBytes(ctx, uri, nil)
+}
+
+// DownloadBytesWithLimit bounds both server reads and local buffering. Older
+// servers may ignore the query parameter; local enforcement remains active.
+func (c *Client) DownloadBytesWithLimit(ctx context.Context, uri string, maxBytes int64) ([]byte, error) {
+	if maxBytes < 0 || maxBytes == math.MaxInt64 {
+		return nil, &Error{Code: "INVALID_ARGUMENT", Message: "maxBytes must be a nonnegative integer below MaxInt64"}
+	}
+	return c.downloadBytes(ctx, uri, &maxBytes)
+}
+
+func (c *Client) downloadBytes(ctx context.Context, uri string, maxBytes *int64) ([]byte, error) {
 	query := url.Values{"uri": []string{NormalizeURI(uri)}}
+	if maxBytes != nil {
+		query.Set("max_bytes", strconv.FormatInt(*maxBytes, 10))
+	}
 	req, err := c.newRequest(ctx, http.MethodGet, "/api/v1/content/download", query, nil)
 	if err != nil {
 		return nil, err
@@ -227,9 +245,19 @@ func (c *Client) DownloadBytes(ctx context.Context, uri string) ([]byte, error) 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	var body io.Reader = resp.Body
+	if maxBytes != nil {
+		if resp.ContentLength > *maxBytes {
+			return nil, &Error{Code: "RESOURCE_EXHAUSTED", Message: "Download exceeds maxBytes", Details: map[string]any{"max_bytes": *maxBytes}}
+		}
+		body = io.LimitReader(resp.Body, *maxBytes+1)
+	}
+	data, err := io.ReadAll(body)
 	if err != nil {
 		return nil, err
+	}
+	if maxBytes != nil && int64(len(data)) > *maxBytes {
+		return nil, &Error{Code: "RESOURCE_EXHAUSTED", Message: "Download exceeds maxBytes", Details: map[string]any{"max_bytes": *maxBytes}}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		env, decodeErr := decodeEnvelope(resp.StatusCode, data)

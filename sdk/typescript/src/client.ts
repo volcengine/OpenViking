@@ -803,19 +803,85 @@ export class OpenVikingClient {
       query: { uri: normalizeURI(uri), offset, limit },
     });
   }
-  /** Download raw stored bytes. */
-  downloadBytes(uri: string): Promise<Uint8Array> {
+  /** Download raw bytes, optionally bounding server reads and local buffering. */
+  downloadBytes(
+    uri: string,
+    options: { maxBytes?: number; signal?: AbortSignal } = {},
+  ): Promise<Uint8Array> {
+    const limit = options.maxBytes;
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0))
+      return Promise.reject(
+        new TypeError("maxBytes must be a nonnegative safe integer"),
+      );
     return this.transport.consume(
       "GET",
       "/api/v1/content/download",
-      { query: { uri: normalizeURI(uri) } },
+      {
+        query: { uri: normalizeURI(uri), max_bytes: limit },
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
       async (response) => {
+        if (limit === undefined) {
+          if (
+            !response.ok ||
+            response.headers.get("content-type")?.includes("json")
+          )
+            return this.transport.parseResponse<never>(response);
+          return new Uint8Array(await response.arrayBuffer());
+        }
+        const tooLarge = () =>
+          new OpenVikingError("Download exceeds maxBytes", {
+            code: "RESOURCE_EXHAUSTED",
+            details: { max_bytes: limit },
+          });
+        const length = response.headers.get("content-length");
+        if (
+          length &&
+          /^\d+$/.test(length) &&
+          Number(length) > limit &&
+          !response.headers.get("content-encoding")
+        ) {
+          await response.body?.cancel();
+          throw tooLarge();
+        }
+        const reader = response.body?.getReader();
+        let finished = false;
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          while (reader) {
+            const item = await reader.read();
+            if (item.done) {
+              finished = true;
+              break;
+            }
+            total += item.value.byteLength;
+            if (total > limit) throw tooLarge();
+            chunks.push(item.value);
+          }
+        } finally {
+          if (reader) {
+            if (!finished) await reader.cancel().catch(() => undefined);
+            reader.releaseLock();
+          }
+        }
+        const data = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+          data.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
         if (
           !response.ok ||
           response.headers.get("content-type")?.includes("json")
         )
-          return this.transport.parseResponse<never>(response);
-        return new Uint8Array(await response.arrayBuffer());
+          return this.transport.parseResponse<never>(
+            new Response(data, {
+              status: response.status,
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        return data;
       },
     );
   }
@@ -1392,7 +1458,12 @@ export class OpenVikingClient {
     );
   }
   /** Return up to limit commits for branch/paths, newest first, skipping offset matches. */
-  gitLog(branch = "main", limit = 20, paths?: string[], offset = 0): Promise<JsonObject[]> {
+  gitLog(
+    branch = "main",
+    limit = 20,
+    paths?: string[],
+    offset = 0,
+  ): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
       query: { branch, limit, offset, paths },
     });
