@@ -75,7 +75,8 @@ def test_search_tag_accepts_long_keys_and_values(key_length, value_length):
     assert normalize_search_tag(f"{key}={value}") == f"{key}={value}"
 
 
-def test_discard_invalid_search_tags_logs_one_summary_for_batch(caplog):
+def test_discard_invalid_search_tags_logs_one_summary_for_batch(caplog, monkeypatch):
+    monkeypatch.setattr(tags_module.logger, "propagate", False)
     tags_module.logger.addHandler(caplog.handler)
     try:
         with caplog.at_level(logging.INFO, logger="openviking.utils.tags"):
@@ -96,7 +97,8 @@ def test_discard_invalid_search_tags_logs_one_summary_for_batch(caplog):
     assert "also-bad" not in summaries[0].getMessage()
 
 
-def test_merge_search_tags_applies_ordered_patches_and_discards_invalid_tags(caplog):
+def test_merge_search_tags_applies_ordered_patches_and_discards_invalid_tags(caplog, monkeypatch):
+    monkeypatch.setattr(tags_module.logger, "propagate", False)
     tags_module.logger.addHandler(caplog.handler)
     try:
         with caplog.at_level(logging.INFO, logger="openviking.utils.tags"):
