@@ -147,6 +147,8 @@ export function useDirectoryTree({
     rootUri,
     dirs,
     expanded,
+    collapsed: expansion.collapsed,
+    pendingEdits: expansion.pendingEdits,
     identifyUri: expansion.identifyUri,
     resolveHome: expansion.resolveHome,
     initializing,

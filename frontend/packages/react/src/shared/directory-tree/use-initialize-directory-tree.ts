@@ -31,6 +31,7 @@ export function useInitializeDirectoryTree({
   const {
     savedExpansion,
     isExpanded,
+    isDeferred,
     readHome,
     resolveHome,
     setExpanded,
@@ -116,7 +117,7 @@ export function useInitializeDirectoryTree({
           rootUri,
           page,
           savedExpansion,
-          { isExpanded, readHome, resolveHome, restoreListed },
+          { isExpanded, isDeferred, readHome, resolveHome, restoreListed },
           controller.signal,
         );
         return;
@@ -146,6 +147,7 @@ export function useInitializeDirectoryTree({
     initialPath,
     savedExpansion,
     isExpanded,
+    isDeferred,
     readHome,
     resolveHome,
     setExpanded,

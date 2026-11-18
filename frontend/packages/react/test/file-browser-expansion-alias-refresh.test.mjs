@@ -52,7 +52,7 @@ async function fixture(saved) {
       h(FileBrowser, {
         rootUri: root,
         dashboardKinds: [],
-        defaultExpandedUris: [saved],
+        defaultExpandedUris: saved ? [saved] : [],
         onExpandedUrisChange: (uris) => snapshots.push([...uris]),
       }),
     ),
@@ -154,6 +154,44 @@ test('subsequent invalidations use only the folder URI currently listed', async 
       );
       assertExpanded(f, uri);
     }
+  } finally {
+    await f.view.unmount();
+  }
+});
+
+test('a folded folder keeps neither spelling subscribed after the listing changes', async () => {
+  const f = await fixture();
+  try {
+    const toggle = () =>
+      act(() =>
+        row(f.view, alias).querySelector('[data-role="toggle"]').click(),
+      );
+    await toggle();
+    await settle();
+    assert.equal(row(f.view, alias)?.getAttribute('aria-expanded'), 'true');
+    assert.ok(row(f.view, file(alias)));
+    await toggle();
+    await settle();
+    assert.equal(row(f.view, alias)?.getAttribute('aria-expanded'), 'false');
+
+    await f.switchTo(canonical);
+    assert.equal(
+      row(f.view, canonical)?.getAttribute('aria-expanded'),
+      'false',
+    );
+    const before = f.fetch.calls.length;
+    await f.refresh();
+    assert.deepEqual(
+      f.fetch.calls
+        .slice(before)
+        .filter(({ path }) => path === listPath)
+        .map(({ uri }) => uri),
+      [root],
+    );
+    assert.equal(
+      row(f.view, canonical)?.getAttribute('aria-expanded'),
+      'false',
+    );
   } finally {
     await f.view.unmount();
   }

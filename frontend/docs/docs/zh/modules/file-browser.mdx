@@ -464,7 +464,7 @@ import '@openviking/react/modules/file-browser/style.css';
 ### 请求与布局
 
 - FileBrowser 的高度是父容器的 100%，父容器需要有明确的高度；组件没有外框和背景，由宿主决定。
-- `rootUri` 或 `requestOptions` 变化时，目录树从根目录重新加载，进行中的请求被中止。`requestOptions` 变化还会重新加载预览。只有挂载时既未传入 `defaultExpandedUris`，也未传入 `defaultExpansionSnapshot`，更新 `defaultExpandedUri` 才会重新加载目录树。
+- `rootUri` 或 `requestOptions` 变化时，目录树从根目录重新加载，进行中的请求被中止。`requestOptions` 变化还会重新加载预览。结构化快照只作用于首次查询作用域。客户端、身份、根目录或缓存作用域变化后，该快照失效。如果未传入 `defaultExpandedUris`，则重新由 `defaultExpandedUri` 控制初始化，更新该值也会重新加载新的目录树。
 - 内联的 `requestOptions` 对象在每次渲染时都是新的，请在组件外定义或用 `useMemo` 保持引用稳定。
 - `acl.resolvePermission` 和 `acl.listPrincipals` 同理：引用变化会重新请求权限和成员，请在组件外定义或用 `useCallback` 保持稳定。
 - 类型从 `@openviking/react/modules/file-browser` 导出，包根入口只导出 `FileBrowser` 和 `FileBrowserProps`。
@@ -476,7 +476,7 @@ import '@openviking/react/modules/file-browser/style.css';
 - 点击文件预览正文；点击目录展开并选中它，预览区显示该目录的 L0 摘要和 L1 总览。
 - `viking://system` 下的目录保留页签和路径，不显示摘要；目录中的文件仍可预览。
 - 单独设置 `defaultExpandedUri`，可在挂载时将目录树展开到一个指定位置。挂载后更新受控 `uri` 会[打开并定位资源](#打开并定位资源)。
-- 要在重新挂载后恢复目录树状态，请按账号和根目录保存 `onExpansionSnapshotChange` 上报的完整快照，下次挂载时传给 `defaultExpansionSnapshot`。请保存两个数组。身份待确认时，折叠记录可能与同一目录的展开 URI 同时存在，确认后以折叠记录为准。初始受控 URI 在恢复展开的目录范围内定位。
+- 要在重新挂载后恢复目录树状态，请按账号和根目录保存 `onExpansionSnapshotChange` 上报的完整快照，下次挂载时传给 `defaultExpansionSnapshot`。请保存完整对象，包括 `expandedUris`、`collapsedUris` 和可选的有序 `pendingEdits`。身份确认后，以最后一次操作为准。身份待确认时，折叠记录可能与同一目录的展开 URI 同时存在，确认后以折叠记录为准。初始受控 URI 在恢复展开的目录范围内定位。
 - 恢复期间列表请求失败时，保留已保存的快照。初始化结束后，折叠可见目录或更新受控 `uri` 并展开目录时，会上报新的快照。快照保留其他仍展开分支中尚未加载的路径，包括根目录后续页请求失败时尚未加载的目录。恢复尚未结束时点击重试，错误会保留到当前恢复完成后再重试。使用仅返回 URI 列表的 `onExpandedUrisChange` 时，可能匹配已保存路径的折叠操作会等主目录身份确认后再上报。点击刷新可重试查询。
 - 文本文件最多读取 2000 行，超出时提示内容被截断。
 - 图片、视频、音频、PDF、Office 文档和压缩包按扩展名通过内容下载接口读取。
