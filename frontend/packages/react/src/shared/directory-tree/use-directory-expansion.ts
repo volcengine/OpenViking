@@ -32,7 +32,7 @@ export function useDirectoryExpansion(
   const setExpanded = useMemo(
     () => (update: SetStateAction<ReadonlySet<string>>) => {
       setLocal((previous) => {
-        const session = activeSession.current;
+        if (activeSession.current !== session) return previous;
         const current =
           previous && previous.session === session
             ? previous.expanded
@@ -42,7 +42,7 @@ export function useDirectoryExpansion(
         return { session, expanded: next };
       });
     },
-    [activeSession, initialExpanded],
+    [activeSession, initialExpanded, session],
   );
   return {
     expanded,

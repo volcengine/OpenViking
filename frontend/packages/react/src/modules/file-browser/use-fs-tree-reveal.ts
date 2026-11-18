@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import type { Dispatch, RefObject, SetStateAction } from 'react';
+import type { RefObject } from 'react';
 import { useOvSignal } from '../../client/provider.js';
 import { isHomeResourceUri, resourceUriIdentity } from './fs-uri.js';
 import type { DirState } from '../../shared/directory-tree/types.js';
@@ -29,7 +29,7 @@ export function useFsTreeReveal({
   initialLoad,
   expanded,
   fetchPage,
-  setExpanded,
+  expandForNavigation,
   resolveHome,
   requestSignal,
 }: {
@@ -44,7 +44,7 @@ export function useFsTreeReveal({
     signal?: AbortSignal,
     refresh?: boolean,
   ) => Promise<DirState | undefined>;
-  setExpanded: Dispatch<SetStateAction<ReadonlySet<string>>>;
+  expandForNavigation: (uri: string) => void;
   resolveHome: (signal: AbortSignal) => Promise<string | undefined>;
   requestSignal?: AbortSignal;
 }) {
@@ -92,7 +92,7 @@ export function useFsTreeReveal({
       await initialLoad.current;
       const expand = async (uri: string) => {
         if (!valid()) return false;
-        setExpanded((previous) => new Set(previous).add(uri));
+        expandForNavigation(uri);
         // The row is already located. Child refresh errors stay in its error
         // row and must not turn successful selection into a navigation failure.
         await fetchPage(uri, 0, signal, true);
@@ -162,8 +162,7 @@ export function useFsTreeReveal({
           return entry.isDir && !preserveExpansion ? expand(entry.uri) : true;
         }
         if (!entry.isDir) return false;
-        if (!preserveExpansion)
-          setExpanded((previous) => new Set(previous).add(entry.uri));
+        if (!preserveExpansion) expandForNavigation(entry.uri);
         parent = entry.uri;
       }
       return false;
@@ -176,7 +175,7 @@ export function useFsTreeReveal({
       expanded,
       rootUri,
       scope,
-      setExpanded,
+      expandForNavigation,
       resolveHome,
       callerSignal,
     ],

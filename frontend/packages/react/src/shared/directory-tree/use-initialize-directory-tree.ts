@@ -13,6 +13,7 @@ interface RestoreAttempt {
   session: DirectoryQueries;
   signal: AbortSignal;
   retryQueued: boolean;
+  listedUris: Set<string>;
   unresolved: UnresolvedExpansion;
 }
 
@@ -58,6 +59,24 @@ export function useInitializeDirectoryTree({
       else current.retryQueued = false;
     });
   }, [session, savedExpansion]);
+  const retryDirectory = useCallback(
+    async (uri: string) => {
+      const current = activeAttempt.current;
+      if (!current || current.session !== session || current.signal.aborted)
+        return;
+      if (current.listedUris.has(uri)) {
+        // Keep the failed row visible until the active pass can be retried.
+        await initialLoad.current;
+        if (activeAttempt.current !== current || current.signal.aborted) return;
+      }
+      const page = await current.session
+        .load(uri, 0, undefined, true)
+        .catch(() => undefined);
+      if (page && !page.error && activeAttempt.current === current)
+        retryExpansion();
+    },
+    [session, retryExpansion],
+  );
   // Synchronize the initial/default path with directory subscriptions after commit.
   // Navigation and identity can change without a click. Cleanup only invalidates
   // this navigation; Query observers own shared request cancellation.
@@ -70,17 +89,19 @@ export function useInitializeDirectoryTree({
       previous?.session === session && previous.retryQueued
         ? session.dirs.current
         : undefined;
-    const load: DirectoryQueries['load'] = async (uri, offset, signal) => {
-      const page = cached?.[uri];
-      if (offset === 0 && page?.ready && !page.loading && !page.error)
-        return page;
-      return session.load(uri, offset, signal);
-    };
     const current: RestoreAttempt = {
       session,
       signal: controller.signal,
       retryQueued: false,
+      listedUris: new Set(),
       unresolved: saved.length ? new Map([[rootUri, saved]]) : emptyExpansion,
+    };
+    const load: DirectoryQueries['load'] = async (uri, offset, signal) => {
+      if (savedExpansion) current.listedUris.add(uri);
+      const page = cached?.[uri];
+      if (offset === 0 && page?.ready && !page.loading && !page.error)
+        return page;
+      return session.load(uri, offset, signal);
     };
     activeAttempt.current = current;
     initialLoad.current = (async () => {
@@ -143,6 +164,7 @@ export function useInitializeDirectoryTree({
     initialLoad,
     initializing,
     unresolved: initializing ? emptyExpansion : initialized.unresolved,
+    retryDirectory,
     retryExpansion,
   };
 }

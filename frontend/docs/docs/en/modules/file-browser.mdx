@@ -473,7 +473,7 @@ All fields are optional, and omitted fields follow `locale`.
 - Directories under `viking://system` show no summaries.
 - Use `defaultExpandedUri` on its own to expand the tree to a single location at mount. After the first render, changes to the controlled `uri` [open and reveal the resource](#open-and-reveal-a-resource).
 - To restore tree expansion after a reload, save `onExpandedUrisChange` per scope and pass the snapshot as `defaultExpandedUris` on the next mount. An initial controlled URI is located within the restored open folders.
-- If a listing fails during restoration, the saved snapshot is kept. After initialization, collapsing a folder reports the new snapshot and retains unresolved paths in other open branches.
+- If a listing fails during restoration, the saved snapshot is kept. After initialization, collapsing a visible folder or expanding a folder through a later controlled `uri` change reports a new snapshot. It retains unresolved paths in other open branches, including folders on a later, failed root page. Retry keeps the error visible while it waits for the active restoration pass to finish.
 - Text files are read up to 2000 lines, and the preview says when the content is truncated.
 - Images, video, audio, PDF, Office documents and archives are read through the content download endpoint, chosen by file extension.
 - Editable formats are `.md`, `.json`, `.jsonl`, `.txt`, `.yaml` and `.yml`: editing reloads the full content, saving calls `POST /api/v1/content/write`, and the preview reloads afterwards.

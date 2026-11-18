@@ -67,15 +67,20 @@ export function useDirectoryTree({
     defaultExpandedUris,
   );
   const initialPath = hasSavedExpansion ? undefined : defaultExpandedUri;
-  const { initialLoad, initializing, unresolved, retryExpansion } =
-    useInitializeDirectoryTree({
-      session,
-      rootUri,
-      initialPath,
-      savedExpansion: hasSavedExpansion ? initialExpanded : undefined,
-      expandedRef,
-      setExpanded,
-    });
+  const {
+    initialLoad,
+    initializing,
+    unresolved,
+    retryDirectory,
+    retryExpansion,
+  } = useInitializeDirectoryTree({
+    session,
+    rootUri,
+    initialPath,
+    savedExpansion: hasSavedExpansion ? initialExpanded : undefined,
+    expandedRef,
+    setExpanded,
+  });
   const scope = useRequestScope(
     request?.client ?? null,
     request?.options,
@@ -90,6 +95,15 @@ export function useDirectoryTree({
       }
     },
     [],
+  );
+  const expandForNavigation = useCallback(
+    (uri: string) => {
+      if (activeSession.current !== session || expandedRef.current.has(uri))
+        return;
+      setEditedSession(session);
+      setExpanded((previous) => new Set(previous).add(uri));
+    },
+    [session, expandedRef, setExpanded],
   );
   const state = useMemo(
     () => ({
@@ -121,13 +135,8 @@ export function useDirectoryTree({
       loadMore: async (uri: string) => {
         await fetchPage(uri, 1);
       },
-      retry: async (uri: string) => {
-        const current = activeSession.current;
-        if (!current) return retryScope();
-        const page = await fetchPage(uri, 0, undefined, true);
-        if (page && !page.error && activeSession.current === current)
-          retryExpansion();
-      },
+      retry: async (uri: string) =>
+        activeSession.current ? retryDirectory(uri) : retryScope(),
       refresh: async () => {
         const current = activeSession.current;
         if (!current) return retryScope();
@@ -142,6 +151,7 @@ export function useDirectoryTree({
       setExpanded,
       fetchPage,
       retryScope,
+      retryDirectory,
       retryExpansion,
     ],
   );
@@ -159,13 +169,15 @@ export function useDirectoryTree({
     monitoring.map((operation) => operation.span),
   );
   const isInitializing = !identityError && initializing;
-  const isReady = dirs[rootUri]?.ready ?? false;
+  const root = dirs[rootUri];
+  const isReady = root?.ready ?? false;
+  const hasExpansionEdit = editedSession === session;
   useReportExpansion(
     session,
     isReady &&
       !isInitializing &&
-      !dirs[rootUri]?.error &&
-      (!unresolved.size || editedSession === session),
+      (!root?.error || (hasExpansionEdit && root.entries.length > 0)) &&
+      (!unresolved.size || hasExpansionEdit),
     rootUri,
     rows,
     unresolved,
@@ -186,7 +198,7 @@ export function useDirectoryTree({
       initialLoad,
       expanded: expandedRef,
       fetchPage,
-      setExpanded,
+      expandForNavigation,
     },
   };
 }

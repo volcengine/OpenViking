@@ -47,7 +47,8 @@ export async function restoreDirectoryExpansion(
     const wanted = children.get(savedParent);
     if (!wanted || !parentExpanded()) return;
     let scanned = 0;
-    while (page && !page.error && !signal.aborted && parentExpanded()) {
+    // A failed later page can still supply previously loaded directory rows.
+    while (page && !signal.aborted && parentExpanded()) {
       for (const entry of page.entries) {
         const savedUri = normalizeResourceUri(entry.uri);
         if (!wanted.delete(savedUri)) continue;
@@ -62,7 +63,7 @@ export async function restoreDirectoryExpansion(
           await restore(entry.uri, savedUri, await load(entry.uri, 0, signal));
         }
       }
-      if (!wanted.size || !page.hasMore) break;
+      if (page.error || !wanted.size || !page.hasMore) break;
       if (page.entries.length <= scanned) {
         if (parentExpanded()) preserve(parent, wanted);
         break;
