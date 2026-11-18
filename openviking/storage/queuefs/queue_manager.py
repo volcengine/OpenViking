@@ -353,6 +353,8 @@ class QueueManager:
                 while not stop_event.is_set():
                     try:
                         queue_size = loop.run_until_complete(queue.size())
+                        if stop_event.is_set():
+                            break
                         if queue.has_dequeue_handler() and queue_size > 0:
                             data = loop.run_until_complete(queue.dequeue())
                             if data is not None:
@@ -421,8 +423,8 @@ class QueueManager:
             # Prune completed tasks
             active_tasks = {t for t in active_tasks if not t.done()}
 
-            # While capacity remains, keep draining the queue
-            while len(active_tasks) < max_concurrent:
+            # Stop taking new work, but drain any claim already in progress.
+            while not stop_event.is_set() and len(active_tasks) < max_concurrent:
                 if not queue.has_dequeue_handler():
                     break
                 data = await queue.dequeue_raw()
@@ -435,7 +437,8 @@ class QueueManager:
                     f"(active={len(active_tasks)})"
                 )
 
-            await asyncio.sleep(poll_interval)
+            if not stop_event.is_set():
+                await asyncio.sleep(poll_interval)
 
         # Drain remaining in-flight tasks on shutdown (with timeout)
         if active_tasks:

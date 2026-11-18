@@ -347,6 +347,64 @@ async def test_concurrent_worker_uses_process_and_ack_middleware(transport, fail
         transport.write.assert_awaited_once_with("/queue/Test/ack", b"message-1")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrency", [1, 4])
+async def test_worker_stops_claiming_when_shutdown_starts(tmp_path, monkeypatch, concurrency):
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
+
+    stop = threading.Event()
+    processed = []
+
+    class Handler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            processed.append(json.loads(data["data"])["text"])
+            return ProcessResult.success()
+
+    client = create_agfs_client(
+        RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path / "storage"), backend="local"))
+    )
+    try:
+        manager = QueueManager(client)
+        queue = manager.get_queue("Synthetic", dequeue_handler=Handler(), allow_create=True)
+        await queue.enqueue({"text": "first"})
+        await queue.enqueue({"text": "second"})
+        if concurrency == 1:
+            size = queue.size
+
+            async def stop_after_size():
+                pending = await size()
+                stop.set()
+                return pending
+
+            monkeypatch.setattr(queue, "size", stop_after_size)
+        else:
+            dequeue = queue.dequeue_raw
+
+            async def stop_after_claim():
+                message = await dequeue()
+                stop.set()
+                return message
+
+            monkeypatch.setattr(queue, "dequeue_raw", stop_after_claim)
+
+        await asyncio.to_thread(manager._queue_worker_loop, queue, stop, concurrency)
+
+        state = await queue.get_status()
+        assert state.in_progress == 0
+        pending = [json.loads(message["data"])["text"] for message in await queue.snapshot()]
+        if concurrency == 1:
+            assert processed == []
+            assert state.pending == 2
+            assert pending == ["first", "second"]
+        else:
+            assert processed == ["first"]
+            assert state.pending == 1
+            assert pending == ["second"]
+    finally:
+        client.close()
+
+
 async def test_bootstrap_restores_legacy_messages_into_store(transport):
     manager = QueueManager(object())
     manager.get_queue("Test", allow_create=True)
