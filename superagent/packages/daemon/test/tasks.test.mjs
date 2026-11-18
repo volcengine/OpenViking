@@ -7,10 +7,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { TaskManager } from '../src/tasks.mjs';
 import { MessageInbox } from '../src/inbox.mjs';
+import { moveToTrash, scanDir } from '../src/task-dirs.mjs';
 
 // A worker that finishes when the test says so, after doing what the test
 // scripted for that turn (a report, an input arriving mid-turn, ...).
@@ -173,6 +175,148 @@ describe('TaskManager', () => {
     assert.match(tasks.list()[0], /^t2 \[running\] "修 X" for unknown in chat=oc_a \(follows t1\) · working for 0m$/);
     tasks.stop('t2', 'Alice said stop');
     assert.throws(() => tasks.route('t2', [row()], 'owner'), /has ended \(stopped\)/);
+  });
+
+  it('deletes what ended tasks left in stages: dependency folders, then the directory and its sessions, never what a task uses', async (t) => {
+    const day = 86_400_000;
+    let now = Date.parse('2026-11-01T00:00:00Z');
+    const { tasks, executor, workspace, activities } = setup(t, { now: () => now });
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-data-'));
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    tasks.config.dataDir = dataDir;
+    const write = (file) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'x'); };
+    const outside = path.join(dataDir, 'outside', 'keep.txt');
+    write(outside);
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    const dir = tasks.get('t1').workdir;
+    const gone = [['repo', 'node_modules', 'x', 'index.js'], ['repo', 'env', 'lib', 'site.py'], ['rust', 'target', 'debug', 'bin']]
+      .map((parts) => path.join(dir, ...parts));
+    const kept = [['repo', 'src', 'a.js'], ['repo', 'target', 'notes.md'], ['repo', '.git', 'node_modules', 'pack'], ['rust', 'Cargo.toml'],
+      ['repo', 'src', 'constructor', 'index.js'], ['repo', 'src', 'hasOwnProperty', 'index.js']].map((parts) => path.join(dir, ...parts));
+    for (const file of [...gone, ...kept, path.join(dir, 'repo', 'env', 'pyvenv.cfg'), path.join(dataDir, 'workers', 't1', 'session.jsonl')]) write(file);
+    fs.symlinkSync(path.dirname(outside), path.join(dir, 'repo', 'src', 'node_modules'));
+    await tasks.sweepDirs();
+    assert.ok(gone.every((file) => fs.existsSync(file)), 'nothing of a live task');
+    tasks.report('t1', { state: 'done', draft: 'a' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+
+    now += 2 * day;
+    assert.deepEqual((await tasks.sweepDirs()).pruned, []);
+    now += day;
+    const pruned = await tasks.sweepDirs();
+    assert.deepEqual([pruned.pruned, pruned.removed], [['t1'], []]);
+    assert.deepEqual(gone.filter((file) => fs.existsSync(file)), []);
+    assert.deepEqual(kept.filter((file) => !fs.existsSync(file)), [], 'sources, a target without its manifest, .git');
+    assert.ok(fs.lstatSync(path.join(dir, 'repo', 'src', 'node_modules')).isSymbolicLink() && fs.existsSync(outside), 'a link is never followed');
+    assert.equal(fs.existsSync(path.join(workspace, 'tasks', '.trash')), false, 'the trash is emptied');
+    assert.equal(activities.at(-1).kind, 'task.dirs_cleaned');
+
+    // A task that follows it is told its dependencies are gone, and nothing
+    // is deleted from the directory its brief points to while it works.
+    tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
+    assert.equal(tasks.get('t2').workdir, path.join(workspace, 'tasks', 't2'));
+    assert.match(executor.turns[1].prompt, new RegExp(`\\nIts directory, with whatever it left there: ${dir}\\nIts dependency folders \\(node_modules, virtual environments, build caches\\) were deleted to save disk: install again only what you need\\.\\n`));
+    write(path.join(dataDir, 'workers', 't2', 'session.jsonl'));
+    now += 30 * day;
+    assert.deepEqual(await tasks.sweepDirs().then(({ pruned: a, removed: b }) => [a, b]), [[], []]);
+    assert.ok(fs.existsSync(kept[0]));
+    tasks.report('t2', { state: 'done', draft: 'b' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+
+    const removed = await tasks.sweepDirs();
+    assert.deepEqual(removed.removed, ['t1'], 'once nothing reads it');
+    assert.equal(fs.existsSync(dir), false);
+    assert.deepEqual(fs.readdirSync(path.join(dataDir, 'workers')), ['t2']);
+    assert.ok(fs.existsSync(outside));
+    assert.equal(tasks.get('t1').status, 'done', 'the task records stay');
+    tasks.create({ rows: [row()], title: 'C', runtime: 'pi', parent: 't1' });
+    assert.match(executor.turns[2].prompt, /\nIts directory was deleted to save disk some days after it ended: start from what it reported\.\n/);
+    tasks.report('t3', { state: 'done', draft: 'c' });
+    executor.turns[2].finish({ text: '' });
+    await settle();
+    now += 14 * day;
+    assert.deepEqual((await tasks.sweepDirs()).removed.sort(), ['t2', 't3']);
+    assert.deepEqual(fs.readdirSync(path.join(dataDir, 'workers')), []);
+  });
+
+  it('never deletes through a link: a trash that is one, or a folder that sits behind one since the scan', async (t) => {
+    const { tasks, executor, workspace } = setup(t);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-outside-'));
+    t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+    const precious = [path.join(outside, 'keep.txt'), path.join(outside, 'node_modules', 'dep.js')];
+    for (const file of precious) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'x'); }
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    const dir = tasks.get('t1').workdir;
+    fs.mkdirSync(path.join(dir, 'repo', 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'repo', 'node_modules', 'dep.js'), 'x');
+    tasks.report('t1', { state: 'done', draft: 'a' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    // A scan found repo/node_modules; then repo became a link to a directory outside.
+    const scan = await scanDir(dir);
+    fs.rmSync(path.join(dir, 'repo'), { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, 'repo'));
+    tasks.config.taskDirBudgetGb = 1e-12;
+    const result = tasks.cleanDirs(new Map([[dir, scan]]));
+    assert.deepEqual([result.pruned, result.removed], [[], ['t1']], 'the directory goes, with the link in it');
+    // A trash that is a link: nothing is moved into it, and it goes as a link.
+    const trash = path.join(workspace, 'tasks', '.trash');
+    fs.rmSync(trash, { recursive: true, force: true });
+    fs.symlinkSync(outside, trash);
+    const kept = path.join(workspace, 'tasks', 'kept');
+    fs.mkdirSync(kept);
+    assert.throws(() => moveToTrash(kept, trash), /not a directory of its own/);
+    assert.ok(fs.existsSync(kept));
+    await tasks.sweepDirs();
+    assert.equal(fs.existsSync(trash), false);
+    assert.deepEqual(precious.filter((file) => !fs.existsSync(file)), []);
+  });
+
+  it('keeps the directories a stopped worker used until its process has exited', async (t) => {
+    const { tasks, executor } = setup(t);
+    const start = executor.start.bind(executor);
+    executor.start = (args) => ({ ...start(args), stop: () => {} });
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
+    for (const id of ['t1', 't2']) fs.writeFileSync(path.join(tasks.get(id).workdir, 'notes.md'), id);
+    tasks.report('t1', { state: 'done', draft: 'a' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    tasks.stop('t2', 'owner asked');
+    assert.equal(tasks.get('t2').status, 'stopped');
+    tasks.config.taskDirBudgetGb = 1e-12;
+    assert.deepEqual((await tasks.sweepDirs()).removed, [], 'its own, and t1\'s it reads, while it runs');
+    executor.turns[1].finish({ text: '', error: 'stopped' });
+    await settle();
+    assert.deepEqual((await tasks.sweepDirs()).removed.sort(), ['t1', 't2']);
+  });
+
+  it('past the disk budget deletes dependency folders first, then whole directories, the longest ended first', async (t) => {
+    let now = Date.parse('2026-11-01T00:00:00Z');
+    const { tasks, executor } = setup(t, { now: () => now });
+    const KB = 1024;
+    for (const [turn, id] of ['t1', 't2', 't3'].entries()) {
+      tasks.create({ rows: [row()], title: id, runtime: 'pi' });
+      const dir = tasks.get(id).workdir;
+      fs.mkdirSync(path.join(dir, 'node_modules'));
+      fs.writeFileSync(path.join(dir, 'node_modules', 'dep.js'), randomBytes(400 * KB));
+      fs.writeFileSync(path.join(dir, 'main.js'), randomBytes(60 * KB));
+      tasks.report(id, { state: 'done', draft: id });
+      executor.turns[turn].finish({ text: '' });
+      await settle();
+      now += 60_000;
+    }
+    tasks.config.taskDirBudgetGb = (900 * KB) / 1024 ** 3;
+    const first = await tasks.sweepDirs();
+    assert.deepEqual([first.pruned, first.removed], [['t1', 't2'], []]);
+    tasks.config.taskDirBudgetGb = (150 * KB) / 1024 ** 3;
+    const second = await tasks.sweepDirs();
+    assert.deepEqual([second.pruned, second.removed], [['t3'], ['t1']]);
+    assert.ok(second.bytes <= 150 * KB && tasks.disk.bytes === second.bytes);
+    tasks.config.taskDirBudgetGb = 0;
+    assert.deepEqual(await tasks.sweepDirs().then(({ pruned, removed }) => [pruned, removed]), [[], []], '0 turns the budget off');
   });
 
   it('answers a progress question: what one person asked for, how long it has worked and what became of its result', async (t) => {

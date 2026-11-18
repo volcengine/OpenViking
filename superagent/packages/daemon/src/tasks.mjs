@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chatTag, metadataTag, oneLine } from './runtime-input.mjs';
 import { safeError } from './logger.mjs';
+import { emptyTrash, formatBytes, isDirectory, isDirectoryWithin, moveToTrash, scanDir, TRASH } from './task-dirs.mjs';
 
 // Workers (agents[].scheduler = workers). The main session is the router: it
 // reads every input (through the inbox), answers what is quick, and hands
@@ -33,6 +34,11 @@ import { safeError } from './logger.mjs';
 // silence naming it with task_ids, or made on its origin), not when the router
 // was shown it: one the router was shown and left is offered again, so a
 // report is neither lost to a failed router turn nor sent twice.
+//
+// Each task works in its own directory, <workspace>/tasks/<id>. What ended
+// tasks leave there is deleted in stages (sweepDirs): dependency folders
+// first, then the whole directory with its worker's sessions, sooner past a
+// disk budget.
 
 export const WORKER_SLOTS = 3;
 // A slot only a follow-up to an existing task may take, so new work cannot
@@ -54,6 +60,15 @@ const TRANSIENT_RETRIES = 2;
 const SUMMARY_CHARS = 600;
 const REPORT_RETRY_MS = 1_000;
 const CANDIDATES = 3;
+// Ended tasks' directories: dependency folders are deleted this many days
+// after the task ended, the whole directory and its worker's sessions after
+// DIR_REMOVE_DAYS, and past the budget the directories of the tasks that ended
+// longest ago go first. The config overrides each; 0 turns it off.
+export const DIR_PRUNE_DAYS = 3;
+export const DIR_REMOVE_DAYS = 14;
+export const DIR_BUDGET_GB = 20;
+const SWEEP_DELAY_MS = 60_000;
+const SWEEP_MS = 3_600_000;
 
 export const REPORT_STATES = Object.freeze(['progress', 'done', 'needs_user', 'blocked', 'dropped', 'failed']);
 const ENDED = new Set(['done', 'dropped', 'failed', 'stopped']);
@@ -124,6 +139,13 @@ const SCHEMA = `
     report_id INTEGER PRIMARY KEY,
     inbox_id INTEGER,
     created_at_ms INTEGER NOT NULL
+  );
+  -- A task directory's clean-up: pruned_at_ms, its dependency folders were
+  -- last deleted; removed_at_ms, the directory itself is gone.
+  CREATE TABLE IF NOT EXISTS task_workdirs (
+    path TEXT PRIMARY KEY,
+    pruned_at_ms INTEGER,
+    removed_at_ms INTEGER
   );
 `;
 
@@ -209,6 +231,10 @@ export class TaskManager {
     this.retries = new Map();
     this.reportRetry = null;
     this.stopped = false;
+    this.sweepTimers = null;
+    this.sweeping = null;
+    // Task directories on disk at the last sweep, after its clean-up.
+    this.disk = null;
   }
 
   transaction(fn) {
@@ -682,8 +708,18 @@ export class TaskManager {
       ...(parent.summary ? ['What that work found:', quoted(clip(parent.summary, SUMMARY_CHARS))] : []),
       ...(parent.draft ? ['Its last answer to the requester:', quoted(clip(parent.draft, PARENT_DRAFT_CHARS))] : []),
       ...(artifacts.length ? [`Its artifacts: ${artifacts.map(oneLine).join(', ')}`] : []),
-      `Its directory, with whatever it left there: ${parent.workdir}`,
+      ...this.parentDirBrief(parent),
       'Do only what this task asks; check what that work already did before redoing it.',
+    ];
+  }
+
+  // Where the files of the work a task follows are, after the sweep.
+  parentDirBrief(parent) {
+    const state = this.dirState(parent.workdir);
+    if (state?.removed_at_ms != null) return ['Its directory was deleted to save disk some days after it ended: start from what it reported.'];
+    return [
+      `Its directory, with whatever it left there: ${parent.workdir}`,
+      ...(state?.pruned_at_ms != null ? ['Its dependency folders (node_modules, virtual environments, build caches) were deleted to save disk: install again only what you need.'] : []),
     ];
   }
 
@@ -933,6 +969,151 @@ export class TaskManager {
     }
   }
 
+  // ---- task directories -----------------------------------------------------
+
+  dirState(dir) {
+    return this.db.prepare('SELECT * FROM task_workdirs WHERE path = ?').get(dir) ?? null;
+  }
+
+  markDir(dir, column) {
+    this.db.prepare(`INSERT INTO task_workdirs(path, ${column}) VALUES (?, ?)
+      ON CONFLICT(path) DO UPDATE SET ${column} = excluded.${column}`).run(dir, this.now());
+  }
+
+  // Directories a task may still use: a live task's own and the one its
+  // parent worked in (its brief points there), and the same two of any worker
+  // whose process has not exited (a stopped task's, until it has).
+  heldDirs() {
+    const ids = [...this.running.keys()];
+    const rows = this.db.prepare(`SELECT t.workdir AS own, p.workdir AS parent FROM tasks t LEFT JOIN tasks p ON p.id = t.parent_id
+      WHERE t.status NOT IN ('done', 'dropped', 'failed', 'stopped')${ids.length ? ` OR t.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(...ids);
+    return new Set(rows.flatMap((row) => [row.own, row.parent]).filter(Boolean));
+  }
+
+  // Only directories this manager made: <workspace>/tasks/<task id>.
+  ownDir(dir) {
+    return path.dirname(dir) === path.join(this.config.workspace, 'tasks') && /^t[0-9]+$/.test(path.basename(dir));
+  }
+
+  dirLimits() {
+    const setting = (value, fallback) => (Number.isFinite(value) ? value : fallback);
+    return {
+      pruneMs: setting(this.config.taskDirPruneDays, DIR_PRUNE_DAYS) * 86_400_000,
+      removeMs: setting(this.config.taskDirRemoveDays, DIR_REMOVE_DAYS) * 86_400_000,
+      budget: setting(this.config.taskDirBudgetGb, DIR_BUDGET_GB) * 1024 ** 3,
+    };
+  }
+
+  startSweeps({ delayMs = SWEEP_DELAY_MS, everyMs = SWEEP_MS } = {}) {
+    if (this.sweepTimers || this.stopped) return;
+    const run = () => {
+      this.sweepDirs().catch((error) => this.logger?.warn('task_dirs_sweep_failed', { error: safeError(error) }));
+    };
+    this.sweepTimers = [setTimeout(run, delayMs), setInterval(run, everyMs)];
+    for (const timer of this.sweepTimers) timer.unref?.();
+  }
+
+  // Measuring reads the disk in the background. Deciding what to delete and
+  // moving it to the trash happen together, in one step with no wait (an
+  // ended task's state cannot change in between), so a task never starts in
+  // or reads a directory that is half deleted. The trash is emptied after.
+  async sweepDirs() {
+    if (this.sweeping) return this.sweeping;
+    this.sweeping = (async () => {
+      const trashes = [path.join(this.config.workspace, 'tasks', TRASH),
+        ...(this.config.dataDir ? [path.join(this.config.dataDir, 'workers', TRASH)] : [])];
+      for (const trash of trashes) await emptyTrash(trash);
+      const dirs = this.db.prepare('SELECT DISTINCT workdir FROM tasks').all().map((row) => row.workdir)
+        .filter((dir) => this.ownDir(dir) && isDirectory(dir));
+      // What a task used while the scan ran may have changed under it: it
+      // counts toward the budget, and waits for the next sweep.
+      const busy = this.heldDirs();
+      const sizes = new Map();
+      for (const dir of dirs) {
+        if (this.stopped) return null;
+        sizes.set(dir, await scanDir(dir, { stopped: () => this.stopped }));
+      }
+      if (this.stopped) return null;
+      const result = this.cleanDirs(sizes, busy);
+      for (const trash of trashes) await emptyTrash(trash);
+      return result;
+    })().finally(() => { this.sweeping = null; });
+    return this.sweeping;
+  }
+
+  cleanDirs(sizes, busy = new Set()) {
+    const { pruneMs, removeMs, budget } = this.dirLimits();
+    const now = this.now();
+    const held = new Set([...busy, ...this.heldDirs()]);
+    const endedAt = new Map(this.db.prepare(`SELECT workdir, MAX(COALESCE(ended_at_ms, updated_at_ms)) AS at FROM tasks
+      GROUP BY workdir`).all().map((row) => [row.workdir, row.at]));
+    const left = new Map([...sizes].map(([dir, scan]) => [dir, scan.bytes]));
+    const total = () => [...left.values()].reduce((sum, bytes) => sum + bytes, 0);
+    // Directories no task uses, the one that ended longest ago first.
+    const idle = [...sizes.keys()].filter((dir) => !held.has(dir) && this.dirState(dir)?.removed_at_ms == null)
+      .sort((a, b) => endedAt.get(a) - endedAt.get(b));
+    const done = { pruned: [], removed: [], freed: 0 };
+    const trash = path.join(this.config.workspace, 'tasks', TRASH);
+    const prune = (dir) => {
+      if (!left.has(dir)) return;
+      const moved = sizes.get(dir).dependencies.filter((folder) => {
+        if (!isDirectoryWithin(folder, dir)) return false;
+        try { moveToTrash(folder, trash); return true; } catch (error) {
+          this.logger?.warn('task_dir_prune_failed', { dir: folder, error: safeError(error) });
+          return false;
+        }
+      });
+      if (moved.length === 0) return;
+      this.markDir(dir, 'pruned_at_ms');
+      const freed = Math.min(left.get(dir), sizes.get(dir).dependencyBytes);
+      left.set(dir, left.get(dir) - freed);
+      sizes.get(dir).dependencies = [];
+      done.pruned.push(path.basename(dir));
+      done.freed += freed;
+    };
+    const remove = (dir) => {
+      if (!left.has(dir)) return;
+      try { moveToTrash(dir, trash); } catch (error) {
+        this.logger?.warn('task_dir_remove_failed', { dir, error: safeError(error) });
+        return;
+      }
+      this.markDir(dir, 'removed_at_ms');
+      // Its worker's sessions: a task that follows it now starts from its
+      // summary instead of a copy of its session.
+      if (this.config.dataDir) {
+        for (const { id } of this.db.prepare('SELECT id FROM tasks WHERE workdir = ?').all(dir)) {
+          const sessions = path.join(this.config.dataDir, 'workers', id);
+          if (!isDirectory(sessions)) continue;
+          try { moveToTrash(sessions, path.join(this.config.dataDir, 'workers', TRASH)); } catch (error) {
+            this.logger?.warn('task_sessions_remove_failed', { task: id, error: safeError(error) });
+          }
+        }
+      }
+      done.removed.push(path.basename(dir));
+      done.freed += left.get(dir);
+      left.delete(dir);
+    };
+    for (const dir of idle) {
+      const age = now - endedAt.get(dir);
+      if (removeMs > 0 && age >= removeMs) remove(dir);
+      else if (pruneMs > 0 && age >= pruneMs) prune(dir);
+    }
+    if (budget > 0) {
+      for (const dir of idle) if (total() > budget) prune(dir);
+      for (const dir of idle) if (total() > budget) remove(dir);
+      if (total() > budget) this.logger?.warn('task_dirs_over_budget', { bytes: total(), budget });
+    }
+    this.disk = { bytes: total(), budget, at: now };
+    if (done.pruned.length || done.removed.length) {
+      this.logger?.info('task_dirs_cleaned', { pruned: done.pruned, removed: done.removed, freed: done.freed });
+      this.recordActivity('task.dirs_cleaned', {
+        summary: `freed ${formatBytes(done.freed)}: dependencies of ${done.pruned.length}, whole directories of ${done.removed.length}`,
+        metadata: { pruned: done.pruned, removed: done.removed, freedBytes: done.freed, bytes: total() },
+      });
+    }
+    return { ...done, bytes: total() };
+  }
+
   // ---- owner command (/tasks) ------------------------------------------------
 
   chatName(chatId) {
@@ -964,6 +1145,7 @@ export class TaskManager {
       ended: ended.map((task) => this.facts(task)),
       total: Number(this.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n),
       slots: { used: this.running.size - reserved, of: this.slots, reserved, reservedOf: this.reservedSlots },
+      disk: this.disk,
     };
   }
 
@@ -981,6 +1163,7 @@ export class TaskManager {
       reports: this.db.prepare(`SELECT r.*, d.inbox_id, d.settled_at_ms, d.settled_by, d.offers FROM task_reports r
         LEFT JOIN task_report_deliveries d ON d.report_id = r.id WHERE r.task_id = ? ORDER BY r.id`).all(task.id),
       children: this.db.prepare('SELECT id, title, status FROM tasks WHERE parent_id = ? ORDER BY created_at_ms').all(task.id),
+      dir: this.dirState(task.workdir),
       lastError,
     };
   }
@@ -991,6 +1174,8 @@ export class TaskManager {
     this.stopped = true;
     clearTimeout(this.reportRetry);
     this.reportRetry = null;
+    for (const timer of this.sweepTimers ?? []) clearTimeout(timer);
+    this.sweepTimers = null;
     for (const slot of this.running.values()) slot.handle?.stop?.();
   }
 }

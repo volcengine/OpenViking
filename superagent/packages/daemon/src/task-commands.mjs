@@ -9,6 +9,8 @@
 //   /tasks t12          one task: request, inputs, reports and their delivery
 //   /tasks stop t12 …   stop it (and hand back what its worker never saw)
 
+import { formatBytes } from './task-dirs.mjs';
+
 const TASK_ID = /^t[0-9]{1,6}$/;
 const USAGE = '用法：/tasks 查看任务；/tasks <编号> 查看详情；/tasks stop <编号> [原因] 停止任务';
 const RECENT = 5;
@@ -74,9 +76,10 @@ export function taskStatusLine(tasks) {
 }
 
 function overviewText(tasks, now) {
-  const { live, ended, total, slots } = tasks.overview({ recent: RECENT });
+  const { live, ended, total, slots, disk } = tasks.overview({ recent: RECENT });
   if (total === 0) return `还没有后台任务。\n${USAGE}`;
   const lines = [`后台任务：进行中 ${live.length} · 共 ${total} 个 · worker 槽位 ${slots.used}/${slots.of}（跟进预留 ${slots.reserved}/${slots.reservedOf}）`];
+  if (disk) lines.push(`任务目录占用 ${formatBytes(disk.bytes)}${disk.budget > 0 ? `（上限 ${formatBytes(disk.budget)}）` : ''}`);
   if (live.length) {
     lines.push('', '进行中');
     for (const task of live.slice(0, LIVE_SHOWN)) lines.push(line(task, now));
@@ -125,7 +128,8 @@ function detailText(tasks, taskId, now) {
   const artifacts = JSON.parse(task.artifacts_json || '[]');
   if (artifacts.length) lines.push(`产出：${artifacts.slice(0, 5).join('、')}`);
   if (task.lastError) lines.push(`最近一次失败（${clock(task.lastError.occurred_at_ms)}）：${oneLine(task.lastError.summary, 160)}`);
-  lines.push(`worker 轮数：${task.turns} · 目录：${task.workdir}`);
+  const dir = task.dir?.removed_at_ms ? '（已清理）' : task.dir?.pruned_at_ms ? '（依赖目录已清理）' : '';
+  lines.push(`worker 轮数：${task.turns} · 目录：${task.workdir}${dir}`);
   return { ok: true, text: lines.join('\n') };
 }
 

@@ -197,7 +197,8 @@ No process runs between turns, so an idle task holds nothing; Durable,
 OpenCode, TraeX and Ark have no worker mode, and `task_create` tells the router
 to handle the request itself there. A task keeps the runtime it started on.
 Three turns run at once, plus one slot only a follow-up to an existing task may
-take. Each task works in `<workspace>/tasks/<id>/`.
+take. Each task works in a directory under `<workspace>/tasks/` (see Task
+directories).
 
 A worker's own shell is not capped like the router's: it may build, test and
 wait. Pi's `bash` alone has no default timeout, so a Pi worker's command
@@ -235,6 +236,41 @@ summary/draft and artifacts, and an instruction to check existing work before
 repeating outside actions. A preallocated session ID or turn counter alone is
 never evidence that Claude can resume a session. Recovery can repeat work;
 outside actions are not guaranteed to run exactly once.
+
+### Task directories
+
+A task works in `<workspace>/tasks/<id>/`, where its worker clones, installs
+and builds; its policy says to keep all of that inside the directory. Nothing
+deleted these directories, and each can hold a clone, `node_modules`, virtual
+environments and build output. The download caches (`~/.npm`, pip, uv) are
+already shared, since workers use the same home.
+
+What an ended task left is deleted in stages, counted from when it ended:
+
+| After | Deleted | Kept |
+|---|---|---|
+| 3 days (`OV_SUPERAGENT_TASK_DIR_PRUNE_DAYS`) | Dependency folders: `node_modules`, Python virtual environments (a folder with `pyvenv.cfg`), `__pycache__` and the test/type-checker caches, `.tox`, `.nox`, `.gradle`, `.next`, `.nuxt`, `.turbo`, `.parcel-cache`, and `target` next to `Cargo.toml` or `pom.xml` | Sources, changes, `.git`, results |
+| 14 days (`OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS`) | The whole directory, and its worker's sessions | The task record |
+
+Past `OV_SUPERAGENT_TASK_DIR_BUDGET_GB` (20 by default) for all task
+directories, dependency folders go first and whole directories after, those of
+the task that ended longest ago first. 0 turns each limit off. A directory a
+live task works in, or reads as its parent's, is never touched, nor are those
+of a stopped task until its worker process has exited, nor anything outside
+`<workspace>/tasks/t<n>`. Links are never followed: a folder is deleted only
+if it is still a real directory reached with no link on the way, and the trash
+is removed as a whole, so a link in its place goes as a link. A task that
+follows one whose directory was deleted starts from its report, as when its
+session cannot be forked; one whose parent lost its dependency folders is told
+to install again what it needs.
+
+The daemon sweeps a minute after it starts and every hour. Measuring runs in
+the background; choosing what to delete and moving it to a trash folder next
+to it happen in one step, so a task never starts in, or reads, a directory
+being deleted, and the trash is emptied after. A directory a task used while
+it was being measured waits for the next sweep. `/tasks` shows how much the
+task directories took at the last sweep. Claude Code and Codex keep their own
+session files in their homes; those are not swept.
 
 ### What the router sees
 
@@ -316,4 +352,5 @@ at work. The Core answers these without the model.
 
 Activities: `task.created` (with `parent`), `task.turn_started`,
 `task.turn_completed` (with usage), `task.reported`, `task.handed_back`,
-`task.report_unrelayed`, `task.ended`.
+`task.report_unrelayed`, `task.ended`, `task.dirs_cleaned` (what a sweep
+deleted and freed).

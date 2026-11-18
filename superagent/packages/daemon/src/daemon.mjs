@@ -419,6 +419,7 @@ export class PersonalAgentDaemon {
       // and tasks whose worker it was running.
       this.inbox?.restore();
       this.tasks?.restore();
+      this.tasks?.startSweeps();
       this.timerConnector = new TimerConnector({
         repository: this.timers,
         submitEvent: (event) => this.harness.handleConnectorEvent(event),
