@@ -792,11 +792,12 @@ describe('durable model configuration', () => {
     assert.equal(safe.LARKSUITE_CLI_PROFILE, 'profile-a');
   });
 
-  it('puts the configured lark-cli and Slack CLI first on PATH, like the other runtimes', () => {
+  it('puts the configured lark-cli, Slack CLI and ripgrep first on PATH, like the other runtimes', () => {
     const safe = sanitizeDurableEnv({ PATH: '/usr/bin:/bin' }, 'profile-a', null, {
       larkCliBin: '/custom-lark/lark-cli',
       slackCliBin: '/custom-slack/slack',
+      ripgrepBin: '/custom-rg/rg',
     });
-    assert.equal(safe.PATH, ['/custom-lark', '/custom-slack', '/usr/bin:/bin'].join(path.delimiter));
+    assert.equal(safe.PATH, ['/custom-lark', '/custom-slack', '/custom-rg', '/usr/bin:/bin'].join(path.delimiter));
   });
 });

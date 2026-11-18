@@ -29,7 +29,7 @@ const usage = () => t(
 );
 
 function larkCliBin(env, deployment) {
-  const bundled = bundledLarkCli();
+  const bundled = bundledLarkCli({ env });
   return env.LARK_CLI_BIN || deployment.env?.LARK_CLI_BIN || (bundled === 'lark-cli' ? which('lark-cli', env) : bundled);
 }
 

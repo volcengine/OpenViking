@@ -26,6 +26,26 @@ afterEach(() => {
 });
 
 describe('configuration safety', { concurrency: false }, () => {
+  it('validates primary, backup and failback timeout without changing backend model defaults', () => {
+    setEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', undefined);
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', undefined);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', undefined);
+    setEnv('FALLBACK_MODEL', undefined);
+    assert.equal(getConfig().primaryRuntime, '');
+    assert.equal(getConfig().fallbackRuntime, 'codex');
+    assert.equal(getConfig().fallbackReturnAfterMs, 600_000);
+    setEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', 'traex');
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'pi');
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '2000');
+    assert.equal(getConfig().primaryRuntime, 'traex');
+    assert.equal(getConfig().fallbackModel, '');
+    assert.equal(getConfig().fallbackReturnAfterMs, 2000);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '-1');
+    assert.throws(() => getConfig(), /FALLBACK_RETURN_AFTER_MS/);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '600000');
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'missing');
+    assert.throws(() => getConfig(), /FALLBACK_RUNTIME/);
+  });
   it('resolves relative CLI overrides against the connector cwd while preserving names and absolute paths', () => {
     const absolute = path.resolve(projectDir, '/opt/custom tools/renamed-cli');
     for (const [envKey, configKey] of [['LARK_CLI_BIN', 'larkCliBin'], ['SLACK_CLI_BIN', 'slackCliBin']]) {
@@ -124,6 +144,16 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_EXPLICIT_SILENCE', 'true');
     assert.equal(getConfig().explicitSilence, true);
   });
+  it('offers an undecided input three times by default, with a bounded override', () => {
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', undefined);
+    assert.equal(getConfig().decisionReminderLimit, 3);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '5');
+    assert.equal(getConfig().decisionReminderLimit, 5);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '0');
+    assert.equal(getConfig().decisionReminderLimit, 0);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '-1');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_DECISION_REMINDER_LIMIT/);
+  });
   it('keeps staged replies off unless the instance opts in', () => {
     setEnv('OV_SUPERAGENT_STAGED_REPLIES', undefined);
     assert.equal(getConfig().stagedReplies, false);
@@ -132,6 +162,17 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_STAGED_REPLIES', 'often');
     assert.throws(() => getConfig(), /OV_SUPERAGENT_STAGED_REPLIES must be a boolean/);
     setEnv('OV_SUPERAGENT_STAGED_REPLIES', undefined);
+  });
+  it('keeps the legacy scheduler unless the instance picks the inbox', () => {
+    setEnv('OV_SUPERAGENT_SCHEDULER', undefined);
+    assert.equal(getConfig().scheduler, 'legacy');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'inbox');
+    assert.equal(getConfig().scheduler, 'inbox');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'workers');
+    assert.equal(getConfig().scheduler, 'workers');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'parallel');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_SCHEDULER must be one of: legacy, inbox, workers/);
+    setEnv('OV_SUPERAGENT_SCHEDULER', undefined);
   });
   it('searches OV per line only on an instance that opts in; preferences need no switch', () => {
     setEnv('OV_SUPERAGENT_OV_AUTO_RECALL', undefined);
@@ -150,6 +191,15 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'everyone');
     assert.throws(() => getConfig(), /OV_SUPERAGENT_LARK_MESSAGE_ACCESS must be one of: owner, bot/);
     setEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', undefined);
+  });
+  it('knows a bot-only owner only by a well-formed open_id', () => {
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', undefined);
+    assert.equal(getConfig().larkOwnerOpenId, null);
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', 'ou_owner12345678');
+    assert.equal(getConfig().larkOwnerOpenId, 'ou_owner12345678');
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', 'someone');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_LARK_OWNER_OPEN_ID must be a Feishu\/Lark open_id/);
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', undefined);
   });
   it('stores meeting notes only on an instance that opts in and has Feishu/Lark', () => {
     setEnv('OV_SUPERAGENT_MEETING_NOTES', undefined);
@@ -320,32 +370,25 @@ describe('release-owned prompts and the instance role', () => {
   it('reads every prompt from the release and has no mutable kernel paths', () => {
     const config = getConfig();
     assert.equal(config.promptDir, path.join(projectDir, 'packages', 'daemon', 'agent'));
-    assert.equal(config.rolePromptPath, '');
+    assert.equal(config.soulUri, 'viking://~/memories/soul.md');
+    assert.equal('rolePromptPath' in config, false);
     assert.equal(config.naturalWriting, true);
     assert.equal('kernelInnerPath' in config, false);
     assert.equal('kernelOuterPath' in config, false);
     assert.equal('kernelOuterDataPath' in config, false);
   });
 
-  it('resolves OV_SUPERAGENT_ROLE to a shipped role or the owner\'s own file', () => {
-    setEnv('OV_SUPERAGENT_ROLE', 'assistant');
-    assert.equal(getConfig().rolePromptPath, path.join(projectDir, 'packages', 'daemon', 'agent', 'roles', 'assistant.md'));
-
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-role-'));
-    const own = path.join(directory, 'role.md');
-    fs.writeFileSync(own, 'You answer questions about the garden.\n');
-    try {
-      setEnv('OV_SUPERAGENT_ROLE', own);
-      assert.equal(getConfig().rolePromptPath, own);
-      setEnv('OV_SUPERAGENT_ROLE', path.join(directory, 'missing.md'));
-      assert.throws(() => getConfig(), /OV_SUPERAGENT_ROLE names a file that does not exist/);
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+  it('keeps the soul at OV_SUPERAGENT_SOUL_URI (viking:// or a local file) when set, and ignores the retired role variable', () => {
+    setEnv('OV_SUPERAGENT_ROLE', '/srv/superagent/roles/beta.md');
+    assert.equal('rolePromptPath' in getConfig(), false);
+    setEnv('OV_SUPERAGENT_SOUL_URI', 'viking://~/memories/team-soul.md');
+    assert.equal(getConfig().soulUri, 'viking://~/memories/team-soul.md');
+    setEnv('OV_SUPERAGENT_SOUL_URI', '/srv/soul.md');
+    assert.equal(getConfig().soulUri, '/srv/soul.md');
+    for (const value of ['souls/mine.md', 'https://example.com/soul.md', 'viking://~/my soul.md']) {
+      setEnv('OV_SUPERAGENT_SOUL_URI', value);
+      assert.throws(() => getConfig(), /OV_SUPERAGENT_SOUL_URI must be a viking:\/\/ address or an absolute file path/);
     }
-    setEnv('OV_SUPERAGENT_ROLE', 'pirate');
-    assert.throws(() => getConfig(), /OV_SUPERAGENT_ROLE pirate is not a known role/);
-    setEnv('OV_SUPERAGENT_ROLE', '../roles/qa');
-    assert.throws(() => getConfig(), /OV_SUPERAGENT_ROLE must be a role name or an absolute path/);
   });
 
   it('turns natural writing off only when asked', () => {

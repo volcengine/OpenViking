@@ -4,8 +4,11 @@
 data/
 agent/.tmp/
 coverage/
-node_modules/
+node_modules
 .loopy/
 dist/
 bin/slack
 bin/slack.LICENSE
+bin/rg
+bin/rg.exe
+bin/rg.LICENSE

@@ -335,19 +335,21 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     }
   });
 
-  it('reminds once about a direct message the turn did not decide on', async () => {
+  it('reminds three times about a direct message the turns did not decide on, then stops', async () => {
     const env = await startMockEnv({ codex: { behavior: 'complete' }, config: { explicitSilence: true } });
     try {
       env.receive(textMessage({ messageId: 'om-undecided', text: '在吗' }));
-      await env.waitFor(() => env.codexInput().length === 2);
+      await env.waitFor(() => env.codexInput().length === 4);
       await env.daemon.agentRuntime.whenIdle();
       const turns = env.codexInput();
       assert.doesNotMatch(turns[0].text, /undecided=1/);
-      assert.match(turns[1].text, /msg=om-undecided event=evt-om-undecided [^\]]* undecided=1\] 在吗/);
+      for (const turn of turns.slice(1)) {
+        assert.match(turn.text, /msg=om-undecided event=evt-om-undecided [^\]]* undecided=1\] 在吗/);
+      }
       assert.deepEqual(env.daemon.store.db.prepare("SELECT status FROM activities WHERE kind = 'agent.decision_missing' ORDER BY id")
-        .all().map((row) => row.status), ['NUDGED']);
+        .all().map((row) => row.status), ['NUDGED', 'NUDGED', 'NUDGED', 'MISSING']);
       await new Promise((resolve) => setTimeout(resolve, 300));
-      assert.equal(env.codexInput().length, 2, 'never a second reminder');
+      assert.equal(env.codexInput().length, 4, 'never a fourth reminder');
       assert.deepEqual(env.replies(), []);
     } finally {
       await env.stop();
@@ -511,22 +513,29 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     }
   });
 
-  it('gives codex the instance role after the Core', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-e2e-role-'));
-    const rolePromptPath = path.join(dir, 'role.md');
-    fs.writeFileSync(rolePromptPath, '<!-- editor note -->\nYou are {{AGENT_NAME}}. Role fixture marker: zircon-e2e-7742\n');
-    const env = await startMockEnv({ config: { rolePromptPath, agentName: 'Alpha' } });
+  it('gives codex the soul read from OpenViking after the Core', async () => {
+    const reads = [];
+    const env = await startMockEnv({
+      config: { agentName: 'Alpha', soulUri: 'viking://~/memories/alpha-soul.md' },
+      ovClient: {
+        async read(...args) {
+          reads.push(args);
+          return '<!-- editor note -->\nYou are {{AGENT_NAME}}. Soul fixture marker: zircon-e2e-7742\n';
+        },
+      },
+    });
     try {
+      assert.deepEqual(reads, [['viking://~/memories/alpha-soul.md', 0, -1]]);
       const instructions = process.platform === 'win32' ? env.codexThreadParams()[0].developerInstructions
         : env.codexSpawnArgs()[0].find((argument) => argument.startsWith('developer_instructions='));
       assert.ok(instructions, 'codex receives developer instructions in the platform-selected transport');
       assert.match(instructions, /## Role/);
-      assert.match(instructions, /You are Alpha\. Role fixture marker: zircon-e2e-7742/);
+      assert.match(instructions, /kept in OpenViking at `viking:\/\/~\/memories\/alpha-soul\.md`/);
+      assert.match(instructions, /You are Alpha\. Soul fixture marker: zircon-e2e-7742/);
       assert.doesNotMatch(instructions, /editor note/);
       assert.ok(instructions.indexOf('## Role') > instructions.indexOf('# Operating policy'));
     } finally {
       await env.stop();
-      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 

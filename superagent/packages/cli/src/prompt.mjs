@@ -470,9 +470,12 @@ export class Prompter {
       this.write(`  ${index + 1}) ${choice.label}${hint}${choice.disabled ? t('（不可选）', ' (unavailable)') : ''}\n`);
     });
     const fallback = [...selected].map((index) => index + 1).join(',');
-    const answer = await this.text(multiple ? t('输入编号，多个用逗号分隔', 'Numbers, separated by commas') : t('输入编号', 'Number'), {
+    const answer = await this.text(multiple
+      ? (min === 0 ? t('输入编号，多个用逗号分隔（0 为全不选）', 'Numbers, separated by commas (0 selects none)') : t('输入编号，多个用逗号分隔', 'Numbers, separated by commas'))
+      : t('输入编号', 'Number'), {
       initial: fallback,
       validate: (value) => {
+        if (multiple && min === 0 && value.trim() === '0') return null;
         const numbers = value.split(/[\s,，]+/).filter(Boolean).map(Number);
         if (numbers.some((number) => !Number.isInteger(number) || !choices[number - 1] || choices[number - 1].disabled)) {
           return t('编号无效', 'No such choice');
@@ -482,6 +485,7 @@ export class Prompter {
         return null;
       },
     });
+    if (multiple && min === 0 && answer.trim() === '0') return [];
     return [...new Set(answer.split(/[\s,，]+/).filter(Boolean).map(Number))]
       .sort((a, b) => a - b).map((number) => choices[number - 1].value);
   }

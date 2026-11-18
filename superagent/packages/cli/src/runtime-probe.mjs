@@ -212,7 +212,9 @@ function catalogueNote(reply) {
 // starts from the same separate `control-patch.yml` the control client writes,
 // never from the daemon's `run/patch.yml`, so a live instance's launch patch is
 // not overwritten by a read-only check.
-export async function probeDsh(bin, { env = process.env, spawnImpl = spawn, timeoutMs = 30_000, dataDir = '' } = {}) {
+export async function probeDsh(bin, {
+  env = process.env, spawnImpl = spawn, timeoutMs = 30_000, dataDir = '', dshHomeMode = 'isolated', homeDir,
+} = {}) {
   const ownHome = !dataDir;
   let directory = dataDir;
   let catalogue = null;
@@ -224,7 +226,7 @@ export async function probeDsh(bin, { env = process.env, spawnImpl = spawn, time
     }
     const patchPath = ownHome
       ? writeDshPatch({ dataDir: directory, policy: 'OpenViking SuperAgent setup bridge probe', mcp: null })
-      : writeControlPatch({ dataDir: directory, policy: 'OpenViking SuperAgent setup bridge probe' });
+      : writeControlPatch({ dataDir: directory, policy: 'OpenViking SuperAgent setup bridge probe', dshHomeMode, homeDir });
     const command = dshCommand({ bin, patchPath });
     const result = await probeInitialize(bin, {
       args: command.args, label: 'DSH',
@@ -233,7 +235,7 @@ export async function probeDsh(bin, { env = process.env, spawnImpl = spawn, time
         params: { cwd: directory, ...DSH_PROBE_ROUTE, reasoningEffort: 'high', approvalRequests: true },
       },
       bridge: { onModels: (reply) => { catalogue = reply; } },
-      env: sanitizeDshEnv({ ...env }, { dataDir: directory }),
+      env: sanitizeDshEnv({ ...env }, { dataDir: directory, dshHomeMode, homeDir }),
       spawnImpl, timeoutMs,
     });
     const route = dshCatalogueRoute(catalogue);

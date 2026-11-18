@@ -203,6 +203,67 @@ describe('global Codex/Claude hard switch', () => {
     assert.equal(Object.isFrozen(snapshot.account), true);
   });
 
+  it('temporary switches drain accepted work, preserve preference and reconcile primary on restart', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-failback-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    const config = { initialModel: 'codex:primary-model', connectors: ['lark'] };
+    store.getOVContext = () => ({ sessionId: 'test-ov-session', messages: [] });
+    const saved = [];
+    let active;
+    const create = runtime => options => {
+      const instance = backend(runtime, options);
+      if (runtime === 'codex') active = instance;
+      return instance;
+    };
+    const options = { codexFactory: create('codex'), claudeFactory: create('claude'),
+      persistRuntimePreference: runtime => saved.push(runtime) };
+    let runtime = new AgentRuntime(config, store, quietLogger, options);
+    try {
+      await runtime.start();
+      let finish;
+      active.turnInProgress = true;
+      active.whenIdle = () => new Promise(resolve => { finish = () => { active.turnInProgress = false; resolve(); }; });
+      active.interruptTurn = () => { assert.equal(active.turnInProgress, false, 'must not interrupt accepted work'); };
+      const switchPromise = runtime.transition({ kind: 'select-runtime', runtime: 'claude', model: 'sonnet',
+        persistPreference: false, whenIdle: true });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(runtime.runtime, 'codex');
+      assert.equal(runtime.submit([{ text: 'later', seq: 2 }]).accepted, false);
+      finish();
+      await switchPromise;
+      assert.equal(runtime.runtime, 'claude');
+      assert.deepEqual(saved, []);
+      await runtime.stop();
+      runtime = new AgentRuntime(config, store, quietLogger, options);
+      await runtime.start();
+      assert.equal(runtime.runtime, 'codex');
+      assert.equal(runtime.model, 'primary-model');
+      assert.deepEqual(saved, []);
+    } finally { await runtime.stop(); store.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('keeps admission closed across a failed return until its owner releases it', async () => {
+    const runtime = new AgentRuntime({}, {}, quietLogger);
+    runtime.backend = adaptRuntime('codex', backend('codex'));
+    const release = runtime.holdAdmission();
+    await assert.rejects(runtime.transition({ kind: 'select-runtime', runtime: 'missing', persistPreference: false }));
+    assert.equal(runtime.submit([{ text: 'later' }]).reason, 'switching');
+    assert.equal(runtime.snapshot().session.connected, false);
+    release();
+    assert.notEqual(runtime.submit([{ text: 'later' }]).reason, 'switching');
+  });
+
+  it('shutdown cancels a failback idle wait even if a backend never becomes idle', async () => {
+    const runtime = new AgentRuntime({}, {}, quietLogger);
+    const instance = backend('codex');
+    instance.whenIdle = () => new Promise(() => {});
+    runtime.backend = adaptRuntime('codex', instance);
+    const returning = runtime.transition({ kind: 'select-runtime', runtime: 'claude', whenIdle: true, persistPreference: false });
+    const rejected = assert.rejects(returning, /stopped during idle wait/);
+    await new Promise(resolve => setImmediate(resolve));
+    await runtime.stop();
+    await rejected;
+  });
   it('keeps catalogs scoped and validates max/ultra using the active default model', async () => {
     const runtime = new AgentRuntime({}, {}, quietLogger);
     const implementation = backend('codex');
@@ -527,6 +588,30 @@ describe('global Codex/Claude hard switch', () => {
       assert.deepEqual(order, ['config', 'sqlite']);
       assert.equal(runtime.runtime, 'pi');
       assert.equal(store.getCognitionState().runtime, 'pi');
+    } finally {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rereads the soul before a runtime switch builds the new backend, and not for the same runtime', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-refresh-policy-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    store.initializeCognition('codex', 'old-token');
+    const config = { soulText: 'old soul' };
+    const order = [];
+    const runtime = new AgentRuntime(config, store, quietLogger, {
+      refreshPolicy: async () => { order.push('refresh'); config.soulText = 'new soul'; },
+      codexFactory: (options) => backend('codex', options),
+      piFactory: (options) => { order.push(`construct pi with ${config.soulText}`); return backend('pi', options); },
+    });
+    try {
+      await runtime.start();
+      await runtime.transition({ kind: 'select-runtime', runtime: 'codex' });
+      assert.deepEqual(order, []);
+      await runtime.transition({ kind: 'select-runtime', runtime: 'pi' });
+      assert.deepEqual(order, ['refresh', 'construct pi with new soul']);
     } finally {
       await runtime.stop();
       store.close();
@@ -872,6 +957,7 @@ describe('global Codex/Claude hard switch', () => {
       namespace: 'test-namespace',
       messages: [],
       async create(id) { return { session_id: id, uri: `viking://session/${id}` }; },
+      async request() { throw Object.assign(new Error('Session not found'), { httpStatus: 404 }); },
       async append(id, message) { this.messages.push({ ...message, parts: [{ type: 'text', text: message.content }] }); },
       async context() {
         return { messages: this.messages.slice(-1), latest_archive_overview: '', stats: { totalArchives: 3, failedArchives: 0 } };

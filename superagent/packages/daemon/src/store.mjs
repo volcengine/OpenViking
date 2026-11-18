@@ -1473,7 +1473,19 @@ export class Store {
   resolveMessageAuthor(messageId, instance = 'lark') {
     if (!messageId) return null;
     const inbound = this.getInboundByMessage.get(instance, messageId);
-    if (inbound) return { kind: 'user', chatId: inbound.chat_id, senderId: inbound.sender_id };
+    // The whole stored message, so a quote of someone else's message can show
+    // its name and how it begins, as a quote of the agent's own does.
+    if (inbound) {
+      const author = { kind: 'user', chatId: inbound.chat_id, senderId: inbound.sender_id };
+      // A row an older version stored that no longer parses still names its
+      // author; only the quote is lost.
+      try {
+        const message = rowToInbound(inbound);
+        return { ...author, senderName: message.senderName ?? null, message };
+      } catch {
+        return author;
+      }
+    }
     const journal = this.getJournalActorByMessage.get(instance, messageId);
     if (journal?.actor === 'me') return { kind: 'me', text: journal.text };
     return null;
@@ -1606,9 +1618,12 @@ export class Store {
 
   // The newest accepted inbound received after seq in that scope, if any. Core
   // receive order, never provider timestamps.
+  // A reaction is no newer word in the conversation: it never makes a reply
+  // stale.
   newerAcceptedSeq(scopeKey, seq) {
     const newer = this.db.prepare(`
       SELECT MAX(seq) AS seq FROM connector_events WHERE scope_key = ? AND status = 'DONE' AND seq > ?
+        AND kind NOT LIKE 'message.reaction.%'
     `).get(scopeKey, seq);
     return newer?.seq == null ? null : number(newer.seq);
   }

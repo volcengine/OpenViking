@@ -14,8 +14,11 @@ import {
   assembleConversationPolicy,
   assembleVolcConversationPolicy,
   assembleVolcSelfHostedConversationPolicy,
+  assembleWorkerPolicy,
   docCommentNotice,
-  resolveRolePromptPath,
+  OV_SOUL_URI,
+  loadSoul,
+  rolePresetText,
   rolePrompt,
   substitutePromptPlaceholders,
 } from '../src/conversation-policy.mjs';
@@ -24,18 +27,7 @@ import { agentCliCommands, cliCommandCode } from '../src/agent-clis.mjs';
 const { ROLE_PRESETS } = createRequire(import.meta.url)('../../../deployment-config.cjs');
 
 const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8');
-const role = (name) => resolveRolePromptPath(name);
-
-function withRoleFile(body, callback) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-role-'));
-  const filePath = path.join(directory, 'role.md');
-  fs.writeFileSync(filePath, body);
-  try {
-    return callback(filePath);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-}
+const role = (name) => rolePresetText(name);
 
 describe('conversation policy assemble', () => {
   it('assembles one Core for every connector set, with a section per connector in use', () => {
@@ -59,7 +51,7 @@ describe('conversation policy assemble', () => {
 
   it('keeps QQ owner routing and reply limits in single and mixed sessions', () => {
     for (const connectors of [['qq'], ['qq', 'email'], ['lark', 'slack', 'telegram', 'qq']]) {
-      const text = assembleConversationPolicy({ connectors, rolePromptPath: role('assistant') });
+      const text = assembleConversationPolicy({ connectors, soulText: role('assistant') });
       assert.match(text, /^## QQ$/m);
       assert.match(text, /source=qq/);
       assert.match(text, /4000 characters/);
@@ -74,7 +66,7 @@ describe('conversation policy assemble', () => {
 
   it('explains OneBot batches, the account\'s other programs and other people\'s direct chats', () => {
     for (const connectors of [['onebot'], ['qq', 'onebot', 'email']]) {
-      const text = assembleConversationPolicy({ connectors, rolePromptPath: role('assistant') });
+      const text = assembleConversationPolicy({ connectors, soulText: role('assistant') });
       assert.match(text, /^## OneBot$/m);
       assert.match(text, /source=onebot/);
       assert.match(text, /decide once, on the newest/);
@@ -119,7 +111,7 @@ describe('conversation policy assemble', () => {
   });
 
   it('places an answer where its message is, never by style', () => {
-    const text = assembleConversationPolicy({ connectors: ['lark'], rolePromptPath: role('qa') });
+    const text = assembleConversationPolicy({ connectors: ['lark'], soulText: role('qa') });
     assert.match(text, /A message with `thread=` is answered inside that thread/);
     assert.match(text, /A message without `thread=` is answered in its conversation/);
     assert.match(text, /answer the original message where it was asked/);
@@ -198,7 +190,52 @@ describe('conversation policy assemble', () => {
     const text = assembleConversationPolicy({ connectors: ['weixin'] });
     assert.match(text, /## Bundled command-line tools/);
     for (const { name, bin } of agentCliCommands()) assert.ok(text.includes(`- ${name}: ${cliCommandCode(bin)}`));
+    assert.ok(agentCliCommands().some(({ name }) => name === 'rg'));
     assert.match(text, /messages still go through the Core tools/);
+  });
+
+  it('tells every session to search with the bundled rg, and a Pi session that does the work itself its timeout', () => {
+    const rule = /A shell command without a `timeout` of its own is stopped after 5 minutes, and none runs longer than 60: give a build, test run or install that needs more its own `timeout` \(in seconds\)\./;
+    const rg = cliCommandCode(agentCliCommands().find(({ name }) => name === 'rg').bin);
+    for (const scheduler of ['legacy', 'inbox', 'workers']) {
+      const config = { connectors: ['lark'], scheduler };
+      const text = assembleConversationPolicy(config);
+      assert.ok(text.includes(`\n## Shell\n\n- Search file contents with ${rg} rather than \`grep -r\``), scheduler);
+      assert.ok(text.indexOf('## Bundled command-line tools') < text.indexOf('## Shell'), 'with the CLIs, before the Role');
+      assert.doesNotMatch(text, rule, `${scheduler}: only Pi's shell has no timeout of its own`);
+      const pi = assembleConversationPolicy(config, { runtime: 'pi' });
+      if (scheduler === 'workers') assert.doesNotMatch(pi, rule, 'a workers router keeps its 30-second cap');
+      else assert.match(pi, rule, scheduler);
+      assert.match(assembleWorkerPolicy(config, { runtime: 'pi' }), rule, `${scheduler} worker`);
+      for (const runtime of ['codex', 'claude']) {
+        const worker = assembleWorkerPolicy(config, { runtime });
+        assert.ok(worker.includes(`- Search file contents with ${rg}`), runtime);
+        assert.doesNotMatch(worker, rule, runtime);
+      }
+    }
+    const spaced = assembleWorkerPolicy({ ripgrepBin: '/opt/my tools/rg' }, { runtime: 'pi' });
+    assert.ok(spaced.includes("- Search file contents with `'/opt/my tools/rg'` rather than"));
+  });
+
+  it('keeps searches where the answer can be: the worker\'s own directory first, never a home, / or the installation', () => {
+    const release = { connectors: ['lark'], projectDir: '/home/u/.ov-superagent/releases/0.5.3', dataDir: '/home/u/.ov-superagent/data/asd' };
+    const never = (dirs) => `Never search a whole home directory, \`/\`, or OpenViking SuperAgent's own installation and data (${dirs}): they hold hundreds of thousands of files, and one search there runs for many minutes. When the request is about one of them, search the subdirectory it concerns.`;
+    for (const runtime of ['pi', 'codex', 'claude']) {
+      const worker = assembleWorkerPolicy(release, { runtime });
+      assert.ok(worker.includes('- Search only where the answer can be: your directory first, then the repository or directory the request is about.'), runtime);
+      // Every release kept and the data are under the installation: it is named once.
+      assert.ok(worker.includes(never('`/home/u/.ov-superagent`')), runtime);
+    }
+    const router = assembleConversationPolicy(release, { runtime: 'pi' });
+    assert.ok(router.includes('- Search only where the answer can be: the repository or directory the request is about.'));
+    assert.doesNotMatch(router, /your directory first/);
+    // A source checkout is named with its data directory, wherever that is.
+    const source = assembleWorkerPolicy({ projectDir: '/src/OpenViking/superagent', dataDir: '/home/u/.vika/data/asd' }, { runtime: 'pi' });
+    assert.ok(source.includes(never('`/src/OpenViking/superagent`, `/home/u/.vika/data/asd`')));
+    assert.ok(assembleWorkerPolicy({ projectDir: '/srv/sa', dataDir: '/srv/sa/data' }).includes(never('`/srv/sa`')));
+    // Without a config, the package this policy runs from.
+    const packageDir = path.resolve(DEFAULT_PROMPT_DIR, '..', '..', '..');
+    assert.ok(assembleWorkerPolicy({}).includes(never(cliCommandCode(packageDir))));
   });
 
   it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
@@ -248,7 +285,7 @@ describe('the instance role', () => {
   });
 
   it('goes after the Core, inside a Role section closed by its boundary', () => {
-    const text = assembleConversationPolicy({ connectors: ['lark'], agentName: 'Vee', rolePromptPath: role('assistant') });
+    const text = assembleConversationPolicy({ connectors: ['lark'], agentName: 'Vee', soulText: role('assistant') });
     const start = text.indexOf('\n## Role\n');
     assert.ok(start > text.indexOf('## OpenViking memory'));
     assert.match(text, /You are Vee, the owner's personal assistant\./);
@@ -256,29 +293,99 @@ describe('the instance role', () => {
     assert.equal(text.split('\n## Role\n').length, 2);
   });
 
-  it('reads the owner\'s own file, without its comments', () => {
-    withRoleFile('<!-- notes for whoever edits this -->\nYou are {{AGENT_NAME}}, the garden club\'s helper.\n', (filePath) => {
-      const text = assembleConversationPolicy({ connectors: ['weixin'], agentName: 'Fern', rolePromptPath: filePath });
-      assert.match(text, /## Role\n\nThe person who runs this agent wrote the text below\.[^\n]*\n\nYou are Fern, the garden club's helper\.\n\nRole boundary:/);
-      assert.doesNotMatch(text, /notes for whoever edits this/);
-    });
-    withRoleFile('<!-- nothing yet -->\n', (filePath) => {
-      assert.equal(rolePrompt({ rolePromptPath: filePath }), '');
-      assert.doesNotMatch(assembleConversationPolicy({ rolePromptPath: filePath }), /## Role/);
-    });
+  it('takes the soul loaded from OpenViking, without its comments, under a pointer to where it lives', () => {
+    const soulText = '<!-- notes for whoever edits this -->\nYou are {{AGENT_NAME}}, the garden club\'s helper.\n';
+    const text = assembleConversationPolicy({ connectors: ['weixin'], agentName: 'Fern', soulText });
+    assert.match(text, /## Role\n\nYour soul \(who you are, what you work on, when you speak, how you sound\) is kept in OpenViking at `viking:\/\/~\/memories\/soul\.md`\.[^\n]*`openviking_write`[^\n]*\n\nYou are Fern, the garden club's helper\.\n\nRole boundary:/);
+    assert.doesNotMatch(text, /notes for whoever edits this/);
+    assert.equal(rolePrompt({ soulText: '<!-- nothing yet -->\n' }), '');
   });
 
-  it('runs on the Core defaults without a role', () => {
-    const text = assembleConversationPolicy({ connectors: ['lark'] });
-    assert.doesNotMatch(text, /## Role/);
-    assert.match(text, /The Role decides when you speak\. Where it says nothing, use these defaults:/);
-    assert.match(text, /Reply in Chinese by default, or in the language the person wrote in\./);
+  it('keeps only the pointer and the boundary when the soul is empty, at the instance\'s own address', () => {
+    for (const config of [{ connectors: ['lark'] }, { connectors: ['lark'], soulText: '<!-- nothing yet -->\n' }]) {
+      const text = assembleConversationPolicy(config);
+      assert.match(text, /## Role\n\nYour soul [^\n]*viking:\/\/~\/memories\/soul\.md[^\n]*\n\nRole boundary:/);
+      assert.match(text, /The Role decides when you speak\. Where it says nothing, use these defaults:/);
+    }
+    const custom = assembleConversationPolicy({ connectors: ['lark'], soulUri: 'viking://~/memories/team/soul.md' });
+    assert.match(custom, /kept in OpenViking at `viking:\/\/~\/memories\/team\/soul\.md`/);
+    assert.doesNotMatch(custom, /memories\/soul\.md/);
+  });
+});
+
+describe('loading the soul', () => {
+  const quiet = () => {
+    const warnings = [];
+    return { warnings, logger: { warn: (event, fields) => warnings.push([event, fields]) } };
+  };
+  const failure = (httpStatus) => Object.assign(new Error('OpenViking request failed'), { httpStatus });
+
+  it('reads the soul from the configured address into the policy, for Core and Volc alike', async () => {
+    const reads = [];
+    const config = { agentName: 'Fern', connectors: ['lark'] };
+    assert.equal(await loadSoul(config, { read: async (...args) => { reads.push(args); return 'You are {{AGENT_NAME}}, from OpenViking.'; } }), true);
+    assert.deepEqual(reads, [[OV_SOUL_URI, 0, -1]]);
+    assert.match(assembleConversationPolicy(config), /You are Fern, from OpenViking\./);
+    assert.match(assembleVolcConversationPolicy(config), /You are Fern, from OpenViking\.\n\nRole boundary:/);
+    const custom = { soulUri: 'viking://user/team/memories/soul.md' };
+    await loadSoul(custom, { read: async (...args) => { reads.push(args); return 'x'; } });
+    assert.deepEqual(reads.at(-1), ['viking://user/team/memories/soul.md', 0, -1]);
+  });
+
+  it('retries a failing read, then runs with the pointer alone and no local fallback', async () => {
+    const { warnings, logger } = quiet();
+    const sleeps = [];
+    let calls = 0;
+    const config = { connectors: ['lark'], soulText: 'an older soul' };
+    const loaded = await loadSoul(config, { read: async () => { calls += 1; throw failure(503); } },
+      { logger, sleep: async (ms) => { sleeps.push(ms); } });
+    assert.equal(loaded, false);
+    assert.equal(calls, 3);
+    assert.deepEqual(sleeps, [500, 1000]);
+    assert.equal(config.soulText, '');
+    assert.deepEqual(warnings.map(([event, fields]) => [event, fields.attempts]), [['ov_soul_unavailable', 3]]);
+    assert.match(assembleConversationPolicy(config), /## Role\n\nYour soul [^\n]*\n\nRole boundary:/);
+  });
+
+  it('succeeds on a retry, and does not retry a soul that is missing or refused', async () => {
+    let calls = 0;
+    const config = {};
+    assert.equal(await loadSoul(config, { read: async () => { calls += 1; if (calls < 2) throw failure(); return 'second time'; } },
+      { sleep: async () => {} }), true);
+    assert.equal(config.soulText, 'second time');
+    for (const [status, warned] of [[404, 0], [403, 1]]) {
+      const { warnings, logger } = quiet();
+      calls = 0;
+      assert.equal(await loadSoul(config, { read: async () => { calls += 1; throw failure(status); } }, { logger, sleep: async () => {} }), false);
+      assert.equal(calls, 1, `HTTP ${status}`);
+      assert.equal(warnings.length, warned, `HTTP ${status}`);
+    }
+    assert.equal(await loadSoul(config, { read: async () => '  \n' }), false);
+    assert.equal(await loadSoul(config, {}), false);
+    assert.equal(config.soulText, '');
+  });
+
+});
+
+describe('a soul kept in a local file', () => {
+  it('reads an absolute soulUri from disk and points the agent at that file', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'soul-'));
+    const file = path.join(dir, 'soul.md');
+    fs.writeFileSync(file, 'You are {{AGENT_NAME}}, from a local file.');
+    const config = { agentName: 'Fern', connectors: ['lark'], soulUri: file };
+    assert.equal(await loadSoul(config, { read: async () => { throw new Error('OpenViking must not be read'); } }), true);
+    const policy = assembleConversationPolicy(config);
+    assert.match(policy, /You are Fern, from a local file\./);
+    assert.ok(policy.includes(`kept in the local file \`${file}\``));
+    const absent = { connectors: ['lark'], soulUri: path.join(dir, 'missing.md') };
+    assert.equal(await loadSoul(absent, {}), false);
+    assert.equal(absent.soulMissing, true);
   });
 });
 
 describe('natural writing', () => {
   it('follows the role unless the instance turns it off', () => {
-    const config = { connectors: ['lark'], rolePromptPath: role('colleague') };
+    const config = { connectors: ['lark'], soulText: role('colleague') };
     const on = assembleConversationPolicy(config);
     assert.ok(on.indexOf('## Natural writing') > on.indexOf('Role boundary:'));
     assert.match(assembleConversationPolicy({ connectors: ['lark'] }), /## Natural writing/);
@@ -289,7 +396,7 @@ describe('natural writing', () => {
 });
 
 describe('explicit silence is opt-in per instance', () => {
-  const base = { workspace: '/srv/superagent/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const base = { workspace: '/srv/superagent/workspace', agentName: 'Tester', soulText: role('colleague') };
   const sessions = [['lark'], ['lark', 'weixin', 'telegram', 'qq', 'email'], ['weixin'], ['telegram', 'email']]
     .map((connectors) => ({ ...base, connectors }));
   const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -327,7 +434,7 @@ describe('explicit silence is opt-in per instance', () => {
 });
 
 describe('staged replies are opt-in per instance', () => {
-  const base = { workspace: '/srv/superagent/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const base = { workspace: '/srv/superagent/workspace', agentName: 'Tester', soulText: role('colleague') };
   const single = read('delivery/single.md').trim();
   const staged = read('delivery/staged.md').trim();
   const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -369,9 +476,79 @@ describe('staged replies are opt-in per instance', () => {
   });
 });
 
+describe('the inbox scheduler is opt-in per instance', () => {
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
+  const codexHash = (config) => new CodexAgent(config, {
+    getCognitionState: () => ({ runtime: 'codex', epoch: 1, authorityToken: 'token' }), getSetting: () => null,
+  }, quiet).policyHash;
+  const configs = [['lark'], ['weixin'], ['slack', 'lark']].map((connectors) => ({ ...base, connectors }));
+
+  it('legacy assembles exactly the policy without the setting', () => {
+    for (const config of [...configs, { ...base, connectors: ['lark'], explicitSilence: true, stagedReplies: true }]) {
+      const legacy = assembleConversationPolicy({ ...config, scheduler: 'legacy' });
+      assert.equal(legacy, assembleConversationPolicy(config));
+      assert.doesNotMatch(legacy, /message_check|\[daemon inbox\]|## Inbox/);
+      assert.equal(codexHash({ ...config, scheduler: 'legacy' }), codexHash(config));
+    }
+  });
+
+  it('inbox appends its section last and changes nothing above it', () => {
+    for (const config of [...configs, { ...base, connectors: ['lark'], explicitSilence: true }]) {
+      const off = assembleConversationPolicy(config);
+      const on = assembleConversationPolicy({ ...config, scheduler: 'inbox' });
+      assert.ok(on.startsWith(`${off}\n\n## Inbox\n`), config.connectors.join('+'));
+      assert.equal(on.split('## Inbox').length, 2);
+      assert.notEqual(codexHash({ ...config, scheduler: 'inbox' }), codexHash(config));
+    }
+    const on = assembleConversationPolicy({ ...base, connectors: ['lark'], scheduler: 'inbox' });
+    assert.match(on, /`\[daemon inbox\]` line may arrive\. It is a daemon notice, not an input/);
+    assert.match(on, /It needs no decision\. Finish the step you are on, then call `message_check`/);
+    assert.match(on, /delivers waiting inputs oldest first, as ordinary input lines right after the call/);
+    assert.match(on, /never answer only the newest line/);
+    assert.match(on, /you need not call `message_check` before ending a turn/);
+  });
+});
+
+describe('the workers scheduler', () => {
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague'), connectors: ['lark'] };
+
+  it('gives the router the inbox and then its workers section, and nothing else changes', () => {
+    const inbox = assembleConversationPolicy({ ...base, scheduler: 'inbox' });
+    const workers = assembleConversationPolicy({ ...base, scheduler: 'workers' });
+    assert.ok(workers.startsWith(`${inbox}\n\n## Workers\n`));
+    assert.match(workers, /Never rewrite the request or add a plan: the worker reads the original messages\./);
+    assert.match(workers, /A task is one piece of work, not a conversation\. Decide each input by what it asks for, never by where it was written or who wrote it/);
+    assert.match(workers, /More work on an ended task is always a new task that follows it; ended tasks take no inputs\./);
+    assert.match(workers, /When unsure between `owner` and a new task, create the new task with `follows`\./);
+    assert.match(workers, /Being near a task says nothing about belonging to it\./);
+    assert.match(workers, /A `\[task handback\]` input holds lines a worker found are not part of its task[\s\S]*never route one back to that task\./);
+    assert.match(workers, /and `task_ids` with its task \(several when one reply covers several reports\)/);
+    assert.match(workers, /A report marked `undelivered=1` was shown to you before/);
+    assert.match(workers, /A `\[task report\]` line is a worker's result for one task, not an input from a person\./);
+    assert.match(workers, /for `dropped`, tell the requester in one line why nothing needed doing/);
+    assert.match(workers, /a command is cut off after 30 seconds and may not sleep, and a turn gets a few calls of them/);
+    assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
+    assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
+  });
+
+  it('gives a worker its own policy: the task, no deliveries, a report, and the instance Role', () => {
+    const text = assembleWorkerPolicy({ ...base, scheduler: 'workers' });
+    assert.match(text, /^## Worker\n\nYou are a worker for Tester\./);
+    assert.match(text, /Finish every turn with task_report/);
+    assert.match(text, /You have no tool to send, reply, react or notify/);
+    assert.match(text, /New inputs routed to your task while you work may arrive by themselves as a `\[task input\]` message/);
+    assert.match(text, /hand it back with task_handback \(its event= and one sentence why\) and do not work on or answer it/);
+    assert.match(text, /A line marked as context asks nothing of you: when it does not bear on your task, ignore it; never hand it back\./);
+    assert.match(text, /When your brief says your task follows another one, start from that work/);
+    assert.match(text, /## Role\n/);
+    assert.doesNotMatch(text, /## Decisions and delivery|stay_silent|message_check|## Inbox/);
+  });
+});
+
 describe('Volc', () => {
   it('gets the input grammar, the events section and the role, never the Core tools', () => {
-    const config = { agentName: 'Alpha', rolePromptPath: role('qa') };
+    const config = { agentName: 'Alpha', soulText: role('qa') };
     for (const assemble of [assembleVolcConversationPolicy, assembleVolcSelfHostedConversationPolicy]) {
       const text = assemble(config);
       assert.match(text, /^## Inputs\n/);
@@ -388,6 +565,6 @@ describe('Volc', () => {
       assert.equal(assemble({ ...config, stagedReplies: true }), text);
     }
     assert.match(assembleVolcSelfHostedConversationPolicy(config), /--idempotency-key <stable-key>/);
-    assert.doesNotMatch(assembleVolcConversationPolicy({}), /## Role/);
+    assert.match(assembleVolcConversationPolicy({}), /## Role\n\nYour soul [^\n]*\n\nRole boundary:/);
   });
 });

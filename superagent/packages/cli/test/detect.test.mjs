@@ -40,7 +40,7 @@ test('OpenViking: the user config wins, its credentials prove who the user is', 
   const detected = await detectOpenViking({ env: {}, homeDir: home, fetchImpl });
   assert.deepEqual(detected, {
     configPath: path.join(home, '.openviking', 'ovcli.conf'), url: 'https://ov.example', usable: true,
-    user: 'amy', account: null, role: null, authMode: 'api_key', reason: null,
+    user: 'amy', account: null, role: null, version: '0.4', authMode: 'api_key', reason: null,
   });
   assert.equal(calls[0].headers['X-API-Key'], 'key-1');
   assert.equal(calls[0].headers['X-OpenViking-Account'], 'acme');
@@ -200,6 +200,7 @@ test('runtimes: installed and logged-in CLIs are offered, the rest say what is m
     { id: 'claude', available: false, model: 'claude:' },
     { id: 'pi', available: true, model: 'pi' },
     { id: 'durable', available: false, model: 'durable' },
+    { id: 'traex', available: false, model: 'traex' },
     { id: 'opencode', available: false, model: 'opencode' },
     { id: 'agy', available: false, model: 'agy' },
     { id: 'dsh', available: false, model: 'dsh' },
@@ -243,7 +244,7 @@ test('runtimes: a Pi with no model points the user at ov-superagent pi', async (
     execFileImpl: async () => ({ stdout: 'No models available.\n' }),
   });
   assert.deepEqual(runtimes.map(({ id, available }) => [id, available]), [
-    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false], ['agy', false], ['dsh', false],
+    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['traex', false], ['opencode', false], ['agy', false], ['dsh', false],
   ]);
   assert.match(runtimes[2].note, /ov-superagent pi/);
 });

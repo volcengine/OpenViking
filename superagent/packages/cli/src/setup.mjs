@@ -13,10 +13,10 @@ import { loginWeixin } from '../../daemon/src/weixin/auth.mjs';
 import { WeixinState } from '../../daemon/src/weixin/state.mjs';
 import { bundledLarkCli } from '../../daemon/src/lark-cli-bin.mjs';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
-import { resolveRolePromptPath } from '../../daemon/src/conversation-policy.mjs';
+import { OV_SOUL_URI, rolePresetText } from '../../daemon/src/conversation-policy.mjs';
 import { LarkCli } from './lark-cli.mjs';
 import {
-  LarkCredentialsError, LarkPolicyError, LarkRegistrationError, MESSAGE_EVENT, grantedUserScopes, inspectApp, lacksAny, missingConfig, readApp,
+  COMMENT_EVENT, LarkCredentialsError, LarkPolicyError, LarkRegistrationError, MESSAGE_EVENT, grantedUserScopes, inspectApp, lacksAny, missingConfig, readApp,
   scanApp, tenantToken,
 } from './lark-app.mjs';
 import {
@@ -24,12 +24,15 @@ import {
   superagentHome, withChangedInstance, withDefaultTempDir, withInstance, writeManifest,
 } from './manifest.mjs';
 import { OVRegistrations, detectOpenViking, instanceOvConfig, writeInstanceOvConfig } from './ov.mjs';
-import { configureOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities } from './ov-setup.mjs';
+import { configureOpenViking, prepareInstanceOpenViking, readOVSoul, saveOVConnection, takenIdentities, writeOVSoul } from './ov-setup.mjs';
 import { detectDsh, detectRuntimes, which } from './runtimes.mjs';
 import {
   collectDshModelDraft, dshSettingsDocument, validateDshModelDraft, writeDshModelDraft,
 } from './dsh-model-wizard.mjs';
 import { resolveRuntimeModelTarget } from '../../daemon/src/runtime-catalog.mjs';
+import {
+  DSH_HOME_SHARED, defaultDshSkillRoots, dshHomePath, dshSkillDirectories, dshSkillRootChoices,
+} from '../../daemon/src/dsh-config.mjs';
 import { showScan } from './qr.mjs';
 import { restartCommand, startCommand } from './control.mjs';
 import { removeInstance } from './remove-instance.mjs';
@@ -57,7 +60,7 @@ import { connectOneBot, groupDefault, policyPath } from './onebot.mjs';
 const PERMISSIONS = new URL('../../../permission.json', import.meta.url);
 
 function resolveLarkCli(env) {
-  const bundled = bundledLarkCli();
+  const bundled = bundledLarkCli({ env });
   return bundled === 'lark-cli' ? which('lark-cli', env) : bundled;
 }
 
@@ -75,15 +78,15 @@ export const OWNER_MESSAGE_SCOPES = Object.freeze([
   'search:message', 'im:message:readonly', 'im:message.group_msg:get_as_user', 'im:message.p2p_msg:get_as_user',
 ]);
 
-// What the app and the owner's login ask for. `bot` (larkMessageAccess):
-// none of OWNER_MESSAGE_SCOPES, and search as the bot instead, which covers
+// What the app and the owner's login ask for. `bot` (larkMessageAccess) asks
+// for no user scopes at all, and searches as the bot instead, which covers
 // only the chats the bot has joined.
 export function larkScopes(access = 'owner') {
   const { scopes } = JSON.parse(fs.readFileSync(PERMISSIONS, 'utf8'));
   if (access !== 'bot') return { tenant: scopes.tenant, user: scopes.user };
   return {
     tenant: [...scopes.tenant, 'search:message'],
-    user: scopes.user.filter((scope) => !OWNER_MESSAGE_SCOPES.includes(scope)),
+    user: [],
   };
 }
 
@@ -105,37 +108,37 @@ const imChoices = () => [
 // IMs connected by pasting tokens rather than scanning a code.
 const TOKEN_IMS = ['telegram', 'slack', 'qq', 'onebot'];
 
-// Where the Feishu/Lark bot app comes from. A scan can only pick an app the
-// scanner owns or administers, and a test tenant cannot scan at all; then the
-// App ID and App Secret are typed in, and the app's settings are the owner's
-// to complete in the developer console.
+// Where the Feishu/Lark bot app comes from. The same scan page can create an
+// app or pick one the scanner owns or administers. A test tenant cannot scan
+// at all; then the App ID and App Secret are typed in, and the app's settings
+// are the owner's to complete in the developer console.
 const larkSources = () => [
-  { value: 'create', label: t('扫码新建一个机器人', 'Scan to create a new bot'),
-    hint: t('一次扫码建好应用、开好权限并发布', 'one scan makes the app, grants its permissions and publishes it') },
-  { value: 'select', label: t('扫码选择已有的机器人', 'Scan to pick an existing bot'),
-    hint: t('你是所有者或管理员的应用；缺的权限和事件在确认页补上', 'an app you own or administer; what it lacks is added on the confirm page') },
+  { value: 'select', label: t('扫码创建或选择机器人', 'Scan to create or pick a bot'),
+    hint: t('可以新建应用，或选你是所有者/管理员的应用；权限和事件在确认页配好',
+      'create an app, or pick one you own/administer; its permissions and events are configured on the confirm page') },
   { value: 'manual', label: t('手动填 App ID 和 App Secret', 'Enter the App ID and App Secret'),
     hint: t('不是所有者或管理员、在测试企业等扫不了码时；缺的配置要去开放平台补',
       'when a scan cannot be used (not an owner or administrator, a test tenant); what the app lacks is added in the developer console') },
 ];
 
-// Whose visibility the bot reads with, asked for each app before its scans:
-// the permissions differ. What the owner grants an app stays with it, so the
-// choice is not offered again for the same app.
+// Which identity the app may use, asked for each scanned app before its scans.
+// What the owner grants an app stays with it, so the choice is not offered
+// again for the same app.
 const larkAccessChoices = () => [
-  { value: 'owner', label: t('允许', 'Allow'),
-    hint: t('能搜索和读取你在飞书里看得到的全部消息，包括它不在的群和你的单聊；授权后飞书不会收回，这个机器人以后改不回来',
-      'it can search and read every message you can see on Feishu/Lark, its chats or not, your direct chats too; Feishu/Lark keeps the grant, so this bot cannot be changed back later') },
-  { value: 'bot', label: t('不允许，只看它所在的会话', 'No, only the chats it is in'),
-    hint: t('搜索和读取都只限它加入的群和它的单聊', 'search and reading stay within the groups it has joined and its own direct chats') },
+  { value: 'owner', label: t('完整用户权限（默认）', 'Full user access (default)'),
+    hint: t('机器人权限 + 你的全部用户权限，可访问你能访问的文档、消息、日历、邮箱、任务等；会扫码两次',
+      'bot permissions plus all of your user permissions, for documents, messages, calendar, mail, tasks and more; requires two scans') },
+  { value: 'bot', label: t('仅机器人权限', 'Bot only'),
+    hint: t('不获取任何用户权限，只能访问明确授权给应用/机器人的资源和机器人所在会话；只扫码一次',
+      'requests no user permissions; limited to resources explicitly shared with the app/bot and chats the bot is in; requires one scan') },
 ];
 
-const larkAccessShown = (access) => (access === 'bot' ? t('只看它所在的会话', 'only the chats it is in') : null);
+const larkAccessShown = (access) => (access === 'bot' ? t('仅机器人权限', 'bot only') : null);
 
 async function askLarkAccess(prompter, initial) {
   const choices = larkAccessChoices();
-  return prompter.select(t('允许机器人以你的身份搜索和读取飞书消息？', 'Let the bot search and read Feishu/Lark messages as you?'), choices,
-    { initial: Math.max(0, choices.findIndex(({ value }) => value === initial)), label: t('以你的身份读消息', 'Reads as you') });
+  return prompter.select(t('授予 OpenViking SuperAgent 哪些飞书权限？', 'Which Feishu/Lark permissions may OpenViking SuperAgent use?'), choices,
+    { initial: Math.max(0, choices.findIndex(({ value }) => value === initial)), label: t('飞书权限', 'Feishu/Lark access') });
 }
 
 // How the instance gets its Feishu/Lark app: `keep` the one it has, or one
@@ -143,7 +146,7 @@ async function askLarkAccess(prompter, initial) {
 function larkSource(state, current) {
   if (!state.connectors.includes('lark')) return null;
   if (state.larkApp) return state.larkApp.source;
-  return current && connectorsOf(current).includes('lark') ? 'keep' : 'create';
+  return current && connectorsOf(current).includes('lark') ? 'keep' : 'select';
 }
 
 // The app as the settings list and the summaries show it; `needs` is what
@@ -170,7 +173,9 @@ function needsShown({ missing, login }) {
   return list([
     ...(scopes ? [t(`${scopes} 个权限`, `${scopes} ${scopes === 1 ? 'permission' : 'permissions'}`)] : []),
     ...(missing.events?.includes(MESSAGE_EVENT) ? [t('接收消息事件', 'the message event')] : []),
-    ...(missing.events?.some((event) => event !== MESSAGE_EVENT) ? [t('文档评论事件', 'the document comment event')] : []),
+    ...(missing.events?.includes(COMMENT_EVENT) ? [t('文档评论事件', 'the document comment event')] : []),
+    ...(missing.events?.some((event) => ![MESSAGE_EVENT, COMMENT_EVENT].includes(event))
+      ? [t('撤回和表情回复事件', 'the recall and reaction events')] : []),
     ...(missing.callbacks.length ? [t('卡片回调', 'the card callback')] : []),
     ...(login.length ? [t('你的授权', 'your authorization')] : []),
   ]);
@@ -180,8 +185,8 @@ function needsShown({ missing, login }) {
 // scan changes it, on the platform's confirm page: the page adds what it
 // lacks and publishes, withdrawing a version under review first (seen in the
 // page's own code), and an app with a webhook keeps it.
-function existingAppNotes(source) {
-  const { tenant, user } = larkScopes();
+function existingAppNotes(source, access = 'owner') {
+  const { tenant, user } = larkScopes(access);
   return [
     ...(source === 'select' ? [t(
       `扫码后飞书的确认页会列出要给它补的权限（最多 ${tenant.length + user.length} 个）、消息事件和卡片回调，确认后发布一个新版本（企业可能要管理员审核）；它要是有版本正在审核，会先被撤回。不确认就什么都不改。`,
@@ -259,7 +264,16 @@ async function orElse(ask, menu, value) {
 // A runtime that is no longer detected stays selectable as it is.
 function keptRuntime(current, runtimes) {
   if (!current || runtimes.some((runtime) => runtime.available && runtime.model === current.model)) return null;
-  return { label: t(`保持现在的（${current.model}）`, `Keep the current one (${current.model})`), model: current.model, available: true, note: '', kept: true };
+  const id = resolveRuntimeModelTarget(current.model).runtime;
+  const detected = runtimes.find(runtime => runtime.id === id);
+  return {
+    ...detected,
+    label: t(`保持现在的（${current.model}）`, `Keep the current one (${current.model})`),
+    model: current.model,
+    available: detected?.available ?? true,
+    note: detected?.note ?? '',
+    kept: true,
+  };
 }
 
 // The answers being put together: defaults for a new instance, or the
@@ -270,10 +284,9 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     id,
     dataDir: current?.dataDir ?? path.join(superagentHome(env), 'data', id),
     displayName: current?.displayName ?? 'OpenViking SuperAgent',
-    // A shipped role by name, or the absolute path of the owner's own file;
-    // roleSeed is the role a new file of theirs starts from (written on save).
-    role: current ? current.role ?? null : ROLE_PRESETS[0],
-    roleSeed: null,
+    // The shipped role to seed the soul in OpenViking with on save, or null to
+    // leave the soul as it is (what changing an instance starts from).
+    role: current ? null : ROLE_PRESETS[0],
     workspace: current?.workspace ?? path.join(homeDir, 'superagent-workspace', id),
     runtime: kept ?? runtimes.find((runtime) => runtime.available && (!current || runtime.model === current.model)),
     connectors,
@@ -284,6 +297,8 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     dshModel: null,
     dshHomeRoute: null,
     dshProbedHome: null,
+    dshHomeMode: current?.dshHomeMode === DSH_HOME_SHARED ? DSH_HOME_SHARED : 'isolated',
+    dshSkillRoots: [...(current?.dshSkillRoots ?? defaultDshSkillRoots(current?.dshHomeMode))],
     switches: Object.fromEntries(Object.keys(SWITCH_DEFAULTS).map((key) => [key, current?.[key] ?? switchDefault(key, current?.model)])),
     larkApp: null,
     mail: { kept: current ? mailboxesOf(current) : [], added: [], updated: new Map(), removed: [] },
@@ -344,60 +359,116 @@ const ROLE_CHOICES = () => ({
   },
 });
 
-const customRole = (role) => Boolean(role) && path.isAbsolute(role);
-
-function roleShown(state, homeDir) {
-  if (!state.role) return t('没有设置（只用默认规则）', 'none (default rules only)');
-  return customRole(state.role) ? shortenHome(state.role, homeDir) : ROLE_CHOICES()[state.role].label;
+function roleShown(state) {
+  if (!state.role) return t('保持现在的 soul', 'Keep the current soul');
+  return ROLE_CHOICES()[state.role].label;
 }
 
-async function askRole({ prompter, env, homeDir }, state) {
+// The role is the soul in OpenViking: a shipped role seeds it on save, or it
+// is left as it is.
+async function askRole({ prompter }, state) {
   const choices = ROLE_CHOICES();
   const options = [
     ...ROLE_PRESETS.map((name) => ({ ...choices[name], value: name })),
-    { label: t('自己写 prompt', 'My own prompt'), hint: t('用你指定的 Markdown 文件，可以从上面任一个角色改起', 'a Markdown file of yours, which can start from any role above'), value: 'custom' },
+    { label: t('保持现在的', 'Keep current'), hint: t('不写入预设，OpenViking 里的 soul 保持不变', 'seeds nothing; the soul in OpenViking stays as it is'), value: 'keep' },
   ];
-  const at = customRole(state.role) ? options.length - 1 : Math.max(0, ROLE_PRESETS.indexOf(state.role));
+  const at = state.role ? ROLE_PRESETS.indexOf(state.role) : options.length - 1;
   const choice = await prompter.select(t('它的角色', 'Its role'), options, { initial: at, label: t('角色', 'Role') });
-  if (choice !== 'custom') {
-    state.role = choice;
-    state.roleSeed = null;
-    return;
-  }
-  const initial = customRole(state.role) ? state.role : path.join(superagentHome(env), 'roles', `${state.id}.md`);
-  const file = path.resolve(expandHome(await prompter.text(t('角色 prompt 文件（Markdown）', 'Role prompt file (Markdown)'), {
-    label: t('角色文件', 'Role file'),
-    initial: shortenHome(initial, homeDir),
-    validate: (value) => {
-      const resolved = path.resolve(expandHome(value, homeDir));
-      return fs.existsSync(resolved) && !fs.statSync(resolved).isFile() ? t('这不是一个文件', 'That is not a file') : null;
-    },
-  }), homeDir));
-  state.role = file;
-  state.roleSeed = fs.existsSync(file) ? null : await prompter.select(
-    t('这个文件还没有。先用哪个角色的 prompt 填上？之后可以随便改', 'That file does not exist yet. Start it from which role? Change it freely afterwards'),
-    [...ROLE_PRESETS.map((name) => ({ label: choices[name].label, value: name })), { label: t('空白', 'Blank'), value: '' }],
-    { label: t('从哪个角色开始', 'Start from') },
-  );
+  state.role = choice === 'keep' ? null : choice;
 }
 
-// A role file of the owner's own, begun from a shipped role (or blank).
-function writeRoleFile({ role, roleSeed }, id) {
-  if (roleSeed === null || fs.existsSync(role)) return;
-  const note = `<!-- ${roleSeed ? `Started from OpenViking SuperAgent's "${roleSeed}" role. ` : ''}This is ${id}'s role: edit it freely, then run ov-superagent restart ${id}. Comments like this one are not sent to the model. -->\n\n`;
-  fs.mkdirSync(path.dirname(role), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(role, `${note}${roleSeed ? fs.readFileSync(resolveRolePromptPath(roleSeed), 'utf8') : ''}`, { mode: 0o600 });
+// The first lines of a soul, to show before asking to replace it.
+function soulExcerpt(text, { lines = 12, chars = 800 } = {}) {
+  const all = text.trim().split('\n');
+  let shown = all.slice(0, lines).join('\n');
+  if (shown.length > chars) shown = `${shown.slice(0, chars)}…`;
+  else if (all.length > lines) shown += '\n…';
+  return shown.split('\n').map((line) => `    ${line}`).join('\n');
+}
+
+// The chosen role goes into the soul in OpenViking, read and written as the
+// instance's own OV user. An empty or missing soul is seeded; one with text is
+// shown and replaced only when the owner says so. Nothing here stops a save.
+async function seedSoul({ prompter, soul }, { role, configPath, uri }) {
+  if (!role) return;
+  const label = ROLE_CHOICES()[role].label;
+  let text;
+  try {
+    text = await soul.read({ configPath, uri });
+  } catch (error) {
+    prompter.warn(t(`读不到 soul（${uri}），没有改它：${error.message}`,
+      `Could not read the soul (${uri}), so it is left unchanged: ${error.message}`));
+    return;
+  }
+  if (text.trim()) {
+    prompter.info(t(`soul（${uri}）已经有内容：\n${soulExcerpt(text)}`,
+      `The soul (${uri}) already has text:\n${soulExcerpt(text)}`));
+    const choice = await prompter.select(t(`换成「${label}」吗？`, `Replace it with ${label}?`), [
+      { label: t('保持不变', 'Leave it unchanged'), value: 'keep' },
+      { label: t(`换成「${label}」`, `Replace it with ${label}`), value: 'replace' },
+    ], { initial: 0, label: 'Soul', back: false });
+    if (choice !== 'replace') {
+      prompter.info(t('soul 保持不变', 'The soul is left unchanged'));
+      return;
+    }
+  }
+  try {
+    await step(prompter, t(`把「${label}」写入 soul`, `Writing ${label} into the soul`),
+      () => soul.write({ configPath, uri, content: rolePresetText(role) }),
+      () => t(`角色已写入 ${uri}`, `The role is in ${uri}`));
+  } catch (error) {
+    prompter.warn(t(`没能写入 soul：${error.message}；之后再运行 setup 选角色`,
+      `Could not write the soul: ${error.message}; run setup again and choose the role later`));
+  }
 }
 
 async function askRuntime(ctx, state) {
   const { prompter, runtimes, kept } = ctx;
   const choices = [...(kept ? [kept] : []), ...runtimes];
   state.runtime = await prompter.select(t('Agent 运行时', 'Agent runtime'), choices.map((runtime) => ({
-    label: runtime.label, value: runtime, hint: runtime.note, disabled: !runtime.available,
+    label: runtime.label, value: runtime, hint: runtime.note,
   })), { initial: Math.max(0, choices.findIndex((runtime) => runtime.available && runtime.model === state.runtime?.model)) });
+  if (!state.runtime.available) {
+    throw new Error(t(
+      `${state.runtime.label} 现在不能运行：${state.runtime.note || '未安装、未登录或没有可用模型'}。未保存任何改动，请先修好再运行 setup。`,
+      `${state.runtime.label} cannot run now: ${state.runtime.note || 'not installed, not logged in, or no model is available'}. Nothing was saved; fix this and run setup again.`,
+    ));
+  }
+  await askDshConfig(ctx, state);
   // DSH cannot serve a turn without a route: guide the operator into adding one
   // instead of saving an instance whose runtime has nothing to run.
   await ensureDshModel(ctx, state);
+}
+
+async function askDshConfig({ prompter, homeDir }, state) {
+  if (state.runtime?.id !== 'dsh') return;
+  const before = state.dshHomeMode;
+  const mode = await prompter.select(t('DSH 配置目录', 'DSH configuration'), [
+    { label: t('独立（默认）', 'Isolated (default)'), value: 'isolated',
+      hint: t('配置放在实例数据目录，不与其他实例共享', 'keep configuration in this instance’s data directory') },
+    { label: t('共享', 'Shared'), value: DSH_HOME_SHARED,
+      hint: t('直接使用本机 ~/.dsh 和 ~/.agents', 'use this account’s ~/.dsh and ~/.agents directly') },
+  ], { initial: before === DSH_HOME_SHARED ? 1 : 0, label: t('DSH 配置目录', 'DSH configuration') });
+  if (mode !== before) {
+    state.dshHomeMode = mode;
+    state.dshSkillRoots = defaultDshSkillRoots(mode);
+    state.dshHomeRoute = null;
+    state.dshProbedHome = null;
+    state.runtime = { ...state.runtime, route: '', probedHome: null, kept: false };
+  }
+  const choices = dshSkillRootChoices(mode).map((id) => {
+    const [directory] = dshSkillDirectories({
+      workspace: state.workspace, dataDir: state.dataDir, homeDir, mode, selected: [id],
+    });
+    return { label: shortenHome(directory, homeDir), value: id };
+  });
+  state.dshSkillRoots = await prompter.multiselect(
+    t(`启用哪些技能目录（${mode === DSH_HOME_SHARED ? '共享 4 个' : '独立 6 个'}；未勾选的不生效）`,
+      `Which skill directories are enabled (${mode === DSH_HOME_SHARED ? '4 shared' : '6 isolated'}; unchecked roots stay off)`),
+    choices,
+    { initial: choices.map((choice, index) => state.dshSkillRoots.includes(choice.value) ? index : -1).filter(index => index >= 0), min: 0,
+      label: t('DSH 技能目录', 'DSH skill directories') },
+  );
 }
 
 // What a step says besides asking. A new instance's steps stay on screen;
@@ -500,11 +571,16 @@ async function askLarkApp(ctx, state) {
       state.larkApp = null;
       break;
     }
-    // A new app: typed in, or one to scan; then whose visibility it reads
-    // with, which decides what both scans ask for.
+    // A new app: typed in, or one to scan; then which identity it may use,
+    // which decides whether a user authorization scan follows.
     try {
       const app = source === 'manual' ? await enterApp(ctx, { previous: state.larkApp?.app }) : null;
-      const access = await askLarkAccess(prompter, state.larkApp?.access ?? current?.larkMessageAccess ?? 'owner');
+      const access = source === 'manual' ? 'owner'
+        : await askLarkAccess(prompter, state.larkApp?.access ?? current?.larkMessageAccess ?? 'owner');
+      if (source === 'manual') note(ctx, t(
+        '手动填写凭据时要扫码授权用户身份来绑定主人；仅机器人权限请改用扫码新建或选择机器人。',
+        'Entering credentials by hand needs a user authorization scan to bind the owner; use a scan-created or selected bot for bot-only access.',
+      ));
       state.larkApp = { source, ...(app ? { app } : {}), access };
       break;
     } catch (error) {
@@ -512,7 +588,13 @@ async function askLarkApp(ctx, state) {
       prompter.rewind(mark);
     }
   }
-  if (state.larkApp && state.larkApp.source !== 'create') for (const text of existingAppNotes(state.larkApp.source)) note(ctx, text);
+  if (state.larkApp && state.larkApp.source !== 'create') {
+    for (const text of existingAppNotes(state.larkApp.source, state.larkApp.access)) note(ctx, text);
+  }
+  if (state.larkApp?.access === 'bot' && state.switches.meetingNotes) {
+    state.switches.meetingNotes = false;
+    note(ctx, t('仅机器人权限不能读取会议纪要，会议纪要入库随之关掉', 'A bot-only bot cannot read meeting notes, so they are switched off'));
+  }
 }
 
 // The primary IM is its own question, Feishu unless it is left out; with a
@@ -585,11 +667,18 @@ const switchDefault = (key, model) => (key === 'explicitSilence' && model === 'a
 // Switching one of these changes the model's policy: a new session.
 const POLICY_SWITCHES = new Set(['stagedReplies', 'naturalWriting', 'explicitSilence', 'meetingNotes']);
 
+// Whether the instance's Feishu/Lark bot has no user access: a new app as
+// chosen for it, the app kept as it is.
+const larkBotOnly = (state, current) => state.connectors.includes('lark')
+  && (state.larkApp ? state.larkApp.access : current?.larkMessageAccess) === 'bot';
+
 // A new personal assistant or AI colleague on Feishu/Lark stores the owner's
 // meeting notes, unless another instance here already does; a Q&A bot, which
-// serves other people, does not.
-function defaultMeetingNotes(state, agents) {
+// serves other people, does not, and neither does a bot-only one, since the
+// notes are read as the owner.
+function defaultMeetingNotes(state, agents, current) {
   return ['colleague', 'assistant'].includes(state.role) && state.connectors.includes('lark')
+    && !larkBotOnly(state, current)
     && !agents.some((agent) => agent.id !== state.id && agent.meetingNotes);
 }
 
@@ -597,6 +686,9 @@ function defaultMeetingNotes(state, agents) {
 function meetingNotesRefusal(ctx, state) {
   if (!state.connectors.includes('lark')) {
     return t('会议纪要来自飞书：先在「接入的 IM」里接上飞书', 'Meeting notes come from Feishu/Lark: connect it under Connected IMs first');
+  }
+  if (larkBotOnly(state, ctx.current)) {
+    return t('会议纪要要以你的身份读取：仅机器人权限下不能开', 'Meeting notes are read as you: a bot-only bot cannot store them');
   }
   const holder = (ctx.agents ?? []).find((agent) => agent.id !== state.id && agent.meetingNotes);
   return holder ? t(`会议纪要已经由 ${holder.displayName}（${holder.id}）入库：一台机器上只有一个实例能开，先修改 ${holder.id} 把它关掉`,
@@ -609,7 +701,7 @@ const SWITCHES = () => [
   { key: 'naturalWriting', label: t('自然写作', 'Natural writing'),
     hint: t('写得像人，去掉 AI 腔', 'writes like a person, without the AI tone') },
   { key: 'explicitSilence', label: t('显式不回复', 'Explicit silence'),
-    hint: t('每条消息都要模型表态：回复，或记下不回；漏了提醒一次', 'the model decides on every message: a reply, or a note that it stays silent; a miss gets one reminder') },
+    hint: t('每条消息都要模型表态：回复，或记下不回；漏了最多提醒三次', 'the model decides on every message: a reply, or a note that it stays silent; a miss gets up to three reminders') },
   { key: 'meetingNotes', label: t('会议纪要入库', 'Meeting notes'),
     hint: t('你参加的飞书会议，智能纪要和文字记录存进 OpenViking；一台机器上只有一个实例能开',
       'the Feishu/Lark AI notes and transcripts of your meetings go into OpenViking; one instance per machine') },
@@ -655,10 +747,15 @@ async function askSwitches(ctx, state) {
 
 const SETTINGS = [
   { key: 'displayName', label: () => t('机器人名字', 'Bot name'), ask: askName, shown: (state) => state.displayName },
-  { key: 'role', label: () => t('角色', 'Role'), ask: askRole, shown: (state, { homeDir }) => roleShown(state, homeDir) },
+  { key: 'role', label: () => t('角色', 'Role'), ask: askRole, shown: (state) => roleShown(state) },
   { key: 'workspace', label: () => t('工作目录', 'Workspace'), ask: askWorkspace, shown: (state, { homeDir }) => shortenHome(state.workspace, homeDir) },
   { key: 'runtime', label: () => t('Agent 运行时', 'Agent runtime'), ask: askRuntime,
     shown: (state) => `${state.runtime.kept ? state.runtime.model : state.runtime.label}${state.dshModel ? t('（保存时加 model route）', ' (adds a model route on save)') : ''}` },
+  { key: 'dshConfig', label: () => t('DSH 配置与技能', 'DSH configuration & skills'),
+    ask: async (ctx, state) => { await askDshConfig(ctx, state); await ensureDshModel(ctx, state); },
+    shown: (state) => state.runtime?.id === 'dsh'
+      ? `${state.dshHomeMode === DSH_HOME_SHARED ? t('共享', 'shared') : t('独立', 'isolated')} · ${state.dshSkillRoots.length}/${dshSkillRootChoices(state.dshHomeMode).length}`
+      : t('仅使用 DSH 时可改', 'available when DSH is selected') },
   { key: 'ims', label: () => t('接入的 IM', 'Connected IMs'), ask: askIms, shown: (state) => imList(state.connectors) },
   { key: 'larkApp', label: () => t('飞书应用', 'Feishu/Lark app'), ask: askLarkApp,
     shown: (state, { current, larkNeeds }) => larkAppShown(state, current, larkNeeds) },
@@ -670,6 +767,7 @@ const SETTINGS = [
   { key: 'switches', label: () => t('其他设置', 'Other settings'), ask: askSwitches, shown: switchesShown },
 ];
 
+const settingsFor = (state) => SETTINGS.filter(({ key }) => key !== 'dshConfig' || state.runtime?.id === 'dsh');
 const mailChanged = (state) => state.mail.added.length + state.mail.updated.size + state.mail.removed.length > 0;
 
 // Changing an instance: every setting with its value; the owner opens the
@@ -681,6 +779,7 @@ const mailChanged = (state) => state.mail.added.length + state.mail.updated.size
 // and `page.notice`, why the scans came back, when they said.
 async function editInstance(ctx, state, { describe, check, before, page }) {
   const { prompter, out, current } = ctx;
+  const settings = settingsFor(state);
   page.mark ??= prompter.mark();
   let notice = page.notice ?? null;
   page.notice = null;
@@ -691,13 +790,13 @@ async function editInstance(ctx, state, { describe, check, before, page }) {
     notice = null;
     const changes = describe(state);
     const changed = (key, value) => value !== before[key] || (key === 'mailboxes' && mailChanged(state));
-    const labels = SETTINGS.map(({ label }) => label());
+    const labels = settings.map(({ label }) => label());
     const labelWidth = Math.max(...labels.map((label) => width(label))) + 2;
     const name = t(`修改 ${current.displayName}（${current.id}）`, `Change ${current.displayName} (${current.id})`);
     let choice;
     try {
       choice = await prompter.select(name, [
-        ...SETTINGS.map(({ key, shown }, index) => {
+        ...settings.map(({ key, shown }, index) => {
           const value = shown(state, ctx);
           return { label: padEnd(labels[index], labelWidth), hint: `${value}${changed(key, value) ? t('（已改）', ' (changed)') : ''}`, value: index };
         }),
@@ -729,7 +828,7 @@ async function editInstance(ctx, state, { describe, check, before, page }) {
     page.cursor = choice;
     // ← inside a setting leaves it as it was and comes back to the list.
     try {
-      await SETTINGS[choice].ask(ctx, state);
+      await settings[choice].ask(ctx, state);
     } catch (error) {
       if (!(error instanceof GoBack)) throw error;
     }
@@ -832,10 +931,10 @@ async function enterApp({ prompter, fetchImpl = globalThis.fetch }, { previous =
 }
 
 const scanTitles = {
-  create: (minutes) => t(`第 1 次扫码：用飞书 App 扫码，创建机器人应用（${minutes} 分钟内有效）`,
-    `Scan 1 of 2: scan with the Feishu/Lark app to create the bot app (valid for ${minutes} minutes)`),
-  select: (minutes) => t(`第 1 次扫码：用飞书 App 扫码，选择已有的机器人应用（${minutes} 分钟内有效）`,
-    `Scan 1 of 2: scan with the Feishu/Lark app to pick an existing bot app (valid for ${minutes} minutes)`),
+  create: (minutes, _appId, single) => t(`${single ? '' : '第 1 次扫码：'}用飞书 App 扫码，创建机器人应用（${minutes} 分钟内有效）`,
+    `${single ? 'Scan with' : 'Scan 1 of 2: scan with'} the Feishu/Lark app to create the bot app (valid for ${minutes} minutes)`),
+  select: (minutes, _appId, single) => t(`${single ? '' : '第 1 次扫码：'}用飞书 App 扫码，创建或选择机器人应用（${minutes} 分钟内有效）`,
+    `${single ? 'Scan with' : 'Scan 1 of 2: scan with'} the Feishu/Lark app to create or pick a bot app (valid for ${minutes} minutes)`),
   update: (minutes, appId) => t(`用飞书 App 扫码，给应用 ${appId} 补上缺的权限和事件（${minutes} 分钟内有效）`,
     `Scan with the Feishu/Lark app to add what ${appId} lacks (valid for ${minutes} minutes)`),
 };
@@ -867,7 +966,7 @@ export async function registerApp({
       scan = showScan(prompter, {
         url,
         where: IM_LABELS.lark,
-        title: scanTitles[mode](Math.round(expiresIn / 60), appId),
+        title: scanTitles[mode](Math.round(expiresIn / 60), appId, scopes.user.length === 0),
         ...(mode === 'update' ? { stopKey: 's', stopLabel: t('跳过', 'skip') }
           : { stopKey: 'm', stopLabel: t('手动填 App ID', 'enter the App ID by hand') }),
         onBack: canGoBack ? () => wantBack() : null,
@@ -936,10 +1035,14 @@ export function reportApp(prompter, scopes, inspected, { manual = false } = {}) 
     prompter.warn(t(`没有订阅接收消息事件（${MESSAGE_EVENT}）：机器人收不到消息`,
       `The message event (${MESSAGE_EVENT}) is not subscribed: the bot gets no messages`));
   }
-  const comments = missing.events?.filter((event) => event !== MESSAGE_EVENT) ?? [];
-  if (comments.length) {
-    prompter.warn(t(`没有订阅文档评论事件（${list(comments)}）：在飞书文档的评论里 @ 机器人，它收不到`,
-      `The document comment event (${list(comments)}) is not subscribed: the bot misses @mentions in document comments`));
+  if (missing.events?.includes(COMMENT_EVENT)) {
+    prompter.warn(t(`没有订阅文档评论事件（${COMMENT_EVENT}）：在飞书文档的评论里 @ 机器人，它收不到`,
+      `The document comment event (${COMMENT_EVENT}) is not subscribed: the bot misses @mentions in document comments`));
+  }
+  const others = missing.events?.filter((event) => ![MESSAGE_EVENT, COMMENT_EVENT].includes(event)) ?? [];
+  if (others.length) {
+    prompter.warn(t(`没有订阅撤回和表情回复事件（${list(others)}）：消息被撤回、被点表情，机器人都不知道`,
+      `The recall and reaction events (${list(others)}) are not subscribed: the bot does not notice recalled messages or reactions`));
   }
   // No API tells how events arrive; callbacks on a webhook say the app has one.
   if (inspected.callbacks.type === 'webhook') {
@@ -970,11 +1073,11 @@ async function confirmUnshared({ prompter, larkCli, appId, others }) {
 }
 
 // The app from `source`: a scan, or `app` typed in with the questions. It is
-// checked against what OpenViking SuperAgent needs, written to the lark-cli profile, and the
-// owner authorizes as a user (the second scan). `access` is whose visibility
-// the bot reads with (larkScopes). `others` are the machine's other instances
-// with Feishu. Resolves with { profile, ownerOpenId, name }, name being the
-// app's own, when it could be read.
+// checked against what OpenViking SuperAgent needs and written to the
+// lark-cli profile. With full access the owner then authorizes as a user (the
+// second scan); bot-only uses the identity from the app scan and asks for no
+// user authorization. Resolves with { profile, ownerOpenId, name }, name being
+// the app's own, when it could be read.
 export async function connectLark({
   plan, prompter, larkCli, fetchImpl, profile, source = 'create', app: typed = null, access = 'owner', others = [], debug = false,
   canGoBack = false, register = null,
@@ -985,6 +1088,10 @@ export async function connectLark({
   const app = typed ?? await registerApp({ plan, prompter, scopes, debug, canGoBack, mode: source, fetchImpl, register });
   // A scan always says who confirmed it; an app without that was typed in.
   const manual = !app.ownerOpenId;
+  if (manual && scopes.user.length === 0) {
+    throw new GoBack(t('仅机器人权限需要扫码新建或选择机器人，不能手动填写 App ID 和 App Secret。',
+      'Bot-only access requires creating or selecting the bot by scan; App ID and App Secret cannot be entered by hand.'));
+  }
   prompter.success(source === 'create' && !typed ? t(`已创建应用 ${app.appId}`, `Created the app ${app.appId}`)
     : t(`用应用 ${app.appId}`, `Using the app ${app.appId}`));
   let inspected = null;
@@ -1009,11 +1116,33 @@ export async function connectLark({
         'Add what is missing in the developer console; if you own or administer the app, ov-superagent setup can add it with a scan later')
       : t('之后运行 ov-superagent setup 可以扫码补齐', 'ov-superagent setup can add it with a scan later'));
   }
+  if (scopes.user.length === 0) {
+    // Skipping a new OAuth flow is not enough when setup reuses a profile:
+    // remove its saved login while the old app credentials are still
+    // configured. Do not report bot-only if this fails.
+    const oldUserScopes = await larkCli.userScopes({ profile }).catch(() => null);
+    await larkCli.logoutUser({ profile });
+    await larkCli.configureProfile({ profile, ...app });
+    // lark-cli may resolve an app's login after a new profile starts pointing
+    // at it, so clear once more on the selected app side as well.
+    const selectedUserScopes = await larkCli.userScopes({ profile }).catch(() => null);
+    await larkCli.logoutUser({ profile });
+    // A logout only promises the local login is gone (lark-cli asks the
+    // platform to revoke the token but does not say whether it did), so check
+    // that much here rather than take the logout's word for it.
+    if ((await larkCli.userScopes({ profile }))?.length) {
+      throw new Error(t(`${profile} 的用户登录没有删掉，没有按仅机器人权限接入；运行 lark-cli --profile ${profile} auth logout 后再试`,
+        `The user login of ${profile} is still there, so it was not connected as bot only; run lark-cli --profile ${profile} auth logout and try again`));
+    }
+    if (oldUserScopes?.length || selectedUserScopes?.length) {
+      prompter.success(t(`已删除 ${profile} 本地保存的用户登录`, `Removed the saved user login from ${profile}`));
+    }
+    prompter.success(t('飞书已接好（仅机器人权限）', 'Feishu/Lark is connected (bot only)'));
+    return { profile, ownerOpenId: app.ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null };
+  }
   await larkCli.configureProfile({ profile, ...app });
   const login = await larkCli.beginUserLogin({ profile, scopes: grantedUserScopes(scopes, inspected) });
-  const what = access === 'bot'
-    ? t('授权 OpenViking SuperAgent 以你的身份用文档、日历等（不读你的消息）', 'let OpenViking SuperAgent use documents, calendar and more as you (not your messages)')
-    : t('授权 OpenViking SuperAgent 以你的身份读消息（用于搜索和读历史）', 'let OpenViking SuperAgent read messages as you (for search and history)');
+  const what = t('授权 OpenViking SuperAgent 使用你的完整用户权限', 'let OpenViking SuperAgent use your full user access');
   const scan = showScan(prompter, {
     url: login.url, where: IM_LABELS.lark, label: t('等待授权', 'Waiting for authorization'),
     title: source === 'manual' ? t(`扫码${what}`, `Scan to ${what}`) : t(`第 2 次扫码：${what}`, `Scan 2 of 2: ${what}`),
@@ -1029,20 +1158,8 @@ export async function connectLark({
     prompter.warn(t('两次扫码的不是同一个飞书账号；机器人会把第 2 次扫码的人当作主人。',
       'The two scans came from different Feishu/Lark accounts; the bot takes the second as its owner.'));
   }
-  if (access === 'bot') await warnOwnerReads(prompter, larkCli, profile);
   prompter.success(t('飞书已接好', 'Feishu/Lark is connected'));
   return { profile, ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null };
-}
-
-// An app the owner once let read their messages keeps that grant, whatever
-// it asks for now: OpenViking SuperAgent itself reads as the bot, but the grant stays usable.
-async function warnOwnerReads(prompter, larkCli, profile) {
-  let granted = null;
-  try { granted = await larkCli.userScopes({ profile }); } catch {}
-  const kept = (granted ?? []).filter((scope) => OWNER_MESSAGE_SCOPES.includes(scope));
-  if (!kept.length) return;
-  prompter.warn(t(`你以前允许过这个应用以你的身份读消息（${list(kept)}），飞书不会收回：OpenViking SuperAgent 的工具只用机器人身份读消息，但机器人在命令行里用 lark-cli 仍能以你的身份搜到消息。要彻底隔开，换一个新建的机器人。`,
-    `You once let this app read messages as you (${list(kept)}), and Feishu/Lark keeps that grant: OpenViking SuperAgent's tools read only as the bot, but with lark-cli in its shell the bot can still search messages as you. To keep them apart for sure, use a newly created bot.`));
 }
 
 // The app as its bot reads it, through the instance's profile.
@@ -1117,13 +1234,12 @@ export async function completeLarkApp({ agent, prompter, larkCli, scopes = larkS
 // The owner authorizes OpenViking SuperAgent as a user again (a scan), for the user scopes
 // the app has.
 export async function reauthorizeOwner({ agent, prompter, larkCli, scopes = larkScopes(agent.larkMessageAccess), inspected = null }) {
+  if (scopes.user.length === 0) return;
   const login = await larkCli.beginUserLogin({ profile: agent.profile, scopes: grantedUserScopes(scopes, inspected) });
   const scan = showScan(prompter, {
     url: login.url, where: IM_LABELS.lark, label: t('等待授权', 'Waiting for authorization'),
-    title: agent.larkMessageAccess === 'bot'
-      ? t(`扫码重新授权 ${agent.displayName}（${agent.profile}）以你的身份用文档、日历等（不读你的消息）`,
-        `Scan to let ${agent.displayName} (${agent.profile}) use documents, calendar and more as you again (not your messages)`)
-      : t(`扫码重新授权 ${agent.displayName}（${agent.profile}）以你的身份读消息`, `Scan to let ${agent.displayName} (${agent.profile}) read messages as you again`),
+    title: t(`扫码重新授权 ${agent.displayName}（${agent.profile}）使用你的完整用户权限`,
+      `Scan to let ${agent.displayName} (${agent.profile}) use your full user access again`),
   });
   try {
     await larkCli.finishUserLogin({ profile: agent.profile, deviceCode: login.deviceCode });
@@ -1452,7 +1568,9 @@ function dshModelHint({ env, state }) {
 async function probeInstanceRoutes(ctx, state) {
   if (!ctx.detect.dsh || !state.dataDir) return '';
   try {
-    const probed = await ctx.detect.dsh({ env: ctx.probeEnv, dataDir: state.dataDir });
+    const probed = await ctx.detect.dsh({
+      env: ctx.probeEnv, dataDir: state.dataDir, dshHomeMode: state.dshHomeMode, homeDir: ctx.homeDir,
+    });
     return typeof probed?.route === 'string' ? probed.route : '';
   } catch {
     return '';
@@ -1469,17 +1587,17 @@ function instanceRouteNote(route) {
 // `ov-superagent dsh model list` starts a control process against it. Detection probed a
 // throwaway home, so without this a configured instance would report "no route"
 // even though its turns work.
-async function refreshDshRoutes({ prompter, env, detect, current, runtimes }) {
+async function refreshDshRoutes({ prompter, env, homeDir, detect, current, runtimes }) {
   const at = runtimes.findIndex((runtime) => runtime.id === 'dsh');
   if (at < 0 || !current?.dataDir || typeof detect.dsh !== 'function') return runtimes;
   const model = String(current.model ?? '');
   if (model !== 'dsh' && model !== 'deepseek-harness' && !model.startsWith('dsh:')) return runtimes;
-  if (!fs.existsSync(path.join(current.dataDir, 'dsh', 'home'))) return runtimes;
+  if (!fs.existsSync(dshHomePath({ dataDir: current.dataDir, mode: current.dshHomeMode, homeDir }))) return runtimes;
   let refreshed;
   try {
     refreshed = await step(prompter,
       t(`读取实例 ${current.id} 自己的 DSH model route`, `Reading the DSH model routes of instance ${current.id}`),
-      () => detect.dsh({ env, dataDir: current.dataDir }),
+      () => detect.dsh({ env, dataDir: current.dataDir, dshHomeMode: current.dshHomeMode, homeDir }),
       (runtime) => (runtime.route
         ? t(`model route：${runtime.route}`, `model route: ${runtime.route}`)
         : t('实例自己的 DSH 里现在没有能服务 model 的 route', 'the instance’s own DSH serves no model route right now')));
@@ -1510,7 +1628,7 @@ async function ensureDshModel(ctx, state) {
   if (state.dshModel) return;
   let route = typeof runtime.route === 'string' ? runtime.route : null;
   if (route === null) return;
-  if (route === '' && state.dataDir && fs.existsSync(path.join(state.dataDir, 'dsh', 'home'))) {
+  if (route === '' && state.dataDir && fs.existsSync(dshHomePath({ dataDir: state.dataDir, mode: state.dshHomeMode, homeDir: ctx.homeDir }))) {
     // A directory that already served DSH keeps its routes there (an instance
     // being re-created over an older home, or one configured with
     // the menu after a setup that had no route). Read once: going
@@ -1529,15 +1647,17 @@ async function ensureDshModel(ctx, state) {
   if (route) return;
   const hint = dshModelHint({ env: ctx.env, state });
   if (!prompter.tty) {
-    // An unattended run must not block on a question nobody answers.
+    // An unattended run must not save a runtime that cannot serve a turn.
     prompter.info(hint);
-    return;
+    throw new Error(t('DeepSeek Harness 没有可用模型，未保存任何改动。',
+      'DeepSeek Harness has no usable model; nothing was saved.'));
   }
   prompter.warn(t(`DeepSeek Harness 现在没有能服务 model 的 route${runtime.note ? `（${runtime.note}）` : ''}：这样保存的实例启动后会反复重启。`,
     `DeepSeek Harness has no model route that serves a model${runtime.note ? ` (${runtime.note})` : ''}: an instance saved now would restart in a loop.`));
   if (!await prompter.confirm(t('现在添加一个 model route？', 'Add a model route now?'), true)) {
     prompter.info(hint);
-    return;
+    throw new Error(t('DeepSeek Harness 没有可用模型，未保存任何改动。',
+      'DeepSeek Harness has no usable model; nothing was saved.'));
   }
   const draft = await collectDshModelDraft({
     prompter,
@@ -1546,10 +1666,13 @@ async function ensureDshModel(ctx, state) {
     validate: ctx.dshTools.validate,
     onDecline: () => prompter.info(dshModelHint({ env: ctx.env, state })),
   });
-  if (!draft) return;
+  if (!draft) {
+    throw new Error(t('DeepSeek Harness 没有可用模型，未保存任何改动。',
+      'DeepSeek Harness has no usable model; nothing was saved.'));
+  }
   state.dshModel = draft;
-  prompter.info(t(`保存实例时把它写进 ${dshSettingsDocument(state.dataDir)}`,
-    `It is written to ${dshSettingsDocument(state.dataDir)} when the instance is saved`));
+  prompter.info(t(`保存实例时把它写进 ${dshSettingsDocument(state.dataDir, { dshHomeMode: state.dshHomeMode, homeDir: ctx.homeDir })}`,
+    `It is written to ${dshSettingsDocument(state.dataDir, { dshHomeMode: state.dshHomeMode, homeDir: ctx.homeDir })} when the instance is saved`));
 }
 
 // Label/value rows: a box on a colour terminal, indented lines otherwise.
@@ -1563,10 +1686,11 @@ function table(prompter, title, rows) {
   prompter.write(`\n${title}${t('：', ':')}\n${rows.map(([key, value]) => `  ${padEnd(key, keyWidth)}  ${value}`).join('\n')}\n`);
 }
 
-// Feishu/Lark is one scan when the app is typed in: only the owner's authorization.
-const scansOf = (im, larkSource) => (im === 'lark' ? (larkSource === 'manual' ? 1 : 2) : 1);
+// Feishu/Lark is one scan for bot-only, or when the app is typed in and only
+// the owner's authorization remains.
+const scansOf = (im, larkSource, larkAccess) => (im === 'lark' ? (larkSource === 'manual' || larkAccess === 'bot' ? 1 : 2) : 1);
 
-function connectionSteps(prompter, connectors, { saving = false, larkSource = 'create' } = {}) {
+function connectionSteps(prompter, connectors, { saving = false, larkSource = 'select', larkAccess = 'owner' } = {}) {
   if (!connectors.length) return;
   const telegram = connectors.some((im) => TOKEN_IMS.includes(im));
   const steps = connectors.map((im) => {
@@ -1574,7 +1698,7 @@ function connectionSteps(prompter, connectors, { saving = false, larkSource = 'c
     if (im === 'qq') return t('QQ AppID / AppSecret + 私聊验证码绑定', 'QQ AppID / AppSecret + private-chat verification code');
     if (im === 'slack') return t('Slack 新建或选已有 App + 两个 token + 私聊口令绑定', 'Slack app (new or existing) + two tokens + a code in a direct message');
     if (im === 'onebot') return t(`${IM_LABELS.onebot} WebSocket 地址 + access token + 私聊口令绑定`, `${IM_LABELS.onebot} WebSocket address + access token + a code in a private message`);
-    const scans = scansOf(im, larkSource);
+    const scans = scansOf(im, larkSource, larkAccess);
     return t(`${IM_LABELS[im]} ${scans} 次`, `${IM_LABELS[im]} ${scans} ${scans === 1 ? 'scan' : 'scans'}`);
   });
   prompter.info(t(
@@ -1647,6 +1771,7 @@ async function setupFlow({
   detect = { runtimes: detectRuntimes, openViking: detectOpenViking, larkApps: checkLarkApps, dsh: detectDsh },
   dshModels = null,
   configureOV = configureOpenViking,
+  soul = null,
   connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, email: askEmail, greet, pi: loginPi },
   control = { start: startCommand, restart: restartCommand, autostart: autostartCommand },
   listen = larkMessageListener,
@@ -1702,7 +1827,7 @@ async function setupFlow({
   } else {
     // An instance that already runs keeps its model routes in its own DSH home;
     // the detection probe used a throwaway one and cannot see them.
-    runtimes = await refreshDshRoutes({ prompter, env: probeEnv, detect, current, runtimes });
+    runtimes = await refreshDshRoutes({ prompter, env: probeEnv, homeDir, detect, current, runtimes });
   }
   const kept = keptRuntime(current, runtimes);
   const others = manifest?.agents?.length > 0;
@@ -1710,6 +1835,7 @@ async function setupFlow({
   const dshTools = { validate: validateDshModelDraft, write: writeDshModelDraft, ...(dshModels ?? {}) };
   const ctx = {
     prompter, out, env, probeEnv, homeDir, fetchImpl, runtimes, current, connect, kept, detect, dshTools,
+    soul: soul ?? { read: (input) => readOVSoul({ ...input, fetchImpl }), write: (input) => writeOVSoul({ ...input, fetchImpl }) },
     menu: Boolean(current), startOver: others, notes: [],
     agents: manifest?.agents ?? [],
     larkNeeds: (memo.lacking ?? []).find((needs) => needs.agent.id === current?.id) ?? null,
@@ -1788,14 +1914,25 @@ async function setupFlow({
       workspace: state.workspace,
       model: manifestModel(state, current),
     };
-    if (state.role) agent.role = state.role;
-    else delete agent.role;
+    if (state.runtime?.id === 'dsh') {
+      agent.dshHomeMode = state.dshHomeMode;
+      agent.dshSkillRoots = [...state.dshSkillRoots];
+    } else {
+      delete agent.dshHomeMode;
+      delete agent.dshSkillRoots;
+    }
+    // The soul lives only in OpenViking; older manifests may still carry role.
+    delete agent.role;
     if (state.connectors.includes('lark')) agent.profile = current?.profile ?? `superagent-${state.id}`;
     else delete agent.profile;
     // A new app reads as chosen for it; the app kept reads as it did.
-    const access = state.larkApp ? state.larkApp.access : current?.larkMessageAccess;
-    if (state.connectors.includes('lark') && access === 'bot') agent.larkMessageAccess = 'bot';
+    if (larkBotOnly(state, current)) agent.larkMessageAccess = 'bot';
     else delete agent.larkMessageAccess;
+    // A bot-only bot has no user login to tell its owner by: it keeps who
+    // confirmed the new app's scan, and the app kept keeps its owner.
+    const owner = state.larkApp ? state.larkOwnerOpenId : current?.larkOwnerOpenId;
+    if (larkBotOnly(state, current) && owner) agent.larkOwnerOpenId = owner;
+    else delete agent.larkOwnerOpenId;
     agent.ovConfig = state.ovConfig;
     // Retired OpenViking options: peers are gone, and remember is always on.
     delete agent.ovRecallScope;
@@ -1841,7 +1978,7 @@ async function setupFlow({
     if (late) throw new Error(late);
   };
   const confirmNew = async () => {
-    state.switches.meetingNotes = defaultMeetingNotes(state, ctx.agents);
+    state.switches.meetingNotes = defaultMeetingNotes(state, ctx.agents, current);
     const addresses = mailPlan(state).added;
     const channels = ims(state).length > 1
       ? t(`${imList(ims(state))}，主渠道：${IM_LABELS[state.channel]}`, `${imList(ims(state))}; primary: ${IM_LABELS[state.channel]}`)
@@ -1849,6 +1986,8 @@ async function setupFlow({
     table(prompter, t(`将添加实例 ${state.id}`, `New instance ${state.id}`), [
       [t('机器人', 'Bot'), `${state.displayName} · ${state.runtime.label}`],
       ...(state.dshModel ? [[t('model route', 'Model route'), `${state.dshModel.route}/${state.dshModel.model}${t('（保存时写入 DSH）', ' (written to DSH on save)')}`]] : []),
+      ...(state.runtime?.id === 'dsh' ? [[t('DSH 配置与技能', 'DSH configuration & skills'),
+        `${state.dshHomeMode === DSH_HOME_SHARED ? t('共享', 'shared') : t('独立', 'isolated')} · ${state.dshSkillRoots.length}/${dshSkillRootChoices(state.dshHomeMode).length}`]] : []),
       [t('角色', 'Role'), roleShown(state, homeDir)],
       [t('消息渠道', 'Channels'), channels],
       ...(larkSource(state, null) ? [[t('飞书机器人', 'Feishu/Lark bot'), larkAppShown(state, null)]] : []),
@@ -1858,7 +1997,11 @@ async function setupFlow({
       [t('工作目录', 'Workspace'), shortenHome(state.workspace, homeDir)],
       [t('数据目录', 'Data'), shortenHome(state.dataDir, homeDir)],
     ]);
-    connectionSteps(prompter, ims(state), { saving: true, larkSource: larkSource(state, null) });
+    connectionSteps(prompter, ims(state), {
+      saving: true,
+      larkSource: larkSource(state, null),
+      larkAccess: state.larkApp?.access ?? 'owner',
+    });
     const go = ims(state).some((im) => TOKEN_IMS.includes(im)) ? t('开始接入？', 'Start connecting?')
       : ims(state).length ? t('开始扫码？', 'Start scanning?') : t('保存并启动？', 'Save and start?');
     if (await prompter.confirm(go)) return null;
@@ -1875,7 +2018,7 @@ async function setupFlow({
   ];
   const run = {};
   const page = {};
-  const original = current ? Object.fromEntries(SETTINGS.map(({ key, shown }) => [key, shown(state, ctx)])) : null;
+  const original = current ? Object.fromEntries(settingsFor(state).map(({ key, shown }) => [key, shown(state, ctx)])) : null;
   let newIms;
   let larkCliBin;
   let agent;
@@ -1890,7 +2033,10 @@ async function setupFlow({
       const describe = () => describeChanges(current, build(), mailPlan(state), homeDir, state);
       if (!await editInstance(ctx, state, { describe, check: () => problem(build()), before: original, page })) return 0;
       out(`\n${t(`将修改 ${current.displayName}（${current.id}）：`, `Changing ${current.displayName} (${current.id}):`)}\n${describe().map((change) => `  ${change}\n`).join('')}`);
-      connectionSteps(prompter, toConnect(), { larkSource: larkSource(state, current) });
+      connectionSteps(prompter, toConnect(), {
+        larkSource: larkSource(state, current),
+        larkAccess: state.larkApp?.access ?? current?.larkMessageAccess ?? 'owner',
+      });
     } else if (await wizard(ctx, state, steps, run) === DECLINED) {
       return 1;
     }
@@ -1920,6 +2066,10 @@ async function setupFlow({
           others: (manifest?.agents ?? []).filter((other) => other.id !== state.id && other.profile),
         })
         : null;
+      if (lark) {
+        state.larkOwnerOpenId = lark.ownerOpenId ?? null;
+        agent = build();
+      }
       // People @ the bot by its app's name, so that is the default; an owner
       // who has called it something else for long may keep that.
       if (lark?.name && lark.name !== state.displayName && lark.name.length <= 40
@@ -1972,7 +2122,7 @@ async function setupFlow({
   const id = state.id;
   const mail = mailPlan(state);
   for (const { config, account } of mail.write) writeEmailAccount(config, account);
-  writeRoleFile(state, id);
+  await seedSoul(ctx, { role: state.role, configPath: agent.ovConfig, uri: agent.soulUri ?? OV_SOUL_URI });
 
   fs.mkdirSync(state.workspace, { recursive: true, mode: 0o700 });
   // The DSH route stayed in memory until here: this is where the instance is
@@ -1982,7 +2132,10 @@ async function setupFlow({
     try {
       const written = await step(prompter,
         t('把 model route 写进实例的 DSH 配置', 'Writing the model route into the instance’s DSH configuration'),
-        () => ctx.dshTools.write({ dataDir: state.dataDir, draft: state.dshModel, bin: state.runtime.bin || 'dsh', env: probeEnv }),
+        () => ctx.dshTools.write({
+          dataDir: state.dataDir, draft: state.dshModel, bin: state.runtime.bin || 'dsh', env: probeEnv,
+          dshHomeMode: state.dshHomeMode, homeDir,
+        }),
         (result) => t(`model route 已写入 ${shortenHome(result.settings, homeDir)}`,
           `The model route is in ${shortenHome(result.settings, homeDir)}`));
       for (const line of written.notes ?? []) prompter.info(line);
@@ -1991,14 +2144,11 @@ async function setupFlow({
           `The credential ${written.keyRef} has no value yet: DSH can serve this route only once it resolves it. Run ${cli} dsh model key set ${written.keyRef}`));
       }
     } catch (error) {
-      // Saving the qualified model without the route would be exactly the
-      // restart loop this step exists to prevent: keep today's value instead and
-      // name the command that adds the route later.
+      // Never fall back to a manifest that names a route which was not written.
       prompter.warn(t(`model route 没能写进实例的 DSH 配置：${error.message}`,
         `Could not write the model route into the instance’s DSH configuration: ${error.message}`));
       prompter.info(dshModelHint({ env, state }));
-      state.dshModel = null;
-      agent = build();
+      throw new Error(t('DSH 配置没有写好，实例未保存。', 'The DSH configuration was not written; the instance was not saved.'));
     }
   }
   writeManifest(configPath, manifestWith(agent), { expected: manifest });
@@ -2133,20 +2283,16 @@ async function setupFlow({
 
 // Starting at login is one question at the end of a first setup. A machine
 // without a user service manager says so, and setup still succeeds.
-async function offerAutostart({ prompter, env, homeDir, control, cli }) {
+export async function offerAutostart({ prompter, env, homeDir, control, cli }) {
   if (!await prompter.confirm(t('开机后自动启动 OpenViking SuperAgent？', 'Start OpenViking SuperAgent when this computer starts?'), true)) {
     prompter.info(t(`之后想开：${cli} autostart enable`, `To turn it on later: ${cli} autostart enable`));
     return;
   }
   let said = '';
   await control.autostart(['enable'], { env, homeDir, output: { write: (text) => { said += text; } } }).then(
-    () => {
-      prompter.success(t('开机自启已开启', 'Autostart is on'));
-      if (/loginctl/.test(said)) {
-        prompter.info(t('Linux 服务器上还要运行一次 loginctl enable-linger，否则退出登录后 OpenViking SuperAgent 会停。',
-          'On a Linux server, also run loginctl enable-linger once, or OpenViking SuperAgent stops when you log out.'));
-      }
-    },
+    (code) => code === 0
+      ? prompter.success(t('开机自启已开启', 'Autostart is on'))
+      : prompter.warn(said.trim() || t('开机自启没有完整开启', 'Autostart was not fully enabled')),
     (error) => prompter.warn(t(`这台机器开不了开机自启：${String(error.message).split('\n')[0]}`, `Autostart is not available here: ${String(error.message).split('\n')[0]}`)),
   );
 }
@@ -2157,9 +2303,10 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
   const was = connectorsOf(before);
   if (before.ovConfig !== after.ovConfig) changes.push(t('更新 OpenViking 连接', 'Update the OpenViking connection'));
   if (before.displayName !== after.displayName) changes.push(`${t('机器人名字：', 'Bot name: ')}${before.displayName} → ${after.displayName}`);
-  if (before.role !== after.role) {
-    const shown = (agent) => roleShown(agent, homeDir);
-    changes.push(t(`角色：${shown(before)} → ${shown(after)}（模型会开一次新的会话）`, `Role: ${shown(before)} → ${shown(after)} (the model starts a new session)`));
+  if (state?.role) {
+    const label = roleShown(state);
+    changes.push(t(`角色：把「${label}」写入 OpenViking 里的 soul（已有内容时先问你）`,
+      `Role: seed ${label} into the soul in OpenViking (asks first if it has text)`));
   }
   if (before.workspace !== after.workspace) {
     const move = `${shortenHome(before.workspace, homeDir)} → ${shortenHome(after.workspace, homeDir)}`;
@@ -2170,6 +2317,17 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
     changes.push(sameRuntime
       ? `${t('model：', 'Model: ')}${before.model} → ${after.model}`
       : `${t('运行时：', 'Runtime: ')}${before.model} → ${after.model}`);
+  }
+  const beforeDshMode = before.dshHomeMode ?? 'isolated';
+  const afterDshMode = after.dshHomeMode ?? 'isolated';
+  if (beforeDshMode !== afterDshMode) {
+    changes.push(`${t('DSH 配置目录：', 'DSH configuration: ')}${beforeDshMode} → ${afterDshMode}`);
+  }
+  const beforeRoots = before.dshSkillRoots ?? defaultDshSkillRoots(beforeDshMode);
+  const afterRoots = after.dshSkillRoots ?? defaultDshSkillRoots(afterDshMode);
+  if (JSON.stringify(beforeRoots) !== JSON.stringify(afterRoots)) {
+    changes.push(t(`DSH 技能目录：${beforeRoots.length} 个 → ${afterRoots.length} 个`,
+      `DSH skill roots: ${beforeRoots.length} → ${afterRoots.length}`));
   }
   for (const { key, label } of SWITCHES()) {
     const was = before[key] ?? switchDefault(key, before.model);

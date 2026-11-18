@@ -4,17 +4,82 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { actionEndpoint, listTools } from './actions/client.mjs';
+import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
 import { PI_MCP_STATUS } from './pi-runtime.mjs';
 
 // Loaded explicitly only by the daemon's Pi process. Nothing is written to
 // ~/.pi or the workspace, and no tools are reimplemented in this extension.
+// Pi's own tools that do work, as against the Core tools a router routes with.
+const WORK_TOOLS = new Set(['bash', 'read', 'edit', 'write', 'grep', 'find', 'ls']);
+
 export default function personalAgentMcp(pi) {
   const config = JSON.parse(process.env.PERSONAL_AGENT_MCP_CONFIG);
   pi.registerMcpServer('personal_agent', { ...config, exposure: 'direct' });
 
   let stopped = false;
   pi.on('session_shutdown', () => { stopped = true; });
+
+  // A router (workers scheduler) hands longer work to tasks: its own shell
+  // commands are capped and may not sleep, and each run gets a few calls of
+  // its own work tools; past them, the work belongs to a task. A capped
+  // command alone does not stop many short ones in a row.
+  const shellLimit = Number(process.env.PERSONAL_AGENT_SHELL_LIMIT_S);
+  const workBudget = Number(process.env.PERSONAL_AGENT_WORK_TOOL_BUDGET);
+  let workUsed = 0;
+  if (shellLimit > 0) {
+    pi.on('agent_start', () => { workUsed = 0; });
+    pi.on('tool_call', (event) => {
+      if (workBudget > 0 && WORK_TOOLS.has(event.toolName)) {
+        workUsed += 1;
+        if (workUsed > workBudget) {
+          return { block: true, reason: `You have used your own tools ${workBudget} times in this turn: what still needs work is a task. Hand it to a worker with task_create, tell the requester once, and go on with your other inputs.` };
+        }
+      }
+      if (event.toolName !== 'bash' || !event.input) return undefined;
+      if (/(^|[\s;&|(`])sleep\s/.test(String(event.input.command ?? ''))) {
+        return { block: true, reason: 'Your own shell may not sleep or wait; hand work that waits to a task (task_create).' };
+      }
+      const timeout = Number(event.input.timeout);
+      event.input.timeout = timeout > 0 ? Math.min(timeout, shellLimit) : shellLimit;
+      return undefined;
+    });
+  }
+  // A session that does the work itself (a worker, or a router that hands
+  // nothing off) may run long commands, but one that never ends must not hold
+  // it: Pi's bash has no default timeout. A command without one gets the
+  // default; one that asks for more than the most gets the most. Neither cuts
+  // short a timeout the model chose within it, nor refuses sleep.
+  const shellDefault = Number(process.env.PERSONAL_AGENT_SHELL_DEFAULT_S);
+  const shellMax = Number(process.env.PERSONAL_AGENT_SHELL_MAX_S);
+  if (!(shellLimit > 0) && shellDefault > 0) {
+    pi.on('tool_call', (event) => {
+      if (event.toolName !== 'bash' || !event.input) return undefined;
+      const timeout = Number(event.input.timeout);
+      const chosen = timeout > 0 ? timeout : shellDefault;
+      event.input.timeout = shellMax > 0 ? Math.min(chosen, shellMax) : chosen;
+      return undefined;
+    });
+  }
+  // A worker (workers scheduler) gets what is routed to its task while it
+  // works, as the router gets its inputs: after each model step and before
+  // its run settles, new task inputs join the session as one message and the
+  // run goes on, so a follow-up never waits for the turn to end.
+  if (process.env.PERSONAL_AGENT_TASK_INPUTS === '1') {
+    const pull = async () => {
+      if (stopped) return undefined;
+      let result;
+      try { result = await callTool(actionEndpoint('mcp'), 'task_check', {}); } catch { return undefined; }
+      if (!result?.data?.count) return undefined;
+      return {
+        entries: [{ type: 'custom_message', customType: 'task_input', display: true,
+          content: `[task input] ${result.text}\nHandle what changes or answers your task; hand back with task_handback what does not belong to it.` }],
+        continue: true,
+      };
+    };
+    pi.on('turn_end', pull);
+    pi.on('agent_before_settle', pull);
+  }
+
   pi.on('session_start', (_event, ctx) => {
     stopped = false;
     // Other session_start handlers (including built-in MCP) must run before

@@ -55,6 +55,9 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OV_SUPERAGENT_VOLC_REQUEST_TIMEOUT_MS',
   'OV_SUPERAGENT_VOLC_STREAM_IDLE_TIMEOUT_MS',
   'FALLBACK_MODEL',
+  'OV_SUPERAGENT_PRIMARY_RUNTIME',
+  'OV_SUPERAGENT_FALLBACK_RUNTIME',
+  'OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS',
   'OV_SUPERAGENT_HISTORY_LIMIT',
 ]);
 // Read from the operator environment only: forwarded to the daemon and updater
@@ -95,28 +98,46 @@ const AGENT_FIELDS = Object.freeze([
   'connectors',
   'profile',
   'larkMessageAccess',
+  'larkOwnerOpenId',
   'port',
   'dataDir',
   'tempDir',
   'workspace',
   'ovConfig',
   'ovAutoRecall',
+  'soulUri',
   'explicitSilence',
   'stagedReplies',
-  'role',
+  'scheduler',
   'naturalWriting',
   'model',
+  'primaryRuntime',
+  'fallbackRuntime',
+  'fallbackReturnAfterMs',
+  'dshHomeMode',
+  'dshSkillRoots',
   'volcSessionId',
   'volcEnvironmentId',
   'meetingNotes',
   'emailAccounts',
 ]);
-// The roles shipped with the release (packages/daemon/agent/roles/<name>.md).
-// An instance names one of them, or the absolute path of its own role file.
+// The roles shipped with the release (packages/daemon/agent/roles/<name>.md),
+// which setup can seed the instance's soul in OpenViking with.
 const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
-// agents[].larkMessageAccess: `owner` reads with the owner's visibility,
-// `bot` only in the chats the bot has joined.
+// agents[].larkMessageAccess: `owner` adds the owner's user access to the
+// bot's; `bot` has no user access, only what is shared with the app and the
+// chats the bot has joined.
 const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
+// agents[].soulUri: where the instance's soul is kept (a viking:// address or an
+// absolute local file path), when not
+// at the default viking://~/memories/soul.md.
+const SOUL_URI = /^viking:\/\/[^\s%\\?#]+$/;
+// How inputs reach the model (agents[].scheduler). legacy: every input goes
+// into the running turn as soon as it arrives. inbox: while the model works,
+// inputs wait and it gets a notice; it reads them, oldest first, at a
+// checkpoint (message_check), or they start the next turn. workers: the inbox,
+// and the main session hands longer work to worker sessions (tasks).
+const SCHEDULERS = Object.freeze(['legacy', 'inbox', 'workers']);
 // Each mailbox is its own email Connector instance; the id is how the model
 // and the logs tell them apart.
 const EMAIL_INSTANCE_ID = /^email-[a-z0-9][a-z0-9-]{0,39}$/;
@@ -242,6 +263,14 @@ function parseAgent(value, index, ignored) {
     throw new Error(`${label}.port must be an integer between 1 and 65535`);
   }
   const model = manifestString(value.model, `${label}.model`);
+  const runtimeIds = ['codex', 'traex', 'claude', 'pi', 'durable', 'opencode', 'agy', 'dsh', 'volc'];
+  for (const field of ['primaryRuntime', 'fallbackRuntime']) {
+    if (value[field] !== undefined && !runtimeIds.includes(value[field])) throw new Error(`${label}.${field} must name a supported runtime`);
+  }
+  if (value.fallbackReturnAfterMs !== undefined
+    && (!Number.isSafeInteger(value.fallbackReturnAfterMs) || value.fallbackReturnAfterMs < 0 || value.fallbackReturnAfterMs > 86_400_000)) {
+    throw new Error(`${label}.fallbackReturnAfterMs must be an integer between 0 and 86400000`);
+  }
   let connectors = null;
   if (value.connectors !== undefined) {
     if (!Array.isArray(value.connectors) || value.connectors.length === 0) {
@@ -303,17 +332,28 @@ function parseAgent(value, index, ignored) {
   if (!connectors.includes('lark') && value.profile !== undefined) {
     throw new Error(`${label}.profile is only used by the lark connector`);
   }
-  // Whose visibility Lark reads use: the owner's (search and history across
-  // their chats, the default) or only the bot's own chats. Chosen when the app
-  // is connected; the permissions it asks for follow it.
+  // Whether the bot also has the owner's user access (the default) or only its
+  // own. Chosen when the app is connected; the permissions it asks for follow it.
   if (!connectors.includes('lark') && value.larkMessageAccess !== undefined) {
     throw new Error(`${label}.larkMessageAccess is only used by the lark connector`);
   }
   if (value.larkMessageAccess !== undefined && !LARK_MESSAGE_ACCESS.includes(value.larkMessageAccess)) {
     throw new Error(`${label}.larkMessageAccess must be ${LARK_MESSAGE_ACCESS.join(' or ')}`);
   }
+  // The owner of a bot-only bot, which has no user login to tell them by.
+  if (!connectors.includes('lark') && value.larkOwnerOpenId !== undefined) {
+    throw new Error(`${label}.larkOwnerOpenId is only used by the lark connector`);
+  }
+  if (value.larkOwnerOpenId !== undefined
+    && (typeof value.larkOwnerOpenId !== 'string' || !/^ou_[A-Za-z0-9_-]+$/.test(value.larkOwnerOpenId))) {
+    throw new Error(`${label}.larkOwnerOpenId must be a Feishu/Lark open_id (ou_...)`);
+  }
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
+  }
+  if (value.soulUri != null && (typeof value.soulUri !== 'string'
+    || !(SOUL_URI.test(value.soulUri) || path.isAbsolute(value.soulUri)))) {
+    throw new Error(`${label}.soulUri must be a viking:// address or an absolute file path`);
   }
   if (value.explicitSilence !== undefined && typeof value.explicitSilence !== 'boolean') {
     throw new Error(`${label}.explicitSilence must be a boolean`);
@@ -324,11 +364,37 @@ function parseAgent(value, index, ignored) {
   if (value.stagedReplies !== undefined && typeof value.stagedReplies !== 'boolean') {
     throw new Error(`${label}.stagedReplies must be a boolean`);
   }
+  if (value.scheduler !== undefined && !SCHEDULERS.includes(value.scheduler)) {
+    throw new Error(`${label}.scheduler must be ${SCHEDULERS.join(' or ')}`);
+  }
+  // The inbox is read with a Core tool, which Ark has not got.
+  if (value.scheduler !== undefined && value.scheduler !== 'legacy' && model === 'ark') {
+    throw new Error(`${label}.scheduler ${value.scheduler} needs a runtime with Core tools; ark has none`);
+  }
   if (value.meetingNotes !== undefined && typeof value.meetingNotes !== 'boolean') {
     throw new Error(`${label}.meetingNotes must be a boolean`);
   }
   if (value.meetingNotes && !connectors.includes('lark')) {
     throw new Error(`${label}.meetingNotes requires the lark connector`);
+  }
+  // Meeting notes are read as the owner; a bot-only instance has no user access.
+  if (value.meetingNotes && value.larkMessageAccess === 'bot') {
+    throw new Error(`${label}.meetingNotes needs the owner's user access, which larkMessageAccess bot does not have`);
+  }
+  const dshHomeMode = value.dshHomeMode ?? 'isolated';
+  if (!['isolated', 'shared'].includes(dshHomeMode)) {
+    throw new Error(`${label}.dshHomeMode must be isolated or shared`);
+  }
+  const dshSkillRoots = value.dshSkillRoots ?? (dshHomeMode === 'shared'
+    ? ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh']
+    : ['workspace-dsh', 'project-agents', 'data-dsh', 'data-agents']);
+  const allowedSkillRoots = new Set(dshHomeMode === 'shared'
+    ? ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh']
+    : ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents']);
+  if (!Array.isArray(dshSkillRoots)
+    || dshSkillRoots.some(root => typeof root !== 'string' || !allowedSkillRoots.has(root))
+    || new Set(dshSkillRoots).size !== dshSkillRoots.length) {
+    throw new Error(`${label}.dshSkillRoots must contain unique skill root ids supported by ${dshHomeMode} mode`);
   }
   return Object.freeze({
     id,
@@ -337,19 +403,26 @@ function parseAgent(value, index, ignored) {
     connectors: Object.freeze(connectors),
     profile: connectors.includes('lark') ? manifestString(value.profile, `${label}.profile`) : null,
     larkMessageAccess: connectors.includes('lark') ? value.larkMessageAccess ?? 'owner' : null,
+    larkOwnerOpenId: connectors.includes('lark') ? value.larkOwnerOpenId ?? null : null,
     port: value.port,
     dataDir: manifestAbsolutePath(value.dataDir, `${label}.dataDir`),
     tempDir: value.tempDir == null ? null : manifestAbsolutePath(value.tempDir, `${label}.tempDir`),
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
     ovAutoRecall: value.ovAutoRecall ?? false,
+    soulUri: value.soulUri ?? null,
     // On by default, except on Ark (no Core tools, so no stay_silent); an
     // explicit false opts out.
     explicitSilence: value.explicitSilence ?? model !== 'ark',
     stagedReplies: value.stagedReplies ?? false,
-    role: manifestRole(value.role, `${label}.role`),
+    scheduler: value.scheduler ?? 'legacy',
     naturalWriting: value.naturalWriting ?? true,
     model,
+    primaryRuntime: value.primaryRuntime ?? null,
+    fallbackRuntime: value.fallbackRuntime ?? null,
+    fallbackReturnAfterMs: value.fallbackReturnAfterMs ?? null,
+    dshHomeMode,
+    dshSkillRoots: Object.freeze([...dshSkillRoots]),
     volcSessionId,
     volcEnvironmentId,
     meetingNotes: value.meetingNotes ?? false,
@@ -357,12 +430,6 @@ function parseAgent(value, index, ignored) {
   });
 }
 
-function manifestRole(value, label) {
-  if (value === undefined || value === null) return null;
-  if (typeof value === 'string' && ROLE_PRESETS.includes(value)) return value;
-  if (typeof value === 'string' && path.isAbsolute(value.trim())) return manifestAbsolutePath(value, label);
-  throw new Error(`${label} must be ${ROLE_PRESETS.join(', ')} or an absolute path`);
-}
 
 function manifestEmailAccounts(value, label, ignored) {
   if (value === undefined || value === null) return [];
@@ -559,6 +626,11 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
     OV_SUPERAGENT_WORKSPACE: agent.workspace,
     OV_SUPERAGENT_MODEL: agent.model,
   });
+  for (const [field, key] of [['primaryRuntime', 'OV_SUPERAGENT_PRIMARY_RUNTIME'], ['fallbackRuntime', 'OV_SUPERAGENT_FALLBACK_RUNTIME'], ['fallbackReturnAfterMs', 'OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS']]) {
+    if (agent[field] !== null) env[key] = String(agent[field]);
+    else if (deployment.env[key] !== undefined) env[key] = deployment.env[key];
+    else delete env[key];
+  }
   if (agent.tempDir) env.OV_SUPERAGENT_TEMP_DIR = agent.tempDir;
   if (agent.profile) {
     env.OV_SUPERAGENT_LARK_PROFILE = agent.profile;
@@ -569,15 +641,22 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
     delete env.LARKSUITE_CLI_PROFILE;
     delete env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS;
   }
+  // Set or removed, so another instance's owner never leaks in.
+  if (agent.larkOwnerOpenId) env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID = agent.larkOwnerOpenId;
+  else delete env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID;
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.OV_SUPERAGENT_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
   env.OV_SUPERAGENT_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.OV_SUPERAGENT_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.OV_SUPERAGENT_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';
+  env.OV_SUPERAGENT_SCHEDULER = agent.scheduler;
   env.OV_SUPERAGENT_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
-  if (agent.role) env.OV_SUPERAGENT_ROLE = agent.role;
-  else delete env.OV_SUPERAGENT_ROLE;
+  env.OV_SUPERAGENT_DSH_HOME_MODE = agent.dshHomeMode;
+  env.OV_SUPERAGENT_DSH_SKILL_ROOTS = JSON.stringify(agent.dshSkillRoots);
+  if (agent.soulUri) env.OV_SUPERAGENT_SOUL_URI = agent.soulUri;
+  else delete env.OV_SUPERAGENT_SOUL_URI;
+  delete env.OV_SUPERAGENT_ROLE;
   env.OV_SUPERAGENT_CHANNEL = agent.channel;
   env.OV_SUPERAGENT_CONNECTORS_JSON = JSON.stringify(agent.connectors);
   if (agent.emailAccounts.length > 0) env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON = JSON.stringify(agent.emailAccounts);

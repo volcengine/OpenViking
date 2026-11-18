@@ -15,10 +15,14 @@ import { registerApp } from '@larksuiteoapi/node-sdk';
 // drops unknown scope names silently, so the caller compares the granted
 // scopes with the request.
 
-// Messages to the bot, and comments on documents that mention it or answer
-// it (drive.notice.comment_add_v1).
-export const EVENTS = Object.freeze(['im.message.receive_v1', 'drive.notice.comment_add_v1']);
+// Messages to the bot, their recalls and reactions, and comments on documents
+// that mention it or answer it (drive.notice.comment_add_v1).
+export const EVENTS = Object.freeze([
+  'im.message.receive_v1', 'im.message.recalled_v1', 'im.message.reaction.created_v1', 'im.message.reaction.deleted_v1',
+  'drive.notice.comment_add_v1',
+]);
 export const MESSAGE_EVENT = 'im.message.receive_v1';
+export const COMMENT_EVENT = 'drive.notice.comment_add_v1';
 export const CALLBACKS = Object.freeze(['card.action.trigger']);
 
 export class LarkRegistrationError extends Error {

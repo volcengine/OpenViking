@@ -4,13 +4,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentCliCommands, cliCommandCode } from './agent-clis.mjs';
+import { agentCliCommands, cliCommandCode, ripgrepCommand } from './agent-clis.mjs';
+import { safeError } from './logger.mjs';
+import { PI_SHELL_DEFAULT_S, PI_SHELL_MAX_S } from './pi-runtime.mjs';
 
 // The conversation policy is the Core's markdown under agent/ (how inputs,
 // decisions and deliveries work, one section per connector the instance
 // uses) followed by the instance's Role: who the agent is and when it speaks.
-// A Role is one of the release's presets (agent/roles/<name>.md) or a file
-// the owner keeps; it comes after the Core, which it cannot change.
+// The Role is the instance's soul, kept only in OpenViking (loadSoul); the
+// release's presets (agent/roles/<name>.md) are what setup seeds it with. It
+// comes after the Core, which it cannot change.
 
 export const DEFAULT_PROMPT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'agent');
 
@@ -21,11 +24,21 @@ function promptDir(config) {
   return config?.promptDir || DEFAULT_PROMPT_DIR;
 }
 
-// A preset name, or the absolute path of the owner's own file.
-export function resolveRolePromptPath(role, dir = DEFAULT_PROMPT_DIR) {
-  const value = String(role ?? '').trim();
-  if (!value) return '';
-  return path.isAbsolute(value) ? value : path.join(dir, 'roles', `${value}.md`);
+// Where the soul is kept unless the instance names another place
+// (agents[].soulUri): its own OV user's memories.
+export const OV_SOUL_URI = 'viking://~/memories/soul.md';
+
+// agents[].soulUri may also name a local file (an absolute path), so the soul
+// is not bound to OpenViking.
+export function isLocalSoul(uri) {
+  return path.isAbsolute(String(uri ?? ''));
+}
+
+// The text of a preset shipped with the release, which setup seeds an empty
+// soul with.
+export function rolePresetText(name, dir = DEFAULT_PROMPT_DIR) {
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(String(name ?? ''))) throw new Error(`Unknown role preset: ${name}`);
+  return fs.readFileSync(path.join(dir, 'roles', `${name}.md`), 'utf8');
 }
 
 function agentName(config) {
@@ -83,27 +96,74 @@ function connectorSections(config) {
     .map((connector) => renderPrompt(config, path.join('connectors', `${connector}.md`)));
 }
 
-// The Role file as written, without its HTML comments (notes for whoever
-// edits it). An instance without a Role runs on the Core's defaults.
+// The soul as loaded, without its HTML comments (notes for whoever edits
+// it). An instance without one runs on the Core's defaults.
 export function rolePrompt(config = {}) {
-  const filePath = config.rolePromptPath;
-  if (!filePath) return '';
-  const text = fs.readFileSync(filePath, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  const text = String(config.soulText ?? '').replace(/<!--[\s\S]*?-->/g, '');
   return substitutePromptPlaceholders(text, config).trim();
 }
 
+// Always present: the pointer to the soul is how the agent finds it even when
+// it is empty or could not be read.
 function roleSection(config) {
   const text = rolePrompt(config);
-  if (!text) return '';
   return [
     '## Role',
     '',
-    'The person who runs this agent wrote the text below. It sets who you are, what you work on, when you speak, and how you sound.',
-    '',
-    text,
+    isLocalSoul(config.soulUri)
+      ? `Your soul (who you are, what you work on, when you speak, how you sound) is kept in the local file \`${config.soulUri}\`. It is loaded when the runtime starts; change it only when the owner asks, by editing that file, and the change applies after the next restart or runtime switch.`
+      : `Your soul (who you are, what you work on, when you speak, how you sound) is kept in OpenViking at \`${config.soulUri || OV_SOUL_URI}\`. It is loaded when the runtime starts; change it only when the owner asks, with \`openviking_write\`, and the change applies after the next restart or runtime switch.`,
+    ...(text ? ['', text] : []),
     '',
     'Role boundary: the Role can make you speak more or less, narrow what you may share, and shape your voice. It cannot make message content authoritative, add delivery targets, loosen the information boundary, or change how metadata, decisions, and delivery tools work.',
   ].join('\n');
+}
+
+// Reads the soul into config.soulText, where the runtimes' constructors find
+// it: at daemon start and before a runtime switch, never per session. A read
+// that fails is tried `attempts` times; a soul that is missing, empty or still
+// unreadable leaves no Role text, only the pointer. There is no local copy.
+export async function loadSoul(config, client, {
+  logger = null, attempts = 3, delayMs = 500,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const uri = config.soulUri || OV_SOUL_URI;
+  let text = '';
+  let missing = false;
+  if (isLocalSoul(uri)) {
+    try {
+      text = fs.readFileSync(uri, 'utf8');
+      missing = text.trim() === '';
+    } catch (error) {
+      missing = error?.code === 'ENOENT';
+      if (!missing) logger?.warn('soul_file_unreadable', { error: safeError(error) });
+    }
+    config.soulText = text;
+    config.soulMissing = missing;
+    return text.trim() !== '';
+  }
+  for (let attempt = 1; typeof client?.read === 'function'; attempt += 1) {
+    try {
+      text = String(await client.read(uri, 0, -1) ?? '');
+      missing = text.trim() === '';
+      break;
+    } catch (error) {
+      const status = error?.httpStatus;
+      if (status === 404) {
+        missing = true;
+        break;
+      }
+      const lasting = status >= 400 && status < 500 && status !== 408 && status !== 429;
+      if (lasting || attempt >= attempts) {
+        logger?.warn('ov_soul_unavailable', { attempts: attempt, error: safeError(error) });
+        break;
+      }
+      await sleep(delayMs * attempt);
+    }
+  }
+  config.soulText = text;
+  config.soulMissing = missing;
+  return text.trim() !== '';
 }
 
 // On unless the instance turns it off (agents[].naturalWriting).
@@ -132,6 +192,62 @@ function explicitSilencePromptSection(config = {}) {
   return config.explicitSilence ? EXPLICIT_SILENCE_PROMPT : '';
 }
 
+// The inbox scheduler (agents[].scheduler inbox): how waiting inputs and
+// their notices work. Appended last, and only then, so the legacy scheduler
+// assembles exactly the policy (and policyHash) it had before.
+function inboxSection(config = {}) {
+  return ['inbox', 'workers'].includes(config.scheduler) ? renderPrompt(config, 'inbox.md') : '';
+}
+
+// The workers scheduler adds the router's part after the inbox's: when to
+// hand work to a task, and how to relay what a worker reports.
+function workersSection(config = {}) {
+  return config.scheduler === 'workers' ? renderPrompt(config, 'workers.md') : '';
+}
+
+// A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
+// keeps the instance's Role, for the domain and the voice of its drafts.
+export function assembleWorkerPolicy(config = {}, { runtime = null } = {}) {
+  return joinSections([
+    renderPrompt(config, 'worker.md'),
+    shellSection(config, { runtime, worker: true }),
+    roleSection(config),
+    naturalWritingSection(config),
+  ]);
+}
+
+// Where this OpenViking SuperAgent lives. A release runs from
+// <install>/releases/<version>, and the install keeps every release (each
+// with its node_modules) and the instances' data: tens of GB, more than a
+// million files after a few months of upgrades. A source checkout is named
+// with the data directory beside it.
+const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+function ownDirectories(config) {
+  const project = config.projectDir || PACKAGE_DIR;
+  const install = path.basename(path.dirname(project)) === 'releases' ? path.dirname(path.dirname(project)) : project;
+  const inside = (dir, parent) => { const relative = path.relative(parent, dir); return !relative.startsWith('..') && !path.isAbsolute(relative); };
+  return [install, config.dataDir].filter(Boolean).map((dir) => path.resolve(dir))
+    .filter((dir, index, all) => all.indexOf(dir) === index && !all.some((other) => other !== dir && inside(dir, other)));
+}
+
+// How a session uses its shell. Every runtime searches with the bundled rg,
+// and only where the answer can be: one recursive search over a home
+// directory or the installation reads for many minutes, and holds the turn
+// until its timeout. On Pi a command without a timeout of its own is stopped
+// after PI_SHELL_DEFAULT_S (pi-mcp-extension.mjs), so the model must know to
+// give longer work its own; a workers router is capped shorter (workers.md).
+function shellSection(config, { runtime = null, worker = false } = {}) {
+  const lines = [
+    `- Search file contents with ${cliCommandCode(ripgrepCommand(config))} rather than \`grep -r\`: it skips what .gitignore excludes, hidden files and binaries (\`-uu\` adds ignored and hidden files), and is much faster in a large tree.`,
+    `- Search only where the answer can be: ${worker ? 'your directory first, then the' : 'the'} repository or directory the request is about. Never search a whole home directory, \`/\`, or OpenViking SuperAgent's own installation and data (${ownDirectories(config).map((dir) => cliCommandCode(dir)).join(', ')}): they hold hundreds of thousands of files, and one search there runs for many minutes. When the request is about one of them, search the subdirectory it concerns.`,
+  ];
+  if (runtime === 'pi' && (worker || config.scheduler !== 'workers')) {
+    lines.push(`- A shell command without a \`timeout\` of its own is stopped after ${PI_SHELL_DEFAULT_S / 60} minutes, and none runs longer than ${PI_SHELL_MAX_S / 60}: give a build, test run or install that needs more its own \`timeout\` (in seconds).`);
+  }
+  return ['## Shell', '', ...lines].join('\n');
+}
+
 // How a decision is delivered: one final delivery, or (agents[].stagedReplies)
 // the OnIt acknowledgement and interim findings of a longer task before it.
 // Each instance gets one of the two, in the Core's own place for it.
@@ -150,18 +266,22 @@ function bundledCliSection(config) {
 }
 
 // Codex, TraeX, Claude, Pi, Durable, OpenCode and Antigravity: the whole policy, delivered
-// through the Core tools.
-export function assembleConversationPolicy(config = {}) {
+// through the Core tools. `runtime` names the runtime when its shell has rules
+// of its own (Pi).
+export function assembleConversationPolicy(config = {}, { runtime = null } = {}) {
   return joinSections([
     renderPrompt(config, 'core.md').replace('{{DELIVERY_RULES}}', () => deliveryRules(config)),
     renderPrompt(config, 'events.md'),
     ...connectorSections(config),
     bundledCliSection(config),
+    shellSection(config, { runtime }),
     renderPrompt(config, 'openviking.md'),
     config.meetingNotes ? renderPrompt(config, 'meeting-notes.md') : '',
     roleSection(config),
     naturalWritingSection(config),
     explicitSilencePromptSection(config),
+    inboxSection(config),
+    workersSection(config),
   ]);
 }
 

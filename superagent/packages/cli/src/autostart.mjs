@@ -10,12 +10,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { t } from './i18n.mjs';
+import { serviceDirectory, termuxAutostart } from './termux-autostart.mjs';
 
 // `ov-superagent autostart enable|disable`: start OpenViking SuperAgent at login/boot without sudo.
-// Linux: a systemd user unit; macOS: a LaunchAgent; Windows: a script in the
-// user's own Startup folder. All three run `ov-superagent start`, the same path as by
-// hand, with the PATH of the shell that enabled it so the agent CLIs (codex,
-// claude) are found under a minimal service environment.
+// Linux uses systemd, macOS launchd, Windows the Startup folder, and native
+// Termux runit. The desktop mechanisms run `ov-superagent start`; runit supervises
+// foreground PM2 directly. The enabling shell PATH is preserved so agent CLIs
+// (codex, claude) remain available under a minimal service environment.
 
 const execFile = promisify(execFileCallback);
 const LABEL = 'com.superagent.agent';
@@ -104,6 +105,10 @@ export function startupEntry(homeDir, pathValue = null) {
 }
 
 export function autostartEnabled({ env = process.env, homeDir = defaultPlatform.homeDir(env) || os.homedir(), platform = defaultPlatform } = {}) {
+  if (platform.loginService === 'runit') {
+    const directory = serviceDirectory(env);
+    return fs.existsSync(path.join(directory, 'run')) && !fs.existsSync(path.join(directory, 'down'));
+  }
   return capabilitiesFor(platform).autostart && fs.existsSync(targets(homeDir, platform, env).file);
 }
 
@@ -123,6 +128,7 @@ export async function autostartCommand([action, ...extra], {
     output.write(t('这台系统没有可用的开机自启方式\n', 'Autostart is not available on this system\n'));
     return 1;
   }
+  if (platform.loginService === 'runit') return termuxAutostart(action, { homeDir, env, execFileImpl, output });
   const { file } = targets(homeDir, platform, env);
   if (platform.loginService === 'startupFolder') {
     return action === 'disable'
@@ -138,8 +144,8 @@ export async function autostartCommand([action, ...extra], {
     return 0;
   }
   const pathValue = env.PATH || '/usr/bin:/bin';
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   if (platform.loginService === 'launchd') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.mkdirSync(path.join(homeDir, '.ov-superagent', 'logs'), { recursive: true });
     fs.writeFileSync(file, launchAgent({ homeDir, pathValue }));
     await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
@@ -147,12 +153,28 @@ export async function autostartCommand([action, ...extra], {
     output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
     return 0;
   }
+  const loginctlUser = String(uid ?? env.USER ?? '');
+  const lingerArgs = loginctlUser ? ['show-user', loginctlUser, '--property=Linger', '--value'] : [];
+  const lingerEnabled = async () => {
+    if (!lingerArgs.length) return false;
+    const { stdout } = await execFileImpl('loginctl', lingerArgs);
+    return String(stdout).trim().toLowerCase() === 'yes';
+  };
+  let lingers = await lingerEnabled().catch(() => false);
+  if (!lingers) {
+    await execFileImpl('loginctl', ['enable-linger', ...(loginctlUser ? [loginctlUser] : [])]).catch(() => {});
+    lingers = await lingerEnabled().catch(() => false);
+  }
+  if (!lingers) {
+    output.write(t('无法开启 linger，未写入 systemd 用户服务。请运行 sudo loginctl enable-linger "$USER"，然后重试。\n',
+      'Could not enable linger; the systemd user service was not installed. Run sudo loginctl enable-linger "$USER", then retry.\n'));
+    return 1;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, systemdUnit({ homeDir, pathValue }));
   await execFileImpl('systemctl', ['--user', 'daemon-reload']);
   await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
-  output.write(t('服务器上还要执行一次 loginctl enable-linger，否则退出登录后 OpenViking SuperAgent 会停。\n',
-    'On a server, also run loginctl enable-linger once, or OpenViking SuperAgent stops when you log out.\n'));
   return 0;
 }
 

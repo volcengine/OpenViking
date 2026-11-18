@@ -71,7 +71,11 @@ export class AgentRuntime {
     this.onTurnStopped = options.onTurnStopped ?? null;
     this.onAvailable = options.onAvailable ?? null;
     this.onAuthorityChanged = options.onAuthorityChanged ?? null;
+    this.onRuntimeSelected = options.onRuntimeSelected ?? null;
     this.persistRuntimePreference = options.persistRuntimePreference ?? null;
+    // Rereads what the policy is assembled from (the soul) before a runtime
+    // switch constructs the new backend.
+    this.refreshPolicy = options.refreshPolicy ?? null;
     this.recordActivity = options.recordActivity ?? null;
     this.clock = options.clock ?? (() => Date.now());
     this.loopCancelGraceMs = options.loopCancelGraceMs ?? LOOP_CANCEL_GRACE_MS;
@@ -86,6 +90,8 @@ export class AgentRuntime {
     this.switching = false;
     this.transitioning = false;
     this.pendingTransitions = 0;
+    this.admissionHolds = new Set();
+    this.stopController = new AbortController();
     this.transitionBarrier = Promise.resolve();
     this.stopping = false;
     this.revision = 0;
@@ -105,7 +111,7 @@ export class AgentRuntime {
   }
   get state() {
     const state = this.backend?.state ?? { connected: false, activeTurn: 0, queued: 0 };
-    return { ...state, connected: state.connected && this.pendingTransitions === 0 };
+    return { ...state, connected: state.connected && this.pendingTransitions === 0 && this.admissionHolds.size === 0 };
   }
   get turnInProgress() { return this.pendingTransitions > 0 || Boolean(this.backend?.turnInProgress); }
   get workStatus() {
@@ -177,11 +183,15 @@ export class AgentRuntime {
 
   async start() {
     this.stopping = false;
+    this.stopController = new AbortController();
     let cognition = this.store.getCognitionState();
     const persistedRuntime = RUNTIME_IDS.includes(cognition.runtime)
       ? cognition.runtime
       : DEFAULT_RUNTIME_ID;
-    const configuredSelector = String(this.config.initialModel || '').trim();
+    const initialSelector = String(this.config.initialModel || '').trim();
+    const configuredSelector = this.config.primaryRuntime
+      && resolveRuntimeModelTarget(initialSelector).runtime !== this.config.primaryRuntime
+      ? `${this.config.primaryRuntime}:` : initialSelector || (this.config.primaryRuntime ? `${this.config.primaryRuntime}:` : '');
     const freshTarget = resolveRuntimeModelTarget(configuredSelector);
     const freshCognition = this.store.hasCognitionRuntime?.() === false;
     this._assertConnectorSupport(freshTarget.runtime);
@@ -236,6 +246,7 @@ export class AgentRuntime {
 
   submit(items, { admission = 'enqueue' } = {}) {
     if (this.stopping) return { accepted: false, reason: 'stopping' };
+    if (this.admissionHolds.size > 0) return { accepted: false, reason: 'switching' };
     if (this.pendingTransitions > 0) return { accepted: false, reason: 'switching' };
     if (!this.backend) return { accepted: false, reason: 'not-started' };
     if (!Array.isArray(items) || items.length === 0) {
@@ -253,6 +264,33 @@ export class AgentRuntime {
   }
 
   _interrupt() { return this.backend?.interrupt() ?? Promise.resolve(); }
+
+  // Keep new ingress in its caller-owned queue while a timed failback drains
+  // already accepted work. Releasing one hold never releases another owner.
+  holdAdmission() {
+    const token = Symbol('runtime-admission');
+    this.admissionHolds.add(token);
+    return () => {
+      if (!this.admissionHolds.delete(token)) return;
+      if (!this.stopping && this.admissionHolds.size === 0 && this.pendingTransitions === 0) {
+        try { this.onAvailable?.(); } catch (error) {
+          this.logger.warn('runtime_available_notification_failed', { error: error.message });
+        }
+      }
+    };
+  }
+
+  async _waitForIdle() {
+    const signal = this.stopController.signal;
+    if (signal.aborted) throw new Error('agent runtime is stopping');
+    let onStop;
+    const stopped = new Promise((resolve, reject) => {
+      onStop = () => reject(new Error('agent runtime stopped during idle wait'));
+      signal.addEventListener('abort', onStop, { once: true });
+    });
+    try { await Promise.race([this.whenIdle(), stopped]); }
+    finally { signal.removeEventListener('abort', onStop); }
+  }
 
   // Every transport's turn end passes here. The turn a loop stop ended goes
   // to onTurnStopped whatever the transport saw (a cancelled prompt reports as
@@ -520,7 +558,17 @@ export class AgentRuntime {
         return { ok: true, kind: request.kind, ...result };
       }
       if (request.kind === 'select-runtime') {
-        const result = await this._selectRuntime(request.runtime, request.model);
+        if (getRuntimeDefinition(request.runtime)?.id !== this.runtime) await this.refreshPolicy?.();
+        // Admission is closed synchronously by transition(), before waiting.
+        // Unlike manual switches, failback must never interrupt accepted work.
+        if (request.whenIdle) await this._waitForIdle();
+        if (request.expectedRuntime && request.expectedRuntime !== this.runtime) {
+          return { ok: false, kind: request.kind, reason: 'runtime-changed' };
+        }
+        const result = await this._selectRuntime(request.runtime, request.model, {
+          persistPreference: request.persistPreference !== false,
+        });
+        if (request.persistPreference !== false && result.ok !== false) this.onRuntimeSelected?.(this.runtime);
         return { ok: true, kind: request.kind, ...result };
       }
       if (request.kind === 'select-effort') {
@@ -962,6 +1010,7 @@ export class AgentRuntime {
 
   async stop() {
     this.stopping = true;
+    this.stopController.abort();
     const transitionPending = this.pendingTransitions > 0;
     const stopBackends = async () => {
       const backends = [...new Set([this.backend, this.stagedBackend].filter(Boolean))];

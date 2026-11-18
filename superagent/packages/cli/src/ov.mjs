@@ -39,7 +39,7 @@ export async function detectOpenViking({ env = process.env, homeDir = os.homedir
     return { configPath: selected, url: connection.url, usable: true,
       user: user ?? health.user_id ?? (health.auth_mode === 'api_key' ? null : config.user) ?? null,
       account: health.account_id ?? null, role: health.role ?? null,
-      authMode: health.auth_mode ?? null, reason: null };
+      version: health.version ?? null, authMode: health.auth_mode ?? null, reason: null };
   } catch (error) {
     let reason;
     if (!(error instanceof OVUnavailableError)) {

@@ -9,7 +9,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bundledLarkCli } from './lark-cli-bin.mjs';
 import { managedPiBin } from './pi-runtime.mjs';
-import { resolveRolePromptPath } from './conversation-policy.mjs';
+import { OV_SOUL_URI } from './conversation-policy.mjs';
+import { defaultDshSkillRoots, dshSkillRootChoices } from './dsh-config.mjs';
+import { RUNTIME_IDS } from './runtime-catalog.mjs';
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,21 +51,22 @@ function boolEnv(name, fallback) {
   throw new Error(`${name} must be a boolean`);
 }
 
-// OV_SUPERAGENT_ROLE: a role shipped under agent/roles, or the absolute path of the
-// owner's own role file. Unset, the agent runs on the Core's defaults alone.
-function rolePromptEnv(promptDir) {
-  const role = (process.env.OV_SUPERAGENT_ROLE ?? '').trim();
-  if (!role) return '';
-  if (!path.isAbsolute(role) && !/^[a-z][a-z0-9-]{0,31}$/.test(role)) {
-    throw new Error('OV_SUPERAGENT_ROLE must be a role name or an absolute path');
+// OV_SUPERAGENT_SOUL_URI (agents[].soulUri): where the instance's soul is kept
+// in OpenViking. Unset, it is the instance's own viking://~/memories/soul.md.
+function soulUriEnv() {
+  const uri = (process.env.OV_SUPERAGENT_SOUL_URI ?? '').trim();
+  if (!uri) return OV_SOUL_URI;
+  if (!/^viking:\/\/[^\s%\\?#]+$/.test(uri) && !path.isAbsolute(uri)) {
+    throw new Error('OV_SUPERAGENT_SOUL_URI must be a viking:// address or an absolute file path');
   }
-  const filePath = resolveRolePromptPath(role, promptDir);
-  let info = null;
-  try { info = fs.statSync(filePath); } catch {}
-  if (!info?.isFile()) {
-    throw new Error(path.isAbsolute(role) ? 'OV_SUPERAGENT_ROLE names a file that does not exist' : `OV_SUPERAGENT_ROLE ${role} is not a known role`);
-  }
-  return filePath;
+  return uri;
+}
+
+function openIdEnv(name) {
+  const value = (process.env[name] ?? '').trim();
+  if (!value) return null;
+  if (!/^ou_[A-Za-z0-9_-]+$/.test(value)) throw new Error(`${name} must be a Feishu/Lark open_id (ou_...)`);
+  return value;
 }
 
 function csvEnv(name) {
@@ -151,6 +154,9 @@ export function getConfig() {
   const dataDir = path.resolve(
     process.env.OV_SUPERAGENT_DATA_DIR || path.join(os.homedir(), '.ov-superagent', 'data'),
   );
+  const primaryRuntime = process.env.OV_SUPERAGENT_PRIMARY_RUNTIME
+    ? enumEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', '', RUNTIME_IDS) : '';
+  const fallbackRuntime = enumEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'codex', RUNTIME_IDS);
   const configuredTempDir = (process.env.OV_SUPERAGENT_TEMP_DIR ?? '').trim();
   if (configuredTempDir && !path.isAbsolute(configuredTempDir)) {
     throw new Error('OV_SUPERAGENT_TEMP_DIR must be an absolute path');
@@ -179,6 +185,12 @@ export function getConfig() {
   if (pathsOverlap(workspace, dataDir)) {
     throw new Error('OV_SUPERAGENT_WORKSPACE must not overlap OV_SUPERAGENT_DATA_DIR');
   }
+  const dshHomeMode = enumEnv('OV_SUPERAGENT_DSH_HOME_MODE', 'isolated', ['isolated', 'shared']);
+  const dshSkillRoots = jsonStringArrayEnv('OV_SUPERAGENT_DSH_SKILL_ROOTS', defaultDshSkillRoots(dshHomeMode));
+  const allowedDshSkillRoots = new Set(dshSkillRootChoices(dshHomeMode));
+  if (dshSkillRoots.some(root => !allowedDshSkillRoots.has(root)) || new Set(dshSkillRoots).size !== dshSkillRoots.length) {
+    throw new Error('OV_SUPERAGENT_DSH_SKILL_ROOTS contains an unknown or repeated root for the selected DSH mode');
+  }
   const daemonProfile = (process.env.OV_SUPERAGENT_LARK_PROFILE ?? '').trim();
   const cliProfile = (process.env.LARKSUITE_CLI_PROFILE ?? '').trim();
   if (daemonProfile && cliProfile && daemonProfile !== cliProfile) {
@@ -206,7 +218,7 @@ export function getConfig() {
     tempDir: configuredTempDir ? path.normalize(configuredTempDir) : path.join(dataDir, 'tmp'),
     workspace,
     promptDir,
-    rolePromptPath: rolePromptEnv(promptDir),
+    soulUri: soulUriEnv(),
     // On by default; agents[].naturalWriting: false turns it off.
     naturalWriting: boolEnv('OV_SUPERAGENT_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),
@@ -228,6 +240,7 @@ export function getConfig() {
     actionMcpPath: path.join(sourceDir, 'actions', 'mcp.mjs'),
     larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
     slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),
+    ripgrepBin: cliBin(process.env.RIPGREP_BIN || undefined),
     emailAccounts,
     weixinLongPollTimeoutMs: intEnv('OV_SUPERAGENT_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
       min: 5_000,
@@ -240,6 +253,9 @@ export function getConfig() {
     opencodeBin: process.env.OPENCODE_BIN || 'opencode',
     agyBin: process.env.AGY_BIN || 'agy',
     initialModel: process.env.OV_SUPERAGENT_MODEL || '',
+    primaryRuntime,
+    fallbackRuntime,
+    fallbackReturnAfterMs: intEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', 600_000, { min: 0, max: 86_400_000 }),
     codexEffort: enumEnv('OV_SUPERAGENT_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
     traexEffort: enumEnv('OV_SUPERAGENT_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
     claudeModel: process.env.OV_SUPERAGENT_CLAUDE_MODEL || '',
@@ -262,6 +278,8 @@ export function getConfig() {
     opencodeModel: process.env.OV_SUPERAGENT_OPENCODE_MODEL || '',
     agyModel: process.env.OV_SUPERAGENT_AGY_MODEL || '',
     dshBin: process.env.DSH_BIN || 'dsh',
+    dshHomeMode,
+    dshSkillRoots: Object.freeze([...dshSkillRoots]),
     // Model routes are DSH's own settings document, not a daemon setting and not
     // a manifest field: DSH's own settings service is the only writer, and
     // `ov-superagent dsh model` plus `/model` are the only callers. This is the effort a
@@ -295,8 +313,9 @@ export function getConfig() {
       min: 30_000,
       max: 3_600_000,
     }),
-    // Codex model the daemon auto-switches to when a claude turn fails.
-    fallbackModel: process.env.FALLBACK_MODEL || 'gpt-5.6-sol',
+    // Only Codex uses the legacy model default; other backends keep their own
+    // saved/configured model and effort unless explicitly overridden.
+    fallbackModel: process.env.FALLBACK_MODEL || (fallbackRuntime === 'codex' ? 'gpt-5.6-sol' : ''),
     host,
     port: intEnv('OV_SUPERAGENT_PORT', 3738, { min: 1, max: 65535 }),
     httpEnabled: boolEnv('OV_SUPERAGENT_HTTP_ENABLED', true),
@@ -322,12 +341,24 @@ export function getConfig() {
     // tools and assembles the same policy text as without them. Unpinned (a
     // daemon started without a manifest) it stays off.
     explicitSilence: boolEnv('OV_SUPERAGENT_EXPLICIT_SILENCE', false),
+    // Number of times an undecided chat input is offered again. Its seq comes
+    // with each reminder so the next turn end can settle it, up to this limit.
+    decisionReminderLimit: intEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', 3, { min: 0, max: 100 }),
     // Opt-in per instance (agents[].stagedReplies): a longer task may get an
     // OnIt and interim findings before its final delivery.
     stagedReplies: boolEnv('OV_SUPERAGENT_STAGED_REPLIES', false),
+    ovCommitOnly: boolEnv('EXPERIMENTAL_OV_COMMIT_ONLY', false),
+    // agents[].scheduler: legacy puts every input into the running turn at
+    // once; inbox holds inputs while the model works, notifies it, and lets it
+    // read them at a checkpoint (inbox.mjs); workers adds worker sessions
+    // the main session hands longer work to (tasks.mjs). Read at start only.
+    scheduler: enumEnv('OV_SUPERAGENT_SCHEDULER', 'legacy', ['legacy', 'inbox', 'workers']),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
+    // agents[].larkOwnerOpenId: the owner of a bot-only instance, which has no
+    // user login to tell them by (setup keeps who confirmed the app's scan).
+    larkOwnerOpenId: openIdEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID'),
     // Opt-in per instance (agents[].meetingNotes), on one instance at most:
     // the owner's Feishu/Lark meeting notes are stored in OV.
     meetingNotes: boolEnv('OV_SUPERAGENT_MEETING_NOTES', false) && connectors.includes('lark'),

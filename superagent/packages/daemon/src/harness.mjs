@@ -4,7 +4,7 @@
 import { normalizeEvent, deterministicFilter } from './event.mjs';
 import { commandCandidate, parseCommand } from './commands.mjs';
 import { GroupBurstRouter } from './group-burst.mjs';
-import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem } from './runtime-input.mjs';
+import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem, senderLabel } from './runtime-input.mjs';
 import { opaqueRef, safeError } from './logger.mjs';
 import { parseProtocolLine } from './connectors/protocol.mjs';
 
@@ -13,9 +13,25 @@ import { parseProtocolLine } from './connectors/protocol.mjs';
 // chats, lines that @mention it, document comments, and events outside chats
 // such as mail. Never for another bot's line or a card click.
 function wantsRecall(event, mention) {
-  if (BOT_SENDERS.has(event.senderType) || event.messageType === 'card_action') return false;
+  if (BOT_SENDERS.has(event.senderType) || ['card_action', 'recall', 'reaction'].includes(event.messageType)) return false;
   if (!event.chatId) return true;
   return event.chatType === 'p2p' || event.chatType === 'doc_comment' || mention === 'me' || mention === 'mixed';
+}
+
+// What an inbox notice says about a waiting input: where it is and who wrote
+// it, never its text.
+function inputMeta(event, { owner = false, mention = null } = {}) {
+  return {
+    chatId: event.chatId ?? null,
+    threadId: event.threadId ?? null,
+    source: event.source ?? null,
+    instance: event.connectorInstance ?? null,
+    kind: event.kind ?? null,
+    chatType: event.chatId ? event.chatType ?? null : null,
+    from: event.senderId || event.senderName ? senderLabel(event) : null,
+    owner: Boolean(owner),
+    mention: mention ?? null,
+  };
 }
 
 // The harness: canonical Connector EVENT -> persistence -> AgentRuntime.submit.
@@ -41,6 +57,8 @@ export class Harness {
     isOwner = () => false,
     mentionTarget = () => null,
     isStopping = () => false,
+    inbox = null,
+    taskHint = null,
   }) {
     this.config = config;
     this.store = store;
@@ -59,6 +77,10 @@ export class Harness {
     this.isOwner = isOwner;
     this.mentionTarget = mentionTarget;
     this.isStopping = isStopping;
+    // The inbox scheduler's waiting inputs (inbox.mjs); null under legacy.
+    this.inbox = inbox;
+    // Workers scheduler: a line naming the tasks an input may belong to.
+    this.taskHint = taskHint;
     this.ingressBarrier = Promise.resolve();
     this.pendingIngress = 0;
     this.groupBurst = new GroupBurstRouter({
@@ -200,13 +222,27 @@ export class Harness {
         ...(idleHint ?? {}),
         owner,
         mention,
-        replyTo: event.messageType === 'card_action' ? { kind: 'me' } : resolveReplyTarget(this.store, event),
+        replyTo: resolveReplyTarget(this.store, event),
         // How long only bots have been talking here: the model's cue to stop.
         ...(BOT_SENDERS.has(event.senderType)
           ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, result.inbound.seq) } : {}),
       });
-      this.groupBurst.route(eventDeliveryItem(event, result.inbound.seq, { text: recall ? `${line}\n${recall}` : line }));
+      const hint = event.chatId ? this.taskHint?.(event, { owner }) ?? '' : '';
+      this.route(eventDeliveryItem(event, result.inbound.seq, { text: [line, hint, recall].filter(Boolean).join('\n') }),
+        inputMeta(event, { owner, mention }));
     });
+  }
+
+  // Every input line's way to the runtime: the inbox scheduler's inbox, or
+  // the legacy group burst. A runtime that cannot read the inbox (no Core
+  // tools) gets inputs the legacy way, after anything still waiting there.
+  route(item, meta) {
+    if (this.inbox?.usable()) {
+      this.inbox.add(item, meta);
+      return;
+    }
+    this.inbox?.drain();
+    this.groupBurst.route(item);
   }
 
   // A line the Core composed about an accepted chat event (what an approval
@@ -215,29 +251,32 @@ export class Harness {
   deliverNote(event, content) {
     return this.enqueueIngress(async () => {
       await this.runtime.prepareInputContext?.();
-      this.groupBurst.route(eventDeliveryItem(event, null, {
-        text: formatInboundLine({ ...event, content }, null, { owner: this.isOwner(event), replyTo: { kind: 'me' } }),
-      }));
+      const owner = this.isOwner(event);
+      this.route(eventDeliveryItem(event, null, {
+        text: formatInboundLine({ ...event, content }, null, { owner, replyTo: { kind: 'me' } }),
+      }), inputMeta(event, { owner }));
     });
   }
 
   // Shows an accepted line again, tagged undecided=1, after a turn ended with
   // neither a delivery nor stay_silent for it. Same event= (still a valid
-  // decision_id), but no seq: it never moves the fence or counts as a new
-  // input, so it cannot start another reminder. A line a loop-stopped turn
-  // left behind comes back with its seq instead (a second stop must see it
-  // again), and with the tag only where the policy explains it.
+  // decision_id) and original seq: it never moves the fence or counts as a new
+  // input, but lets the next turn end settle it until the reminder limit. A
+  // line a loop-stopped turn left behind uses the same seq mechanics, with the
+  // tag only where the policy explains it.
   redeliverUndecided(row, { seq = null, undecided = true } = {}) {
     return this.enqueueIngress(async () => {
       await this.runtime.prepareInputContext?.();
-      this.groupBurst.route(eventDeliveryItem(row, seq, {
+      const owner = this.isOwner(row);
+      const mention = this.mentionTarget(row);
+      this.route(eventDeliveryItem(row, seq, {
         text: formatInboundLine(row, null, {
-          owner: this.isOwner(row),
-          mention: this.mentionTarget(row),
+          owner,
+          mention,
           replyTo: row.messageType === 'card_action' ? { kind: 'me' } : resolveReplyTarget(this.store, row),
           undecided,
         }),
-      }));
+      }), inputMeta(row, { owner, mention }));
     });
   }
 
@@ -264,9 +303,11 @@ export class Harness {
   // The runtime became idle: give buffered group bursts a chance to claim it.
   onAvailable() {
     this.groupBurst.onAvailable();
+    this.inbox?.onAvailable();
   }
 
   stop() {
     this.groupBurst.stop();
+    this.inbox?.stop();
   }
 }

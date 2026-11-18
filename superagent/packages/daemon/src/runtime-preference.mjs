@@ -41,7 +41,11 @@ export function updateRuntimePreference(config, runtime) {
     // desired state and can be left byte-for-byte unchanged.
     saved = configuredRuntime === runtime ? instance.model : target;
     value.agents.find((agent) => agent.id === config.instanceId).model = saved;
+    if (instance.primaryRuntime || config.primaryRuntime) {
+      value.agents.find((agent) => agent.id === config.instanceId).primaryRuntime = runtime;
+    }
   });
   config.initialModel = saved;
+  if (config.primaryRuntime) config.primaryRuntime = runtime;
   return saved;
 }

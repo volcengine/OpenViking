@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { loginCommand } from '../src/login.mjs';
 import { Prompter } from '../src/prompt.mjs';
-import { OWNER_MESSAGE_SCOPES, larkScopes } from '../src/setup.mjs';
+import { larkScopes } from '../src/setup.mjs';
 
 function agent(home, id, overrides = {}) {
   return {
@@ -206,7 +206,7 @@ test('Feishu login without the update asks the owner only for the user scopes th
   assert.equal(login[login.indexOf('--scope') + 1], lark.few.user.join(' '));
 });
 
-test('Feishu login for a bot that reads only its own chats never asks the owner for their message scopes', async (t) => {
+test('Feishu login for a bot-only app never starts user authorization', async (t) => {
   const m = machine(t, (home) => [agent(home, 'haha', { larkMessageAccess: 'bot' })], { answers: ['n'] });
   const lark = fakeLarkCli(m.home);
   // The app has everything, the owner's message scopes too.
@@ -214,9 +214,9 @@ test('Feishu login for a bot that reads only its own chats never asks the owner 
   m.options.env.LARK_CLI_BIN = lark.bin;
   assert.equal(await loginCommand(['lark'], m.options), 0);
   const login = lark.calls().find((args) => args.includes('--no-wait'));
-  assert.equal(login[login.indexOf('--scope') + 1], larkScopes('bot').user.join(' '));
-  for (const scope of OWNER_MESSAGE_SCOPES) assert.ok(!login[login.indexOf('--scope') + 1].split(' ').includes(scope));
-  assert.match(m.written(), /以你的身份用文档、日历等（不读你的消息）/);
+  assert.equal(login, undefined);
+  assert.deepEqual(larkScopes('bot').user, []);
+  assert.doesNotMatch(m.written(), /重新授权|等待授权/);
 });
 
 test('Feishu login with a version under review says the scan would withdraw it, and does not scan by default', async (t) => {

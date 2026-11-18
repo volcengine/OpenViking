@@ -99,6 +99,19 @@ test('generated patch replaces SDK transport and keeps config/mcp variants', (t)
   assert.equal(JSON.parse(fs.readFileSync(written, 'utf8')).some(row => row.id === 'llm-pi-ai'), false);
 });
 
+test('a setup skill selection replaces default discovery, including an empty selection', () => {
+  assert.deepEqual(buildDshPatch({
+    mcp: null, skillDirs: ['/work/.dsh/skills'], includeDefaultSkillRoots: false,
+  }).find(row => row.id === 'skill-filesystem'), {
+    id: 'skill-filesystem', config: { includeDefaultRoots: false, customSkillDirs: ['/work/.dsh/skills'] },
+  });
+  assert.deepEqual(buildDshPatch({
+    mcp: null, skillDirs: [], includeDefaultSkillRoots: false,
+  }).find(row => row.id === 'skill-filesystem'), {
+    id: 'skill-filesystem', config: { includeDefaultRoots: false, customSkillDirs: [] },
+  });
+});
+
 test('the model settings document is DSH home profiles/sdk/cordis.patch.yml', t => {
   const dataDir = temp(t);
   const expected = path.join(dataDir, 'dsh', 'home', 'profiles', 'sdk', 'cordis.patch.yml');
@@ -139,6 +152,21 @@ test('private DSH environment removes inherited DSH settings and pins Node', t =
     assert.equal(fs.statSync(directory).mode & 0o077, 0);
   }
   assert.throws(() => sanitizeDshEnv({}, {}), /dataDir/);
+});
+
+test('shared DSH environment uses host homes without creating or chmodding them', t => {
+  const root = temp(t);
+  const homeDir = path.join(root, 'host-home');
+  const env = sanitizeDshEnv({ HOME: homeDir, PATH: '/bin' }, {
+    dataDir: path.join(root, 'data'), dshHomeMode: 'shared', execPath: '/node24/bin/node',
+  });
+  assert.equal(env.DSH_HOME, path.join(homeDir, '.dsh'));
+  assert.equal(env.DSH_AGENTS_HOME, path.join(homeDir, '.agents'));
+  assert.equal(fs.existsSync(homeDir), false);
+  assert.equal(fs.existsSync(path.join(root, 'data', 'dsh', 'home')), false);
+  assert.equal(fs.existsSync(path.join(root, 'data', 'dsh', 'agents')), false);
+  assert.equal(dshProfilePatchPath({ dataDir: path.join(root, 'data'), dshHomeMode: 'shared', homeDir }),
+    path.join(homeDir, '.dsh', 'profiles', 'sdk', 'cordis.patch.yml'));
 });
 
 test('patch file is private JSON-compatible YAML with an absolute bridge', t => {

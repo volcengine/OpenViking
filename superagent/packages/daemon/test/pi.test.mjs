@@ -5,8 +5,10 @@ import { PI_BUILTIN_EXTENSIONS } from '../src/ov-isolation.mjs';
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import { managedPiBin, PI_VERSION, PI_MCP_EXTENSION, PI_MCP_STATUS } from '../src/pi-runtime.mjs';
 import { assembleConversationPolicy } from '../src/conversation-policy.mjs';
 import {
@@ -18,19 +20,22 @@ import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-pi-'));
+after(() => fs.rmSync(root, { recursive: true, force: true }));
+
 const baseConfig = {
   piBin: 'pi',
   piModel: 'openai/gpt-4o',
   piEffort: 'medium',
-  workspace: '/tmp/superagent-workspace',
+  workspace: path.join(root, 'workspace'),
   projectDir: '/release',
-  dataDir: '/tmp/superagent-pi-data',
-  databasePath: '/tmp/superagent-test.sqlite3',
+  dataDir: path.join(root, 'data'),
+  databasePath: path.join(root, 'test.sqlite3'),
   profile: 'test-profile',
   connectors: ['lark'],
   larkCliBin: '/fake/lark-cli',
   slackCliBin: '/fake-slack/slack',
-  actionSocketPath: '/tmp/superagent-pi-data/actions.sock',
+  actionSocketPath: path.join(root, 'data', 'actions.sock'),
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
   maxReplyChars: 1_000,
@@ -344,6 +349,17 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.deepEqual(failures[0].receiptIds, ['receipt-stop']);
   });
 
+  it('caps a workers router\'s own shell instead of giving it the default timeout', async () => {
+    const { agent, calls } = harness({ config: { ...baseConfig, scheduler: 'workers' } });
+    await agent.start();
+    const { args, options: { env } } = calls.at(-1);
+    assert.deepEqual([env.PERSONAL_AGENT_SHELL_LIMIT_S, env.PERSONAL_AGENT_WORK_TOOL_BUDGET, env.PERSONAL_AGENT_SHELL_DEFAULT_S, env.PERSONAL_AGENT_SHELL_MAX_S],
+      ['30', '6', undefined, undefined]);
+    const runtimePrompt = fs.readFileSync(args[args.indexOf('--append-system-prompt') + 1], 'utf8');
+    assert.match(runtimePrompt, /a command is cut off after 30 seconds/);
+    assert.doesNotMatch(runtimePrompt, /stopped after 5 minutes/);
+  });
+
   it('preflights, starts pi --mode rpc, and prefixes the first real turn', async () => {
     const { agent, calls, persistent, store } = harness();
     await agent.start();
@@ -358,13 +374,18 @@ describe('PiAgent persistent rpc runtime', () => {
     const env = calls.at(-1).options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
     assert.ok(calls.every((call) => call.options.env.PATH.startsWith('/fake:/fake-slack:')));
-    assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/superagent-pi-data/actions.sock');
+    assert.equal(env.PERSONAL_AGENT_SOCKET, baseConfig.actionSocketPath);
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
     assert.equal(env.LARK_APP_SECRET, undefined);
     assert.equal(env.PI_LARK_TOOLS_CONFIG, undefined);
     const promptPath = args[args.indexOf('--append-system-prompt') + 1];
     const runtimePrompt = fs.readFileSync(promptPath, 'utf8');
-    assert.equal(runtimePrompt, assembleConversationPolicy(baseConfig));
+    assert.equal(runtimePrompt, assembleConversationPolicy(baseConfig, { runtime: 'pi' }));
+    // A router that does the work itself: a command without a timeout cannot
+    // hold every chat, and the model knows to give longer work its own.
+    assert.match(runtimePrompt, /stopped after 5 minutes, and none runs longer than 60/);
+    assert.deepEqual([env.PERSONAL_AGENT_SHELL_DEFAULT_S, env.PERSONAL_AGENT_SHELL_MAX_S, env.PERSONAL_AGENT_SHELL_LIMIT_S],
+      ['300', '3600', undefined]);
     assert.doesNotMatch(runtimePrompt, /Agent tools from bash|actions\/cli\.mjs/);
     assert.doesNotMatch(runtimePrompt, /lark-cli im \+messages-reply/);
     assert.equal(args[args.lastIndexOf('--extension') + 1], PI_MCP_EXTENSION);

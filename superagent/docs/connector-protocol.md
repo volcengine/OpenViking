@@ -175,6 +175,17 @@ markdown `content` body, through the same outbox as agent deliveries.
 Failure-notice muting uses the event scope, and its outbound history keeps the
 source, subject and action without inventing a chat.
 
+Chat `kind` values the Core treats specially (others are free strings):
+
+| `kind` | Decision expected | Makes an earlier reply stale |
+| --- | --- | --- |
+| `message.created`, `message.action`, `message.recalled` | yes | yes |
+| `message.reaction.created`, `message.reaction.deleted` | no, but it wakes the model | no |
+
+A reaction or recall carries the conversation and thread of the message it is
+about; for Lark, which leaves them out, the Core places it from its own history.
+Only a reaction on the bot's newest message in that chat/thread is delivered.
+
 Lark's Connector decodes message, card-action, and meeting envelopes. Weixin,
 Telegram, QQ, Slack and OneBot produce canonical chat events directly. The Core validates and
 consumes only the fields above, plus optional typed extension `data`. Provider

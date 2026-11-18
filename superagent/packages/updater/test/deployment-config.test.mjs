@@ -77,6 +77,21 @@ function withManifest(value, callback) {
 }
 
 test('loads any number of agents from one absolute deployment manifest', () => {
+  const value = validManifest();
+  value.agents[0].primaryRuntime = 'traex';
+  value.agents[0].fallbackRuntime = 'pi';
+  value.agents[0].fallbackReturnAfterMs = 600_000;
+  withManifest(value, (manifestPath) => {
+    const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
+    const env = { OV_SUPERAGENT_PRIMARY_RUNTIME: 'claude' };
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.OV_SUPERAGENT_PRIMARY_RUNTIME, 'traex');
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RUNTIME, 'pi');
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS, '600000');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_PRIMARY_RUNTIME, undefined);
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RUNTIME, undefined);
+  });
   withManifest(validManifest(), (manifestPath) => {
     const deployment = loadDeploymentManifest({
       OV_SUPERAGENT_CONFIG: manifestPath,
@@ -520,6 +535,25 @@ test('explicit silence is on by default except on Ark, an explicit false opts ou
   });
 });
 
+test('the scheduler is legacy unless an instance picks the inbox, and is always pinned in the daemon env', () => {
+  const manifest = validManifest();
+  manifest.agents[1].scheduler = 'inbox';
+  withManifest(manifest, (manifestPath) => {
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_SCHEDULER: 'inbox' };
+    const deployment = loadDeploymentManifest(env);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').scheduler, 'legacy');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.OV_SUPERAGENT_SCHEDULER, 'legacy');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_SCHEDULER, 'inbox');
+  });
+  const broken = validManifest();
+  broken.agents[0].scheduler = 'parallel';
+  withManifest(broken, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.scheduler must be legacy or inbox or workers/);
+  });
+});
+
 test('staged replies are opt-in per instance and always pinned in the daemon env', () => {
   const manifest = validManifest();
   manifest.agents[1].stagedReplies = true;
@@ -572,6 +606,31 @@ test('Lark message access is the owner\'s unless an instance keeps to the bot\'s
   });
 });
 
+test('a bot-only instance\'s owner is pinned in its daemon env, and never leaks into another instance', () => {
+  const manifest = validManifest();
+  Object.assign(manifest.agents[1], { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_owner12345678' });
+  withManifest(manifest, (manifestPath) => {
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_LARK_OWNER_OPEN_ID: 'ou_stale12345678' };
+    const deployment = loadDeploymentManifest(env);
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID, 'ou_owner12345678');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').larkOwnerOpenId, null);
+    assert.equal(env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID, undefined);
+  });
+  const wrong = validManifest();
+  wrong.agents[0].larkOwnerOpenId = 'someone';
+  withManifest(wrong, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.larkOwnerOpenId must be a Feishu\/Lark open_id/);
+  });
+  const elsewhere = validManifest();
+  Object.assign(elsewhere.agents[2], { channel: 'weixin', connectors: ['weixin'], larkOwnerOpenId: 'ou_owner12345678' });
+  delete elsewhere.agents[2].profile;
+  withManifest(elsewhere, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[2\]\.larkOwnerOpenId is only used by the lark connector/);
+  });
+});
+
 test('meeting notes are opt-in for one Feishu/Lark instance at most, and always pinned in the daemon env', () => {
   const manifest = validManifest();
   manifest.agents[1].meetingNotes = true;
@@ -601,30 +660,41 @@ test('meeting notes are opt-in for one Feishu/Lark instance at most, and always 
   withManifest(broken, (manifestPath) => {
     assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.meetingNotes must be a boolean/);
   });
+  // Meeting notes are read as the owner, which a bot-only instance cannot.
+  const botOnly = validManifest();
+  Object.assign(botOnly.agents[1], { larkMessageAccess: 'bot', meetingNotes: true });
+  withManifest(botOnly, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }),
+      /agents\[1\]\.meetingNotes needs the owner's user access, which larkMessageAccess bot does not have/);
+  });
 });
 
-test('an instance names a shipped role or its own role file, and keeps natural writing unless it turns it off', () => {
+test('an instance names where its soul is kept and keeps natural writing unless it turns it off; an old role is ignored', () => {
   const manifest = validManifest();
+  // role from before the soul moved to OpenViking still loads, and means nothing.
   manifest.agents[0].role = 'assistant';
   manifest.agents[1].role = '/srv/superagent/roles/beta.md';
+  manifest.agents[1].soulUri = 'viking://~/memories/beta-soul.md';
+  manifest.agents[2].soulUri = '/srv/superagent/souls/gamma.md';
   manifest.agents[1].naturalWriting = false;
   withManifest(manifest, (manifestPath) => {
-    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_ROLE: 'qa', OV_SUPERAGENT_NATURAL_WRITING: 'false' };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_ROLE: 'qa', OV_SUPERAGENT_SOUL_URI: 'viking://~/shell.md', OV_SUPERAGENT_NATURAL_WRITING: 'false' };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').naturalWriting, true);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').role, undefined);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.OV_SUPERAGENT_ROLE, 'assistant');
+    assert.equal(env.OV_SUPERAGENT_ROLE, undefined);
+    assert.equal(env.OV_SUPERAGENT_SOUL_URI, undefined, 'the default soul; the shell\'s does not leak in');
     assert.equal(env.OV_SUPERAGENT_NATURAL_WRITING, 'true');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.OV_SUPERAGENT_ROLE, '/srv/superagent/roles/beta.md');
+    assert.equal(env.OV_SUPERAGENT_SOUL_URI, 'viking://~/memories/beta-soul.md');
     assert.equal(env.OV_SUPERAGENT_NATURAL_WRITING, 'false');
-    // No role: neither the shell's nor another instance's leaks in.
     applyDeploymentAgentEnv(env, deployment, 'gamma');
-    assert.equal(env.OV_SUPERAGENT_ROLE, undefined);
+    assert.equal(env.OV_SUPERAGENT_SOUL_URI, '/srv/superagent/souls/gamma.md');
   });
   for (const [field, value, message] of [
-    ['role', 'pirate', /agents\[0\]\.role must be colleague, assistant, qa or an absolute path/],
-    ['role', 'roles/mine.md', /agents\[0\]\.role must be colleague, assistant, qa or an absolute path/],
+    ['soulUri', 'souls/mine.md', /agents\[0\]\.soulUri must be a viking:\/\/ address or an absolute file path/],
+    ['soulUri', 'viking://~/my soul.md', /agents\[0\]\.soulUri must be a viking:\/\/ address or an absolute file path/],
     ['naturalWriting', 'no', /agents\[0\]\.naturalWriting must be a boolean/],
   ]) {
     const broken = validManifest();

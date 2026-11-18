@@ -20,6 +20,7 @@ const {
   DAEMON_ENV_FIELDS,
   DAEMON_SECRET_ENV_FIELDS,
   DAEMON_SHELL_ENV_FIELDS,
+  applyDeploymentAgentEnv,
   applyDeploymentDaemonEnv,
   deploymentDaemonEnvOverrides,
   loadDeploymentManifest,
@@ -117,6 +118,21 @@ describe('the daemon reads DSH from the environment only', { concurrency: false 
     assert.throws(() => getConfig(), /OV_SUPERAGENT_DSH_START_TIMEOUT_MS/);
   });
 
+  it('defaults to four isolated skill roots without host roots and accepts an empty shared selection', () => {
+    setEnv('OV_SUPERAGENT_DSH_HOME_MODE', undefined);
+    setEnv('OV_SUPERAGENT_DSH_SKILL_ROOTS', undefined);
+    assert.equal(getConfig().dshHomeMode, 'isolated');
+    assert.deepEqual([...getConfig().dshSkillRoots], [
+      'workspace-dsh', 'project-agents', 'data-dsh', 'data-agents',
+    ]);
+    setEnv('OV_SUPERAGENT_DSH_HOME_MODE', 'shared');
+    setEnv('OV_SUPERAGENT_DSH_SKILL_ROOTS', '[]');
+    assert.equal(getConfig().dshHomeMode, 'shared');
+    assert.deepEqual([...getConfig().dshSkillRoots], []);
+    setEnv('OV_SUPERAGENT_DSH_SKILL_ROOTS', '["data-dsh"]');
+    assert.throws(() => getConfig(), /unknown or repeated root/);
+  });
+
   it('has no DSH model seed: the route lives in DSH\'s own settings document', () => {
     // Neither variable was renamed: a stale environment setting must not
     // resurrect a second model configuration source outside DSH.
@@ -173,6 +189,34 @@ describe('how the DSH variables travel through deployment', () => {
       const overrides = deploymentDaemonEnvOverrides(sourceEnv);
       assert.equal(overrides.DSH_BIN, '/opt/dsh-from-shell');
       assert.equal(overrides.OV_SUPERAGENT_DSH_EFFORT, 'xhigh');
+    });
+  });
+
+  it('carries the home mode and selected roots from the manifest into the daemon', () => {
+    const manifest = validManifest();
+    withManifest(manifest, (manifestPath) => {
+      const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
+      assert.equal(deployment.agents[0].dshHomeMode, 'isolated');
+      assert.deepEqual([...deployment.agents[0].dshSkillRoots], [
+        'workspace-dsh', 'project-agents', 'data-dsh', 'data-agents',
+      ]);
+      const env = {};
+      applyDeploymentAgentEnv(env, deployment);
+      assert.equal(env.OV_SUPERAGENT_DSH_HOME_MODE, 'isolated');
+      assert.deepEqual(JSON.parse(env.OV_SUPERAGENT_DSH_SKILL_ROOTS), [...deployment.agents[0].dshSkillRoots]);
+    });
+    manifest.agents[0].dshHomeMode = 'shared';
+    manifest.agents[0].dshSkillRoots = ['host-dsh'];
+    withManifest(manifest, (manifestPath) => {
+      const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
+      const env = {};
+      applyDeploymentAgentEnv(env, deployment);
+      assert.equal(env.OV_SUPERAGENT_DSH_HOME_MODE, 'shared');
+      assert.equal(env.OV_SUPERAGENT_DSH_SKILL_ROOTS, '["host-dsh"]');
+    });
+    manifest.agents[0].dshSkillRoots = ['data-dsh'];
+    withManifest(manifest, (manifestPath) => {
+      assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /dshSkillRoots/);
     });
   });
 

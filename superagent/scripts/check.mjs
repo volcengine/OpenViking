@@ -16,6 +16,19 @@ function check(command, flag, patterns) {
   }
 }
 
+// A release is built from committed files (git archive). A committed
+// node_modules or symlink ships a path from whoever committed it.
+const tracked = spawnSync('git', ['ls-files', '-s', '--', '.'], { encoding: 'utf8' });
+if (tracked.status === 0) {
+  const bad = tracked.stdout.split('\n').filter(Boolean)
+    .map((line) => ({ mode: line.split(' ')[0], file: line.split('\t')[1] }))
+    .filter(({ mode, file }) => mode === '120000' || /(^|\/)node_modules(\/|$)/.test(file));
+  if (bad.length) {
+    console.error(`Committed symlinks or node_modules are not allowed:\n${bad.map(({ file }) => `  ${file}`).join('\n')}`);
+    process.exit(1);
+  }
+}
+
 if (process.platform === 'win32') {
   console.log('Skipping POSIX shell syntax checks on Windows.');
 } else {

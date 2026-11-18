@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isLocalSoul } from '../../daemon/src/conversation-policy.mjs';
 import { OVConnection, readOVConfig } from '../../daemon/src/ov-connection.mjs';
 import { availableInstanceOvConfig } from './manifest.mjs';
 import {
@@ -34,6 +35,23 @@ const canonical = (value) => (Array.isArray(value) ? value.map(canonical)
 // A new instance is named after its connection is chosen, so until then its
 // OV user can only be shown with the name still to come.
 const UNNAMED = () => t('<实例名称>', '<instance name>');
+
+// Older OV releases let memory extraction update soul.md. An absent or
+// unfamiliar version cannot prove that behavior, so it never blocks setup or
+// produces a speculative warning.
+function hasLegacySoulExtraction(version) {
+  if (typeof version !== 'string') return false;
+  const match = version.trim().match(/^v?(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (!match) return false;
+  const parts = match.slice(1).map((part) => Number(part ?? 0));
+  return parts[0] === 0 && (parts[1] < 5 || (parts[1] === 5 && parts[2] < 5));
+}
+
+function warnAboutLegacySoulExtraction(prompter, version) {
+  if (!hasLegacySoulExtraction(version)) return;
+  prompter.warn(t(`当前 OpenViking 版本为 ${version}，低于 0.5.5；记忆抽取链路可能更新 soul，覆盖角色设定。建议升级到 0.5.5 或更高版本。`,
+    `OpenViking ${version} is older than 0.5.5; its memory extraction pipeline may update the soul and overwrite the role. Upgrade to OpenViking 0.5.5 or later.`));
+}
 
 // Everything an instance copy takes from a config: all of it but the peer the
 // copy drops. Null for a file that cannot be read.
@@ -288,6 +306,7 @@ export async function configureOpenViking({
         continue;
       }
       prompter.success(t(`OpenViking 连接已验证：${address(result.url || config.url)}`, `OpenViking connection verified: ${address(result.url || config.url)}`));
+      warnAboutLegacySoulExtraction(prompter, result.version);
       const identity = await chooseIdentity(prompter, { result, config, taken, instanceId });
       if (!identity) continue;
       return { ...result, configPath, config: keyIdentity(structuredClone(config), result), via, identity };
@@ -316,6 +335,45 @@ export function saveOVConnection(detected, { env = process.env, homeDir = env.HO
     fs.renameSync(temporary, target);
   } finally { fs.rmSync(temporary, { force: true }); }
   return target;
+}
+
+// The instance's soul in OpenViking, read and written with the instance's own
+// identity (its ovConfig). A missing soul reads as empty; a release that
+// refuses `replace` on a missing file (404) gets `create`.
+export async function readOVSoul({ configPath, uri, fetchImpl = globalThis.fetch }) {
+  if (isLocalSoul(uri)) {
+    try {
+      return fs.readFileSync(uri, 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') return '';
+      throw error;
+    }
+  }
+  const connection = new OVConnection(readOVConfig(configPath), { fetch: fetchImpl });
+  try {
+    const { result } = await connection.json(`/api/v1/content/read?uri=${encodeURIComponent(uri)}&offset=0&limit=-1&raw=true`);
+    return String(result ?? '');
+  } catch (error) {
+    if (error?.httpStatus === 404) return '';
+    throw error;
+  }
+}
+
+export async function writeOVSoul({ configPath, uri, content, fetchImpl = globalThis.fetch }) {
+  if (isLocalSoul(uri)) {
+    fs.mkdirSync(path.dirname(uri), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(uri, content, { mode: 0o600 });
+    return uri;
+  }
+  const connection = new OVConnection(readOVConfig(configPath), { fetch: fetchImpl });
+  const write = (mode) => connection.json('/api/v1/content/write', { uri, content, mode, wait: true });
+  try {
+    await write('replace');
+  } catch (error) {
+    if (error?.httpStatus !== 404) throw error;
+    await write('create');
+  }
+  return uri;
 }
 
 // A changed connection gets a new private file. Existing files are left intact

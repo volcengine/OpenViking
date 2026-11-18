@@ -82,6 +82,21 @@ test('a repeated runtime selection does not rewrite the manifest', (t) => {
   assert.equal(fs.readFileSync(`${f.manifestPath}.bak`, 'utf8'), backup);
 });
 
+test('manual selection updates an explicit primary without changing its backup policy', (t) => {
+  const f = fixture(t);
+  const value = f.read();
+  value.agents[1].primaryRuntime = 'codex';
+  value.agents[1].fallbackRuntime = 'pi';
+  value.agents[1].fallbackReturnAfterMs = 1234;
+  writeManifest(f.manifestPath, value);
+  f.config.primaryRuntime = 'codex';
+  updateRuntimePreference(f.config, 'traex');
+  assert.equal(f.read().agents[1].primaryRuntime, 'traex');
+  assert.equal(f.config.primaryRuntime, 'traex');
+  assert.equal(f.read().agents[1].fallbackRuntime, 'pi');
+  assert.equal(f.read().agents[1].fallbackReturnAfterMs, 1234);
+});
+
 test('a repeated runtime selection preserves an explicit configured model', (t) => {
   const f = fixture(t);
   const changed = f.read();

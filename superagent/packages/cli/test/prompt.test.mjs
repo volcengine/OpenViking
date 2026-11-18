@@ -53,6 +53,13 @@ test('piped answers cannot pick a disabled choice', async () => {
   assert.match(written(), /编号无效/);
 });
 
+test('piped answers can explicitly select none when a multiselect allows it', async () => {
+  const { prompter } = piped(['0']);
+  assert.deepEqual(await prompter.multiselect('技能目录', [
+    { label: '工作区', value: 'workspace' }, { label: '宿主', value: 'host' },
+  ], { initial: [0, 1], min: 0 }), []);
+});
+
 test('terminal: arrows skip disabled rows and wrap; raw mode ends with the question', async () => {
   const { prompter, input, type } = terminal();
   const choices = [

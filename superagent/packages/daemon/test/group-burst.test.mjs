@@ -101,6 +101,22 @@ describe('warm group burst routing', () => {
     assert.equal(router.pendingConversations, 0);
   });
 
+  it('holds quick reactions in a direct chat for one burst, like group traffic', () => {
+    const { router, clock, deliveries } = newRouter();
+    const p2p = { conversationKey: 'test:tenant:oc_p2p:main', chatType: 'p2p' };
+
+    router.route({ ...message({ ...p2p, seq: 1 }), batched: true });
+    router.route({ ...message({ ...p2p, seq: 2 }), batched: true });
+    assert.equal(deliveries.length, 0);
+
+    clock.advance(GROUP_BURST_DELAY_MS);
+    assert.deepEqual(deliveries.map((batch) => batch.map((item) => item.seq)), [[1, 2]]);
+
+    router.route(message({ ...p2p, seq: 3 }));
+    assert.deepEqual(deliveries.map((batch) => batch.map((item) => item.seq)), [[1, 2], [3]],
+      'a direct message still goes at once');
+  });
+
   it('does not merge a post-deadline message when the timer callback runs late', () => {
     let currentTime = 0;
     const deliveries = [];

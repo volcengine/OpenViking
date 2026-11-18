@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { isLanguage, languageChoice, saveLanguage, setLanguage, t } from '../src/i18n.mjs';
-import { PALETTE, padEnd, styler, width } from '../src/ui.mjs';
+import { PALETTE, flushOutput, padEnd, styler, width } from '../src/ui.mjs';
 
 // The `ov-superagent` command. Each subcommand loads only what it needs, so `setup`
 // and `help` work before any manifest exists. --lang zh|en anywhere on the
@@ -220,7 +220,12 @@ try {
     // A finished setup must return the terminal even when a stray handle keeps
     // the event loop alive (an interactive setup has done exactly that), or the
     // installer never reaches the shell prompt it is supposed to return to.
-    if (args[0] === 'setup' && process.stdin.isTTY) process.exit(process.exitCode ?? 0);
+    if (args[0] === 'setup' && process.stdin.isTTY) {
+      // Do not let the shell reclaim the terminal while the final summary is
+      // still queued (notably on Windows), then exit despite any stray handle.
+      await Promise.all([flushOutput(process.stdout), flushOutput(process.stderr)]);
+      process.exit(process.exitCode ?? 0);
+    }
   }
 } catch (error) {
   process.stderr.write(`${error.name === 'PromptAborted' ? t('已取消', 'Cancelled') : error.message}\n`);

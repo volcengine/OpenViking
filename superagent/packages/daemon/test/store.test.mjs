@@ -8,6 +8,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Store } from '../src/store.mjs';
 import { cognitionHistoryPrefix } from '../src/cognition.mjs';
+import { resolveReplyTarget } from '../src/runtime-input.mjs';
 import { chatEvent } from './event-fixture.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -61,8 +62,13 @@ describe('Store', () => {
 
   it('resolves a quoted message author from inbound history or the journal', () => {
     store.ingest(event('parent', 'original', { senderId: 'ou-author' }));
-    assert.deepEqual(store.resolveMessageAuthor('om-parent'), {
-      kind: 'user', chatId: 'oc-chat', senderId: 'ou-author',
+    const { message, ...author } = store.resolveMessageAuthor('om-parent');
+    assert.deepEqual(author, { kind: 'user', chatId: 'oc-chat', senderId: 'ou-author', senderName: null });
+    // The stored message itself, so a quote of it can show how it begins.
+    assert.equal(message.messageId, 'om-parent');
+    assert.equal(message.content, 'original');
+    assert.deepEqual(resolveReplyTarget(store, event('child', 'agreed', { parentId: 'om-parent' })), {
+      kind: 'user', chatId: 'oc-chat', senderId: 'ou-author', senderName: null, text: 'original',
     });
 
     store.appendCognitionJournal({

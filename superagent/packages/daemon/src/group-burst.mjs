@@ -49,8 +49,10 @@ export class GroupBurstRouter {
       throw new TypeError('event scopeKey is required');
     }
 
+    // Group traffic, and reactions anywhere, wait a short burst while idle.
+    const batched = item.chatType === 'group' || item.batched === true;
     let existing = this.pending.get(key);
-    if (item.chatType === 'group'
+    if (batched
       && existing
       && existing.dueAtMs <= this.now()
       && this.isConnected()
@@ -64,7 +66,7 @@ export class GroupBurstRouter {
         return true;
       }
     }
-    const immediate = item.chatType !== 'group'
+    const immediate = !batched
       || !this.isConnected()
       || this.isTurnInProgress();
 

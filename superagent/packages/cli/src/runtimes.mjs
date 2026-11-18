@@ -87,7 +87,7 @@ export async function detectRuntimes({
   if (durable) runtimes.push(durable);
 
   const traex = await detectTraex({ env, execFileImpl, probe });
-  if (traex) runtimes.push(traex);
+  runtimes.push(traex);
   const opencode = await detectOpencode({ env, execFileImpl, probe: acpProbe });
   if (opencode) runtimes.push(opencode);
   runtimes.push(await detectAgy({ env, execFileImpl, probe: agyProbe }));
@@ -204,7 +204,11 @@ async function detectTraex({ env, execFileImpl, probe }) {
     if (result.available) return result;
     if (!best || result.protocolCompatible) best = result;
   }
-  return best;
+  return best ?? {
+    id: 'traex', label: 'TraeX', model: 'traex', bin: null, binEnv: 'TRAECLI_BIN',
+    installed: false, protocolCompatible: false, loggedIn: false, available: false,
+    note: t('未安装', 'not installed'),
+  };
 }
 
 // DSH owns model execution; OpenViking SuperAgent supplies the bridge and personal_agent MCP.
@@ -215,7 +219,9 @@ async function detectTraex({ env, execFileImpl, probe }) {
 // operator edits an instance that already exists: that instance's routes live
 // in its home, and a throwaway home can never see them, so a configured
 // instance would otherwise read as "no route".
-export async function detectDsh({ env = process.env, execFileImpl = execFile, probe = probeDsh, dataDir = '' } = {}) {
+export async function detectDsh({
+  env = process.env, execFileImpl = execFile, probe = probeDsh, dataDir = '', dshHomeMode = 'isolated', homeDir,
+} = {}) {
   const explicit = env.DSH_BIN?.trim();
   const bin = explicit ? locateBinary(explicit, env) : which('dsh', env);
   const result = {
@@ -242,7 +248,7 @@ export async function detectDsh({ env = process.env, execFileImpl = execFile, pr
   // succeeds, and DSH can enumerate its own routes. Whether those routes carry
   // credentials is DSH's configuration (`ov-superagent dsh model list`), not something a
   // keyless probe can decide — so it is reported, never used to hide the runtime.
-  const handshake = await probe(bin, { env: probeEnv, ...(dataDir ? { dataDir } : {}) });
+  const handshake = await probe(bin, { env: probeEnv, ...(dataDir ? { dataDir, dshHomeMode, homeDir } : {}) });
   result.route = handshake.route ?? '';
   result.fallbackRoute = handshake.fallbackRoute ?? '';
   if (!handshake.compatible) {
