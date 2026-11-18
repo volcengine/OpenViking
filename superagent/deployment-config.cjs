@@ -98,6 +98,7 @@ const AGENT_FIELDS = Object.freeze([
   'connectors',
   'profile',
   'larkMessageAccess',
+  'larkOwnerOpenId',
   'port',
   'dataDir',
   'tempDir',
@@ -339,6 +340,14 @@ function parseAgent(value, index, ignored) {
   if (value.larkMessageAccess !== undefined && !LARK_MESSAGE_ACCESS.includes(value.larkMessageAccess)) {
     throw new Error(`${label}.larkMessageAccess must be ${LARK_MESSAGE_ACCESS.join(' or ')}`);
   }
+  // The owner of a bot-only bot, which has no user login to tell them by.
+  if (!connectors.includes('lark') && value.larkOwnerOpenId !== undefined) {
+    throw new Error(`${label}.larkOwnerOpenId is only used by the lark connector`);
+  }
+  if (value.larkOwnerOpenId !== undefined
+    && (typeof value.larkOwnerOpenId !== 'string' || !/^ou_[A-Za-z0-9_-]+$/.test(value.larkOwnerOpenId))) {
+    throw new Error(`${label}.larkOwnerOpenId must be a Feishu/Lark open_id (ou_...)`);
+  }
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
@@ -394,6 +403,7 @@ function parseAgent(value, index, ignored) {
     connectors: Object.freeze(connectors),
     profile: connectors.includes('lark') ? manifestString(value.profile, `${label}.profile`) : null,
     larkMessageAccess: connectors.includes('lark') ? value.larkMessageAccess ?? 'owner' : null,
+    larkOwnerOpenId: connectors.includes('lark') ? value.larkOwnerOpenId ?? null : null,
     port: value.port,
     dataDir: manifestAbsolutePath(value.dataDir, `${label}.dataDir`),
     tempDir: value.tempDir == null ? null : manifestAbsolutePath(value.tempDir, `${label}.tempDir`),
@@ -631,6 +641,9 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
     delete env.LARKSUITE_CLI_PROFILE;
     delete env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS;
   }
+  // Set or removed, so another instance's owner never leaks in.
+  if (agent.larkOwnerOpenId) env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID = agent.larkOwnerOpenId;
+  else delete env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID;
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.OV_SUPERAGENT_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';

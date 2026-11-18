@@ -1928,6 +1928,11 @@ async function setupFlow({
     // A new app reads as chosen for it; the app kept reads as it did.
     if (larkBotOnly(state, current)) agent.larkMessageAccess = 'bot';
     else delete agent.larkMessageAccess;
+    // A bot-only bot has no user login to tell its owner by: it keeps who
+    // confirmed the new app's scan, and the app kept keeps its owner.
+    const owner = state.larkApp ? state.larkOwnerOpenId : current?.larkOwnerOpenId;
+    if (larkBotOnly(state, current) && owner) agent.larkOwnerOpenId = owner;
+    else delete agent.larkOwnerOpenId;
     agent.ovConfig = state.ovConfig;
     // Retired OpenViking options: peers are gone, and remember is always on.
     delete agent.ovRecallScope;
@@ -2061,6 +2066,10 @@ async function setupFlow({
           others: (manifest?.agents ?? []).filter((other) => other.id !== state.id && other.profile),
         })
         : null;
+      if (lark) {
+        state.larkOwnerOpenId = lark.ownerOpenId ?? null;
+        agent = build();
+      }
       // People @ the bot by its app's name, so that is the default; an owner
       // who has called it something else for long may keep that.
       if (lark?.name && lark.name !== state.displayName && lark.name.length <= 40

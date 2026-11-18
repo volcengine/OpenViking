@@ -1292,6 +1292,8 @@ test('a new Feishu bot asks for full or bot-only access; bot-only is saved', asy
   assert.match(h.written(), /接下来扫码：飞书 1 次/);
   assert.deepEqual([given[0].source, given[0].access], ['select', 'bot']);
   assert.equal(h.manifest().agents[0].larkMessageAccess, 'bot');
+  // No user login tells the daemon its owner: who confirmed the scan does.
+  assert.equal(h.manifest().agents[0].larkOwnerOpenId, 'ou_owner');
 
   // Allowing it, the default, leaves the manifest as it always was.
   const allowed = harness(t, ['', '', '', '1', '1', '', '', 'y']);
@@ -1299,6 +1301,7 @@ test('a new Feishu bot asks for full or bot-only access; bot-only is saved', asy
   assert.equal(await setupCommand(allowed.options), 0);
   assert.equal(allowedGiven[0].access, 'owner');
   assert.equal('larkMessageAccess' in allowed.manifest().agents[0], false);
+  assert.equal('larkOwnerOpenId' in allowed.manifest().agents[0], false);
 
   // Without Feishu there is nothing to ask.
   const weixin = harness(t, ['', '', '', '1', '2', 'y']);
@@ -1309,25 +1312,27 @@ test('a new Feishu bot asks for full or bot-only access; bot-only is saved', asy
 test('an instance keeps how its app reads; another app is asked again, starting from the current answer', async (t) => {
   // Kept: nothing is asked, and it still reads only its own chats.
   const kept = harness(t, ['2', '1', 'Renamed', '11']);
-  const before = existing(kept, { larkMessageAccess: 'bot' });
+  const before = existing(kept, { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_kept' });
   assert.equal(await setupCommand(kept.options), 0);
   assert.doesNotMatch(kept.written(), /以你的身份搜索和读取/);
   assert.deepEqual(kept.manifest().agents, [{ ...before, displayName: 'Renamed' }]);
 
+  // Another app: its owner is whoever confirmed that app's scan.
   //                         change asd  飞书应用  pick existing  reads-as-you (as it was)  save  call it 小助手
   const switched = harness(t, ['2',        '6',      '2',           '',                       '11', 'n']);
-  const was = existing(switched, { larkMessageAccess: 'bot' });
+  const was = existing(switched, { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_kept' });
   const given = recordLark(switched, { name: '小助手' });
   assert.equal(await setupCommand(switched.options), 0);
   assert.equal(given[0].access, 'bot');
-  assert.deepEqual(switched.manifest().agents, [was]);
+  assert.deepEqual(switched.manifest().agents, [{ ...was, larkOwnerOpenId: 'ou_owner' }]);
 
-  // Allowed this time: the next app reads as the owner.
+  // Allowed this time: the next app reads as the owner, whose login names them.
   const widened = harness(t, ['2', '6', '2', '1', '11', 'n']);
-  existing(widened, { larkMessageAccess: 'bot' });
+  existing(widened, { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_kept' });
   recordLark(widened, { name: '小助手' });
   assert.equal(await setupCommand(widened.options), 0);
   assert.equal('larkMessageAccess' in widened.manifest().agents[0], false);
+  assert.equal('larkOwnerOpenId' in widened.manifest().agents[0], false);
 });
 
 test('ticking Feishu on an instance that had none asks where its bot comes from, right away', async (t) => {
@@ -1834,7 +1839,7 @@ test('meeting notes are read as the owner, so a bot-only Feishu/Lark bot never s
   recordLark(moved, { name: '小助手' });
   assert.equal(await setupCommand(moved.options), 0);
   assert.match(moved.written(), /仅机器人权限不能读取会议纪要，会议纪要入库随之关掉/);
-  assert.deepEqual(moved.manifest().agents, [{ ...was, larkMessageAccess: 'bot', meetingNotes: false }]);
+  assert.deepEqual(moved.manifest().agents, [{ ...was, larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_owner', meetingNotes: false }]);
 });
 
 test('会议纪要入库 is one instance\'s: refused while another has it, switched on like any other setting', async (t) => {

@@ -51,7 +51,7 @@ export function connectorInstances(config) {
     : [{ id: type, type }]));
 }
 
-function childConfig(config, instance) {
+export function childConfig(config, instance) {
   return {
     channel: instance.type,
     instance: instance.id,
@@ -67,6 +67,8 @@ function childConfig(config, instance) {
     emailConfigFile: instance.emailConfigFile ?? null,
     // The Lark Connector of the instance that stores meeting notes.
     meetingNotes: instance.type === 'lark' && Boolean(config.meetingNotes),
+    // A bot-only Lark bot has no user login to tell its owner by.
+    larkOwnerOpenId: instance.type === 'lark' ? config.larkOwnerOpenId ?? null : null,
     // A mailbox stores each mail in OV before reporting it; so does the Lark
     // Connector each meeting note.
     openVikingConfigPath: instance.type === 'email' || (instance.type === 'lark' && config.meetingNotes)

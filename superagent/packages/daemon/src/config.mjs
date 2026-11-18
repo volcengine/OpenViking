@@ -62,6 +62,13 @@ function soulUriEnv() {
   return uri;
 }
 
+function openIdEnv(name) {
+  const value = (process.env[name] ?? '').trim();
+  if (!value) return null;
+  if (!/^ou_[A-Za-z0-9_-]+$/.test(value)) throw new Error(`${name} must be a Feishu/Lark open_id (ou_...)`);
+  return value;
+}
+
 function csvEnv(name) {
   return new Set(
     (process.env[name] ?? '')
@@ -349,6 +356,9 @@ export function getConfig() {
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
+    // agents[].larkOwnerOpenId: the owner of a bot-only instance, which has no
+    // user login to tell them by (setup keeps who confirmed the app's scan).
+    larkOwnerOpenId: openIdEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID'),
     // Opt-in per instance (agents[].meetingNotes), on one instance at most:
     // the owner's Feishu/Lark meeting notes are stored in OV.
     meetingNotes: boolEnv('OV_SUPERAGENT_MEETING_NOTES', false) && connectors.includes('lark'),
