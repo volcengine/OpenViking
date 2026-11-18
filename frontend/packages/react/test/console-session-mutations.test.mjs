@@ -75,7 +75,7 @@ test('shared Console renames provider-backed sessions without a host rename call
   }
 });
 
-test('closing a session dialog with the mouse restores focus without showing the history tooltip', async () => {
+test('focusing session history after closing a dialog with the mouse leaves its tooltip hidden', async () => {
   const view = await mount(() => ok([]), {
     defaultMode: 'conversation',
     conversation: {
@@ -93,10 +93,16 @@ test('closing a session dialog with the mouse restores focus without showing the
   try {
     const history = view.button('Session history');
     await click(history);
-    await click(row('Rename session “First”'));
+    const actions = row('Session actions · First');
+    if (actions) await click(actions);
+    const rename = row(actions ? 'Rename' : 'Rename session “First”');
+    assert.ok(rename);
+    await click(rename);
     const cancel = button('Cancel');
     cancel.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
     await click(cancel);
+    assert.equal(dialog(), null);
+    await act(() => history.focus());
     await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
     assert.equal(document.activeElement === history, true);
     assert.equal(Boolean(document.querySelector('[role="tooltip"]')), false);
