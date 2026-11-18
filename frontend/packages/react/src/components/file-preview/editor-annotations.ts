@@ -3,7 +3,7 @@ import {
   StateEffect,
   StateField,
   type EditorState,
-  type Text,
+  type Extension,
 } from '@codemirror/state';
 import {
   Decoration,
@@ -15,80 +15,42 @@ import {
   tooltips,
   type Tooltip,
 } from '@codemirror/view';
-import { createMarkdownAnchorLocator } from '../../shared/markdown/locate-markdown-anchor.js';
+import {
+  annotatedLines,
+  trackAnnotationRanges,
+} from './editor-annotation-ranges.js';
+import {
+  annotationTooltip,
+  tooltipClass,
+} from './editor-annotation-tooltip.js';
 import type { FilePreviewEditorAnnotation } from './types.js';
 
 const lineClass = 'ov-file-preview__annotation-line';
 const gutterClass = 'ov-file-preview__annotation-gutter';
-const tooltipClass = 'ov-file-preview__annotation-tooltip';
 const highlightedLine = Decoration.line({ class: lineClass });
 const highlightedGutter = new (class extends GutterMarker {
   elementClass = gutterClass;
 })();
 const showAnnotationAt = StateEffect.define<number | null>();
 
-function findAnnotatedLines(
-  doc: Text,
-  annotations: readonly FilePreviewEditorAnnotation[],
-) {
-  const locate = createMarkdownAnchorLocator(doc.toString());
-  const matches = new Map<number, FilePreviewEditorAnnotation[]>();
-  for (const annotation of annotations) {
-    const location = locate(annotation.matchText.replace(/\r\n?/g, '\n'));
-    if (location.status !== 'unique') continue;
-    const start = doc.lineAt(location.start).number;
-    const end = doc.lineAt(location.end - 1).number;
-    for (let number = start; number <= end; number += 1) {
-      const { from } = doc.line(number);
-      const line = matches.get(from);
-      if (line) line.push(annotation);
-      else matches.set(from, [annotation]);
-    }
-  }
-  return matches;
-}
-
-function annotationTooltip(
-  pos: number,
-  annotations: readonly FilePreviewEditorAnnotation[],
-): Tooltip {
-  return {
-    pos,
-    above: true,
-    arrow: true,
-    create(view) {
-      const doc = view.dom.ownerDocument;
-      const dom = doc.createElement('div');
-      dom.className = tooltipClass;
-      dom.setAttribute('role', 'tooltip');
-      const content = doc.createElement('div');
-      content.className = 'ov-file-preview__annotation-tooltip-content';
-      for (const annotation of annotations) {
-        const section = doc.createElement('section');
-        const description = doc.createElement('strong');
-        description.textContent = annotation.description;
-        section.append(description);
-        if (annotation.reason) {
-          const reason = doc.createElement('p');
-          reason.textContent = annotation.reason;
-          section.append(reason);
-        }
-        content.append(section);
-      }
-      dom.append(content);
-      return { dom };
-    },
-  };
-}
-
 export function editorAnnotations(
   annotations: readonly FilePreviewEditorAnnotation[],
-) {
+): {
+  extensions: Extension[];
+  firstLine: (state: EditorState) => number | undefined;
+  annotationPosition: (
+    state: EditorState,
+    matchText: string,
+  ) => number | undefined;
+} {
+  const tracked = trackAnnotationRanges(annotations);
   const rows = StateField.define({
-    create: ({ doc }) => findAnnotatedLines(doc, annotations),
+    create: (state) => annotatedLines(state.doc, state.field(tracked.field)),
     update(value, transaction) {
-      return transaction.docChanged
-        ? findAnnotatedLines(transaction.newDoc, annotations)
+      const ranges = transaction.state.field(tracked.field);
+      return transaction.docChanged ||
+        ranges !== transaction.startState.field(tracked.field, false)
+        ? annotatedLines(transaction.newDoc, ranges)
         : value;
     },
     provide: (field) => [
@@ -133,6 +95,7 @@ export function editorAnnotations(
         view.dom.addEventListener('mouseleave', this.hideSoon);
         view.dom.addEventListener('mousedown', this.onDown);
         view.dom.addEventListener('keydown', this.onKey);
+        view.dom.addEventListener('focusout', this.onFocusOut);
       }
 
       private onMove = (event: MouseEvent) => {
@@ -164,8 +127,18 @@ export function editorAnnotations(
       };
 
       private onKey = (event: KeyboardEvent) => {
-        if (event.key === 'Escape') this.show(null);
+        if (event.key === 'Escape') this.hide();
       };
+
+      private onFocusOut = ({ relatedTarget }: FocusEvent) => {
+        if (
+          !(relatedTarget instanceof Node) ||
+          !this.view.dom.contains(relatedTarget)
+        )
+          this.hide();
+      };
+
+      hide = () => this.show(null);
 
       private show(pos: number | null) {
         this.cancelHide();
@@ -177,7 +150,7 @@ export function editorAnnotations(
         if (this.hideTimer !== undefined || !this.view.state.field(hovered))
           return;
         // Give the pointer time to cross the gap between the row and its tooltip.
-        this.hideTimer = setTimeout(() => this.show(null), 120);
+        this.hideTimer = setTimeout(this.hide, 120);
       };
 
       private cancelHide() {
@@ -192,12 +165,22 @@ export function editorAnnotations(
         dom.removeEventListener('mouseleave', this.hideSoon);
         dom.removeEventListener('mousedown', this.onDown);
         dom.removeEventListener('keydown', this.onKey);
+        dom.removeEventListener('focusout', this.onFocusOut);
       }
+    },
+    {
+      eventObservers: {
+        scroll(event) {
+          // CodeMirror also observes scrolling in the editor's parents.
+          if (event.type === 'scroll') this.hide();
+        },
+      },
     },
   );
 
   return {
     extensions: [
+      ...tracked.extensions,
       rows,
       hovered,
       hover,
@@ -206,7 +189,12 @@ export function editorAnnotations(
         tooltipSpace: (view) => view.dom.getBoundingClientRect(),
       }),
     ],
-    firstLine(state: EditorState) {
+    annotationPosition(state, matchText) {
+      return state
+        .field(tracked.field)
+        .find(({ annotation }) => annotation.matchText === matchText)?.from;
+    },
+    firstLine(state) {
       let first: number | undefined;
       for (const pos of state.field(rows).keys())
         if (first === undefined || pos < first) first = pos;

@@ -26,6 +26,7 @@ const messages: typeof enUS = {
       | 'quickStart'
     >
   >,
+  telemetryResult: (value: string) => `遥测：${value}`,
   taskCompletion: {
     title: '任务完成',
     description: '异步任务已完成。',

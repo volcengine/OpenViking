@@ -57,6 +57,7 @@ const messages = {
       | 'quickStart'
     >
   >,
+  telemetryResult: (value: string) => `Telemetry: ${value}`,
   taskCompletion: {
     title: 'Task complete',
     description: 'Background task completed.',

@@ -12,12 +12,13 @@ import type { FileBrowserDashboard } from './dashboard-model.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
 import type { FileBrowserDashboardLabels, FileBrowserLabels } from './types.js';
+import type { WikiSaveFeedback } from './use-wiki-save-feedback.js';
 
 /** View data and operations for the composed FileBrowser. */
 export interface FileBrowserApi {
   treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
   previewMonitoring?: Workflow<'file_browser_preview_load'>;
-  wikiSaving: boolean;
+  wikiSaveFeedback?: WikiSaveFeedback;
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;

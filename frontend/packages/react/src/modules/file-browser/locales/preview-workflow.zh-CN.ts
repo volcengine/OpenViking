@@ -12,6 +12,8 @@ export default {
   latest: '最新',
   rollback: '回滚至此版本',
   rollbackBadge: '回滚',
+  deletedBadge: '已删除',
+  deletedVersion: '此版本的文件已被删除，暂无正文',
   rollbackTitle: '回滚此文档至此版本？',
   rollbackConfirm: '确定回滚',
   rollbackHint:

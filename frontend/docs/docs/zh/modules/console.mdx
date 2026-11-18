@@ -50,7 +50,7 @@ import '@openviking/react/modules/console/style.css';
 
 示例使用模拟服务，可切换原生能力与火山当前契约。原生适配器提供 `interrupt` 和 `steer`，支持停止及生成中追问；火山当前适配器省略这两个方法，生成中禁用发送且不显示停止。回答后的下一轮提问两者均支持。
 
-点击底部的 `@`，或在输入框中键入 `@`，可浏览、搜索并引用文件和目录。内置选择器使用当前请求作用域下的 `/api/v1/fs/ls` 和 `/api/v1/search/glob`，打开时才加载。提供 `conversation.references` 时改用宿主的目录与引用状态。自定义对话服务可通过发送参数中的 `references` 读取已选引用。
+点击底部的 `@`，或在输入框中键入 `@`，可浏览、搜索并引用文件和目录。内置选择器使用当前请求作用域下的 `/api/v1/fs/ls` 和 `/api/v1/search/glob`，打开时才加载。通过 `chatOptions.referenceSelection` 传入 `{ selected, onChange }`，可以让目录树与内置 `@` 选择器共享已选引用。发送后由宿主移除已发送的引用，重置会话时由 Console 清空已选引用。设置 `conversation.references` 可自行提供候选项和已选引用，替代内置选择器。自定义对话服务可通过发送参数中的 `references` 读取已选引用。
 
 ### 待确认交互
 
@@ -109,6 +109,7 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 | scopeKey          | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                | -                                                                 |
 | commandHistoryKey | 同一标签页刷新时恢复命令历史，按宿主提供的环境和身份标识隔离                                                                                                        | `string`                                | -                                                                 |
 | command           | 命令模式的覆盖项，类型见下方 `ConsoleCommandProps`                                                                                                                  | `ConsoleCommandProps`                   | -                                                                 |
+| commandOptions    | [文件选择、下载与管理员命令配置](#consolecommandoptions)                                                                                                            | `ConsoleCommandOptions`                 | 使用浏览器处理文件，管理员命令关闭                                |
 | onOpenUri         | 点击资源链接时触发，参数为资源 URI；两种模式各自以 `conversation.onOpenUri`、`command.onOpenUri` 为准                                                               | `(uri: string) => void`                 | -                                                                 |
 | slots             | 在面板中插入宿主内容，类型见下方 `ConsoleSlots`                                                                                                                     | `ConsoleSlots`                          | -                                                                 |
 | labels            | 覆盖界面文案，类型见下方 `ConsoleLabels`                                                                                                                            | `ConsoleLabels`                         | -                                                                 |
@@ -118,15 +119,16 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 ### ConsoleChatOptions
 
-| 参数           | 说明                                                | 类型                                             | 默认值           |
-| -------------- | --------------------------------------------------- | ------------------------------------------------ | ---------------- |
-| taskService    | 对话后台任务查询适配器，默认共享 Console 的查询服务 | `ConsoleTaskService`                             | 继承 Console     |
-| locale         | 对话文案语言                                        | `'zh-CN' \| 'en-US'`                             | 继承 Console     |
-| persist        | 保存已完成的消息                                    | `boolean`                                        | `true`           |
-| scopeKey       | 动态身份的隔离键                                    | `string`                                         | 继承 Console     |
-| service        | 对话与会话适配器，保持引用稳定                      | `VikingBotChatService & VikingBotSessionService` | 原生服务         |
-| requestOptions | 对话请求配置                                        | `OvRequestOptions`                               | 继承 Console     |
-| hitl           | 自动问题组、字段校验与自定义卡片配置                | `ConsoleHitlOptions \| false`                    | 自动启用内置卡片 |
+| 参数               | 说明                                                | 类型                                                  | 默认值           |
+| ------------------ | --------------------------------------------------- | ----------------------------------------------------- | ---------------- |
+| taskService        | 对话后台任务查询适配器，默认共享 Console 的查询服务 | `ConsoleTaskService`                                  | 继承 Console     |
+| locale             | 对话文案语言                                        | `'zh-CN' \| 'en-US'`                                  | 继承 Console     |
+| persist            | 保存已完成的消息                                    | `boolean`                                             | `true`           |
+| scopeKey           | 动态身份的隔离键                                    | `string`                                              | 继承 Console     |
+| service            | 对话与会话适配器，保持引用稳定                      | `VikingBotChatService & VikingBotSessionService`      | 原生服务         |
+| requestOptions     | 对话请求配置                                        | `OvRequestOptions`                                    | 继承 Console     |
+| hitl               | 自动问题组、字段校验与自定义卡片配置                | `ConsoleHitlOptions \| false`                         | 自动启用内置卡片 |
+| referenceSelection | 内置 `@` 选择器的受控引用状态                       | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | 可选             |
 
 适配器每个方法都收到 `AbortSignal`，应响应取消并在失败时抛出错误。后端自动保存消息时省略 `saveMessage`。
 
@@ -252,6 +254,24 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 | --------- | ------------------------------------------------------------ | ----------------------- | ------ |
 | onOpenUri | 命令模式下点击资源链接时触发；省略时使用 `Console.onOpenUri` | `(uri: string) => void` | -      |
 
+### ConsoleCommandOptions
+
+| 参数                 | 说明                                                                         | 类型                                                                      | 默认值                               |
+| -------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------ |
+| `allowAdminCommands` | 在命令列表显示并启用 `ov backup` 和 `ov restore`。服务端仍会校验权限。       | `boolean`                                                                 | `false`                              |
+| `files`              | 选择本地文件和保存下载内容。                                                 | [ConsoleCommandFiles](#consolecommandfiles)                               | 使用浏览器选择文件和下载             |
+| `choosePackFile`     | 为 `ov import` 选择本地归档包，回调接收目标 URI。返回 `undefined` 取消导入。 | `(targetUri: string, signal?: AbortSignal) => Promise<File \| undefined>` | 通过 `files.pickFile` 筛选 `.ovpack` |
+| `onPackImported`     | `ov import` 成功并返回 URI 后，以该 URI 调用。                               | `(uri: string) => void`                                                   | -                                    |
+
+### ConsoleCommandFiles
+
+自定义 `files` 适配器时需要同时提供这两个方法。
+
+| 方法       | 说明                                                                                                                    | 类型                                                                                               | 默认值 |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| `pickFile` | 选择单个文件。`name` 是命令中输入的文件名，`accept` 是文件筛选条件，`signal` 用于取消选择。用户取消时返回 `undefined`。 | `(options: { name: string; accept?: string; signal?: AbortSignal }) => Promise<File \| undefined>` | 必填   |
+| `download` | 将返回的 Blob 以给定的文件名保存。                                                                                      | `(blob: Blob, filename: string) => void \| Promise<void>`                                          | 必填   |
+
 ### ConsoleSlots
 
 | 参数                | 说明                                                     | 类型                                              | 默认值 |
@@ -280,7 +300,7 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 
 ## 命令
 
-命令模式只执行内置的原生 API 命令。输入 `/` 或运行 `ov help`，可以按「核心流程」「文件系统」「搜索与上下文」「配置与状态」查看命令和各自的选项。
+命令模式只执行内置的原生 API 命令。输入 `/` 或运行 `ov help`，可以按「核心流程」「文件系统」「搜索与上下文」「文件传输」「会话」「配置与状态」查看命令和各自的选项。
 
 ### 写法
 
@@ -312,7 +332,7 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 - `task cancel` 向服务端请求协作取消，任务可能不会立即停止。
 - 导入、编译与记忆提交返回任务 ID 后自动跟踪；任务状态独立于提交结果，终端输入在提交请求返回后恢复可用。
 - `session` 支持创建、列表、详情、上下文、归档、消息写入、提交和配置。批量消息用 `ov session add-messages <session-id> '<messages-json>'`。
-- `ov get <uri> <local-path>` 和 `ov export <uri> <output.ovpack>` 由浏览器下载。输出路径的最后一段用作文件名。
+- `ov get <uri> <local-path>` 和 `ov export <uri> <output.ovpack>` 由浏览器下载。输出路径的最后一段用作文件名。`export` 和 `backup` 支持 `--include-vectors`。
 - `ov import <file.ovpack> <target-uri>` 通过本地文件选择器上传 OVPack，可传 `--on-conflict` 和 `--vector-mode`。宿主可以通过 `commandOptions.choosePackFile` 复用文件管理器的导入弹窗。弹窗只接受有效的 `.ovpack` 文件。
 - `add-resource` 的本地来源以及 `write --from-file` 通过浏览器选择文件。浏览器的本机配置和登录由宿主处理。管理员命令 `backup`、`restore` 默认关闭，由有授权的宿主通过 `commandOptions.allowAdminCommands` 启用。
 

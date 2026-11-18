@@ -121,6 +121,11 @@ test('search runs as you type, keeps the scope, and survives a locale change', a
     await view.render(render(fetch, 'zh-CN'));
     assert.equal(input().value, '  profile  ');
     assert.equal(calls(fetch).length, 1);
+
+    await type('');
+    await waitForDebounce();
+    assert.equal(modeSwitch().getAttribute('aria-label'), '切换 (find)');
+    assert.equal(calls(fetch).length, 1);
   } finally {
     await view.unmount();
   }
