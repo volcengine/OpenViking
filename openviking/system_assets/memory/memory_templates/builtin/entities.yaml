@@ -9,6 +9,9 @@ description: |
   even when they share a theme, owner, participants, appearance, or use.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category|lower }}/{{ name|lower }}.md"
+abstract_template: >-
+  {% if subdirectory %}Remembered entities in the {{ subdirectory }} category.
+  {% else %}Remembered people, projects, and other entities organized by category.{% endif %}
 enabled: true
 embedding_template: |-
   {{ category }}

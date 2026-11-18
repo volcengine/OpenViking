@@ -4,6 +4,7 @@
 """Service-level tests for content write coordination."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,12 +12,12 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.session.memory.utils.content_visibility import visible_content
+from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.acl import AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
     InvalidArgumentError,
-    NotFoundError,
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -27,11 +28,27 @@ async def test_write_updates_memory_file_and_parent_overview(service, monkeypatc
     from openviking.observability.events import get_event_bus
     from openviking.observability.reporting import runtime
 
+    load_model = AsyncMock(side_effect=AssertionError("memory write must not call a text model"))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticProcessor._get_vlm_config",
+        load_model,
+    )
     ctx = RequestContext(user=service.user, role=Role.USER)
-    memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/preferences"
+    memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/preferences/alice"
     memory_uri = f"{memory_dir}/theme.md"
 
-    await service.viking_fs.write_file(memory_uri, "Original preference", ctx=ctx)
+    await service.viking_fs.write_file(
+        memory_uri,
+        MemoryFileUtils.write(
+            MemoryFile(
+                uri=memory_uri,
+                memory_type="preferences",
+                content="Original preference",
+                extra_fields={"user": "alice", "topic": "Theme"},
+            )
+        ),
+        ctx=ctx,
+    )
 
     monkeypatch.setattr(runtime, "_reporter", object())
     events = []
@@ -52,7 +69,8 @@ async def test_write_updates_memory_file_and_parent_overview(service, monkeypatc
         e for e in events if e.event_name == "file_mutation" and e.payload["uri"] == memory_uri
     ]
     assert len(writes) == 1
-    assert writes[0].payload["task_id"] == result["task_id"]
+    assert writes[0].payload["task_id"]
+    assert "task_id" not in result
     assert writes[0].payload["memory_type"] == "preferences"
     assert writes[0].payload["change_type"] == "modified"
 
@@ -63,9 +81,14 @@ async def test_write_updates_memory_file_and_parent_overview(service, monkeypatc
     assert result["queue_status"]["Embedding"]["processed"] >= 1
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
     assert visible_content(stored, uri=memory_uri) == "Updated preference"
-    assert await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
-    with pytest.raises(NotFoundError):
+    overview = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
+    assert "[Theme](./theme.md)" in overview
+    l0 = parse_abstract_overview(
         await service.viking_fs.read_file(f"{memory_dir}/.abstract.md", ctx=ctx)
+    )
+    assert "Long-term preferences for alice" in l0.body
+    assert l0.is_manual_abstract
+    load_model.assert_not_awaited()
 
 
 @pytest.mark.asyncio

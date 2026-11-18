@@ -22,6 +22,7 @@ from openviking.service.task_work_index import bind_task_context
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     ConflictError,
@@ -1876,12 +1877,14 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
         viking_fs=viking_fs,
         resource_memory_link_service=link_service,
     )
-    service._enqueue_delete_refresh = AsyncMock()
+    service._enqueue_delete_refresh = AsyncMock(return_value=FreshnessAction.MARK_PENDING)
+    service._wait_for_refresh = AsyncMock(return_value={"Semantic": {"pending_count": 0}})
 
     refreshed = []
 
     async def fake_refresh_schema_overview(*, viking_fs, directory_uri, ctx):
         refreshed.append({"viking_fs": viking_fs, "directory_uri": directory_uri, "ctx": ctx})
+        return True
 
     monkeypatch.setattr(
         "openviking.service.fs_service.MemoryUpdater.refresh_schema_overview",
@@ -1889,7 +1892,7 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
     )
 
     uri = "viking://resources/images/2026/06/11/不二周助_jpeg"
-    result = await service.rm(uri, ctx=request_context, recursive=True)
+    result = await service.rm(uri, ctx=request_context, recursive=True, wait=True)
 
     assert link_service.calls == [{"ctx": request_context, "resource_uri": uri, "recursive": True}]
     assert refreshed == [
@@ -1900,6 +1903,7 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
         }
     ]
     assert result["memory_cleanup"] == cleanup
+    service._wait_for_refresh.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ description: |
 
 directory: "viking://user/{{ user_space }}/memories/experiences"
 filename_template: "{{ experience_name|lower }}.md"
+abstract_template: "Reusable lessons learned from earlier tasks and interactions."
 enabled: true
 operation_mode: "upsert"
 stage: agent

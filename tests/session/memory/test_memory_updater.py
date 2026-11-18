@@ -6,6 +6,7 @@ Tests for MemoryUpdater.
 
 import errno
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -44,9 +45,13 @@ from openviking.session.memory.utils import (
     parse_memory_file_with_fields,
 )
 from openviking.storage.abstract_overview import parse_abstract_overview
+from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.parser_config import SemanticConfig
+from tests.storage.test_abstract_overview_freshness import _FakeFS
 
 
 class TestMemoryUpdateResult:
@@ -342,250 +347,181 @@ class TestMemoryUpdater:
         assert updater._registry == registry
 
     @pytest.mark.asyncio
-    async def test_generate_overview_deletes_empty_overview_via_rm(self):
-        schema = MemoryTypeSchema(
-            memory_type="entities",
-            description="entity memory",
-            directory="viking://user/{{ user_space }}/memories/entities",
-            filename_template="{{ name }}.md",
-            fields=[],
-            overview_template="overview",
-        )
+    async def test_generate_overview_enqueues_directory_work_with_changed_uris(self):
         registry = MagicMock()
-        registry.get.return_value = schema
-
-        class FakeVikingFS:
-            def __init__(self):
-                self.rm_calls = []
-
-            async def ls(self, uri, show_all_hidden=False, ctx=None):
-                return [{"name": ".overview.md", "isDir": False}]
-
-            async def rm(self, uri, recursive=False, ctx=None, **kwargs):
-                self.rm_calls.append((uri, recursive))
-
-        viking_fs = FakeVikingFS()
-        updater = MemoryUpdater(registry=registry)
-        updater._get_viking_fs = MagicMock(return_value=viking_fs)
-        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-
-        await updater.generate_overview(
-            "entities",
-            "viking://user/alice/memories/entities/动漫角色",
-            ctx,
+        registry.get.return_value = SimpleNamespace(
+            overview_template="{% for item in items %}{{ item.file_name }}{% endfor %}",
+            abstract_template="Remembered events for {{ subdirectory }}.",
         )
-
-        assert viking_fs.rm_calls == [
-            (
-                "viking://user/alice/memories/entities/动漫角色/.overview.md",
-                False,
-            ),
-            ("viking://user/alice/memories/entities/动漫角色", True),
-        ]
+        queue = SimpleNamespace(enqueue=AsyncMock())
+        manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue)
+        updater = MemoryUpdater(registry=registry)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+        directory = "viking://user/alice/memories/events"
+        with patch("openviking.storage.queuefs.get_queue_manager", return_value=manager):
+            assert await updater.generate_overview(
+                "events", directory, ctx, changed_uris=[f"{directory}/deleted.md"]
+            )
+        msg = queue.enqueue.await_args.args[0]
+        assert msg.uri == directory
+        assert msg.context_type == "memory"
+        assert msg.changes == {"modified": [f"{directory}/deleted.md"]}
+        assert msg.overview_template == registry.get.return_value.overview_template
+        assert msg.abstract_template == registry.get.return_value.abstract_template
+        assert msg.account_id == "acme"
+        assert msg.user_id == "alice"
+        assert msg.recursive is False
+        assert queue.enqueue.await_args.kwargs["deduplicate_memory"] is False
 
     @pytest.mark.asyncio
-    async def test_generate_overview_skips_deleted_directory(self):
-        schema = MemoryTypeSchema(
-            memory_type="entities",
-            description="entity memory",
-            directory="viking://user/{{ user_space }}/memories/entities",
-            filename_template="{{ name }}.md",
-            fields=[],
-            overview_template="overview",
-        )
-        registry = MagicMock()
-        registry.get.return_value = schema
-
-        class FakeVikingFS:
-            def __init__(self):
-                self.rm_calls = []
-
-            async def ls(self, uri, show_all_hidden=False, ctx=None):
-                raise NotFoundError(uri, "directory")
-
-            async def rm(self, uri, recursive=False, ctx=None):
-                self.rm_calls.append((uri, recursive))
-
-        viking_fs = FakeVikingFS()
-        updater = MemoryUpdater(registry=registry)
-        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+    async def test_generate_overview_skips_when_no_memory_changed(self):
+        updater = MemoryUpdater(registry=MagicMock())
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-
-        await updater.generate_overview(
-            "entities",
-            "viking://user/alice/memories/entities/动漫角色",
-            ctx,
-        )
-
-        assert viking_fs.rm_calls == []
+        with patch("openviking.storage.queuefs.get_queue_manager") as manager:
+            assert not await updater.generate_overview(
+                "events", "viking://user/alice/memories/events", ctx, changed_uris=[]
+            )
+        manager.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(self):
-        schema = MemoryTypeSchema(
-            memory_type="events",
-            description="event memory",
-            directory="viking://user/{{ user_space }}/memories/events",
-            filename_template="{{ event_name }}.md",
-            fields=[],
-            overview_template=(
-                "# Events Overview\n"
-                "{% for item in items %}\n"
-                "- [{{ item.file_content.summary|default(item.file_name, true) }}](./{{ item.file_name }})\n"
-                "{% endfor %}"
-            ),
-        )
-        registry = MagicMock()
-        registry.get.return_value = schema
-
         directory = "viking://user/alice/memories/events/2026/06/16"
-        event_uri = f"{directory}/kept_event.md"
-        plain_event_uri = f"{directory}/plain_event.md"
-        overview_uri = f"{directory}/.overview.md"
-
-        class FakeVikingFS:
-            def __init__(self):
-                self.store = {
-                    event_uri: MemoryFileUtils.write(
-                        MemoryFile(
-                            uri=event_uri,
-                            content="Summary: kept event",
-                            memory_type="events",
-                            extra_fields={
-                                "event_name": "kept_event",
-                                "summary": "kept event",
-                                "ranges": "0",
-                            },
-                        )
-                    ),
-                    plain_event_uri: "Plain event first sentence. More detail on the same line.",
-                    overview_uri: (
-                        "# Events Overview\n"
-                        "**Date:** 2026/06/16\n"
-                        "- [deleted event](./deleted_event.md)\n"
-                    ),
-                }
-
-            async def ls(self, uri, show_all_hidden=False, ctx=None):
-                return [
-                    {"name": "kept_event.md", "isDir": False},
-                    {"name": "plain_event.md", "isDir": False},
-                    {"name": ".overview.md", "isDir": False},
-                ]
-
-            async def read_file(self, uri, ctx=None):
-                return self.store[uri]
-
-            async def write_file(self, uri, content, ctx=None, **kwargs):
-                self.store[uri] = content
-
-        viking_fs = FakeVikingFS()
-        updater = MemoryUpdater(registry=registry)
-        updater._get_viking_fs = MagicMock(return_value=viking_fs)
-        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-
-        with patch(
-            "openviking.utils.embedding_utils.vectorize_directory_meta",
-            new_callable=AsyncMock,
-        ) as vectorize_directory_meta:
-            generated = await updater.generate_overview(
-                "events", directory, ctx, extract_context=None
-            )
-
-        assert generated is True
-        vectorize_directory_meta.assert_awaited_once_with(
-            uri=directory,
-            abstract="",
-            overview=(
-                "# Events Overview\n\n"
-                "- [kept event](./kept_event.md)\n\n"
-                "- [plain_event.md](./plain_event.md)"
+        event_uri = f"{directory}/kept.md"
+        files = {
+            event_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=event_uri,
+                    content="Kept event.",
+                    memory_type="events",
+                    extra_fields={"summary": "kept event"},
+                )
             ),
-            context_type="memory",
-            ctx=ctx,
-            include_abstract=False,
-        )
+            f"{directory}/plain.md": "Plain event.",
+        }
 
-        document = parse_abstract_overview(viking_fs.store[overview_uri])
-        assert document.metadata["generated_by"] == {
-            "component": "MemoryUpdater",
-            "trigger": "memory_update",
-        }
-        assert document.metadata["freshness"] == {
-            "total_entries": 2,
-            "sampled_entries": 2,
-            "unsampled_entries": 0,
-            "pending_child_changes": 0,
-        }
-        assert "**Date:**" not in document.body
-        assert "- [kept event](./kept_event.md)" in document.body
-        assert "- [plain_event.md](./plain_event.md)" in document.body
-        assert "deleted_event.md" not in document.body
+        async def read_file(uri, **kwargs):
+            if uri not in files:
+                raise FileNotFoundError(uri)
+            return files[uri]
+
+        template = "# Events Overview\n{% for item in items %}\n- [{{ item.file_content.summary|default(item.file_name, true) }}](./{{ item.file_name }})\n{% endfor %}"
+        model = AsyncMock(side_effect=AssertionError("directory refresh must use stored fields"))
+        processor = SemanticProcessor(vlm_resolver=SimpleNamespace(get_vlm=model))
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+        with (
+            patch(
+                "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+                return_value=SimpleNamespace(read_file=read_file),
+            ),
+            patch(
+                "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+                return_value=SimpleNamespace(
+                    semantic=SemanticConfig(), output_language_override="en"
+                ),
+            ),
+        ):
+            result = await processor._generate_directory_semantics(
+                directory,
+                [
+                    {"name": "kept.md", "summary": "Kept event."},
+                    {"name": "plain.md", "summary": "Plain event."},
+                ],
+                [],
+                ctx=ctx,
+                total_entries=2,
+                overview_template=template,
+                abstract_template="Event memories.",
+            )
+        assert result.abstract == "Event memories."
+        assert "- [kept event](./kept.md)" in result.overview
+        assert "- [plain.md](./plain.md)" in result.overview
+        assert "Directory navigation" in result.overview
+        assert "Access guide" in result.overview
+        assert "# Events Overview" not in result.overview
+        model.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_generate_overview_template_fallbacks_for_builtin_memories(self):
+    async def test_memory_refresh_uses_builtin_directory_templates_without_model(self):
         registry = MemoryTypeRegistry(load_schemas=False)
         memory_dir = builtin_memory_templates_dir()
-        registry.load_from_yaml(str(memory_dir / "cases.yaml"))
-        registry.load_from_yaml(str(memory_dir / "entities.yaml"))
-        registry.load_from_yaml(str(memory_dir / "preferences.yaml"))
-
-        case_dir = "viking://user/alice/memories/cases"
-        case_uri = f"{case_dir}/merged_case.md"
-        case_overview_uri = f"{case_dir}/.overview.md"
-        entity_dir = "viking://user/alice/memories/entities/动漫角色"
-        entity_uri = f"{entity_dir}/越前龙马.md"
-        entity_overview_uri = f"{entity_dir}/.overview.md"
-        preference_dir = "viking://user/alice/memories/preferences/alice"
-        preference_uri = f"{preference_dir}/workflow.md"
-        preference_overview_uri = f"{preference_dir}/.overview.md"
-
-        class FakeVikingFS:
-            def __init__(self):
-                self.store = {
-                    case_uri: "Merged into another case.",
-                    entity_uri: "A tennis character.",
-                    preference_uri: "Prefers concise updates.",
-                }
-
-            async def ls(self, uri, show_all_hidden=False, ctx=None):
-                if uri == case_dir:
-                    return [{"name": "merged_case.md", "isDir": False}]
-                if uri == entity_dir:
-                    return [{"name": "越前龙马.md", "isDir": False}]
-                if uri == preference_dir:
-                    return [{"name": "workflow.md", "isDir": False}]
-                return []
-
-            async def read_file(self, uri, ctx=None):
-                return self.store[uri]
-
-            async def write_file(self, uri, content, ctx=None, **kwargs):
-                self.store[uri] = content
-
-        viking_fs = FakeVikingFS()
-        updater = MemoryUpdater(registry=registry)
-        updater._get_viking_fs = MagicMock(return_value=viking_fs)
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+        model = AsyncMock(side_effect=AssertionError("directory refresh must use stored fields"))
+        processor = SemanticProcessor(vlm_resolver=SimpleNamespace(get_vlm=model))
+        processor._vectorize_directory = AsyncMock(return_value={0, 1})
+        processor._vectorize_single_file = AsyncMock(
+            side_effect=AssertionError("directory refresh must not index the memory file again")
+        )
+        cases = [
+            ("cases", "cases", "merged_case.md", "Merged into another case.", "Past problems"),
+            ("entities", "entities/动漫角色", "越前龙马.md", "A tennis character.", "动漫角色"),
+            (
+                "preferences",
+                "preferences/alice",
+                "workflow.md",
+                "Prefers concise updates.",
+                "Long-term preferences for alice",
+            ),
+        ]
+        for memory_type, relative_dir, filename, content, abstract in cases:
+            registry.load_from_yaml(str(memory_dir / f"{memory_type}.yaml"))
+            schema = registry.get(memory_type)
+            directory = f"viking://user/alice/memories/{relative_dir}"
+            file_uri = f"{directory}/{filename}"
 
-        with patch(
-            "openviking.utils.embedding_utils.vectorize_directory_meta",
-            new_callable=AsyncMock,
-        ) as vectorize_directory_meta:
-            await updater.generate_overview("cases", case_dir, ctx, extract_context=None)
-            await updater.generate_overview("entities", entity_dir, ctx, extract_context=None)
-            await updater.generate_overview(
-                "preferences", preference_dir, ctx, extract_context=None
-            )
+            class MemoryFS(_FakeFS):
+                async def read_file(self, uri, ctx=None):
+                    if uri not in self.files:
+                        raise FileNotFoundError(uri)
+                    return self.files[uri]
 
-        assert vectorize_directory_meta.await_count == 3
-
-        assert "- [merged_case.md](./merged_case.md)" in viking_fs.store[case_overview_uri]
-        assert "no such element" not in viking_fs.store[case_overview_uri]
-        assert "**Category:** 动漫角色" in viking_fs.store[entity_overview_uri]
-        assert "- [越前龙马.md](./越前龙马.md)" in viking_fs.store[entity_overview_uri]
-        assert "**User:** alice" in viking_fs.store[preference_overview_uri]
-        assert "**Topic:** workflow.md" in viking_fs.store[preference_overview_uri]
-        assert "- [workflow.md](./workflow.md)" in viking_fs.store[preference_overview_uri]
+            fs = MemoryFS({file_uri: content})
+            fs.ls = AsyncMock(return_value=[{"name": filename, "isDir": False}])
+            config = SimpleNamespace(semantic=SemanticConfig(), output_language_override="en")
+            # A delete refresh does not carry a changed-file list. It still
+            # needs the sampled files that remain in the directory.
+            changes = None if memory_type == "entities" else {"modified": [file_uri]}
+            with (
+                patch(
+                    "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+                    return_value=fs,
+                ),
+                patch(
+                    "openviking.storage.queuefs.semantic_executor.get_viking_fs",
+                    return_value=fs,
+                ),
+                patch(
+                    "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+                    return_value=config,
+                ),
+                patch(
+                    "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+                    return_value=config,
+                ),
+            ):
+                executor = SemanticTreeExecutor(
+                    processor,
+                    "memory",
+                    1,
+                    ctx,
+                    target_uri=directory,
+                    recursive=False,
+                    incremental_update=changes is not None,
+                    changes=changes,
+                    generation_trigger="memory_update",
+                    overview_template=schema.overview_template,
+                    abstract_template=schema.abstract_template,
+                )
+                await executor.run(directory)
+            overview = parse_abstract_overview(fs.files[f"{directory}/.overview.md"]).body
+            l0 = parse_abstract_overview(fs.files[f"{directory}/.abstract.md"])
+            assert filename in overview
+            assert "no such element" not in overview
+            assert abstract in l0.body
+            assert abstract in overview
+            assert l0.metadata["maintenance"] == "manual"
+            assert "Access guide" in overview
+        model.assert_not_awaited()
+        processor._vectorize_single_file.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):
@@ -876,8 +812,7 @@ class TestMemoryUpdater:
             memory_type,
             expected_directory,
             ctx,
-            None,
-            lease_ref=None,
+            changed_uris=[resolved_uri],
         )
 
     @pytest.mark.asyncio

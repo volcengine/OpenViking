@@ -37,6 +37,8 @@ def test_unchanged_l0_stops_bubbling_without_incrementing_pending():
         ({"total_entries": 32}, FreshnessAction.REFRESH_NOW),
         ({"force_refresh": True}, FreshnessAction.REFRESH_NOW),
         ({}, FreshnessAction.MARK_PENDING),
+        ({"total_entries": 1000, "pending_before": 19}, FreshnessAction.MARK_PENDING),
+        ({"total_entries": 1000, "pending_before": 99}, FreshnessAction.REFRESH_NOW),
         ({"pending_before": 16}, FreshnessAction.REFRESH_NOW),
     ],
 )

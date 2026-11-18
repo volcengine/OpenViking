@@ -22,7 +22,7 @@ from typing import (
     Sequence,
     TypeVar,
 )
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, unquote
 
 import yaml
 
@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 
 ABSTRACT_OVERVIEW_FILENAMES = frozenset({".abstract.md", ".overview.md"})
 EMBEDDING_METADATA_FIELDS = ("directory",)
-_METADATA_ORDER = ("directory", "source", "generated_by", "freshness")
+_METADATA_ORDER = ("directory", "source", "generated_by", "maintenance", "freshness")
 _MARKDOWN_URI_SAFE_ASCII = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/:"
 )
@@ -64,6 +64,18 @@ class AbstractOverviewDocument:
     metadata: Dict[str, Any]
     body: str
     legacy: bool = False
+
+    @property
+    def is_manual_abstract(self) -> bool:
+        """Preserve user-maintained abstracts and preset initialization content."""
+        # DirectoryInitializer is the sole producer of write_context summaries.
+        # Preserve presets written before the maintenance field was introduced.
+        return self.metadata.get("maintenance") == "manual" or self.metadata.get(
+            "generated_by"
+        ) == {
+            "component": "VikingFS.write_context",
+            "trigger": "context_write",
+        }
 
 
 @dataclass(frozen=True)
@@ -115,6 +127,11 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
     normalized: Dict[str, Any] = {}
     if "directory" in metadata:
         normalized["directory"] = _normalize_directory_uri(str(metadata["directory"]))
+
+    if "maintenance" in metadata:
+        if metadata["maintenance"] != "manual":
+            raise AbstractOverviewFormatError("maintenance must be manual")
+        normalized["maintenance"] = metadata["maintenance"]
 
     source = metadata.get("source")
     if source is not None:
@@ -255,6 +272,8 @@ def render_abstract_overview(
         raise TypeError("abstract overview body must be a string")
 
     merged: Dict[str, Any] = dict(metadata or {})
+    if resolved_level == ContextLevel.OVERVIEW:
+        merged.pop("maintenance", None)
     merged["directory"] = _normalize_directory_uri(dir_uri)
     frontmatter = yaml.safe_dump(
         _normalize_metadata(merged),
@@ -393,7 +412,10 @@ def prepare_abstract_overview_write(
     # metadata as a side effect.  Legacy sidecars have no metadata baseline,
     # so their first body edit naturally migrates them using the target URI.
     dir_uri = current.metadata.get("directory") or uri.rstrip("/").rsplit("/", 1)[0]
-    return render_abstract_overview(level, dir_uri, body, current.metadata)
+    metadata = dict(current.metadata)
+    if level == ContextLevel.ABSTRACT and body.strip() != current.body.strip():
+        metadata["maintenance"] = "manual"
+    return render_abstract_overview(level, dir_uri, body, metadata)
 
 
 def body_for_preview(raw: str | bytes) -> str:
@@ -405,62 +427,6 @@ def body_for_preview(raw: str | bytes) -> str:
     # Rendering adds one canonical terminal newline to the stored document.
     # It is a serialization detail, not part of semantic accessor output.
     return document.body.rstrip("\r\n")
-
-
-def parse_overview_file_summaries(overview_content: str | bytes) -> Dict[str, str]:
-    """Extract direct-file summaries from an overview body."""
-    overview = body_for_preview(overview_content)
-    if not overview.strip():
-        return {}
-
-    summaries: Dict[str, str] = {}
-    current_file = ""
-    current_summary_lines: list[str] = []
-
-    def save_current() -> None:
-        if current_file and current_summary_lines:
-            summaries[current_file] = " ".join(current_summary_lines).strip()
-
-    for line in overview.split("\n"):
-        header_match = re.match(r"^###\s+(.+?)\s*$", line)
-        if header_match:
-            save_current()
-            heading = header_match.group(1).strip()
-            file_name = _overview_heading_file_name(heading)
-            parts = file_name.split()
-            current_file = parts[0] if len(parts) >= 2 and parts[0] == parts[1] else file_name
-            current_summary_lines = []
-            continue
-
-        numbered_match = re.match(r"^\[(\d+)\]\s+(.+?):\s*(.+)$", line)
-        if numbered_match:
-            save_current()
-            current_file = numbered_match.group(2).strip()
-            current_summary_lines = [numbered_match.group(3).strip()]
-            continue
-
-        if current_file:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#"):
-                current_summary_lines.append(stripped)
-
-    save_current()
-    return summaries
-
-
-def _overview_heading_file_name(heading: str) -> str:
-    """Return the direct entry name represented by an overview H3 heading."""
-    if heading.startswith("[") and heading.endswith(")"):
-        destination_start = heading.rfind("](")
-        if destination_start > 0:
-            target = heading[destination_start + 2 : -1].strip()
-            if target.startswith("<") and target.endswith(">"):
-                target = target[1:-1].strip()
-            if target.startswith("viking://"):
-                path = unquote(urlsplit(target).path).rstrip("/")
-                if path:
-                    return path.rsplit("/", 1)[-1]
-    return heading
 
 
 def body_for_embedding(
@@ -545,7 +511,7 @@ async def write_abstract_overview(
     viking_fs: Any,
     dir_uri: str,
     overview: str,
-    abstract: str,
+    abstract: str | None,
     ctx: Optional[RequestContext],
     is_stale: Optional[Callable[[], Awaitable[bool]]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
@@ -557,7 +523,8 @@ async def write_abstract_overview(
     """Render and atomically write sidecars while preserving source metadata.
 
     Exact equality is checked under the lock so stable refreshes do not touch
-    modification times or create noisy Git diffs.
+    modification times or create noisy Git diffs. A missing abstract input
+    allows a directory to publish an overview without creating an empty L0.
     """
 
     if is_stale is not None and await is_stale():
@@ -594,6 +561,12 @@ async def write_abstract_overview(
             else None
         )
         merged_metadata = dict(metadata or {})
+        if existing_abstract is not None:
+            if "maintenance" in existing_abstract.metadata:
+                merged_metadata["maintenance"] = existing_abstract.metadata["maintenance"]
+            if existing_abstract.is_manual_abstract:
+                merged_metadata["maintenance"] = "manual"
+                abstract = existing_abstract.body.strip()
         for existing in (existing_overview, existing_abstract):
             if existing and "source" in existing.metadata and "source" not in merged_metadata:
                 merged_metadata["source"] = existing.metadata["source"]
@@ -618,15 +591,18 @@ async def write_abstract_overview(
         overview_body_changed = existing_overview is None or semantic_body_digest(
             existing_overview.body
         ) != semantic_body_digest(overview)
-        abstract_body_changed = existing_abstract is None or semantic_body_digest(
-            existing_abstract.body
-        ) != semantic_body_digest(abstract)
+        abstract_body_changed = abstract is not None and (
+            existing_abstract is None
+            or semantic_body_digest(existing_abstract.body) != semantic_body_digest(abstract)
+        )
 
         rendered_overview = render_abstract_overview(
             ContextLevel.OVERVIEW, dir_uri, overview, merged_metadata
         )
-        rendered_abstract = render_abstract_overview(
-            ContextLevel.ABSTRACT, dir_uri, abstract, merged_metadata
+        rendered_abstract = (
+            render_abstract_overview(ContextLevel.ABSTRACT, dir_uri, abstract, merged_metadata)
+            if abstract is not None
+            else None
         )
         current_overview = (
             existing_raw.get(1)
@@ -647,7 +623,7 @@ async def write_abstract_overview(
             await viking_fs.write_file(
                 overview_uri, rendered_overview, ctx=ctx, lease_ref=sidecar_lease
             )
-        if current_abstract != rendered_abstract:
+        if rendered_abstract is not None and current_abstract != rendered_abstract:
             await viking_fs.write_file(
                 abstract_uri, rendered_abstract, ctx=ctx, lease_ref=sidecar_lease
             )
@@ -796,12 +772,8 @@ async def read_abstract_overview_pending_snapshot(
     ctx: Optional[RequestContext],
     lock: Optional[Dict[str, Any]] = None,
     existing_raw: Optional[Mapping[int, str | bytes]] = None,
-    overview_body_out: Optional[Dict[str, str]] = None,
 ) -> int:
-    """Read pending and optionally retain the already-read overview body.
-
-    The body is only an input-summary cache, not a writeback metadata snapshot.
-    """
+    """Read the pending counter before generation, preserving concurrent changes."""
 
     uris = [
         f"{dir_uri.rstrip('/')}/.overview.md",
@@ -809,10 +781,6 @@ async def read_abstract_overview_pending_snapshot(
     ]
 
     def _pending_of(documents: Sequence[Optional[AbstractOverviewDocument]]) -> int:
-        if overview_body_out is not None:
-            overview_body_out[dir_uri.rstrip("/")] = (
-                documents[0].body if documents[0] is not None else ""
-            )
         pending_values = []
         for document in documents:
             freshness = document.metadata.get("freshness") if document else None

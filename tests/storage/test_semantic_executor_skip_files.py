@@ -7,6 +7,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+from openviking.storage.queuefs.semantic_ops.directory_generation import DirectoryGeneration
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -67,12 +68,14 @@ class _FakeProcessor:
         self.summarized_files.append(file_path)
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
-        self.overview_contexts.append(kwargs.get("ctx"))
-        return "overview"
+    async def _load_transfer_file_summaries(self, file_paths, ctx=None):
+        return {}
 
-    def _normalize_overview_generation(self, overview):
-        return overview, "abstract"
+    async def _generate_directory_semantics(
+        self, dir_uri, file_summaries, children_abstracts, **kwargs
+    ):
+        self.overview_contexts.append(kwargs.get("ctx"))
+        return DirectoryGeneration(overview="overview", abstract="abstract")
 
     async def _vectorize_directory(
         self,
@@ -194,7 +197,8 @@ async def test_unlistable_semantic_root_is_not_materialized_as_directory(
         skip_vectorization=True,
     )
 
-    await executor.run(root_uri)
+    with pytest.raises((FileNotFoundError, NotADirectoryError)):
+        await executor.run(root_uri)
 
     assert root_uri not in fake_fs.materialized_dirs
     assert fake_fs.writes == []

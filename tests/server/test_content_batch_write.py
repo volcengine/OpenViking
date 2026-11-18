@@ -1397,6 +1397,7 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
 
     async def overview(**kwargs):
         overview_calls.append(kwargs)
+        return True
 
     async def embedding(**kwargs):
         embedding_calls.append(kwargs)
@@ -1425,8 +1426,12 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
     }
     assert len(overview_calls) == 1
     assert overview_calls[0]["strict"] is True
+    assert overview_calls[0]["changed_uris"] == [
+        "viking://user/default/memories/preferences/wiki/a.md",
+        "viking://user/default/memories/preferences/wiki/b.md",
+    ]
     assert len(embedding_calls) == 2
-    assert outcome.statuses(wait=False) == ("deferred", "queued")
+    assert outcome.statuses(wait=False) == ("queued", "queued")
     assert all(call["strict"] is True for call in embedding_calls)
 
 
