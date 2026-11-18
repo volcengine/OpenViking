@@ -1,149 +1,80 @@
 """Frozen stage rules and cross-purpose comparison in the Markdown pipeline."""
 
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from test_compile_markdown import MERGE, contract, sources
+from test_compile_markdown import MERGE, contract
 from test_compile_markdown import agent_loop as _agent_loop
 from test_compile_markdown import pipeline as _pipeline
-from vikingbot.compile.models import COMPILE_DRAFT_ROOT, CompileFailure
+from vikingbot.compile.conflict_rules import (
+    BUNDLED_WIKI_URI,
+    MAP_CONFLICT_RULES,
+    REDUCE_CONFLICT_RULES,
+    WIKI_WORKER_RULES,
+)
+from vikingbot.compile.conflict_visibility import without_conflict_comments
+from vikingbot.compile.models import COMPILE_DRAFT_ROOT
 from vikingbot.compile.ops.shuffle import Shuffle, group_related_documents
+from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.plan import parse_plan
 from vikingbot.compile.results import Document, RouteResponse
 
-from openviking_cli.exceptions import NotFoundError
-
 pipeline = _pipeline
 agent_loop = _agent_loop
-ASSETS = (
-    Path(__file__).resolve().parents[2] / "openviking/system_assets/compile/example-skills/llm-wiki"
-)
-SKILL = """---
-name: synthetic
-compile_stage_resources:
-  map: [references/common.md, references/map.md]
-  reduce: [references/common.md, references/final.md]
----
-Keep all facts and citations.
-"""
 
 
-def attach(pipeline):
-    values = {
-        "references/common.md": "COMMON RULES",
-        "references/map.md": "MAP RULES",
-        "references/final.md": "FINAL RECORD SCHEMA",
-    }
-    pipeline.client.stat = AsyncMock(return_value={"size": 0})
-    pipeline.client.download_bytes = AsyncMock(
-        side_effect=lambda uri: values[uri.split("/synthetic/")[-1]].encode()
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("builtin", [False, True])
+async def test_only_opted_in_workers_receive_stage_rules(pipeline, enabled, builtin):
+    request = pipeline.request.model_copy(
+        update={
+            "skill": BUNDLED_WIKI_URI if builtin else pipeline.request.skill,
+            "global_conflict_detection": enabled,
+        }
     )
-    pipeline.resources.root = "viking://agent/skills/synthetic"
-    return values
-
-
-async def test_rule_snapshots_are_authorized_deduplicated_and_stage_scoped(pipeline):
-    attach(pipeline)
-    await pipeline.resources.prepare_stages(SKILL)
-    await pipeline.resources.prepare_stages(SKILL)
-    assert pipeline.client.download_bytes.await_count == 3
-    map_rules = pipeline.resources.stage_context("map")
-    reduce_rules = pipeline.resources.stage_context("reduce")
-    assert "COMMON RULES" in map_rules and "MAP RULES" in map_rules
-    assert "FINAL RECORD SCHEMA" not in map_rules
-    assert "COMMON RULES" in reduce_rules and "FINAL RECORD SCHEMA" in reduce_rules
-    assert "MAP RULES" not in reduce_rules
-    # Later cache mutation cannot alter this run's frozen rule text.
-    pipeline.resources.snapshots["references/common.md"] = "CHANGED"
-    assert "CHANGED" not in pipeline.resources.stage_context("map")
-    assert len((await pipeline.files.get("skill-dependencies"))) == 3
-
-
-@pytest.mark.parametrize(
-    "declaration",
-    [
-        "map: ../outside.md",
-        "unknown: []",
-        "map: [../../outside.md]",
-        "map: [42]",
-        "map: [viking://agent/skills/another/rules.md]",
-        'map: ["%2e%2e/outside.md"]',
-    ],
-)
-async def test_invalid_stage_declarations_fail_before_io(pipeline, declaration):
-    with pytest.raises(ValueError):
-        await pipeline.resources.prepare_stages(
-            "---\ncompile_stage_resources:\n  " + declaration + "\n---\nSkill"
-        )
-    pipeline.client.download_bytes.assert_not_awaited()
-
-
-async def test_missing_required_rule_fails_before_any_planning_or_publication(pipeline):
-    pipeline.skill = SKILL
-    pipeline.model.ask = AsyncMock()
-    with pytest.raises(CompileFailure) as raised:
-        await pipeline.run(sources())
-    assert isinstance(raised.value.__cause__, NotFoundError)
-    pipeline.model.ask.assert_not_awaited()
-    pipeline.client.batch_write.assert_not_awaited()
-
-
-async def test_legacy_skill_does_not_load_or_inject_rules(pipeline):
-    await pipeline.resources.prepare_stages("Ordinary Skill without stage declarations.")
-    assert pipeline.resources.stage_context("map") == ""
-    assert pipeline.resources.stage_context(None) == ""
-    pipeline.client.download_bytes.assert_not_awaited()
-
-
-async def test_actual_generation_receives_only_its_frozen_skill_rules(pipeline):
-    pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
-    attach(pipeline)
-    await pipeline.resources.prepare_stages(SKILL)
+    run = Pipeline(
+        client=pipeline.client,
+        sandbox=pipeline.files.sandbox,
+        provider=pipeline.model.provider,
+        model="synthetic",
+        temperature=0,
+        limits=pipeline.limits,
+        request=request,
+        skill="Original Skill text.",
+        usage={},
+    )
+    run.timestamp = pipeline.timestamp
     seen = []
 
-    async def run(system, data, model, **kwargs):
-        seen.append(system)
+    async def worker(system, data, model, **kwargs):
+        seen.append((system, data["runtime"]))
         root = COMPILE_DRAFT_ROOT + "/stage-test/output"
-        await pipeline.files.sandbox.write_file(root + "/topic.md", "# Topic\n\nSource facts.")
+        await run.files.sandbox.write_file(root + "/topic.md", "# Topic\n\nSource facts.")
         return root
 
-    pipeline.model.agent_runner = run
-    await pipeline.generate("arbitrary-node-name", "Draft", {}, [], skill_stage="map")
-    await pipeline.generate("another-node", "Finalize", {}, [], skill_stage="reduce")
-    assert "MAP RULES" in seen[0] and "FINAL RECORD SCHEMA" not in seen[0]
-    assert "FINAL RECORD SCHEMA" in seen[1] and "MAP RULES" not in seen[1]
-
-
-def test_builtin_skill_keeps_final_schema_and_matches_worker_tools():
-    from vikingbot.compile.renderer import _split_frontmatter
-
-    skill = (ASSETS / "SKILL.md").read_text()
-    metadata, _ = _split_frontmatter(skill)
-    assert metadata["compile_stage_resources"]["reduce"] == ["references/conflicts.md"]
-    assert "In an isolated Compile Markdown worker, use its provided `write_file`" in skill
-    final = (ASSETS / "references/conflicts.md").read_text()
-    for field in (
-        "match_text",
-        "problem_description",
-        "reason",
-        "severity",
-        "state",
-        "begin_time",
-        "fix_plan",
-        "fix_time",
-        "resolution_basis",
-        "conflict_type",
-        "resolved_by",
+    run.model.agent_runner = worker
+    await run.generate("draft", "Draft evidence", {}, [], skill_stage="map")
+    await run.generate("merge", "Merge evidence", {}, [], skill_stage="reduce")
+    for (prompt, context), rules, stage in zip(
+        seen, (MAP_CONFLICT_RULES, REDUCE_CONFLICT_RULES), ("map", "reduce"), strict=True
     ):
-        assert "`" + field + "`" in final
-    assert "用户手动解决内容冲突，修正后的内容如正文所示" in final
-    assert "人工修复" in final
+        assert ("Original Skill text." in prompt) is (not builtin or not enabled)
+        assert (WIKI_WORKER_RULES in prompt) is (builtin and enabled)
+        assert (rules in prompt) is enabled
+        assert ("| `match_text` |" in prompt) is (enabled and stage == "reduce")
+        if enabled:
+            assert context["skill_context"]["conflict_rule_stage"] == stage
+        else:
+            assert context == {"time": run.timestamp}
+    pipeline.client.download_bytes.assert_not_awaited()
 
 
-async def test_shuffle_preserves_hub_comparison_and_selected_history(pipeline, monkeypatch):
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_shuffle_scopes_comparison_and_preserves_selected_history(
+    pipeline, monkeypatch, enabled
+):
     pipeline.contract = contract(True)
-    pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
+    pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": enabled})
     docs = [Document(str(i) + ".md", "drafts/" + str(i) + ".md", [str(i)]) for i in range(4)]
     for doc in docs:
         await pipeline.files.sandbox.write_file(
@@ -156,12 +87,11 @@ async def test_shuffle_preserves_hub_comparison_and_selected_history(pipeline, m
     monkeypatch.setattr(Shuffle, "candidates", AsyncMock(return_value=[{"uri": history_uri}]))
 
     async def decide(stage, system, data, response_type, validate, **kwargs):
-        assert "different reader purposes" in system
-        assert all("HIDDEN_DISPUTE" not in d["markdown"] for d in data["documents"])
+        assert ("different reader purposes" in system) is enabled
         for d in data["documents"]:
-            assert "HIDDEN_DISPUTE" not in await kwargs["readers"]["read_document"].execute(
-                d["document"]
-            )
+            assert ("HIDDEN_DISPUTE" in d["markdown"]) is not enabled
+            body = await kwargs["readers"]["read_document"].execute(d["document"])
+            assert ("HIDDEN_DISPUTE" in body) is not enabled
         choices = []
         for item in data["assignments"]:
             document = item["document"]
@@ -187,10 +117,16 @@ async def test_shuffle_preserves_hub_comparison_and_selected_history(pipeline, m
     node = replace(parse_plan(MERGE, pipeline.contract)[1], against_target=True)
     groups = await Shuffle(pipeline).run(node, docs)
     assert groups[0].target_uris == [history_uri]
-    assert len(groups) == 1 and {d.workspace_path for d in groups[0].documents} == {
+    assert len(groups) == (1 if enabled else 3)
+    assert {d.workspace_path for group in groups for d in group.documents} == {
         d.workspace_path for d in docs
     }
-    assert {r for d in groups[0].documents for r in d.source_refs} == {"0", "1", "2", "3"}
+    assert {r for group in groups for d in group.documents for r in d.source_refs} == {
+        "0",
+        "1",
+        "2",
+        "3",
+    }
 
 
 @pytest.mark.parametrize(
@@ -240,25 +176,6 @@ async def test_visibility_projection_leaves_raw_draft_available_to_reduce(pipeli
     assert visible["total_chars"] == len(visible["text"]) and visible["complete"] is True
 
 
-async def test_ordinary_map_keeps_final_rules_if_reduce_can_be_skipped(pipeline):
-    attach(pipeline)
-    await pipeline.resources.prepare_stages(SKILL)
-    captured = []
-
-    async def run(system, data, model, **kwargs):
-        captured.append((system, data))
-        root = COMPILE_DRAFT_ROOT + "/ordinary-map/output"
-        await pipeline.files.sandbox.write_file(root + "/topic.md", "# Topic\n\nFacts.")
-        return root
-
-    pipeline.model.agent_runner = run
-    await pipeline.generate("custom-map", "Write final pages", {}, [], skill_stage="map")
-    assert "MAP RULES" in captured[0][0] and "FINAL RECORD SCHEMA" in captured[0][0]
-    context = captured[0][1]["runtime"]["skill_context"]
-    assert len(context["skill_attachment_paths"]) == 3
-    assert context["skill_attachment_chars"] == len("COMMON RULESMAP RULESFINAL RECORD SCHEMA")
-
-
 async def test_reduce_preserves_planned_work_and_review_revisions(pipeline):
     from types import SimpleNamespace
 
@@ -278,15 +195,11 @@ async def test_reduce_preserves_planned_work_and_review_revisions(pipeline):
     assert pipeline.generate.await_count == 2
 
 
-async def test_actual_agent_calls_record_injected_rules_not_every_loaded_attachment(
-    pipeline, agent_loop
-):
+async def test_actual_agent_calls_report_the_selected_conflict_rules(pipeline, agent_loop):
     from vikingbot.compile.pipeline_agent import agent_runner
     from vikingbot.providers.base import LLMResponse, ToolCallRequest
 
     pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
-    attach(pipeline)
-    await pipeline.resources.prepare_stages(SKILL)
     loop, key, _ = agent_loop
     pipeline.model.provider.chat = AsyncMock(
         side_effect=[
@@ -308,10 +221,8 @@ async def test_actual_agent_calls_record_injected_rules_not_every_loaded_attachm
     await pipeline.generate("map-receipt", "Draft source facts.", {}, [], skill_stage="map")
     for number in [1, 2]:
         receipt = await pipeline.files.get(f"calls/map-receipt-{number}")
-        assert receipt["skill_attachment_paths"] == ["references/common.md", "references/map.md"]
-        assert receipt["skill_attachment_chars"] == len("COMMON RULESMAP RULES")
-        assert receipt["skill_context_policy"] == "staged-rules-v1"
-    assert len(pipeline.resources.hashes) == 3
+        assert receipt["conflict_rule_stage"] == "map"
+        assert receipt["conflict_rule_chars"] == len(MAP_CONFLICT_RULES)
 
 
 def test_centered_comparison_accepts_iterable_document_ids():
@@ -349,4 +260,13 @@ async def test_opt_in_smoke_supplies_public_final_rules_without_model_calls(
     assert seen
     assert "| `match_text` |" in seen[0]
     assert "用户手动解决内容冲突，修正后的内容如正文所示" in seen[0]
-    assert set(pipeline.resources.hashes) == {"references/map.md", "references/conflicts.md"}
+    pipeline.client.download_bytes.assert_not_awaited()
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("prefix", ["", "> ", "- "])
+def test_real_inline_conflict_comment_is_hidden_and_code_literal_remains(newline, prefix):
+    comment = "<!-- CONFLICTS_CONTENT evidence -->"
+    text = f"{prefix}`{comment}` is syntax. {comment}\n"
+    visible = without_conflict_comments(text.replace("\n", newline))
+    assert visible.count(comment) == 1 and f"`{comment}`" in visible

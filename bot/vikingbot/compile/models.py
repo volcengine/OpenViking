@@ -213,8 +213,6 @@ class CompileResult(BaseModel):
     page_count: int = 0
     link_count: int = 0
     warnings: list[str] = Field(default_factory=list)
-    # Structural processing/delivery receipt, never a claim of complete semantic recall.
-    source_processing_complete: bool | None = None
 
 
 class CompileTask(BaseModel):

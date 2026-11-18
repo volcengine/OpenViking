@@ -5,13 +5,16 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from fastapi import FastAPI
 from pydantic import ValidationError
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
+from vikingbot.channels.openapi import OpenAPIChannel
 from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.models import CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
@@ -22,7 +25,7 @@ from vikingbot.compile.plan import Contract, PlanProposal, Transform, parse_plan
 from vikingbot.compile.results import Document, Group, RouteResponse
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.sources import split_source
-from vikingbot.config.schema import Config, SessionKey
+from vikingbot.config.schema import Config, OpenAPIChannelConfig, SessionKey
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
@@ -468,7 +471,7 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
 
 
 @pytest.mark.parametrize("bad", ["true", "false", 0, 1, None, {}, []])
-async def test_conflict_opt_in_is_strict_at_public_and_runtime_boundaries(bad):
+async def test_shared_compile_keeps_args_opaque_and_vikingbot_validates_the_flag(bad):
     from vikingbot.compile.models import CompileFailure, CompileRequest
 
     from openviking.service.compile_service import CompileInputs
@@ -479,11 +482,40 @@ async def test_conflict_opt_in_is_strict_at_public_and_runtime_boundaries(bad):
         "skill": "viking://agent/skills/wiki",
         "args": {"global_conflict_detection": bad},
     }
-    with pytest.raises(ValidationError):
-        CompileInputs.model_validate(payload)
+    assert CompileInputs.model_validate(payload).args == payload["args"]
     service = BotCompileService.__new__(BotCompileService)
     with pytest.raises(CompileFailure, match="must be a boolean"):
         await service._normalize_request(CompileRequest.model_validate(payload), connection={})
+
+
+async def test_vikingbot_rejects_non_wiki_target_before_creating_it(agent_loop, monkeypatch):
+    from vikingbot.compile.models import CompileFailure, CompileRequest
+
+    loop, _, _ = agent_loop
+    service = BotCompileService.__new__(BotCompileService)
+    service.config = loop.config
+    request = CompileRequest.model_validate(
+        {
+            "from": ["viking://resources/source"],
+            "to": "viking://agent/skills",
+            "skill": "viking://agent/skills/wiki",
+            "args": {"global_conflict_detection": True},
+        }
+    )
+    client = SimpleNamespace(
+        attrs=AsyncMock(side_effect=lambda uri: {"uri": uri}),
+        stat=AsyncMock(
+            side_effect=[{"uri": request.skill, "isDir": True}, NotFoundError(request.to)]
+        ),
+        mkdir=AsyncMock(),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "vikingbot.compile.service.VikingClient.create", AsyncMock(return_value=client)
+    )
+    with pytest.raises(CompileFailure, match="requires a resource Wiki target"):
+        await service._normalize_request(request, connection={})
+    client.mkdir.assert_not_awaited()
 
 
 def _human_conflict_page(sentence="The approved limit is 7."):
@@ -592,12 +624,10 @@ async def test_conflict_plan_and_snapshot_keep_comparison_on(pipeline):
     )
 
 
-@pytest.mark.parametrize("flag", [False, True])
+@pytest.mark.parametrize("flag", [None, False, True])
 async def test_conflict_admission_freezes_executor_without_changing_service_default(
     agent_loop, pipeline, tmp_path, monkeypatch, flag
 ):
-    from vikingbot.compile.models import CompileRequest
-
     loop, _, _ = agent_loop
     loop.config.storage_workspace = str(tmp_path / "service")
     loop.config.compile.mode = "simple"
@@ -613,22 +643,47 @@ async def test_conflict_admission_freezes_executor_without_changing_service_defa
     monkeypatch.setattr(service, "_openviking_auth_mode", lambda: "dev")
     # Admission and durable request are real; keep execution outside this assertion.
     monkeypatch.setattr(service, "_run_admitted_task", AsyncMock())
-    accepted = await service.create_task(
-        CompileRequest.model_validate(
-            {
-                "from": ["viking://resources/source"],
-                "to": pipeline.target,
-                "skill": pipeline.request.skill,
-                "args": {"global_conflict_detection": flag},
-            }
+    config = SimpleNamespace(
+        gateway=SimpleNamespace(host="127.0.0.1", token="synthetic-gateway"),
+        ov_server=SimpleNamespace(
+            server_url="http://127.0.0.1:1933", effective_auth_mode="dev", api_key_type="user"
         ),
-        principal_scope="synthetic",
     )
-    task = await service.store.get(accepted.task_id)
-    assert task.meta["mode"] == ("complex" if flag else "simple")
-    assert task.sanitized_request.global_conflict_detection is flag
-    assert loop.config.compile.mode == "simple"
-    await service.close()
+    channel = OpenAPIChannel(
+        OpenAPIChannelConfig(),
+        MessageBus(),
+        workspace_path=tmp_path,
+        global_config=config,
+        compile_service=service,
+    )
+    monkeypatch.setattr(
+        channel, "_assert_runtime_upstream_auth_mode", AsyncMock(return_value={"status": "ok"})
+    )
+    app = FastAPI()
+    app.include_router(channel.get_gateway_router())
+    payload = {
+        "from": ["viking://resources/source"],
+        "to": pipeline.target,
+        "skill": pipeline.request.skill,
+    }
+    if flag is not None:
+        payload["args"] = {"global_conflict_detection": flag}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+        ) as http:
+            accepted = await http.post(
+                "/runtime/v1/tasks",
+                headers={"X-Gateway-Token": config.gateway.token},
+                json={"task_type": "compile", "payload": payload},
+            )
+        assert accepted.status_code == 202, accepted.text
+        task = await service.store.get(accepted.json()["task_id"])
+        assert task.meta["mode"] == ("complex" if flag else "simple")
+        assert task.sanitized_request.global_conflict_detection is bool(flag)
+        assert loop.config.compile.mode == "simple"
+    finally:
+        await service.close()
 
 
 async def test_global_comparison_runs_map_shuffle_reduce_and_publishes_evidence(

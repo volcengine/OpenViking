@@ -13,8 +13,8 @@ from threading import Event
 import httpx
 
 from openviking.core.namespace import relative_uri_path
-from openviking.utils.markdown_visibility import without_conflict_comments
 from openviking_cli.exceptions import OpenVikingError
+from vikingbot.compile.conflict_visibility import without_conflict_comments
 from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.pipeline_io import bounded_jobs
@@ -137,15 +137,17 @@ def group_related_documents(keys, links, *, centered=False):
     Either link direction suffices. Unknown endpoints are rejected; input order
     determines first-fit assignment, and documents without links remain independent.
     """
-    keys = list(keys)
     neighbours = {key: set() for key in keys}
-    directed = {tuple(link) for link in links}
-    for left, right in directed:
+    directed = set()
+    for left, right in links:
         neighbours[left].add(right)
         neighbours[right].add(left)
+        if centered:
+            directed.add((left, right))
     if centered:
         # Bounded one-hop comparison sets keep hub-to-leaf evidence together
         # without requiring every pair of leaves to be related or closing chains.
+        keys = list(neighbours)
         order = {key: index for index, key in enumerate(keys)}
         mutual = {
             key: sum((other, key) in directed and (key, other) in directed for other in values)
@@ -334,11 +336,11 @@ class Shuffle:
         )
         rule = r.contract.routing
         bodies = [
-            without_conflict_comments(
-                (await r.files.sandbox.read_file_bytes(d.workspace_path)).decode("utf-8")
-            )
+            (await r.files.sandbox.read_file_bytes(d.workspace_path)).decode("utf-8")
             for d in documents
         ]
+        if conflict_comparison:
+            bodies = [without_conflict_comments(body) for body in bodies]
         # shortcut: candidate ranking uses Markdown prefixes; use chunked embeddings if long drafts miss matches.
         texts = [body[:8000] for body in bodies]
         histories = (
@@ -387,7 +389,9 @@ class Shuffle:
                 }
                 for i in indices
             ]
-            reader = DocumentReader(r, [documents[i] for i in selected], visible_only=True)
+            reader = DocumentReader(
+                r, [documents[i] for i in selected], visible_only=conflict_comparison
+            )
 
             def validate(response):
                 expected = {item["document"]: item for item in assigned}

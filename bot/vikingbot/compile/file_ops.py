@@ -112,7 +112,7 @@ class DocumentReader:
             raise ValueError("Invalid Markdown character range")
         content = (await self.runtime.files.sandbox.read_file_bytes(path)).decode("utf-8")
         if self.visible_only:
-            from openviking.utils.markdown_visibility import without_conflict_comments
+            from vikingbot.compile.conflict_visibility import without_conflict_comments
 
             content = without_conflict_comments(content)
         if offset > len(content):

@@ -12,7 +12,7 @@ from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.agent.tools.base import MultimodalToolResult, Tool
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import COMPILE_STAGING_ROOT
-from vikingbot.compile.renderer import _split_frontmatter, validate_relative_file_path
+from vikingbot.compile.renderer import validate_relative_file_path
 
 
 class SkillResources(Tool):
@@ -48,8 +48,6 @@ class SkillResources(Tool):
         self.snapshots: dict[str, str] = {}
         self.hashes: dict[str, str] = {}
         self.lock = asyncio.Lock()
-        self.stage_rules: dict[str, tuple[tuple[str, str], ...]] = {}
-        self._stages_prepared = False
         self.local_root = posixpath.join(
             files.sandbox.sandbox_cwd, COMPILE_STAGING_ROOT, "skills", uuid.uuid4().hex
         )
@@ -67,51 +65,6 @@ class SkillResources(Tool):
         path = validate_relative_file_path(path)
         safe_join_viking_uri(self.root, path)
         return path
-
-    async def prepare_stages(self, skill: str) -> None:
-        """Freeze explicitly declared rule attachments once, before planning.
-
-        Legacy Skills have no declaration and retain their full-text behavior.
-        Each path is authorized/bounded by the existing attachment owner.
-        """
-        if self._stages_prepared:
-            return
-        metadata, _ = _split_frontmatter(skill)
-        stages = metadata.get("compile_stage_resources", {})
-        if not isinstance(stages, dict) or set(stages) - {"map", "reduce"}:
-            raise ValueError("compile_stage_resources must map map/reduce to relative file lists")
-        paths = {}
-        for stage, entries in stages.items():
-            if not isinstance(entries, list) or any(not isinstance(p, str) for p in entries):
-                raise ValueError("compile_stage_resources entries must be lists of file paths")
-            paths[stage] = tuple(dict.fromkeys(self.path(p) for p in entries))
-        if len({p for entries in paths.values() for p in entries}) > 32:
-            raise ValueError("Skill dependency limit exceeds 32 files")
-        content = {}
-        for entries in paths.values():
-            for path in entries:
-                if path not in content:
-                    content[path] = await self.read(path)
-        self.stage_rules = {
-            stage: tuple((path, content[path]) for path in entries)
-            for stage, entries in paths.items()
-        }
-        self._stages_prepared = True
-
-    def selected_rules(self, stage: str | None) -> tuple[tuple[str, str], ...]:
-        """Select frozen rule text, preserving all rules for an unclassified producer."""
-        if stage not in {None, "map", "reduce"}:
-            raise ValueError("Unknown Compile Skill stage")
-        return (
-            self.stage_rules.get(stage, ())
-            if stage is not None
-            else tuple(dict.fromkeys(rule for rules in self.stage_rules.values() for rule in rules))
-        )
-
-    def stage_context(self, stage: str | None) -> str:
-        return "".join(
-            f"\n\nSkill resource {path}:\n{content}" for path, content in self.selected_rules(stage)
-        )
 
     async def read(self, path, *, refresh=False):
         """Load a bounded attachment and persist its content version; errors never mean absence."""

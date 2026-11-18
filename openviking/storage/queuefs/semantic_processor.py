@@ -1365,11 +1365,6 @@ class SemanticProcessor(DequeueHandlerBase):
         config = get_openviking_config()
         live_context = self._parse_live_context_metadata(content)
 
-        if file_name.lower().endswith((".md", ".markdown")):
-            from openviking.utils.markdown_visibility import without_conflict_comments
-
-            content = without_conflict_comments(content)
-
         # Limit content length
         max_chars = config.semantic.max_file_content_chars
         if len(content) > max_chars:

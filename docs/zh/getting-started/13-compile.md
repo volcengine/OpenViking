@@ -57,6 +57,16 @@ ov task status <cmp_task_id>
 
 直接传入 `ov compile --from … --to … --skill …` 的写法已弃用，仍可执行一次性全量编译。
 
+### 开源 VikingBot Runtime 的冲突对照
+
+使用 VikingBot 的 `/runtime/v1/tasks` 端点时，资料 Wiki Compile 可将
+`payload.args.global_conflict_detection` 设为 JSON 布尔值 `true`。VikingBot
+为该任务选择复杂执行器，分阶段比较相关输入草稿和召回的 Wiki 证据，并保护已有的人工裁决。
+历史召回有范围限制，需要据此决策时请看正文所引证据和未解决记录。
+
+开关默认关闭，对 VikingBot 实际收到的任务生效。命名 Compile 沿用原有增量计划，
+也可能在调用 Runtime 前跳过。当开启后需要覆盖全部来源时，请显式发起全量运行。
+
 ## 打开正文
 
 ```bash
@@ -74,46 +84,3 @@ ov read viking://resources/onboarding-wiki-v1/entity/lighthouse.md
 | 正文缺少依据 | 检查实际读取记录和来源引用，补充编译指令后使用新目标重试 |
 
 完成标志是一篇可阅读、可导航且关键事实有来源支持的正文。文件结构、页面类型和可视化见 [LLM Wiki 示例](../context-compilation/02-llm-wiki.md)。清理时确认演示目标目录，保留需要的产物后在 Studio 中删除。
-
-## 启用运行时冲突比较
-
-在配置的 `args` 中保存 `"global_conflict_detection": true`，例如创建配置时传入
-`--args '{"global_conflict_detection":true}'`。值必须是 JSON 布尔值；缺省为 false，
-普通任务保留现有执行器和行为。此选项用于配合冲突感知 LLM Wiki Skill 的资源 Wiki，
-不适用于记忆整理或 Skill 包生成。
-
-启用后的 VikingBot 任务独立选择 complex 执行，不修改服务默认值。执行计划保留
-Map、Shuffle、Reduce；目标已有内容时召回历史候选。格式与人工记录保护错误反馈给
-同一个 worker，在原工具轮数预算内修复。发布边界保留人工记录及其可见正文锚点。
-事实比较与证据质量仍由 Skill 和模型负责。
-
-有效开关随任务冻结；切换开关后，命名配置执行全量处理。没有显式完整处理收据的运行
-不推进增量基线。该收据只说明结构性输入处理和已确认交付，不证明语义覆盖完整、
-冲突召回无遗漏或索引已完成；来源引用和索引状态须单独检查。候选数量及并发默认值
-保持不变，增加比较步骤可能增加模型工作量。
-
-### 按阶段提供 Skill 附件
-
-Skill 的 YAML frontmatter 可显式声明：
-
-```yaml
-compile_stage_resources:
-  map: [references/map.md]
-  reduce: [references/conflicts.md]
-```
-
-复杂 Markdown 流水线在规划前通过现有授权和大小限制冻结这些附件，每个任务只读取
-一次。开启冲突模式、确定还有 Reduce 时，Map 才只注入草稿规则；普通 Map 可能直接
-发布或由阶段 Review 移除 Reduce，因此保留全部生成规则。必需附件缺失或声明非法时，在模型规划前失败，
-不以缩短上下文为由丢规则。没有声明的已有 Skill 保持全文行为；直通代理需自行按 Skill
-链接读取附件。内置 LLM Wiki 分开来源草稿规则与最终冲突格式/人工保护规则；隔离 worker
-用文件工具写入，直通场景仍使用原脚本。不新增冲突裁决模型。保留规划指令与阶段 Review 的补充安排，不能用固定模板替换
-Reduce 任务。调用回执记录实际注入的附件路径和字符数，不包含附件正文。
-
-开启全局冲突时，语义路由按有界一跳比较组（最多 50 个草稿）保留中心说法与不同查阅
-目的页面的比较关系，不做传递闭包，也不保证召回无遗漏。普通路由、候选窗口、并发和
-模型选择默认值不变。用户 Skill 的既有整目录快照已覆盖附件。升级内置系统 Skill 后，
-应先做全量运行再使用旧命名增量基线；当前基线身份尚未包含系统 Skill 的资产版本。
-
-Markdown 摘要输入与路由视图在截断前排除保留的冲突注释；原始来源、草稿、引用、
-哈希和 Reduce 证据保持完整。既有已存摘要不会自动重建。

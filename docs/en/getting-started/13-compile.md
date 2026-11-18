@@ -57,27 +57,18 @@ The first run is full. Subsequent runs use the last successful baseline. The nam
 
 The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 
-## Opt in to runtime conflict comparison
+### Conflict comparison in the open-source VikingBot Runtime
 
-Save `"global_conflict_detection": true` in the configuration's `args`, for example
-`--args '{"global_conflict_detection":true}'` on `ov compile create`. The value must
-be a JSON boolean. Missing values remain false, preserving the current executor and
-behavior for ordinary tasks. This option is intended for a resource Wiki with the
-conflict-aware LLM Wiki Skill; it does not apply to memory consolidation or Skill
-package generation.
+When using VikingBot's `/runtime/v1/tasks` endpoint, a resource Wiki Compile can
+set `payload.args.global_conflict_detection` to the JSON boolean `true`. VikingBot
+selects its complex executor for that task and compares related input drafts and
+recalled Wiki evidence. The comparison preserves existing human resolutions and
+uses stage-specific worker rules. Target recall is bounded, so review the cited
+evidence and unresolved records when decisions depend on them.
 
-Enabled VikingBot tasks use complex execution independently of the service default.
-They retain Map, Shuffle and Reduce, and recall target candidates when the target has
-content. The same worker receives format/protection errors within its existing tool
-budget. Runtime publication preserves human records and their visible anchors.
-Custom Skills still own factual comparison and evidence quality.
-
-The effective option is frozen in the task. Changing it forces a full named run.
-A run without an explicit complete-processing receipt does not advance the incremental
-baseline. This receipt describes structural input processing and acknowledged delivery;
-it does not prove complete semantic coverage, exhaustive conflict recall or completed
-indexing. Check source citations and index state separately. Candidate bounds and
-concurrency defaults remain unchanged; additional comparison can increase model work.
+The flag defaults to false and applies to tasks received by VikingBot. Named
+Compile uses its existing incremental plan and can skip a run before calling the
+Runtime. To compare all sources after enabling the option, request a full run.
 
 ## Open the body page
 
@@ -96,39 +87,3 @@ If filenames differ, use the tree and index to locate the body page. Check the i
 | Evidence missing | Actual read records and citations; refine the instruction and retry with a new target |
 
 Completion means a readable, navigable body page with evidence for key facts. See the [LLM Wiki example](../context-compilation/02-llm-wiki.md) for structures, page types, and visualization. To clean up, identify the demo target in Studio, preserve any needed output, and delete the directory.
-
-### Stage-specific Skill attachments
-
-A Skill may declare `compile_stage_resources` in its YAML frontmatter:
-
-```yaml
-compile_stage_resources:
-  map: [references/map.md]
-  reduce: [references/conflicts.md]
-```
-
-The complex Markdown pipeline authorizes and snapshots these bounded attachments
-once before planning, then injects the declared rules into generation workers. A Map draft omits
-final-generation rules only when conflict mode guarantees a later Reduce;
-ordinary Map keeps the union because it can publish directly or lose Reduce
-after stage review. Missing or invalid required files fail before model planning; no shorter
-fallback drops rules. Existing Skills without this declaration retain their full
-text. Standalone agents must follow the Skill's reference links themselves.
-The bundled LLM Wiki separates source-draft instructions from final conflict
-format/human-protection rules, and uses file tools inside isolated workers while
-retaining its script for standalone writing. No extra adjudication model is added. Planner instructions and stage-review
-revisions remain intact; attachment selection never substitutes a fixed Reduce task.
-Content-free call receipts identify the injected attachment paths and characters.
-
-When global conflict detection is enabled, semantic routing uses bounded one-hop
-comparison groups (at most 50 drafts) so a hub claim can be compared with related
-pages that serve different reader purposes. It does not close transitive chains
-or promise exhaustive recall. Normal routing, candidate windows, concurrency and
-model selection defaults remain unchanged. Whole-Skill snapshots already cover
-user Skill attachments. After upgrading bundled system Skills, start a full run
-before relying on an old named incremental baseline; system-Skill asset versions
-are not currently part of that baseline's identity.
-
-Reserved conflict comments are excluded from Markdown summary inputs and routing
-views before truncation. Raw source/draft bytes, citations, hashes and Reduce
-evidence remain intact; existing stored summaries are not automatically rebuilt.

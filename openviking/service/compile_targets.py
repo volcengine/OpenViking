@@ -930,8 +930,6 @@ class CompileLifecycle:
             and progress.get("source_commit")
             and (request.get("instruction") or "") == (progress.get("instruction") or "")
             and (request.get("args") or {}).get("model_name", "") == progress.get("model_name")
-            and (request.get("args") or {}).get("global_conflict_detection", False)
-            == progress.get("global_conflict_detection", False)
             and previous.get("uri") == request["skill"]
         )
         if incremental and not classify_uri(request["skill"]).is_system:
@@ -1098,13 +1096,6 @@ class CompileLifecycle:
             await self._advance_progress(task, run)
             await self._save_checkpoint(task, {"phase": "finished"})
             return self._finished_snapshot(run, snapshot.error_code)
-        if (run["params"].get("args") or {}).get(
-            "global_conflict_detection"
-        ) is True and "source_processing_complete" not in run["meta"]:
-            run["meta"]["source_processing_complete"] = (
-                isinstance(snapshot.result, dict)
-                and snapshot.result.get("source_processing_complete") is True
-            )
         ctx = await self.task_ctx(task)
         target = task.meta["request"]["to"]
         meta = run["meta"]
@@ -1210,10 +1201,6 @@ class CompileLifecycle:
         compile_name = self._compile_name(task)
         if not compile_name or run["status"] != "completed" or not run["meta"]["start_snapshot"]:
             return
-        if (run["params"].get("args") or {}).get("global_conflict_detection") is True and run[
-            "meta"
-        ].get("source_processing_complete") is not True:
-            return
         from openviking.service.task_tracker import get_task_tracker
 
         async with self._store.edit(
@@ -1232,9 +1219,6 @@ class CompileLifecycle:
             record["progress"] = {
                 "source_commit": run["meta"]["start_snapshot"],
                 "processed_roots": list(run["params"]["from"]),
-                "global_conflict_detection": (run["params"].get("args") or {}).get(
-                    "global_conflict_detection", False
-                ),
                 "instruction": run["params"].get("instruction"),
                 # Empty means the successful request uses Runtime's default model selection.
                 "model_name": (run["params"].get("args") or {}).get("model_name", ""),

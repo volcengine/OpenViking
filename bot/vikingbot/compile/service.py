@@ -593,17 +593,13 @@ class BotCompileService:
             except OpenVikingError as exc:
                 if exc.code != "NOT_FOUND":
                     raise
-                self._validate_target_directory(raw_target, {"isDir": True})
+                self._validate_target_directory(
+                    raw_target, {"isDir": True}, resource_only=conflict_detection
+                )
                 await client.mkdir(raw_target, description="compile target folder")
                 target_stat = await client.stat(raw_target)
             target = str(target_stat.get("uri") or "").rstrip("/")
-            if conflict_detection and classify_uri(target).context_type != "resource":
-                raise CompileFailure(
-                    "INVALID_ARGUMENT",
-                    "Global conflict comparison requires a resource Wiki target",
-                    stage="queued",
-                )
-            self._validate_target_directory(target, target_stat)
+            self._validate_target_directory(target, target_stat, resource_only=conflict_detection)
         except CompileFailure:
             raise
         except OpenVikingError as exc:
@@ -626,7 +622,9 @@ class BotCompileService:
         )
 
     @staticmethod
-    def _validate_target_directory(target: str, stat: Mapping[str, Any]) -> None:
+    def _validate_target_directory(
+        target: str, stat: Mapping[str, Any], *, resource_only: bool = False
+    ) -> None:
         if not stat.get("isDir"):
             raise CompileFailure(
                 "INVALID_ARGUMENT", "Compile target must be a directory", stage="queued"
@@ -638,6 +636,12 @@ class BotCompileService:
                 stage="queued",
             )
         classification = classify_uri(target)
+        if resource_only and classification.context_type != "resource":
+            raise CompileFailure(
+                "INVALID_ARGUMENT",
+                "Global conflict comparison requires a resource Wiki target",
+                stage="queued",
+            )
         parts = uri_parts(target)
         if classification.context_type == "skill":
             if not classification.is_skill_namespace or (
@@ -1241,16 +1245,6 @@ class BotCompileService:
                 page_count=len(set(published)),
                 link_count=rendered.link_count,
                 warnings=pipeline.warnings,
-                source_processing_complete=(
-                    not pipeline.failures
-                    and not conflicts
-                    and all(
-                        value in {"delivered", "empty"}
-                        for value in (await pipeline.files.get("inputs") or {}).values()
-                    )
-                    if request.global_conflict_detection
-                    else None
-                ),
             )
 
             def complete(task):

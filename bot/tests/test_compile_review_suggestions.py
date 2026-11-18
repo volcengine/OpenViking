@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from test_compile_markdown import _human_conflict_page, agent_loop, pipeline  # noqa: F401
-from test_compile_stage_context import ASSETS
+from vikingbot.compile.conflict_rules import REDUCE_CONFLICT_RULES, WIKI_WORKER_RULES
 from vikingbot.compile.ops import finalize
 from vikingbot.compile.pipeline_agent import agent_runner
 from vikingbot.compile.results import Document
@@ -19,7 +19,7 @@ async def test_real_reduce_preserves_optional_advice_and_existing_human_decision
     pipeline, agent_loop, with_suggestion
 ):
     pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
-    pipeline.skill = (ASSETS / "SKILL.md").read_text()
+    pipeline.skill = WIKI_WORKER_RULES
     original = _human_conflict_page()
     retained = original.split("<!-- CONFLICTS_CONTENT\n", 1)[1].split("\n-->", 1)[0]
     anchor = "The secondary same-version sources disagree about the applicable retry interval."
@@ -49,14 +49,7 @@ async def test_real_reduce_preserves_optional_advice_and_existing_human_decision
         + "\n-->\n"
     )
     pipeline.client.stat = AsyncMock(return_value={"isDir": False})
-    pipeline.client.download_bytes = AsyncMock(
-        side_effect=lambda uri: (
-            (ASSETS / uri.split("/wiki/", 1)[1]).read_bytes()
-            if "/wiki/references/" in uri
-            else original.encode()
-        )
-    )
-    await pipeline.resources.prepare_stages(pipeline.skill)
+    pipeline.client.download_bytes = AsyncMock(return_value=original.encode())
     loop, key, _ = agent_loop
     pipeline.model.provider.chat = AsyncMock(
         side_effect=[
@@ -95,7 +88,8 @@ async def test_real_reduce_preserves_optional_advice_and_existing_human_decision
     assert records[1]["state"] == "unfixed" and records[1]["fix_time"] is None
     assert all(records[1][field] == "" for field in ("fix_plan", "resolution_basis", "resolved_by"))
     receipt = await pipeline.files.get("calls/reduce-review-1")
-    assert receipt["skill_attachment_paths"] == ["references/conflicts.md"]
+    assert receipt["conflict_rule_stage"] == "reduce"
+    assert receipt["conflict_rule_chars"] == len(REDUCE_CONFLICT_RULES)
     # Advice alone does not supply an actual repair/action/evidence contract.
     forged = published.replace('"state": "unfixed"', '"state": "fixed"')
     with pytest.raises(ValueError, match="resolution requires"):
