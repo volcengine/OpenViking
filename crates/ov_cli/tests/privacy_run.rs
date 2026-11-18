@@ -591,3 +591,67 @@ async fn group_signal_without_a_terminal_delivers_once_and_preserves_zero_status
     .await
     .expect("group signal test did not finish");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn closing_stdout_delivers_sigpipe_without_error_output() {
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    for masked in [false, true] {
+        let (url, server) = if masked {
+            let (url, server) = resolver([(TOKEN, Some("secret-line".into()))]).await;
+            (url, Some(server))
+        } else {
+            ("http://127.0.0.1:1".to_owned(), None)
+        };
+        let mut command = privacy(dir.path(), &url);
+        command.arg("run");
+        if masked {
+            command.args(["--env", &format!("TOKEN={TOKEN}")]);
+        }
+        command
+            .args([
+                "--",
+                "/bin/sh",
+                "-c",
+                r#"while :; do printf '%s\n' "${TOKEN:-plain-line}"; done"#,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        let expected = if masked {
+            format!("{TOKEN}\n")
+        } else {
+            "plain-line\n".to_owned()
+        };
+
+        timeout(Duration::from_secs(5), async {
+            let mut stdout = BufReader::new(child.stdout.take().unwrap());
+            let mut first = String::new();
+            stdout.read_line(&mut first).await.unwrap();
+            assert_eq!(first, expected);
+            drop(stdout);
+
+            let mut stderr = Vec::new();
+            child
+                .stderr
+                .take()
+                .unwrap()
+                .read_to_end(&mut stderr)
+                .await
+                .unwrap();
+            assert!(
+                stderr.is_empty(),
+                "unexpected stderr: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+            assert_eq!(child.wait().await.unwrap().code(), Some(141));
+        })
+        .await
+        .expect("closed stdout test did not finish");
+        if let Some(server) = server {
+            server.await.unwrap();
+        }
+    }
+}

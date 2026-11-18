@@ -229,11 +229,28 @@ async fn relay_child_output(
 ) -> std::io::Result<()> {
     if let (Some(stdout), Some(stderr)) = (stdout, stderr) {
         tokio::try_join!(
-            relay_output(stdout, tokio::io::stdout(), masker),
-            relay_output(stderr, tokio::io::stderr(), masker),
+            relay_stream(stdout, tokio::io::stdout(), masker),
+            relay_stream(stderr, tokio::io::stderr(), masker),
         )?;
     }
     Ok(())
+}
+
+async fn relay_stream<R, W>(
+    reader: R,
+    writer: W,
+    masker: Option<&OutputMasker>,
+) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    match relay_output(reader, writer, masker).await {
+        // Like a shell pipeline (`| head`), closing a stream's reader stops that stream
+        // so the child receives SIGPIPE on its next write while the other stream finishes.
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
 }
 
 fn exit_code(status: std::process::ExitStatus) -> i32 {
