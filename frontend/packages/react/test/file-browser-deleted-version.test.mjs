@@ -104,13 +104,9 @@ test('history retains confirmed deletion badges and reports missing blobs as rea
     assert.deepEqual(badges(), ['Deleted']);
     assert.equal(fetch.countOf('/api/v1/snapshot/log'), 0);
     assert.equal(fetch.countOf('/api/v1/snapshot/diff'), 0);
-    assert.ok(
-      !fetch.calls.some(
-        (call) =>
-          call.path.endsWith('/snapshot/show') &&
-          call.query.target_ref === older.oid,
-      ),
-      'native deletion confirmation needs no content from the parent',
+    assert.equal(
+      fetch.calls.some((call) => call.query.target_ref === older.oid),
+      false,
     );
     assert.match(revisions()[1].textContent, /Deleted/);
     assert.match(
@@ -151,13 +147,18 @@ for (const [label, response, message] of [
     /Snapshot content missing/,
   ],
   [
-    'the older server did not report first-parent type',
-    () => missingContent({ reason: 'path_not_found' }),
+    'the deletion marker is a string',
+    () => missingContent({ reason: 'path_not_found', deleted_file: 'true' }),
+    /Snapshot content missing/,
+  ],
+  [
+    'the deletion marker is null',
+    () => missingContent({ reason: 'path_not_found', deleted_file: null }),
     /Snapshot content missing/,
   ],
   [
     'the error declares another reason',
-    () => missingContent({ reason: 'object_not_found' }),
+    () => missingContent({ reason: 'object_not_found', deleted_file: true }),
     /Snapshot content missing/,
   ],
   [

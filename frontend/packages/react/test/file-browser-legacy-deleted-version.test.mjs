@@ -2,10 +2,12 @@ import './helpers/history-viewer-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  click,
   fixture,
   mount,
   ok,
   openAction,
+  settle,
   target,
   tree,
   workflow,
@@ -15,6 +17,7 @@ const uri = `${target}/guide.md`;
 const removed = { oid: 'b'.repeat(40), message: 'Removed file' };
 const older = { oid: 'c'.repeat(40), message: 'Previous file version' };
 const secondParent = 'd'.repeat(40);
+const missingPath = { details: { reason: 'path_not_found' } };
 
 function replyError(status, error) {
   return Promise.resolve(Response.json({ status: 'error', error }, { status }));
@@ -26,8 +29,14 @@ const deletedDiff = {
   to_commit: removed.oid,
 };
 
-for (const [label, compare, message, commit = removed] of [
+for (const [label, compare, message, { commit = removed, details } = {}] of [
   ['explicit deletion', () => ok(deletedDiff)],
+  [
+    'explicit deletion with an untyped missing path',
+    () => ok(deletedDiff),
+    undefined,
+    missingPath,
+  ],
   [
     'a mismatched comparison result',
     () => ok({ ...deletedDiff, from_commit: secondParent }),
@@ -38,7 +47,28 @@ for (const [label, compare, message, commit = removed] of [
     () => replyError(404, { code: 'NOT_FOUND', message: 'Route unavailable' }),
     /Snapshot content missing/,
   ],
-  ['no exact path change', undefined, /Snapshot content missing/, older],
+  [
+    'an untyped missing path without a diff endpoint',
+    () => replyError(404, { code: 'NOT_FOUND', message: 'Route unavailable' }),
+    /Snapshot content missing/,
+    missingPath,
+  ],
+  [
+    'an untyped missing path exceeding diff limits',
+    () =>
+      replyError(429, {
+        code: 'RESOURCE_EXHAUSTED',
+        message: 'Snapshot diff file size limit exceeded',
+      }),
+    /Snapshot diff file size limit exceeded/,
+    missingPath,
+  ],
+  [
+    'no exact path change',
+    undefined,
+    /Snapshot content missing/,
+    { commit: older },
+  ],
   [
     'a diff authorization failure',
     () =>
@@ -85,10 +115,12 @@ for (const [label, compare, message, commit = removed] of [
           return ok([{ ...commit, parents: [older.oid, secondParent] }]);
         }
         if (call.path.endsWith('/snapshot/show')) {
+          if (call.query.target_ref === older.oid)
+            return Promise.resolve(new Response('Older content\n'));
           return replyError(404, {
             code: 'NOT_FOUND',
             message: 'Snapshot content missing',
-            details: { type: 'git_blob', resource: uri },
+            details: { type: 'git_blob', resource: uri, ...details },
           });
         }
         if (call.path.endsWith('/snapshot/diff')) {
@@ -115,6 +147,11 @@ for (const [label, compare, message, commit = removed] of [
         );
       } else {
         assert.equal(badge?.textContent, 'Deleted');
+        await click(workflow().querySelector('[role="switch"]'));
+        await settle();
+        const patch = workflow().querySelector('pre').textContent;
+        assert.match(patch, /\+\+\+ \/dev\/null/);
+        assert.match(patch, /-Older content/);
       }
     } finally {
       await view.unmount();

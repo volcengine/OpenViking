@@ -60,17 +60,15 @@ export async function readHistoricalText(
       throw error;
     }
     const reason = 'reason' in error.details ? error.details.reason : undefined;
-    if (
-      reason === 'path_not_found' &&
-      'deleted_file' in error.details &&
-      error.details.deleted_file === true
-    ) {
-      return null;
+    if ('deleted_file' in error.details) {
+      if (reason === 'path_not_found' && error.details.deleted_file === true)
+        return null;
+      throw error;
     }
-    if (reason !== undefined) throw error;
+    if (reason !== undefined && reason !== 'path_not_found') throw error;
 
-    // Older servers return an ambiguous blob 404. A legacy diff distinguishes
-    // a missing tree path from a missing object for a path still in the tree.
+    // Older gateways can report a missing path without the first parent's type.
+    // Confirm that a file was deleted from that parent using the legacy diff.
     const [commit] = await client.request<{ oid: string; parents: string[] }[]>(
       {
         method: 'GET',
