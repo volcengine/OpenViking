@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from loguru import logger
-from telegram import BotCommand, Update
+from telegram import BotCommand, Message, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
@@ -81,6 +81,23 @@ def _markdown_to_telegram_html(text: str) -> str:
         text = text.replace(f"\x00CB{i}\x00", f"<pre><code>{escaped}</code></pre>")
 
     return text
+
+
+def _direct_messages_topic_metadata(message: Message) -> dict[str, int]:
+    """Return routing metadata for a Telegram native DM topic."""
+    topic = getattr(message, "direct_messages_topic", None)
+    topic_id = getattr(topic, "topic_id", None)
+    if not isinstance(topic_id, int) or topic_id <= 0:
+        return {}
+    return {"direct_messages_topic_id": topic_id}
+
+
+def _direct_messages_topic_kwargs(metadata: dict[str, object]) -> dict[str, int]:
+    """Return Bot API routing arguments from preserved channel metadata."""
+    topic_id = metadata.get("direct_messages_topic_id")
+    if not isinstance(topic_id, int) or topic_id <= 0:
+        return {}
+    return {"direct_messages_topic_id": topic_id}
 
 
 class TelegramChannel(BaseChannel):
@@ -211,6 +228,7 @@ class TelegramChannel(BaseChannel):
         try:
             # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.session_key.chat_id)
+            topic_kwargs = _direct_messages_topic_kwargs(msg.metadata)
 
             # First extract local image file paths
             local_image_paths, content_no_paths = extract_image_paths(msg.content)
@@ -223,7 +241,9 @@ class TelegramChannel(BaseChannel):
                         image_bytes = read_image_file(img_path)
                         from io import BytesIO
 
-                        await self._app.bot.send_photo(chat_id=chat_id, photo=BytesIO(image_bytes))
+                        await self._app.bot.send_photo(
+                            chat_id=chat_id, photo=BytesIO(image_bytes), **topic_kwargs
+                        )
                         logger.debug(f"Sent local image to {chat_id}: {img_path}")
                     except Exception as e:
                         logger.warning(f"Failed to process local image {img_path}: {e}")
@@ -233,7 +253,7 @@ class TelegramChannel(BaseChannel):
                 # Convert markdown to Telegram HTML
                 html_content = _markdown_to_telegram_html(content_no_paths)
                 await self._app.bot.send_message(
-                    chat_id=chat_id, text=html_content, parse_mode="HTML"
+                    chat_id=chat_id, text=html_content, parse_mode="HTML", **topic_kwargs
                 )
         except ValueError:
             logger.exception(f"Invalid chat_id: {msg.session_key.chat_id}")
@@ -242,7 +262,7 @@ class TelegramChannel(BaseChannel):
             logger.warning(f"HTML parse failed, falling back to plain text: {e}")
             try:
                 await self._app.bot.send_message(
-                    chat_id=int(msg.session_key.chat_id), text=msg.content
+                    chat_id=int(msg.session_key.chat_id), text=msg.content, **topic_kwargs
                 )
             except Exception as e2:
                 logger.exception(f"Error sending Telegram message: {e2}")
@@ -268,6 +288,7 @@ class TelegramChannel(BaseChannel):
             sender_name=update.effective_user.full_name or str(update.effective_user.id),
             chat_id=str(update.message.chat_id),
             content=update.message.text,
+            metadata=_direct_messages_topic_metadata(update.message),
         )
 
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -370,6 +391,7 @@ class TelegramChannel(BaseChannel):
             content=content,
             media=media_paths,
             metadata={
+                **_direct_messages_topic_metadata(message),
                 "message_id": message.message_id,
                 "user_id": user.id,
                 "username": user.username,
