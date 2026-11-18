@@ -11,6 +11,7 @@ from openviking.session.memory.extraction_output_protocol import prompt_fragment
 from openviking.session.memory.extraction_output_protocol.base import (
     ExtractionOutputContext,
     ExtractionOutputProtocol,
+    ExtractionOutputProtocolError,
 )
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils import parse_json_with_stability
@@ -100,7 +101,7 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
             f"{skeleton}"
         )
 
-    def render_format_retry(self, error: str | None = None) -> str:
+    def render_format_retry(self, error: str | ExtractionOutputProtocolError | None = None) -> str:
         del error
         return (
             "Your previous output could not be parsed as valid JSON. "

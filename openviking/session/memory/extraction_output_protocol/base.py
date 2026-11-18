@@ -113,12 +113,19 @@ class ExtractionOutputProtocol(ABC):
     ) -> tuple[Any | None, str | None]:
         """Parse model output into the shared dynamic operations model."""
 
+    def parse_with_error(
+        self, content: str, context: ExtractionOutputContext
+    ) -> tuple[Any | None, ExtractionOutputProtocolError | None]:
+        """Parse model output while retaining the original diagnostic when available."""
+        operations, error = self.parse(content, context)
+        return operations, ExtractionOutputProtocolError(error) if error is not None else None
+
     @abstractmethod
     def render_final_instruction(self, context: ExtractionOutputContext) -> str:
         """Render the instruction used when tool iterations are exhausted."""
 
     @abstractmethod
-    def render_format_retry(self, error: str | None = None) -> str:
+    def render_format_retry(self, error: str | ExtractionOutputProtocolError | None = None) -> str:
         """Render guidance after output parsing fails."""
 
     @abstractmethod

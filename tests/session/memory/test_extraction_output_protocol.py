@@ -707,13 +707,14 @@ def test_python_reserved_existing_retry_explains_new_replacement_binding():
     assert "duplicate_1.delete(replacement=canonical)" in retry
 
 
-def test_python_string_literal_retry_pushes_triple_quotes():
+def test_python_string_literal_retry_explains_how_to_preserve_trailing_quotes():
     protocol = create_extraction_output_protocol("python")
 
     retry = protocol.render_format_retry("Line 33: invalid syntax. Perhaps you forgot a comma?")
 
-    assert "offending line is shown above" in retry
-    assert 'triple-quoted string ("""...""")' in retry
+    assert "offending line shown above" in retry
+    assert "triple-single or triple-double quotes" in retry
+    assert "Preserve the ending quote in the decoded string" in retry
 
 
 def test_python_non_string_syntax_error_omits_quote_guidance():
@@ -898,6 +899,25 @@ def test_python_syntax_error_includes_offending_source_line():
     assert "invalid Python syntax" in error
     assert "Little Women" in error
     assert "^" in error
+
+
+def test_python_syntax_diagnostic_retains_position_and_clips_around_the_error():
+    context = _context([_preference_schema()])
+    protocol = create_extraction_output_protocol("python")
+    code = 'sdk.create_preferences(topic="x", score=1, content="""' + "中文" * 140
+    code += '尾部引号"""")'
+
+    operations, error = protocol.parse_with_error(code, context)
+
+    assert operations is None
+    assert error is not None
+    assert isinstance(error.__cause__, SyntaxError)
+    assert error.__cause__.lineno == 1
+    assert error.__cause__.offset == code.rindex('"') + 1
+    assert f"column {error.__cause__.offset}" in str(error)
+    assert '尾部引号"""")' in str(error)
+    assert "^" in str(error)
+    assert code not in str(error)
 
 
 @pytest.mark.parametrize("ending", ["sdk.commit(", "sdk.commit())"])

@@ -11,14 +11,16 @@ budget exhaustion is terminal — no cap doubling, no replay of the truncated
 output, and no completion_tokens-based truncation inference.
 """
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 from openviking.models.vlm.base import ToolCall, VLMResponse
-from openviking.session.memory.dataclass import MemoryTypeSchema
+from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
 from openviking.session.memory.extract_loop import ExtractLoop
+from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.page_id_map import PageIdMap
 
 _DEFAULT_CAP = 32768
@@ -84,7 +86,7 @@ class ScriptedVLM:
         self.calls = []
 
     async def get_completion_async(self, **kwargs):
-        self.calls.append(kwargs)
+        self.calls.append({**kwargs, "messages": list(kwargs["messages"])})
         return next(self.responses)
 
 
@@ -112,9 +114,9 @@ def _make_loop(vlm, **kwargs):
     )
 
 
-async def _run_loop(loop):
+async def _run_loop(loop, *, output_format="python"):
     config = SimpleNamespace(
-        memory=SimpleNamespace(link_enabled=False, extraction_output_format="python")
+        memory=SimpleNamespace(link_enabled=False, extraction_output_format=output_format)
     )
     with (
         patch(
@@ -304,8 +306,17 @@ class TestNoTokenCounterInference:
         assert _assistant_contents(vlm.calls[1]["messages"]) == []
 
     @pytest.mark.asyncio
-    async def test_ordinary_format_error_retry_keeps_cap_and_no_assistant_program(self):
-        vlm = ScriptedVLM(["this is not a python program", "sdk.commit()"])
+    @pytest.mark.parametrize(
+        ("invalid_program", "diagnostic"),
+        [
+            ("this is not a python program", "invalid Python syntax"),
+            ("sdk.unknown()", "unknown SDK method sdk.unknown()"),
+        ],
+    )
+    async def test_ordinary_format_error_retry_keeps_cap_and_includes_diagnostic(
+        self, invalid_program, diagnostic
+    ):
+        vlm = ScriptedVLM([invalid_program, "sdk.commit()"])
         loop = _make_loop(vlm)
 
         await _run_loop(loop)
@@ -313,6 +324,71 @@ class TestNoTokenCounterInference:
         assert len(vlm.calls) == 2
         assert vlm.calls[1]["max_tokens"] == _DEFAULT_CAP
         assert _assistant_contents(vlm.calls[1]["messages"]) == []
+        assert "Previous model output" not in "\n".join(_user_contents(vlm.calls[0]["messages"]))
+        retry_prompt = "\n".join(_user_contents(vlm.calls[1]["messages"]))
+        assert "Parser error:" in retry_prompt
+        assert diagnostic in retry_prompt
+        assert json.dumps(invalid_program) in retry_prompt
+
+    @pytest.mark.asyncio
+    async def test_retry_parses_experience_update_and_preserves_ending_quote(self):
+        body = '## Situation\n最后一步是"直接执行"'
+        invalid_program = f'experiences_1.content.update("""{body}""")'
+        fixed_program = f"experiences_1.content.update('''{body}''')"
+        vlm = ScriptedVLM([invalid_program, fixed_program])
+        loop = _make_loop(vlm)
+        uri = "viking://user/test/memories/experiences/sample.md"
+        schema = MemoryTypeSchema(
+            memory_type="experiences",
+            description="Experiences",
+            directory="viking://user/{{ user_space }}/memories/experiences",
+            filename_template="sample.md",
+            fields=[
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE)
+            ],
+        )
+        loop.context_provider.get_memory_schemas = lambda _ctx: [schema]
+        loop.context_provider.read_file_contents = {
+            uri: MemoryFile(uri=uri, content="Old content", memory_type="experiences")
+        }
+
+        operations, _ = await _run_loop(loop)
+
+        assert len(vlm.calls) == 2
+        retry_prompt = "\n".join(_user_contents(vlm.calls[1]["messages"]))
+        assert json.dumps(invalid_program, ensure_ascii=False) in retry_prompt
+        assert "unterminated string literal" in retry_prompt
+        assert "triple-single or triple-double quotes" in retry_prompt
+        assert len(operations.upsert_operations) == 1
+        operation = operations.upsert_operations[0]
+        assert operation.uris == [uri]
+        assert operation.memory_fields["content"] == body
+
+    @pytest.mark.asyncio
+    async def test_large_failed_program_is_excerpted_for_the_format_retry(self):
+        invalid_program = 'head = "begin"\n' + "#" * 9000 + "missing-middle" + "#" * 9000 + "\n("
+        vlm = ScriptedVLM([invalid_program, "sdk.commit()"])
+
+        await _run_loop(_make_loop(vlm))
+
+        retry_prompt = "\n".join(_user_contents(vlm.calls[1]["messages"]))
+        assert "Middle of previous output omitted" in retry_prompt
+        assert "missing-middle" not in retry_prompt
+        assert json.dumps('head = "begin"', ensure_ascii=False)[1:-1] in retry_prompt
+        assert "was never closed" in retry_prompt
+
+    @pytest.mark.asyncio
+    async def test_json_format_retry_keeps_its_existing_prompt(self):
+        invalid_output = "not a JSON document"
+        vlm = ScriptedVLM([invalid_output, '{"preferences": [], "delete_ids": []}'])
+
+        operations, _ = await _run_loop(_make_loop(vlm), output_format="json")
+
+        assert operations is not None
+        assert len(vlm.calls) == 2
+        retry_prompt = "\n".join(_user_contents(vlm.calls[1]["messages"]))
+        assert "Your previous output could not be parsed as valid JSON" in retry_prompt
+        assert invalid_output not in retry_prompt
 
 
 class TestExtractionContentBoundary:
