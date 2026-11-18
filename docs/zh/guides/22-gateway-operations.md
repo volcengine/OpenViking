@@ -460,7 +460,7 @@ extraVolumeMounts:
 - `records_dropped` 或 `records_failed` 大于零：请求记录在丢失。
 - `capture.failed` 大于零：有已完成的轮次没能写入 OpenViking，网关不会重试；`capture.delivered` 同时一直为零时，保存完全停止了。按请求记录的 `capture_reason` 查原因。
 
-提交失败不进入状态行和请求记录。默认由网关提交时，对网关日志中的 `could not commit` 警告设置告警：空闲提交失败后网关每分钟再试一次，成功之前这段对话只保存为消息。
+提交失败不进入状态行和请求记录。默认由网关提交时，对网关日志中的 `could not commit` 警告设置告警：空闲提交失败后网关每分钟再试一次，成功之前这段对话只保存为消息；被 OpenViking 以 401、403、404 拒绝的不再重试。
 
 ### 例行检查 {#day-to-day-operations}
 

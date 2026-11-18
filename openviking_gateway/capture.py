@@ -42,6 +42,9 @@ CUT_SECONDS = 10
 # Each process looks this often for idle commits overdue by as long: ones whose process
 # went away before the commit, and ones that failed.
 SWEEP_SECONDS = 60
+# OpenViking's answers to a commit that no later try changes: it rejects the key, or has
+# no such session.
+REFUSED = (401, 403, 404)
 # ``created`` says who commits the OpenViking session as it was last set up. ``idle_at``
 # is when the gateway's idle commit is due, for the key ``account`` and ``credential_id`` name.
 FIELDS = (
@@ -206,8 +209,9 @@ class CapturePipeline:
     async def idle_commit(self, name, due):
         """Commit everything with the stored key, then clear the due time.
 
-        A failed commit leaves the due time for ``sweep``. A key that was revoked, or
-        whose record expired, commits nothing: the conversation's next turn waits anew.
+        A failed commit leaves the due time for ``sweep``. One that OpenViking refuses
+        is given up, and a key that was revoked, or whose record expired, commits
+        nothing: the conversation's next turn waits anew.
         """
         self.running.add(name)
         try:
@@ -263,6 +267,7 @@ class CapturePipeline:
                 )
 
     async def commit(self, key, session, keep):
+        """Commit; False when it failed and a later try may succeed."""
         try:
             with without_deadline():
                 await self.viking.commit(key, session, keep)
@@ -272,7 +277,7 @@ class CapturePipeline:
                 session,
                 getattr(error, "reason", type(error).__name__),
             )
-            return False
+            return getattr(error, "status", None) in REFUSED
         return True
 
     def spawn(self, work):

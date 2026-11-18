@@ -240,6 +240,24 @@ async def test_sweep_leaves_a_wait_that_a_turn_just_renewed(setup_kernel, creden
     assert not viking.commits and "idle_at" in (await store.capture.get(*name)).value
 
 
+@pytest.mark.parametrize("status", [401, 404])
+async def test_idle_commit_that_openviking_refuses_is_given_up(
+    setup_kernel, credential, policy, keys, status
+):
+    kernel, store, viking, _ = setup_kernel
+    policy.update(recall=False)
+    request, _, _ = await turn(kernel, credential, policy, [{"role": "user", "content": "hi"}])
+
+    async def refused(key, session, keep=0):
+        raise VikingError(f"openviking_http_{status}", status)
+
+    viking.commit = refused
+    kernel.capture.idle((request.scope, request.session))
+    await settled(kernel)
+    # No later try changes that answer: nothing waits, and the next turn waits anew.
+    assert not await store.capture.waiting(FOREVER)
+
+
 async def test_failed_commit_does_not_fail_the_save(setup_kernel, credential, policy):
     kernel, _, viking, _ = setup_kernel
     policy.update(recall=False, commit_tokens=1)
