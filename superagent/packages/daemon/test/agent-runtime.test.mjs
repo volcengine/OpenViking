@@ -937,6 +937,7 @@ describe('global Codex/Claude hard switch', () => {
       namespace: 'test-namespace',
       messages: [],
       async create(id) { return { session_id: id, uri: `viking://session/${id}` }; },
+      async request() { throw Object.assign(new Error('Session not found'), { httpStatus: 404 }); },
       async append(id, message) { this.messages.push({ ...message, parts: [{ type: 'text', text: message.content }] }); },
       async context() {
         return { messages: this.messages.slice(-1), latest_archive_overview: '', stats: { totalArchives: 3, failedArchives: 0 } };
