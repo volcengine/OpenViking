@@ -1,4 +1,7 @@
-import { toError } from '../fs-model.js';
+import { useAnalyticsRef } from '../../../shared/analytics/context.js';
+import { beginMutation } from '../../../shared/analytics/mutation.js';
+import { toError } from '../../../shared/request/fs-errors.js';
+import { localRequestErrors } from '../../../client/observe-errors.js';
 import { useEffect, useRef, useState } from 'react';
 import type {
   FileBrowserAclContext,
@@ -23,6 +26,7 @@ export function useAclReport({
   readOnly: boolean;
   onUpdated: (report: FileBrowserAclReport) => void;
 }) {
+  const analytics = useAnalyticsRef();
   const [report, setReport] = useState<FileBrowserAclReport>();
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [error, setError] = useState<Error>();
@@ -48,7 +52,10 @@ export function useAclReport({
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
       : controller.signal;
-    void readAcl(client, uri, { ...requestOptions, signal }).then(
+    void readAcl(localRequestErrors(client), uri, {
+      ...requestOptions,
+      signal,
+    }).then(
       (value) => {
         if (!signal.aborted) {
           setReport(value);
@@ -86,6 +93,8 @@ export function useAclReport({
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
       : controller.signal;
+    let completed = false;
+    const event = beginMutation(analytics, 'file_browser_acl_change');
     try {
       const value = await writeAcl(
         client,
@@ -94,12 +103,17 @@ export function useAclReport({
         change && { direct_entries: change.entries, mode: change.mode },
       );
       if (signal.aborted) return;
+      completed = true;
+      event?.success();
       setReport(value);
       setConfirmation(undefined);
       setSaved(true);
       onUpdated(value);
     } catch (cause) {
-      if (!signal.aborted) setError(toError(cause));
+      if (!signal.aborted) {
+        if (!completed) event?.fail(cause);
+        setError(toError(cause));
+      }
     } finally {
       if (!controller.signal.aborted && lifetime.current === controller) {
         pending.current = false;

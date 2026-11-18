@@ -6,20 +6,23 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from openviking.concurrency import bounded_map
 from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.pyagfs.exceptions import AGFSInternalError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import (
-    COMPILE_NAME_PATTERN,
     CompileLifecycle,
+    CompileName,
     UpdateSchedule,
     execution_signature,
     is_versioned,
@@ -29,6 +32,8 @@ from openviking.service.compile_targets import (
     validate_compile_name,
 )
 from openviking.service.external_task_service import (
+    ENQUEUE_FAILURE,
+    CompileDependencyFailure,
     ExternalTaskCancellation,
     ExternalTaskError,
     ExternalTaskRetryExhaustedError,
@@ -40,6 +45,7 @@ from openviking.service.memory_compile import MemoryCompileRunner
 from openviking.service.task_domain import sanitize_task_result
 from openviking.service.task_tracker import TaskRecord
 from openviking.storage.acl import AclAction
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -59,6 +65,29 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 # Sentinel --skill value that routes a Compile request to in-process memory
 # consolidation instead of the VikingBot agent path. It is not a real Skill URI.
 MEMORY_COMPILE_SKILL = "memory"
+
+
+def _lost_state_lease(error: AGFSInternalError | ValueError) -> bool:
+    """Match lease loss, requiring chained write and release errors to name the same lease."""
+    release = None
+    write: BaseException = error
+    if isinstance(error, ValueError):
+        release = re.fullmatch(
+            r"invalid lock request: owned lease capability does not match ref '([^']+)'", str(error)
+        )
+        if release is None:
+            return False
+        if error.__context__ is None:
+            return True
+        write = error.__context__
+    if not isinstance(write, AGFSInternalError):
+        return False
+    lost = re.fullmatch(
+        r"internal error: (?:encrypted write lock context error|lock lease error): "
+        r"invalid lock request: unknown pathlock lease ref '([^']+)'",
+        str(write),
+    )
+    return lost is not None and (release is None or release[1] == lost[1])
 
 
 class CompileInputs(BaseModel):
@@ -114,9 +143,8 @@ class CompileInputs(BaseModel):
 class CompileCreateRequest(CompileInputs):
     """Save complete inputs under a caller-supplied configuration name unique to its creator within the account."""
 
-    compile_name: str = Field(
-        pattern=COMPILE_NAME_PATTERN,
-        description="Case-sensitive configuration name: 1–64 ASCII letters, digits, underscores or hyphens. The first character cannot be a hyphen.",
+    compile_name: CompileName = Field(
+        description="Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Maximum length: 64 characters for ASCII-only names, 32 for names containing Han characters.",
     )
 
 
@@ -125,9 +153,8 @@ class CompileRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    compile_name: str | None = Field(
+    compile_name: CompileName | None = Field(
         default=None,
-        pattern=COMPILE_NAME_PATTERN,
         description="Saved configuration name; omit for a one-off execution with complete inputs.",
     )
     from_: list[str] = Field(default_factory=list, alias="from")
@@ -357,24 +384,28 @@ class CompileAPIClient:
         try:
             body = response.json()
         except ValueError as exc:
-            if not response.is_success:
+            if response.is_success:
                 raise ExternalTaskError(
-                    "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT",
-                    "Compile API request failed",
-                    transient=response.status_code in {408, 425, 429}
-                    or response.status_code >= 500,
+                    "INVALID_RESPONSE", "Compile API returned a non-JSON response", transient=False
                 ) from exc
-            raise ExternalTaskError(
-                "INVALID_RESPONSE",
-                "Compile API returned a non-JSON response",
-                transient=False,
-            ) from exc
+            body = {}
         if response.is_success:
             return body
 
         detail = body.get("detail") if isinstance(body, dict) else None
         error = body.get("error") if isinstance(body, dict) else None
         source = detail if isinstance(detail, dict) else error if isinstance(error, dict) else {}
+        if response.status_code == 424:
+            request_id = (
+                body.get("request_id") if isinstance(body, dict) else None
+            ) or headers.get("X-Tt-Logid")
+            detail_message = source.get("message") or (detail if isinstance(detail, str) else None)
+            reason = f"HTTP 424 {path}: {detail_message or 'Compile dependency failed'}"
+            if request_id and str(request_id) not in reason:
+                reason += f" (request_id={request_id})"
+            raise CompileDependencyFailure(
+                str(source.get("code") or "CompileDependencyFailed"), reason, transient=False
+            )
         default_code = "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT"
         code = str(source.get("code") or default_code)
         message = str(source.get("message") or detail or error or "Compile API request failed")
@@ -454,7 +485,7 @@ class CompileService:
             base_url=base_url.rstrip("/"),
             gateway_token=gateway_token,
             http_timeout_seconds=10.0,
-            poll_interval_ms=30000,
+            poll_interval_ms=self._config.poll_interval_ms,
             local=True,
         )
 
@@ -630,21 +661,33 @@ class CompileService:
         compile_name = request.compile_name
         owner_user_id = (request.args or {}).get("owner_user_id", ctx.user.user_id)
         if compile_name and locked_record is None:
-            configuration = await self._configuration(
-                compile_name, ctx, action=AclAction.WRITE, owner_user_id=owner_user_id
-            )
-            async with self._require_lifecycle().store.edit(
-                ctx.account_id, configuration["execution_context"]["owner_user_id"], compile_name
-            ) as record:
-                return await self.create(
-                    request,
-                    connection=connection,
-                    ctx=ctx,
-                    idempotency_key=idempotency_key,
-                    trigger=trigger,
-                    locked_record=record,
-                    scheduled_slot=scheduled_slot,
+            lifecycle = self._require_lifecycle()
+            await lifecycle.store.require_config_exists(ctx.account_id, owner_user_id, compile_name)
+            task = None
+            try:
+                async with lifecycle.store.edit(
+                    ctx.account_id, owner_user_id, compile_name
+                ) as record:
+                    await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
+                    task = await self.create(
+                        request,
+                        connection=connection,
+                        ctx=ctx,
+                        idempotency_key=idempotency_key,
+                        trigger=trigger,
+                        locked_record=record,
+                        scheduled_slot=scheduled_slot,
+                    )
+            except (AGFSInternalError, ValueError) as exc:
+                if task is None or task.error == ENQUEUE_FAILURE or not _lost_state_lease(exc):
+                    raise
+                logger.warning(
+                    "Queued Compile task %s lost the state.json lease for %s",
+                    task.task_id,
+                    compile_name,
+                    exc_info=True,
                 )
+            return task
         if compile_name:
             record = locked_record
             inputs = CompileInputs.model_validate(
@@ -706,6 +749,7 @@ class CompileService:
             submission_payload=submitted if idempotency_key else None,
             submission_private_payload={} if compile_name else None,
             on_task_created=record_created if compile_name else None,
+            retry_enqueue=trigger == "scheduled",
         )
 
     async def on_start(self, task: TaskRecord) -> str | ExternalTaskSnapshot | None:
@@ -1107,15 +1151,11 @@ class CompileService:
     ) -> dict[str, Any]:
         """Page authorized run outputs with each file's latest commit, or null for no history."""
         run = await self.get_run(compile_name, task_id, ctx)
-        target = run["params"]["to"]
-        fs = self._require_lifecycle()._fs
-        await fs._ensure_access(target, ctx)
         start, finish = run["meta"]["start_snapshot"], run["meta"]["finish_snapshot"]
-        changes = (
-            await fs.diff_paths(dirs=[target], base=start, head=finish, ctx=ctx)
-            if start and finish
-            else []
-        )
+        if not start or not finish:
+            return {"outputs": [], "next_cursor": None}
+        fs = self._require_lifecycle()._fs
+        changes = await fs.diff_paths(dirs=[run["params"]["to"]], base=start, head=finish, ctx=ctx)
         outputs = [
             {"uri": item["uri"], "snapshot_id": finish, "change_type": item["change_type"]}
             for item in sorted(changes, key=lambda item: item["uri"])
@@ -1126,9 +1166,13 @@ class CompileService:
         allowed = await fs._can_access_many([item["uri"] for item in outputs], ctx)
         outputs = [item for item in outputs if allowed.get(item["uri"], False)]
         page = outputs[:limit]
-        for item in page:
+
+        async def fill_latest_snapshot(item: dict[str, Any]) -> None:
+            """Set an output's latest commit in place, using None for no history; errors propagate."""
             history = await fs.log(ctx=ctx, paths=[item["uri"]], limit=1)
             item["latest_snapshot_id"] = history[0]["oid"] if history else None
+
+        await bounded_map(page, fill_latest_snapshot, concurrency=8)
         return {"outputs": page, "next_cursor": page[-1]["uri"] if len(outputs) > limit else None}
 
     @staticmethod
@@ -1153,7 +1197,7 @@ class CompileService:
     def _normalize_request_uris(
         self, request: CompileInputs | CompileRequest, ctx: RequestContext
     ) -> CompileInputs | CompileRequest:
-        """Normalize identity-bound names without requiring live resources."""
+        """Resolve identity-bound URIs and sanitize target whitespace before checks or persistence."""
         sources = list(
             dict.fromkeys(
                 validate_request_viking_uri(
@@ -1175,9 +1219,9 @@ class CompileService:
                 "Select a Skill directory or its SKILL.md, "
                 "e.g. viking://user/<user_id>/skills/<skill_name>."
             )
-        target = validate_request_viking_uri(
-            resolve_path_variables(request.to), ctx, field_name="to"
-        ).rstrip("/")
+        target = normalize_storage_target_uri(
+            validate_request_viking_uri(resolve_path_variables(request.to), ctx, field_name="to")
+        )
         self._validate_target(target)
         return request.model_copy(update={"from_": sources, "to": target, "skill": skill})
 
@@ -1320,7 +1364,11 @@ class CompileService:
             status=status,
             stage=task.stage,
             result=task.result,
-            meta=task.meta,
+            meta={
+                key: value
+                for key, value in task.meta.items()
+                if key != "compile_runtime_http_status"
+            },
             error_code=error_code,
             error_message=error_message,
         )

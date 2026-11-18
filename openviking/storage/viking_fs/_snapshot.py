@@ -7,6 +7,7 @@ import sys
 from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
@@ -504,10 +505,10 @@ class _SnapshotMixin:
                     project_dir=project_dir,
                     real_ctx=real_ctx,
                 )
-            except Exception:
-                logger.exception(
-                    "[VikingFS] git restore partial: reindex scheduling failed; "
-                    "HEAD advanced but reindex was not queued"
+            except Exception as _log_error:
+                logger.error(
+                    "git restore partial: reindex scheduling failed; HEAD advanced but reindex was not queued error_type=%s",
+                    type(_log_error).__name__,
                 )
             raise partial_exc
 
@@ -527,10 +528,10 @@ class _SnapshotMixin:
                 )
                 if task_id is not None:
                     result["task_id"] = task_id
-            except Exception:
-                logger.exception(
-                    "[VikingFS] git restore reindex task creation failed; "
-                    "falling back to fire-and-forget rebuild"
+            except Exception as _log_error:
+                logger.info(
+                    "git restore reindex task creation failed; falling back to fire-and-forget rebuild error_type=%s",
+                    type(_log_error).__name__,
                 )
                 self._schedule_vector_rebuild(
                     written=written,
@@ -783,12 +784,14 @@ class _SnapshotMixin:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back from ``branch``'s HEAD along ``parents[0]`` up to ``limit`` commits.
 
-        Returns a list of commit metadata dicts (same shape as ``show(target_ref)``).
+        Skip ``offset`` matching commits before collecting results. Returns a
+        list of commit metadata dicts (same shape as ``show(target_ref)``).
         """
         if limit <= 0:
             return []
@@ -810,6 +813,7 @@ class _SnapshotMixin:
             account=account,
             branch=branch,
             limit=limit,
+            offset=offset,
             paths=tree_paths,
         )
 
@@ -895,14 +899,20 @@ class _SnapshotMixin:
         """
         try:
             from openviking.service.reindex_executor import ReindexExecutor
-        except Exception:
-            logger.exception("[VikingFS] ReindexExecutor import failed; skipping rebuild")
+        except Exception as _log_error:
+            logger.info(
+                "ReindexExecutor import failed; skipping rebuild error_type=%s",
+                type(_log_error).__name__,
+            )
             return
 
         try:
             loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning("[VikingFS] git restore vector rebuild skipped: no running event loop")
+        except RuntimeError as _log_error:
+            logger.info(
+                "git restore vector rebuild skipped: no running event loop error_type=%s",
+                type(_log_error).__name__,
+            )
             return
 
         tasks = self._collect_restore_vector_tasks(written, deleted)
@@ -1025,6 +1035,15 @@ class _SnapshotMixin:
             elif op == "delete":
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive
-                logger.warning("[VikingFS] unknown vector rebuild op %r for %s", op, uri)
-        except Exception:
-            logger.exception("[VikingFS] git restore vector task %s failed for %s", op, uri)
+                logger.info(
+                    "unknown vector rebuild op %s for %s",
+                    short_hash(str(op)),
+                    safe_uri_for_log(str(uri)),
+                )
+        except Exception as _log_error:
+            logger.error(
+                "git restore vector task %s failed for %s error_type=%s",
+                short_hash(str(op)),
+                safe_uri_for_log(str(uri)),
+                type(_log_error).__name__,
+            )

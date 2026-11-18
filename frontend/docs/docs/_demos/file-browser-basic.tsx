@@ -11,6 +11,7 @@ import {
   DEMO_PREVIEW_FILE,
   MEMORIES,
 } from '#file-browser-basic-data';
+import { DEMO_PREVIEW_VIDEO } from '#file-browser-native-demo';
 import '@openviking/react/modules/file-browser/style.css';
 
 export default function FileBrowserBasic() {
@@ -101,6 +102,19 @@ export default function FileBrowserBasic() {
             ? '预览目录摘要'
             : 'Preview directory summaries'}
         </Button>{' '}
+        {(['.abstract.md', '.overview.md'] as const).map((name, index) => (
+          <Button
+            key={name}
+            size="small"
+            onClick={() =>
+              void browserRef.current?.openResource(`${MEMORIES}/${name}`)
+            }
+          >
+            {componentLocale === 'zh-CN'
+              ? `打开 L${index} 摘要链接`
+              : `Open L${index} summary link`}
+          </Button>
+        ))}
         <Button size="small" onClick={() => setUri(DEMO_EXPERIENCE)}>
           {componentLocale === 'zh-CN' ? '预览经验文件' : 'Preview experience'}
         </Button>
@@ -131,14 +145,7 @@ export default function FileBrowserBasic() {
         >
           {componentLocale === 'zh-CN' ? '预览图片' : 'Preview image'}
         </Button>
-        <Button
-          size="small"
-          onClick={() =>
-            setUri(
-              `${DEMO_PREVIEW_FILE.slice(0, DEMO_PREVIEW_FILE.lastIndexOf('/'))}/demo.webm`,
-            )
-          }
-        >
+        <Button size="small" onClick={() => setUri(DEMO_PREVIEW_VIDEO)}>
           {componentLocale === 'zh-CN' ? '预览视频' : 'Preview video'}
         </Button>
         <code style={{ overflowWrap: 'anywhere' }}>{uri}</code>

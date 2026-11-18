@@ -6,6 +6,7 @@ on:
     paths:
       - "frontend/packages/react/src/**"
       - "frontend/packages/icons/**"
+      - "frontend/.changeset/react-stable-release.json"
     tags:
       - "react@*"
   workflow_dispatch:
@@ -16,7 +17,7 @@ on:
         options: [latest, beta]
         default: latest
       version:
-        description: "Exact stable version (required for latest; leave empty for beta)"
+        description: "Exact stable version (prepares a release PR if needed; leave empty for beta)"
         type: string
         required: false
 
@@ -29,10 +30,108 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  plan:
     if: github.repository == 'volcengine/OpenViking'
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      version: ${{ steps.plan.outputs.version }}
+      preparedVersion: ${{ steps.plan.outputs.preparedVersion }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Resolve release operation
+        id: plan
+        working-directory: frontend
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: node scripts/react-release.mjs --plan
+
+  prepare:
+    needs: plan
+    if: needs.plan.outputs.mode == 'prepare'
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Find existing release work
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          branch="codex/react-$RELEASE_VERSION"
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --state open --json url,headRepositoryOwner |
+            node -e 'const prs = JSON.parse(require("node:fs").readFileSync(0)); const owners = [process.env.GITHUB_REPOSITORY_OWNER, process.env.GITHUB_ACTOR]; process.stdout.write(prs.find(pr => owners.includes(pr.headRepositoryOwner?.login))?.url ?? "")')
+          if [[ -n "$existing" ]]; then
+            printf 'Existing release PR: %s\n' "$existing" >> "$GITHUB_STEP_SUMMARY"
+            echo 'pull-request=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          remote_branch=$(git ls-remote --heads origin "refs/heads/$branch")
+          if [[ -n "$remote_branch" ]]; then
+            git fetch --no-tags origin "refs/heads/$branch"
+            git show FETCH_HEAD:frontend/.changeset/react-stable-release.json |
+              node -e 'const request = JSON.parse(require("node:fs").readFileSync(0)); if (request.version !== process.env.RELEASE_VERSION) throw new Error("Existing release branch version mismatch")'
+            echo 'branch=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Generate stable release artifacts
+        if: steps.existing.outputs.pull-request != 'true' && steps.existing.outputs.branch != 'true'
+        env:
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          npm ci
+          node scripts/react-release-prepare.mjs "$RELEASE_VERSION"
+          node scripts/react-github-release.mjs prepare "$RELEASE_VERSION" "$RUNNER_TEMP/react-release-notes.md"
+          node -e 'const { writeFileSync } = require("node:fs"); writeFileSync(".changeset/react-stable-release.json", JSON.stringify({ version: process.env.RELEASE_VERSION }, null, 2) + "\n")'
+      - name: Open the stable release PR
+        if: steps.existing.outputs.pull-request != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+          RELEASE_BRANCH_EXISTS: ${{ steps.existing.outputs.branch }}
+        run: |
+          branch="codex/react-$RELEASE_VERSION"
+          if [[ "$RELEASE_BRANCH_EXISTS" != 'true' ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A -- .changeset docs/docs/en/guide/changelog.md docs/docs/zh/guide/changelog.md docs/package.json package-lock.json packages/react/package.json packages/react/CHANGELOG.md
+            git diff --cached --check
+            git commit -m "chore(react): prepare $RELEASE_VERSION release"
+            gh auth setup-git --hostname github.com
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+            --title "chore(react): prepare $RELEASE_VERSION release" \
+            --body "Archive the pending bilingual Changesets for @openviking/react@$RELEASE_VERSION. The official main push that merges this release request publishes the stable package after checks.")
+          printf 'Review and merge the release PR: %s\n' "$pr" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: plan
+    if: needs.plan.outputs.mode == 'publish'
+    permissions:
+      contents: write
       id-token: write
     runs-on: ubuntu-24.04
     defaults:
@@ -40,6 +139,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -47,13 +148,19 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Test release routing
-        run: node --test scripts/react-release*.test.mjs
+        run: node --test scripts/react-release.test.mjs scripts/react-release-cli.test.mjs scripts/react-release-plan.test.mjs scripts/react-release-notes.test.mjs
       - name: Resolve and stage release version
         id: release
         env:
           RELEASE_CHANNEL: ${{ inputs.channel }}
           RELEASE_VERSION: ${{ inputs.version }}
+          PREPARED_RELEASE_VERSION: ${{ needs.plan.outputs.preparedVersion }}
         run: node scripts/react-release.mjs
+      - name: Prepare GitHub Release notes
+        if: steps.release.outputs.channel == 'latest'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: node scripts/react-github-release.mjs prepare "$RELEASE_VERSION" "$RUNNER_TEMP/react-release-notes.md"
       - name: Check whether version already exists
         id: published
         env:
@@ -83,3 +190,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
         run: npm publish --workspace @openviking/react --access public --provenance --tag "$RELEASE_CHANNEL"
+      - name: Publish GitHub Release
+        if: steps.release.outputs.channel == 'latest'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: node scripts/react-github-release.mjs publish "$RELEASE_VERSION" "$RUNNER_TEMP/react-release-notes.md"

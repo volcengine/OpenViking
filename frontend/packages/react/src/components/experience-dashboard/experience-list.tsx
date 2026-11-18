@@ -5,6 +5,7 @@ import {
   getFileTypeIcon,
   resolveFileTypeIconKey,
 } from '../../icons/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import type { ExperienceDashboardLabels, ExperienceItem } from './types.js';
 
 /**
@@ -40,17 +41,40 @@ function updatedAt(value: string, locale: 'en-US' | 'zh-CN') {
 }
 
 /**
+ * 表头的说明触发器：虚线下划线加一个可聚焦的按钮，悬停或聚焦时弹出说明。
+ *
+ * 用浮层而不是 `title`：`title` 要等一秒才出现、键盘聚焦不展示，而且样式无法
+ * 跟随主题。按钮本身是说明的触发元素，因此读屏器把它当作可操作控件朗读。
+ *
+ * The hint trigger of a column header: a dotted underline on a focusable button that
+ * opens the explanation on hover or focus.
+ *
+ * A popover rather than `title`: a native tooltip waits a second, never appears on
+ * keyboard focus, and cannot follow the theme. The button is the trigger, so assistive
+ * technology announces it as an operable control.
+ */
+function MetricHint({ label, content }: { label: string; content: string }) {
+  return (
+    <Tooltip content={content} placement="top">
+      <button type="button" className="ov-experience-dashboard__hint-label">
+        {label}
+      </button>
+    </Tooltip>
+  );
+}
+
+/**
  * 目录视图的经验列表：表格化的行，列依次是序号、经验文件、注入次数、召回次数。
  *
- * 表头右侧两列带虚线下划线——它们在火山版里是可聚焦的说明触发器，这里保留同样
- * 的视觉与 `title` 提示，说明文案来自文案包。
+ * 表头右侧两列是说明触发器，说明文案来自文案包。名称右侧的「更新」标记由宿主在
+ * `isUpdated` 里给出，组件不比较时间。
  *
  * The experience list of the directory view: table-like rows with the index, the
  * experience file and the two counters.
  *
- * The last two headers carry a dotted underline — in the console they open an
- * explanatory popover; here the same look and a `title` hint remain, with the copy
- * from the label pack.
+ * The last two headers trigger an explanation from the label pack. The "Updated" tag
+ * beside a name comes from the host through `isUpdated`; the component compares no
+ * timestamps.
  */
 export function ExperienceList({
   items,
@@ -71,15 +95,11 @@ export function ExperienceList({
         <div className="ov-experience-dashboard__table-head" role="row">
           <span role="columnheader" aria-label={t.index} />
           <span role="columnheader">{t.name}</span>
-          <span role="columnheader" title={t.injectionHint}>
-            <span className="ov-experience-dashboard__hint-label">
-              {t.injection}
-            </span>
+          <span role="columnheader">
+            <MetricHint label={t.injection} content={t.injectionHint} />
           </span>
-          <span role="columnheader" title={t.recallHint}>
-            <span className="ov-experience-dashboard__hint-label">
-              {t.listRecall}
-            </span>
+          <span role="columnheader">
+            <MetricHint label={t.listRecall} content={t.recallHint} />
           </span>
         </div>
         {items.map((item, index) => {
@@ -123,6 +143,11 @@ export function ExperienceList({
                   >
                     {item.name}
                   </button>
+                  {item.isUpdated ? (
+                    <span className="ov-experience-dashboard__updated-tag">
+                      <span>{t.updatedTag}</span>
+                    </span>
+                  ) : null}
                 </div>
                 <div className="ov-experience-dashboard__table-file-meta">
                   <span title={item.uri}>{item.uri}</span>

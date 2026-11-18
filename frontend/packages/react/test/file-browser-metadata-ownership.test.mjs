@@ -42,3 +42,27 @@ test('an ownership lookup failure cannot publish reserved metadata as body text'
     await f.view.unmount();
   }
 });
+
+test('another user’s tagged target establishes Wiki editing without a configuration lookup', async () => {
+  const f = await metadataFixture({
+    uri,
+    content: body + footer,
+    kinds: [],
+    taggedTarget: 'viking://user/alice/resources/handbook',
+    registry: Promise.resolve(
+      new Response('Configuration listing unavailable', { status: 503 }),
+    ),
+  });
+  try {
+    assert.equal(f.tab.source.content, body);
+    assert.equal(await f.tab.editing.loadContent(), body);
+    await f.tab.editing.save(body + 'Reviewed.\n');
+    const write = f.fetch.calls.find((call) => call.body).body;
+    assert.equal(write.use_snapshot, true);
+    assert.equal(write.resolve_conflicts, true);
+    assert.equal('edit_source' in write, false);
+    assert.equal(f.fetch.countOf('/api/v1/compile/configs'), 0);
+  } finally {
+    await f.view.unmount();
+  }
+});

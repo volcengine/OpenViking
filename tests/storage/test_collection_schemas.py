@@ -806,7 +806,7 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_warning(
+async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_info(
     monkeypatch, caplog
 ):
     from openviking.utils.circuit_breaker import CircuitBreakerOpen
@@ -840,19 +840,16 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
 
     monkeypatch.setattr(collection_schemas.logger, "propagate", False)
     collection_schemas.logger.addHandler(caplog.handler)
-    collection_schemas.logger.setLevel(logging.WARNING)
+    collection_schemas.logger.setLevel(logging.INFO)
     try:
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             first_result = await handler.on_dequeue(_build_queue_payload())
             second_result = await handler.on_dequeue(_build_queue_payload())
     finally:
         collection_schemas.logger.removeHandler(caplog.handler)
 
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
-    assert (
-        warnings.count("Embedding circuit breaker is open; re-enqueueing messages account=default")
-        == 1
-    )
+    infos = [record.message for record in caplog.records if record.levelno == logging.INFO]
+    assert infos.count("Embedding circuit breaker is open; re-enqueueing messages") == 1
     for result in (first_result, second_result):
         assert result.outcome is ProcessOutcome.REQUEUED
         assert result.value is None

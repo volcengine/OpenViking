@@ -1,6 +1,9 @@
+import { useLocale } from '../../shared/locale-context.js';
+import { renderErrors as renderEn } from './locales/en-US.js';
+import { renderErrors as renderZh } from './locales/zh-CN.js';
 import type { WikiDashboardLabels } from './types.js';
 import { mergeLabels } from '../../shared/locale.js';
-const en: WikiDashboardLabels = {
+const en: Required<WikiDashboardLabels> = {
   title: 'Generation results',
   pendingLabel: 'Pending',
   conflicts: 'All conflicts',
@@ -18,14 +21,15 @@ const en: WikiDashboardLabels = {
   loading: 'Loading…',
   failed: 'Could not load conflicts',
   retry: 'Retry',
-  open: 'Open',
+  open: 'Open file',
+  editConflict: (title) => `Edit conflict: ${title}`,
   solution: 'Solution',
   occurred: 'Detected',
   fixedAt: 'Resolved',
   evidence: 'Resolution basis',
   limited: 'Showing up to 100 conflicting files',
 };
-const zh: WikiDashboardLabels = {
+const zh: Required<WikiDashboardLabels> = {
   title: '生成效果',
   pendingLabel: '待确认',
   conflicts: '全部冲突',
@@ -43,7 +47,8 @@ const zh: WikiDashboardLabels = {
   loading: '加载中…',
   failed: '冲突加载失败',
   retry: '重试',
-  open: '打开',
+  open: '打开文件',
+  editConflict: (title) => `人工修改：${title}`,
   solution: '修复方案',
   occurred: '检测时间',
   fixedAt: '修复时间',
@@ -53,4 +58,13 @@ const zh: WikiDashboardLabels = {
 export const wikiLabels = (
   locale?: string,
   labels?: Partial<WikiDashboardLabels>,
-): WikiDashboardLabels => mergeLabels(locale === 'zh-CN' ? zh : en, labels);
+): Required<WikiDashboardLabels> =>
+  mergeLabels<Required<WikiDashboardLabels>>(
+    locale === 'zh-CN' ? zh : en,
+    labels,
+  );
+
+/** Private render-failure copy; independent of request errors and public label overrides. */
+export function useRenderErrors(locale?: Parameters<typeof useLocale>[0]) {
+  return useLocale(locale) === 'zh-CN' ? renderZh : renderEn;
+}

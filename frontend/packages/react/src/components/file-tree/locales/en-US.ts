@@ -1,12 +1,11 @@
 import type { ResolvedLabels } from '../file-tree-row-context.js';
 
 const messages = {
-  readOnly: 'Read-only',
-  noAccess: 'No access',
-  traverseOnly: 'Traverse only',
   search: 'Search files ⌘+K...',
   refresh: 'Refresh file tree',
   empty: 'No files yet',
+  emptyDirectory: 'This folder is empty',
+  shared: 'Shared',
   error: 'Failed to load',
   retry: 'Retry',
   loadMore: 'Load more',
@@ -31,7 +30,7 @@ const messages = {
       cases: 'Interaction cases used to train experience',
       trajectories: 'Reusable task execution trajectories',
       experiences: 'Execution experience distilled automatically',
-      sharedResources: 'External resources the agent can reference',
+      sharedResources: 'Knowledge shared by team members',
       agentRoot: 'Agent capabilities, tools and experience',
       agentEndpoints: 'Communication endpoints shared across the account',
       agentPayments: 'Payment capabilities shared across the account',

@@ -1,3 +1,5 @@
+import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
+import { TaskStatusList } from '../../shared/task-status/task-status.js';
 import type {
   ActivityItemRenderContext,
   McpToolCallActivityItem,
@@ -28,11 +30,13 @@ export function ToolActivity({
   labels,
   onOpenUri,
   results,
+  tasks,
 }: {
   context: ActivityItemRenderContext<McpToolCallActivityItem>;
   labels: VikingBotLabels;
   onOpenUri?: (uri: string) => void;
   results?: readonly VikingBotToolResultLink[];
+  tasks?: readonly TaskSnapshot[];
 }) {
   const Disclosure = context.components.ActivityToolDisclosure;
   const input = payload(context.item.arguments);
@@ -46,6 +50,7 @@ export function ToolActivity({
     `${status === 'running' || status === 'queued' ? labels.toolRunning : status === 'failed' ? labels.toolError : labels.toolCompleted} ${name}`;
   const detail = (
     <div className="ov-viking-bot__tool-details">
+      <TaskStatusList tasks={tasks} />
       {[
         { value: input, label: labels.toolInput },
         { value: output, label: labels.toolOutput, results },
@@ -81,7 +86,11 @@ export function ToolActivity({
       expanded={context.expanded}
       onExpandedChange={context.setExpanded}
       status={context.status}
-      detail={input.code || output.code || results?.length ? detail : undefined}
+      detail={
+        input.code || output.code || results?.length || tasks?.length
+          ? detail
+          : undefined
+      }
     />
   );
 }

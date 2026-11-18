@@ -1,3 +1,11 @@
+import { markFault } from '../../shared/monitoring/fault.js';
+import { useCodeLoad } from '../../shared/monitoring/use-code-load.js';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
+import {
+  ErrorNotification,
+  errorMessage,
+} from '../../shared/feedback/error-notification.js';
+import type { Locale } from '../../shared/locale.js';
 import { useEffect, useState, type ComponentType } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
 import type { FilePreviewLabels, FilePreviewSource } from './types.js';
@@ -5,31 +13,52 @@ import type { FilePreviewCodeEditorProps } from './file-preview-code-editor.js';
 
 export interface FilePreviewEditorProps {
   draft: string;
+  annotations?: FilePreviewCodeEditorProps['annotations'];
+  readOnlySuffix?: string;
   source: FilePreviewSource;
   text: Required<FilePreviewLabels>;
   loading: boolean;
   failed: boolean;
-  saveFailed: boolean;
+  saveFailure?: { reason: unknown };
+  locale?: Locale;
   saving: boolean;
   onChange: (value: string) => void;
   onCancel: () => void;
 }
 
+const loadCodeEditor = async () => {
+  const result = await import('./file-preview-code-editor.js');
+  if (!result.FilePreviewCodeEditor)
+    throw markFault(
+      new Error('Required editor export is missing'),
+      'configuration',
+      'RESOURCE_EXPORT_INVALID',
+    );
+  return result;
+};
+
 /** Load CodeMirror only when editing; retain the draft if loading fails. */
 export function FilePreviewEditor({
   draft,
+  annotations,
+  readOnlySuffix,
   source,
   text,
   loading,
   failed,
-  saveFailed,
+  saveFailure,
+  locale,
   saving,
   onChange,
   onCancel,
 }: FilePreviewEditorProps) {
+  const { load: loadEditor } = useCodeLoad(
+    loadCodeEditor,
+    'file_preview_editor_load',
+  );
   const [Editor, setEditor] =
     useState<ComponentType<FilePreviewCodeEditorProps>>();
-  const [editorFailed, setEditorFailed] = useState(false);
+  const [editorFailure, setEditorFailure] = useState<{ reason: unknown }>();
   const [attempt, setAttempt] = useState(0);
   // Text inputs match :focus-visible even on pointer focus; track only this editor.
   const [pointerFocus, setPointerFocus] = useState(false);
@@ -39,19 +68,25 @@ export function FilePreviewEditor({
   useEffect(() => {
     if (loading || failed) return;
     let active = true;
-    setEditorFailed(false);
-    void import('./file-preview-code-editor.js')
+    setEditorFailure(undefined);
+    void loadEditor()
       .then((module) => {
         if (active) setEditor(() => module.FilePreviewCodeEditor);
       })
-      .catch(() => {
-        if (active) setEditorFailed(true);
+      .catch((reason: unknown) => {
+        if (active) setEditorFailure({ reason });
       });
     return () => {
       active = false;
     };
-  }, [loading, failed, attempt]);
+  }, [loading, failed, attempt, loadEditor]);
 
+  const exposure = useExposure(
+    'file_preview_source_show',
+    source.path ?? source.fileName,
+    undefined,
+    !loading && !failed && Boolean(Editor || editorFailure),
+  );
   if (loading) {
     return (
       <div className="ov-file-preview__state" role="status">
@@ -84,6 +119,7 @@ export function FilePreviewEditor({
 
   return (
     <div
+      ref={exposure}
       className="ov-file-preview__editor"
       data-pointer-focus={pointerFocus || undefined}
       onPointerDownCapture={() => setPointerFocus(true)}
@@ -98,12 +134,14 @@ export function FilePreviewEditor({
       {Editor ? (
         <Editor
           draft={draft}
+          annotations={annotations}
+          readOnlySuffix={readOnlySuffix}
           source={source}
           saving={saving}
           text={text}
           onChange={onChange}
         />
-      ) : editorFailed ? (
+      ) : editorFailure ? (
         <>
           <textarea
             className="ov-file-preview__textarea"
@@ -113,23 +151,39 @@ export function FilePreviewEditor({
             spellCheck={false}
             onChange={(event) => onChange(event.target.value)}
           />
-          <div className="ov-file-preview__notice" role="alert">
-            {text.editorLoadFailed}{' '}
-            <Button
-              size="small"
-              onClick={() => setAttempt((value) => value + 1)}
-            >
-              {text.retry}
-            </Button>
-          </div>
+          {readOnlySuffix ? (
+            <pre className="ov-file-preview__editor-suffix">
+              {readOnlySuffix}
+            </pre>
+          ) : null}
+          <ErrorNotification
+            title={text.editorLoadFailed}
+            identity={editorFailure}
+            error={editorFailure.reason}
+            locale={locale}
+          >
+            {errorMessage(editorFailure.reason)}
+          </ErrorNotification>
+          <Button
+            size="small"
+            title={text.editorLoadFailed}
+            onClick={() => setAttempt((value) => value + 1)}
+          >
+            {text.retry}
+          </Button>
         </>
       ) : (
         <p className="ov-file-preview__notice">{text.loading}</p>
       )}
-      {saveFailed ? (
-        <p className="ov-file-preview__notice" role="alert">
-          {text.saveFailed}
-        </p>
+      {saveFailure ? (
+        <ErrorNotification
+          title={text.saveFailed}
+          identity={saveFailure}
+          error={saveFailure.reason}
+          locale={locale}
+        >
+          {errorMessage(saveFailure.reason)}
+        </ErrorNotification>
       ) : null}
     </div>
   );

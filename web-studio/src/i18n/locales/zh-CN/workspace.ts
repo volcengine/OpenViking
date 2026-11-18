@@ -68,6 +68,8 @@ const workspace = {
       github: 'GitHub',
       sdkApi: 'SDK 与 API',
       users: '用户与权限',
+      version: 'v{{version}}',
+      versionTitle: 'OpenViking 版本',
     },
     header: {
       backToConfig: '返回工作区配置',

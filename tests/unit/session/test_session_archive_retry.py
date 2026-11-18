@@ -250,6 +250,9 @@ async def test_failed_archive_is_enqueued_with_bound_recovery(env):
     assert saved["recovery"]["failed_sha256"] == hashlib.sha256(failed_raw.encode()).hexdigest()
     assert env.fs.files[f"{ARCHIVE_URI}/.failure-before-recovery-task.json"] == failed_raw
     enqueued = env.queue_manager.enqueue.await_args.args[1]
+    assert env.queue_manager.enqueue.await_args.kwargs == {
+        "group_key": _commit_message().queue_group_key
+    }
     assert enqueued["recovery"]["task_id"] == "recovery-task"
     assert enqueued["recovery"]["messages_sha256"] == env.messages_sha256
 

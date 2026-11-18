@@ -133,6 +133,8 @@ impl GitService {
                 source: source_oid,
             });
         }
+        let snapshot_log_paths =
+            super::snapshot_log::restore_snapshot_log_paths(project_dir.as_deref(), &diff);
 
         // 6. Prepare writeback metadata. Paths in the diff are relative to
         //    project_dir — prefix here. NOTE: the VFS is NOT mutated yet. The
@@ -210,6 +212,15 @@ impl GitService {
             }
             Err(other) => return Err(other.into()),
         }
+
+        self.try_append_snapshot_log(
+            account,
+            branch,
+            Some(head_oid),
+            new_commit_oid,
+            &snapshot_log_paths,
+        )
+        .await;
 
         // 10. The ref swap committed our new state. Now write back through the
         //     VFS so the working tree reflects the restored content. The ref

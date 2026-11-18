@@ -1,7 +1,15 @@
-export { VikingBotInteraction } from './lazy-interaction.js';
+export { VikingBotInteraction } from './interaction-boundary.js';
 export { DEFAULT_INTERACTION_LABELS } from './labels.js';
 export type { InteractionLabels } from './labels.js';
 export type {
+  VikingBotInteractionCustomInputContext,
+  VikingBotInteractionDirectoryPicker,
+  VikingBotInteractionDirectoryPermission,
+  VikingBotInteractionDirectoryInfo,
+  VikingBotInteractionDirectoryOperations,
+  VikingBotInteractionTargetRequest,
+  VikingBotInteractionSingleRequest,
+  VikingBotInteractionSingleAnswer,
   VikingBotInteractionAnswer,
   VikingBotInteractionLabels,
   VikingBotInteractionOption,
@@ -11,3 +19,9 @@ export type {
   VikingBotRepairOption,
   VikingBotScheduleValue,
 } from './types.js';
+
+export type {
+  VikingBotInteractionFields,
+  VikingBotInteractionField,
+  VikingBotInteractionFieldContext,
+} from './field-types.js';

@@ -124,11 +124,12 @@ class IntentAnalyzer:
             )
 
         # Log analysis result
-        for i, q in enumerate(queries):
-            logger.info(
-                f'  [{i + 1}] type={q.context_type.value}, priority={q.priority}, query="{q.query}"'
-            )
-        logger.debug(f"[IntentAnalyzer] Reasoning: {reasoning[:200]}...")
+        logger.debug(
+            "intent analysis completed total=%d reasoning_chars=%d",
+            len(queries),
+            len(reasoning),
+            extra={"total": len(queries)},
+        )
 
         return QueryPlan(
             queries=queries,

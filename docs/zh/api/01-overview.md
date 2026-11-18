@@ -361,6 +361,9 @@ JSON 输出 - 错误：
 |------|------|------|
 | POST | `/api/v1/resources/temp_upload` | 上传后续导入所需的临时文件 |
 | POST | `/api/v1/resources` | 从 URL 或临时文件添加资源 |
+| POST | `/api/v1/resources/cp` | 在共享资源子树内复制资源 |
+| POST | `/api/v1/resources/mv` | 在共享资源子树内移动或重命名资源 |
+| DELETE | `/api/v1/resources` | 删除共享资源 |
 | GET | `/api/v1/fs/ls` | 列出目录 |
 | GET | `/api/v1/fs/tree` | 获取目录树 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |
@@ -405,6 +408,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/skills/find` | 搜索技能 |
 | POST | `/api/v1/skills/validate` | 校验技能数据 |
 | GET | `/api/v1/skills/{skill_name}` | 获取技能 |
+| GET | `/api/v1/skills/{skill_name}/audit` | 查询技能归属和修改历史 |
 | PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
 | DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
 
@@ -594,7 +598,7 @@ JSON 输出 - 错误：
 | PUT / DELETE | `/gateway/admin/policies/{identifier}` | 创建/替换或删除上下文配置 |
 | GET / POST | `/gateway/admin/keys` | 列出调用方可见的网关密钥，或签发新密钥 |
 | DELETE | `/gateway/admin/keys/{identifier}` | 吊销网关密钥 |
-| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话重新开始保存 |
+| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话改存到新的 OpenViking 会话，下一轮结束时写入完整历史 |
 | DELETE | `/gateway/admin/users/{user_id}/data` | admin 或 root：删除某个用户的网关数据 |
 | DELETE | `/gateway/admin/account/data` | root：删除整个账号的网关数据 |
 

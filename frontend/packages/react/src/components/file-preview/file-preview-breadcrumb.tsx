@@ -21,10 +21,7 @@ export interface FilePreviewBreadcrumbProps {
 
 /** 判断是否应跳过动画：用户要求减少动效时不做位移。 */
 function prefersReducedMotion() {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  );
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 /**
@@ -207,17 +204,21 @@ export function FilePreviewBreadcrumb({
       ref={rootRef}
     >
       <div
-        className="ov-file-preview__breadcrumb-measure"
-        ref={measureRef}
+        className="ov-file-preview__breadcrumb-measure-clip"
         aria-hidden="true"
       >
-        {segments.map((segment) => (
-          <span key={segment.uri} className="ov-file-preview__breadcrumb-part">
-            <span>{segment.isFirst ? `${segment.uri}` : segment.label}</span>
-            <span className="ov-file-preview__breadcrumb-separator">/</span>
-          </span>
-        ))}
-        <span>{title}</span>
+        <div className="ov-file-preview__breadcrumb-measure" ref={measureRef}>
+          {segments.map((segment) => (
+            <span
+              key={segment.uri}
+              className="ov-file-preview__breadcrumb-part"
+            >
+              <span>{segment.isFirst ? `${segment.uri}` : segment.label}</span>
+              <span className="ov-file-preview__breadcrumb-separator">/</span>
+            </span>
+          ))}
+          <span>{title}</span>
+        </div>
       </div>
       {rootHidden && menu ? (
         <span className="ov-file-preview__breadcrumb-part">

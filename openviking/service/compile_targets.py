@@ -10,13 +10,15 @@ The external task queue groups Compile runs by account and output target for ser
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import heapq
 import json
 import math
 import random
 import re
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from copy import deepcopy
 from typing import (
     Annotated,
@@ -34,7 +36,7 @@ from typing import (
 )
 from urllib.parse import quote
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, WithJsonSchema, with_config
 from typing_extensions import NotRequired, TypedDict
 
 from openviking.core.identifiers import validate_user_id
@@ -53,6 +55,10 @@ from openviking.service.external_task_service import ExternalTaskSnapshot
 from openviking.service.task_domain import TaskPatch, TaskStatus, sanitize_error
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.pathlock_recovery import (
+    is_compile_lock_conflict,
+    lock_retry_delay,
+)
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import (
     ConflictError,
@@ -65,7 +71,34 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 LOCK_TIMEOUT_SECONDS = 30.0
-COMPILE_NAME_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$"
+ROLLBACK_LOCK_MAX_RETRIES = 60
+_ROLLBACK_LOCK_EXHAUSTED = "COMPILE_ROLLBACK_LOCK_EXHAUSTED"
+# Pin the supported Unified_Ideograph ranges and 〇 so schema consumers need no Unicode property tables.
+_HAN = (
+    "〇\u3400-\u4dbf\u4e00-\u9fff\ufa0e-\ufa0f\ufa11\ufa13-\ufa14\ufa1f\ufa21\ufa23-\ufa24\ufa27-\ufa29"
+    "\U00020000-\U0002a6df\U0002a700-\U0002b739\U0002b740-\U0002b81d\U0002b820-\U0002cea1"
+    "\U0002ceb0-\U0002ebe0\U0002ebf0-\U0002ee5d\U00030000-\U0003134a\U00031350-\U000323af"
+)
+_NAME_PATTERN = (
+    r"^(?:[A-Za-z0-9_][A-Za-z0-9_-]{0,63}|"
+    rf"[A-Za-z0-9_{_HAN}][A-Za-z0-9_{_HAN}-]{{0,31}})$"
+)
+# Swagger UI applies top-level query patterns without Unicode mode. Some schema validators
+# also let $ match before a final newline, which is invalid in a configuration name.
+CompileName = Annotated[
+    str,
+    Field(strict=True, pattern=_NAME_PATTERN),
+    WithJsonSchema(
+        {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "allOf": [{"pattern": _NAME_PATTERN}],
+            "not": {"pattern": r"\n"},
+        }
+    ),
+]
+_COMPILE_NAME = TypeAdapter(CompileName)
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 GIT_RETRIES = 3
 SNAPSHOT_BUSY_SECONDS = 30.0
@@ -92,10 +125,11 @@ STATE_FIELDS = frozenset(
 
 
 def validate_compile_name(compile_name: str) -> str:
-    """Return an unchanged safe name, rejecting invalid account-scoped path segments."""
-    if not isinstance(compile_name, str) or not re.fullmatch(COMPILE_NAME_PATTERN, compile_name):
-        raise InvalidArgumentError("Invalid compile_name")
-    return compile_name
+    """Return the name unchanged or raise InvalidArgumentError."""
+    try:
+        return _COMPILE_NAME.validate_python(compile_name)
+    except ValidationError as exc:
+        raise InvalidArgumentError("Invalid compile_name") from exc
 
 
 def validate_task_id(task_id: str) -> str:
@@ -199,11 +233,17 @@ class CompileStore(Protocol):
     async def get(
         self, account_id: str, owner_user_id: str, compile_name: str
     ) -> Optional[dict]: ...
+    async def require_config_exists(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> None: ...
     async def list_users(self, account_id: str) -> list[str]: ...
     def edit(self, account_id: str, owner_user_id: str, compile_name: str) -> Any: ...
     async def get_run(
         self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
     ) -> Optional[dict]: ...
+    async def list_runs(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> list[dict]: ...
     async def put_run(
         self, account_id: str, owner_user_id: str, compile_name: str, run: dict
     ) -> None: ...
@@ -235,13 +275,21 @@ class CompileStateStore:
     def _name_segment(compile_name: str) -> str:
         """Encode case-sensitive names as lowercase filesystem path segments."""
         validate_compile_name(compile_name)
-        return compile_name.encode("ascii").hex()
+        if compile_name.isascii():
+            return compile_name.encode("ascii").hex()
+        encoded = base64.b32encode(compile_name.encode("utf-8")).decode("ascii")
+        return "u-" + encoded.rstrip("=").lower()
 
     @staticmethod
     def _segment_name(segment: str) -> Optional[str]:
         """Return the name of a canonical storage directory, or None for unrelated entries."""
         try:
-            name = bytes.fromhex(segment).decode("ascii")
+            if segment.startswith("u-"):
+                encoded = segment[2:]
+                padded = encoded + "=" * (-len(encoded) % 8)
+                name = base64.b32decode(padded, casefold=True).decode("utf-8")
+            else:
+                name = bytes.fromhex(segment).decode("ascii")
             return name if CompileStateStore._name_segment(name) == segment else None
         except (ValueError, InvalidArgumentError):
             return None
@@ -324,18 +372,37 @@ class CompileStateStore:
         return compile_name
 
     async def get(self, account_id: str, owner_user_id: str, compile_name: str) -> Optional[dict]:
-        return await self.read_json(self._record_path(account_id, owner_user_id, compile_name))
+        """Load configuration state, defaulting an unrecorded conflict count to null."""
+        record = await self.read_json(self._record_path(account_id, owner_user_id, compile_name))
+        if record is not None:
+            record.setdefault("conflict_num", None)
+        return record
+
+    async def require_config_exists(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> None:
+        """Raise NotFoundError before a filesystem lock can create a missing config directory.
+
+        A fresh stat observes configurations published by other workers after a cached miss.
+        """
+        path = self._record_path(account_id, owner_user_id, compile_name)
+        try:
+            await self._agfs.stat(path, bypass_cache=True)
+        except (AGFSNotFoundError, FileNotFoundError) as exc:
+            raise NotFoundError(compile_name, "compile name") from exc
 
     @asynccontextmanager
     async def edit(
         self, account_id: str, owner_user_id: str, compile_name: str
     ) -> AsyncIterator[dict]:
-        """Mutate an existing configuration atomically; failed bodies leave it unchanged."""
+        """Persist only changed JSON under the configuration lock; failed bodies leave it unchanged."""
         path = self._record_path(account_id, owner_user_id, compile_name)
         async with self.locked(path) as lease:
             record = await self.read_json(path)
             if record is None:
                 raise NotFoundError(compile_name, "compile configuration")
+            record.setdefault("conflict_num", None)
+            original_json = json.dumps(record, ensure_ascii=False, sort_keys=True)
             yield record
             if set(record) != STATE_FIELDS:
                 raise InvalidArgumentError(
@@ -343,7 +410,8 @@ class CompileStateStore:
                 )
             if record["execution_context"].get("owner_user_id") != owner_user_id:
                 raise InvalidArgumentError("Compile configuration owner cannot change")
-            await self.write_json(path, record, lease)
+            if json.dumps(record, ensure_ascii=False, sort_keys=True) != original_json:
+                await self.write_json(path, record, lease)
 
     async def iter_records(
         self,
@@ -437,7 +505,7 @@ class CompileStateStore:
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
     ) -> list[dict]:
-        """Read newest runs by (created_at, task_id); cursor identifies the last returned run."""
+        """Return up to limit runs below the cursor in descending (created_at, task_id) order."""
         if owner_user_id is None:
             raise InvalidArgumentError("user_id must be a string.")
         directory = (
@@ -447,22 +515,38 @@ class CompileStateStore:
             entries = await self._agfs.ls(directory)
         except (AGFSNotFoundError, FileNotFoundError):
             return []
-        runs = []
+        before = None
+        cursor_name = None
+        if cursor:
+            run = await self.get_run(account_id, owner_user_id, compile_name, cursor)
+            if run is None:
+                raise InvalidArgumentError("Run cursor does not exist")
+            before = run["created_at"], run["task_id"]
+            cursor_name = f"{cursor}.json"
+            del run
+        if limit is not None and limit <= 0:
+            return []
+
+        candidates: list[tuple[float, str, dict]] = []
         for entry in entries:
             name = str(entry.get("name") or "")
-            if name.endswith(".json"):
-                run = await self.read_json(f"{directory}/{name}")
-                if run is not None:
-                    runs.append(run)
-        runs.sort(key=lambda run: (run["created_at"], run["task_id"]), reverse=True)
-        if cursor:
-            validate_task_id(cursor)
-            boundary = next((r for r in runs if r["task_id"] == cursor), None)
-            if boundary is None:
-                raise InvalidArgumentError("Run cursor does not exist")
-            key = boundary["created_at"], boundary["task_id"]
-            runs = [r for r in runs if (r["created_at"], r["task_id"]) < key]
-        return runs if limit is None else runs[: max(limit, 0)]
+            if name == cursor_name or not name.endswith(".json"):
+                continue
+            run = await self.read_json(f"{directory}/{name}")
+            if run is None:
+                continue
+            key = run["created_at"], run["task_id"]
+            if before is not None and key >= before:
+                continue
+            candidate = (*key, run)
+            if limit is None:
+                candidates.append(candidate)
+            elif len(candidates) < limit:
+                heapq.heappush(candidates, candidate)
+            else:
+                heapq.heappushpop(candidates, candidate)
+        candidates.sort(reverse=True)
+        return [run for _, _, run in candidates]
 
     async def _history_candidates(self) -> AsyncIterator[tuple[str, str, str, str]]:
         """Yield run IDs from filenames so cleanup reads each candidate under its lock."""
@@ -517,11 +601,10 @@ class CompileStateStore:
                         or finished >= now - HISTORY_RETENTION_SECONDS
                     ):
                         continue
-                    tasks = await get_task_tracker()._store.list_durable(
-                        account_id, task_type="compile"
+                    task = await get_task_tracker()._store.get_durable_task(
+                        task_id, account_id=account_id, user_id=run["actor"]
                     )
-                    task = next((item for item in tasks if item.task_id == task_id), None)
-                    if task is not None and not task.is_terminal():
+                    if task is not None and task.task_type == "compile" and not task.is_terminal():
                         continue
                     path = self._run_path(account_id, owner_user_id, compile_name, task_id)
                     async with self.locked(path) as lease:
@@ -626,19 +709,21 @@ class CompileLifecycle:
     def _checkpoint(task: Any) -> dict:
         return (task.auth or {}).get("compile_execution") or {}
 
-    async def _save_checkpoint(self, task: Any, updates: dict) -> None:
-        """Persist recovery decisions before exposing their effects to another delivery."""
+    @staticmethod
+    async def _patch_task(task: Any, patch: TaskPatch) -> None:
+        """Persist a Compile checkpoint or raise if the task rejects it."""
         from openviking.service.task_tracker import get_task_tracker
 
-        checkpoint = {**self._checkpoint(task), **deepcopy(updates)}
         result = await get_task_tracker().patch_task(
-            task.task_id,
-            TaskPatch(auth={"compile_execution": checkpoint}),
-            account_id=task.account_id,
-            user_id=task.user_id,
+            task.task_id, patch, account_id=task.account_id, user_id=task.user_id
         )
         if not result.accepted:
             raise FailedPreconditionError("Compile task no longer accepts execution checkpoints")
+
+    async def _save_checkpoint(self, task: Any, updates: dict) -> None:
+        """Persist recovery decisions before exposing their effects to another delivery."""
+        checkpoint = {**self._checkpoint(task), **deepcopy(updates)}
+        await self._patch_task(task, TaskPatch(auth={"compile_execution": checkpoint}))
         task.auth = {**(task.auth or {}), "compile_execution": checkpoint}
 
     async def _read_run(self, task: Any) -> dict:
@@ -688,42 +773,38 @@ class CompileLifecycle:
             async with self._store.edit(
                 task.account_id, self._owner_user_id(task), compile_name
             ) as record:
-                await self.record_queued(task, locked_record=record)
+                await self._ensure_queued_run(task, compile_name, record)
             return
+        await self._ensure_queued_run(task, compile_name, locked_record)
+
+    async def _ensure_queued_run(self, task: Any, compile_name: str, locked_record: dict) -> dict:
+        """Return the persisted run, repairing missing registration under the caller's config lock."""
         run = await self._store.get_run(
             task.account_id, self._owner_user_id(task), compile_name, task.task_id
         )
-        first = None
-        if locked_record["task_first_create_time"] is None or (
-            run is None and task.created_at == locked_record["task_first_create_time"]
-        ):
-            from openviking.service.task_tracker import get_task_tracker
-
-            accepted = await get_task_tracker()._store.list_durable(
-                task.account_id, task_type="compile"
+        if locked_record["task_first_create_time"] is None:
+            # A persisted initial run survives a failed state.json acceptance write.
+            history = await self._store.list_runs(
+                task.account_id, self._owner_user_id(task), compile_name
             )
-            # A prior Task can survive an interrupted configuration publication.
-            first = min(
-                [task]
-                + [
-                    prior
-                    for prior in accepted
-                    if self._compile_name(prior) == compile_name
-                    and self._owner_user_id(prior) == self._owner_user_id(task)
-                ],
-                key=lambda prior: (prior.created_at, prior.task_id),
+            initial = next(
+                (item for item in reversed(history) if item["meta"]["trigger"] == "initial"),
+                None,
             )
-        # Writing the run first lets a replay repair times after interrupted state publication.
+            if initial is not None:
+                locked_record["task_first_create_time"] = initial["created_at"]
+        is_first = locked_record["task_first_create_time"] is None
         if run is None:
             run = new_run(task)
-            if first is not None and first.task_id == task.task_id:
+            if is_first:
                 run["meta"]["trigger"] = "initial"
             await self._store.put_run(task.account_id, self._owner_user_id(task), compile_name, run)
-        if locked_record["task_first_create_time"] is None:
-            locked_record["task_first_create_time"] = first.created_at
+        if is_first:
+            locked_record["task_first_create_time"] = task.created_at
         locked_record["last_run_time"] = max(
             locked_record["last_run_time"] or task.created_at, task.created_at
         )
+        return run
 
     @asynccontextmanager
     async def _admission(self, task: Any) -> AsyncIterator[None]:
@@ -767,20 +848,22 @@ class CompileLifecycle:
 
     async def on_start(self, task: Any) -> Any:
         """Resume a fixed plan; target admission also serializes duplicate task deliveries."""
-        if self._compile_name(task):
-            await self.record_queued(task)
+        compile_name = self._compile_name(task)
         try:
             async with self._admission(task):
                 await self._refresh_checkpoint(task)
                 if not self._checkpoint(task).get("phase"):
                     await self._save_checkpoint(task, {"phase": "planning"})
-                run = await self._read_run(task)
+                record = None
+                if compile_name:
+                    async with self._store.edit(
+                        task.account_id, self._owner_user_id(task), compile_name
+                    ) as record:
+                        run = await self._ensure_queued_run(task, compile_name, record)
+                else:
+                    run = await self._read_run(task)
                 if run["status"] in TERMINAL and run["finished_at"] is not None:
-                    return ExternalTaskSnapshot(
-                        status=run["status"],
-                        result=run.get("result"),
-                        error_message=run.get("error"),
-                    )
+                    return self._finished_snapshot(run)
                 checkpoint = self._checkpoint(task)
                 if checkpoint.get("phase") == "committing":
                     return ExternalTaskSnapshot(status="completed", result=run.get("result"))
@@ -789,7 +872,7 @@ class CompileLifecycle:
                         status=checkpoint["terminal_status"], error_message=run.get("error")
                     )
                 if not checkpoint.get("plan"):
-                    await self._begin_run(task, run)
+                    await self._begin_run(task, run, record)
                 if self._checkpoint(task).get("noop"):
                     return ExternalTaskSnapshot(
                         status="completed", result=dict.fromkeys(_RESULT_KEYS.values(), 0)
@@ -798,8 +881,8 @@ class CompileLifecycle:
         except LockAcquisitionError:
             return "busy"
 
-    async def _begin_run(self, task: Any, run: dict) -> None:
-        """Freeze source and Skill snapshots plus a replayable Runtime plan before submission."""
+    async def _begin_run(self, task: Any, run: dict, record: Optional[dict]) -> None:
+        """Freeze a replayable plan using the config read at start, or no config for one-off runs."""
         request = task.meta["request"]
         compile_name = self._compile_name(task)
         ctx = await self.task_ctx(task)
@@ -807,20 +890,19 @@ class CompileLifecycle:
         checkpoint = self._checkpoint(task)
         if "baseline" not in checkpoint:
             progress = {}
-            if compile_name:
-                record = await self._store.get(
-                    task.account_id, self._owner_user_id(task), compile_name
-                )
-                if record is None:
-                    raise NotFoundError(compile_name, "compile configuration")
-                if execution_signature(record) == request["compile"]["input_signature"]:
-                    progress = deepcopy(record["progress"])
+            if (
+                record is not None
+                and execution_signature(record) == request["compile"]["input_signature"]
+            ):
+                progress = deepcopy(record["progress"])
             await self._save_checkpoint(
                 task, {"baseline": progress, "progress_before": progress.get("source_commit")}
             )
         progress = self._checkpoint(task).get("baseline") or {}
         run["status"] = "running"
         run["started_at"] = run["started_at"] or time.time()
+        # Snapshot failures must retain the start time for terminal run publication.
+        await self._save_run(task, run)
         if (
             compile_name
             and not classify_uri(request["skill"]).is_system
@@ -924,23 +1006,97 @@ class CompileLifecycle:
 
     async def on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
         """Finish output publication or rollback before exposing a terminal Task result."""
-        compile_name = self._compile_name(task)
-        if compile_name:
-            await self.record_queued(task)
+        name = self._compile_name(task)
+        scope = (task.account_id, self._owner_user_id(task), name, task.task_id) if name else ()
+        retries = task.meta.get("rollback_lock_retries", 0)
+        if scope and isinstance(retries, int) and retries >= ROLLBACK_LOCK_MAX_RETRIES:
+            await self._refresh_checkpoint(task)
+            if self._checkpoint(task).get("phase") == "rollback_exhausted":
+                return await self._fail_blocked_rollback(task, snapshot, scope)
         try:
             async with self._admission(task):
                 await self._refresh_checkpoint(task)
-                if compile_name:
-                    async with self._store.lock_run(
-                        task.account_id, self._owner_user_id(task), compile_name, task.task_id
-                    ):
-                        return await self._finish(task, snapshot)
-                return await self._finish(task, snapshot)
-        except LockAcquisitionError:
+                # A baseline key proves registration completed; early cancellation can bypass start.
+                if "baseline" not in self._checkpoint(task):
+                    await self.record_queued(task)
+                async with self._store.lock_run(*scope) if scope else nullcontext():
+                    return await self._finish(task, snapshot)
+        except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
+            if not is_compile_lock_conflict(exc):
+                raise
+            if (
+                snapshot.status == "completed"
+                and task.status != TaskStatus.CANCELLING
+                and self._checkpoint(task).get("phase") != "rolling_back"
+            ):
+                if not isinstance(exc, LockAcquisitionError):
+                    raise
+                return ExternalTaskSnapshot(status="running", stage="committing")
+            delay = lock_retry_delay(retries, ROLLBACK_LOCK_MAX_RETRIES)
+            if delay is None:
+                await self._refresh_checkpoint(task)
+                if scope:
+                    await self._save_checkpoint(task, {"phase": "rollback_exhausted"})
+                return await self._fail_blocked_rollback(task, snapshot, scope)
+            update = {"rollback_lock_retries": retries + 1}
+            await self._patch_task(task, TaskPatch(meta=update))
+            task.meta.update(update)
+            await asyncio.sleep(delay)
+            return ExternalTaskSnapshot(status="cancelling", stage="cancelling")
+
+    async def _fail_blocked_rollback(
+        self, task: Any, snapshot: ExternalTaskSnapshot, scope: tuple
+    ) -> ExternalTaskSnapshot:
+        """Persist the exhausted rollback outcome before allowing the Task to fail."""
+
+        async def save_outcome() -> ExternalTaskSnapshot:
+            run = await self._store.get_run(*scope) if scope else await self._read_run(task)
+            if run is None:
+                run = new_run(task)
+            if run["finished_at"] is not None:
+                return self._finished_snapshot(run, snapshot.error_code)
+            message = f"Compile rollback incomplete after {ROLLBACK_LOCK_MAX_RETRIES} lock retries"
+            if snapshot.error_message:
+                message += f": {snapshot.error_message}"
+            result = {
+                "rollback_incomplete": True,
+                "start_snapshot": run["meta"]["start_snapshot"],
+            }
+            run.update(status="failed", result=result, error=message, finished_at=time.time())
+            await self._save_run(task, run)
             return ExternalTaskSnapshot(
-                status="running" if snapshot.status == "completed" else "cancelling",
-                stage="committing" if snapshot.status == "completed" else "cancelling",
+                status="failed",
+                error_code=_ROLLBACK_LOCK_EXHAUSTED,
+                error_message=message,
+                result=result,
             )
+
+        if not scope:
+            return await save_outcome()
+        try:
+            async with self._store.lock_run(*scope):
+                return await save_outcome()
+        except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
+            if not is_compile_lock_conflict(exc):
+                raise
+            return ExternalTaskSnapshot(status="cancelling", stage="cancelling")
+
+    @staticmethod
+    def _finished_snapshot(run: dict, error_code: str | None = None) -> ExternalTaskSnapshot:
+        """Replay the saved outcome, preferring a local rollback failure over the Runtime code."""
+        result = run.get("result")
+        if (
+            run["status"] == "failed"
+            and isinstance(result, dict)
+            and result.get("rollback_incomplete") is True
+        ):
+            error_code = _ROLLBACK_LOCK_EXHAUSTED
+        return ExternalTaskSnapshot(
+            status=run["status"],
+            result=result,
+            error_code=error_code,
+            error_message=run.get("error"),
+        )
 
     async def _finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
         from openviking.service.task_tracker import get_task_tracker
@@ -948,16 +1104,17 @@ class CompileLifecycle:
         run = await self._read_run(task)
         if run["finished_at"] is not None:
             await self._record_conflicts(task, run)
-            await self._advance_progress(task, run)
+            await self._publish_state(task, run)
             await self._save_checkpoint(task, {"phase": "finished"})
-            return ExternalTaskSnapshot(
-                status=run["status"], result=run.get("result"), error_message=run.get("error")
-            )
+            return self._finished_snapshot(run, snapshot.error_code)
         ctx = await self.task_ctx(task)
         target = task.meta["request"]["to"]
         meta = run["meta"]
-        if await get_task_tracker().is_cancellation_requested(
-            task.task_id, account_id=task.account_id, user_id=task.user_id
+        if (
+            not task.has_compile_dependency_failure()
+            and await get_task_tracker().is_cancellation_requested(
+                task.task_id, account_id=task.account_id, user_id=task.user_id
+            )
         ):
             snapshot = ExternalTaskSnapshot(status="cancelled")
         try:
@@ -1035,17 +1192,14 @@ class CompileLifecycle:
                     filter(None, [snapshot.error_message or snapshot.status, run.get("error")])
                 )
         except ResourceBusyError as exc:
-            if not exc.retryable:
+            if not exc.retryable or snapshot.status != "completed":
                 raise
-            return ExternalTaskSnapshot(
-                status="running" if snapshot.status == "completed" else "cancelling",
-                stage="committing" if snapshot.status == "completed" else "cancelling",
-            )
+            return ExternalTaskSnapshot(status="running", stage="committing")
         run["status"] = snapshot.status
         run["finished_at"] = time.time()
         await self._save_run(task, run)
         await self._record_conflicts(task, run)
-        await self._advance_progress(task, run)
+        await self._publish_state(task, run)
         await self._save_checkpoint(task, {"phase": "finished"})
         return ExternalTaskSnapshot(
             status=run["status"],
@@ -1057,8 +1211,8 @@ class CompileLifecycle:
     async def _record_conflicts(self, task: Any, run: dict) -> None:
         """Publish the final target's capped file count, retaining a durable value for retries.
 
-        Search failures yield null without changing the execution outcome. State/checkpoint
-        write failures propagate, so the target claim remains held until publication finishes.
+        Search failures yield null without changing the execution outcome. Checkpoint failures
+        propagate, so the target claim remains held until publication finishes.
         """
         compile_name = self._compile_name(task)
         checkpoint = self._checkpoint(task)
@@ -1100,27 +1254,28 @@ class CompileLifecycle:
             except Exception:
                 logger.warning("Compile conflict count failed for %s", task.task_id, exc_info=True)
             await self._save_checkpoint(task, {"conflict_num": conflict_num})
-        async with self._store.edit(
-            task.account_id, self._owner_user_id(task), compile_name
-        ) as record:
-            if execution_signature(record) == task.meta["request"]["compile"]["input_signature"]:
-                record["conflict_num"] = self._checkpoint(task)["conflict_num"]
 
-    async def _advance_progress(self, task: Any, run: dict) -> None:
-        """Advance only the matching configuration's unchanged successful predecessor."""
+    async def _publish_state(self, task: Any, run: dict) -> None:
+        """Publish the checkpointed conflict count and any successful incremental baseline."""
         compile_name = self._compile_name(task)
-        if not compile_name or run["status"] != "completed" or not run["meta"]["start_snapshot"]:
+        checkpoint = self._checkpoint(task)
+        if not compile_name or checkpoint.get("phase") == "finished":
             return
         from openviking.service.task_tracker import get_task_tracker
 
+        advance_progress = run["status"] == "completed" and run["meta"]["start_snapshot"]
+        if "conflict_num" not in checkpoint and not advance_progress:
+            return
         async with self._store.edit(
             task.account_id, self._owner_user_id(task), compile_name
         ) as record:
-            if await get_task_tracker().is_cancellation_requested(
+            if execution_signature(record) != task.meta["request"]["compile"]["input_signature"]:
+                return
+            if "conflict_num" in checkpoint:
+                record["conflict_num"] = checkpoint["conflict_num"]
+            if not advance_progress or await get_task_tracker().is_cancellation_requested(
                 task.task_id, account_id=task.account_id, user_id=task.user_id
             ):
-                return
-            if execution_signature(record) != task.meta["request"]["compile"]["input_signature"]:
                 return
             if (record["progress"] or {}).get("source_commit") != self._checkpoint(task).get(
                 "progress_before"

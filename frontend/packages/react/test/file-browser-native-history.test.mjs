@@ -1,3 +1,4 @@
+import './helpers/history-viewer-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -40,6 +41,7 @@ test('compile file history uses retained versions and their snapshot paths; lang
   const view = await mount(tree(fetch, uri));
   try {
     await openAction('Version history');
+    assert.equal(button('Save snapshot', workflow()), undefined);
     const request = fetch.calls.find((call) =>
       call.path.endsWith('/snapshot/versions'),
     );
@@ -61,7 +63,12 @@ test('compile file history uses retained versions and their snapshot paths; lang
     const count = fetch.calls.length;
     await view.render(tree(fetch, uri, { locale: 'zh-CN' }));
     assert.equal(fetch.calls.length, count);
-    assert.match(workflow().textContent, /版本 2/);
+    assert.equal(
+      workflow()
+        .querySelector('[aria-label="版本 2"]')
+        .getAttribute('aria-pressed'),
+      'true',
+    );
     assert.equal(
       workflow().querySelector('pre').textContent,
       'historical body',
@@ -91,14 +98,14 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
   try {
     assert.equal(view.container.querySelector('[aria-label="Edit"]'), null);
     await openAction('Version history');
+    assert.equal(button('Save snapshot', workflow()), undefined);
     assert.ok(workflow().querySelector('[role="alert"]'));
     await click(button('Retry', workflow()));
-    assert.match(workflow().textContent, /Initial experience/);
     assert.equal(
       workflow().querySelector('time')?.dateTime,
-      new Date(1794268800000).toISOString(),
+      new Date(1825804800000).toISOString(),
     );
-    assert.match(workflow().querySelector('time').textContent, /2026/);
+    assert.match(workflow().querySelector('time').textContent, /2027/);
     assert.deepEqual(
       fetch.calls.find((call) => call.path.endsWith('/snapshot/log')).query,
       { paths: uri, limit: '500' },
@@ -112,12 +119,18 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
   }
 });
 
-test('Compile directory history renders native log author dates', async () => {
+test('Compile directory history renders native log committer dates', async () => {
   const fetch = fixture(
     target,
     true,
-    (call) =>
-      call.path.endsWith('/snapshot/log')
+    (call) => {
+      if (call.path.endsWith('/fs/ls') && call.uri === target)
+        return ok([{ uri: `${target}/doc.md`, isDir: false }]);
+      if (call.path.endsWith('/snapshot/versions'))
+        return Promise.resolve(new Response('', { status: 404 }));
+      if (call.path.endsWith('/snapshot/show'))
+        return Promise.resolve(new Response('historical body'));
+      return call.path.endsWith('/snapshot/log')
         ? ok([
             {
               oid: 'directory-snapshot',
@@ -126,18 +139,53 @@ test('Compile directory history renders native log author dates', async () => {
               committer: { time_seconds: 1825804800 },
             },
           ])
-        : undefined,
+        : undefined;
+    },
     [{ to: target }],
   );
   const view = await mount(tree(fetch, target));
   try {
     await openAction('Version history');
-    assert.equal(
-      workflow().querySelector('time')?.dateTime,
-      new Date(1794268800000).toISOString(),
+    assert.match(
+      workflow().querySelector('[aria-label="Select historical version"]')
+        .textContent,
+      /2027-11-10/,
     );
-    assert.match(workflow().querySelector('time').textContent, /2026/);
   } finally {
     await view.unmount();
   }
 });
+
+for (const versionsFail of [false, true]) {
+  test(`directory history displays ${versionsFail ? 'a retryable error' : 'an empty state'} when a file has no versions`, async () => {
+    let failed = versionsFail;
+    const fetch = fixture(
+      target,
+      true,
+      (call) => {
+        if (call.path.endsWith('/fs/ls') && call.uri === target)
+          return ok([{ uri: `${target}/doc.md`, isDir: false }]);
+        if (call.path.endsWith('/snapshot/versions') && failed)
+          return Promise.resolve(new Response('offline', { status: 503 }));
+      },
+      [{ to: target }],
+    );
+    const view = await mount(tree(fetch, target));
+    try {
+      await openAction('Version history');
+      if (failed) {
+        assert.ok(workflow().querySelector('[role="alert"]'));
+        failed = false;
+        await click(button('Retry', workflow()));
+      }
+      assert.match(workflow().textContent, /No version history yet/);
+      assert.equal(workflow().querySelector('[aria-busy="true"]'), null);
+      assert.equal(
+        fetch.calls.some((call) => call.path.endsWith('/snapshot/show')),
+        false,
+      );
+    } finally {
+      await view.unmount();
+    }
+  });
+}

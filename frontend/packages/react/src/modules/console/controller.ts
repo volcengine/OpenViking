@@ -1,20 +1,26 @@
+import { observeCommand, tagCommandRecords } from './command-monitoring.js';
+import type { MonitoringSpan } from '../../shared/monitoring/trace/span.js';
+import type { CommandAnalytics } from './use-command-analytics.js';
+import type { TaskReference } from '../../shared/task-tracking/types.js';
 import type { SetStateAction } from 'react';
 import type { Locale } from '../../shared/locale.js';
 import {
   ConsoleCommandError,
   formatConsoleMessage,
+  commandErrorText,
   type ConsoleMessage,
   type ConsoleRecord,
 } from './command-messages.js';
-import { isOvClientError } from '../../client/errors.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import type { ConsoleState } from './types.js';
+import type { ConsoleCommandOptions, ConsoleState } from './types.js';
 import { executeCommand } from './commands.js';
-import { tokenize, parseArguments } from './command-parser.js';
+import { clearRequested } from './command-parser.js';
 
 export function createConsoleController(
   client: OvClient,
   options: OvRequestOptions = {},
+  trackTask?: (task: TaskReference, origin?: MonitoringSpan) => string,
+  analytics?: CommandAnalytics,
 ) {
   let state: Omit<ConsoleState, 'records'> & {
     records: readonly ConsoleRecord[];
@@ -28,12 +34,13 @@ export function createConsoleController(
   let running: AbortController | undefined;
   let active = false;
   let sequence = 0;
-  let cancelRunning: (() => void) | undefined;
+  let cancelRunning: ((report?: boolean) => void) | undefined;
   const update = (patch: Partial<ConsoleState>) => {
+    tagCommandRecords(client, patch.records);
     state = { ...state, ...patch };
     listeners.forEach((listener) => listener());
   };
-  const cancel = () => cancelRunning?.();
+  const cancel = () => cancelRunning?.(true);
   const clear = () => {
     cancel();
     update({
@@ -43,19 +50,16 @@ export function createConsoleController(
       failedCommand: undefined,
     });
   };
-  async function execute(input = state.command, locale: Locale = 'en-US') {
+  async function execute(
+    input = state.command,
+    locale: Locale = 'en-US',
+    commandOptions?: ConsoleCommandOptions,
+  ) {
     const command = input.trim();
     if (!active || running || !command) return;
-    try {
-      const tokens = tokenize(command);
-      if (tokens[0]?.value === 'clear') {
-        parseArguments(tokens.slice(1), []);
-        clear();
-        update({ command: '' });
-        return;
-      }
-    } catch {
-      // executeCommand reports parsing errors through the same record lifecycle.
+    if (clearRequested(command)) {
+      clear();
+      return;
     }
     const controller = new AbortController();
     const signal = options.signal
@@ -63,6 +67,8 @@ export function createConsoleController(
       : controller.signal;
     running = controller;
     const id = `command-${++sequence}`;
+    const event = analytics?.begin(id);
+    const monitoring = observeCommand(client, signal);
     const current = () => active && running === controller;
     const finish = (message: ConsoleMessage) => {
       if (!current()) return;
@@ -86,7 +92,8 @@ export function createConsoleController(
       });
     };
     const onAbort = () => finish({ code: 'cancelled' });
-    cancelRunning = () => {
+    cancelRunning = (report = false) => {
+      if (report) event?.cancel();
       controller.abort();
       signal.removeEventListener('abort', onAbort);
     };
@@ -106,29 +113,36 @@ export function createConsoleController(
         onAbort();
         return;
       }
+      let taskKeys: string[] = [];
       const content = await executeCommand(
         command,
-        client,
+        monitoring?.client ?? client,
         { ...options, signal },
         locale,
+        (tasks) => {
+          if (current() && !signal.aborted && trackTask)
+            taskKeys = tasks.map((task) => trackTask(task, monitoring?.span));
+        },
+        commandOptions,
       );
       if (!current() || signal.aborted) return;
+      monitoring?.finish(content);
+      event?.success(taskKeys);
       update({
         records: state.records.map((record) =>
-          record.id === id ? { ...record, status: 'success', content } : record,
+          record.id === id
+            ? { ...record, status: 'success', content, taskKeys }
+            : record,
         ),
       });
     } catch (error) {
       if (!current() || signal.aborted) return;
+      monitoring?.finish();
+      event?.fail(error);
       const localMessage =
         error instanceof ConsoleCommandError
           ? { code: error.code, value: error.value, usage: error.usage }
           : undefined;
-      const message = isOvClientError(error)
-        ? `${error.code}: ${error.message}`
-        : error instanceof Error
-          ? error.message
-          : String(error);
       update({
         error,
         failedCommand: command,
@@ -138,7 +152,7 @@ export function createConsoleController(
                 ...record,
                 status: 'error',
                 localMessage,
-                content: { variant: 'text', text: message },
+                content: { variant: 'text', text: commandErrorText(error) },
               }
             : record,
         ),
@@ -163,7 +177,7 @@ export function createConsoleController(
     start() {
       active = true;
       return () => {
-        cancel();
+        cancelRunning?.();
         active = false;
       };
     },
@@ -178,9 +192,9 @@ export function createConsoleController(
             ? conversationDraft(state.conversationDraft)
             : conversationDraft,
       }),
-    retry: (locale: Locale) =>
+    retry: (locale: Locale, commandOptions?: ConsoleCommandOptions) =>
       state.failedCommand
-        ? execute(state.failedCommand, locale)
+        ? execute(state.failedCommand, locale, commandOptions)
         : Promise.resolve(),
   };
 }

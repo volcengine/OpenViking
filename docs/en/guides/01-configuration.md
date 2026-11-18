@@ -1303,7 +1303,7 @@ using Choice through MCP.
 | `candidates_visible` | bool | Jev Noul only. Default: `false`, isolating each candidate in its own question. Explicit `true` shares candidates in state. Choice ignores this option. |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
-| `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
+| `log_payloads` | bool | Jev only: log safe request and response summaries when `log.level=DEBUG`; query, document and response content are omitted. Default: `false` |
 | `threshold` | float | Rerank score threshold between `0.0` and `1.0`; reranked results below this are filtered out. It never filters vector scores (rerank not used, or failed), and a request `score_threshold` overrides it. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
@@ -1363,7 +1363,7 @@ Grep engine configuration for content pattern search. These settings are server-
 | `engine` | str | Search engine mode: `"auto"` uses VikingDB BM25 recall when available and falls back to local filesystem search; `"fs"` forces local filesystem search only. | `"auto"` |
 | `switch_to_remote_threshold` | int | L2 record count threshold to switch to VikingDB BM25 recall. When the number of L2 files under the search scope reaches this threshold, VikingDB BM25 is used for phase-1 recall; otherwise local filesystem search is used. Set to `0` to always use VikingDB BM25. Must be ≥ 0. | `10000` |
 
-For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `http`) the field is not written.
+For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. The SQL backends (`opengauss`, `pgvector`) also store `content`; pgvector grep uses the filesystem fallback. The field is not written on `local`, `cuvs` or `http`.
 
 ### glob
 
@@ -1461,6 +1461,49 @@ the change scripts in order; existing TaskStore tables created before
 `openviking/service/sql/changes/0001_task_store_service_name.sql` before
 upgrading. Do not use the FileStore tables and MySQL tables as active writers
 for the same deployment.
+
+PostgreSQL is also supported with `"provider": "postgres"`. Install
+`openviking[postgres]`, then run
+`openviking/service/sql/task_store_postgres_init.sql` using `psql` before starting
+the server. This script includes `service_name`; do not apply the MySQL change
+scripts to PostgreSQL. No Redis or pgvector extension is required:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "task_store": {
+      "provider": "postgres",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "table": "ov_tasks",
+        "sslmode": "prefer"
+      }
+    }
+  }
+}
+```
+
+PostgreSQL requires `user` and `database`; `password` is optional when the
+database authentication method permits it. Defaults are `host=127.0.0.1`,
+`port=5432`, `maxsize=10`, `connect_timeout=10`, and `sslmode=prefer`.
+`sslmode` accepts libpq's `disable`, `allow`, `prefer`, `require`, `verify-ca`,
+and `verify-full`; configure `sslrootcert`, `sslcert`, and `sslkey` as needed.
+For verified TLS, use `verify-full` with the server hostname and trusted CA.
+The runtime database role needs SELECT/INSERT/UPDATE/DELETE on all three tables.
+
+The PostgreSQL prefix follows the same character rules, with a maximum of
+37 characters to fit its 63-byte identifier limit. Quote identifiers in the
+DDL if the custom prefix contains uppercase letters. Task/Work/Event changes
+use READ COMMITTED transactions and lock the Task row before changing Work
+state. PostgreSQL preserves the same durable recovery, event history, active-task
+deduplication, and service/owner isolation as MySQL. Keep `service_name` stable
+across processes sharing tasks. Changing providers does not migrate existing
+tasks; plan the data migration before switching a deployed store.
 
 #### watch_store
 
@@ -1645,18 +1688,21 @@ Top-level `service_name` names the OpenViking deployment. CacheFS, QueueFS with
 `backend=cache`, cache-backed PathLock, coordination, and multi-write metadata
 derive their Redis namespaces from it.
 
-The top-level `cache` section is a sibling of `storage`. Its public shape is Provider-neutral:
+The top-level `cache` section is a sibling of `storage`. It holds named
+Provider-neutral entries:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | Global Cache Provider. This release supports `redis` | required |
-| `params` | object | Provider-owned parameters; parsed as Redis connection settings when `provider=redis` | `{}` |
+| `instances` | object | Named Runtime providers; must contain `default` | required |
+| `instances.<name>.provider` | str | Provider for one named Runtime; this release supports `redis` and `dynamic` | required |
+| `instances.<name>.params` | object | Provider-owned parameters; parsed as Redis connection settings when the provider is `redis` | `{}` |
 
 `storage.agfs.cachefs` only controls CacheFS behavior:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `backend` | str | `local` keeps the original filesystem path; `cache` enables the CacheFS wrapper | `local` |
+| `instance` | str | Runtime selected when `backend=cache` | `"default"` |
 | `shared_redis_ttl_seconds` | int | TTL override for every query bucket; `0` keeps the provider default. Applied only when CacheFS shares a Redis service with QueueFS, cache-backed PathLock, or the expiry scheduler | `0` |
 
 `storage.agfs.pathlock` selects the PathLock storage provider:
@@ -1664,6 +1710,7 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `provider` | str | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; `postgres` connects directly to PostgreSQL, `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `instance` | str | Runtime selected when `provider=cache`; it must use Redis | `"default"` |
 | `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
 | `postgres_dsn_env` | str / null | Required for `postgres`; environment variable name containing the PostgreSQL DSN. See [PostgreSQL setup](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
@@ -1699,7 +1746,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 
 All participants must use the same writable PostgreSQL primary, top-level
 `service_name`, and expiry duration. PostgreSQL PathLock is independent of
-`cache.provider/cache.params`; it does not enable CacheFS or change QueueFS,
+`cache.instances`; it does not enable CacheFS or change QueueFS,
 business file storage, or the vector backend's concurrency limits. In particular,
 the default SQLite queue is not suitable for cross-host sharing on EFS.
 See [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock) for setup and verification.
@@ -1713,32 +1760,40 @@ coordination, keeping SQLite state off EFS.
 {
   "service_name": "production",
   "cache": {
-    "provider": "redis",
-    "params": {
-      "mode": "sentinel",
-      "endpoints": [
-        "redis://sentinel-1:26379",
-        "redis://sentinel-2:26379"
-      ],
-      "master_name": "mymaster",
-      "password_env": "OPENVIKING_REDIS_PASSWORD",
-      "connect_timeout_ms": 1000,
-      "command_timeout_ms": 1000
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "mode": "sentinel",
+          "endpoints": [
+            "redis://sentinel-1:26379",
+            "redis://sentinel-2:26379"
+          ],
+          "master_name": "mymaster",
+          "password_env": "OPENVIKING_REDIS_PASSWORD",
+          "connect_timeout_ms": 1000,
+          "command_timeout_ms": 1000
+        }
+      }
     }
   },
   "storage": {
     "agfs": {
       "cachefs": {
-        "backend": "cache"
+        "backend": "cache",
+        "instance": "default"
       },
       "queuefs": {
-        "backend": "cache"
+        "backend": "cache",
+        "instance": "default"
       },
       "coordination": {
-        "provider": "cache"
+        "provider": "cache",
+        "instance": "default"
       },
       "pathlock": {
         "provider": "cache",
+        "instance": "default",
         "lock_expire_secs": 30.0
       }
     }
@@ -1746,9 +1801,12 @@ coordination, keeping SQLite state off EFS.
 }
 ```
 
-The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When none of these modules selects a cache provider, `cache.params` is not parsed and no CacheRuntime connection is opened, including when PathLock uses PostgreSQL.
+The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized from `cache.instances` when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires its selected instance to use `redis`; DynamicProvider is not supported for PathLock. When none of these modules selects a cache provider, no CacheRuntime connection is opened, including when PathLock uses PostgreSQL.
+Python `cache_runtime()` handles are available only for a Runtime created by one
+of these consumers; configuring `cache.instances` alone does not open a
+standalone provider connection.
 
-Move Provider settings to top-level `cache.provider/cache.params`, set top-level `service_name` for shared Redis names, select `cachefs.backend="cache"`, `queuefs.backend="cache"`, or `backups.provider="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
+Move Provider settings to `cache.instances.<name>`, set top-level `service_name` for shared Redis names, select `cachefs.backend="cache"`, `queuefs.backend="cache"`, or `backups.provider="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
 
 ##### QueueFS Configuration
 
@@ -1756,6 +1814,7 @@ Move Provider settings to top-level `cache.provider/cache.params`, set top-level
 |-----------|------|-------------|---------|
 | `mode` | str | QueueFS namespace mode: `"shared"` uses `/queue`; `"worker"` isolates each worker under `/queue/worker-<index\|pid>` | `"shared"` |
 | `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, `"sqlite3"`, or `"cache"` | `"sqlite"` |
+| `instance` | str | Runtime selected when `backend="cache"` | `"default"` |
 | `db_path` | str (optional) | SQLite database path for QueueFS when backend is `"sqlite"` or `"sqlite3"` | `null` |
 | `recover_stale_sec` | int | Recover `processing` queue messages older than this many seconds on startup. `0` means recover all stale processing messages | `0` |
 | `busy_timeout_ms` | int | SQLite busy timeout for QueueFS in milliseconds | `5000` |
@@ -1765,7 +1824,7 @@ Notes:
 - QueueFS defaults to `sqlite` even if the main AGFS storage backend is `local`, `s3`, or `memory`.
 - `mode=shared` keeps the historical global queue namespace at `/queue`; `mode=worker` isolates each worker under `/queue/worker-<index|pid>`.
 - `db_path` is only used when QueueFS backend is `sqlite` or `sqlite3`.
-- `backend=cache` automatically binds the global `cache.provider + cache.params` configuration and uses top-level `service_name` as the key prefix.
+- `backend=cache` selects `queuefs.instance` from `cache.instances` and uses top-level `service_name` as the key prefix.
 - `recover_stale_sec` and `busy_timeout_ms` apply only to SQLite backends.
 - Redis Cluster endpoints are seed nodes, and `db` must be `0`. Slot routing, `MOVED`/`ASK`, topology refresh, and reconnects are handled by Fred RedisProvider.
 - Redis Sentinel endpoints are Sentinel nodes and require a non-empty `master_name`; the provider handles master discovery and reconnects.
@@ -1941,7 +2000,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
+| `backend` | str | VectorDB backend: `local`, `http`, `volcengine`, `vikingdb`, `cuvs`, `opengauss`, or `pgvector` (PostgreSQL) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., `http://localhost:5000`) | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1951,6 +2010,7 @@ Vector database storage configuration
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
+| `pgvector` | object | PostgreSQL connection pool and flat/HNSW settings; see the [pgvector guide](./25-pgvector.md) | - |
 
 Default local mode
 ```
@@ -2255,7 +2315,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `port` | int | Bind port | `1933` |
 | `auth_mode` | str / null | Built-in modes: `"dev"`, `"api_key"`, `"trusted"`, `"oidc"`, `"ldap"`. When omitted/null, infer `api_key` from a non-empty `root_api_key`; otherwise infer `dev`. | `null` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is required on every deployment, including localhost; it does not become the source of user identity | `null` |
-| `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
+| `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, `"postgres"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"postgres"` uses PostgreSQL directly. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
 | `account_store.params` | object | Provider-specific startup parameters. Framework-owned filesystem and File-provider API-key hashing dependencies cannot be overridden here. | `{}` |
 | `account_store.params.read_only` | bool | File provider only. Load an existing writer-created registry without locks, bootstrap, or credential migrations, and reject identity mutations. Keep the replica's data mount read-only and set `reconcile_system_assets_on_startup=false`; enable `api_key_watch_enabled` to observe writer changes. A missing registry prevents startup. | `false` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
@@ -2269,6 +2329,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://~/skills` and `viking://agent/skills` are accepted. | `null` |
 | `user_config_defaults.memory_policy` | object | Deployment default memory extraction policy used when neither the Session nor the User has an explicit policy. | `null` |
 | `user_config_defaults.auto_commit_policy` | object | Deployment default auto-commit policy for newly created sessions without an explicit policy. | `null` |
+| `user_config_defaults.privacy` | object | Deployment default privacy settings used when the User has not explicitly configured `privacy`. | `mode=off`, `restore=true` |
 | `agent_evolution.enabled` | bool | Startup cluster default for Agent Evolution. Account and Cluster Admin settings may override it at runtime. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. Existing memories remain readable and searchable when disabled. | `false` |
 
 The MySQL provider stores a versioned SHA-256 digest of each high-entropy API
@@ -2315,14 +2376,60 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 }
 ```
 
+For PostgreSQL Account Store, install `pip install 'openviking[postgres]'` and
+select the `postgres` provider. It connects through psycopg 3 and SQLAlchemy;
+Redis and pgvector are not required. Provision
+`openviking/server/account_stores/sql/postgres/init.sql` with your migration role
+before startup. The runtime never creates or migrates tables. Grant the runtime
+role schema `USAGE`, `SELECT, INSERT, UPDATE, DELETE` on the five `ov_accounts*`
+tables, and `USAGE, SELECT` on their three primary-key sequences. Table ownership
+and schema `CREATE` are not required. A new deployment creates the `default`
+account on first startup.
+
+```json
+{
+  "service_name": "production",
+  "server": {
+    "account_store": {
+      "provider": "postgres",
+      "params": {
+        "host": "db.example.com",
+        "port": 5432,
+        "user": "openviking",
+        "password": "secret",
+        "database": "openviking",
+        "maxsize": 10,
+        "connect_timeout": 10,
+        "sslmode": "verify-full",
+        "sslrootcert": "/etc/ssl/certs/postgres-ca.pem",
+        "credential_storage": "hash"
+      }
+    }
+  }
+}
+```
+
+The top-level `service_name` is required and separates deployments sharing a
+database. Credentials support the same `hash` and `encrypted` modes and
+`credential_encryption_key` as MySQL; plaintext is never persisted. `maxsize`
+limits connections per Store instance (default 10); `connect_timeout` is the
+connection timeout in seconds (default 10). Omit `password` to use libpq-supported
+authentication; `host` can also be a Unix socket directory. `sslmode` defaults to
+`prefer` and accepts `disable`, `allow`, `require`, `verify-ca`, or `verify-full`.
+Use `sslcert` / `sslkey` for client certificates. Authentication reads the latest
+committed PG state across instances; user pages and their counts share one MVCC
+snapshot. Existing File/MySQL accounts are not migrated automatically. This
+setting replaces only Account Store; Task, Work, and Watch stores have independent
+configuration.
+
 `redis_mysql` requires the `redis-mysql` extra. Its `mysql` block uses the
 same parameters as the MySQL provider; its `cache` block follows the top-level
 cache `provider/params` structure and supports `standalone`, `cluster`, and
 `sentinel` Redis deployments.
 
-MySQL remains the source of truth. Redis caches authentication results, user
+MySQL is the source of truth. Redis caches authentication results, user
 information, groups, and deletion status. Cache misses and Redis read failures
-fall back to MySQL. Configure `cache.params.ttl_seconds` to control cache lifetime;
+fall back to MySQL. Configure `server.account_store.params.cache.params.ttl_seconds` to control cache lifetime;
 the default is 60 seconds. Hits do not extend the TTL.
 
 Credential, permission, and deletion changes invalidate the affected cache.
@@ -2332,9 +2439,9 @@ do not invalidate each other. Cache-version metadata does not expire automatical
 and should be included in Redis capacity planning. Legacy `lock_ttl_seconds` and
 `lock_wait_seconds` settings are accepted but no longer used.
 
-Redis connection and command timeouts use `cache.params.connect_timeout_ms` and
-`cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
-are socket timeouts, not an overall request deadline. Set `cache.params.pool_size`
+Redis connection and command timeouts use `server.account_store.params.cache.params.connect_timeout_ms` and
+`server.account_store.params.cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
+are socket timeouts, not an overall request deadline. Set `server.account_store.params.cache.params.pool_size`
 for the expected concurrent Redis requests; the default is 32, and the example
 below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
 
@@ -2697,7 +2804,7 @@ This illustrates the main sections, not a complete runnable configuration or JSO
       }
     },
     "vectordb": {
-      "backend": "local|cuvs|http|volcengine|vikingdb",
+      "backend": "local|cuvs|http|volcengine|vikingdb|opengauss|pgvector",
       "url": "string",
       "project": "string"
     }

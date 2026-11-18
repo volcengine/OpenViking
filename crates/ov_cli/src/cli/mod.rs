@@ -33,16 +33,17 @@ const MAX_TIME_DECAY_DURATION_DAYS: u128 = 3000 * 365;
 
 /// Return the unchanged configuration name or a CLI usage error before contacting the server.
 fn parse_compile_name(value: &str) -> Result<String, &'static str> {
-    if (1..=64).contains(&value.len())
-        && !value.starts_with('-')
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-    {
+    static NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"^(?:[A-Za-z0-9_][A-Za-z0-9_-]{0,63}|[A-Za-z0-9_〇\p{Unified_Ideograph}][A-Za-z0-9_〇\p{Unified_Ideograph}-]{0,31})$",
+        )
+        .expect("valid compile name pattern")
+    });
+    if NAME.is_match(value) {
         return Ok(value.to_owned());
     }
     Err(
-        "Use 1–64 ASCII letters, digits, underscores or hyphens. The first character cannot be a hyphen.",
+        "Use Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Maximum length: 64 characters for ASCII-only names, 32 for names containing Han characters.",
     )
 }
 
@@ -652,6 +653,9 @@ pub(crate) enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
+        /// Save content without semantic or vector processing
+        #[arg(long = "defer-processing", help_heading = "Advanced options")]
+        defer_processing: bool,
         /// Comma-separated k=v retrieval tags to write with the content
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,

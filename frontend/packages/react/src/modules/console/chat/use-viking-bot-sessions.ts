@@ -1,3 +1,4 @@
+import { useMonitoringBinding } from '../../../shared/monitoring/context.js';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { createSessionsController } from './sessions-controller.js';
 import { useBotService } from './use-service.js';
@@ -9,13 +10,19 @@ import type {
 export function useVikingBotSessions(
   options: UseVikingBotSessionsOptions = {},
 ): VikingBotSessionsResult {
+  const monitoring = useMonitoringBinding();
   const { service: native, signal } = useBotService(options);
   const { service = native, enabled = true, scopeKey } = options;
   const controller = useMemo(() => {
     void scopeKey;
-    void native;
-    return createSessionsController(service, enabled, signal);
-  }, [native, service, enabled, signal, scopeKey]);
+    return createSessionsController(
+      service,
+      enabled,
+      signal,
+      monitoring,
+      native.patchSessionTitle,
+    );
+  }, [native, service, enabled, signal, scopeKey, monitoring]);
   // Effect necessity: the session list is synchronized with a remote service.
   // Identity changes can arrive through navigation, not just clicks. Cleanup
   // cancels this instance's requests and invalidates any late list/mutation result.
@@ -23,12 +30,14 @@ export function useVikingBotSessions(
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
-    controller.getSnapshot,
   );
   return {
     ...state,
     refresh: controller.refresh,
     create: controller.create,
     remove: controller.remove,
+    rename: state.sessions.some((item) => item.canRename)
+      ? controller.rename
+      : undefined,
   };
 }

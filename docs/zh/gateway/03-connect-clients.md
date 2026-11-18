@@ -167,6 +167,8 @@ print(reply.choices[0].message.content)
 - Anthropic SDK 指向 `https://ov.example.com/gateway`。
 - Responses API 使用 `https://ov.example.com/gateway/v1`，每个请求都要带完整历史并设置 `store: false`；其他 Responses 请求直接转发，不补充记忆。
 
+如果服务商在流式回复中途停止发送（超过 `upstream_timeout_seconds` 没有数据，或连接断开），流仍然以 SDK 能识别的方式结束：网关追加一条当前 API 的错误事件，然后正常关闭流。OpenAI Chat Completions 和 Anthropic SDK 会抛出它们的 API 错误，消息开头是原因（例如 `upstream_timeout`）；Responses API 收到 `response.failed`。此时 HTTP 状态码已经是 200。只有服务商停在一个事件的中间，或者停在回复的最后一个事件之后，连接才会像以前一样直接断开。
+
 配好后，[检查接入是否生效](#check-the-connection)。
 
 ## Open WebUI {#open-webui}
@@ -317,11 +319,11 @@ client = Ark(base_url="https://ov.example.com/gateway/api/v3", api_key="<gateway
 
 1. 在客户端的同一段对话（同一个聊天或同一个 Agent 会话）里发两条消息。应该能正常收到回复。
 2. 在 Studio 中打开**请求日志**标签页。两个请求都应显示为**新消息**，状态码为 200。
-3. 展开这两个请求。它们的**对话**应该相同，**保存**一栏应显示**正常**，表示保存已开启且运行正常。第二条消息到达后第一轮就会保存；要看到它，请以密钥所属用户的身份登录 Studio，在**会话**页面找到 `gateway-…` 会话（见[确认记忆生效](02-quickstart.md#confirm-that-memory-works)）。
+3. 展开这两个请求。它们的**对话**应该相同，**保存**一栏应显示**正常**，表示保存已开启且运行正常。每一轮在回复结束后就会保存；要看到它，请以密钥所属用户的身份登录 Studio，在**会话**页面找到 `gateway-…` 会话（见[确认记忆生效](02-quickstart.md#confirm-that-memory-works)）。
 
 如果结果不对：
 
-- **看不到任何请求。** 只有到达模型服务商的请求才会记录，说明客户端直接收到了网关返回的错误，见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
+- **看不到任何请求。** 默认的 `store` 存储不保留在密钥确认之前就失败的请求（例如 401、402、403）；其余请求都会出现在列表中，包括网关自身返回的错误，并带有错误原因，见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
 - **两个请求属于不同的对话。** 客户端没有发送会话请求头，且历史也没有匹配上，见[网关如何识别对话](#how-conversations-are-recognized)。
 - **记忆一栏一直是空的。** 全新账号本来就是这样。要完整验证记忆是否生效，按[确认记忆生效](02-quickstart.md#confirm-that-memory-works)操作。
 
@@ -329,7 +331,7 @@ client = Ark(base_url="https://ov.example.com/gateway/api/v3", api_key="<gateway
 
 ## 网关如何识别对话 {#how-conversations-are-recognized}
 
-对话是网关当作同一次聊天处理的一系列请求：一段对话固定使用同一份上下文配置和同一个上游，并保存到一个 OpenViking 会话，某些情况下改存到新会话，例如客户端改写历史时（见[保存状态](10-overview-and-requests.md#saving-status)）。为了判断请求属于哪段对话，网关按以下顺序取第一个出现的请求头：
+对话是网关当作同一次聊天处理的一系列请求：一段对话固定使用同一份上下文配置和同一个上游，并保存到一个 OpenViking 会话，客户端改写历史后也不换会话，只有[重新同步对话](10-overview-and-requests.md#resync-a-conversation)会换。为了判断请求属于哪段对话，网关按以下顺序取第一个出现的请求头：
 
 1. `X-OpenViking-Session`
 2. `thread-id`

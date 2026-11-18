@@ -108,8 +108,10 @@ export function HttpStatusBadge({ status }: { status?: number }) {
 const CAPTURE_TONES: Record<string, Tone> = {
   active: 'success',
   disabled: 'neutral',
+  failed: 'danger',
   retrying: 'warning',
   paused: 'danger',
+  lost: 'danger',
 }
 
 /** Whether the conversation is being saved to OpenViking; the reason shows on hover. */

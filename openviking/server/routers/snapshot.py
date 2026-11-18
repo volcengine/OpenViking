@@ -23,6 +23,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.skill_history import reject_generic_skill_mutation
 from openviking_cli.exceptions import (
     InternalError,
     InvalidArgumentError,
@@ -80,6 +81,7 @@ async def commit(
 async def log(
     branch: str = Query("main", description="Branch ref name"),
     limit: int = Query(20, ge=1, le=500, description="Max commits to return"),
+    offset: int = Query(0, ge=0, le=2**63 - 1, description="Skip first N matching commits"),
     paths: Optional[List[str]] = Query(
         None,
         max_length=MAX_LOG_FILTER_PATHS,
@@ -98,7 +100,7 @@ async def log(
         else None
     )
     try:
-        result = await service.fs.log(branch=branch, limit=limit, paths=canonical_paths, ctx=_ctx)
+        result = await service.fs.log(branch=branch, limit=limit, offset=offset, paths=canonical_paths, ctx=_ctx)
     except AGFSNotFoundError:
         raise NotFoundError(branch, "git_ref")
     except (AGFSClientError, ValueError) as e:
@@ -174,9 +176,11 @@ async def restore(
         if request.project_dir
         else None
     )
+    reject_generic_skill_mutation(project_dir, "snapshot restore")
     try:
         if request.path is not None:
             path = validate_request_viking_uri(request.path, _ctx, field_name="path")
+            reject_generic_skill_mutation(path, "snapshot restore")
             result = await service.fs.restore_file_version(
                 uri=path,
                 restore_commit_id=request.restore_commit_id,

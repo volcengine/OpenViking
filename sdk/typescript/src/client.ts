@@ -851,6 +851,8 @@ export class OpenVikingClient {
           : undefined,
       wait: options.wait,
       telemetry: options.telemetry,
+      resolve_conflicts: options.resolveConflicts,
+      defer_processing: options.deferProcessing,
     });
     return this.request("POST", "/api/v1/content/write", {
       body: mergeExtra(body, options.extra),
@@ -870,6 +872,9 @@ export class OpenVikingClient {
           content: operation.content,
           content_base64: operation.contentBase64,
           mode: operation.mode,
+          expected_sha256: operation.expectedSha256,
+          if_absent: operation.ifAbsent,
+          resolve_conflicts: operation.resolveConflicts,
           tags: operation.tags,
           tag_mode: operation.tagMode,
           acl: operation.acl,
@@ -880,6 +885,7 @@ export class OpenVikingClient {
       processing_mode: options.processingMode,
       use_snapshot: options.useSnapshot,
       defer_processing: options.deferProcessing,
+      skip_conflicts: options.skipConflicts,
     });
     return this.request("POST", "/api/v1/content/batch-write", {
       body: mergeExtra(body, options.extra),
@@ -1385,10 +1391,10 @@ export class OpenVikingClient {
       },
     );
   }
-  /** Return snapshot history from newest to oldest. */
-  gitLog(branch = "main", limit = 20, paths?: string[]): Promise<JsonObject[]> {
+  /** Return up to limit commits for branch/paths, newest first, skipping offset matches. */
+  gitLog(branch = "main", limit = 20, paths?: string[], offset = 0): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
-      query: { branch, limit, paths },
+      query: { branch, limit, offset, paths },
     });
   }
   /** Compare one file between two snapshot refs. */

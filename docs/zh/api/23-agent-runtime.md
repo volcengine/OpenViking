@@ -4,7 +4,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 
 ## Compile 配置与执行
 
-`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由 1–64 位 ASCII 字母、数字、下划线或连字符组成，首字符不能是连字符，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
+`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由汉字、ASCII 字母、数字、下划线或连字符组成，纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符，首字符不能是连字符，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
 
 普通 Compile 在创建或更新配置、手动或定时提交新执行时，统一校验规范化后的目录 URI：
 
@@ -209,7 +209,7 @@ Compile 业务文件仅有：
 /local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-`configuration_directory` 为名称 ASCII 字节的小写十六进制编码（`compile_name.encode("ascii").hex()`），不添加前缀，保证存储系统不区分大小写时，不同大小写的名称仍相互独立。公开 API 接收和返回原始 `compile_name`，不使用目录编码。
+纯 ASCII 名称的小写十六进制编码用作 `configuration_directory`。含汉字的名称使用 `u-` 加上名称 UTF-8 字节的小写 Base32 编码作为目录名，省略末尾的填充符 `=`。两种目录格式在不区分大小写的存储上都能区分名称大小写。
 
 配置按账号和用户分目录存储，公开 API 使用原始 `compile_name` 定位配置。
 

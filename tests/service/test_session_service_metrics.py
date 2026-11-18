@@ -25,8 +25,7 @@ async def test_create_keeps_working_when_lifecycle_metrics_fail(monkeypatch: pyt
     service = SessionService()
     ctx = _make_ctx()
     session = Mock()
-    session.exists = AsyncMock(return_value=False)
-    session.ensure_exists = AsyncMock()
+    session.ensure_exists = AsyncMock(return_value=True)
     debug = Mock()
 
     def _boom(*_args, **_kwargs):
@@ -39,7 +38,6 @@ async def test_create_keeps_working_when_lifecycle_metrics_fail(monkeypatch: pyt
     result = await service.create(ctx, "sess-1")
 
     assert result is session
-    session.exists.assert_awaited_once()
     session.ensure_exists.assert_awaited_once()
     assert debug.call_count == 2
 

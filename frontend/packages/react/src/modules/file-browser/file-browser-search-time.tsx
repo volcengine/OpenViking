@@ -102,25 +102,25 @@ export function FileBrowserSearchTime({
             {text.searchUpdatedAt}
           </Radio>
         </div>
-        <div className="ov-file-browser-search__dates">
-          <DatePicker
-            aria-label={text.searchSince}
-            placeholder={text.searchSince}
-            value={filters.since}
-            locale={locale}
-            disabled={!availability.time}
-            onChange={(next) => onChange({ ...filters, since: next })}
-          />
-          <span aria-hidden="true">–</span>
-          <DatePicker
-            aria-label={text.searchUntil}
-            placeholder={text.searchUntil}
-            value={filters.until}
-            locale={locale}
-            disabled={!availability.time}
-            onChange={(next) => onChange({ ...filters, until: next })}
-          />
-        </div>
+        {availability.time && filters.timeField ? (
+          <div className="ov-file-browser-search__dates">
+            <DatePicker
+              aria-label={text.searchSince}
+              placeholder={text.searchSince}
+              value={filters.since}
+              locale={locale}
+              onChange={(next) => onChange({ ...filters, since: next })}
+            />
+            <span aria-hidden="true">–</span>
+            <DatePicker
+              aria-label={text.searchUntil}
+              placeholder={text.searchUntil}
+              value={filters.until}
+              locale={locale}
+              onChange={(next) => onChange({ ...filters, until: next })}
+            />
+          </div>
+        ) : null}
       </section>
     </>
   );

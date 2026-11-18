@@ -138,7 +138,7 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 
 ### log()
 
-从某个分支的 HEAD 开始，沿首个父提交（`parents[0]`）逐层回溯历史，按时间从新到旧返回提交列表。
+从某个分支的 HEAD 开始，沿首个父提交（`parents[0]`）逐层回溯历史，按提交链从新到旧返回，不按时间戳重新排序。
 
 **参数**
 
@@ -146,17 +146,33 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 |------|------|------|--------|------|
 | branch | str | 否 | `main` | 要回溯的分支 |
 | limit | int | 否 | 20 | 最多返回的提交数量。HTTP 接口限制范围为 1–500 |
+| offset | int | 否 | 0 | 跳过前多少条匹配的提交，必须为非负整数。例如每页 10 条，第二页传 `offset=10` |
 | paths | List[str] | 否 | null | 只返回修改了任一指定 `viking://` URI 的提交；USER/ADMIN 必须显式传入。本地 ROOT 模式可省略以查询全局历史。最多接受 32 条路径，每条 account-relative 路径最多包含 64 个层级。HTTP 接口通过重复 `paths` 查询参数传入多个 URI |
 
-过滤发生在限制返回数量之前，因此 `limit=10` 和 `paths=[X]` 表示最多返回 10 条与 X 有关的提交，而不是先取最近 10 条提交再过滤。
+路径过滤和提交去重发生在 `offset`、`limit` 之前。
+`paths=[X]`、`offset=10`、`limit=10` 表示返回与 X 有关的第 11–20 条提交。
+无关提交不计入 `offset`，同时命中多条路径的提交只计一次。
+遍历到历史末尾后，`offset` 超过匹配提交数量时返回空列表。
 
-为限制存储开销，过滤请求最多检查 1,000 条提交。如果尚未收集到请求数量的匹配结果，并且仍存在未检查的更早历史，接口将返回 `INVALID_ARGUMENT` 错误，而不是返回不完整的历史列表。非过滤请求不受该扫描预算限制，因为每检查一条提交都会推进返回数量限制。
+当传入 `paths` 时，服务端可使用 `ov.conf` 中的 `git.snapshot.log`
+路径历史索引。该索引从快照提交派生，不改变响应格式：
+
+- 索引已追平 HEAD：直接查询匹配的提交。
+- 索引落后于 HEAD：扫描较新的提交，再与索引历史合并。这段尾部扫描没有 1,000 条上限。
+- 没有可用索引：旧版过滤扫描仍最多检查 1,000 条候选提交。无关提交和被 `offset` 跳过的匹配提交都计入扫描预算。
+- 旧版扫描尚未凑齐请求页，且仍有未检查的更早历史时，返回 `INVALID_ARGUMENT`，不返回部分结果。
+
+不传 `paths` 时，查询不受上述 1,000 条扫描限制。
+
+每页 10 条时，第一页省略 `offset`，下一页使用 `offset=10`，示例如下。
+每次请求都从当前分支 HEAD 开始，两次请求之间新增提交可能使页边界移动。
 
 **Python SDK (HTTP)**
 
 ```python
 history = client.snapshot.log(
     limit=10,
+    offset=10,
     paths=["viking://resources/a.md", "viking://resources/docs"],
 )
 for commit in history:
@@ -167,23 +183,24 @@ for commit in history:
 
 ```typescript
 console.log(
-  await client.gitLog("main", 20, [
+  await client.gitLog("main", 10, [
     "viking://resources/a.md",
     "viking://resources/docs",
-  ]),
+  ], 10),
 );
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/snapshot/log?branch={branch}&limit={limit}&paths={uri1}&paths={uri2}
+GET /api/v1/snapshot/log?branch={branch}&limit={limit}&offset={offset}&paths={uri1}&paths={uri2}
 ```
 
 ```bash
 curl --get "http://localhost:1933/api/v1/snapshot/log" \
   --data-urlencode "branch=main" \
   --data-urlencode "limit=10" \
+  --data-urlencode "offset=10" \
   --data-urlencode "paths=viking://resources/a.md" \
   --data-urlencode "paths=viking://resources/docs" \
   -H "X-API-Key: your-key"
@@ -192,7 +209,7 @@ curl --get "http://localhost:1933/api/v1/snapshot/log" \
 **CLI**
 
 ```bash
-ov snapshot log --limit 10 \
+ov snapshot log --limit 10 --offset 10 \
   --paths viking://resources/a.md,viking://resources/docs \
   -o json
 ```

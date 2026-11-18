@@ -463,6 +463,7 @@ impl HttpClient {
         wait: bool,
         use_snapshot: bool,
         processing_mode: &str,
+        defer_processing: bool,
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
@@ -470,6 +471,9 @@ impl HttpClient {
         let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
         if use_snapshot {
             body["use_snapshot"] = json!(true);
+        }
+        if defer_processing {
+            body["defer_processing"] = Value::from(true);
         }
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
@@ -2252,11 +2256,13 @@ impl HttpClient {
         &self,
         branch: &str,
         limit: u32,
+        offset: u32,
         paths: Option<&[String]>,
     ) -> Result<Value> {
         let mut params = vec![
             ("branch".to_string(), branch.to_string()),
             ("limit".to_string(), limit.to_string()),
+            ("offset".to_string(), offset.to_string()),
         ];
         if let Some(paths) = paths {
             for path in paths {

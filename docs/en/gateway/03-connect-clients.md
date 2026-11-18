@@ -167,6 +167,8 @@ SDKs for the other two APIs work the same way, as long as the upstream uses the 
 - Point the Anthropic SDK at `https://ov.example.com/gateway`.
 - For the Responses API, use `https://ov.example.com/gateway/v1`, send the full history in every request and set `store: false`. Other Responses requests are forwarded without memory.
 
+If the provider stops sending in the middle of a streamed reply (nothing for `upstream_timeout_seconds`, or a dropped connection), the stream still ends in a way the SDK understands: the gateway adds one error event of the API in use and closes the stream normally. The OpenAI Chat Completions and Anthropic SDKs raise their API error, with the reason (such as `upstream_timeout`) at the start of the message; the Responses API receives `response.failed`. The HTTP status is already 200 by then. Only when the provider stops in the middle of an event, or after the reply's last event, is the connection cut as before.
+
 Next, [check the connection](#check-the-connection).
 
 ## Open WebUI {#open-webui}
@@ -317,11 +319,11 @@ Check every new client setup once, with a short conversation. This matters most 
 
 1. In the client, send two messages in one conversation (one chat, or one agent session). You should get normal replies.
 2. In Studio, open the **Requests** tab. Both requests should appear as **New message** with status 200.
-3. Expand both requests. They should show the same **Conversation**, and **Saving** should read **On**, which means saving is enabled and healthy. The first turn is saved once the second message arrives; to see it, look for a `gateway-…` session on Studio's **Sessions** page, signed in as the key's user (see [Confirm that memory works](02-quickstart.md#confirm-that-memory-works)).
+3. Expand both requests. They should show the same **Conversation**, and **Saving** should read **On**, which means saving is enabled and healthy. Each turn is saved as soon as its reply ends; to see the saved turns, look for a `gateway-…` session on Studio's **Sessions** page, signed in as the key's user (see [Confirm that memory works](02-quickstart.md#confirm-that-memory-works)).
 
 If something is off:
 
-- **No requests appear.** Only requests that reach a model provider are logged; the client received the gateway's error directly. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
+- **No requests appear.** The default `store` sink keeps no record of a request that failed before its key was confirmed (for example 401, 402 or 403); every other request appears, gateway errors included, with its error reason. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
 - **The two requests have different conversations.** The client sends no session header and the history did not match; see [How conversations are recognized](#how-conversations-are-recognized).
 - **Memory stays empty.** That is expected on a brand-new account. To prove that memory works end to end, follow [Confirm that memory works](02-quickstart.md#confirm-that-memory-works).
 
@@ -329,7 +331,7 @@ Every column and label of the log is explained in [Requests](10-overview-and-req
 
 ## How conversations are recognized {#how-conversations-are-recognized}
 
-A conversation is the series of requests the gateway treats as one chat: it keeps one context profile and one upstream, and is saved to an OpenViking session, or to a new one in some cases, for example when the client rewrites its history (see [Saving status](10-overview-and-requests.md#saving-status)). To decide which conversation a request belongs to, the gateway takes the first of these request headers that is present:
+A conversation is the series of requests the gateway treats as one chat: it keeps one context profile and one upstream, and is saved to one OpenViking session until someone [resyncs](10-overview-and-requests.md#resync-a-conversation) it (see [When conversations are saved](01-how-it-works.md#when-conversations-are-saved)). To decide which conversation a request belongs to, the gateway takes the first of these request headers that is present:
 
 1. `X-OpenViking-Session`
 2. `thread-id`

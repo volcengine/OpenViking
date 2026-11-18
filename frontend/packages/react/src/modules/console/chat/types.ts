@@ -1,3 +1,7 @@
+import type {
+  TaskReference,
+  TaskService,
+} from '../../../shared/task-tracking/types.js';
 import type { OvRequestOptions } from '../../../client/types.js';
 import type { Locale } from '../../../shared/locale.js';
 import type {
@@ -14,7 +18,13 @@ export type VikingBotChatEvent =
   | { type: 'text'; text: string; delta: boolean }
   | { type: 'iteration'; iteration: number }
   | { type: 'tool'; part: Extract<VikingBotMessagePart, { type: 'tool' }> }
-  | { type: 'tool-result'; id: string; output: string; isError?: boolean }
+  | {
+      type: 'tool-result';
+      id: string;
+      output: string;
+      isError?: boolean;
+      tasks?: readonly TaskReference[];
+    }
   | { type: 'complete'; text?: string }
   | { type: 'interrupted' };
 
@@ -23,17 +33,28 @@ export interface VikingBotChatInput extends VikingBotDraft {
   text: string;
 }
 
+export interface VikingBotAttachmentUpload {
+  /** File picker accept filter; the adapter still validates files, including drops. */
+  accept?: string;
+  /** Uploads a file and returns the identifier to pass to the chat service. */
+  upload: (file: File, signal: AbortSignal) => Promise<string>;
+}
+
 /** All methods receive the operation's signal; adapters must stop when it aborts. */
 export interface VikingBotChatService {
   stream: (
     input: VikingBotChatInput,
     signal: AbortSignal,
+    /** Report acceptance of this input before any response events are available. */
+    onAccepted?: () => void,
   ) => AsyncIterable<VikingBotChatEvent>;
   createSession: (signal: AbortSignal) => Promise<VikingBotSession>;
   loadMessages: (
     id: string,
     signal: AbortSignal,
   ) => Promise<readonly VikingBotMessage[]>;
+  /** Enables the built-in attachment picker when Console owns the draft. */
+  attachmentUpload?: VikingBotAttachmentUpload;
   /** Omit when the backend already persists chat, as in the commercial service. */
   saveMessage?: (
     id: string,
@@ -55,6 +76,12 @@ export interface VikingBotSessionService {
   listSessions: (signal: AbortSignal) => Promise<readonly VikingBotSession[]>;
   createSession: (signal: AbortSignal) => Promise<VikingBotSession>;
   removeSession: (id: string, signal: AbortSignal) => Promise<void>;
+  /** Omit when the service cannot persist a session title. */
+  renameSession?: (
+    id: string,
+    title: string,
+    signal: AbortSignal,
+  ) => Promise<void>;
 }
 
 export interface VikingBotHookOptions {
@@ -67,6 +94,8 @@ export interface VikingBotHookOptions {
 }
 
 export interface UseVikingBotChatOptions extends VikingBotHookOptions {
+  /** Adapts task queries; native HTTP is the default. Shared by Console when omitted. */
+  taskService?: TaskService;
   sessionId?: string;
   initialMessages?: readonly VikingBotMessage[];
   /** Defaults to true. Native session persistence does not store reasoning. */
@@ -75,6 +104,10 @@ export interface UseVikingBotChatOptions extends VikingBotHookOptions {
 }
 
 export interface VikingBotChatState {
+  /** Draft ownership changes on every history load, even for the same session ID. */
+  historyKey?: object;
+  /** A normal terminal event in the current stream permits HITL. */
+  responseComplete?: boolean;
   sessionId?: string;
   messages: readonly VikingBotMessage[];
   streaming?: VikingBotStreamingState;
@@ -87,10 +120,16 @@ export interface VikingBotChatState {
 }
 
 export interface VikingBotChatResult extends VikingBotChatState {
+  /** Resolved request lifetime shared with managed attachment uploads. */
+  signal?: AbortSignal;
   /** True only when this service supplies an actual interrupt operation. */
   canInterrupt: boolean;
   canSteer: boolean;
-  send: (input: string | VikingBotDraft) => Promise<boolean>;
+  /** For a new turn, the optional callback runs once the stream acknowledges the input. */
+  send: (
+    input: string | VikingBotDraft,
+    onDelivered?: () => void,
+  ) => Promise<boolean>;
   abort: () => Promise<void>;
   reset: () => void;
   selectSession: (sessionId: string) => void;
@@ -112,4 +151,5 @@ export interface VikingBotSessionsResult extends VikingBotSessionsState {
   refresh: () => Promise<void>;
   create: () => Promise<VikingBotSession | undefined>;
   remove: (id: string) => Promise<boolean>;
+  rename?: (id: string, title: string) => Promise<boolean>;
 }

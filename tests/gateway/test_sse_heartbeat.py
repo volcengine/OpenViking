@@ -5,6 +5,7 @@ import gzip
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import aiohttp
 import async_timeout
 import orjson
 import pytest
@@ -34,10 +35,12 @@ def upstream(source, **headers):
 
 def passthrough(response):
     """The ProxyRequest fields observe_response reads."""
+    record = proxy.RequestRecord(None, None)
     return SimpleNamespace(
         response=response,
         capture=ResponseCapture("chat"),
-        metrics={},
+        record=record,
+        metrics=record.metrics,
         relay=AsyncMock(),
         finish=AsyncMock(),
     )
@@ -341,7 +344,9 @@ def hidden_tool_proxy(monkeypatch, tasks):
     monkeypatch.setattr(proxy, "ToolExecutor", lambda *args: object())
     monkeypatch.setattr(proxy, "HiddenToolLoop", lambda *args: Loop())
     request = proxy.ProxyRequest.__new__(proxy.ProxyRequest)
-    request.app = SimpleNamespace(state=SimpleNamespace(viking=object()))
+    request.app = SimpleNamespace(
+        state=SimpleNamespace(viking=object(), kernel=SimpleNamespace(capture=None))
+    )
     request.store = object()
     request.prepared = prepared
     request.credential = {}
@@ -352,7 +357,8 @@ def hidden_tool_proxy(monkeypatch, tasks):
     request.body = {"stream": True, "store": False}
     request.response = response
     request.capture = capture
-    request.metrics = {}
+    request.record = proxy.RequestRecord(request.app, None)
+    request.metrics = request.record.metrics
     request.target = "https://upstream/v1/responses"
     request.headers = {}
     request.relay = AsyncMock()
@@ -413,3 +419,121 @@ async def test_hidden_tool_stream_closes_upstream_on_asgi_disconnect(monkeypatch
     assert not request.capture.complete
     assert tasks[0].done()
     assert source_closed == [True]
+
+
+def first_event(protocol):
+    """The opening event of a native stream, as the provider frames it."""
+    if protocol == "chat":
+        return sse({"id": "chatcmpl-1", "choices": [{"delta": {"content": "hel"}, "index": 0}]})
+    event = native_events(protocol, native_response(protocol, 1))[0]
+    return b"event: " + event["type"].encode() + b"\n" + sse(event)
+
+
+def failing_passthrough(protocol, data, error):
+    """A relayed stream that sends ``data`` and then fails with ``error``."""
+
+    async def source():
+        for chunk in data:
+            yield chunk
+        raise error
+
+    response = upstream(source)
+    request = passthrough(response)
+    request.capture = ResponseCapture(protocol)
+    request.protocol, request.body = protocol, request_body(protocol, True)
+    return request, response
+
+
+@pytest.mark.parametrize("protocol", ["anthropic", "chat", "responses"])
+async def test_passthrough_stream_failure_emits_protocol_error(protocol):
+    first = first_event(protocol)
+    request, response = failing_passthrough(protocol, [first], aiohttp.ServerTimeoutError())
+    outgoing = await proxy.ProxyRequest.observe_response(request)
+    output = b"".join([chunk async for chunk in outgoing.body_iterator])
+    assert output.startswith(first)
+    added = output[len(first) :]
+    message = "upstream_timeout: the model provider stopped before the reply finished"
+    if protocol == "chat":
+        error = {"error": {"type": "upstream_timeout", "message": message}}
+        assert added == sse(error) + b"data: [DONE]\n\n"
+    else:
+        (frame,) = SSEDecoder().feed(added)
+        event = SSEDecoder.data(frame)
+        if protocol == "anthropic":
+            assert frame.startswith(b"event: error\n")
+            assert event == {
+                "type": "error",
+                "error": {"type": "upstream_timeout", "message": message},
+            }
+        else:
+            assert frame.startswith(b"event: response.failed\n")
+            failed = event["response"]
+            assert event["type"] == "response.failed" and failed["id"] == "resp_1"
+            assert failed["status"] == "failed" and failed["output"] == []
+            assert failed["error"] == {"code": "server_error", "message": message}
+    assert response.close.called and not request.capture.complete
+    metrics = request.record.metrics
+    assert metrics["stream_error"] == metrics["error_reason"] == "upstream_timeout"
+    assert metrics["error_origin"] == "upstream" and metrics["status"] == 200
+
+
+async def test_failure_inside_an_event_cuts_the_connection():
+    first = first_event("chat")
+    request, _ = failing_passthrough("chat", [first[:10]], aiohttp.ClientPayloadError("cut"))
+    outgoing = await proxy.ProxyRequest.observe_response(request)
+    output = []
+    with pytest.raises(aiohttp.ClientPayloadError):
+        async for chunk in outgoing.body_iterator:
+            output.append(chunk)
+    assert output == [first[:10]]
+    assert request.record.metrics["stream_error"] == "upstream_disconnected"
+
+
+async def test_failure_after_terminal_event_adds_nothing():
+    data = [first_event("chat"), sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})]
+    request, _ = failing_passthrough("chat", data, aiohttp.ServerDisconnectedError())
+    outgoing = await proxy.ProxyRequest.observe_response(request)
+    output = []
+    with pytest.raises(aiohttp.ServerDisconnectedError):
+        async for chunk in outgoing.body_iterator:
+            output.append(chunk)
+    assert output == data
+    assert request.record.metrics["stream_error"] == "upstream_disconnected"
+
+
+@pytest.mark.parametrize(
+    ("protocol", "event", "code"),
+    [
+        ("chat", {"error": {"code": "RateLimit", "message": "secret text"}}, "RateLimit"),
+        (
+            "anthropic",
+            {"type": "error", "error": {"type": "overloaded_error", "message": "secret text"}},
+            "overloaded_error",
+        ),
+        (
+            "responses",
+            {
+                "type": "response.failed",
+                "response": {"id": "resp_1", "error": {"code": "server_error", "message": "x"}},
+            },
+            "server_error",
+        ),
+    ],
+)
+async def test_upstream_error_event_is_relayed_and_recorded(protocol, event, code):
+    data = [first_event(protocol), sse(event)]
+
+    async def source():
+        for chunk in data:
+            yield chunk
+
+    response = upstream(source)
+    request = passthrough(response)
+    request.capture = ResponseCapture(protocol)
+    outgoing = await proxy.ProxyRequest.observe_response(request)
+    assert [chunk async for chunk in outgoing.body_iterator] == data
+    metrics = request.record.metrics
+    assert metrics["stream_error"] == "upstream_event"
+    assert metrics["upstream_error_code"] == code
+    assert metrics["error_reason"] == "upstream_error" and metrics["error_origin"] == "upstream"
+    assert "secret text" not in orjson.dumps(metrics).decode()

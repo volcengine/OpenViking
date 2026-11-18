@@ -149,7 +149,6 @@ class ExperienceGradientEstimator:
             ctx=context.request_context,
             context_provider=provider,
             isolation_handler=isolation_handler,
-            thinking=True,
         )
         operations, _ = await orchestrator.run()
         return operations

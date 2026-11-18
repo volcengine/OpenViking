@@ -46,6 +46,11 @@ export interface CommandConsoleCommandDefinition {
   params?: readonly CommandConsoleCommandParam[];
   options?: readonly CommandConsoleCommandOption[];
   examples?: readonly (string | CommandConsoleCommandExample)[];
+  /** 由文字和可选命令组成的快速体验。Steps with optional commands to fill the input. */
+  quickStart?: {
+    documentation?: { label: string; href: string };
+    steps: readonly { description: string; command?: string }[];
+  };
   skeleton?: CommandConsoleSkeletonKind;
 }
 

@@ -37,6 +37,10 @@ npm run changeset    # Add a release note for @openviking/react
 
 `dev`, `lint`, `lint:fix`, `typecheck`, `test` and `build` run `npm run build:lib` first, so the docs and the tests consume the library's built output. `npm run check` is an alias for `lint`, and `npm run` lists every script. The library is built into `packages/react/dist/` and the docs into `docs/doc_build/`.
 
+The Node test runner limits each test process to 512 MiB of V8 old space and 16 MiB per semi-space, with at most four test files running concurrently. A separate parent timer stops the test process tree after five minutes (exit code 124), including synchronously blocked workers. On macOS/Linux it kills the isolated process group; on Windows it uses `taskkill /T /F`. Interrupts also stop the test tree. These are test execution guards, not a total RSS limit.
+
+After `npm run build:lib`, run selected tests with `node scripts/test.mjs packages/react/test/viking-bot-directory-errors.test.mjs`. Keep DOM identity and absence assertions boolean, for example `assert.equal(document.activeElement === trigger, true)`: Node's assertion diff can deeply inspect jsdom and React references when DOM objects are passed directly. Simulated user clicks that test focus restoration must call `focus()` before `click()`.
+
 Pass files, directories or quoted globs after `--` to limit formatting and lint rules; type checking always covers the whole configured projects:
 
 ```bash
@@ -51,7 +55,7 @@ Run commands from `frontend/` and format only the files you changed: the reposit
 1. Create `packages/react/src/components/<name>/` for a business component, or `packages/react/src/modules/<name>/` for a block. The directory name is kebab-case and the entry file has the same name (`<name>.tsx`). `index.ts` is the only export point and `style.css` is the stylesheet entry. Keep the implementation, styles and private subcomponents beside them, and put tests in `packages/react/test/`. Three or more related components that share internal code go in a group directory such as `components/auth/`, and their names carry no group prefix: `components/auth/email-login-form` exports `EmailLoginForm`.
 2. Add the entries. In `packages/react/package.json`, add the JS entry and its `style.css` to `exports`. In `packages/react/rslib.config.ts`, add the JS entry and the stylesheet. Import the stylesheet from `components/style.css` or `modules/style.css`, and export the main component and its `<Name>Props` from `src/index.ts`, unless it depends on an optional peer dependency, as `FilePreview` does. Copy the pattern of an existing entry.
 3. Document it. Add a page under `docs/docs/zh/components/` (or `modules/`) and the matching page under `docs/docs/en/`, list it on the category overview, and register it once in `docs/sidebar.ts`, which serves both languages. Put runnable examples in `docs/docs/_demos/`, importing from the public package exports. For a component, also add a short `README.md` and `README_CN.md` in its directory: a one-line description, the public entry and a link to the docs. The [documentation conventions](./AGENTS.md#文档写法) apply to all of these.
-4. When the change should ship to npm, run `npm run changeset`, select `@openviking/react`, choose the bump, describe the change for package consumers and commit the generated file. See [React releases](./.changeset/README.md).
+4. When the change should ship to npm, run `npm run changeset`, select `@openviking/react`, choose the bump and add both `en-US` and `zh-CN` notes to the generated file. Run `npm run check:release-notes` and commit the file. See [React releases](./.changeset/README.md) for the format and release process.
 5. Run `npm run lint`, `npm run typecheck`, `npm test` and `npm run build`, then open the example in a browser (`npm run dev`) and try it.
 
 ## Continuous integration and deployment

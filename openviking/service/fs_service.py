@@ -32,13 +32,17 @@ from openviking.core.namespace_policy import (
 )
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.observability.log_safety import safe_uri_for_log
+from openviking.privacy.restore import PrivacyRestorer
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
@@ -517,14 +521,28 @@ class FSService:
         self._reject_storage_internal_target(uri)
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
         namespace_policy = namespace_policy_for_uri(directory_uri)
+        # Authorize both namespace modes before the occupied-target shortcut.
+        # VikingFS.mkdir rechecks permission after the Tree lock is acquired.
+        await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
         if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
-            await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
             if acl is not None and not namespace_policy.supports_acl:
                 raise InvalidArgumentError(f"ACL is not supported for namespace: {directory_uri}")
             if description is not None:
                 raise InvalidArgumentError(
                     f"directory descriptions are not supported for namespace: {directory_uri}"
                 )
+
+        # Reject occupied targets before acquiring a Tree lock, which may scan a
+        # large existing subtree. The backend mkdir still checks for races.
+        path = viking_fs._uri_to_path(directory_uri, ctx=ctx)
+        try:
+            await viking_fs._async_agfs.stat(path, bypass_cache=True)
+        except AGFSNotFoundError:
+            pass
+        else:
+            raise AGFSAlreadyExistsError(f"path already exists: {directory_uri}")
+
+        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
             async with self._hold_watch_scope(
                 [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
             ) as lease:
@@ -700,7 +718,11 @@ class FSService:
                     directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )
-            if refresh_parent_uri and wait and refresh_action is not FreshnessAction.MARK_PENDING:
+            if (
+                refresh_parent_uri
+                and wait
+                and refresh_action not in (FreshnessAction.NOOP, FreshnessAction.MARK_PENDING)
+            ):
                 queue_status = await self._wait_for_refresh()
         finally:
             pass
@@ -708,11 +730,14 @@ class FSService:
             result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
             result["semantic_root_uri"] = refresh_parent_uri
-            result["semantic_status"] = (
-                "deferred"
-                if refresh_action is FreshnessAction.MARK_PENDING
-                else self._semantic_refresh_status(wait=wait, queue_status=queue_status)
-            )
+            if refresh_action is FreshnessAction.NOOP:
+                result["semantic_status"] = "skipped"
+            elif refresh_action is FreshnessAction.MARK_PENDING:
+                result["semantic_status"] = "deferred"
+            else:
+                result["semantic_status"] = self._semantic_refresh_status(
+                    wait=wait, queue_status=queue_status
+                )
             if queue_status is not None:
                 result["queue_status"] = queue_status
         return result
@@ -807,22 +832,35 @@ class FSService:
         force_refresh: bool = False,
     ) -> FreshnessAction:
         semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
-            viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=1,
-            ctx=ctx,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-            force_refresh=force_refresh,
-        )
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=self._viking_fs,
+                dir_uri=root_uri,
+                changed_entries=1,
+                ctx=ctx,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                force_refresh=force_refresh,
+            )
+        except LockAcquisitionError:
+            # Content deletion already succeeded. Parent freshness bookkeeping
+            # is best effort, as in content writes.
+            logger.info(
+                "Skipping best-effort delete parent freshness update because sidecars are busy",
+                extra={"uri": safe_uri_for_log(root_uri), "degraded": True},
+            )
+            return FreshnessAction.NOOP
+
         if decision.action is not FreshnessAction.REFRESH_NOW:
             return decision.action
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping delete refresh: %s", exc)
-            return decision.action
+            logger.info(
+                "QueueManager not available; skipping delete refresh",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
+            return FreshnessAction.NOOP
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
         msg = SemanticMsg(
@@ -869,7 +907,10 @@ class FSService:
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping copy refresh: %s", exc)
+            logger.info(
+                "QueueManager not available; skipping copy refresh",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             return "skipped"
 
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -918,7 +959,10 @@ class FSService:
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping transfer rebuild: %s", exc)
+            logger.info(
+                "QueueManager not available; skipping transfer rebuild",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             return "skipped"
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
@@ -1040,10 +1084,13 @@ class FSService:
                     ctx=ctx,
                 )
             except Exception as exc:
-                logger.warning(
-                    "Copy committed but semantic rebuild failed for %s: %s",
-                    to_uri,
-                    exc,
+                logger.info(
+                    "Copy committed with failed semantic rebuild",
+                    extra={
+                        "target_id": safe_uri_for_log(to_uri),
+                        "error_type": type(exc).__name__,
+                        "degraded": True,
+                    },
                 )
                 result["semantic_status"] = "failed"
                 result["semantic_error"] = str(exc)
@@ -1066,10 +1113,13 @@ class FSService:
                 ctx=ctx,
             )
         except Exception as exc:
-            logger.warning(
-                "Copy committed but parent semantic refresh failed for %s: %s",
-                to_uri,
-                exc,
+            logger.info(
+                "Copy committed with failed parent semantic refresh",
+                extra={
+                    "target_id": safe_uri_for_log(to_uri),
+                    "error_type": type(exc).__name__,
+                    "degraded": True,
+                },
             )
             result["semantic_status"] = "failed"
             result["semantic_error"] = str(exc)
@@ -1162,16 +1212,15 @@ class FSService:
                                 "Watch move rollback did not restore every moved task"
                             )
                     except BaseException as rollback_error:
-                        logger.exception(
-                            "Watch move rollback failed after filesystem move failed: "
-                            "account_id=%s from=%s to=%s task_count=%d task_ids=%s "
-                            "filesystem_error=%r",
-                            watch_move_result.account_id,
-                            watch_move_result.from_uri,
-                            watch_move_result.to_uri,
-                            len(watch_move_result.task_ids),
-                            watch_move_result.task_ids[:20],
-                            move_error,
+                        logger.error(
+                            "Watch move rollback failed after filesystem move failure filesystem_error_type=%s",
+                            type(move_error).__name__,
+                            extra={
+                                "account_id": watch_move_result.account_id,
+                                "target_id": safe_uri_for_log(watch_move_result.to_uri),
+                                "total": len(watch_move_result.task_ids),
+                                "error_type": type(rollback_error).__name__,
+                            },
                         )
                         raise rollback_error from move_error
                     raise
@@ -1201,10 +1250,13 @@ class FSService:
                         ctx=ctx,
                     )
                 except Exception as exc:
-                    logger.warning(
-                        "Move committed but semantic rebuild failed for %s: %s",
-                        to_uri,
-                        exc,
+                    logger.info(
+                        "Move committed with failed semantic rebuild",
+                        extra={
+                            "target_id": safe_uri_for_log(to_uri),
+                            "error_type": type(exc).__name__,
+                            "degraded": True,
+                        },
                     )
         else:
             await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
@@ -1274,11 +1326,11 @@ class FSService:
                 transaction_task.result()
             except asyncio.CancelledError:
                 pass
-            except Exception:
+            except Exception as exc:
                 logger.error(
                     "Filesystem %s transaction failed while caller was cancelled",
                     operation,
-                    exc_info=True,
+                    extra={"error_type": type(exc).__name__},
                 )
             raise
 
@@ -1305,6 +1357,7 @@ class FSService:
         if target_parent_uri and refresh_target:
             refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
 
+        failed_refreshes = 0
         for parent_uri, changed_uri, change_kind, context_type in refreshes:
             try:
                 await self._enqueue_copy_refresh(
@@ -1316,12 +1369,21 @@ class FSService:
                     ctx=ctx,
                 )
             except Exception as exc:
-                logger.warning(
-                    "Move committed but %s parent semantic refresh failed for %s: %s",
+                failed_refreshes += 1
+                logger.debug(
+                    "Move parent semantic refresh failed change=%s",
                     change_kind,
-                    parent_uri,
-                    exc,
+                    extra={
+                        "target_id": safe_uri_for_log(parent_uri),
+                        "error_type": type(exc).__name__,
+                    },
                 )
+
+        if failed_refreshes:
+            logger.info(
+                "Move committed with incomplete parent semantic refresh",
+                extra={"total": len(refreshes), "failed": failed_refreshes, "degraded": True},
+            )
 
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":
@@ -1334,9 +1396,8 @@ class FSService:
         deactivated = await watch_manager.deactivate_tasks_under_uri_internal(uri, account_id)
         if deactivated:
             logger.info(
-                "Deactivated %d watch task(s) after deleting %s",
-                len(deactivated),
-                uri,
+                "Watch tasks deactivated after resource deletion",
+                extra={"total": len(deactivated), "target_id": safe_uri_for_log(uri)},
             )
 
     async def tree(
@@ -1524,11 +1585,17 @@ class FSService:
         return resolved_uri, content
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
-        """Read file content, restoring Privacy references for Skills and Sessions."""
+        """Read file content, restoring the owner's Privacy references when enabled."""
         uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [uri])
         resolved_uri, content = await self._read_content(uri, ctx)
-        if self._privacy_config_service is not None and ctx.data_access is None:
+        scope = PrivacySanitizer.scope_from_uri(resolved_uri, ctx)
+        if (
+            self._privacy_config_service is not None
+            and ctx.data_access is None
+            and scope is not None
+            and (await self._privacy_config_service.get_settings(ctx)).restore
+        ):
             skill_name = get_skill_name_from_uri(resolved_uri)
             session_id = get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
             if skill_name is not None:
@@ -1546,6 +1613,11 @@ class FSService:
                     session_id=session_id,
                     jsonl=resolved_uri.endswith("/messages.jsonl"),
                 )
+            else:
+                restorer = PrivacyRestorer(
+                    self._privacy_config_service, ctx, category=scope[0], target_key=scope[1]
+                )
+                content = await restorer.restore_content(content, uri=resolved_uri)
 
         if offset == 0 and limit == -1:
             return content
@@ -1567,9 +1639,14 @@ class FSService:
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
+        settings = (
+            await self._privacy_sanitizer.settings_for_uri(resolved_uri, ctx)
+            if self._privacy_sanitizer is not None and ctx.data_access is None
+            else None
+        )
         max_bytes = (
             self._privacy_sanitizer.max_content_bytes
-            if self._privacy_sanitizer is not None
+            if self._privacy_sanitizer is not None and settings is not None
             else None
         )
         try:
@@ -1581,26 +1658,31 @@ class FSService:
                 "File exceeds the Privacy visible-read size limit",
                 details={**exc.details, "reason": "privacy_visible_read_limit_exceeded"},
             ) from exc
-        content = await self._make_content_visible(resolved_uri, content, ctx)
+        content = await self._make_content_visible(resolved_uri, content, ctx, settings=settings)
         if offset == 0 and limit == -1:
             return content
         lines = content.splitlines(keepends=True)
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
 
-    async def _make_content_visible(self, uri: str, content: str, ctx: RequestContext) -> str:
+    async def _make_content_visible(
+        self,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        *,
+        settings: ResolvedPrivacyConfig | None = None,
+    ) -> str:
         """Hide memory metadata and sanitize private values in already-read text."""
         if classify_uri(uri).is_memory:
             content = visible_content(content, uri=uri)
-        if self._privacy_sanitizer is not None and ctx.data_access is None:
+        if self._privacy_sanitizer is not None and settings is not None:
             content = (
                 await self._privacy_sanitizer.sanitize(
                     content,
                     ctx=ctx,
                     uri=uri,
-                    prefer_credentials=(
-                        get_session_id_from_uri(uri, canonical_session_root(ctx)) is not None
-                    ),
+                    settings=settings,
                 )
             ).content
         return content
@@ -1748,6 +1830,7 @@ class FSService:
         commit_content: Optional[Callable[..., Awaitable[Any]]] = None,
         resolve_conflicts: bool = False,
         use_snapshot: bool = False,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
         """Write content with optional snapshots; restores supply their own commit callback."""
         viking_fs = self._ensure_initialized()
@@ -1771,6 +1854,7 @@ class FSService:
             tag_mode=tag_mode,
             acl=acl,
             resolve_conflicts=resolve_conflicts,
+            defer_processing=defer_processing,
         )
         return await write()
 
@@ -1913,7 +1997,13 @@ class FSService:
             except Exception as exc:
                 error = map_exception(exc, resource=uri)
                 if error is None:
-                    logger.exception("Batch tag update failed for %s", uri)
+                    logger.debug(
+                        "Batch tag update failed",
+                        extra={
+                            "target_id": safe_uri_for_log(uri),
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                     error = OpenVikingError("Tag update failed", code="INTERNAL")
                 return False, {
                     "uri": uri,
@@ -1921,6 +2011,14 @@ class FSService:
                 }
 
         results = await bounded_map(targets, update, concurrency=8)
+        unexpected_failures = sum(
+            not success and result["error"]["code"] == "INTERNAL" for success, result in results
+        )
+        if unexpected_failures:
+            logger.error(
+                "Batch tag update encountered internal failures",
+                extra={"total": len(results), "failed": unexpected_failures},
+            )
         return {
             "items": [result for success, result in results if success],
             "failed": [result for success, result in results if not success],
@@ -2300,7 +2398,7 @@ class FSService:
                     and exc.conflicting_owner.startswith(_COMPILE_TARGET_LOCK_OWNER_PREFIX)
                     and exc.conflicting_owner != owner
                 ):
-                    logger.warning("Compile target rejected: parent/child directory lock conflict")
+                    logger.info("Compile target rejected: parent/child directory lock conflict")
                 raise ResourceBusyError(
                     "Compile target is busy or its parent/child is already a Compile target. "
                     "Choose another directory or retry later.",
@@ -2720,11 +2818,12 @@ class FSService:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Forward to VikingFS.log. Walks parents[0] up to limit commits."""
+        """Forward to VikingFS.log. Walks parents[0] up to limit commits, skipping offset."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.log(branch=branch, limit=limit, paths=paths, ctx=ctx)
+        return await viking_fs.log(branch=branch, limit=limit, offset=offset, paths=paths, ctx=ctx)
 
     async def get_gitignore(self, *, ctx: RequestContext) -> str:
         """Forward to VikingFS.get_gitignore. Returns the account .ovgitignore

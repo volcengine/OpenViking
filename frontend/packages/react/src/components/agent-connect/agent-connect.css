@@ -37,6 +37,7 @@
   box-sizing: border-box;
   width: 1000px;
   max-width: 100%;
+  container-type: inline-size;
   overflow-x: auto;
   background: var(--ov-ui-agent-connect-bg);
   color: var(--ov-ui-agent-connect-text);
@@ -55,7 +56,7 @@
 .ov-agent-connect__canvas {
   position: relative;
   isolation: isolate;
-  width: 1000px;
+  width: 100%;
   min-height: 949px;
   overflow: hidden;
   box-shadow: inset 0 0 0 0.5px
@@ -425,4 +426,48 @@
   border-bottom-color: var(--ov-ui-agent-connect-primary);
   color: var(--ov-ui-agent-connect-text);
   font-weight: 600;
+}
+
+@container (width < 720px) {
+  .ov-agent-connect__canvas {
+    min-height: 0;
+  }
+  .ov-agent-connect__header {
+    padding-inline: 16px;
+  }
+  .ov-agent-connect__tabs {
+    max-width: 100%;
+    height: auto;
+  }
+  .ov-agent-connect__tab {
+    flex: 1;
+    min-width: 0;
+    white-space: normal;
+    text-align: center;
+  }
+  .ov-agent-connect__layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    padding: 0 16px 24px;
+  }
+  .ov-agent-connect__list {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 4px 0 12px;
+  }
+  .ov-agent-connect__list > li {
+    flex: none;
+  }
+  .ov-agent-connect__detail {
+    padding-top: 0;
+  }
+  .ov-agent-connect__guides {
+    flex-wrap: wrap;
+  }
+  .ov-agent-connect__instructions-header {
+    height: auto;
+    min-height: 34px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 }

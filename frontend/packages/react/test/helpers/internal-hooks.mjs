@@ -30,3 +30,11 @@ const modal = await import(pathToFileURL(join(output, 'modal.js')));
 export const Modal = modal.Modal;
 const entries = await import(pathToFileURL(join(output, 'browser-entries.js')));
 export const FileBrowserActionBar = entries.FileBrowserActionBar;
+
+const notification = await import(
+  pathToFileURL(join(output, 'notification.js'))
+);
+export const useNotification = notification.useNotification;
+
+const toast = await import(pathToFileURL(join(output, 'toast.js')));
+export const useToast = toast.useToast;

@@ -7,6 +7,7 @@
  * Visual rules come from the console's theme-ve-o-aml-design@0.0.36 skin.
  */
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { LoadingIcon } from '../loading-icon/loading-icon.js';
 
 export interface ButtonProps extends Omit<
   ButtonHTMLAttributes<HTMLButtonElement>,
@@ -78,7 +79,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       >
         {loading || icon != null ? (
           <span className="ov-button__icon" aria-hidden="true">
-            {loading ? <span className="ov-button__spinner" /> : icon}
+            {loading ? <LoadingIcon className="ov-button__spinner" /> : icon}
           </span>
         ) : null}
         {children}

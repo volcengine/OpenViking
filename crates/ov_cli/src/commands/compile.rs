@@ -58,8 +58,8 @@ pub async fn run(
                 "{}",
                 copy(
                     Language::current(),
-                    "ov compile --from … is deprecated. Use ov compile create --compile-name <name> with your inputs, then ov compile --compile-name <name>. https://docs.openviking.ai/en/getting-started/13-compile#submit-compilation",
-                    "ov compile --from … 已弃用。请用 ov compile create --compile-name <名称> 保存参数，再用 ov compile --compile-name <名称> 运行。https://docs.openviking.ai/zh/getting-started/13-compile#提交编译",
+                    "ov compile --from … is no longer recommended. Use ov compile create --compile-name <name> with your inputs, then ov compile --compile-name <name>. Refer to https://docs.openviking.ai/en/getting-started/13-compile#submit-compilation",
+                    "ov compile --from … 已不再推荐。请用 ov compile create --compile-name <名称> 保存参数，再用 ov compile --compile-name <名称> 运行。详情可见 https://docs.openviking.ai/zh/getting-started/13-compile#提交编译",
                 )
             );
         }

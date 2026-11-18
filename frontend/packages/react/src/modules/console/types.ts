@@ -1,3 +1,7 @@
+import type { TaskService } from '../../shared/task-tracking/types.js';
+export type ConsoleTaskService = TaskService;
+export type { TaskSnapshot as ConsoleTaskSnapshot } from '../../shared/task-tracking/types.js';
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode, SetStateAction } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
@@ -15,6 +19,7 @@ import type {
 import type {
   VikingBotLabels,
   VikingBotProps,
+  VikingBotReferences,
 } from '../../components/viking-bot/index.js';
 
 export type ConsoleMode = 'conversation' | 'command';
@@ -22,9 +27,12 @@ export type ConsoleMode = 'conversation' | 'command';
 export interface ConsoleCommandGuide {
   description: string;
   examples: readonly [string, ...string[]];
+  quickStart?: CommandConsoleCommandDefinition['quickStart'];
 }
 
 export interface ConsoleSlots {
+  /** 渲染异常时替换失败区域。Replaces a section after a rendering failure. */
+  errorFallback?: ErrorFallback;
   toolbar?: ReactNode;
   conversationContext?: ReactNode;
   commandHelp?: ReactNode;
@@ -53,7 +61,12 @@ export interface ConsoleLabels {
 export type ConsoleChatOptions = Omit<
   UseVikingBotChatOptions,
   'enabled' | 'sessionId' | 'initialMessages'
-> & { service?: VikingBotChatService & VikingBotSessionService };
+> & {
+  service?: VikingBotChatService & VikingBotSessionService;
+  hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
+  /** Control selected references while Console loads the picker tree and search. The host clears sent references; Console clears selection when resetting the conversation. */
+  referenceSelection?: Pick<VikingBotReferences, 'selected' | 'onChange'>;
+};
 
 /**
  * 命令模式的宿主覆盖项；记录、输入、提交和命令目录由 Console 管理。
@@ -65,8 +78,33 @@ export interface ConsoleCommandProps {
   onOpenUri?: (uri: string) => void;
 }
 
+export interface ConsoleCommandFiles {
+  pickFile(options: {
+    name: string;
+    accept?: string;
+    signal?: AbortSignal;
+  }): Promise<File | undefined>;
+  download(blob: Blob, filename: string): void | Promise<void>;
+}
+
+export interface ConsoleCommandOptions {
+  /** Administrator commands require explicit opt-in and server-side authorization. */
+  allowAdminCommands?: boolean;
+  /** The default uses the browser's file picker and downloads. */
+  files?: ConsoleCommandFiles;
+  /** The host can reuse its OVPack import dialog to confirm the local file. */
+  choosePackFile?: (
+    targetUri: string,
+    signal?: AbortSignal,
+  ) => Promise<File | undefined>;
+  onPackImported?: (uri: string) => void;
+}
+
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
+  /** Task queries use native HTTP by default; hosts can adapt another backend. */
+  taskService?: ConsoleTaskService;
+  commandOptions?: ConsoleCommandOptions;
   locale?: Locale;
   /** Enabled modes, in toolbar order. Omitted enables both; an empty list renders no panels. */
   modes?: readonly ConsoleMode[];

@@ -41,7 +41,7 @@ test('path copying is independent of injected actions and host visibility is a m
   try {
     await click(button('Copy path'));
     assert.match(
-      document.querySelector('[role="status"]').textContent,
+      document.querySelector('.ov-toast--error').textContent,
       /Could not copy/,
     );
     assert.equal(button('Copy path').disabled, false);
@@ -59,10 +59,10 @@ test('path copying is independent of injected actions and host visibility is a m
         { toolbar: { copyPath: false } },
       ),
     );
-    assert.equal(button('Copy path'), null);
+    assert.equal(Boolean(button('Copy path')), false);
     assert.ok(button('Run'));
     await view.render(tree([], { source: { ...source, path: undefined } }));
-    assert.equal(button('Copy path'), null);
+    assert.equal(Boolean(button('Copy path')), false);
   } finally {
     await view.unmount();
   }

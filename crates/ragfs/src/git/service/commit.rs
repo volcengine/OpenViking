@@ -153,6 +153,8 @@ impl GitService {
 
         // Lazily flatten prev_tree once if any explicit path requires it.
         let mut prev_paths_cache: Option<Vec<(String, ObjectId)>> = None;
+        let collect_snapshot_log_paths = self.snapshot_log_store.is_some();
+        let mut actual_changed_paths: Vec<String> = Vec::new();
 
         let candidates: Vec<String> = match &paths {
             Some(ps) => {
@@ -211,6 +213,9 @@ impl GitService {
                                             .await?;
                                         if credited_removed.insert(path.clone()) {
                                             changed += 1;
+                                            if collect_snapshot_log_paths {
+                                                actual_changed_paths.push(path.clone());
+                                            }
                                         }
                                     }
                                 }
@@ -219,6 +224,7 @@ impl GitService {
                         Ok(_) => {
                             // File: take it verbatim, subject to pruning and ignore.
                             cleanup_exact.insert(p.clone());
+                            cleanup_prefixes.push(format!("{}/", p));
                             if include_path(p) {
                                 set.insert(p.clone());
                             } else if let Some(t) = prev_tree {
@@ -256,6 +262,9 @@ impl GitService {
                                         .remove(self.object_store.as_ref(), &account, p)
                                         .await?;
                                     changed += 1;
+                                    if collect_snapshot_log_paths {
+                                        actual_changed_paths.push(p.clone());
+                                    }
                                 }
                             }
                         }
@@ -306,6 +315,9 @@ impl GitService {
                                         .remove(self.object_store.as_ref(), &account, p)
                                         .await?;
                                     changed += 1;
+                                    if collect_snapshot_log_paths {
+                                        actual_changed_paths.push(p.clone());
+                                    }
                                 }
                             }
                             if let Some(t) = prev_tree {
@@ -342,6 +354,9 @@ impl GitService {
                                             .await?;
                                         if credited_removed.insert(path.clone()) {
                                             changed += 1;
+                                            if collect_snapshot_log_paths {
+                                                actual_changed_paths.push(path.clone());
+                                            }
                                         }
                                     }
                                 }
@@ -391,6 +406,9 @@ impl GitService {
                                 .await?;
                             if credited_removed.insert(p.clone()) {
                                 changed += 1;
+                                if collect_snapshot_log_paths {
+                                    actual_changed_paths.push(p.clone());
+                                }
                             }
                         }
                     }
@@ -521,11 +539,39 @@ impl GitService {
                         }
                         None => None,
                     };
-                    if prev_entry.map(|(o, _)| o) != Some(oid) {
+                    let prev_was_tree = prev_entry
+                        .as_ref()
+                        .map(|(_, mode)| mode.is_tree())
+                        .unwrap_or(false);
+                    if prev_entry.as_ref().map(|(o, _)| *o) != Some(oid) {
                         editor
                             .upsert(self.object_store.as_ref(), &account, &rel_path, oid)
                             .await?;
                         changed += 1;
+                        if collect_snapshot_log_paths {
+                            actual_changed_paths.push(rel_path.clone());
+                            if prev_was_tree {
+                                let pref = format!("{}/", rel_path);
+                                if let Some(prev_paths) = &prev_paths_cache {
+                                    for (path, _) in prev_paths {
+                                        if path.starts_with(&pref) {
+                                            actual_changed_paths.push(path.clone());
+                                        }
+                                    }
+                                } else if let Some((old_tree_oid, _)) = prev_entry.as_ref() {
+                                    let subtree_paths = crate::git::tree_builder::flatten(
+                                        self.object_store.as_ref(),
+                                        &account,
+                                        *old_tree_oid,
+                                        &None,
+                                    )
+                                    .await?;
+                                    for (path, _) in subtree_paths {
+                                        actual_changed_paths.push(format!("{pref}{path}"));
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Record in the new index regardless of whether the editor
@@ -570,6 +616,9 @@ impl GitService {
                             .remove(self.object_store.as_ref(), &account, &rel_path)
                             .await?;
                         changed += 1;
+                        if collect_snapshot_log_paths {
+                            actual_changed_paths.push(rel_path.clone());
+                        }
                     }
                     // The file is gone (or became a directory): drop its cached blob.
                     if self.index_store.is_some() {
@@ -632,6 +681,17 @@ impl GitService {
                 });
             }
             Err(other) => return Err(other.into()),
+        }
+
+        if collect_snapshot_log_paths {
+            self.try_append_snapshot_log(
+                &account,
+                &branch,
+                prev_head,
+                commit_oid,
+                &actual_changed_paths,
+            )
+            .await;
         }
 
         // 8. Persist the new commit index. Soft-fail: a save error logs and

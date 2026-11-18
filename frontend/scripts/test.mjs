@@ -1,8 +1,16 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { startTests } from './test-process.mjs';
 import { createRslib } from '@rslib/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginSvgr } from '@rsbuild/plugin-svgr';
@@ -20,13 +28,49 @@ try {
           dts: false,
           source: {
             entry: {
+              monitoring: './test/fixtures/monitoring.tsx',
+              'error-boundary':
+                './src/shared/error-boundary/error-boundary.tsx',
+              'lazy-content': './src/shared/lazy-content.tsx',
+              'browser-tree-pane':
+                './src/modules/file-browser/file-browser-tree-pane.tsx',
+              'browser-preview-pane':
+                './src/modules/file-browser/file-browser-preview-pane.tsx',
+              'browser-search':
+                './src/modules/file-browser/file-browser-search.tsx',
+              'browser-search-results':
+                './src/modules/file-browser/file-browser-search-results.tsx',
+              'fs-tree': './src/modules/file-browser/use-fs-tree.ts',
+              'browser-preview-model': './src/modules/file-browser/fs-model.ts',
+              'scope-page':
+                './src/modules/file-browser/use-search-scope-page.ts',
+              'query-runtime': './src/client/query-client.tsx',
+              'fs-search': './src/modules/file-browser/use-fs-search.ts',
+              'browser-labels':
+                './src/modules/file-browser/file-browser-labels.ts',
               button: './src/shared/primitives/button/button.tsx',
               input: './src/shared/primitives/input/input.tsx',
+              'overlay-position':
+                './src/shared/primitives/overlay/use-overlay-position.ts',
               modal: './src/shared/primitives/modal/modal.tsx',
+              'time-picker':
+                './src/shared/primitives/time-picker/time-picker.tsx',
+              notification: './src/shared/primitives/notification/index.ts',
+              toast: './src/shared/primitives/toast/index.ts',
+              select: './src/shared/primitives/select/index.ts',
+
+              dropdown: './src/shared/primitives/dropdown/index.ts',
+              tooltip: './src/shared/primitives/tooltip/index.ts',
+              'breadcrumb-menu':
+                './src/components/file-preview/file-preview-breadcrumb-menu.tsx',
               'browser-entries':
                 './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
               console: './src/modules/console/use-console.ts',
+              'task-context': './src/shared/task-tracking/context.tsx',
+              'task-tracker': './src/shared/task-tracking/tracker.ts',
+              'task-references':
+                './src/shared/task-tracking/read-references.ts',
               'bot-chat-hook':
                 './src/modules/console/chat/use-viking-bot-chat.ts',
               'bot-chat': './src/modules/console/chat/chat-controller.ts',
@@ -39,9 +83,18 @@ try {
               'bot-submit': './src/components/viking-bot/composer-controls.tsx',
               'bot-composer-events':
                 './src/components/viking-bot/composer-events.ts',
+              'console-hitl-protocol': './src/modules/console/hitl/protocol.ts',
+              'console-hitl-summary': './src/modules/console/hitl/summary.ts',
               'console-conversation':
                 './src/modules/console/use-conversation.tsx',
               provider: './src/client/provider.tsx',
+              'request-errors': './src/client/error-events.ts',
+              'observe-errors': './src/client/observe-errors.ts',
+              'error-feedback': './src/shared/feedback/error-notification.tsx',
+              'notification-scope':
+                './src/shared/feedback/notification-scope.tsx',
+              'reference-picker':
+                './src/components/viking-bot/reference-picker.tsx',
               'reference-tags':
                 './src/components/viking-bot/composer-reference-tags.tsx',
               'wiki-pane': './src/modules/file-browser/wiki-dashboard-pane.tsx',
@@ -70,29 +123,55 @@ try {
   });
   await builder.build();
   await writeFile(join(output, 'package.json'), '{"type":"module"}');
+  // Resolve the SDK's pinned runtime separately from the host React Query.
+  // Private orchestration must exercise the same dependency graph as the package.
+  const modules = join(output, 'node_modules');
+  await mkdir(join(modules, '@tanstack'), { recursive: true });
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  for (const entry of await readdir(join(root, 'node_modules'), {
+    withFileTypes: true,
+  })) {
+    if (
+      entry.name !== '@tanstack' &&
+      (entry.isDirectory() || entry.isSymbolicLink())
+    )
+      await symlink(
+        join(root, 'node_modules', entry.name),
+        join(modules, entry.name),
+        linkType,
+      );
+  }
+  const fromSDK = createRequire(join(root, 'packages/react/package.json'));
   await symlink(
-    join(root, 'node_modules'),
-    join(output, 'node_modules'),
-    process.platform === 'win32' ? 'junction' : 'dir',
+    dirname(fromSDK.resolve('@tanstack/query-core/package.json')),
+    join(modules, '@tanstack/query-core'),
+    linkType,
   );
-  process.exitCode = await new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        '--test',
-        'scripts/package.test.mjs',
-        'scripts/react-release*.test.mjs',
-        'packages/react/test/*.test.mjs',
-      ],
-      {
-        cwd: root,
-        stdio: 'inherit',
-        env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
-      },
-    );
-    child.once('error', reject);
-    child.once('exit', (code) => resolve(code ?? 1));
-  });
+  await symlink(
+    join(root, 'node_modules/@tanstack/react-query'),
+    join(modules, '@tanstack/react-query'),
+    linkType,
+  );
+  const { completed } = startTests(
+    [
+      '--import',
+      './packages/react/test/helpers/query-timers.mjs',
+      ...(process.argv.length > 2
+        ? process.argv.slice(2)
+        : [
+            'scripts/package.test.mjs',
+            'scripts/test-process.test.mjs',
+            'scripts/react-release*.test.mjs',
+            'scripts/release-notes*.test.mjs',
+            'packages/react/test/*.test.mjs',
+          ]),
+    ],
+    {
+      cwd: root,
+      env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
+    },
+  );
+  process.exitCode = await completed;
 } finally {
   await rm(output, { recursive: true, force: true });
 }

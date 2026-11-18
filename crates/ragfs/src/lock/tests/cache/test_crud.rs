@@ -23,10 +23,7 @@ use super::*;
         assert_ne!(refreshed.time_ns, 200);
 
         runtime
-            .register_script(ScriptDefinition {
-                id: TEST_PTTL_ID,
-                redis_lua: TEST_PTTL_SCRIPT,
-            })
+            .register_script(TEST_PTTL_ID.to_string(), TEST_PTTL_SCRIPT.to_string())
             .unwrap();
         let ttl = runtime
             .execute_script(ScriptRequest {

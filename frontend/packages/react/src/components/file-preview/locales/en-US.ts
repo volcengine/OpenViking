@@ -3,6 +3,13 @@ import type { FilePreviewLabels } from '../types.js';
 const messages = {
   previewImage: 'Enlarge image',
   closePreview: 'Close preview',
+  expandVideo: 'Expand video',
+  videoTranscript: 'Transcript',
+  videoFrames: (count: number) =>
+    count ? `Extracted frames (${count})` : 'Extracted frames',
+  videoSpeaker: 'Speaker',
+  videoNoTranscript: 'No transcript available',
+  videoNoFrames: 'No extracted frames available',
   showHiddenPath: 'Show hidden path levels',
   moreActions: 'More actions',
   actionFailed: 'The action failed',
@@ -22,6 +29,12 @@ const messages = {
   retry: 'Retry',
   loadFailed: 'Failed to load the file',
   saveFailed: 'Failed to save',
+  versionNoteTitle: 'Add a version note',
+  versionNoteLabel: 'Description',
+  versionNotePlaceholder: 'Describe this version',
+  versionNoteCancel: 'Cancel',
+  versionNoteConfirm: 'Confirm',
+  versionNotCreated: 'The file was saved, but a new version was not created.',
   unsupported: 'Preview is not supported for this format',
   loading: 'Loading…',
   fileEmpty: 'This file is empty',
@@ -30,3 +43,9 @@ const messages = {
 } satisfies Required<FilePreviewLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  preview: 'File preview failed.',
+  content: 'Tab content could not be displayed.',
+  editor: 'File editor could not be displayed.',
+};

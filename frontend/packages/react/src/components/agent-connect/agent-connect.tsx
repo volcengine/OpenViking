@@ -1,3 +1,6 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { useId, useState } from 'react';
 
@@ -19,10 +22,11 @@ export type {
 } from './types.js';
 
 /** 按设计稿固定文案与图标；选择与复制保持实例内交互。 */
-export function AgentConnect({
+function AgentConnectView({
   apiKey,
   locale: localeProp,
   baseUrl = DEFAULT_BASE_URL,
+  isEnterprise = false,
   agreementUrl,
   showOverseasTag,
   activeTabId: controlledTabId,
@@ -33,6 +37,8 @@ export function AgentConnect({
   className,
   ...rest
 }: AgentConnectProps) {
+  const track = useTrack();
+  const exposure = useExposure('agent_connect_show');
   const locale = useLocale(localeProp);
   const id = useId();
   const [localTabId, setLocalTabId] = useState<AgentConnectTabId>('mainstream');
@@ -54,11 +60,13 @@ export function AgentConnect({
   const selected = items.find((item) => item.id === selectedId) ?? items[0]!;
 
   function selectTab(tabId: AgentConnectTabId) {
+    if (tabId !== activeTabId) track('agent_connect_tab_change');
     setLocalTabId(tabId);
     onTabChange?.(tabId);
   }
 
   function selectItem(item: AgentConnectItem) {
+    track('agent_connect_select');
     setLocalSelection((previous) => ({ ...previous, [activeTabId]: item.id }));
     onSelect?.({ id: item.id, name: item.name });
   }
@@ -66,6 +74,7 @@ export function AgentConnect({
   return (
     <div
       {...rest}
+      ref={exposure}
       className={['ov-agent-connect', className].filter(Boolean).join(' ')}
     >
       <div className="ov-agent-connect__canvas">
@@ -144,11 +153,12 @@ export function AgentConnect({
             ))}
           </ul>
           <AgentConnectDetailView
-            key={`${activeTabId}:${selected.id}:${locale}`}
+            key={`${activeTabId}:${selected.id}`}
             selected={selected}
             apiKey={apiKey}
             locale={locale}
             baseUrl={baseUrl}
+            isEnterprise={isEnterprise}
             agreementUrl={agreementUrl}
             onCopy={onCopy}
           />
@@ -157,3 +167,5 @@ export function AgentConnect({
     </div>
   );
 }
+
+export const AgentConnect = withMonitoring(AgentConnectView, 'AgentConnect');

@@ -3,6 +3,9 @@ import type { ShellLabels } from '../file-browser-labels.js';
 const messages = {
   formatCharacterCount: (count) =>
     `${count.toLocaleString('en-US')} ${count === 1 ? 'character' : 'characters'}`,
+  formatPreviewUpdatedAt: (time) => `Updated on ${time}`,
+  previewModelNotice:
+    'Content parsing provided by the Content Understanding Model',
   accessDenied: 'You do not have permission to view this node.',
   traverseOnly:
     'This directory can only be expanded to reach accessible children.',
@@ -50,9 +53,6 @@ const messages = {
   searchAdvancedLabel: 'Advanced filters',
   loading: 'Loading…',
   searchDismiss: 'Esc to close',
-  searchPreview: 'Search result preview',
-  searchPreviewEmpty: 'No content to preview',
-  searchPreviewFailed: 'Could not load the preview',
   searchLoading: 'Searching…',
   previewMode: 'Preview',
   sourceMode: 'Source',
@@ -73,10 +73,24 @@ const messages = {
   resizeTree: 'Resize the directory tree',
   l0Summary: 'L0 Summary',
   l1Overview: 'L1 Overview',
+  emptyL0Summary: 'No L0 summary',
+  emptyL1Overview: 'No L1 overview',
   summaryEmpty: 'No summary generated yet',
   summaryFailed: 'The summary could not be loaded.',
 } satisfies Required<ShellLabels>;
 
 export default messages;
 
+export const emptySummaries = {
+  l0: 'No L0 summary available',
+  l1: 'No L1 overview available',
+};
+
 export const stackedEmpty = 'Select a file above to preview it';
+
+export const renderErrors = {
+  browser: 'File browser could not be displayed.',
+  tree: 'File tree could not be displayed.',
+  preview: 'File preview failed.',
+  search: 'Search results could not be displayed.',
+};

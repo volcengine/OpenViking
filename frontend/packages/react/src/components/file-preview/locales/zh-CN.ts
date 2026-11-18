@@ -1,8 +1,15 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { FilePreviewLabels } from '../types.js';
 
 const messages = {
   previewImage: '放大图片',
   closePreview: '关闭预览',
+  expandVideo: '放大视频',
+  videoTranscript: '转录文稿',
+  videoFrames: (count: number) => (count ? `抽帧图片 (${count})` : '抽帧图片'),
+  videoSpeaker: '说话人',
+  videoNoTranscript: '暂无转录文稿',
+  videoNoFrames: '暂无抽帧图片',
   showHiddenPath: '显示隐藏的路径层级',
   moreActions: '更多操作',
   actionFailed: '操作失败',
@@ -22,6 +29,12 @@ const messages = {
   retry: '重试',
   loadFailed: '文件加载失败',
   saveFailed: '保存失败',
+  versionNoteTitle: '填写版本备注',
+  versionNoteLabel: '描述',
+  versionNotePlaceholder: '给当前版本写句说明',
+  versionNoteCancel: '取消',
+  versionNoteConfirm: '确定',
+  versionNotCreated: '正文已保存，未创建新版本。',
   unsupported: '不支持预览此格式',
   loading: '加载中…',
   fileEmpty: '该文件为空',
@@ -30,3 +43,9 @@ const messages = {
 } satisfies Required<FilePreviewLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  preview: '文件预览失败',
+  content: '页签内容显示失败',
+  editor: '文件编辑器显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

@@ -201,6 +201,7 @@ async def test_git_show_blob_missing_headers_degrades_gracefully():
 
 
 async def test_git_log_gets_with_params():
+    """Verify explicit pagination and paths are sent to the log endpoint."""
     client, fake = _client_with_fake()
     client._handle_response = lambda resp: [{"oid": "d" * 40, "message": "x"}]
     fake.next_response = object()
@@ -208,6 +209,7 @@ async def test_git_log_gets_with_params():
     result = await client.git_log(
         branch="main",
         limit=5,
+        offset=1,
         paths=["viking://resources/a.md", "viking://resources/docs"],
     )
 
@@ -218,11 +220,13 @@ async def test_git_log_gets_with_params():
     assert call["params"] == {
         "branch": "main",
         "limit": 5,
+        "offset": 1,
         "paths": ["viking://resources/a.md", "viking://resources/docs"],
     }
 
 
 async def test_git_log_empty_paths_is_unfiltered():
+    """Verify empty paths stay unfiltered and an omitted offset defaults to zero."""
     client, fake = _client_with_fake()
     client._handle_response = lambda resp: [{"oid": "d" * 40, "message": "x"}]
     fake.next_response = object()
@@ -232,7 +236,7 @@ async def test_git_log_empty_paths_is_unfiltered():
     call = fake.calls[-1]
     assert call["method"] == "GET"
     assert call["path"] == "/api/v1/snapshot/log"
-    assert call["params"] == {"branch": "main", "limit": 5}
+    assert call["params"] == {"branch": "main", "limit": 5, "offset": 0}
 
 
 async def test_git_diff_gets_with_refs_and_path():
