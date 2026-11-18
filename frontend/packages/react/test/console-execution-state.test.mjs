@@ -114,3 +114,17 @@ test('Console shows the transport message when add-resource fails', async () => 
     await host.dispose();
   }
 });
+
+test('Console falls back to the HTTP error code when the response has no message', async () => {
+  const host = await mount(async () => new Response(null, { status: 502 }), {
+    modes: ['command'],
+  });
+  try {
+    await host.execute('ov read viking://resources/demo');
+    const [record] = host.records;
+    assert.equal(record.dataset.status, 'error');
+    assert.equal(record.querySelector(resultBody).textContent, 'HTTP_502');
+  } finally {
+    await host.dispose();
+  }
+});
