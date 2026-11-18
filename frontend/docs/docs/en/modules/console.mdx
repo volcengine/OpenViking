@@ -50,7 +50,7 @@ Select **Create Wiki** or **Schedule daily report** to fill an empty draft or sw
 
 This example uses simulated services, including native capabilities and the current commercial contract. The native adapter implements `interrupt` and `steer` for stopping and in-flight follow-ups. The current commercial adapter omits both: sending is disabled during generation and stop is hidden. Both support another question after completion.
 
-Click the toolbar `@` or type `@` in the draft to browse, search and reference files or directories. The built-in picker uses `/api/v1/fs/ls` and `/api/v1/search/glob` in the current request scope and loads only when opened. Set `conversation.references` to supply your own candidates and selection. Custom chat services receive the chosen items in the `references` field.
+Click the toolbar `@` or type `@` in the draft to browse, search and reference files or directories. The built-in picker uses `/api/v1/fs/ls` and `/api/v1/search/glob` in the current request scope and loads only when opened. Pass `{ selected, onChange }` in `chatOptions.references` to share the selection with a file tree and use the built-in picker. When this option is omitted, `conversation.references` can supply the candidates and selection. Custom chat services receive the chosen items in the `references` field.
 
 ### Human input
 
@@ -117,15 +117,16 @@ When host content fails to render, the block shows the default fallback: an illu
 
 ### ConsoleChatOptions
 
-| Property       | Description                                             | Type                                             | Default                |
-| -------------- | ------------------------------------------------------- | ------------------------------------------------ | ---------------------- |
-| taskService    | Conversation task queries; inherits the Console adapter | `ConsoleTaskService`                             | Inherited from Console |
-| locale         | Conversation locale                                     | `'zh-CN' \| 'en-US'`                             | Inherited from Console |
-| persist        | Save completed messages                                 | `boolean`                                        | `true`                 |
-| scopeKey       | Isolation key for dynamic identities                    | `string`                                         | Inherited from Console |
-| service        | Chat and session adapter; keep its reference stable     | `VikingBotChatService & VikingBotSessionService` | Native service         |
-| requestOptions | Conversation request settings                           | `OvRequestOptions`                               | Inherited from Console |
-| hitl           | Automatic questions, field validation and custom cards  | `ConsoleHitlOptions \| false`                    | Built-in cards enabled |
+| Property       | Description                                             | Type                                                  | Default                |
+| -------------- | ------------------------------------------------------- | ----------------------------------------------------- | ---------------------- |
+| taskService    | Conversation task queries; inherits the Console adapter | `ConsoleTaskService`                                  | Inherited from Console |
+| locale         | Conversation locale                                     | `'zh-CN' \| 'en-US'`                                  | Inherited from Console |
+| persist        | Save completed messages                                 | `boolean`                                             | `true`                 |
+| scopeKey       | Isolation key for dynamic identities                    | `string`                                              | Inherited from Console |
+| service        | Chat and session adapter; keep its reference stable     | `VikingBotChatService & VikingBotSessionService`      | Native service         |
+| requestOptions | Conversation request settings                           | `OvRequestOptions`                                    | Inherited from Console |
+| hitl           | Automatic questions, field validation and custom cards  | `ConsoleHitlOptions \| false`                         | Built-in cards enabled |
+| references     | Controlled selection for the built-in `@` picker        | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | Optional               |
 
 Every adapter method receives an `AbortSignal`, must honor cancellation, and throws on failure. Omit `saveMessage` when the backend persists messages automatically.
 
@@ -310,7 +311,10 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 - Save a named configuration with `compile create`, then run it with `compile --compile-name <name>`. Repeat `--from` or separate source directory URIs with commas. Use `--instruction` for extra instructions and `--args` for model and scheduling options as a JSON object. `task status <task-id>` checks the returned task ID.
 - `task cancel` asks the server for cooperative cancellation, so a task may not stop immediately.
 - Imports, compiles and memory commits returning task IDs are tracked automatically. Task state is separate from submission results, and the terminal unlocks when submission returns.
-- The command set covers only native APIs that a browser can call; local configuration, login, local file upload or download and session management commands are not included.
+- `get <uri> <local-path>` downloads a file. `export <uri> <output>` and `backup <output>` download an ovpack and accept `--include-vectors`. The browser uses the last segment of the output path as the filename. Backups require administrator or root access.
+- Use `session new`, `session list`, `session get <session-id>`, `session get-session-context <session-id>`, `session get-session-archive <session-id> <archive-id>`, and `session delete <session-id>` to manage sessions.
+- Add a message with `session add-message <session-id> --role <role> --content <text>` or send a quoted JSON array with `session add-messages <session-id> --messages <json-array>`. Use `session commit <session-id>` to submit the session for memory extraction.
+- The command set uses native APIs callable from the browser. Local configuration, login, and local file selection belong to the host application.
 
 ## Notes
 

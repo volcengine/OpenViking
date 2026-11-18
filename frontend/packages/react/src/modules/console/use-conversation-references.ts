@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
@@ -12,16 +12,20 @@ import {
   mentionPattern,
   mentionSearchRows,
   MENTION_ROOT,
+  normalizeMentionQuery,
 } from './mention-search.js';
+import type { ConsoleChatOptions } from './types.js';
 
 const emptyReferences: readonly VikingBotReference[] = [];
 
 export function useConversationReferences({
   enabled,
+  selection,
   requestOptions,
   scopeKey,
 }: {
   enabled: boolean;
+  selection?: ConsoleChatOptions['references'];
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
 }) {
@@ -64,8 +68,21 @@ export function useConversationReferences({
     (items: readonly VikingBotReference[]) => setSelected({ scope, items }),
     [scope],
   );
+  // Follow-up sends finish asynchronously and must preserve newer selections.
+  const latest = useRef({ scope, selection });
+  latest.current = { scope, selection };
   const clearReferences = useCallback(
     (sent?: readonly VikingBotReference[]) => {
+      if (latest.current.scope !== scope) return;
+      const controlled = latest.current.selection;
+      if (controlled) {
+        const items = sent
+          ? controlled.selected.filter((item) => !sent.includes(item))
+          : emptyReferences;
+        if (items.length !== controlled.selected.length)
+          controlled.onChange(items);
+        return;
+      }
       setSelected((current) => {
         if (current?.scope !== scope) return current;
         if (!sent) return undefined;
@@ -82,12 +99,7 @@ export function useConversationReferences({
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
   }, []);
   const [query, setQuery] = useState('');
-  const keyword = query
-    .trim()
-    .replace(/^viking:\/\//i, '')
-    .split('/')
-    .filter(Boolean)
-    .join('/');
+  const keyword = normalizeMentionQuery(query);
   const opened = enabled && openCount > 0;
   const tree = useDirectoryTree({
     client: opened ? client : null,
@@ -161,8 +173,10 @@ export function useConversationReferences({
             expanded: row.hasChildren ? !hidden?.has(row.uri) : undefined,
           }))
       : tree.rows,
-    selected: selected?.scope === scope ? selected.items : emptyReferences,
-    onChange,
+    selected:
+      selection?.selected ??
+      (selected?.scope === scope ? selected.items : emptyReferences),
+    onChange: selection?.onChange ?? onChange,
     onOpenChange,
     onQueryChange: setQuery,
     onExpand: (uri) => {

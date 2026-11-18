@@ -19,6 +19,7 @@ import type {
 import type {
   VikingBotLabels,
   VikingBotProps,
+  VikingBotReferences,
 } from '../../components/viking-bot/index.js';
 
 export type ConsoleMode = 'conversation' | 'command';
@@ -63,6 +64,8 @@ export type ConsoleChatOptions = Omit<
 > & {
   service?: VikingBotChatService & VikingBotSessionService;
   hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
+  /** Controls selection in the built-in picker and takes precedence over conversation.references. */
+  references?: Pick<VikingBotReferences, 'selected' | 'onChange'>;
 };
 
 /**

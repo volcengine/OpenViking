@@ -39,6 +39,7 @@ export const OV_PATHS = {
   resourceTempUpload: '/api/v1/resources/temp_upload',
   packImport: '/api/v1/pack/import',
   packExport: '/api/v1/pack/export',
+  packBackup: '/api/v1/pack/backup',
   experienceTrajectories: '/api/v1/agent-evolution/experiences/trajectories',
   experienceOutcomes: '/api/v1/agent-evolution/experiences/outcomes',
   /** 读取条目状态。Read an entry's status. */
@@ -100,6 +101,8 @@ export const OV_PATH_BUILDERS = {
   /** 会话的消息。Messages of one session. */
   sessionMessages: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/messages`,
+  sessionMessagesBatch: (sessionId: string) =>
+    `${OV_PATH_BUILDERS.sessionMessages(sessionId)}/batch`,
   sessionCommit: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/commit`,
   sessionContext: (sessionId: string) =>

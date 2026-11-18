@@ -3,12 +3,12 @@ import { FileBrowserSearchModeMenu } from './file-browser-search-mode-menu.js';
 import type { SearchMode } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
-/** Result count, current retrieval mode and its shared selection control. */
+/** Current retrieval mode, its selection control and the count when there are hits. */
 export interface FileBrowserSearchModeRowProps {
   mode: SearchMode;
-  count: number;
+  count?: number;
   text: ResolvedLabels;
-  /** Search input keeps focus when selecting a mode unmounts the results row. */
+  /** Search input receives focus after the user selects a mode. */
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   onSelectMode: (mode: SearchMode) => void;
 }
@@ -22,8 +22,12 @@ export function FileBrowserSearchModeRow({
 }: FileBrowserSearchModeRowProps) {
   return (
     <div className="ov-file-browser-search__summary">
-      <span>{text.searchResultCount?.(count)}</span>
-      <span aria-hidden="true">・</span>
+      {count === undefined ? null : (
+        <>
+          <span>{text.searchResultCount?.(count)}</span>
+          <span aria-hidden="true">・</span>
+        </>
+      )}
       <span className="ov-file-browser-search__mode-chip">{mode}</span>
       <span>{text.searchVia}</span>
       <FileBrowserSearchModeMenu

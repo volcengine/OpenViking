@@ -1,6 +1,7 @@
 import { OV_PATHS } from '../../client/paths.js';
 import { isOvClientError } from '../../client/errors.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
+import { splitWikiMetadata } from './wiki-metadata.js';
 import type { PreviewHistoryEntry } from './preview-workflow-types.js';
 
 interface NativeCommit {
@@ -24,6 +25,63 @@ interface VersionPage {
   )[];
   next_before_snapshot?: string | null;
   next_before_version?: string | null;
+}
+
+/** A null result is a confirmed deletion. Other missing content stays an error. */
+export async function readHistoricalText(
+  client: OvClient,
+  entry: PreviewHistoryEntry,
+  options: OvRequestOptions,
+  wiki: boolean,
+): Promise<string | null> {
+  const path = entry.path;
+  const readBlob = (target_ref: string, raw: boolean) =>
+    client.request<Blob>({
+      method: 'GET',
+      path: OV_PATHS.snapshotShow,
+      query: { target_ref, path, raw },
+      responseType: 'blob',
+      options,
+    });
+  try {
+    const blob = await readBlob(entry.snapshot, false);
+    const text = await blob.text();
+    return wiki ? splitWikiMetadata(text).document : text;
+  } catch (error) {
+    if (
+      !isOvClientError(error) ||
+      error.statusCode !== 404 ||
+      error.code !== 'NOT_FOUND' ||
+      !error.details ||
+      typeof error.details !== 'object' ||
+      !('type' in error.details) ||
+      error.details.type !== 'git_blob' ||
+      !('resource' in error.details) ||
+      typeof error.details.resource !== 'string'
+    ) {
+      throw error;
+    }
+    // A missing blob can also mean the path did not exist at this commit.
+    const [commit] = await client.request<{ oid: string; parents: string[] }[]>(
+      {
+        method: 'GET',
+        path: OV_PATHS.snapshotLog,
+        query: { branch: entry.snapshot, paths: [path], limit: 1 },
+        options,
+      },
+    );
+    const parent = commit?.parents?.[0];
+    if (commit?.oid !== entry.snapshot || !parent) throw error;
+    // Confirm the same path existed in the first parent, even on hosted
+    // gateways that only expose snapshot log and show.
+    try {
+      await readBlob(parent, true);
+    } catch (cause) {
+      if (isOvClientError(cause) && cause.statusCode === 404) throw error;
+      throw cause;
+    }
+    return null;
+  }
 }
 
 /** The native file restore writes this message on the new commit. */

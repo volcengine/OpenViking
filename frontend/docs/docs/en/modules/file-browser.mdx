@@ -384,6 +384,8 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 | latest             | Latest                                                                | `string`                     | `'Latest'`                                                                           |
 | rollback           | Restore this version                                                  | `string`                     | `'Restore this version'`                                                             |
 | rollbackBadge      | Badge on versions created by restoring a file                         | `string`                     | `'Restored'`                                                                         |
+| deletedBadge       | Badge on the selected version that deleted the file                   | `string`                     | `'Deleted'`                                                                          |
+| deletedVersion     | Empty state for a deleted version                                     | `string`                     | `'The file was deleted in this version.'`                                            |
 | rollbackTitle      | Restore this version?                                                 | `string`                     | `'Restore this document to this version?'`                                           |
 | rollbackUnchanged  | Feedback when the selected version matches the current file           | `string`                     | `'The selected version matches the current file. No new version was created.'`       |
 | rollbackSaved      | Feedback when a file is restored                                      | `string`                     | `'Restore completed.'`                                                               |
@@ -519,7 +521,7 @@ Directory listings needed to locate the target, or required home alias lookups, 
 
 - The search box at the top of the left column opens the module's search dialog; `⌘K` is a real shortcut, and when a page mounts several instances only the one interacted with last responds.
 - Typing pauses for 400 ms before the request fires; there is no submit button. Closing the dialog cancels the in-flight request and clears the input and filters.
-- Four retrieval modes share one input and one result list. The result header offers “Switch” when the search returns matches:
+- Four retrieval modes share one input and one result list. Once a search starts, use “Switch” at the top of the results area, including when there are no matches:
 
 | Mode     | Endpoint                | Input              | Filters                                |
 | -------- | ----------------------- | ------------------ | -------------------------------------- |

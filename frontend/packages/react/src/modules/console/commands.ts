@@ -1,4 +1,5 @@
 import { readTaskReferences } from '../../shared/task-tracking/read-references.js';
+import { downloadBlob } from '../../shared/download-blob.js';
 import type { TaskReference } from '../../shared/task-tracking/types.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
@@ -8,6 +9,7 @@ import type {
   CommandConsoleRecordContent,
 } from '../../components/command-console/index.js';
 import type { Locale } from '../../shared/locale.js';
+import { COMMAND_GROUPS } from './command-groups.js';
 import { COMMAND_SPECS, type CommandSpec } from './command-specs.js';
 import { parseArguments, tokenize, type Argument } from './command-parser.js';
 import { ConsoleCommandError } from './command-messages.js';
@@ -15,31 +17,6 @@ import { resolveConsoleLocale } from './labels.js';
 import { formatResult } from './results.js';
 import type { ConsoleCommandGuide } from './types.js';
 import { parameterExamples } from './parameter-examples.js';
-
-// Command palette order, restricted to the commands this Console can execute.
-const COMMAND_GROUPS = {
-  core: [
-    'add-resource',
-    'add-skill',
-    'compile',
-    'compile create',
-    'find',
-    'read',
-    'write',
-    'add-memory',
-  ],
-  filesystem: ['ls', 'tree', 'mkdir', 'rm', 'mv', 'stat', 'cp'],
-  search: ['find', 'search', 'grep', 'glob', 'abstract', 'overview', 'read'],
-  status: [
-    'help',
-    'health',
-    'status',
-    'task list',
-    'task status',
-    'task cancel',
-    'clear',
-  ],
-} satisfies Record<string, readonly CommandSpec['name'][]>;
 
 export function consoleCommandGroups(
   locale: Locale,
@@ -204,6 +181,15 @@ export async function executeCommand(
         return client.request({ ...request, options });
       })
     : await client.request({ ...spec.request!(values), options });
+  if (spec.downloadFilename) {
+    options.signal?.throwIfAborted();
+    const filename = spec.downloadFilename(values);
+    downloadBlob(data as Blob, filename);
+    return {
+      variant: 'write-result',
+      lines: [resolveConsoleLocale(locale).downloadedFile(filename)],
+    };
+  }
   onTasks?.(readTaskReferences(spec.name, data));
   return formatResult(spec.name, data, values);
 }

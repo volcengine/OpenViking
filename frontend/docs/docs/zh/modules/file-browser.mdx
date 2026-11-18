@@ -384,6 +384,8 @@ import '@openviking/react/modules/file-browser/style.css';
 | latest             | 最新                               | `string`                     | `'最新'`                                       |
 | rollback           | 回滚至此版本                       | `string`                     | `'回滚至此版本'`                               |
 | rollbackBadge      | 回滚生成的新版本标识               | `string`                     | `'回滚'`                                       |
+| deletedBadge       | 所选版本删除了文件时显示的标识     | `string`                     | `'已删除'`                                     |
+| deletedVersion     | 删除版本无正文时的提示             | `string`                     | `'此版本的文件已被删除，暂无正文'`             |
 | rollbackTitle      | 确认回滚至此版本？                 | `string`                     | `'回滚此文档至此版本？'`                       |
 | rollbackUnchanged  | 所选版本与当前文件内容一致时的提示 | `string`                     | `'所选版本内容与当前文件一致，未生成新版本'`   |
 | rollbackSaved      | 回滚完成时的提示                   | `string`                     | `'回滚已完成'`                                 |
@@ -519,7 +521,7 @@ await browserRef.current?.openResource(directoryUri);
 
 - 左栏顶部的搜索框打开模块内置的搜索弹窗；`⌘K` 是真实快捷键，同一页面挂多个实例时只有最近交互过的那个响应。
 - 输入停顿 400ms 后自动请求，没有提交按钮。关闭弹窗会取消在途请求并清空输入与筛选。
-- 四种检索方式共用一套输入与结果列表。有匹配结果时，可在结果区顶部点「切换」：
+- 四种检索方式共用一套输入与结果列表。开始搜索后，即使没有匹配结果，也可在结果区顶部点「切换」：
 
 | 方式     | 接口                    | 输入解释   | 可用筛选                     |
 | -------- | ----------------------- | ---------- | ---------------------------- |

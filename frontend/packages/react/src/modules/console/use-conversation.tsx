@@ -48,8 +48,11 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
+  const referenceSelection = chatOptions?.references;
   const { references, clearReferences } = useConversationReferences({
-    enabled: enabled && !conversation?.references,
+    enabled:
+      enabled && Boolean(referenceSelection || !conversation?.references),
+    selection: referenceSelection,
     requestOptions: options.requestOptions,
     scopeKey: options.scopeKey,
   });
@@ -69,7 +72,7 @@ export function useConversation(
     chat.signal,
   );
   const clearUploads = uploads.clear;
-  const { sessionId, reset, selectSession } = chat;
+  const { sessionId, reset, selectSession, status } = chat;
   const activeId = useRef(sessionId);
   activeId.current = sessionId;
   const selection = useMemo(
@@ -135,8 +138,8 @@ export function useConversation(
   const switching = Boolean(
     selectedId && selection.prop !== selectedId && sessionId !== selectedId,
   );
-  const isSending =
-    switching || chat.status === 'streaming' || chat.status === 'loading';
+  const isSending = switching || status === 'streaming' || status === 'loading';
+  const canCancel = chat.canInterrupt && status === 'streaming';
   return {
     ...conversation,
     ...uploads.props,
@@ -147,7 +150,7 @@ export function useConversation(
       busy: isSending || chat.isSubmitting,
       setDraft,
     }),
-    references: conversation?.references ?? references,
+    references: references ?? conversation?.references,
     messages: hitl.messages,
     messageList:
       conversation?.messageList === undefined
@@ -158,15 +161,15 @@ export function useConversation(
     listKey: `${scopeKey ?? ''}:${chat.sessionId ?? 'new'}`,
     isSending,
     canSendWhileStreaming:
-      chat.canSteer && chat.status === 'streaming' && Boolean(chat.sessionId),
+      chat.canSteer && status === 'streaming' && Boolean(sessionId),
     isSubmitting: chat.isSubmitting,
     onSend: (draft) => {
       if (!validation.validate(draft)) return;
       const token = ++submission.current;
-      const followingUp = chat.status === 'streaming';
+      const followingUp = status === 'streaming';
       if (!followingUp) {
         if (uploads.props) uploads.removeSent(draft.attachments);
-        clearReferences(draft.references ?? []);
+        if (!referenceSelection) clearReferences(draft.references ?? []);
       }
       setDraft((current) =>
         current.trim() === draft.text.trim() ? '' : current,
@@ -179,16 +182,12 @@ export function useConversation(
           return;
         }
         if (followingUp && uploads.props) uploads.removeSent(draft.attachments);
-        if (followingUp) clearReferences(draft.references ?? []);
+        if (followingUp || referenceSelection)
+          clearReferences(draft.references ?? []);
         if (!followingUp) void sessions.refresh();
       });
     },
-    onCancel:
-      chat.canInterrupt && chat.status === 'streaming'
-        ? () => {
-            void chat.abort();
-          }
-        : undefined,
+    onCancel: canCancel ? () => void chat.abort() : undefined,
     sessions: conversationSessions({
       host: hostSessions,
       sessions,

@@ -61,6 +61,11 @@ export function formatResult(
       'mv',
       'rm',
       'write',
+      'session new',
+      'session delete',
+      'session add-message',
+      'session add-messages',
+      'session commit',
     ].includes(name)
   ) {
     const hidden =
@@ -124,7 +129,16 @@ export function formatResult(
     return { variant: 'search-list', items };
   }
   if (
-    ['stat', 'status', 'health', 'task status', 'task cancel'].includes(name) &&
+    [
+      'stat',
+      'status',
+      'health',
+      'task status',
+      'task cancel',
+      'session get',
+      'session get-session-context',
+      'session get-session-archive',
+    ].includes(name) &&
     Object.keys(result).length
   )
     return {

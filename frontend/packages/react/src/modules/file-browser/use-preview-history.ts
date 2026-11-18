@@ -1,6 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { readHistoricalText, readPreviewHistory } from './preview-native.js';
+import {
+  readHistoricalText,
+  readPreviewHistory,
+} from './preview-history-data.js';
 import { diffLines } from './preview-diff.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import type { PreviewHistoryProps } from './preview-history.js';
@@ -56,7 +59,7 @@ export function usePreviewHistory(props: PreviewHistoryProps) {
       canCompare &&
       content.data !== undefined &&
       (!base || current.data !== undefined)
-        ? diffLines(current.data ?? '', content.data)
+        ? diffLines(current.data ?? '', content.data ?? '')
         : undefined,
     [compare, base, canCompare, content.data, current.data],
   );

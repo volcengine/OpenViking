@@ -1,5 +1,6 @@
 import { coreParameters } from './core-parameters.js';
 import filesystemParameters from './filesystem-parameters.js';
+import { transferCommands } from './transfer-commands.js';
 import { SEARCH_PARAMETERS_EN_US } from './search-parameters.js';
 import type { ConsoleCommandGuide, ConsoleLabels } from '../types.js';
 
@@ -29,6 +30,7 @@ const commands = {
   mv: 'Move a resource',
   rm: 'Remove a resource',
   write: 'Write text content',
+  ...transferCommands['en-US'],
   'task list': 'List background tasks',
   'task status': 'Inspect a background task',
   'task cancel': 'Request task cancellation',
@@ -166,11 +168,13 @@ const messages = {
     ...filesystemParameters['en-US'],
     ...SEARCH_PARAMETERS_EN_US,
   },
+  downloadedFile: (filename: string) => `Downloaded ${filename}`,
   commandGroups: {
     core: 'Core workflow',
     filesystem: 'Filesystem',
     search: 'Search & context',
     status: 'Config & status',
+    transfers: 'Transfers & sessions',
   },
   messages: {
     cancelled: () =>

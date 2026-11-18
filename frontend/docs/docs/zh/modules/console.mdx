@@ -50,7 +50,7 @@ import '@openviking/react/modules/console/style.css';
 
 示例使用模拟服务，可切换原生能力与火山当前契约。原生适配器提供 `interrupt` 和 `steer`，支持停止及生成中追问；火山当前适配器省略这两个方法，生成中禁用发送且不显示停止。回答后的下一轮提问两者均支持。
 
-点击底部的 `@`，或在输入框中键入 `@`，可浏览、搜索并引用文件和目录。内置选择器使用当前请求作用域下的 `/api/v1/fs/ls` 和 `/api/v1/search/glob`，打开时才加载。提供 `conversation.references` 时改用宿主的目录与引用状态。自定义对话服务可通过发送参数中的 `references` 读取已选引用。
+点击底部的 `@`，或在输入框中键入 `@`，可浏览、搜索并引用文件和目录。内置选择器使用当前请求作用域下的 `/api/v1/fs/ls` 和 `/api/v1/search/glob`，打开时才加载。通过 `chatOptions.references` 传入 `{ selected, onChange }`，可以让目录树与内置 `@` 选择器共享已选引用。省略该选项时，可以通过 `conversation.references` 同时提供候选项和已选引用。自定义对话服务可通过发送参数中的 `references` 读取已选引用。
 
 ### 待确认交互
 
@@ -117,15 +117,16 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 ### ConsoleChatOptions
 
-| 参数           | 说明                                                | 类型                                             | 默认值           |
-| -------------- | --------------------------------------------------- | ------------------------------------------------ | ---------------- |
-| taskService    | 对话后台任务查询适配器，默认共享 Console 的查询服务 | `ConsoleTaskService`                             | 继承 Console     |
-| locale         | 对话文案语言                                        | `'zh-CN' \| 'en-US'`                             | 继承 Console     |
-| persist        | 保存已完成的消息                                    | `boolean`                                        | `true`           |
-| scopeKey       | 动态身份的隔离键                                    | `string`                                         | 继承 Console     |
-| service        | 对话与会话适配器，保持引用稳定                      | `VikingBotChatService & VikingBotSessionService` | 原生服务         |
-| requestOptions | 对话请求配置                                        | `OvRequestOptions`                               | 继承 Console     |
-| hitl           | 自动问题组、字段校验与自定义卡片配置                | `ConsoleHitlOptions \| false`                    | 自动启用内置卡片 |
+| 参数           | 说明                                                | 类型                                                  | 默认值           |
+| -------------- | --------------------------------------------------- | ----------------------------------------------------- | ---------------- |
+| taskService    | 对话后台任务查询适配器，默认共享 Console 的查询服务 | `ConsoleTaskService`                                  | 继承 Console     |
+| locale         | 对话文案语言                                        | `'zh-CN' \| 'en-US'`                                  | 继承 Console     |
+| persist        | 保存已完成的消息                                    | `boolean`                                             | `true`           |
+| scopeKey       | 动态身份的隔离键                                    | `string`                                              | 继承 Console     |
+| service        | 对话与会话适配器，保持引用稳定                      | `VikingBotChatService & VikingBotSessionService`      | 原生服务         |
+| requestOptions | 对话请求配置                                        | `OvRequestOptions`                                    | 继承 Console     |
+| hitl           | 自动问题组、字段校验与自定义卡片配置                | `ConsoleHitlOptions \| false`                         | 自动启用内置卡片 |
+| references     | 内置 `@` 选择器的受控引用状态                       | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | 可选             |
 
 适配器每个方法都收到 `AbortSignal`，应响应取消并在失败时抛出错误。后端自动保存消息时省略 `saveMessage`。
 
@@ -310,7 +311,10 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 - 用 `compile create` 保存命名配置，再用 `compile --compile-name <name>` 执行。可以重复传入 `--from`，也可以用英文逗号分隔多个来源目录 URI。通过 `--instruction` 补充指令，或用 `--args` 传入模型、定时计划等 JSON 参数。用 `task status <task-id>` 查询返回的任务 ID。
 - `task cancel` 向服务端请求协作取消，任务可能不会立即停止。
 - 导入、编译与记忆提交返回任务 ID 后自动跟踪；任务状态独立于提交结果，终端输入在提交请求返回后恢复可用。
-- 命令集只包含浏览器能调用的原生 API，本地配置、登录、本地文件上传下载和会话管理类命令不在其中。
+- 用 `get <uri> <local-path>` 下载文件。用 `export <uri> <output>` 导出资源，或用 `backup <output>` 下载备份，两条命令均生成 ovpack，支持 `--include-vectors`。浏览器使用输出路径的最后一段作为文件名。备份需要管理员或 root 权限。
+- 用 `session new`、`session list`、`session get <session-id>`、`session get-session-context <session-id>`、`session get-session-archive <session-id> <archive-id>` 和 `session delete <session-id>` 管理会话。
+- 用 `session add-message <session-id> --role <role> --content <text>` 添加消息，或用 `session add-messages <session-id> --messages <json-array>` 传入带引号的 JSON 数组。用 `session commit <session-id>` 提交会话以提取记忆。
+- 命令集调用浏览器可访问的原生 API。本地配置、登录和本地文件选择由宿主应用处理。
 
 ## 注意
 

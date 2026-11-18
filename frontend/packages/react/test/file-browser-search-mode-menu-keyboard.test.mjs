@@ -3,7 +3,13 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
-import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
+import {
+  deferred,
+  mount,
+  ok,
+  recordingFetch,
+  settle,
+} from './helpers/module-dom.mjs';
 for (const name of ['HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);
@@ -26,18 +32,11 @@ const key = (target, name) =>
     ),
   );
 
-async function openWithResults() {
-  // grep 也要给一条命中：切模式会立刻重新检索，返回空列表时结果区没有模式行，
-  // 断言就看不到新的 chip。
-  //
-  // grep answers with one hit too: switching mode searches again at once, and an empty
-  // list renders no mode row, so the new chip would be missing from the assertions.
-  const fetch = recordingFetch((call) => {
-    if (call.path === find) return ok({ resources: [{ uri }] });
-    if (call.path === '/api/v1/search/grep')
-      return ok({ matches: [{ uri, line: 1, content: 'profile' }] });
-    return ok([]);
-  });
+async function openWithResults(
+  fetch = recordingFetch((call) =>
+    call.path === find ? ok({ resources: [{ uri }] }) : ok([]),
+  ),
+) {
   const view = await mount(
     h(
       OpenVikingProvider,
@@ -91,28 +90,14 @@ test('the mode menu takes focus on open and returns it on close', async () => {
     await act(async () => items()[2].click());
     await settle();
     assert.equal(items().length, 0);
-    // 选中后焦点落在搜索输入框：「切换」随模式行在加载态里卸载，还给它就会掉到
-    // `body`。
-    //
-    // Focus lands on the search input after a selection: the switch unmounts with the
-    // mode row while loading, so returning focus to it would drop to `body`.
+    // Selection returns focus to the input so users can continue typing.
     assert.equal(
       document.activeElement,
       document.querySelector('.ov-file-browser-search__input'),
     );
-    // 选完模式会立刻重新检索，结果区在加载态里不渲染模式行，因此这里等结果回来
-    // 再断言模式 chip；焦点在等待期间落在搜索输入框上。
-    //
-    // Picking a mode starts a new search at once and the results area renders no mode
-    // row while loading, so wait for the results before asserting the chip; focus lands
-    // on the search input in the meantime.
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 100)));
-    await settle();
     assert.equal(
-      document
-        .querySelector('.ov-file-browser-search__summary')
-        .textContent.includes('grep'),
-      true,
+      document.querySelector('.ov-file-browser-search__mode-chip').textContent,
+      'grep',
     );
 
     await key(modeSwitch(), 'ArrowDown');
@@ -129,6 +114,64 @@ test('the mode menu takes focus on open and returns it on close', async () => {
     // Esc 只关菜单，搜索弹窗仍开着。
     // Escape closes the menu only; the search dialog stays open.
     assert.ok(document.querySelector('.ov-file-browser-search'));
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('users can switch from empty grep and glob results to semantic retrieval', async () => {
+  const grep = '/api/v1/search/grep';
+  const glob = '/api/v1/search/glob';
+  const search = '/api/v1/search/search';
+  const pendingGrep = deferred();
+  const fetch = recordingFetch(({ path }) => {
+    if (path === grep) return pendingGrep.promise;
+    if (path === glob) return ok({ matches: [] });
+    if (path === find || path === search) return ok({ resources: [{ uri }] });
+    return ok([]);
+  });
+  const view = await openWithResults(fetch);
+  const trigger = modeSwitch();
+  const switchTo = async (mode) => {
+    await key(trigger, 'Enter');
+    await settle();
+    const option = items().find(
+      (item) =>
+        item.querySelector('.ov-file-browser-search__menu-name').textContent ===
+        mode,
+    );
+    assert.ok(option, `the menu offers ${mode}`);
+    await act(async () => option.click());
+    await settle();
+  };
+  const hasNoResults = () =>
+    document.querySelector('.ov-file-browser-search__no-results');
+  try {
+    await switchTo('grep');
+    assert.ok(document.querySelector('.ov-file-browser-search__skeletons'));
+    pendingGrep.resolve(await ok({ matches: [] }));
+    await settle();
+    assert.ok(hasNoResults());
+    assert.equal(modeSwitch(), trigger);
+
+    await switchTo('search');
+    assert.deepEqual(
+      fetch.calls
+        .filter(({ path }) => path === search)
+        .map(({ body }) => body.query),
+      ['profile'],
+    );
+    assert.equal(hasNoResults(), null);
+
+    await switchTo('glob');
+    assert.ok(hasNoResults());
+    assert.equal(modeSwitch(), trigger);
+    await switchTo('find');
+    assert.equal(hasNoResults(), null);
+    assert.equal(
+      document.querySelector('.ov-file-browser-search__mode-chip').textContent,
+      'find',
+    );
   } finally {
     await view.unmount();
   }

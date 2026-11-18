@@ -119,6 +119,11 @@ test('search runs as you type, keeps the scope, and survives a locale change', a
     await view.render(render(fetch, 'zh-CN'));
     assert.equal(input().value, '  profile  ');
     assert.equal(calls(fetch).length, 1);
+
+    await type('');
+    await waitForDebounce();
+    assert.equal(modeSwitch(), null);
+    assert.equal(calls(fetch).length, 1);
   } finally {
     await view.unmount();
   }
@@ -161,7 +166,7 @@ test('failed searches expose the reason and can retry the same query', async () 
       dialog().querySelector('[role="alert"]').textContent,
       /demo search failed/,
     );
-    assert.equal(modeSwitch(), null);
+    assert.ok(modeSwitch());
 
     available = true;
     await act(async () =>
@@ -173,7 +178,7 @@ test('failed searches expose the reason and can retry the same query', async () 
     assert.equal(calls(fetch).length, 3);
     assert.equal(calls(fetch)[2].body.query, 'profile');
     assert.match(dialog().textContent, /No matching resources/);
-    assert.equal(modeSwitch(), null);
+    assert.ok(modeSwitch());
   } finally {
     await view.unmount();
   }
@@ -191,7 +196,7 @@ test('closing cancels the pending search, clears the draft and restores focus', 
     await waitForDebounce();
     const signal = calls(fetch)[0].init.signal;
     assert.ok(dialog().querySelector('[aria-busy="true"]'));
-    assert.equal(modeSwitch(), null);
+    assert.ok(modeSwitch());
 
     await act(async () => dialog().querySelector('.ov-modal__close').click());
     await settle();

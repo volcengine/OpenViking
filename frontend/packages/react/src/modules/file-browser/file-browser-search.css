@@ -788,4 +788,23 @@
   .ov-file-browser-search__advanced {
     width: 100%;
   }
+
+  .ov-file-browser-search__dates {
+    position: relative;
+  }
+
+  .ov-file-browser-search__dates > .ov-date-picker {
+    position: static;
+  }
+
+  .ov-file-browser-search__dates .ov-date-picker__popup {
+    max-width: 100%;
+  }
+
+  .ov-file-browser-search__dates
+    > .ov-date-picker:last-child
+    .ov-date-picker__popup {
+    right: 0;
+    left: auto;
+  }
 }

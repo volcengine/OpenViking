@@ -3,8 +3,10 @@ import { OV_PATH_BUILDERS, OV_PATHS } from '../../client/paths.js';
 import type { OvRequestSpec } from '../../client/types.js';
 import type { CommandConsoleSkeletonKind } from '../../components/command-console/index.js';
 import { CORE_COMMAND_SPECS } from './core-command-specs.js';
+import { DOWNLOAD_COMMAND_SPECS } from './download-command-specs.js';
 import { FILESYSTEM_COMMAND_SPECS } from './filesystem-command-specs.js';
 import { SEARCH_COMMAND_SPECS } from './search-command-specs.js';
+import { SESSION_COMMAND_SPECS } from './session-command-specs.js';
 import type { Argument, ArgumentValues } from './command-parser.js';
 
 export interface CommandSpec {
@@ -15,6 +17,7 @@ export interface CommandSpec {
   preferredPositional?: readonly Argument[];
   preferredFlags?: readonly Argument[];
   skeleton?: CommandConsoleSkeletonKind;
+  downloadFilename?: (values: ArgumentValues) => string;
   request?: (values: ArgumentValues) => OvRequestSpec;
   execute?: (
     values: ArgumentValues,
@@ -43,6 +46,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   ...FILESYSTEM_COMMAND_SPECS,
   ...SEARCH_COMMAND_SPECS,
+  ...DOWNLOAD_COMMAND_SPECS,
+  ...SESSION_COMMAND_SPECS,
   {
     name: 'task list',
     flags: [

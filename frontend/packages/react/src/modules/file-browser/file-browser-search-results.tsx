@@ -8,18 +8,7 @@ import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
 import type { SearchHit, SearchMode } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
-/**
- * 结果区：计数行与列表，另有空态、加载骨架与失败三态。
- *
- * 计数行只在有结果时出现——没搜过的时候它没有可数的东西，画一条「检索到 0 条」
- * 反而像搜索失败了。
- *
- * The result area: the count line and the list, plus the empty, loading and failure
- * states.
- *
- * The count line only appears when there are results: before a search there is nothing
- * to count, and "0 results" reads as a failure.
- */
+/** The mode stays selectable while an active search changes state. */
 export interface FileBrowserSearchResultsProps {
   open: boolean;
   mode: SearchMode;
@@ -34,7 +23,7 @@ export interface FileBrowserSearchResultsProps {
   /** 是否已经搜过；`false` 时显示空态。Whether a search has run; `false` shows the empty state. */
   searched: boolean;
   text: ResolvedLabels;
-  /** 「切换」不在时的焦点去处，通常是搜索输入框。 Where focus goes when the switch is gone. */
+  /** Focus returns to the search input after a mode is selected. */
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   onSelectMode: (mode: SearchMode) => void;
   onOpen: (uri: string) => void;
@@ -44,8 +33,31 @@ export interface FileBrowserSearchResultsProps {
 const SKELETON_WIDTHS = [368, 348, 319, 359, 335, 316, 368, 351];
 
 export function FileBrowserSearchResults({
-  open,
   mode,
+  fallbackFocusRef,
+  onSelectMode,
+  ...results
+}: FileBrowserSearchResultsProps) {
+  const showMode =
+    results.query.length > 0 || results.loading || results.searched;
+  return (
+    <>
+      {showMode ? (
+        <FileBrowserSearchModeRow
+          mode={mode}
+          count={results.hits.length || undefined}
+          text={results.text}
+          fallbackFocusRef={fallbackFocusRef}
+          onSelectMode={onSelectMode}
+        />
+      ) : null}
+      <SearchResultsBody {...results} />
+    </>
+  );
+}
+
+function SearchResultsBody({
+  open,
   listId,
   activeIndex,
   query,
@@ -56,10 +68,11 @@ export function FileBrowserSearchResults({
   error,
   searched,
   text,
-  fallbackFocusRef,
-  onSelectMode,
   onOpen,
-}: FileBrowserSearchResultsProps) {
+}: Omit<
+  FileBrowserSearchResultsProps,
+  'mode' | 'fallbackFocusRef' | 'onSelectMode'
+>) {
   const exposure = useExposure(
     hits.length
       ? 'file_browser_search_results_show'
@@ -68,12 +81,6 @@ export function FileBrowserSearchResults({
     undefined,
     open && searched && !loading && !error,
   );
-  // 模式行只在真有结果时出现：设计稿的空态、加载态与失败态都没有这一行，它上面
-  // 的数字也只在有东西可数时才说得通。
-  //
-  // The mode row appears only when there are results: the design draws neither the
-  // empty, loading nor failure state with it, and its number only means something
-  // when there is something to count.
   if (loading && !hits.length) {
     return (
       <div className="ov-file-browser-search__skeletons" aria-busy="true">
@@ -143,13 +150,6 @@ export function FileBrowserSearchResults({
     <>
       {failure}
       {loading ? <p role="status">{text.searchLoading}</p> : null}
-      <FileBrowserSearchModeRow
-        mode={mode}
-        count={hits.length}
-        text={text}
-        fallbackFocusRef={fallbackFocusRef}
-        onSelectMode={onSelectMode}
-      />
       <ul
         ref={exposure}
         id={listId}

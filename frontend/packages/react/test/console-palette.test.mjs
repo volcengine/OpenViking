@@ -23,7 +23,7 @@ test('slash palette uses the built-in group order and keeps cross-group commands
           group.querySelector('.ov-command-console__suggestion-label')
             .textContent,
       ),
-      ['核心流程', '文件系统', '搜索与上下文', '配置与状态'],
+      ['核心流程', '文件系统', '搜索与上下文', '配置与状态', '传输与会话'],
     );
     const names = (group) =>
       [...group.querySelectorAll('.ov-command-console__suggestion-name')].map(
@@ -46,6 +46,7 @@ test('slash palette uses the built-in group order and keeps cross-group commands
       'rm',
       'mv',
       'stat',
+      'get',
       'cp',
     ]);
     assert.deepEqual(names(groups[2]), [
@@ -96,7 +97,7 @@ test('slash palette uses the built-in group order and keeps cross-group commands
           '.ov-command-console__help-section-label',
         ),
       ].map((label) => label.textContent),
-      ['核心流程', '文件系统', '搜索与上下文', '配置与状态'],
+      ['核心流程', '文件系统', '搜索与上下文', '配置与状态', '传输与会话'],
     );
   } finally {
     await host.dispose();

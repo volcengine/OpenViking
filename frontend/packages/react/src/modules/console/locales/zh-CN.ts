@@ -1,5 +1,6 @@
 import { coreParameters } from './core-parameters.js';
 import filesystemParameters from './filesystem-parameters.js';
+import { transferCommands } from './transfer-commands.js';
 import { SEARCH_PARAMETERS_ZH_CN } from './search-parameters.js';
 import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ConsoleLabels } from '../types.js';
@@ -66,6 +67,7 @@ const messages: typeof enUS = {
     mv: '移动资源',
     rm: '删除资源',
     write: '更新已有资源',
+    ...transferCommands['zh-CN'],
     'task list': '列出后台任务',
     'task status': '查看后台任务',
     'task cancel': '请求取消后台任务',
@@ -159,11 +161,13 @@ const messages: typeof enUS = {
     ...filesystemParameters['zh-CN'],
     ...SEARCH_PARAMETERS_ZH_CN,
   },
+  downloadedFile: (filename: string) => `已下载 ${filename}`,
   commandGroups: {
     core: '核心流程',
     filesystem: '文件系统',
     search: '搜索与上下文',
     status: '配置与状态',
+    transfers: '传输与会话',
   },
   messages: {
     cancelled: () => '请求已取消；服务端可能仍在处理已接收的操作。',

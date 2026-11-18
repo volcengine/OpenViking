@@ -1,10 +1,7 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { splitWikiMetadata } from './wiki-metadata.js';
-import type {
-  CompileConfig,
-  PreviewHistoryEntry,
-} from './preview-workflow-types.js';
+import { downloadBlob } from '../../shared/download-blob.js';
+import type { CompileConfig } from './preview-workflow-types.js';
 
 export function savePreviewSnapshot(
   client: OvClient,
@@ -18,25 +15,6 @@ export function savePreviewSnapshot(
     body: { message, paths: [uri], branch: 'main' },
     options,
   });
-}
-
-export { readPreviewHistory } from './preview-history-data.js';
-
-export async function readHistoricalText(
-  client: OvClient,
-  entry: PreviewHistoryEntry,
-  options: OvRequestOptions,
-  wiki = false,
-) {
-  const result = await client.request<Blob>({
-    method: 'GET',
-    path: OV_PATHS.snapshotShow,
-    query: { target_ref: entry.snapshot, path: entry.path, raw: false },
-    responseType: 'blob',
-    options,
-  });
-  const text = await result.text();
-  return wiki ? splitWikiMetadata(text).document : text;
 }
 
 export function readCompileConfig(
@@ -76,16 +54,6 @@ export async function importPreviewPack(
   });
 }
 
-export function savePreviewBlob(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = name;
-  link.click();
-  // Let the browser acquire the URL before releasing it.
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
 export async function downloadPreview(
   client: OvClient,
   uri: string,
@@ -111,5 +79,5 @@ export async function downloadPreview(
   );
   if (options.signal?.aborted) return;
   const name = uri.split('/').pop() || 'resource';
-  savePreviewBlob(blob, pack ? `${name}.ovpack` : name);
+  downloadBlob(blob, pack ? `${name}.ovpack` : name);
 }

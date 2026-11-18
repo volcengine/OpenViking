@@ -2,6 +2,15 @@ import type { FileTreeEntryRow } from '../../components/file-tree/index.js';
 
 export const MENTION_ROOT = 'viking://';
 
+export function normalizeMentionQuery(query: string) {
+  return query
+    .trim()
+    .replace(/^viking:\/\//i, '')
+    .split('/')
+    .filter(Boolean)
+    .join('/');
+}
+
 /** Use native glob for a literal basename search across unloaded directories. */
 export function mentionPattern(keyword: string) {
   const parts = keyword
