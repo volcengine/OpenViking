@@ -13,7 +13,7 @@ from openviking_cli.utils.config.parser_config import SemanticConfig
 
 @pytest.mark.asyncio
 async def test_oversized_directory_material_is_batched_before_model_calls():
-    complete = AsyncMock(return_value="Short summary.")
+    complete = AsyncMock(side_effect=["x" * 2000] * 3 + ["Merged summary."])
     config = SemanticConfig(max_overview_prompt_chars=2000, overview_batch_size=50)
     result = await generate_directory_semantics(
         "viking://resources/root",
@@ -29,7 +29,7 @@ async def test_oversized_directory_material_is_batched_before_model_calls():
     assert all(len(prompt) <= config.max_overview_prompt_chars for prompt in prompts)
     assert all(f"child-{i}" in prompts[i] for i in range(3))
     assert all(f"child-{i}" not in prompts[-1] for i in range(3))
-    assert result.abstract == "Short summary."
+    assert result.abstract == "Merged summary."
 
 
 @pytest.mark.asyncio

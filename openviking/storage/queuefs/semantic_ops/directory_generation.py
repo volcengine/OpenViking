@@ -35,12 +35,13 @@ def render_directory_overview(
     abstract: str,
     entries: Mapping[str, Mapping[str, str]],
     *,
+    full_abstract: str,
     config: SemanticConfig,
     language: str,
     total_entries: int,
     navigation_renderer: Callable[[list[str]], str] | None = None,
 ) -> str:
-    """Reserve space for navigation links before adding entry descriptions."""
+    """Reserve space for navigation before expanding the abstract and entry descriptions."""
     chinese = language.lower().startswith("zh")
     title = dir_uri.rstrip("/").rsplit("/", 1)[-1]
     abstract = abstract.strip()
@@ -81,6 +82,12 @@ def render_directory_overview(
             selected.append((link, summary))
             budget -= cost
 
+    full_abstract = full_abstract.strip()
+    extra_chars = len(full_abstract) - len(abstract)
+    if extra_chars <= budget:
+        abstract = full_abstract
+        budget -= extra_chars
+
     separator = "：" if chinese else ": "
     # Give short descriptions their full text first and share the rest among
     # longer descriptions. Links have already been budgeted independently.
@@ -111,7 +118,7 @@ async def generate_directory_semantics(
     navigation_renderer: Callable[[list[str]], str] | None = None,
     preset_abstract: str | None = None,
 ) -> DirectoryGeneration:
-    """Regenerate L0 from the selected inputs, then render L1 without a model."""
+    """Build L0 and L1 from the same directory summary."""
     manual = previous is not None and previous.is_manual_abstract
     # A template-backed directory has a fixed purpose. Preserve any existing
     # L0, or seed the template text on the first refresh of a populated folder.
@@ -120,6 +127,7 @@ async def generate_directory_semantics(
         abstract = previous.body.strip()
     else:
         abstract = (preset_abstract or "") if seeded else ""
+    full_abstract = abstract
 
     def prompt(material: list[str]) -> str:
         return render_prompt(
@@ -134,14 +142,14 @@ async def generate_directory_semantics(
             },
         )
 
-    async def summarize(material: list[str]) -> str:
+    async def summarize(material: list[str]) -> tuple[str, str]:
         text = prompt(material)
         if len(text) > config.max_overview_prompt_chars:
             raise ValueError("directory abstract input exceeds max_overview_prompt_chars")
         result = (await complete(text)).strip()
         if not result:
             raise ValueError("directory abstract generation returned empty content")
-        return result[: config.abstract_max_chars].rstrip()
+        return result[: config.abstract_max_chars].rstrip(), result
 
     def batches(material: list[str]) -> list[list[str]]:
         result: list[list[str]] = []
@@ -168,9 +176,12 @@ async def generate_directory_semantics(
         while True:
             groups = batches(material)
             if len(groups) == 1:
-                abstract = await summarize(groups[0])
+                abstract, full_abstract = await summarize(groups[0])
                 break
-            merged = [await summarize(group) for group in groups]
+            merged = []
+            for group in groups:
+                partial_abstract, _ = await summarize(group)
+                merged.append(partial_abstract)
             if len(merged) >= len(material) and sum(map(len, merged)) >= sum(map(len, material)):
                 raise ValueError("directory abstract budget cannot merge summary batches")
             material = merged
@@ -179,6 +190,7 @@ async def generate_directory_semantics(
         dir_uri,
         abstract,
         entries,
+        full_abstract=full_abstract,
         config=config,
         language=language,
         total_entries=total_entries,

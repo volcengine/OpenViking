@@ -23,7 +23,8 @@ from tests.storage.test_abstract_overview_freshness import _FakeFS
 
 @pytest.mark.asyncio
 async def test_directory_generation_uses_model_only_for_l0_and_renders_real_navigation():
-    complete = AsyncMock(return_value="Documentation for the search service.")
+    full_abstract = "Documentation for the search service."
+    complete = AsyncMock(return_value=full_abstract)
     result = await generate_directory_semantics(
         "viking://resources/product docs",
         {
@@ -32,12 +33,12 @@ async def test_directory_generation_uses_model_only_for_l0_and_renders_real_navi
         },
         previous=None,
         total_entries=513,
-        config=SemanticConfig(),
+        config=SemanticConfig(abstract_max_chars=17),
         language="en",
         complete=complete,
     )
-    assert result.abstract == "Documentation for the search service."
-    assert result.abstract in result.overview
+    assert result.abstract == "Documentation for"
+    assert f"\n\n{full_abstract}\n\n" in result.overview
     assert "viking://resources/product%20docs/guide%20%231.md" in result.overview
     assert result.overview.index("[api]") < result.overview.index("[guide #1.md]")
     assert "Only some entries are listed" in result.overview
@@ -112,6 +113,8 @@ async def test_manual_l0_survives_generation_and_rejects_public_metadata_changes
 
 @pytest.mark.asyncio
 async def test_overview_budget_preserves_navigation_when_the_first_summary_is_too_long():
+    abstract = "Short abstract."
+    full_abstract = f"{abstract} {'x' * 700}"
     result = await generate_directory_semantics(
         "viking://resources/docs",
         {
@@ -120,11 +123,12 @@ async def test_overview_budget_preserves_navigation_when_the_first_summary_is_to
         },
         previous=None,
         total_entries=3,
-        config=SemanticConfig(overview_max_chars=700),
+        config=SemanticConfig(abstract_max_chars=len(abstract), overview_max_chars=700),
         language="en",
-        complete=AsyncMock(return_value="Short abstract."),
+        complete=AsyncMock(return_value=full_abstract),
     )
     assert len(result.overview) <= 700
+    assert f"\n\n{abstract}\n\n" in result.overview
     lines = [line for line in result.overview.splitlines() if line.startswith("- [")]
     assert len(lines) == 2
     assert lines[0].startswith("- [api.py](viking://resources/docs/api.py)")
