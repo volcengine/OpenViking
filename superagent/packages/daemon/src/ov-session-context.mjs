@@ -347,6 +347,9 @@ export class OVSessionContext {
     try {
       return await submit({ pending: saved?.acceptance, stopped: () => this.stopped,
         onAccepted: (acceptance) => {
+          // Cancellation can restore a previously checked journal head; an
+          // accepted write still requires another checkpoint in that case.
+          this.checked.delete(state.epoch);
           state.pending_task = JSON.stringify({ operation, seq, acceptance: {
             accepted: true, task_id: acceptance.task_id, session_id: acceptance.session_id, operation: acceptance.operation,
           } });
@@ -423,6 +426,21 @@ export class OVSessionContext {
   // Returns false when an unsettled local delivery stops the cursor; a later
   // checkpoint continues from it once it settles.
   async sync(state, epoch, throughSeq) {
+    // The journal is mutable: clearing a temporary reaction cancels its row,
+    // and can even move head behind the accepted append. Its durable receipt
+    // still owns the write. Resolve it before selecting/skipping journal rows;
+    // resuming needs no body and must never submit the cancelled source again.
+    if (state.pending_task) {
+      const pending = JSON.parse(state.pending_task);
+      if (pending.operation !== 'append' || pending.acceptance?.accepted !== true
+        || !Number.isSafeInteger(pending.seq) || pending.seq <= 0) {
+        throw new OVSessionTaskError('PROTOCOL_ERROR');
+      }
+      await this.write(state, 'append', pending.seq,
+        (options) => this.client.append(state.session_id, undefined, options));
+      if (this.stopped) throw new Error('OV sync stopped');
+      this.acknowledgeAppend(state, Math.max(state.synced_seq, pending.seq));
+    }
     // Bounded DB reads; no epoch-sized array of bodies is materialized.
     while (state.synced_seq < throughSeq) {
       if (this.stopped) throw new Error('OV sync stopped');
@@ -439,7 +457,7 @@ export class OVSessionContext {
         continue;
       }
       const sourceId = `lark:${epoch}:${row.seq}`;
-      if (state.pending_task || !(state.pending_seq === row.seq && await this.hasSource(state, sourceId))) {
+      if (!(state.pending_seq === row.seq && await this.hasSource(state, sourceId))) {
         const item = this.store.cognitionJournal(epoch, row.seq, row.seq - 1)[0];
         if (!item) throw new Error('OV sync source record is unavailable');
         this.store.db.prepare('UPDATE ov_session_sync SET pending_seq=? WHERE epoch=?').run(row.seq, epoch);
@@ -452,13 +470,17 @@ export class OVSessionContext {
         }, options));
       }
       if (this.stopped) throw new Error('OV sync stopped');
-      this.store.db.prepare('UPDATE ov_session_sync SET synced_seq=?,pending_seq=NULL,pending_task=NULL WHERE epoch=? AND identity=?')
-        .run(row.seq, epoch, this.identity);
-      state.synced_seq = row.seq;
-      state.pending_seq = null;
-      state.pending_task = null;
+      this.acknowledgeAppend(state, row.seq);
     }
     return true;
+  }
+
+  acknowledgeAppend(state, seq) {
+    this.store.db.prepare('UPDATE ov_session_sync SET synced_seq=?,pending_seq=NULL,pending_task=NULL WHERE epoch=? AND identity=?')
+      .run(seq, state.epoch, this.identity);
+    state.synced_seq = seq;
+    state.pending_seq = null;
+    state.pending_task = null;
   }
 
   // OV's recent raw history for a fresh native session. Older history stays in
@@ -524,12 +546,17 @@ export class OVSessionContext {
       WHERE j.epoch<? AND j.status IN ('PENDING','COMMITTED','UNCERTAIN')
         AND (s.identity=? OR (s.epoch IS NULL AND j.epoch>=?))
       GROUP BY j.epoch HAVING MAX(j.seq)>COALESCE(s.finalized_seq,-1)
-      ORDER BY j.epoch`).all(this.store.getCognitionState().epoch, this.identity, this.firstEpoch);
+      UNION
+      SELECT s.epoch, COALESCE((SELECT MAX(j.seq) FROM cognition_journal j
+        WHERE j.epoch=s.epoch AND j.status IN ('PENDING','COMMITTED','UNCERTAIN')),0) AS head
+      FROM ov_session_sync s WHERE s.epoch<? AND s.identity=? AND s.pending_task IS NOT NULL
+      ORDER BY epoch`).all(this.store.getCognitionState().epoch, this.identity, this.firstEpoch,
+        this.store.getCognitionState().epoch, this.identity);
     for (const row of retired) {
       if (this.stopped) throw new Error('OV sync stopped');
       try {
         const state = await this.session(row.epoch);
-        if (state.finalized_seq >= row.head) continue;
+        if (!state.pending_task && state.finalized_seq >= row.head) continue;
         if (!await this.sync(state, row.epoch, row.head)) continue;
         // No retained tail: this session will receive no more user turns.
         await this.commit(state, true, row.head);

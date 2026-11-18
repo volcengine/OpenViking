@@ -194,6 +194,15 @@ receipt. This conservative behavior prevents blind duplicate submission; it
 does not claim an exactly-once guarantee for a lost HTTP response before any
 receipt was obtained. No server dispatch settings or SDK replacement is needed.
 
+Pending appends are resumed before choosing the next journal row, even if their
+source was cancelled by normal temporary-reaction cleanup or the journal head
+has moved backwards. Resume uses only the saved receipt; it never re-posts a
+cancelled message. Completion clears the receipt and acknowledges its original
+sequence atomically. Retired epochs with outstanding receipts remain eligible
+for recovery even when all their journal rows have been cancelled. A failed Task
+is reported without advancing the cursor; subsequent sync can then skip the
+cancelled source and continue with later messages.
+
 Regression tests: `node --test packages/daemon/test/ov-session-*.test.mjs`
 from `superagent/`.
 

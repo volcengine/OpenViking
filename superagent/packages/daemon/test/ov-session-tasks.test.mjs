@@ -369,3 +369,101 @@ test('Task query failure retains its receipt without resubmitting the append', a
   fail = false; await service.prepare(epoch);
   assert.equal(f.posts.filter((p) => p.operation === 'append').length, 1);
 });
+
+test('clearing a temporary reaction does not strand its accepted append, including after restart', async (t) => {
+  for (const restart of [false, true]) await t.test(String(restart), async (t) => {
+    const f = fixture(t); let current = f.connect();
+    const { epoch } = current.store.getCognitionState();
+    await current.service.checkpoint(epoch);
+    const reaction = current.store.reserveOutbox({ connector: 'lark', action: 'message.react',
+      idempotencyKey: 'working', payload: {}, summary: '[reaction OnIt]', caller: 'agent' });
+    current.store.settleOutbox(reaction.id, 'SENT');
+    f.remote.held.add('append');
+    await assert.rejects(current.service.prepare(epoch), /RESULT_UNKNOWN/);
+    const pending = JSON.parse(f.state(current.store).pending_task);
+    current.store.cancelOutboxJournal(reaction.id);
+    if (restart) { current.close(); current = f.connect(); }
+    // The cancelled reaction was the last row: head is now zero. Still poll
+    // its original receipt rather than marking this checkpoint complete.
+    assert.equal(current.store.cognitionJournalHead(epoch), 0);
+    await assert.rejects(current.service.checkpoint(epoch), /RESULT_UNKNOWN/);
+    assert.equal(f.state(current.store).synced_seq, 0);
+    assert.equal(JSON.parse(f.state(current.store).pending_task).acceptance.task_id, pending.acceptance.task_id);
+    f.remote.held.delete('append');
+    await current.service.prepare(epoch);
+    assert.equal(f.state(current.store).synced_seq, pending.seq);
+    assert.equal(f.state(current.store).pending_task, null);
+    current.store.appendCognitionJournal({ kind: 'control', text: '/status' });
+    f.append(current.store, 'next request');
+    await current.service.prepare(epoch);
+    assert.equal(f.posts.filter((p) => p.operation === 'append').length, 2);
+    assert.equal(f.state(current.store).synced_seq, current.store.cognitionJournalHead(epoch));
+    assert.equal([...f.sessions.values()][0].messages.filter((m) => m.source_message_ids.includes(`lark:${epoch}:${pending.seq}`)).length, 1);
+  });
+});
+
+test('a cancelled source still resumes its original Task before skipping ahead to later messages', async (t) => {
+  const f = fixture(t); const { store, service } = f.connect();
+  const { epoch } = store.getCognitionState();
+  const reaction = store.reserveOutbox({ connector: 'lark', action: 'message.react',
+    idempotencyKey: 'working', payload: {}, summary: '[reaction OnIt]', caller: 'agent' });
+  store.settleOutbox(reaction.id, 'SENT'); f.remote.held.add('append');
+  await assert.rejects(service.prepare(epoch), /RESULT_UNKNOWN/);
+  const pending = JSON.parse(f.state(store).pending_task);
+  store.cancelOutboxJournal(reaction.id);
+  store.appendCognitionJournal({ kind: 'control', text: '/status' });
+  f.append(store, 'later request');
+  await assert.rejects(service.prepare(epoch), /RESULT_UNKNOWN/);
+  assert.equal(f.posts.filter((p) => p.operation === 'append').length, 1);
+  assert.equal(f.state(store).synced_seq, 0);
+  f.remote.held.delete('append');
+  await service.prepare(epoch);
+  assert.equal(f.posts.filter((p) => p.operation === 'append').length, 2);
+  assert.ok(f.polls.filter((p) => p.id === pending.acceptance.task_id).length > 1);
+  assert.equal(f.state(store).synced_seq, store.cognitionJournalHead(epoch));
+});
+
+test('a failed cancelled-source Task is reported once, then later messages can sync', async (t) => {
+  const f = fixture(t); const { store, service } = f.connect();
+  const { epoch } = store.getCognitionState();
+  const reaction = store.reserveOutbox({ connector: 'lark', action: 'message.react',
+    idempotencyKey: 'working', payload: {}, summary: '[reaction OnIt]', caller: 'agent' });
+  store.settleOutbox(reaction.id, 'SENT'); f.remote.held.add('append');
+  await assert.rejects(service.prepare(epoch), /RESULT_UNKNOWN/);
+  store.cancelOutboxJournal(reaction.id); f.append(store, 'later request');
+  f.remote.held.delete('append'); f.remote.fail = 'append';
+  await assert.rejects(service.prepare(epoch), (e) => e.code === 'WRITE_REJECTED');
+  assert.equal(f.state(store).pending_task, null);
+  assert.equal(f.state(store).synced_seq, 0);
+  f.remote.fail = null; await service.prepare(epoch);
+  assert.equal(f.posts.filter((p) => p.operation === 'append').length, 2);
+  assert.equal([...f.sessions.values()][0].messages.length, 1);
+  assert.equal(f.state(store).synced_seq, store.cognitionJournalHead(epoch));
+});
+
+test('an epoch containing only a cancelled accepted append is recovered and finalized after restart', async (t) => {
+  const f = fixture(t); let current = f.connect();
+  const { epoch } = current.store.getCognitionState();
+  const reaction = current.store.reserveOutbox({ connector: 'lark', action: 'message.react',
+    idempotencyKey: 'working', payload: {}, summary: '[reaction OnIt]', caller: 'agent' });
+  current.store.settleOutbox(reaction.id, 'SENT'); f.remote.held.add('append');
+  await assert.rejects(current.service.prepare(epoch), /RESULT_UNKNOWN/);
+  const pending = JSON.parse(f.state(current.store).pending_task);
+  current.store.cancelOutboxJournal(reaction.id);
+  current.store.bumpCognitionEpoch('codex', 'owner');
+  current.close(); current = f.connect();
+  await current.service.checkpoint(current.store.getCognitionState().epoch);
+  assert.ok(f.state(current.store, epoch).pending_task);
+  assert.equal(f.state(current.store, epoch).synced_seq, 0);
+  assert.equal(f.posts.filter((p) => p.operation === 'commit').length, 0);
+  f.remote.held.delete('append');
+  await current.service.checkpoint(current.store.getCognitionState().epoch);
+  const state = f.state(current.store, epoch);
+  assert.equal(state.pending_task, null);
+  assert.equal(state.synced_seq, pending.seq);
+  assert.equal(state.finalized_seq, 0);
+  assert.equal(f.posts.filter((p) => p.operation === 'append').length, 1);
+  assert.equal(f.posts.filter((p) => p.operation === 'commit').length, 1);
+  await current.service.checkpoint(current.store.getCognitionState().epoch);
+  assert.equal(f.posts.filter((p) => p.operation === 'commit').length, 1);
+});
