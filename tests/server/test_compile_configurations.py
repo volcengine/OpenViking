@@ -43,14 +43,6 @@ INPUTS = {"from": [SOURCE], "to": TARGET, "skill": SKILL}
 SAVED_INPUTS = {**INPUTS, "compile_name": "研发周报"}
 
 
-COMPLETE_DELIVERY = {
-    "completion_status": "complete",
-    "coverage_kind": "assignment_delivery_v1",
-    "source_coverage": {"delivered": 1},
-    "failure_summary": [],
-}
-
-
 @pytest.mark.parametrize("body", [b'{"error":{"message":"Ark unavailable"}}', b"unavailable"])
 async def test_compile_runtime_424_is_non_retryable(service, monkeypatch, body):
     """Runtime 424 preserves request context even when the response is not JSON."""
@@ -170,7 +162,6 @@ async def prepare(service, app, monkeypatch):
             status=runtime.status,
             stage=runtime.status,
             error="generation failed" if runtime.status == "failed" else None,
-            result=dict(COMPLETE_DELIVERY) if runtime.status == "completed" else None,
         )
     )
     monkeypatch.setattr(service.compile, "_client", lambda: runtime)
@@ -716,9 +707,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         assert failed_run["status"] == "failed"
         assert "Ark unavailable" in failed.error and "Ark unavailable" in failed_run["error"]
         runtime.status, runtime.get.side_effect = "completed", None
-        runtime.get.return_value = CompileSessionStatus(
-            status="completed", stage="done", result=dict(COMPLETE_DELIVERY)
-        )
+        runtime.get.return_value = CompileSessionStatus(status="completed", stage="done")
         successor = await execute({"compile_name": compile_name}, "compile-after-424")
         assert successor.status == "completed"
         assert await service.fs.read(f"{TARGET}/page.md", ctx) != preserved
@@ -1080,38 +1069,3 @@ async def test_failed_tag_enqueue_releases_compile_target(service, monkeypatch):
         await service.fs.ensure_compile_target(TARGET, ctx)
     requests, _ = service.fs._compile_target_lock_scope(TARGET, ctx)
     assert not await service.viking_fs._async_agfs.pathlock_is_locked(requests[0]["path"])
-
-
-@pytest.mark.parametrize("strict", [False, True])
-async def test_delivery_policy_is_frozen_at_http_acceptance(
-    service, app, client, monkeypatch, strict
-):
-    ctx, runtime = await prepare(service, app, monkeypatch)
-    monkeypatch.setattr(service.compile._config, "require_delivery_proof", strict)
-    created = await client.post("/api/v1/compile/create", json=SAVED_INPUTS)
-    assert created.status_code == 200, created.text
-    accepted = await client.post(
-        "/api/v1/compile", json={"compile_name": SAVED_INPUTS["compile_name"]}
-    )
-    assert accepted.status_code == 202, accepted.text
-    task_id = accepted.json()["result"]["task_id"]
-    tracker = get_task_tracker()
-    task = await tracker.get(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
-    assert task.meta["request"]["compile"]["require_delivery_proof"] is strict
-    run = await service.compile.lifecycle._read_run(task)
-    assert run["meta"]["require_delivery_proof"] is strict
-    # A live configuration change after acceptance must not reinterpret this run.
-    monkeypatch.setattr(service.compile._config, "require_delivery_proof", not strict)
-    runtime.get.side_effect = None
-    runtime.get.return_value = CompileSessionStatus(status="completed", stage="done", result={})
-    await service.compile.on_start(task)
-    from openviking.service.external_task_service import ExternalTaskSnapshot
-
-    finished = await service.compile.on_finish(
-        task, ExternalTaskSnapshot(status="completed", result={})
-    )
-    assert finished.result["completion_status"] == "unknown"
-    config = await service.compile.lifecycle.store.get(
-        ctx.account_id, ctx.user.user_id, SAVED_INPUTS["compile_name"]
-    )
-    assert bool(config["progress"]) is (not strict)

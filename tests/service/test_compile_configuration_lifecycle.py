@@ -38,19 +38,6 @@ SKILL = "viking://system/compile/example-skills/llm-wiki"
 PARAMS = {"from": [SOURCE], "to": TARGET, "skill": SKILL, "instruction": None, "args": {}}
 
 
-COMPLETE_DELIVERY = {
-    "completion_status": "complete",
-    "coverage_kind": "assignment_delivery_v1",
-    "source_coverage": {"delivered": 1},
-    "failure_summary": [],
-}
-
-
-def complete_snapshot():
-    """A synthetic Runtime that reports the supported finite delivery contract."""
-    return ExternalTaskSnapshot(status="completed", result=deepcopy(COMPLETE_DELIVERY))
-
-
 class AsyncFiles:
     """Shared JSON storage and distributed-lock stand-in for independent lifecycle instances."""
 
@@ -297,7 +284,7 @@ async def test_output_metrics_preserve_identity_and_commit_time_on_recovery(
     monkeypatch.setattr(setup.lifecycle, "_save_run", fail_terminal_save)
     monkeypatch.setattr("openviking.service.compile_targets.time.time", lambda: 1000)
     with pytest.raises(OSError, match="run unavailable"):
-        await setup.lifecycle.on_finish(task, complete_snapshot())
+        await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     ((name, event),) = compile_metric_events
     assert name == "file_mutation"
     assert event["operation"] == "compile_commit"
@@ -311,11 +298,11 @@ async def test_output_metrics_preserve_identity_and_commit_time_on_recovery(
     resumed = deepcopy(setup.tracker.tasks[task.task_id])
     resumed.auth = {}
     lifecycle = CompileLifecycle(setup.store, setup.fs)
-    outcome = await lifecycle.on_finish(resumed, complete_snapshot())
+    outcome = await lifecycle.on_finish(resumed, ExternalTaskSnapshot(status="completed"))
     assert outcome.status == "completed"
     assert compile_metric_events == [(name, event), (name, event)]
     assert len(setup.fs.commits) == 2
-    await lifecycle.on_finish(resumed, complete_snapshot())
+    await lifecycle.on_finish(resumed, ExternalTaskSnapshot(status="completed"))
     assert len(compile_metric_events) == 2
 
 
@@ -468,8 +455,8 @@ async def test_full_execution_never_touches_compile_storage_or_source_snapshots(
     assert plan["full_dirs"] == [source] and plan["diff_dirs"] == []
     assert plan["skill_snapshot"]["snapshot_id"] is None
     setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
-    outcome = await lifecycle.on_finish(task, complete_snapshot())
-    assert outcome.result == {"created": 1, "updated": 0, "deleted": 0, **COMPLETE_DELIVERY}
+    outcome = await lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
+    assert outcome.result == {"created": 1, "updated": 0, "deleted": 0}
     assert setup.fs.commits == [[TARGET], [TARGET]]
     assert not setup.files.files
     setup.finalize.assert_not_awaited()
@@ -486,7 +473,7 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
         first.meta["request"], "acme", first.task_id, "alice"
     )
     assert first_plan["execution"]["mode"] == "full"
-    await setup.lifecycle.on_finish(first, complete_snapshot())
+    await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
     paths = [call.args[0] for call in setup.files.write.await_args_list]
     assert sum(path.endswith("/state.json") for path in paths) == 2
     state = await setup.store.get("acme", "alice", compile_name)
@@ -499,7 +486,9 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
     assert isinstance(outcome, ExternalTaskSnapshot) and outcome.status == "completed"
     await setup.lifecycle.on_finish(second, outcome)
     run = await setup.store.get_run("acme", "alice", compile_name, second.task_id)
-    await CompileLifecycle(setup.store, setup.fs).on_finish(first, complete_snapshot())
+    await CompileLifecycle(setup.store, setup.fs).on_finish(
+        first, ExternalTaskSnapshot(status="completed")
+    )
     setup.find.assert_not_awaited()
     assert run["meta"]["trigger"] == "scheduled"
     assert run["meta"]["base_snapshot"] == first_plan["head"]
@@ -541,7 +530,7 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
         await resumed.runtime_changes(task.meta["request"], "acme", task.task_id, "alice") == plan
     )
     assert len(setup.fs.commits) == 1
-    await resumed.on_finish(stale_task, complete_snapshot())
+    await resumed.on_finish(stale_task, ExternalTaskSnapshot(status="completed"))
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["params"]["instruction"] is None
@@ -644,7 +633,7 @@ async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(s
     original_plan = deepcopy(setup.tracker.tasks[task.task_id].auth["compile_execution"]["plan"])
     commit = setup.fs.commit
     setup.fs.commit = AsyncMock(side_effect=ResourceBusyError("snapshot is busy"))
-    outcome = await setup.lifecycle.on_finish(task, complete_snapshot())
+    outcome = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert outcome.status == "running" and outcome.stage == "committing"
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     restarted = CompileLifecycle(setup.store, setup.fs)
@@ -725,7 +714,7 @@ async def test_cancel_before_output_snapshot_rolls_back_without_advancing_progre
         return lease
 
     setup.files.pathlock_acquire_tree = cancel_before_snapshot
-    result = await setup.lifecycle.on_finish(task, complete_snapshot())
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert result.status == "cancelled"
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
@@ -761,7 +750,7 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(
         return await original_diff(dirs=dirs, **kwargs)
 
     setup.fs.diff_paths = cancel_after_publication
-    result = await setup.lifecycle.on_finish(task, complete_snapshot())
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert result.status == "cancelled"
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["meta"]["finish_snapshot"] == "f" * 40
@@ -834,12 +823,7 @@ async def test_finalization_does_not_search_conflicts(setup, registered, status)
     _, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     for _ in range(2):
-        result = await setup.lifecycle.on_finish(
-            task,
-            ExternalTaskSnapshot(
-                status=status, result=deepcopy(COMPLETE_DELIVERY) if status == "completed" else None
-            ),
-        )
+        result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
         assert result.status == status
     state = await setup.store.get("acme", "alice", compile_name)
     checkpoint = setup.tracker.tasks[task.task_id].auth["compile_execution"]
@@ -877,12 +861,7 @@ async def test_prepared_finalization_reads_state_only_for_progress(setup, regist
     task.auth = {}
     reads = setup.files.read = AsyncMock(wraps=setup.files.read)
 
-    result = await setup.lifecycle.on_finish(
-        task,
-        ExternalTaskSnapshot(
-            status=status, result=deepcopy(COMPLETE_DELIVERY) if status == "completed" else None
-        ),
-    )
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
 
     assert result.status == status
     paths = [call.args[0] for call in reads.await_args_list]
@@ -909,11 +888,13 @@ async def test_progress_publication_recovers_after_state_write_failure(
 
     monkeypatch.setattr(setup.files, "write", write_with_outage)
     with pytest.raises(OSError, match="state unavailable"):
-        await setup.lifecycle.on_finish(task, complete_snapshot())
+        await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     assert setup.tracker.tasks[task.task_id].auth["compile_execution"]["phase"] != "finished"
     resumed = deepcopy(setup.tracker.tasks[task.task_id])
-    result = await CompileLifecycle(setup.store, setup.fs).on_finish(resumed, complete_snapshot())
+    result = await CompileLifecycle(setup.store, setup.fs).on_finish(
+        resumed, ExternalTaskSnapshot(status="completed")
+    )
     assert result.status == "completed"
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert (await setup.store.get("acme", "alice", compile_name))["progress"][
@@ -936,12 +917,7 @@ async def test_rollback_reindexes_without_waiting(setup, registered, status, sch
         setup.fs._schedule_restore_reindex_for_paths.side_effect = OSError("index unavailable")
     setup.tracker.wait = AsyncMock(side_effect=AssertionError("Rollback must not wait for indexes"))
 
-    result = await setup.lifecycle.on_finish(
-        task,
-        ExternalTaskSnapshot(
-            status=status, result=deepcopy(COMPLETE_DELIVERY) if status == "completed" else None
-        ),
-    )
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
     assert result.status == status
     reindex = setup.fs._schedule_restore_reindex_for_paths
     reindex.assert_awaited_once()

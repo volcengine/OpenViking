@@ -20,7 +20,6 @@ from loguru import logger
 
 from openviking.core.namespace import classify_uri, relative_uri_path, uri_parts
 from openviking.core.skill_loader import validate_skill_format
-from openviking.utils.compile_delivery import COVERAGE_KIND, completion_evidence
 from openviking.utils.path_safety import (
     sanitize_relative_viking_path,
 )
@@ -1025,8 +1024,8 @@ class BotCompileService:
             preserve_workspace = preserve_workspace or bool(warnings)
             if output_file_count == 0:
                 warnings.append("No reliable output was produced from the supplied materials.")
-            result = CompileResult.model_validate(
-                {
+            result = CompileResult(
+                **{
                     "from": request.from_,
                     "to": request.to,
                     "skill": request.skill,
@@ -1036,8 +1035,6 @@ class BotCompileService:
                     "page_count": page_count,
                     "link_count": rendered.link_count,
                     "warnings": warnings,
-                    "completion_status": "partial" if warnings else "unknown",
-                    "failure_summary": ["execution_failures"] if warnings else [],
                 }
             )
 
@@ -1203,23 +1200,14 @@ class BotCompileService:
                 ]
             )
             await pipeline.write_coverage(published)
-            coverage = (await pipeline.files.get("coverage") or {}).get("counts", {})
-            delivery = completion_evidence(
-                {
-                    "completion_status": "complete",
-                    "coverage_kind": COVERAGE_KIND,
-                    "source_coverage": coverage,
-                    "failure_summary": [
-                        *(["execution_failures"] if pipeline.failures else []),
-                        *(["publication_conflicts"] if conflicts else []),
-                    ],
-                }
+            counts = (await pipeline.files.get("coverage") or {}).get("counts", {})
+            partial = bool(pipeline.failures or conflicts) or any(
+                counts.get(state, 0) for state in ("failed", "pending", "unreferenced", "prepared")
             )
             summary = await pipeline.files.get("summary")
             summary["committed"] = True
             summary["warnings"] = pipeline.warnings
             summary["conflicts"] = conflicts
-            summary["delivery"] = delivery
             await pipeline.files.put("summary", summary)
             compiled = CompileResult(
                 from_=request.from_,
@@ -1239,7 +1227,7 @@ class BotCompileService:
                 page_count=len(set(published)),
                 link_count=rendered.link_count,
                 warnings=pipeline.warnings,
-                **delivery,
+                completion_status="partial" if partial else None,
             )
 
             def complete(task):

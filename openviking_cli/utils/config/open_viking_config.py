@@ -201,7 +201,6 @@ class CompileApiConfig(BaseModel):
     gateway_token: str = ""
     http_timeout_seconds: float = 10.0
     poll_interval_ms: int = 30000
-    require_delivery_proof: bool = Field(default=False, strict=True)
     # Run Redis-backed Compile scheduling on this instance.
     scheduler_enabled: bool = False
     scheduler_backend: Literal["redis"] = "redis"

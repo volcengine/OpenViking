@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from test_compile_markdown import configure_pipeline, pipeline  # noqa: F401
 from vikingbot.compile import simple
-from vikingbot.compile.models import CompileResult
+from vikingbot.compile.models import CompileResult, CompileTask
 from vikingbot.compile.service import BotCompileService
 from vikingbot.config.schema import Config, SessionKey
 
@@ -66,15 +66,11 @@ async def test_actual_pipeline_publication_exposes_delivery_status(pipeline, mon
         agent_runner=pipeline.model.agent_runner,
     )
     assert task.status == "completed"
-    assert task.result.completion_status == ("complete" if failure == "none" else "partial")
-    assert task.result.source_coverage.get("delivered") == (2 if failure == "none" else 1)
-    assert task.result.coverage_kind == "assignment_delivery_v1"
-    assert bool(task.result.failure_summary) == (failure != "none")
-    saved = await pipeline.files.get("summary")
-    assert saved["delivery"]["completion_status"] == task.result.completion_status
-    # Public result serialization and reopening do not lose the new classification.
-    reopened = CompileResult.model_validate(task.result.model_dump())
-    assert reopened.completion_status == task.result.completion_status
+    result = task.result.model_dump(exclude_none=True)
+    assert result.get("completion_status") == ("partial" if failure != "none" else None)
+    assert ("completion_status" in result) == (failure != "none")
+    assert task.result.created == (published if failure == "none" else published[:1])
+    assert CompileResult.model_validate(result) == task.result
 
 
 @pytest.mark.parametrize("ending", ["normal", "budget", "incomplete", "unconfirmed"])
@@ -118,21 +114,19 @@ async def test_actual_simple_entry_marks_known_incomplete_and_otherwise_unknown(
         AsyncMock(),
         {},
     )
-    assert result.completion_status == ("unknown" if ending == "normal" else "partial")
+    assert result.completion_status == (None if ending == "normal" else "partial")
     assert result.created == [target + "/kept.md"]
-    assert result.source_coverage == {}
-    assert bool(result.failure_summary) == (ending != "normal")
 
 
-def test_legacy_result_read_does_not_promote_or_echo_new_diagnostic_fields():
-    result = CompileResult.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/output",
-            "skill": "viking://agent/skills/example",
-            "completion_status": "complete",
-            "failure_summary": ["synthetic payload"],
-        }
+@pytest.mark.parametrize("completion_status", [None, "partial"])
+def test_runtime_status_only_includes_partial_marker(completion_status):
+    result = CompileResult(
+        from_=["viking://resources/source"],
+        to="viking://resources/output",
+        skill="viking://agent/skills/example",
+        completion_status=completion_status,
     )
-    assert result.completion_status == "unknown"
-    assert result.failure_summary == []
+    task = CompileTask.model_construct(result=result)
+    payload = task.public_dict()["result"]
+    assert ("completion_status" in payload) == (completion_status == "partial")
+    assert payload.get("completion_status") == completion_status

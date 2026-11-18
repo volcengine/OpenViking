@@ -8,7 +8,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from openviking.session.memory.dataclass import WikiLink
-from openviking.utils.compile_delivery import completion_evidence
 from vikingbot.channels.openapi_models import OpenVikingConnection
 
 DEFAULT_COMPILE_INSTRUCTION = (
@@ -213,17 +212,7 @@ class CompileResult(BaseModel):
     page_count: int = 0
     link_count: int = 0
     warnings: list[str] = Field(default_factory=list)
-    completion_status: Literal["complete", "partial", "unknown"] = "unknown"
-    coverage_kind: Literal["assignment_delivery_v1"] | None = None
-    source_coverage: dict[str, int] = Field(default_factory=dict)
-    failure_summary: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_completion(cls, value):
-        if isinstance(value, dict):
-            return {**value, **completion_evidence(value)}
-        return value
+    completion_status: Literal["partial"] | None = None
 
 
 class CompileTask(BaseModel):
@@ -251,7 +240,7 @@ class CompileTask(BaseModel):
     def public_dict(self) -> dict[str, Any]:
         data = self.model_dump(exclude={"principal_scope", "sanitized_request"}, exclude_none=True)
         if self.result is not None:
-            data["result"] = self.result.model_dump(by_alias=True)
+            data["result"] = self.result.model_dump(by_alias=True, exclude_none=True)
         return data
 
 

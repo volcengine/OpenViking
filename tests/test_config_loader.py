@@ -255,14 +255,6 @@ def test_parser_and_compile_api_validation():
     assert config.gateway_token == ""
 
 
-def test_compile_delivery_proof_is_explicit_and_preserves_default():
-    assert CompileApiConfig().require_delivery_proof is False
-    assert CompileApiConfig(require_delivery_proof=True).require_delivery_proof is True
-    for value in ("true", "false", 0, 1, None):
-        with pytest.raises(ValueError):
-            CompileApiConfig(require_delivery_proof=value)
-
-
 def test_parser_api_upload_defaults():
     config = ParserApiConfig()
 
