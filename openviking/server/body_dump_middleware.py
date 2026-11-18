@@ -119,6 +119,11 @@ def create_dump_http_body_middleware(
                 status_code=response.status_code,
                 headers=new_headers,
                 media_type=response.media_type,
+                # Background tasks (e.g. admin restart's controller.stop) are
+                # attached to the original response and only run when the response
+                # actually sent carries them; dropping them here would silently
+                # skip post-response work.
+                background=response.background,
             )
         except Exception:
             # Fall back to the original response object as a last resort. Its
