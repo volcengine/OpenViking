@@ -1,9 +1,11 @@
+import { transferErrors, transferSession } from './transfer-session.en-US.js';
 import { coreParameters } from './core-parameters.js';
 import filesystemParameters from './filesystem-parameters.js';
 import { SEARCH_PARAMETERS_EN_US } from './search-parameters.js';
 import type { ConsoleCommandGuide, ConsoleLabels } from '../types.js';
 
 const commands = {
+  ...transferSession,
   'add-resource': 'Add a resource from a URL',
   'add-skill': 'Install a Skill',
   'add-memory': 'Add memory directly',
@@ -167,6 +169,8 @@ const messages = {
     ...SEARCH_PARAMETERS_EN_US,
   },
   commandGroups: {
+    transfer: 'File transfer',
+    session: 'Sessions',
     core: 'Core workflow',
     filesystem: 'Filesystem',
     search: 'Search & context',
@@ -175,6 +179,7 @@ const messages = {
   messages: {
     cancelled: () =>
       'Request cancelled; the server may still process an accepted operation.',
+    ...transferErrors,
     unknownCommand: () =>
       'Unknown command. Enter ov help for available commands.',
     shellSyntax: () => 'Shell syntax is not supported.',

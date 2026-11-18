@@ -22,6 +22,7 @@ import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js';
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
+import { usePackImportPicker } from './use-pack-import-picker.js';
 import { useFileBrowserHandle } from './use-file-browser-handle.js';
 import { useFileBrowserUri } from './use-file-browser-uri.js';
 import type {
@@ -133,12 +134,14 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     requestOptions,
     refresh: browser.actions.refresh,
   });
+  const packPicker = usePackImportPicker(layoutRef, text, locale, !readOnly);
   const navigation = useFileBrowserHandle(
     browser,
     ref,
     rootUri,
     uri,
     reportedUri,
+    packPicker.choosePackFile,
   );
 
   const search = useFileBrowserSearchDialog(layoutRef);
@@ -216,20 +219,17 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
         />
       </div>
       {permissions.drawer}
+      {packPicker.dialog}
       <FileBrowserSearch
         key={search.session}
-        open={search.open}
+        {...search.dialog}
         locale={locale}
         rootUri={rootUri}
-        triggerRef={layoutRef}
         text={text}
         requestOptions={requestOptions}
-        advancedOpen={search.advanced}
-        onToggleAdvanced={search.setAdvanced}
         onOpenResource={(target) => {
           void navigation.openResource(target).catch(() => {});
         }}
-        onClose={search.close}
       />
     </LocaleProvider>
   );

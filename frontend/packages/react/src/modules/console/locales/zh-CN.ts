@@ -1,3 +1,4 @@
+import { transferSession } from './transfer-session.zh-CN.js';
 import { coreParameters } from './core-parameters.js';
 import filesystemParameters from './filesystem-parameters.js';
 import { SEARCH_PARAMETERS_ZH_CN } from './search-parameters.js';
@@ -41,6 +42,7 @@ const messages: typeof enUS = {
     },
   },
   commands: {
+    ...transferSession,
     'add-resource': '添加路径或 URL 到资源',
     'add-skill': '添加 Skill 到技能目录',
     'add-memory': '直接添加记忆',
@@ -160,6 +162,8 @@ const messages: typeof enUS = {
     ...SEARCH_PARAMETERS_ZH_CN,
   },
   commandGroups: {
+    transfer: '文件传输',
+    session: '会话',
     core: '核心流程',
     filesystem: '文件系统',
     search: '搜索与上下文',
@@ -167,6 +171,10 @@ const messages: typeof enUS = {
   },
   messages: {
     cancelled: () => '请求已取消；服务端可能仍在处理已接收的操作。',
+    unavailableCommand: (value?: string) => `当前工作台不支持命令：${value}`,
+    invalidOvpack: () => '请选择有效的 .ovpack 文件。',
+    invalidOvpackDownload: () => '服务端未返回有效的 OVPack 压缩包。',
+    missingUploadId: () => '上传未返回临时文件 ID。',
     unknownCommand: () => '未知命令。输入 ov help 查看可用命令。',
     shellSyntax: () => '不支持 Shell 语法。',
     unclosedQuote: () => '引号或转义未闭合。',

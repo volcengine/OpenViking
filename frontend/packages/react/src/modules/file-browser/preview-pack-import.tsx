@@ -1,3 +1,4 @@
+import { hasOvpackHeader, hasOvpackName } from '../../shared/ovpack-file.js';
 import { useId, useState } from 'react';
 import { DocumentIcon } from '../../icons/index.js';
 import UploadIcon from '../../../../icons/svg/file-preview/import.svg?react';
@@ -15,15 +16,38 @@ export function PreviewPackImport({
   requestOptions,
   onUpdated,
   onClose,
-}: PreviewWorkflowProps & { canWrite: boolean }) {
+  onSelectPackFile,
+}: PreviewWorkflowProps & {
+  canWrite: boolean;
+  onSelectPackFile?: (file: File) => void;
+}) {
   const id = useId();
   const [file, setFile] = useState<File>();
+  const [invalid, setInvalid] = useState(false);
   const mutation = usePreviewMutation(uri, requestOptions);
+  async function changeFile(input: HTMLInputElement) {
+    const picked = input.files?.[0];
+    setFile(undefined);
+    setInvalid(false);
+    mutation.reset();
+    if (!picked) return;
+    const valid =
+      hasOvpackName(picked.name) &&
+      (await hasOvpackHeader(picked).catch(() => false));
+    if (input.files?.[0] !== picked) return;
+    if (valid) setFile(picked);
+    else {
+      input.value = '';
+      setInvalid(true);
+    }
+  }
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        if (canWrite && file)
+        if (!canWrite || !file) return;
+        if (onSelectPackFile) onSelectPackFile(file);
+        else
           void mutation.run(
             (client, options) => importPreviewPack(client, uri, file, options),
             onUpdated,
@@ -42,10 +66,7 @@ export function PreviewPackImport({
           aria-label={text.importFile}
           aria-describedby={`${id}-hint`}
           disabled={!canWrite || mutation.pending}
-          onChange={(event) => {
-            setFile(event.currentTarget.files?.[0]);
-            mutation.reset();
-          }}
+          onChange={(event) => void changeFile(event.currentTarget)}
         />
         <label htmlFor={id}>
           {file ? (
@@ -62,6 +83,7 @@ export function PreviewPackImport({
           <span className="ov-pack-import__choose">{text.importChoose}</span>
         </label>
       </div>
+      {invalid ? <p role="alert">{text.importInvalidFormat}</p> : null}
       <PreviewMutationError
         error={mutation.error}
         title={text.failureTitle(text.importSubmit)}

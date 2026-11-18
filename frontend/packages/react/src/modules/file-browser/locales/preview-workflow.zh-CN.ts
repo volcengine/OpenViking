@@ -21,6 +21,7 @@ export default {
   importChoose: '选择文件',
   importDrop: '点击选择或拖入文件',
   importFormat: '支持 .ovpack 格式',
+  importInvalidFormat: '请选择有效的 .ovpack 文件。',
   configure: '编译配置',
   configuration: '编译配置',
   configurationEmpty: '当前用户下没有关联此目录的编译配置。',

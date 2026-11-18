@@ -41,7 +41,7 @@ test('import uploads multipart, retains the selected File after failure and reup
   const view = await mount(tree(fetch, target));
   try {
     await openAction('Import .ovpack');
-    const file = new File(['archive'], 'demo.ovpack');
+    const file = new File(['PK\x03\x04archive'], 'demo.ovpack');
     const input = workflow().querySelector('input[type="file"]');
     Object.defineProperty(input, 'files', {
       configurable: true,
@@ -105,7 +105,7 @@ for (const revoked of [{ readOnly: true }, { acl: true }]) {
     const view = await mount(tree(fetch, target));
     try {
       await openAction('Import .ovpack');
-      const file = new File(['archive'], 'demo.ovpack');
+      const file = new File(['PK\x03\x04archive'], 'demo.ovpack');
       const input = workflow().querySelector('input[type="file"]');
       Object.defineProperty(input, 'files', {
         configurable: true,
@@ -136,3 +136,38 @@ for (const revoked of [{ readOnly: true }, { acl: true }]) {
     }
   });
 }
+
+test('OVPack dialog rejects other extensions and invalid archive headers before upload', async () => {
+  const fetch = fixture(target, true);
+  const view = await mount(tree(fetch, target));
+  try {
+    await openAction('Import .ovpack');
+    const input = workflow().querySelector('input[type="file"]');
+    for (const file of [
+      new File(['video'], 'sample.mp4'),
+      new File(['not a ZIP'], 'renamed.ovpack'),
+    ]) {
+      Object.defineProperty(input, 'files', {
+        configurable: true,
+        value: [file],
+      });
+      await act(async () =>
+        input.dispatchEvent(new window.Event('change', { bubbles: true })),
+      );
+      assert.match(
+        workflow().querySelector('[role="alert"]').textContent,
+        /valid .ovpack/,
+      );
+      assert.equal(button('Import', workflow()).disabled, true);
+      await submit();
+    }
+    assert.equal(
+      fetch.calls.some((call) =>
+        /(?:temp_upload|pack\/import)$/.test(call.path),
+      ),
+      false,
+    );
+  } finally {
+    await view.unmount();
+  }
+});

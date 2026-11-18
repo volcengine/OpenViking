@@ -9,7 +9,7 @@ import { localizeConsoleRecords } from './localize-records.js';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { createOvClient } from '../../client/client.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
-import { consoleCommands } from './commands.js';
+import { consoleCommands } from './command-catalog.js';
 import { ConsoleCommandError } from './command-messages.js';
 import { createConsoleController } from './controller.js';
 import type { ConsoleMode, ConsoleOptions, ConsoleResult } from './types.js';
@@ -24,6 +24,7 @@ export function useConsole({
   onModeChange,
   requestOptions = {},
   taskService,
+  commandOptions,
 }: ConsoleOptions = {}): ConsoleResult {
   const event = useTrack();
   const locale = useLocale(localeProp);
@@ -61,6 +62,7 @@ export function useConsole({
       },
       tracking.track,
       analytics,
+      commandOptions,
     );
   }, [
     client,
@@ -73,6 +75,7 @@ export function useConsole({
     scopeKey,
     tracking.track,
     analytics,
+    commandOptions,
   ]);
   const commandEnabled = modes.includes('command');
   // Effect necessity: commands keep network requests alive after user events.
@@ -94,8 +97,9 @@ export function useConsole({
       localizeConsoleRecords(
         projectConsoleTasks(state.records, tracking.tasks),
         locale,
+        commandOptions,
       ),
-    [state.records, tracking.tasks, locale],
+    [state.records, tracking.tasks, locale, commandOptions],
   );
   // Format library errors at read time; server errors keep their original identity.
   const error = useMemo(
@@ -120,7 +124,7 @@ export function useConsole({
     records,
     error,
     mode,
-    commands: consoleCommands(locale),
+    commands: consoleCommands(locale, commandOptions),
     setMode(next: ConsoleMode) {
       if (next === mode || !modes.includes(next)) return;
       event(

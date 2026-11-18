@@ -24,6 +24,7 @@ export function useFileBrowserHandle(
   rootUri: string,
   controlledUri: string | undefined,
   reportedUri: RefObject<string | undefined>,
+  choosePackFile: FileBrowserHandle['choosePackFile'],
 ) {
   const treeRef = useRef<FileTreeHandle>(null);
   const treeScrollRef = useRef<HTMLDivElement>(null);
@@ -71,7 +72,10 @@ export function useFileBrowserHandle(
       ),
     [navigate, open],
   );
-  useImperativeHandle(ref, () => ({ openResource }), [openResource]);
+  useImperativeHandle(ref, () => ({ openResource, choosePackFile }), [
+    openResource,
+    choosePackFile,
+  ]);
   // Sync the tree with a selection committed by an external owner. The host
   // can change the prop without a FileBrowser event. A newer selection or
   // scope supersedes the outstanding navigation and scroll.

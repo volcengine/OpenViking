@@ -178,3 +178,14 @@ function applyDefault(
   if (required) throw new ConsoleCommandError('missingArgument', name);
   if (argument.defaultValue !== undefined) result[key] = argument.defaultValue;
 }
+
+export function clearRequested(input: string) {
+  try {
+    const tokens = tokenize(input);
+    if (tokens[0]?.value !== 'clear') return false;
+    parseArguments(tokens.slice(1), []);
+    return true;
+  } catch {
+    return false;
+  }
+}

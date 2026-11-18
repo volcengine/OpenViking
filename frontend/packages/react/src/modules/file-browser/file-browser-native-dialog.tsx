@@ -16,8 +16,9 @@ export function FileBrowserNativeDialog({
   versioned,
   showContent,
   directory,
+  onSelectPackFile,
   ...props
-}: Omit<PreviewWorkflowProps, 'text'> & {
+}: Omit<PreviewWorkflowProps, 'text' | 'onUpdated'> & {
   kind: 'history' | 'importPack' | 'configure';
   text: ResolvedLabels;
   triggerRef: RefObject<HTMLElement | null>;
@@ -26,6 +27,8 @@ export function FileBrowserNativeDialog({
   versioned: boolean;
   showContent: boolean;
   directory: boolean;
+  onSelectPackFile?: (file: File) => void;
+  onUpdated?: () => void;
 }) {
   const exposure = useExposure(
     kind === 'history'
@@ -35,7 +38,11 @@ export function FileBrowserNativeDialog({
         : 'file_browser_pack_import_dialog_show',
   );
   const title = kind === 'configure' ? text.workflow.configure : text[kind];
-  const common = { ...props, text: text.workflow };
+  const common = {
+    ...props,
+    onUpdated: props.onUpdated ?? (() => undefined),
+    text: text.workflow,
+  };
   return (
     <Modal
       open
@@ -70,7 +77,11 @@ export function FileBrowserNativeDialog({
           retryText={text.retry}
         />
       ) : kind === 'importPack' ? (
-        <PreviewPackImport {...common} canWrite={canWrite} />
+        <PreviewPackImport
+          {...common}
+          canWrite={canWrite}
+          onSelectPackFile={onSelectPackFile}
+        />
       ) : (
         <PreviewCompileConfig
           {...common}

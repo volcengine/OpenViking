@@ -20,7 +20,7 @@ test('find and search pass Volc retrieval options to the native data plane', asy
       body: {
         query: 'how does retrieval work?',
         target_uri: ['viking://resources', 'viking://agent/skills'],
-        node_limit: 12,
+        limit: 12,
         score_threshold: 0.75,
         level: [0, 2],
         since: '2026-01-01',
