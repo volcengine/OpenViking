@@ -48,9 +48,11 @@ SWEEP_SECONDS = 60
 REFUSED = (401, 403, 404)
 # ``created`` says who commits the OpenViking session as it was last set up. ``idle_at``
 # is when the gateway's idle commit is due, for the key ``account`` and ``credential_id`` name.
+# ``answered`` is the last message of the request whose reply ended the latest saved turn.
 FIELDS = (
     "ov_session",
     "delivered",
+    "answered",
     "created",
     "reason",
     "previous",
@@ -149,6 +151,10 @@ class CapturePipeline:
         policy = Policy.model_validate(request.root["policy"])
         doc = await self.store.get(request.scope, request.session)
         value = current(doc.value)
+        # A history ending where a saved turn's request ended, as a compaction after that
+        # turn sends it, was written when the turn ended.
+        if not ended and chain[stop - 1] == value.get("answered"):
+            return 0
         positions = {anchor: index for index, anchor in enumerate(chain) if anchor}
         cursor = value["delivered"]
         if cursor in positions:
@@ -171,6 +177,8 @@ class CapturePipeline:
                 written = await self.viking.write(key, session, batch)
                 sent += len(batch)
                 mark = {"created": committer}
+                if ended and not captured:
+                    mark["answered"] = request.capture_chain[-1]
                 if self.auto_commit:
                     mark["idle_at"] = None
                 elif ended and not captured:

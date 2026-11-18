@@ -168,6 +168,15 @@ async def claude_code_shape(cc, shape):
         history = [*history, step("t7"), tool_result("t7")]
         await cc.send(history, assistant(LATER_FINAL))
         return [*history, assistant(LATER_FINAL)]
+    elif shape == "later_turn":
+        # The first turn ends; the next is compacted after its first step, without a tail.
+        history = [*history, step("t2"), tool_result("t2")]
+        await cc.send(history, assistant(FINAL))
+        history = [*history, assistant(FINAL), user(REMIND, NEXT)]
+        await cc.send(history, step("t9"))
+        await cc.send(compact([*history, step("t9"), tool_result("t9")]), SUMMARIZED)
+        history = [user(REMIND, ATTRIBUTION, SUMMARY), system(NOTE, block=True)]
+        await cc.send(history, step("t3"))
     elif shape == "no_tail":
         # Compacted with t2 and its result; only the summary goes on.
         history = [*history, step("t2"), tool_result("t2")]
@@ -203,7 +212,9 @@ async def test_claude_code_ordinary_session_saves_each_message_once(client, head
 
 
 @pytest.mark.parametrize("then", ["session_ends", "next_prompt"])
-@pytest.mark.parametrize("shape", ["kept_tail", "no_tail", "manual", "no_tail_no_header"])
+@pytest.mark.parametrize(
+    "shape", ["kept_tail", "no_tail", "later_turn", "manual", "no_tail_no_header"]
+)
 async def test_claude_code_mid_turn_compaction(client, shape, then):
     cc = client("anthropic", {} if shape == "no_tail_no_header" else CC)
     history = await claude_code_shape(cc, shape.removesuffix("_no_header"))
@@ -213,15 +224,14 @@ async def test_claude_code_mid_turn_compaction(client, shape, then):
         tail = [NEXT, "f9 says CODEWORD t9"]
     # Each message once, in one session, except that the summary is saved as the user
     # message the client sent. The compaction request writes the history before its
-    # instruction: without a kept tail, t2 reaches only that request. After a turn that
-    # ended, it writes that turn again. Without a header, the summarised history is a
-    # new conversation.
+    # instruction: without a kept tail, t2 (or t9) reaches only that request. After a
+    # turn that ended, there is nothing to write. Without a header, the summarised history
+    # is a new conversation.
     expected = {
         "kept_tail": [[PROMPT, "t1", SUMMARY, "t2", "t3", FINAL, *tail]],
         "no_tail": [[PROMPT, "t1", "t2", SUMMARY, "t3", FINAL, *tail]],
-        "manual": [
-            [PROMPT, "t1", "t2", FINAL, PROMPT, "t1", "t2", LATER, "t7", LATER_FINAL, *tail]
-        ],
+        "later_turn": [[PROMPT, "t1", "t2", FINAL, NEXT, "t9", SUMMARY, "t3", FINAL, *tail]],
+        "manual": [[PROMPT, "t1", "t2", FINAL, LATER, "t7", LATER_FINAL, *tail]],
         "no_tail_no_header": [[PROMPT, "t1", "t2"], [SUMMARY, "t3", FINAL, *tail]],
     }
     assert cc.saved() == expected[shape]
