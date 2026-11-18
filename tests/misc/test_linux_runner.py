@@ -533,6 +533,7 @@ def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, fil
         assert "git" in calls[1].split()
         if file == "_build.yml":
             assert {"gcc-10", "g++-10"} <= set(calls[1].split())
+            assert "missing required packages: gcc-10; falling back to apt" in result.stdout
 
 
 @pytest.mark.parametrize("container", ["", "ubuntu:24.04"])
