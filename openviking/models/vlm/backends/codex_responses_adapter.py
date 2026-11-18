@@ -8,6 +8,8 @@ import json
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
+from openviking.service.task_tracker_concurrency import run_to_completion
+
 
 def _convert_content_for_responses(content: Any) -> Any:
     if isinstance(content, str):
@@ -328,8 +330,10 @@ class CodexAsyncCompletionsAdapter:
     async def create(self, **kwargs) -> Any:
         if kwargs.get("stream"):
             raise NotImplementedError("Streaming is not supported for openai-codex.")
-        response = await asyncio.to_thread(self._sync_adapter._create_response, **kwargs)
-        return response
+        # Keep caller-owned capacity until the synchronous stream has closed.
+        return await run_to_completion(
+            lambda: asyncio.to_thread(self._sync_adapter._create_response, **kwargs)
+        )
 
 
 class CodexAsyncChatShim:
