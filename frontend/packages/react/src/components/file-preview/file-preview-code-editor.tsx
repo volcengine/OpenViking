@@ -44,31 +44,44 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   const [attempt, setAttempt] = useState(0);
   const language = prismLanguage(props.source);
 
-  // useEffect 必要性：容器 DOM 提交后，以最新草稿创建 CodeMirror 命令式控件；
+  // useEffect 必要性：容器 DOM 提交后，以本次编辑的草稿和标注创建 CodeMirror 控件；
   // React 渲染无法管理该控件的 DOM、监听器与历史记录。
   // 卸载时 destroy，释放监听器并销毁插件及其高亮定时器。
   useEffect(() => {
+    const { draft, annotations, readOnlySuffix } = latest.current;
+    const marked = annotations?.length
+      ? editorAnnotations(annotations)
+      : undefined;
+    const state = EditorState.create({
+      doc: draft,
+      extensions: [
+        lineNumbers(),
+        history(),
+        EditorView.lineWrapping,
+        keymap.of([...defaultKeymap, ...historyKeymap]),
+        access.current.of([]),
+        highlighting.current.of([]),
+        decorations.current.of([
+          marked?.extensions ?? [],
+          readOnlySuffix ? editorReadOnlySuffix(readOnlySuffix) : [],
+        ]),
+        EditorView.updateListener.of((update) => {
+          if (
+            update.docChanged &&
+            update.state.doc.toString() !== latest.current.draft
+          )
+            latest.current.onChange(update.state.doc.toString());
+        }),
+      ],
+    });
+    const first = marked?.firstLine(state);
     const view = new EditorView({
       parent: container.current!,
-      state: EditorState.create({
-        doc: latest.current.draft,
-        extensions: [
-          lineNumbers(),
-          history(),
-          EditorView.lineWrapping,
-          keymap.of([...defaultKeymap, ...historyKeymap]),
-          access.current.of([]),
-          highlighting.current.of([]),
-          decorations.current.of([]),
-          EditorView.updateListener.of((update) => {
-            if (
-              update.docChanged &&
-              update.state.doc.toString() !== latest.current.draft
-            )
-              latest.current.onChange(update.state.doc.toString());
-          }),
-        ],
-      }),
+      state,
+      scrollTo:
+        first === undefined
+          ? undefined
+          : EditorView.scrollIntoView(first, { y: 'center' }),
     });
     editor.current = view;
     return () => {
@@ -113,7 +126,9 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   useEffect(() => {
     editor.current!.dispatch({
       effects: decorations.current.reconfigure([
-        props.annotations?.length ? editorAnnotations(props.annotations) : [],
+        props.annotations?.length
+          ? editorAnnotations(props.annotations).extensions
+          : [],
         props.readOnlySuffix ? editorReadOnlySuffix(props.readOnlySuffix) : [],
       ]),
     });

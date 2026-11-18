@@ -1,14 +1,19 @@
 import { useLocalDraftValidation } from './use-local-draft-validation.js';
 import { renderConversationFeedback } from './conversation-feedback.js';
+import { renderConversationHistory } from './conversation-history.js';
 import { useLocale } from '../../shared/locale-context.js';
 import type { ReactNode, SetStateAction } from 'react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useVikingBotChat } from './chat/use-viking-bot-chat.js';
 import { useVikingBotSessions } from './chat/use-viking-bot-sessions.js';
 import { useHitl } from './hitl/use-hitl.js';
 import { useAttachmentUpload } from './chat/use-attachment-upload.js';
 import { compileQuickInputProps } from './compile-quick-inputs.js';
 import { useConversationReferences } from './use-conversation-references.js';
+import {
+  conversationSessions,
+  useSessionActionScope,
+} from './conversation-sessions.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
 
@@ -65,6 +70,8 @@ export function useConversation(
   );
   const clearUploads = uploads.clear;
   const { sessionId, reset, selectSession } = chat;
+  const activeId = useRef(sessionId);
+  activeId.current = sessionId;
   const selection = useMemo(
     () => ({
       prop: undefined as string | undefined,
@@ -74,11 +81,19 @@ export function useConversation(
     }),
     [selectSession],
   );
+  const hostSessions = conversation?.sessions;
   const sessions = useVikingBotSessions({
     ...options,
-    enabled: enabled && !conversation?.sessions,
+    enabled: enabled && !hostSessions,
   });
+  const sessionScope = useSessionActionScope(sessions.refresh, hostSessions);
   const submission = useRef(0);
+  const resetInput = useCallback(() => {
+    submission.current++;
+    clearUploads();
+    clearReferences();
+    setDraft('');
+  }, [clearUploads, clearReferences, setDraft]);
   const owner = useMemo(() => ({ send: chat.send, active: true }), [chat.send]);
   // Draft callbacks belong to the same controller as the request, including unmount.
   useEffect(() => {
@@ -87,7 +102,7 @@ export function useConversation(
       owner.active = false;
     };
   }, [owner]);
-  const selectedId = conversation?.sessions?.currentId;
+  const selectedId = hostSessions?.currentId;
   // Follow the host's URL-selected remote session, including Back/Forward.
   // A key would also tear down the stream when the URL echoes a newly created ID.
   // The controller cancels old requests on selection changes and unmount.
@@ -96,23 +111,11 @@ export function useConversation(
     selection.prop = selectedId;
     selection.pending = sessionId !== selectedId;
     if (!selection.pending) return;
-    submission.current++;
+    resetInput();
     if (selectedId) selection.select(selectedId);
     else reset();
-    clearUploads();
-    clearReferences();
-    setDraft('');
-  }, [
-    enabled,
-    selection,
-    selectedId,
-    sessionId,
-    reset,
-    clearUploads,
-    clearReferences,
-    setDraft,
-  ]);
-  const onSelect = conversation?.sessions?.onSelect;
+  }, [enabled, selection, selectedId, sessionId, reset, resetInput]);
+  const onSelect = hostSessions?.onSelect;
   // Report asynchronously created remote IDs to the host router while streaming,
   // before send() settles. No event handler receives that intermediate ID.
   // This starts no resources; notified suppresses duplicate router callbacks.
@@ -123,8 +126,17 @@ export function useConversation(
     selection.notified = sessionId;
     if (sessionId && sessionId !== selectedId) onSelect?.(sessionId);
   }, [enabled, selection, selectedId, sessionId, onSelect]);
-  if (!enabled) return conversation ?? {};
-  const isSending = chat.status === 'streaming' || chat.status === 'loading';
+  if (!enabled) {
+    const scoped = hostSessions && { ...hostSessions, scopeKey: sessionScope };
+    return scoped
+      ? { ...conversation, sessions: scoped }
+      : (conversation ?? {});
+  }
+  const switching = Boolean(
+    selectedId && selection.prop !== selectedId && sessionId !== selectedId,
+  );
+  const isSending =
+    switching || chat.status === 'streaming' || chat.status === 'loading';
   return {
     ...conversation,
     ...uploads.props,
@@ -137,6 +149,10 @@ export function useConversation(
     }),
     references: conversation?.references ?? references,
     messages: hitl.messages,
+    messageList:
+      conversation?.messageList === undefined
+        ? renderConversationHistory(chat, switching, conversationLocale)
+        : conversation.messageList,
     interaction: conversation?.interaction ?? hitl.interaction,
     streaming: chat.streaming,
     listKey: `${scopeKey ?? ''}:${chat.sessionId ?? 'new'}`,
@@ -173,34 +189,18 @@ export function useConversation(
             void chat.abort();
           }
         : undefined,
-    sessions: {
-      ...conversation?.sessions,
-      items: conversation?.sessions?.items ?? sessions.sessions,
-      currentId: chat.sessionId,
-      isLoading: conversation?.sessions?.isLoading ?? sessions.isLoading,
-      error: conversation?.sessions?.error ?? sessions.error?.message,
-      onOpenHistory: () => {
-        conversation?.sessions?.onOpenHistory?.();
-        void sessions.refresh();
-      },
-      onSelect: (id) => {
-        submission.current++;
+    sessions: conversationSessions({
+      host: hostSessions,
+      sessions,
+      scopeKey: sessionScope,
+      activeId,
+      select: (id) => {
         selection.notified = id;
         chat.selectSession(id);
-        clearUploads();
-        clearReferences();
-        setDraft('');
-        onSelect?.(id);
       },
-      onNew: () => {
-        submission.current++;
-        chat.reset();
-        clearUploads();
-        clearReferences();
-        setDraft('');
-        conversation?.sessions?.onNew?.();
-      },
-    },
+      reset,
+      resetInput,
+    }),
     feedback: renderConversationFeedback(chat, validation.feedback, {
       locale: feedbackLocale,
       scopeKey,

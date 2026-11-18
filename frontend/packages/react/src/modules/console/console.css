@@ -52,6 +52,16 @@
   flex: 1;
   min-height: 0;
 }
+.ov-console__history-state {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  color: var(--ov-ui-console-muted);
+  text-align: center;
+}
 .ov-console__panel .ov-command-console__body {
   gap: 24px;
   padding-bottom: 12px;

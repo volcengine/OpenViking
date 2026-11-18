@@ -50,7 +50,14 @@ export { settle };
 
 export async function mountHitl(
   cards,
-  { terminal = 'complete', gate, hitl, onAnswer, locale = 'zh-CN' } = {},
+  {
+    terminal = 'complete',
+    gate,
+    hitl,
+    onAnswer,
+    answerEvents,
+    locale = 'zh-CN',
+  } = {},
 ) {
   let props;
   const requests = [];
@@ -65,6 +72,7 @@ export async function mountHitl(
       requests.push(request);
       if (requests.length > 1) {
         if (onAnswer) await onAnswer(request, signal);
+        if (answerEvents) yield* answerEvents(request, signal);
         yield { type: 'complete', text: 'Done' };
         return;
       }

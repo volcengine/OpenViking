@@ -195,11 +195,12 @@ Return `kind: 'custom'` from `createRequest` to render a component that submits 
 
 ### VikingBotSessionService
 
-| Property      | Description      | Type                                                            | Default  |
-| ------------- | ---------------- | --------------------------------------------------------------- | -------- |
-| listSessions  | List sessions    | `(signal: AbortSignal) => Promise<readonly VikingBotSession[]>` | Required |
-| createSession | Create a session | `(signal: AbortSignal) => Promise<VikingBotSession>`            | Required |
-| removeSession | Delete a session | `(id: string, signal: AbortSignal) => Promise<void>`            | Required |
+| Property      | Description                                              | Type                                                                | Default  |
+| ------------- | -------------------------------------------------------- | ------------------------------------------------------------------- | -------- |
+| listSessions  | List sessions                                            | `(signal: AbortSignal) => Promise<readonly VikingBotSession[]>`     | Required |
+| createSession | Create a session                                         | `(signal: AbortSignal) => Promise<VikingBotSession>`                | Required |
+| removeSession | Delete a session                                         | `(id: string, signal: AbortSignal) => Promise<void>`                | Required |
+| renameSession | Persist a session title and enable renaming from history | `(id: string, title: string, signal: AbortSignal) => Promise<void>` | Optional |
 
 ### VikingBotChatEvent
 
@@ -236,7 +237,7 @@ Declare tasks started by a tool in `tool-result.tasks`, with a required `id` and
 | error      | Server task error                                             | `string`                                                                           | -        |
 | queryError | Scheduler query error; the last known task state is preserved | `{ code: 'request' \| 'invalid-response'; message?: string }`                      | -        |
 
-Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Active task notifications use the built-in loading icon; terminal states replace it with their result icon. Query failures display a warning without changing the task status.
+Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Resource import progress is shown in its result record. Other active tasks also show a loading notification. Terminal states show the result icon, and query failures display a warning while the task status stays the same.
 
 The task snapshot uses the completed result's resource URI when available and retains the submission URI as a fallback. A custom task service can provide the final resource directly in `uri`. When a terminal task completes with a resource URI, **View result** opens it through `command.onOpenUri` or `Console.onOpenUri`. The notification remains until the user opens the result or dismisses it.
 

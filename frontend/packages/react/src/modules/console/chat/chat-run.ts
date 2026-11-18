@@ -19,6 +19,7 @@ export async function runChat({
   monitoring,
   state,
   draft,
+  onDelivered,
   undelivered,
   signal,
   current,
@@ -34,6 +35,7 @@ export async function runChat({
   >;
   state: VikingBotChatState;
   draft: VikingBotDraft;
+  onDelivered?: () => void;
   undelivered: VikingBotDraft[];
   signal: AbortSignal;
   current: () => boolean;
@@ -84,8 +86,11 @@ export async function runChat({
     )) {
       if (!current()) return false;
       // A stream event acknowledges delivery; creating a session does not.
-      delivered = true;
-      undelivered.length = 0;
+      if (!delivered) {
+        delivered = true;
+        undelivered.length = 0;
+        if (!signal.aborted) onDelivered?.();
+      }
       signal.throwIfAborted();
       if (
         !started &&

@@ -11,6 +11,8 @@ const { useConversation } = await import(
 );
 const wiki = '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联';
 const report = '基于选中的目录生成日报，并设置定时更新';
+const reportEn =
+  'Generate a daily report from the selected directory and schedule updates';
 const reference = {
   name: 'Team',
   uri: 'viking://resources/team',
@@ -38,11 +40,11 @@ test('Console compile shortcuts fill the draft and leave explicit sending to cha
       yield { type: 'complete', text: 'Ready' };
     },
   };
-  function Host({ conversation }) {
+  function Host({ conversation, locale }) {
     [draft, setDraft] = useState('');
     view = useConversation(
       {
-        locale: 'zh-CN',
+        locale,
         chatOptions: { service },
         conversation: {
           references: { rows: [], selected: [reference], onChange() {} },
@@ -55,8 +57,8 @@ test('Console compile shortcuts fill the draft and leave explicit sending to cha
     return null;
   }
   const root = createRoot(document.createElement('div'));
-  const render = (conversation) =>
-    act(() => root.render(createElement(Host, { conversation })));
+  const render = (conversation, locale = 'zh-CN') =>
+    act(() => root.render(createElement(Host, { conversation, locale })));
   const choose = (index) =>
     act(() => view.onQuickInputSelect(view.quickInputs[index]));
   try {
@@ -69,6 +71,13 @@ test('Console compile shortcuts fill the draft and leave explicit sending to cha
     assert.equal(draft, wiki);
     await choose(0);
     assert.equal(draft, wiki);
+    await render(undefined, 'en-US');
+    assert.equal(draft, wiki);
+    assert.equal(view.quickInputs[1].label, 'Schedule daily report');
+    await choose(1);
+    assert.equal(draft, reportEn);
+    await render();
+    assert.equal(draft, reportEn);
     await choose(1);
     assert.equal(draft, report);
     assert.deepEqual(view.references.selected, [reference]);

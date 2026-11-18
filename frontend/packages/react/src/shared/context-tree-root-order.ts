@@ -1,5 +1,11 @@
-import { splitVikingUri } from './file-tree-info.js';
-import type { FileTreeRow } from './types.js';
+import { splitVikingUri } from './viking-uri.js';
+
+interface TreeRow {
+  depth: number;
+  kind: string;
+  type?: string;
+  uri?: string;
+}
 
 const contextRanks = new Map([
   ['user', 0],
@@ -13,10 +19,10 @@ const contextRanks = new Map([
 ]);
 
 /** Sort directory branches as units; keep root files and state rows in their slots. */
-export function orderContextRoots(
-  rows: readonly FileTreeRow[],
-): readonly FileTreeRow[] {
-  const branches: { rows: FileTreeRow[]; rank: number }[] = [];
+export function orderContextRoots<Row extends TreeRow>(
+  rows: readonly Row[],
+): readonly Row[] {
+  const branches: { rows: Row[]; rank: number }[] = [];
 
   for (const row of rows) {
     const previous = branches.at(-1);
@@ -26,7 +32,7 @@ export function orderContextRoots(
     }
     let rank = -1;
     if (row.depth === 0 && row.kind === 'entry' && row.type === 'directory') {
-      const [namespace] = splitVikingUri(row.uri);
+      const [namespace] = splitVikingUri(row.uri ?? '');
       rank = contextRanks.get(namespace ?? '') ?? Number.MAX_SAFE_INTEGER;
     }
     branches.push({ rows: [row], rank });

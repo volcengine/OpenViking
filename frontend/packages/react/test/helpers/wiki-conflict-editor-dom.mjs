@@ -45,7 +45,12 @@ function wikiSaveNotice() {
   );
 }
 
-async function mountWikiFile(props, pendingPreview, pendingWrite) {
+async function mountWikiFile(
+  props,
+  pendingPreview,
+  pendingWrite,
+  content = fileContent,
+) {
   const fetch = fixture(
     file,
     false,
@@ -71,8 +76,8 @@ async function mountWikiFile(props, pendingPreview, pendingWrite) {
       if (path.endsWith('/content/write')) return pendingWrite;
       if (path.endsWith('/content/read') && uri === file)
         return pendingPreview && query.limit !== '-1'
-          ? pendingPreview.then(() => ok(fileContent))
-          : ok(fileContent);
+          ? pendingPreview.then(() => ok(content))
+          : ok(content);
     },
     [{ to: target }],
   );
