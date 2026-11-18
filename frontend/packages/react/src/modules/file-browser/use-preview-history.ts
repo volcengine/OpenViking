@@ -7,6 +7,7 @@ import {
 import { diffLines } from './preview-diff.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import type { PreviewHistoryProps } from './preview-history.js';
+import type { PreviewHistoryEntry } from './preview-workflow-types.js';
 
 export function usePreviewHistory(props: PreviewHistoryProps) {
   const { uri, versioned, showContent, requestOptions } = props;
@@ -21,6 +22,25 @@ export function usePreviewHistory(props: PreviewHistoryProps) {
   const [selectedId, setSelectedId] = useState<string>();
   const [baseId, setBaseId] = useState<string>();
   const [compare, setCompare] = useState(props.directory);
+  const [deletedIds, setDeletedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const loadRevision = useCallback(
+    async (
+      client: OvClient,
+      entry: PreviewHistoryEntry,
+      options: OvRequestOptions,
+    ) => {
+      const data = await readHistoricalText(client, entry, options, versioned);
+      if (data === null && !options.signal?.aborted) {
+        setDeletedIds((known) =>
+          known.has(entry.id) ? known : new Set([...known, entry.id]),
+        );
+      }
+      return data;
+    },
+    [versioned],
+  );
   const entries = query.data;
   const selected = showContent
     ? (entries?.find((entry) => entry.id === selectedId) ?? entries?.[0])
@@ -36,8 +56,8 @@ export function usePreviewHistory(props: PreviewHistoryProps) {
   const content = useDashboardQuery(
     useCallback(
       (client: OvClient, options: OvRequestOptions) =>
-        readHistoricalText(client, selected!, options, versioned),
-      [selected, versioned],
+        loadRevision(client, selected!, options),
+      [loadRevision, selected],
     ),
     requestOptions,
     Boolean(selected),
@@ -45,8 +65,8 @@ export function usePreviewHistory(props: PreviewHistoryProps) {
   const current = useDashboardQuery(
     useCallback(
       (client: OvClient, options: OvRequestOptions) =>
-        readHistoricalText(client, base!, options, versioned),
-      [base, versioned],
+        loadRevision(client, base!, options),
+      [loadRevision, base],
     ),
     requestOptions,
     Boolean(base) && compare,
@@ -65,6 +85,7 @@ export function usePreviewHistory(props: PreviewHistoryProps) {
   );
   return {
     query,
+    deletedIds,
     selected,
     base,
     content,

@@ -61,9 +61,22 @@ export async function executeCommand(
       return client.request<T>({ ...spec, options });
     },
   };
-  const data = spec.execute
-    ? await spec.execute(values, execution.request, execution)
-    : await execution.request(spec.request!(values));
+  let data: unknown;
+  let telemetry: Record<string, unknown> | undefined;
+  if (spec.execute) {
+    data = await spec.execute(values, execution.request, execution);
+  } else {
+    const request = spec.request!(values);
+    if (spec.name.startsWith('session ') && values.telemetry) {
+      options.signal?.throwIfAborted();
+      ({ result: data, telemetry } = await client.requestEnvelope({
+        ...request,
+        options,
+      }));
+    } else {
+      data = await execution.request(request);
+    }
+  }
   onTasks?.(readTaskReferences(spec.name, data));
-  return formatResult(spec.name, data, values);
+  return formatResult(spec.name, data, values, telemetry);
 }

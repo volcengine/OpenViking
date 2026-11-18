@@ -9,7 +9,7 @@ export const sessionIdArgument: Argument = {
 };
 export const sessionTelemetryArgument: Argument = {
   name: 'telemetry',
-  kind: 'boolean',
+  kind: 'boolean-or-json',
   hidden: true,
 };
 const role: Argument = { name: 'role', required: true };

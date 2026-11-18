@@ -18,7 +18,7 @@ export function PreviewHistoryList({
   query,
   showContent,
   selectedId,
-  selectedDeleted,
+  deletedIds,
   compare,
   canCompare,
   comparison,
@@ -30,7 +30,7 @@ export function PreviewHistoryList({
   query: DashboardQuery<PreviewHistoryEntry[]>;
   showContent: boolean;
   selectedId?: string;
-  selectedDeleted: boolean;
+  deletedIds: ReadonlySet<string>;
   compare: boolean;
   canCompare: boolean;
   comparison?: ReactNode;
@@ -70,7 +70,7 @@ export function PreviewHistoryList({
             const versionLabel = historyVersionLabel(entry, locale);
             const badge = historyVersionBadge(
               entry,
-              entry.id === selectedId && selectedDeleted,
+              deletedIds.has(entry.id),
               text,
             );
             const label = (

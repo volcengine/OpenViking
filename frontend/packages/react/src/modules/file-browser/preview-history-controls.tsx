@@ -75,8 +75,7 @@ export function PreviewHistoryControls({
           .map((entry) => {
             const badge = historyVersionBadge(
               entry,
-              entry.id === history.selected?.id &&
-                history.content.data === null,
+              history.deletedIds.has(entry.id),
               text,
             );
             return (

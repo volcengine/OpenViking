@@ -35,16 +35,14 @@ export async function readHistoricalText(
   wiki: boolean,
 ): Promise<string | null> {
   const path = entry.path;
-  const readBlob = (target_ref: string, raw: boolean) =>
-    client.request<Blob>({
+  try {
+    const blob = await client.request<Blob>({
       method: 'GET',
       path: OV_PATHS.snapshotShow,
-      query: { target_ref, path, raw },
+      query: { target_ref: entry.snapshot, path, raw: false },
       responseType: 'blob',
       options,
     });
-  try {
-    const blob = await readBlob(entry.snapshot, false);
     const text = await blob.text();
     return wiki ? splitWikiMetadata(text).document : text;
   } catch (error) {
@@ -72,15 +70,18 @@ export async function readHistoricalText(
     );
     const parent = commit?.parents?.[0];
     if (commit?.oid !== entry.snapshot || !parent) throw error;
-    // Confirm the same path existed in the first parent, even on hosted
-    // gateways that only expose snapshot log and show.
-    try {
-      await readBlob(parent, true);
-    } catch (cause) {
-      if (isOvClientError(cause) && cause.statusCode === 404) throw error;
-      throw cause;
-    }
-    return null;
+    // Native diff treats only a missing tree path as absent. A missing object
+    // for a tracked path still fails the comparison.
+    const diff = await client
+      .request<{ change_type: string }>({
+        method: 'GET',
+        path: OV_PATHS.snapshotDiff,
+        query: { path, from: parent, to: entry.snapshot },
+        options,
+      })
+      .catch(() => undefined);
+    if (diff?.change_type === 'deleted') return null;
+    throw error;
   }
 }
 

@@ -27,11 +27,13 @@ const revisions = () =>
   workflow().querySelectorAll('.ov-file-history__commit-list button');
 const badges = () =>
   Array.from(
-    workflow().querySelectorAll('.ov-file-history__version-badge'),
+    workflow().querySelectorAll(
+      '.ov-file-history__commit-list .ov-file-history__version-badge',
+    ),
     (badge) => badge.textContent,
   );
 
-test('only a confirmed deletion marks the selected history revision', async () => {
+test('history retains confirmed deletion badges and reports missing blobs as read errors', async () => {
   const fetch = fixture(
     uri,
     false,
@@ -40,11 +42,7 @@ test('only a confirmed deletion marks the selected history revision', async () =
         return ok({ versions: [latest, removed, older, missing] });
       }
       if (call.path.endsWith('/snapshot/show')) {
-        if (
-          [removed.oid, missing.oid, missingParent].includes(
-            call.query.target_ref,
-          )
-        ) {
+        if ([removed.oid, missing.oid].includes(call.query.target_ref)) {
           return Promise.resolve(
             Response.json(
               {
@@ -61,7 +59,27 @@ test('only a confirmed deletion marks the selected history revision', async () =
         }
         return Promise.resolve(
           new Response(
-            call.query.target_ref === older.oid ? 'Older content\n' : '',
+            call.query.target_ref === latest.oid
+              ? 'Recreated content\n'
+              : 'Older content\n',
+          ),
+        );
+      }
+      if (call.path.endsWith('/snapshot/diff')) {
+        if (call.query.to === removed.oid) {
+          assert.equal(call.query.from, older.oid);
+          assert.equal(call.query.path, uri);
+          return ok({ change_type: 'deleted' });
+        }
+        assert.equal(call.query.to, missing.oid);
+        assert.equal(call.query.from, missingParent);
+        return Promise.resolve(
+          Response.json(
+            {
+              status: 'error',
+              error: { code: 'NOT_FOUND', message: 'Object store unavailable' },
+            },
+            { status: 404 },
           ),
         );
       }
@@ -83,6 +101,22 @@ test('only a confirmed deletion marks the selected history revision', async () =
     assert.deepEqual(badges(), []);
     assert.equal(button('Copy source', workflow()).disabled, false);
 
+    await click(workflow().querySelector('[role="switch"]'));
+    assert.match(
+      workflow().querySelector('pre').textContent,
+      /\+Recreated content/,
+    );
+    assert.deepEqual(badges(), ['Deleted']);
+    await click(workflow().querySelector('[aria-label="Compare with"]'));
+    assert.ok(
+      [...document.querySelectorAll('[role="option"]')].some((option) =>
+        option.textContent.includes('Deleted'),
+      ),
+    );
+    await click(workflow().querySelector('[aria-label="Compare with"]'));
+    await click(workflow().querySelector('[role="switch"]'));
+    assert.deepEqual(badges(), ['Deleted']);
+
     await click(revisions()[1]);
     assert.deepEqual(badges(), ['Deleted']);
     assert.match(revisions()[1].textContent, /Deleted/);
@@ -101,9 +135,12 @@ test('only a confirmed deletion marks the selected history revision', async () =
     );
     assert.match(workflow().querySelector('pre').textContent, /-Older content/);
 
-    await click(workflow().querySelector('[role="switch"]'));
+    await click(revisions()[0]);
+    assert.deepEqual(badges(), ['Deleted']);
     await click(revisions()[3]);
-    assert.deepEqual(badges(), []);
+    assert.deepEqual(badges(), ['Deleted']);
+    assert.doesNotMatch(revisions()[3].textContent, /Deleted/);
+    assert.equal(workflow().querySelector('pre'), null);
     assert.match(
       workflow().querySelector('[role="alert"]').textContent,
       /Snapshot content missing/,

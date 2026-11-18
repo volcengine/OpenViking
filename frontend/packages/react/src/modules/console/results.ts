@@ -20,6 +20,7 @@ export function formatResult(
   name: string,
   data: unknown,
   values: ArgumentValues,
+  telemetry?: Record<string, unknown>,
 ): CommandConsoleRecordContent {
   if (['read', 'abstract', 'overview'].includes(name)) {
     const uri = values.uri as string;
@@ -78,21 +79,20 @@ export function formatResult(
         value !== null &&
         !hidden.has(key.replace(/_/g, '').toLowerCase()),
     );
-    return {
-      variant: 'write-result',
-      lines: rows.length
-        ? rows.slice(0, 12).map(([key, value]) => {
-            const label = (
-              key === 'status' && readTaskReferences(name, data).length
-                ? 'submission_status'
-                : key
-            ).replaceAll('_', ' ');
-            return `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}: ${text(value)}`;
-          })
-        : data === null || data === undefined
-          ? []
-          : [text(data)],
-    };
+    const lines = rows.length
+      ? rows.slice(0, 12).map(([key, value]) => {
+          const label = (
+            key === 'status' && readTaskReferences(name, data).length
+              ? 'submission_status'
+              : key
+          ).replaceAll('_', ' ');
+          return `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}: ${text(value)}`;
+        })
+      : data === null || data === undefined
+        ? []
+        : [text(data)];
+    if (telemetry) lines.push(`Telemetry: ${text(telemetry)}`);
+    return { variant: 'write-result', lines };
   }
   if (name === 'search' && values.mode === 'context')
     return {

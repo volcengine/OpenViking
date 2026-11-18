@@ -58,7 +58,7 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
             query={history.query}
             showContent={props.showContent}
             selectedId={selected?.id}
-            selectedDeleted={deleted}
+            deletedIds={history.deletedIds}
             compare={history.requestedCompare}
             canCompare={history.canCompare}
             text={text}

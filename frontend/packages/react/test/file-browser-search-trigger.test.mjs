@@ -124,7 +124,7 @@ test('search runs as you type, keeps the scope, and survives a locale change', a
 
     await type('');
     await waitForDebounce();
-    assert.equal(modeSwitch().textContent, 'find');
+    assert.equal(modeSwitch().getAttribute('aria-label'), '切换 (find)');
     assert.equal(calls(fetch).length, 1);
   } finally {
     await view.unmount();
