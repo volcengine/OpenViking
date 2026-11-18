@@ -75,16 +75,30 @@ class CodexSource(JsonlLogSource):
 
     @staticmethod
     def _peek_session_meta(path: Path) -> Dict[str, Any]:
+        """First ``session_meta`` payload in a rollout file, or ``{}``.
+
+        Records before it are skipped rather than treated as the end of the file:
+        a rollout can carry a truncated line or a value of the wrong shape ahead
+        of its metadata, and stopping there loses the session's real id and
+        provider for everything that follows.
+        """
         try:
             with open(path, "rb") as f:
                 for raw in f:
                     raw = raw.strip()
                     if not raw:
                         continue
-                    obj = json.loads(raw)
-                    if obj.get("type") == "session_meta":
-                        return obj.get("payload", {}) or {}
-        except (OSError, ValueError):
+                    try:
+                        obj = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if not isinstance(obj, dict):
+                        continue
+                    if obj.get("type") != "session_meta":
+                        continue
+                    payload = obj.get("payload")
+                    return payload if isinstance(payload, dict) else {}
+        except OSError:
             pass
         return {}
 

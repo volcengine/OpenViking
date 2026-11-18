@@ -175,6 +175,42 @@ def test_codex_forked_rollout_file_gets_its_own_session_id(tmp_path):
         assert msgs == [], f"{sid} re-read its rollout file on the second sweep"
 
 
+def test_codex_discovery_skips_unreadable_leading_records(tmp_path):
+    """A malformed record before ``session_meta`` must not hide the session.
+
+    Codex rollout files can start with records that are not metadata objects: a
+    truncated JSON line, or a well-formed value of the wrong shape. Discovery has
+    to skip those and keep reading up to the first metadata object, otherwise one
+    bad line aborts the whole root (AttributeError) or silently drops the
+    session's real id and provider.
+    """
+    root = tmp_path / "sessions"
+    day = root / "2026" / "06" / "25"
+    day.mkdir(parents=True)
+
+    (day / "rollout-a.jsonl").write_text(
+        "[]\n"
+        '{"type":"session_meta","payload":{"id":"recovered","model_provider":"openai"}}\n'
+        '{"type":"response_item","payload":{"type":"message","role":"assistant",'
+        '"content":[{"type":"output_text","text":"hello"}]}}\n'
+    )
+    (day / "rollout-b.jsonl").write_text('{"type":"session_meta","payload":{"id":"other"}}\n')
+    # Truncated JSON, then valid metadata: the session must keep its real id.
+    (day / "rollout-c.jsonl").write_text(
+        '{\n{"type":"session_meta","payload":{"id":"third","model_provider":"openai"}}\n'
+    )
+
+    src = CodexSource(_cfg(root), fallback_user="tester")
+    refs = {r.native_session_id: r for r in src.discover_sessions()}
+    assert set(refs) == {"recovered", "other", "third"}
+    assert refs["recovered"].meta["model"] == "openai"
+    assert refs["third"].meta["model"] == "openai"
+
+    msgs, _ = src.read_messages(refs["recovered"], None)
+    assert [(m.role, m.text) for m in msgs] == [("assistant", "hello")]
+    assert msgs[0].peer_id == "codex__openai"
+
+
 def _workbuddy_turn(role, text, ts_ms, model=None):
     record = {
         "id": f"m-{ts_ms}",
