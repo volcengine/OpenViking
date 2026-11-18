@@ -8,6 +8,7 @@ from functools import partial
 from typing import Any, Optional
 
 from openviking.concurrency import AsyncSemaphore
+from openviking.scheduling.progress import LoopProgress
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_types import WatchRun, WatchRunning, WatchRunResult
 from openviking.service.task_domain import TERMINAL_TASK_STATUSES
@@ -73,6 +74,7 @@ class WatchRuntime:
         self._active_runs: set[str] = set()
         self._occupancy_initialized = False
         self._dispatch_lock = AsyncSemaphore()
+        self.progress = LoopProgress(poll_interval)
 
     def _leader_mode(self, provider: str) -> str:
         provider = provider.strip().lower()
@@ -137,15 +139,19 @@ class WatchRuntime:
                     if not self._running:
                         return
                     self._is_leader = True
+                    self.progress = LoopProgress(self._poll_interval)
                     self._occupancy_initialized = False
                     try:
                         while self._continue(leadership.stop_event):
                             try:
+                                self.progress.begin()
                                 await self._sweep(leadership.stop_event)
                                 await self._dispatch_due(leadership.stop_event)
+                                self.progress.succeeded()
                             except asyncio.CancelledError:
                                 raise
                             except Exception:
+                                self.progress.failed()
                                 logger.exception("Watch Runtime round failed")
                             try:
                                 await asyncio.wait_for(

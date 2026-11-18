@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from openviking.crypto.encryptor import build_credential_encryptor as build_credential_encryptor
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import CompileStore, task_ctx
+from openviking.scheduling.progress import LoopProgress
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -151,6 +152,7 @@ class CompileScheduler:
 
     async def start(self) -> None:
         if self._task is None:
+            self.progress = LoopProgress(COMPENSATION_SCAN_SECONDS)
             self._stop.clear()
             self._task = asyncio.create_task(self._run())
 
@@ -163,12 +165,18 @@ class CompileScheduler:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
+            retry = COMPENSATION_SCAN_SECONDS
             try:
+                self.progress.begin()
                 await self.scan_once()
+                self.progress.succeeded()
             except Exception:
+                self.progress.failed()
+                # 补扫失败采用有界恢复间隔，不等到六小时后；原生时间槽锁仍负责去重。
+                retry = min(COMPENSATION_SCAN_SECONDS, 60)
                 logger.exception("Compile scheduler scan failed")
             try:
-                await asyncio.wait_for(self._stop.wait(), COMPENSATION_SCAN_SECONDS)
+                await asyncio.wait_for(self._stop.wait(), retry)
             except asyncio.TimeoutError:
                 pass
 
@@ -176,17 +184,28 @@ class CompileScheduler:
 
     async def scan_once(self, now: Optional[datetime] = None) -> None:
         now = now or datetime.now(TZ)
+        incomplete = False
+        oldest_due = 0
         for account_id in await self._store.list_accounts():
             for item in await self._store.list_summaries(account_id):
                 try:
                     if item.get("auto_update") and is_due(
                         item, current_slot(item["update_schedule"], now)
                     ):
+                        oldest_due = max(
+                            oldest_due,
+                            (now - current_slot(item["update_schedule"], now)).total_seconds(),
+                        )
                         await self.trigger_if_due(account_id, item["to"], now)
                     elif item.get("auto_update"):
                         await self.reschedule(account_id, item)
                 except Exception:
+                    incomplete = True
                     logger.exception("Compile schedule check failed for %s", item.get("to"))
+        if hasattr(self, "progress"):
+            self.progress.oldest_due_age_seconds = oldest_due
+        if incomplete:
+            raise RuntimeError("Compile compensation scan incomplete")
 
     async def reschedule(
         self,

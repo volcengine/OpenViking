@@ -221,6 +221,9 @@ async def readiness_check(request: Request):
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503
     content = {"status": "ready" if all_ok else "not_ready", "checks": checks, "shared_state": state_backend}
+    runtime = getattr(request.app.state, "server_runtime", None)
+    if runtime is not None:
+        content["scheduler_progress"] = runtime.scheduler_progress()
     # provider可报告已验证schema身份，私有化迁移准出使用；原生流程不在这里建表。
     schema = getattr(adapter, "schema", None)
     if isinstance(schema, dict):

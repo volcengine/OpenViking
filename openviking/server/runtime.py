@@ -213,6 +213,15 @@ class ServerRuntime:
         ):
             return False
         service = self.shared.service
+        # 私有化独立Scheduler沿原生循环核对推进，不另建调度或业务状态；其他角色不受影响。
+        if self.scheduler is not None:
+            for name in ("_watch_runtime", "_compile_scheduler"):
+                component = getattr(service, name, None)
+                progress = getattr(component, "progress", None)
+                if name == "_watch_runtime" and not getattr(component, "is_leader", False):
+                    continue
+                if progress is not None and not progress.snapshot()["healthy"]:
+                    return False
         if self.queue_worker is not None:
             manager = getattr(service, "_queue_manager", None)
             if manager is None or not manager.is_running():
@@ -248,6 +257,16 @@ class ServerRuntime:
             ):
                 return False
         return True
+
+    def scheduler_progress(self) -> dict:
+        """公开有限循环进度，空闲与不同补扫周期不共享一个超时阈值。"""
+        service = self.shared.service
+        return {
+            name: component.progress.snapshot()
+            for name in ("_watch_runtime", "_compile_scheduler")
+            if (component := getattr(service, name, None)) is not None
+            and hasattr(component, "progress")
+        }
 
     async def start(self) -> None:
         if self.started:
