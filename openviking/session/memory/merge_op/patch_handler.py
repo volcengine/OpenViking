@@ -568,9 +568,16 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     # Check if all results are successful (including no-change cases)
     has_failures = any(not result.get("success", False) for result in diff_results)
 
-    if applied_count == 0 and has_failures:
+    # Callers persist the returned content and only keep the previous value when
+    # this raises, so returning the blocks that happened to match would drop the
+    # rest of the edit without any signal. Ambiguous blocks already fail the
+    # whole patch; missing ones must be atomic as well.
+    if has_failures:
+        failed_count = sum(1 for result in diff_results if not result.get("success", False))
         raise PatchParseError(
-            f"Patch application failed: search content not found in original, original_content={original_content}, patch={patch}"
+            f"Patch application failed: {failed_count} of {len(replacements)} block(s) "
+            "could not be applied; no partial content is returned, "
+            f"original_content={original_content}, patch={patch}"
         )
 
     return final_content
