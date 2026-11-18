@@ -1183,7 +1183,7 @@ async def test_resource_rm_skips_refresh_when_freshness_lock_is_busy(
     assert result["semantic_status"] == "skipped"
     plan.assert_awaited_once()
     assert plan.await_args.kwargs["dir_uri"] == "viking://resources/docs"
-    assert plan.await_args.kwargs["lock_timeout_secs"] == 1.0
+    assert plan.await_args.kwargs.get("lock_timeout_secs", 0.0) == 0.0
     get_queue_manager.assert_not_called()
     service._wait_for_refresh.assert_not_awaited()
 

@@ -826,11 +826,10 @@ class FSService:
                 overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
                 refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
                 force_refresh=force_refresh,
-                lock_timeout_secs=1.0,
             )
         except LockAcquisitionError:
             # Content deletion already succeeded. Parent freshness bookkeeping
-            # is best effort, as in automatic upward semantic propagation.
+            # is best effort, as in content writes.
             logger.info(
                 "Skipping best-effort delete parent freshness update because sidecars are busy",
                 extra={"uri": safe_uri_for_log(root_uri), "degraded": True},
