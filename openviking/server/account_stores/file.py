@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
@@ -824,19 +824,22 @@ class FileStore(AccountStore):
             if not isinstance(deletion, dict) or deletion.get("task_id") != task_id:
                 return False
 
-            await self._load_account_groups_if_needed(account_id, account)
             old_groups = copy.deepcopy(account.groups)
-            groups = copy.deepcopy(account.groups)
-            for group in groups.values():
-                members = group.get("members", [])
-                if user_id in members:
-                    group["members"] = [member for member in members if member != user_id]
+
+            def apply(groups: Dict[str, dict]) -> bool:
+                changed = False
+                for group in groups.values():
+                    members = group.get("members", [])
+                    if user_id in members:
+                        group["members"] = [member for member in members if member != user_id]
+                        changed = True
+                return changed
+
             self._remove_key_index_entry(account_id, user_id, user_info)
             account.users.pop(user_id)
             try:
                 await self._save_users_json(account_id, deleted_user_ids={user_id})
-                if groups != old_groups:
-                    await self._write_groups_json(account_id, groups)
+                await self._mutate_persisted_groups(account_id, apply)
             except Exception:
                 account.users[user_id] = user_info
                 account.groups = old_groups
@@ -845,9 +848,6 @@ class FileStore(AccountStore):
                 )
                 self._rebuild_account_group_index(account_id)
                 raise
-            if groups != old_groups:
-                account.groups = groups
-                self._rebuild_account_group_index(account_id)
             return True
 
     def _get_deletion(self, account_id: str, user_id: str | None = None) -> Optional[dict]:
@@ -1041,13 +1041,15 @@ class FileStore(AccountStore):
             raise InvalidArgumentError(error)
         async with self._reload_lock:
             account = self._require_account(account_id)
-            await self._load_account_groups_if_needed(account_id, account)
-            if group_id in account.groups:
-                raise AlreadyExistsError(group_id, "group")
-            groups = copy.deepcopy(account.groups)
-            groups[group_id] = {"members": []}
-            await self._replace_groups(account_id, account, groups)
-            return self._group_result(group_id, groups[group_id])
+
+            def apply(groups: Dict[str, dict]) -> bool:
+                if group_id in groups:
+                    raise AlreadyExistsError(group_id, "group")
+                groups[group_id] = {"members": []}
+                return True
+
+            await self._mutate_persisted_groups(account_id, apply)
+            return self._group_result(group_id, account.groups[group_id])
 
     def _get_groups(self, account_id: str) -> list[dict]:
         account = self._require_account(account_id)
@@ -1063,45 +1065,55 @@ class FileStore(AccountStore):
     async def _add_group_members(self, account_id: str, group_id: str, user_ids: list[str]) -> bool:
         async with self._reload_lock:
             account = self._require_account(account_id)
-            await self._load_account_groups_if_needed(account_id, account)
-            group = self._require_group(account_id, group_id)
             user_ids = list(dict.fromkeys(user_ids))
             for user_id in user_ids:
                 if user_id not in account.users:
                     raise NotFoundError(user_id, "user")
                 if account.users[user_id].get("deletion"):
                     raise FailedPreconditionError("User deletion is in progress")
-            members = set(group.get("members", []))
-            if members.issuperset(user_ids):
+
+            def apply(groups: Dict[str, dict]) -> bool:
+                group = groups.get(group_id)
+                if group is None:
+                    raise NotFoundError(group_id, "group")
+                members = set(group.get("members", []))
+                if members.issuperset(user_ids):
+                    return False
+                group["members"] = sorted(members.union(user_ids))
                 return True
-            groups = copy.deepcopy(account.groups)
-            groups[group_id]["members"] = sorted(members.union(user_ids))
-            await self._replace_groups(account_id, account, groups)
+
+            await self._mutate_persisted_groups(account_id, apply)
             return True
 
     async def _remove_group_members(
         self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
         async with self._reload_lock:
-            account = self._require_account(account_id)
-            await self._load_account_groups_if_needed(account_id, account)
-            group = self._require_group(account_id, group_id)
-            members = set(group.get("members", []))
-            if members.isdisjoint(user_ids):
-                return False
-            groups = copy.deepcopy(account.groups)
-            groups[group_id]["members"] = sorted(members.difference(user_ids))
-            await self._replace_groups(account_id, account, groups)
-            return True
+            self._require_account(account_id)
+
+            def apply(groups: Dict[str, dict]) -> bool:
+                group = groups.get(group_id)
+                if group is None:
+                    raise NotFoundError(group_id, "group")
+                members = set(group.get("members", []))
+                if members.isdisjoint(user_ids):
+                    return False
+                group["members"] = sorted(members.difference(user_ids))
+                return True
+
+            return await self._mutate_persisted_groups(account_id, apply)
 
     async def _delete_group(self, account_id: str, group_id: str) -> None:
         async with self._reload_lock:
-            account = self._require_account(account_id)
-            await self._load_account_groups_if_needed(account_id, account)
-            self._require_group(account_id, group_id)
-            groups = copy.deepcopy(account.groups)
-            del groups[group_id]
-            await self._replace_groups(account_id, account, groups)
+            self._require_account(account_id)
+
+            def apply(groups: Dict[str, dict]) -> bool:
+                if group_id not in groups:
+                    raise NotFoundError(group_id, "group")
+                del groups[group_id]
+                return True
+
+            await self._mutate_persisted_groups(account_id, apply)
 
     # ---- internal helpers ----
 
@@ -1181,13 +1193,43 @@ class FileStore(AccountStore):
             for user_id, group_ids in group_ids_by_user.items()
         }
 
-    async def _replace_groups(
-        self, account_id: str, account: AccountInfo, groups: Dict[str, dict]
-    ) -> None:
-        await self._write_groups_json(account_id, groups)
-        account.groups = groups
-        account.groups_loaded = True
-        self._rebuild_account_group_index(account_id)
+    async def _mutate_persisted_groups(
+        self,
+        account_id: str,
+        apply: Callable[[Dict[str, dict]], bool],
+    ) -> bool:
+        """Apply one mutation to the latest persisted groups under a cross-instance lock.
+
+        Every group write replaces the whole ``groups.json``, so a mutation computed
+        from the process-local cache drops changes another instance persisted in the
+        meantime. The file provider is documented for multi-instance deployments and
+        the account and user registries already coordinate through exact path locks;
+        take the same lease here, re-read under it, and report whether anything
+        changed so no-change operations skip the write.
+        """
+        path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
+        try:
+            lease = await self._async_agfs.pathlock_acquire_exact(path, timeout_secs=10.0)
+        except LockAcquisitionError as exc:
+            raise ResourceBusyError(
+                "Another group operation is in progress for this account. Please retry.",
+                uri=path,
+                conflict_type="group_registry_busy",
+            ) from exc
+        try:
+            data = await self._read_json(path)
+            groups = data.get("groups", {}) if data else {}
+            changed = apply(groups)
+            if changed:
+                await self._write_groups_json(account_id, groups, lease_ref=lease)
+            account = self._accounts.get(account_id)
+            if account is not None:
+                account.groups = groups
+                account.groups_loaded = True
+                self._rebuild_account_group_index(account_id)
+            return changed
+        finally:
+            await self._async_agfs.pathlock_release(lease)
 
     def _remove_key_index_entry(self, account_id: str, user_id: str, user_info: dict) -> None:
         key_or_hash = user_info.get("key", "")
