@@ -218,6 +218,19 @@ MCP tools to its output.
 
 OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction, session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
 
+### Optional skill experience hints (OpenCode v2)
+
+Set `plugin.opencode.skillExperience` to `true` or set
+`OPENVIKING_SKILL_EXPERIENCE=true` to append relevant experiences to successful
+`skill` loads and reads that include the beginning of a `skills/.../SKILL.md`
+file. A hint is attempted once per skill and session. The plugin keeps the
+original tool result and adds a separately labelled text block.
+
+Hints come from the authenticated user's OpenViking Experience memories and
+are limited to three results per skill and a short request budget. If lookup
+fails, the original skill is still available. Receiving a hint does not
+establish that the model used it.
+
 ## MCP Tools
 
 OpenCode sees the OpenViking MCP server as `openviking`, so tool names are namespaced with `openviking_`.
