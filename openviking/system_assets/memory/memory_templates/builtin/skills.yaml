@@ -3,6 +3,7 @@ description: |
   Record all skills uses，
 directory: "viking://user/{{ user_space }}/memories/skills"
 filename_template: "{{ skill_name }}.md"
+abstract_template: "Experience using configured skills, including when and how to apply them."
 enabled: false
 content_template: |
   Skill: {{ skill_name }}

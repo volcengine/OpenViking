@@ -52,7 +52,7 @@ L1 提供更完整的目录摘要和导航信息，用于 Rerank 和决定是否
 overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
-资源目录生成语义摘要时，L0 从 L1 正文中提取：取 H1 标题之后、第一个 `##` 标题之前的 Brief Description 段落。YAML frontmatter 不参与提取。
+普通目录的 L0 由模型根据文件摘要和子目录 L0 生成。L1 由程序渲染目录简介、条目导航和读取指引，空间不足时优先保留条目链接。记忆目录刷新时，如果 L0 缺失且类型提供了预设文案，就写入预设 L0 并标记为 `manual`。L1 直接使用已存的记忆字段渲染，普通记忆写入后的目录刷新无需调用文本生成模型。Skill 根目录的 L0 来自 Skill 元信息，L1 使用 `SKILL.md` 正文。
 
 ## L2：详情
 
@@ -165,15 +165,19 @@ L0/L1 正文可以通过公共 `write` / `batch_write` 更新，但 metadata 受
 - `append` 只追加正文，不会把用户内容追加到 frontmatter。
 - 正文更新只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成，避免刚写入的正文被覆盖。
 
+通过 `write` / `batch_write` 修改已有 L0 正文后，系统将其标记为 `maintenance: manual`。该标记由系统维护，不能通过公共写入 API 修改或删除。之后的自动刷新和语义重建保留人工 L0，L1 导航仍自动更新。L1 不支持人工保留区域，直接修改的正文会在后续生成时被替换。
+
+系统预置的 L0 同样属于 `manual`。新建时写入该标记；此前由目录初始化写入、尚无该标记的 L0 按已有生成来源识别为人工维护。预置 L1 不受此保护。
+
 ## 生成机制
 
 SemanticProcessor 自底向上处理目录：
 
 ```text
-文件摘要 → 叶子目录 L1 → 叶子目录 L0 → 父目录 → namespace 根边界
+文件摘要 / 子目录 L0 → 目录 L0 → 模板渲染目录 L1 → 父目录
 ```
 
-子目录 L0 被聚合到父目录 L1。Memory 目录也通过统一的 SemanticProcessor 入口处理，但当前父级冒泡逻辑只用于 resource/skill。多模态文件会先生成文本摘要，再作为普通文件摘要参与其所在目录的 L0/L1；不会为每个图片、音频或视频创建 per-file L0/L1 sidecar。
+子目录 L0 被聚合到父目录 L0，再作为父目录 L1 的简介。Memory 目录也通过统一的 SemanticProcessor 入口处理，但当前父级冒泡逻辑只用于 resource/skill。多模态文件会先生成文本摘要，再作为普通文件摘要参与其所在目录的 L0/L1；不会为每个图片、音频或视频创建 per-file L0/L1 sidecar。
 
 ## 最佳实践
 

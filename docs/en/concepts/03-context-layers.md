@@ -52,7 +52,7 @@ This directory covers the primary API authentication methods.
 overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
-When generating resource-directory summaries, L0 is extracted from the L1 body: the Brief Description paragraph after the H1 title and before the first `##` heading. YAML frontmatter is not part of this extraction.
+For ordinary directories, the model generates L0 from file summaries and child-directory L0 bodies. L1 renders the directory description, navigation, and access guide. When space is limited, entry links take priority over descriptions. On a memory directory refresh, a type template can supply a missing L0 as a `manual` preset. L1 renders from stored memory fields, so directory refresh after a normal memory write needs no text generation call. For Skill roots, L0 comes from Skill metadata and L1 uses the `SKILL.md` body.
 
 ## L2: Detail
 
@@ -160,20 +160,24 @@ L0/L1 bodies can be updated through public `write` / `batch_write`, while metada
 
 - The target sidecar must already exist; public APIs cannot directly create a new `.abstract.md` or `.overview.md`.
 - A body-only request inherits the stored metadata and writes canonical OKF.
-- A full-OKF request must preserve all known metadata; changing a protected field fails.
+- A full-OKF request must preserve known metadata; changing protected fields is rejected.
 - Unknown metadata fields are silently dropped.
 - `append` appends only to the body, never to frontmatter.
 - A body update rebuilds only the directory levels that currently exist and does not regenerate semantics, preventing the newly written body from being overwritten.
+
+Editing an existing L0 body through `write` / `batch_write` sets `maintenance: manual`. This system-managed marker cannot be changed or removed through the public write APIs. Automatic refreshes and semantic rebuilds preserve this L0 while updating L1 navigation. L1 has no protected manual sections; subsequent generation replaces direct body edits.
+
+Preset L0 descriptions also use `manual` maintenance. New presets carry this marker; existing presets without it are recognized by their directory-initialization source metadata. Preset L1 descriptions are not protected by this rule.
 
 ## Generation
 
 SemanticProcessor processes directories bottom-up:
 
 ```text
-file summaries → leaf L1 → leaf L0 → parent directories → namespace boundary
+file summaries / child L0 → directory L0 → rendered directory L1 → parent directories
 ```
 
-Child-directory L0 bodies are aggregated into the parent L1. Memory directories use the same SemanticProcessor entry point, although the current parent-bubbling path applies only to resource/skill. Multimodal files first produce text summaries, which contribute to the containing directory's L0/L1 like other file summaries; OpenViking does not create per-file L0/L1 sidecars for each image, audio file, or video.
+Child-directory L0 bodies contribute to the parent L0, which also becomes the parent L1 description. Memory directories use the same SemanticProcessor entry point, although the current parent-bubbling path applies only to resource/skill. Multimodal files first produce text summaries, which contribute to the containing directory's L0/L1 like other file summaries; OpenViking does not create per-file L0/L1 sidecars for each image, audio file, or video.
 
 ## Best Practices
 

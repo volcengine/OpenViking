@@ -12,11 +12,11 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
     freshness_metadata,
     parse_abstract_overview,
-    parse_overview_file_summaries,
     render_abstract_overview,
 )
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+from openviking.storage.queuefs.semantic_ops.directory_generation import DirectoryGeneration
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
@@ -95,15 +95,6 @@ class _FakeProcessor:
         self.generated_overviews = []
         self.updated_file_vectors = []
 
-    def _parse_overview_md(self, overview_content):
-        results = {}
-        for line in overview_content.splitlines():
-            m = re.match(r"^-\s*(?P<name>[^:]+):\s*(?P<summary>.*)$", line.strip())
-            if not m:
-                continue
-            results[m.group("name").strip()] = m.group("summary").strip()
-        return results
-
     async def _generate_single_file_summary(
         self, file_path, llm_sem=None, ctx=None, file_content=None
     ):
@@ -111,7 +102,9 @@ class _FakeProcessor:
         self.file_contents[("summary", file_path)] = file_content
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
+    async def _generate_directory_semantics(
+        self, dir_uri, file_summaries, children_abstracts, **kwargs
+    ):
         self.generated_overviews.append(dir_uri)
         lines = ["FILES:"]
         for item in file_summaries:
@@ -122,7 +115,7 @@ class _FakeProcessor:
             name = item.get("name", "")
             abstract = item.get("abstract", "")
             lines.append(f"- {name}/: {abstract}")
-        return "\n".join(lines)
+        return DirectoryGeneration(overview="\n".join(lines), abstract="abstract")
 
     async def _load_transfer_file_summaries(self, file_paths, ctx=None):
         self.transfer_summary_calls.append(list(file_paths))
@@ -131,9 +124,6 @@ class _FakeProcessor:
             for path in file_paths
             if self.transfer_summaries.get(path)
         }
-
-    def _normalize_overview_generation(self, overview):
-        return overview, "abstract"
 
     async def _vectorize_single_file(
         self,
@@ -423,7 +413,7 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
 
-    processor = _FakeProcessor(fake_fs)
+    processor = _FakeProcessor(fake_fs, transfer_summaries={f"{root_uri}/b.txt": "old-b"})
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -440,8 +430,8 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
 
     expected_files = {
         "valid": [f"{root_uri}/a.txt"],
-        "malformed_overview": [f"{root_uri}/a.txt", f"{root_uri}/b.txt"],
-        "malformed_abstract": [],
+        "malformed_overview": [f"{root_uri}/a.txt"],
+        "malformed_abstract": [f"{root_uri}/a.txt"],
     }[sidecar_state]
     assert processor.summarized_files == expected_files
     assert processor.vectorized_files == expected_files
@@ -455,8 +445,8 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     else:
         assert f"{root_uri}/a.txt" not in processor.file_md5s
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
-    expected_a = "old-a" if sidecar_state == "malformed_abstract" else "summary"
-    expected_b = "summary" if sidecar_state == "malformed_overview" else "old-b"
+    expected_a = "summary"
+    expected_b = "old-b"
     assert f"- a.txt: {expected_a}" in overview
     assert f"- b.txt: {expected_b}" in overview
     assert parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.abstract.md"]).body.strip()
@@ -780,7 +770,7 @@ async def test_content_write_tags_apply_only_to_changed_file(monkeypatch):
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
 
-    processor = _FakeProcessor(fake_fs)
+    processor = _FakeProcessor(fake_fs, transfer_summaries={f"{root_uri}/b.txt": "old-b"})
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     tag_options = IngestOptions(search_tags=["team=search"])
     executor = SemanticTreeExecutor(
@@ -986,7 +976,6 @@ async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monk
             changed_path: "current changed summary",
         },
     )
-    monkeypatch.setattr(processor, "_parse_overview_md", parse_overview_file_summaries)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -1002,19 +991,17 @@ async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monk
 
     await executor.run(root_uri)
 
-    assert processor.summarized_files == [missing_path]
-    fake_fs.read_file_bytes.assert_awaited_once_with(missing_path, ctx=ctx)
-    # Pending snapshot and writeback already read each sidecar four times;
-    # reusing the captured overview must not add another storage read.
-    assert [call.args[0] for call in fake_fs.read_file.await_args_list].count(
-        f"{root_uri}/.overview.md"
-    ) == 4
+    assert set(processor.summarized_files) == {missing_path, f"{root_uri}/overview.txt"}
+    assert {call.args[0] for call in fake_fs.read_file_bytes.await_args_list} == {
+        missing_path,
+        f"{root_uri}/overview.txt",
+    }
     assert processor.vectorized_files == []
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
     assert set(overview.body.splitlines()) == {
         "FILES:",
         "- indexed.txt: current indexed summary",
-        "- overview.txt: old overview summary",
+        "- overview.txt: summary",
         "- missing.txt: summary",
         "- changed.txt: current changed summary",
     }
@@ -1054,7 +1041,8 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
     fake_fs.pathlock_acquire_exact_batch = AsyncMock(
         side_effect=[{"paths": []}, LockAcquisitionError("parent sidecars are busy")]
     )
-    await make_executor().run(root_uri)
+    with pytest.raises(LockAcquisitionError):
+        await make_executor().run(root_uri)
     assert fake_fs.writes == []
     assert processor.vectorized_files == [file_path]
     vectorize_directory.assert_not_awaited()

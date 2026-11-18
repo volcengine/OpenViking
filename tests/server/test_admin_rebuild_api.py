@@ -404,7 +404,7 @@ async def test_reindex_memory_semantic_request_survives_write_deduplication(monk
     assert queue_fs.write.await_count == 2
     queued = SemanticMsg.from_dict(json.loads(queue_fs.write.await_args.args[1]))
     assert queued.uri == root and queued.recursive
-    assert queued.use_hierarchical_aggregation and not queued.skip_vectorization
+    assert not queued.skip_vectorization
     assert queued.ingest_options == run.ingest_options
     assert counters.deleted_records == 1
     db.strict_delete.assert_awaited_once_with(["gone"], ctx=ctx)

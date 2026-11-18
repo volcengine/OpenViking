@@ -653,7 +653,7 @@ async def resolve_account_memory_registry(
                     template,
                     schema.memory_type,
                     deployment_defaults=memory_template_data(schema),
-                )
+                ).model_copy(update={"abstract_template": schema.abstract_template})
                 if template is not None
                 else schema.model_copy(deep=True)
             )

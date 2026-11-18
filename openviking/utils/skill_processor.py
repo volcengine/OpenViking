@@ -23,7 +23,7 @@ from urllib.parse import unquote
 
 import yaml
 
-from openviking.config.vlm import VLMHandle, VLMResolver
+from openviking.config.vlm import VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
@@ -762,20 +762,6 @@ class SkillProcessor:
             ctx,
             change_reason="auto-extracted from add_skill",
         )
-
-    async def _generate_overview(self, skill_dict: Dict[str, Any], vlm: VLMHandle) -> str:
-        """Generate L1 overview using VLM."""
-        from openviking.prompts import render_prompt
-
-        prompt = render_prompt(
-            "skill.overview_generation",
-            {
-                "skill_name": skill_dict["name"],
-                "skill_description": skill_dict.get("description", ""),
-                "skill_content": skill_dict.get("content", ""),
-            },
-        )
-        return await vlm.get_completion_async(prompt)
 
     async def _write_skill_content(
         self,

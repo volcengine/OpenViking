@@ -37,9 +37,6 @@ class SemanticMsg:
                    When True, the processor will collect all subdirectory info and
                    enqueue them for processing (bottom-up order).
                    When False, only the specified directory will be processed.
-        use_hierarchical_aggregation: Route memory directories through the
-                   shared semantic tree instead of the specialized flat memory
-                   update path.
         propagate_to_parent: Whether a completed directory refresh may enqueue
                    a freshness refresh for its parent.
     """
@@ -74,8 +71,9 @@ class SemanticMsg:
     )
     source: Optional[Dict[str, str]] = None
     generation_trigger: str = "semantic_refresh"
+    overview_template: Optional[str] = None
+    abstract_template: Optional[str] = None
     aggregate_directory: bool = True
-    use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
     copy_source_uri: str = ""
     # Per-file md5 of final stored bytes, keyed by target URI. Supplied by the
@@ -112,8 +110,9 @@ class SemanticMsg:
         changes: Optional[Dict[str, List[str]]] = None,
         source: Optional[Dict[str, str]] = None,
         generation_trigger: str = "semantic_refresh",
+        overview_template: Optional[str] = None,
+        abstract_template: Optional[str] = None,
         aggregate_directory: bool = True,
-        use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
         copy_source_uri: str = "",
         file_md5s: Optional[Dict[str, str]] = None,
@@ -156,8 +155,9 @@ class SemanticMsg:
         self.changes = changes
         self.source = dict(source) if source else None
         self.generation_trigger = generation_trigger
+        self.overview_template = overview_template
+        self.abstract_template = abstract_template
         self.aggregate_directory = bool(aggregate_directory)
-        self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
         self.copy_source_uri = copy_source_uri
         self.file_md5s = dict(file_md5s or {})
@@ -246,8 +246,9 @@ class SemanticMsg:
             changes=data.get("changes"),
             source=data.get("source"),
             generation_trigger=data.get("generation_trigger", "semantic_refresh"),
+            overview_template=data.get("overview_template"),
+            abstract_template=data.get("abstract_template"),
             aggregate_directory=data.get("aggregate_directory", True),
-            use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
             copy_source_uri=data.get("copy_source_uri", ""),
             file_md5s=(data.get("file_md5s") if isinstance(data.get("file_md5s"), dict) else None),

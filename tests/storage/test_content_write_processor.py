@@ -62,13 +62,16 @@ async def test_content_write_processor_recovers_checkpoint(monkeypatch, operatio
         SimpleNamespace(_async_agfs=SimpleNamespace(), stat=AsyncMock(return_value={"isDir": True}))
     )
     processor._execute_refresh = AsyncMock(
-        return_value={"overview_status": "complete", "vector_status": "skipped"}
+        return_value={"overview_status": "queued", "vector_status": "skipped"}
     )
     data = {"data": msg.to_dict()}
 
     try:
         await processor._on_dequeue_bound(data)
         await processor._on_dequeue_bound(data)
+        await tracker.mark_work_done(
+            task.task_id, "root-work-1", account_id=ctx.account_id, user_id=ctx.user.user_id
+        )
 
         restored = await tracker.get(
             task.task_id,

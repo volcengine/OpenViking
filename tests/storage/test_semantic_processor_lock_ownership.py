@@ -17,6 +17,7 @@ from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.queuefs.semantic_ops.directory_generation import DirectoryGeneration
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
@@ -58,19 +59,26 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
     pathlock = _FakePathLock()
     borrowed_lease = {"id": "borrowed-lock", "owned": False}
 
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-        lambda: _FakeVikingFS(pathlock),
-    )
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+    from openviking_cli.session.user_id import UserIdentifier
 
-    await processor._process_memory_directory(
-        SemanticMsg(
-            uri="viking://memory/demo",
-            context_type="memory",
-            recursive=False,
-        ),
-        lock=borrowed_lease,
+    fs = _FakeVikingFS(pathlock)
+    fs.read_file = AsyncMock(return_value="")
+    fs.write_file = AsyncMock()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor._generate_directory_semantics = AsyncMock(
+        return_value=DirectoryGeneration(abstract="", overview="Empty memory directory.")
     )
+    executor = SemanticTreeExecutor(
+        processor,
+        "memory",
+        1,
+        RequestContext(user=UserIdentifier("a", "u"), role=Role.USER),
+        lock=borrowed_lease,
+        skip_vectorization=True,
+    )
+    await executor.run("viking://user/u/memories")
 
     assert pathlock.release_calls == []
 
@@ -315,8 +323,9 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         return {0, 1}
 
     processor = _processor()
-    processor._generate_overview = AsyncMock(return_value="overview")
-    processor._normalize_overview_generation = lambda overview: (overview, "abstract")
+    processor._generate_directory_semantics = AsyncMock(
+        return_value=DirectoryGeneration(overview="overview", abstract="abstract")
+    )
     processor._vectorize_directory = vectorize
     processor._generate_single_file_summary = AsyncMock(
         return_value={"name": "a.md", "summary": "file summary"}
@@ -335,7 +344,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         )
     await tracker.complete(source.task_id, {"ok": True}, **owner)
 
-    processor._generate_overview.reset_mock()
+    processor._generate_directory_semantics.reset_mock()
     msg = SemanticMsg(
         uri=root,
         context_type=context_type,
@@ -384,7 +393,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
             assert directory["coalesce_key"]
             assert directory["lock_handoff"] is None
             assert extract_task_metadata(directory) is None
-            processor._generate_overview.assert_not_awaited()
+            processor._generate_directory_semantics.assert_not_awaited()
         if not tracked:
             completed = await tracker.wait(metadata.task_id, **owner, timeout=0)
             assert completed.status is (

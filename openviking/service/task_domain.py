@@ -476,6 +476,7 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
             task.result["queue_status"] = projected
         for queue_name, field_name in (
             ("Semantic", "semantic_status"),
+            ("Semantic", "overview_status"),
             ("Embedding", "vector_status"),
         ):
             if task.result.get(field_name) == "queued":

@@ -689,6 +689,7 @@ class FSService:
             refresh_parent_uri = None
         queue_status = None
         refresh_action: Optional[FreshnessAction] = None
+        memory_refresh_requested = False
         try:
             if refresh_parent_uri:
                 refresh_action = await self._enqueue_delete_refresh(
@@ -705,7 +706,7 @@ class FSService:
                     recursive=recursive,
                 )
             if memory_overview_uri:
-                await MemoryUpdater.refresh_schema_overview(
+                memory_refresh_requested = await MemoryUpdater.refresh_schema_overview(
                     viking_fs=viking_fs,
                     directory_uri=memory_overview_uri,
                     ctx=ctx,
@@ -713,15 +714,18 @@ class FSService:
             for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(
                 cleanup_result
             ):
-                await MemoryUpdater.refresh_schema_overview(
+                requested = await MemoryUpdater.refresh_schema_overview(
                     viking_fs=viking_fs,
                     directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )
-            if (
-                refresh_parent_uri
-                and wait
-                and refresh_action not in (FreshnessAction.NOOP, FreshnessAction.MARK_PENDING)
+                memory_refresh_requested = memory_refresh_requested or requested
+            if wait and (
+                memory_refresh_requested
+                or (
+                    refresh_parent_uri
+                    and refresh_action not in (FreshnessAction.NOOP, FreshnessAction.MARK_PENDING)
+                )
             ):
                 queue_status = await self._wait_for_refresh()
         finally:

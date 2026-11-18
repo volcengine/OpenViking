@@ -229,7 +229,6 @@ def _failure_payload(exc: BaseException) -> Dict[str, Any]:
 class _BatchRefreshOutcome:
     queue_status: Optional[Dict[str, Any]]
     semantic_actions: tuple[FreshnessAction, ...] = ()
-    memory_refreshed: bool = False
     embedding_requested: bool = False
 
     def statuses(self, *, wait: bool) -> tuple[str, str]:
@@ -241,7 +240,7 @@ class _BatchRefreshOutcome:
             else:
                 semantic_status = "skipped"
         else:
-            semantic_status = "complete" if self.memory_refreshed else "skipped"
+            semantic_status = "skipped"
 
         vector_work = bool(self.semantic_actions) or self.embedding_requested
         vector_status = ("complete" if wait else "queued") if vector_work else "skipped"
@@ -1326,12 +1325,15 @@ class ContentWriteCoordinator:
 
         embedding_requested = False
         for directory_uri, uris in sorted(memory_groups.items()):
-            await MemoryUpdater.refresh_schema_overview(
+            overview_requested = await MemoryUpdater.refresh_schema_overview(
                 viking_fs=self._viking_fs,
                 directory_uri=directory_uri,
+                changed_uris=sorted(uris),
                 ctx=ctx,
                 strict=True,
             )
+            if overview_requested:
+                semantic_actions.append(FreshnessAction.REFRESH_NOW)
             for uri in uris:
                 requested = await MemoryUpdater.refresh_file_embedding(
                     viking_fs=self._viking_fs,
@@ -1344,11 +1346,10 @@ class ContentWriteCoordinator:
                 )
                 embedding_requested = embedding_requested or requested
 
-        if not wait or (not resource_groups and not embedding_requested):
+        if not wait or (not semantic_actions and not embedding_requested):
             return _BatchRefreshOutcome(
                 queue_status=None,
                 semantic_actions=tuple(semantic_actions),
-                memory_refreshed=bool(memory_groups),
                 embedding_requested=embedding_requested,
             )
         queue_status = await self._wait_for_request(
@@ -1358,7 +1359,6 @@ class ContentWriteCoordinator:
         return _BatchRefreshOutcome(
             queue_status=queue_status,
             semantic_actions=tuple(semantic_actions),
-            memory_refreshed=bool(memory_groups),
             embedding_requested=embedding_requested,
         )
 
@@ -1451,7 +1451,6 @@ class ContentWriteCoordinator:
         return _BatchRefreshOutcome(
             queue_status=legacy_outcome.queue_status,
             semantic_actions=planned_actions + legacy_outcome.semantic_actions,
-            memory_refreshed=legacy_outcome.memory_refreshed,
             embedding_requested=direct_index_requested or legacy_outcome.embedding_requested,
         )
 
@@ -2749,9 +2748,11 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         ingest_options: IngestOptions | None = None,
     ) -> tuple[bool, bool]:
-        overview_refreshed = await MemoryUpdater.refresh_schema_overview(
+        overview_requested = await MemoryUpdater.refresh_schema_overview(
             viking_fs=self._viking_fs,
             directory_uri=root_uri,
+            changed_uris=[uri],
+            strict=True,
             ctx=ctx,
         )
         embedding_requested = await MemoryUpdater.refresh_file_embedding(
@@ -2763,7 +2764,7 @@ class ContentWriteCoordinator:
             strict=True,
             ingest_options=ingest_options,
         )
-        return overview_refreshed, embedding_requested
+        return overview_requested, embedding_requested
 
     async def _write_memory_with_refresh(
         self,
