@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import type { Dispatch, RefObject, SetStateAction } from 'react';
+import type { useDirectoryExpansion } from './use-directory-expansion.js';
 import type { DirectoryQueries } from './directory-queries.js';
 import { expandChain } from './fs-path.js';
 import {
@@ -21,17 +21,21 @@ export function useInitializeDirectoryTree({
   session,
   rootUri,
   initialPath,
-  savedExpansion,
-  expandedRef,
-  setExpanded,
+  expansion,
 }: {
   session?: DirectoryQueries;
   rootUri: string;
   initialPath?: string;
-  savedExpansion?: ReadonlySet<string>;
-  expandedRef: RefObject<ReadonlySet<string>>;
-  setExpanded: Dispatch<SetStateAction<ReadonlySet<string>>>;
+  expansion: ReturnType<typeof useDirectoryExpansion>;
 }) {
+  const {
+    savedExpansion,
+    isExpanded,
+    readHome,
+    resolveHome,
+    setExpanded,
+    restoreListed,
+  } = expansion;
   const [initialized, setInitialized] = useState<{
     session: DirectoryQueries | undefined;
     uri?: string;
@@ -112,18 +116,8 @@ export function useInitializeDirectoryTree({
           rootUri,
           page,
           savedExpansion,
-          (uri) => expandedRef.current.has(uri),
+          { isExpanded, readHome, resolveHome, restoreListed },
           controller.signal,
-          (saved, listed) => {
-            if (saved === listed) return;
-            setExpanded((previous) => {
-              if (!previous.has(saved)) return previous;
-              const next = new Set(previous);
-              next.delete(saved);
-              next.add(listed);
-              return next;
-            });
-          },
         );
         return;
       }
@@ -151,8 +145,11 @@ export function useInitializeDirectoryTree({
     rootUri,
     initialPath,
     savedExpansion,
-    expandedRef,
+    isExpanded,
+    readHome,
+    resolveHome,
     setExpanded,
+    restoreListed,
     attempt,
   ]);
   const initializing =

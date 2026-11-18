@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import { useOvSignal } from '../../client/provider.js';
-import { isHomeResourceUri, resourceUriIdentity } from './fs-uri.js';
+import {
+  needsHomeIdentity,
+  resourceUriIdentity,
+} from '../../shared/resource-uri.js';
 import type { DirState } from '../../shared/directory-tree/types.js';
 import type { RequestScopeHandle } from '../../shared/request/use-request-scope.js';
 
 const childPrefix = (uri: string) => (uri.endsWith('/') ? uri : `${uri}/`);
-const isUserUri = (uri: string) =>
-  uri === 'viking://user' || uri.startsWith('viking://user/');
-
-const needsHomeIdentity = (left: string, right: string) =>
-  (isHomeResourceUri(left) && isUserUri(right)) ||
-  (isHomeResourceUri(right) && isUserUri(left));
-
 function isTimeoutReason(reason: unknown) {
   return (
     typeof reason === 'object' &&
@@ -27,7 +23,7 @@ export function useFsTreeReveal({
   scope,
   dirs,
   initialLoad,
-  expanded,
+  isExpanded,
   fetchPage,
   expandForNavigation,
   resolveHome,
@@ -37,7 +33,7 @@ export function useFsTreeReveal({
   scope: RequestScopeHandle;
   dirs: RefObject<Record<string, DirState>>;
   initialLoad: RefObject<Promise<void> | undefined>;
-  expanded: RefObject<ReadonlySet<string>>;
+  isExpanded: (uri: string) => boolean;
   fetchPage: (
     uri: string,
     offset: number,
@@ -100,7 +96,7 @@ export function useFsTreeReveal({
       };
       if (target === root) return preserveExpansion || expand(rootUri);
       let parent = rootUri;
-      while (valid() && (!preserveExpansion || expanded.current.has(parent))) {
+      while (valid() && (!preserveExpansion || isExpanded(parent))) {
         const cached = dirs.current[parent];
         // A listing may omit virtual ancestors (e.g. viking://user) and return
         // a deeper directory directly. Follow actual rows rather than URI segments.
@@ -172,7 +168,7 @@ export function useFsTreeReveal({
       dirs,
       fetchPage,
       initialLoad,
-      expanded,
+      isExpanded,
       rootUri,
       scope,
       expandForNavigation,

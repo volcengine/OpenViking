@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { normalizeResourceUri } from '../resource-uri.js';
 import type { DirectoryQueries } from './directory-queries.js';
 import { expansionPath } from './expansion-path.js';
 import type { UnresolvedExpansion } from './restore-expansion.js';
 import type { DirectoryRow } from './rows.js';
+import type { useDirectoryExpansion } from './use-directory-expansion.js';
 
 export function useReportExpansion(
   session: DirectoryQueries | undefined,
@@ -11,6 +11,13 @@ export function useReportExpansion(
   rootUri: string,
   rows: readonly DirectoryRow[],
   unresolved: UnresolvedExpansion,
+  {
+    collapsed,
+    identifyUri,
+  }: Pick<
+    ReturnType<typeof useDirectoryExpansion>,
+    'collapsed' | 'identifyUri'
+  >,
   onChange?: (uris: readonly string[]) => void,
 ) {
   const last = useRef<{ session: DirectoryQueries; uris: string[] }>(undefined);
@@ -19,24 +26,21 @@ export function useReportExpansion(
   useEffect(() => {
     if (!session || !ready || !onChange) return;
     const visible = new Map<string, string>();
-    const collapsed = new Set<string>();
     for (const row of rows) {
-      if (row.kind !== 'entry' || row.type !== 'directory') continue;
-      const uri = normalizeResourceUri(row.uri);
-      if (row.expanded) visible.set(uri, row.uri);
-      else collapsed.add(uri);
+      if (row.kind === 'entry' && row.type === 'directory' && row.expanded)
+        visible.set(identifyUri(row.uri), row.uri);
     }
     const saved = new Map(visible);
-    // A later page can reveal a branch that is still pending under the root.
-    // Honor its current collapse state and keep pending paths elsewhere.
+    const root = identifyUri(rootUri);
+    const collapsedKeys = new Set([...collapsed].map(identifyUri));
     for (const [parent, pending] of unresolved) {
-      if (parent !== rootUri && !visible.has(normalizeResourceUri(parent)))
-        continue;
+      const parentKey = identifyUri(parent);
+      if (parentKey !== root && !visible.has(parentKey)) continue;
       for (const uri of pending) {
-        const key = normalizeResourceUri(uri);
+        const key = identifyUri(uri);
         if (
           !saved.has(key) &&
-          !expansionPath(rootUri, key).some((path) => collapsed.has(path))
+          !expansionPath(root, key).some((path) => collapsedKeys.has(path))
         )
           saved.set(key, uri);
       }
@@ -52,5 +56,14 @@ export function useReportExpansion(
     }
     last.current = { session, uris };
     onChange(uris);
-  }, [session, ready, rootUri, rows, unresolved, onChange]);
+  }, [
+    session,
+    ready,
+    rootUri,
+    rows,
+    unresolved,
+    collapsed,
+    identifyUri,
+    onChange,
+  ]);
 }

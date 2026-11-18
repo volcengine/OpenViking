@@ -102,3 +102,28 @@ test('normalizes saved paths and uses the listed spelling to load folders', asyn
     await view.unmount();
   }
 });
+
+test('preserves a saved branch when its listed alias cannot yet be resolved', async () => {
+  const aliasFolder = `${root}/folder`;
+  const fetch = recordingFetch(({ path, uri }) => {
+    if (path === '/api/v1/fs/stat')
+      return new Response('Home unavailable', { status: 503 });
+    assert.equal(path, listPath);
+    assert.equal(uri, root);
+    return ok([{ uri: aliasFolder, isDir: true }]);
+  });
+  const snapshots = [];
+  const view = await mount(
+    browser(fetch, {
+      defaultExpandedUris: [folder, nested],
+      onExpandedUrisChange: (uris) => snapshots.push([...uris]),
+    }),
+  );
+  try {
+    assert.ok(row(view, aliasFolder));
+    assert.ok(fetch.calls.some(({ uri }) => uri === 'viking://~'));
+    assert.deepEqual(snapshots, []);
+  } finally {
+    await view.unmount();
+  }
+});

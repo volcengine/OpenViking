@@ -5,7 +5,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
 } from 'react';
 import { useRequestScope } from '../request/use-request-scope.js';
@@ -48,25 +47,20 @@ export function useDirectoryTree({
     session?.getSnapshot ?? emptySnapshot,
   );
   const activeSession = useRef(session);
-  const [editedSession, setEditedSession] = useState<DirectoryQueries>();
   // Publish committed query subscriptions for stable event callbacks. Abandoned
   // renders must not replace the session used by the visible preview.
   useEffect(() => {
     activeSession.current = session;
   }, [session]);
-  const {
-    expanded,
-    expandedRef,
-    initialExpanded,
-    hasSavedExpansion,
-    setExpanded,
-  } = useDirectoryExpansion(
+  const expansion = useDirectoryExpansion({
     session,
     activeSession,
+    request,
     rootUri,
+    cacheScopeKey,
     defaultExpandedUris,
-  );
-  const initialPath = hasSavedExpansion ? undefined : defaultExpandedUri;
+  });
+  const { expanded, hasListedExpansion, edit, setExpanded } = expansion;
   const {
     initialLoad,
     initializing,
@@ -76,10 +70,8 @@ export function useDirectoryTree({
   } = useInitializeDirectoryTree({
     session,
     rootUri,
-    initialPath,
-    savedExpansion: hasSavedExpansion ? initialExpanded : undefined,
-    expandedRef,
-    setExpanded,
+    initialPath: expansion.savedExpansion ? undefined : defaultExpandedUri,
+    expansion,
   });
   const scope = useRequestScope(
     request?.client ?? null,
@@ -98,12 +90,10 @@ export function useDirectoryTree({
   );
   const expandForNavigation = useCallback(
     (uri: string) => {
-      if (activeSession.current !== session || expandedRef.current.has(uri))
-        return;
-      setEditedSession(session);
-      setExpanded((previous) => new Set(previous).add(uri));
+      if (activeSession.current !== session || hasListedExpansion(uri)) return;
+      edit(uri, true);
     },
-    [session, expandedRef, setExpanded],
+    [session, hasListedExpansion, edit],
   );
   const state = useMemo(
     () => ({
@@ -122,14 +112,8 @@ export function useDirectoryTree({
       },
       toggleExpand: async (row: { uri: string; disabled?: boolean }) => {
         if (row.disabled) return;
-        const isOpen = expandedRef.current.has(row.uri);
-        setEditedSession(activeSession.current);
-        setExpanded((previous) => {
-          const next = new Set(previous);
-          if (isOpen) next.delete(row.uri);
-          else next.add(row.uri);
-          return next;
-        });
+        const isOpen = hasListedExpansion(row.uri);
+        edit(row.uri, !isOpen);
         if (!isOpen) await fetchPage(row.uri, 0);
       },
       loadMore: async (uri: string) => {
@@ -147,7 +131,8 @@ export function useDirectoryTree({
     [
       scope,
       rootUri,
-      expandedRef,
+      hasListedExpansion,
+      edit,
       setExpanded,
       fetchPage,
       retryScope,
@@ -171,16 +156,16 @@ export function useDirectoryTree({
   const isInitializing = !identityError && initializing;
   const root = dirs[rootUri];
   const isReady = root?.ready ?? false;
-  const hasExpansionEdit = editedSession === session;
   useReportExpansion(
     session,
     isReady &&
       !isInitializing &&
-      (!root?.error || (hasExpansionEdit && root.entries.length > 0)) &&
-      (!unresolved.size || hasExpansionEdit),
+      (!root?.error || (expansion.edited && root.entries.length > 0)) &&
+      (!unresolved.size || expansion.edited),
     rootUri,
     rows,
     unresolved,
+    expansion,
     onExpandedUrisChange,
   );
   return {
@@ -192,11 +177,12 @@ export function useDirectoryTree({
     ...state,
     dirs,
     navigationInputs: {
-      request,
       scope,
       dirs: session?.dirs ?? emptyDirectoryRef,
       initialLoad,
-      expanded: expandedRef,
+      isExpanded: expansion.isExpanded,
+      identifyUri: expansion.identifyUri,
+      resolveHome: expansion.resolveHome,
       fetchPage,
       expandForNavigation,
     },

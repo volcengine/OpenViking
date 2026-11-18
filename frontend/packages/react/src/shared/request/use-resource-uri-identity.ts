@@ -3,12 +3,14 @@ import { useOvIdentity } from '../../client/provider.js';
 import { isOvClientError } from '../../client/errors.js';
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { scopeKeyOf } from '../../shared/request/fs-scope.js';
-import { normalizeResourceUri } from '../../shared/resource-uri.js';
-import { resourceUriIdentity } from './fs-uri.js';
+import { scopeKeyOf } from './fs-scope.js';
+import {
+  HOME_URI,
+  normalizeResourceUri,
+  resourceUriIdentity,
+} from '../resource-uri.js';
 
 const userRoot = /^viking:\/\/user\/[^/]+$/;
-const homeAlias = 'viking://~';
 type ResolvedHome = { scope: string; uri: string };
 
 function unsupportedHomeLookup(error: unknown): boolean {
@@ -24,13 +26,18 @@ export function useResourceUriIdentity(
   client: OvClient | null,
   requestOptions: OvRequestOptions | undefined,
   rootUri: string,
+  cacheScopeKey?: string,
+  requestSignal?: AbortSignal,
 ) {
   const { userId } = useOvIdentity(requestOptions);
   const configuredHome =
     typeof userId === 'string' && userId && !userId.includes('/')
       ? `viking://user/${userId}`
       : undefined;
-  const scope = scopeKeyOf(client, requestOptions, rootUri);
+  const scope = JSON.stringify([
+    scopeKeyOf(client, requestOptions, rootUri),
+    cacheScopeKey,
+  ]);
   const cache = useRef<ResolvedHome | null>(null);
   const [resolved, setResolved] = useState<ResolvedHome | null>(null);
   const home =
@@ -40,19 +47,29 @@ export function useResourceUriIdentity(
     [home],
   );
 
+  const readHome = useCallback(
+    () =>
+      configuredHome ??
+      (cache.current?.scope === scope ? cache.current.uri : undefined),
+    [configuredHome, scope],
+  );
+
   // Resolve on demand. Ordinary canonical navigation does not need an extra
   // request, and an auth scope change cannot reuse another user's alias.
   const resolveHome = useCallback(
-    async (signal: AbortSignal) => {
+    async (callerSignal: AbortSignal) => {
+      const signal = requestSignal
+        ? AbortSignal.any([requestSignal, callerSignal])
+        : callerSignal;
       signal.throwIfAborted();
-      if (configuredHome) return configuredHome;
-      if (cache.current?.scope === scope) return cache.current.uri;
+      const known = readHome();
+      if (known) return known;
       if (!client) return;
       try {
         const stat = await client.request<{ uri?: unknown; isDir?: unknown }>({
           method: 'GET',
           path: OV_PATHS.fsStat,
-          query: { uri: homeAlias },
+          query: { uri: HOME_URI },
           options: { ...requestOptions, signal },
         });
         signal.throwIfAborted();
@@ -60,7 +77,7 @@ export function useResourceUriIdentity(
           throw new TypeError('Invalid home directory stat');
         const uri = normalizeResourceUri(stat.uri);
         // Some gateways can stat ~ but return it verbatim instead of resolving it.
-        if (uri === homeAlias) return;
+        if (uri === HOME_URI) return;
         if (!userRoot.test(uri))
           throw new TypeError('Invalid canonical home URI');
         const home = { scope, uri };
@@ -73,7 +90,7 @@ export function useResourceUriIdentity(
         throw error;
       }
     },
-    [client, configuredHome, requestOptions, scope],
+    [client, readHome, requestOptions, requestSignal, scope],
   );
-  return { identifyUri, resolveHome };
+  return { identifyUri, readHome, resolveHome };
 }
