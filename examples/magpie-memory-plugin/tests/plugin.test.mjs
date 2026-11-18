@@ -475,6 +475,24 @@ test("tools require opt-in, validate arguments and use the same file connection"
   assert.ok(f.calls.every((c) => c.headers.authorization === "Bearer test-secret"));
 });
 
+test("session_history requires session and posts the rest to the first session's history", async (t) => {
+  const f = await fixture(t, () => ({ text: "1 match", ids: ["a#1"], has_more: false }));
+  const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+  process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
+  t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+  const { tool } = await OpenVikingMemory(undefined, { modelsEnabled: false });
+  const ctx = { abort: new AbortController().signal };
+  await assert.rejects(tool.session_history.execute({ action: "overview", session: "magpie-a" }, ctx), /disabled/);
+  await f.save({ plugin: { magpie: { mcpEnabled: true } } });
+  for (const args of [{ action: "overview" }, { action: "overview", session: " , " }, { action: "overview", session: "magpie-a", user: "other" }]) {
+    await assert.rejects(tool.session_history.execute(args, ctx), /invalid/);
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(await tool.session_history.execute({ action: "search", query: "ECONNREFUSED", limit: 3, session: "magpie-a, magpie-b" }, ctx), "1 match");
+  assert.equal(f.calls[0].path, "/api/v1/sessions/magpie-a/history");
+  assert.deepEqual(f.calls[0].body, { action: "search", query: "ECONNREFUSED", limit: 3, sessions: ["magpie-b"] });
+});
+
 test("Rule search preserves complete constraints, opt-in, identity and errors", async (t) => {
   const rendered = "完整规则\n".repeat(17000) + "LAST RULE";
   const f = await fixture(t, (call, res) => {
@@ -540,7 +558,7 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
     { spec, target, gateway: join(target, "hooks.mjs"), options: { gatewayTimeoutMs: 1500, memoryEnabled: true, modelsEnabled: true } },
   ] });
   assert.equal(init.plugins[0].error, undefined, JSON.stringify(init));
-  assert.equal(init.plugins[0].tools.length, 6);
+  assert.equal(init.plugins[0].tools.length, 7);
   for (const protocol of ["chat", "responses", "anthropic", "gemini"]) {
     const wire = body();
     if (protocol === "responses") { wire.store = false; wire.input = [{ role: "user", content: "TypeScript?" }]; delete wire.messages; }

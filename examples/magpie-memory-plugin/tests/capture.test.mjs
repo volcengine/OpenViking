@@ -760,3 +760,41 @@ test("sessionless hooks warn once without masking recall or queuing capture", as
   assert.equal(f.writes.length, 0);
   await assert.rejects(readdir(f.cfg.dataDir), { code: "ENOENT" });
 });
+
+test("a compacted conversation names its OV session on the first rewritten turn and keeps the note there", async (t) => {
+  const f = await fixture(t);
+  const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+  process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
+  t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+  t.mock.method(globalThis, "fetch", async () => Response.json({ status: "ok", result: { rendered: "Recalled preference" } }));
+  const context = () => ({ ...f.ctx, query: "My preference?", success: true, state: {} });
+  const noted = (out) => (out?.messages || []).flatMap((m, i) => String(m.content).includes('source="session-history"') ? [i] : []);
+  await onRequest({ messages: [f.messages[0]] }, context());
+  const compacted = [{ role: "user", content: "Summary of the earlier conversation" }, { role: "assistant", content: "ok" }, { role: "user", content: "Continue" }];
+  const out = await onRequest({ messages: compacted }, context());
+  assert.deepEqual(noted(out), [2]);
+  assert.ok(out.messages[2].content.includes(`session="magpie-${connectionScope(f.cfg, f.ctx)}"`));
+  assert.match(out.messages[2].content, /Pass session=/);
+  const later = await onRequest({ messages: [...compacted, { role: "assistant", content: "done" }, { role: "user", content: "Next" }] }, context());
+  assert.deepEqual(noted(later), [2]);
+  assert.equal(later.messages[2].content, out.messages[2].content);
+  assert.match(out.messages[2].content, /look it up with the OpenViking MCP tool session_history/);
+  assert.deepEqual(noted(await onRequest({ messages: [f.messages[0]] }, context())), []);
+  assert.deepEqual(noted(await onRequest({ messages: compacted }, { ...context(), session: "unbound-conversation" })), []);
+  // Subagents, side queries and new chats reusing the session id open with one user turn.
+  assert.deepEqual(noted(await onRequest({ messages: [{ role: "user", content: "Search the repo for X" }] }, context())), []);
+  assert.deepEqual(noted(await onRequest({ messages: [{ role: "user", content: "Search the repo for X" },
+    { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "grep", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "c1", content: "found" }] }, context())), []);
+  // Trimming older messages keeps the note on the message that has it.
+  const trimmed = [{ role: "user", content: "Continue" }, { role: "assistant", content: "done" }, { role: "user", content: "Next" }];
+  assert.deepEqual(noted(await onRequest({ messages: trimmed }, context())), [0]);
+  await writeFile(f.configPath, JSON.stringify({ ...f.file, plugin: { magpie: { ...f.file.plugin.magpie, mcpEnabled: true } } }));
+  const other = [{ role: "user", content: "Another summary" }, { role: "assistant", content: "ok" }, { role: "user", content: "Go on" }];
+  assert.deepEqual(noted(await onRequest({ messages: other }, context())), [2]);
+  const named = await onRequest({ messages: compacted }, context());
+  assert.deepEqual(noted(named), [2]);
+  assert.match(named.messages[2].content, /look it up with this plugin's tool whose name ends in session_history/);
+  await writeFile(f.configPath, JSON.stringify({ ...f.file, plugin: { magpie: { ...f.file.plugin.magpie, sessionHistoryPointer: false } } }));
+  assert.deepEqual(noted(await onRequest({ messages: compacted }, context())), []);
+});

@@ -1,10 +1,13 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { loadConfig } from "./config.mjs";
 import { buildContextSearchBody, isRecallEnabled, selectRecallContent } from "./shared/recall-core.mjs";
 import { estimateTokens } from "./shared/profile-inject.mjs";
 import { PluginError, request } from "./http.mjs";
-import { withRecallLedger } from "./recall-ledger.mjs";
+import { recallAnchors, withRecallLedger } from "./recall-ledger.mjs";
 import { bypassedSession, connectionScope, dataDirectory } from "./scope.mjs";
-import { nativeOwner } from "./capture.mjs";
+import { captureDirectory, nativeOwner } from "./capture.mjs";
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { describeConversation, isAuxiliaryRequest, memoryBlock, replayContext } from "./conversation.mjs";
 
@@ -131,6 +134,29 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
     ctx.report?.(outcome(error), 0);
     return;
   }
+}
+
+// A captured conversation that no longer opens with its first message was
+// compacted or trimmed: point the model at the full record in OpenViking. The
+// note stays on the message it was first added to, found by that message's own
+// digest so trimming older messages does not move it.
+export async function historyPointer(body, recalled, ctx, cfg) {
+  if (!ctx.state?.rewritten || !cfg.sessionHistoryPointer) return recalled;
+  const conversation = describeConversation(body, ctx.protocol);
+  if (!conversation) return recalled;
+  const file = join(captureDirectory(cfg, ctx), "history-pointer");
+  const saved = (await readFile(file, "utf8").catch((error) => { if (error.code === "ENOENT") return ""; throw error; })).split("\n").filter(Boolean);
+  const digest = (index) => recallAnchors([conversation.messages[index]], {}, ctx.protocol)[0];
+  let index = conversation.users.find((i) => saved.includes(digest(i)));
+  if (index === undefined) {
+    index = conversation.latest;
+    await writeFile(file, [...saved.slice(-19), digest(index)].join("\n"), { mode: 0o600 });
+  }
+  const anchor = conversation.anchors[index];
+  const tool = cfg.mcpEnabled && cfg.explicitMcpOptIn ? "this plugin's tool whose name ends in session_history" : undefined;
+  const note = formatSessionHistoryPointer(`magpie-${connectionScope(cfg, ctx)}`, { sessionDefault: false, tool });
+  const target = recalled ? { ...conversation, messages: recalled[conversation.field] } : conversation;
+  return replayContext(recalled || body, ctx.protocol, target, { [anchor]: { block: note } }) || recalled;
 }
 
 export function requiredText(args, key, max = 16000) {

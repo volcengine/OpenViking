@@ -136,7 +136,12 @@ export async function prepareCapture(body, ctx, cfg, options) {
   const binding = join(directory, "start");
   try {
     const { readFile } = await import("node:fs/promises");
-    if (await readFile(binding, "utf8") !== first) return;
+    if (await readFile(binding, "utf8") !== first) {
+      // A single user turn under the same session is a subagent, side query
+      // or new chat rather than a compacted history.
+      if (ctx.state && conversation.users.length > 1) ctx.state.rewritten = true;
+      return;
+    }
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     // Joining unknown history could copy another connection's earlier text.
