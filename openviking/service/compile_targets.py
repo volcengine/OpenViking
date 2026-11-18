@@ -59,6 +59,7 @@ from openviking.storage.pathlock_recovery import (
     is_compile_lock_conflict,
     lock_retry_delay,
 )
+from openviking.utils.compile_delivery import completion_evidence
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -645,6 +646,9 @@ def new_run(task: Any) -> dict:
             "start_snapshot": None,
             "finish_snapshot": None,
             "skill_snapshot_id": None,
+            "require_delivery_proof": (task.meta["request"].get("compile") or {}).get(
+                "require_delivery_proof", False
+            ),
         },
     }
 
@@ -745,7 +749,15 @@ class CompileLifecycle:
                 {
                     "snapshots": {
                         key: run["meta"][key]
-                        for key in ("start_snapshot", "finish_snapshot", "skill_snapshot_id")
+                        for key in (
+                            "start_snapshot",
+                            "finish_snapshot",
+                            "skill_snapshot_id",
+                            "delivery",
+                            "delivery_noop",
+                            "require_delivery_proof",
+                        )
+                        if key in run["meta"]
                     },
                     "outcome": {
                         key: run[key]
@@ -1075,6 +1087,14 @@ class CompileLifecycle:
     def _finished_snapshot(run: dict, error_code: str | None = None) -> ExternalTaskSnapshot:
         """Replay the saved outcome, preferring a local rollback failure over the Runtime code."""
         result = run.get("result")
+        if run["status"] == "completed":
+            result = {
+                **(result or {}),
+                **completion_evidence(
+                    run["meta"].get("delivery") or result,
+                    verified_noop=run["meta"].get("delivery_noop") is True,
+                ),
+            }
         if (
             run["status"] == "failed"
             and isinstance(result, dict)
@@ -1108,6 +1128,14 @@ class CompileLifecycle:
             snapshot = ExternalTaskSnapshot(status="cancelled")
         try:
             if snapshot.status == "completed" and meta["start_snapshot"]:
+                incoming = completion_evidence(
+                    snapshot.result, verified_noop=bool(self._checkpoint(task).get("noop"))
+                )
+                if "delivery" not in meta or incoming["completion_status"] == "partial":
+                    # Persist classification before snapshots/count aggregation. Retry
+                    # without the original Runtime result cannot upgrade a partial run.
+                    meta["delivery"] = incoming
+                    meta["delivery_noop"] = self._checkpoint(task).get("noop") is True
                 await self._save_checkpoint(task, {"phase": "committing"})
                 run["status"] = "committing"
                 await self._save_run(task, run)
@@ -1141,7 +1169,7 @@ class CompileLifecycle:
                         head=meta["finish_snapshot"],
                         ctx=ctx,
                     )
-                    run["result"] = dict.fromkeys(_RESULT_KEYS.values(), 0)
+                    run["result"] = {**dict.fromkeys(_RESULT_KEYS.values(), 0), **meta["delivery"]}
                     for change in changes:
                         if is_versioned(change["uri"]):
                             run["result"][_RESULT_KEYS[change["change_type"]]] += 1
@@ -1200,6 +1228,15 @@ class CompileLifecycle:
         """Advance only the matching configuration's unchanged successful predecessor."""
         compile_name = self._compile_name(task)
         if not compile_name or run["status"] != "completed" or not run["meta"]["start_snapshot"]:
+            return
+        delivery = completion_evidence(
+            run["meta"].get("delivery") or run.get("result"),
+            verified_noop=run["meta"].get("delivery_noop") is True,
+        )
+        if delivery["completion_status"] == "partial" or (
+            delivery["completion_status"] != "complete"
+            and run["meta"].get("require_delivery_proof", False) is not False
+        ):
             return
         from openviking.service.task_tracker import get_task_tracker
 

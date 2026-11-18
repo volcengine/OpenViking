@@ -215,7 +215,41 @@ Configurations are stored in account and user directories. Public APIs locate co
 
 State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
 
-Successful Compile finalization publishes output snapshots and advances the incremental baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
+Compile finalization publishes retained output snapshots. Explicit partial delivery never advances the incremental baseline; an optional strict policy also blocks unknown delivery. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
+
+### Delivery quality and incremental progress
+
+A terminal `completed` Task can retain useful **partial** output. Its result and the
+saved run retain `completion_status` (`complete`, `partial`, or `unknown`),
+`coverage_kind`, `source_coverage` and bounded `failure_summary` codes.
+`assignment_delivery_v1` counts describe prepared input assignments and acknowledged
+output publication; they do not prove semantic fact coverage, citation correctness,
+exhaustive conflict detection or successful indexing.
+
+Known failed/pending/unreferenced assignments, skipped output conflicts, iteration-limit
+salvage and unconfirmed writes are partial. Useful acknowledged pages remain visible,
+and partial runs always preserve the previous source baseline. A retry therefore
+can still include unchanged sources that the previous execution did not deliver.
+The classification is persisted before finalization and survives restart and retries;
+output change-count aggregation does not discard it. Only the existing kernel-verified
+no-change path can complete without input-delivery counts.
+
+Absent, malformed or unsupported evidence from older Runtime versions is **unknown**,
+not verified complete. By default unknown results retain the existing advancement
+behavior. Set `compile_api.require_delivery_proof=true` to also block unknown results;
+this opt-in can repeat more input work until the producer supplies complete evidence.
+The flag defaults to false and is frozen at acceptance in each Task and durable run,
+so a configuration change or restart cannot reinterpret an in-flight run. Legacy Tasks
+without the policy retain compatibility behavior. The simple-agent path reports known
+partial outcomes, but an ordinary final reply without a verifiable discovery/read ledger
+remains unknown. Existing progress is preserved. No new Task terminal state or retry/
+polling loop is introduced.
+
+Publication and indexing have different owners. The existing content-write Task/Work
+and output PathLock coordinate background processing; a file, released lease or finish
+snapshot alone does not prove successful indexing. This delivery classification does
+not add an index-success guarantee. Rollback/index failure and recovery behavior remain
+with their existing owners.
 
 ### Check Compile availability
 

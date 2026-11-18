@@ -718,7 +718,10 @@ class CompileService:
         assert normalized.to is not None
         CompileLifecycle.validate_layout(normalized.to, normalized.from_)
         payload, private_payload = self._split_payload(normalized)
-        payload["compile"] = {"trigger": trigger}
+        payload["compile"] = {
+            "trigger": trigger,
+            "require_delivery_proof": self._config.require_delivery_proof,
+        }
         if trigger == "scheduled":
             payload["compile"]["scheduled_slot"] = scheduled_slot
         if record is not None:

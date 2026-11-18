@@ -6,6 +6,7 @@ import json
 
 from openviking.core.namespace import classify_uri
 from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
+from openviking.utils.compile_delivery import completion_evidence
 from openviking.utils.path_safety import (
     normalize_storage_target_uri,
     safe_join_viking_uri,
@@ -274,4 +275,14 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
             "No output or verified incremental no-change result.",
             stage="agent",
         )
-    return result
+    evidence = completion_evidence(
+        {
+            "completion_status": "unknown",
+            "failure_summary": [
+                *(["unconfirmed_writes"] if writer.unconfirmed else []),
+                *(["incomplete_reply"] if incomplete else []),
+                *(["iteration_limit"] if final is None else []),
+            ],
+        }
+    )
+    return result.model_copy(update=evidence)

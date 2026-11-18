@@ -215,7 +215,31 @@ Compile 业务文件仅有：
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
-Compile 成功收尾时发布产物快照并推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+Compile 收尾时发布保留产物的快照；明确部分交付始终不推进增量基线，可选严格策略还会阻止未知交付推进。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+
+### 交付质量与增量进度
+
+终态为 `completed` 的 Task 仍可能保留有用的**部分**产物。结果与持久 run 保留
+`completion_status`（`complete`、`partial`、`unknown`）、`coverage_kind`、
+`source_coverage` 及有界的 `failure_summary` 原因码。`assignment_delivery_v1`
+统计输入分配和已确认发布，不证明语义事实覆盖、引用正确性、全局冲突无遗漏或索引成功。
+
+失败、待处理、未引用的输入分配，跳过的写入冲突、迭代上限下的部分产物及未确认写入，
+都会成为部分交付。有用且已确认的页面保留，但 partial 始终不推进原有源基线，
+后续运行仍可处理此前未交付且未变化的来源。分类在收尾前持久化，重启和重试不丢失，
+产物变化计数也不会覆盖它。只有内核已验证的无变化路径允许在没有输入交付计数时完成。
+
+旧 Runtime 缺少、提供非法或不支持的证明时显示 **unknown**，不能标记为验证完整。
+默认 unknown 沿用既有进度行为；设置 `compile_api.require_delivery_proof=true` 才会
+进一步阻止 unknown 推进，直到生产者提供完整证明，因此该可选策略可能重复更多输入。
+开关默认 false，在受理时冻结到 Task 和持久 run，运行中改配置或重启不会改写本次策略。
+没有策略字段的旧 Task 保持兼容行为。已有进度不会清空。simple agent 对已知不完整情况
+报告 partial，没有可验证发现/读取账本的普通结束回复仍为 unknown。Task 终态名称不变，
+不新增重试或轮询机制。
+
+发布与索引由不同 owner 负责。现有 content-write Task/Work 和产物 PathLock 协调
+后台处理；文件存在、租约释放或 finish 快照本身都不证明索引成功。本交付分类不新增
+索引成功保证；回滚、索引失败与恢复继续由原 owner 处理。
 
 ### 检查 Compile 可用性
 
