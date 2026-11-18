@@ -67,6 +67,12 @@ test('Console shows the Compile guide and extended parameters in the selected lo
           ? /有有效计划则为 true/
           : /true if a valid schedule is present/,
       );
+      assert.match(
+        hint.textContent,
+        locale === 'zh-CN'
+          ? /false 关闭定时自动执行，但保留已保存的 update_schedule/
+          : /Set to false to disable scheduled runs while keeping the saved update_schedule/,
+      );
       assert.match(hint.textContent, /00:00.{1,4}03:59/);
       await host.execute('ov help');
       assert.match(host.records.at(-1).textContent, help);
