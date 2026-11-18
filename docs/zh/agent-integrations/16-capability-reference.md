@@ -41,7 +41,7 @@
 | [DSH](#dsh) | 同进程 Cordis 插件 + MCP 代理 | 服务端 MCP 工具，名为 `mcp__openviking__<tool>` |
 | [pi](#pi) | 原生扩展，内置 MCP 客户端 | 服务端 MCP 工具；MCP 握手成功后注册为 `openviking_<tool>` |
 | [OpenClaw](#openclaw) | context-engine 插件 | 16 个原生工具，默认启用 15 个 |
-| [Hermes](#hermes) | Hermes memory provider | 更新后的外部插件有 7 个原生 `viking_*` 工具；旧版内置 provider 有 6 个 |
+| [Hermes](#hermes) | Hermes memory provider | 更新后的外部插件有 8 个原生 `viking_*` 工具；旧版内置 provider 有 6 个 |
 | [MCP 客户端、Agent Plugins](#其他集成) | 仅 MCP | 服务端 MCP 工具 |
 | [ov CLI](#ov-cli) | 命令行客户端 | 每个操作都是显式命令，不经过 Agent |
 
@@ -154,7 +154,7 @@ OpenClaw 注册自己的工具，不转发 MCP 工具。
 
 ### Hermes 工具
 
-更新后的 Hermes 外部插件有 7 个工具：`viking_search`、`viking_rule_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`，没有 skill 安装工具。`viking_remember` 通过独立会话提交一条事实，在抽取完成前就返回；抽取可能新增、合并或跳过这条事实。旧版内置 provider 保留原来的 6 个工具。分发方式的区别见 [Hermes](#hermes)。
+更新后的 Hermes 外部插件有 8 个工具：`viking_search`、`viking_rule_search`、`viking_read`、`viking_browse`、`viking_session_history`、`viking_remember`、`viking_forget` 和 `viking_add_resource`，没有 skill 安装工具。`viking_remember` 通过独立会话提交一条事实，在抽取完成前就返回；抽取可能新增、合并或跳过这条事实。旧版内置 provider 保留原来的 6 个工具。分发方式的区别见 [Hermes](#hermes)。
 
 <a id="_3-5-写入与删除的类型边界"></a><a id="_3-5-1-写入边界"></a><a id="_3-5-2-删除边界"></a>
 
@@ -327,7 +327,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 ### 避免注入内容被重复捕获
 
-注入的上下文用固定标签包裹，例如 `<openviking-context>`。捕获时先去掉这些块再发送，召回的记忆就不会被当成新对话再次存储。共享捕获代码还会去掉摘要块、元数据围栏和时间戳前缀。TRAE 和 ZCode 使用各自的清理函数，ZCode 的清理函数会去掉三类注入块。OpenClaw 在捕获一轮对话和构造下一次召回查询时都会去掉 `<relevant-memories>`。Hermes 从捕获批次中丢弃三个只读工具的调用和结果，保留写入类工具的调用。
+注入的上下文用固定标签包裹，例如 `<openviking-context>`。捕获时先去掉这些块再发送，召回的记忆就不会被当成新对话再次存储。共享捕获代码还会去掉摘要块、元数据围栏和时间戳前缀。TRAE 和 ZCode 使用各自的清理函数，ZCode 的清理函数会去掉三类注入块。OpenClaw 在捕获一轮对话和构造下一次召回查询时都会去掉 `<relevant-memories>`。Hermes 从捕获批次中丢弃五个只读工具（`viking_search`、`viking_rule_search`、`viking_read`、`viking_browse`、`viking_session_history`）的调用和结果，保留写入类工具的调用。
 
 <a id="_3-3-会话与-commit-生命周期"></a>
 
