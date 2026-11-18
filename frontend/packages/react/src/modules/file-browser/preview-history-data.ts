@@ -55,14 +55,22 @@ export async function readHistoricalText(
       !('type' in error.details) ||
       error.details.type !== 'git_blob' ||
       !('resource' in error.details) ||
-      typeof error.details.resource !== 'string' ||
-      !('reason' in error.details) ||
-      error.details.reason !== 'path_not_found'
+      typeof error.details.resource !== 'string'
     ) {
       throw error;
     }
-    // A path-filtered log compares tree entries against each first parent.
-    // A matching commit changed this absent path without needing either blob.
+    const reason = 'reason' in error.details ? error.details.reason : undefined;
+    if (
+      reason === 'path_not_found' &&
+      'deleted_file' in error.details &&
+      error.details.deleted_file === true
+    ) {
+      return null;
+    }
+    if (reason !== undefined) throw error;
+
+    // Older servers return an ambiguous blob 404. A legacy diff distinguishes
+    // a missing tree path from a missing object for a path still in the tree.
     const [commit] = await client.request<{ oid: string; parents: string[] }[]>(
       {
         method: 'GET',
@@ -71,7 +79,31 @@ export async function readHistoricalText(
         options,
       },
     );
-    if (commit?.oid === entry.snapshot && commit.parents?.[0]) return null;
+    const parent = commit?.parents?.[0];
+    if (commit?.oid !== entry.snapshot || !parent) throw error;
+
+    const diff = await client
+      .request<{
+        change_type: string;
+        from_commit: string;
+        to_commit: string;
+      }>({
+        method: 'GET',
+        path: OV_PATHS.snapshotDiff,
+        query: { path, from: parent, to: entry.snapshot },
+        options,
+      })
+      .catch((cause: unknown) => {
+        if (isOvClientError(cause) && cause.statusCode === 404) throw error;
+        throw cause;
+      });
+    if (
+      diff?.change_type === 'deleted' &&
+      diff.from_commit === parent &&
+      diff.to_commit === entry.snapshot
+    ) {
+      return null;
+    }
     throw error;
   }
 }

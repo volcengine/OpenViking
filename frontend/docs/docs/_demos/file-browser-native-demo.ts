@@ -163,6 +163,7 @@ export function nativePreviewDemoResponse(
                 type: 'git_blob',
                 resource: path,
                 reason: 'path_not_found',
+                deleted_file: true,
               },
             },
           },

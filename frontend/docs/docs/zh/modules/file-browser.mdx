@@ -549,7 +549,8 @@ await browserRef.current?.openResource(directoryUri);
 - 非资源文本文件保存成功后，选择「保留快照」或「暂不保留」。保留时填写必填描述，再通过 `POST /api/v1/snapshot/commit` 保存快照；跳过或取消不影响已保存的正文，失败保留描述以供重试，无变化时显示独立结果。Wiki 编译文件沿用自动版本。
 - 也可以在历史弹窗填写描述并保存非资源文本文件的快照。快照读取提交时服务端的当前文件，期间发生的其他写入可能包含在内。
 - 版本历史通过 `GET /api/v1/snapshot/versions` 分页读取 Git 提交，分页使用 `before_snapshot`，展示提交者时间，历史正文使用所选提交 ID 和当前文件路径读取。兼容旧版本索引；未提供版本接口的服务使用 `GET /api/v1/snapshot/log`（最近 500 条）。文件回滚调用 `POST /api/v1/snapshot/restore`，失败保留选择并允许重试。
-- 网关可通过 `GET /api/v1/snapshot/log` 提供版本列表，通过 `GET /api/v1/snapshot/show` 提供历史正文。要展示删除版本，需保留 `/show` 的 404 响应中的 `error.details.reason: "path_not_found"`，并支持用提交（`branch`）和文件（`paths`）筛选 `/log`。历史正文缺失且无法确认删除时，界面显示读取错误。
+- 网关可通过 `GET /api/v1/snapshot/log` 提供版本列表，通过 `GET /api/v1/snapshot/show` 提供历史正文。请透传 `/show` 的 404 错误详情，以便 FileBrowser 识别删除版本。只有所选提交中该路径缺失，且首个父提交中同一精确路径存在文件时，原生接口才会在 `reason: "path_not_found"` 的同时返回 `deleted_file: true`。
+- 如果旧版 `/show` 返回 `type: "git_blob"` 的 404 且缺少 `reason`，FileBrowser 会以所选提交为起点（`branch`）、以文件 URI 为过滤条件（`paths`）查询 `/log`，然后调用 `GET /api/v1/snapshot/diff`，确认从 `parents[0]` 到所选提交的变更类型为 `deleted`。`/log` 按精确路径与 `parents[0]` 中的树条目比较，合并提交也只比较首个父提交。历史正文缺失且无法确认删除时，界面显示读取错误。
 - 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存源目录、Skill 和更新计划，目标目录只读，已有指令和其他执行参数保持不变。同一目录关联多个配置时通过页签切换查看和修改，默认展示首个配置；只有一个配置时不显示页签；查询和更新通过 `compile_name` 定位。当前用户没有关联配置时展示空状态。
 - 导入 .ovpack：先通过 `POST /api/v1/resources/temp_upload` 上传文件，再调用 `POST /api/v1/pack/import` 导入到当前目录；失败时保留所选文件，重试会重新上传。
 - 导出 .ovpack：调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。

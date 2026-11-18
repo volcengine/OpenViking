@@ -36,11 +36,11 @@ function replyError(status, error) {
   return Promise.resolve(Response.json({ status: 'error', error }, { status }));
 }
 
-function missingContent(reason) {
+function missingContent(details) {
   return replyError(404, {
     code: 'NOT_FOUND',
     message: 'Snapshot content missing',
-    details: { type: 'git_blob', resource: uri, reason },
+    details: { type: 'git_blob', resource: uri, ...details },
   });
 }
 
@@ -54,7 +54,10 @@ test('history retains confirmed deletion badges and reports missing blobs as rea
       }
       if (call.path.endsWith('/snapshot/show')) {
         if (call.query.target_ref === removed.oid)
-          return missingContent('path_not_found');
+          return missingContent({
+            reason: 'path_not_found',
+            deleted_file: true,
+          });
         if (call.query.target_ref === missing.oid) return missingContent();
         return Promise.resolve(
           new Response(
@@ -65,11 +68,13 @@ test('history retains confirmed deletion badges and reports missing blobs as rea
         );
       }
       if (call.path.endsWith('/snapshot/log') && call.query.branch) {
-        assert.equal(call.query.branch, removed.oid);
-        assert.equal(call.query.paths, uri);
-        assert.equal(call.query.limit, '1');
-        return ok([{ ...removed, parents: [older.oid] }]);
+        return ok([{ ...missing, parents: [older.oid] }]);
       }
+      if (call.path.endsWith('/snapshot/diff'))
+        return replyError(404, {
+          code: 'NOT_FOUND',
+          message: 'Tracked blob is missing',
+        });
     },
     [{ to: target }],
   );
@@ -97,6 +102,7 @@ test('history retains confirmed deletion badges and reports missing blobs as rea
 
     await click(revisions()[1]);
     assert.deepEqual(badges(), ['Deleted']);
+    assert.equal(fetch.countOf('/api/v1/snapshot/log'), 0);
     assert.equal(fetch.countOf('/api/v1/snapshot/diff'), 0);
     assert.ok(
       !fetch.calls.some(
@@ -104,7 +110,7 @@ test('history retains confirmed deletion badges and reports missing blobs as rea
           call.path.endsWith('/snapshot/show') &&
           call.query.target_ref === older.oid,
       ),
-      'deletion confirmation needs no content from the parent',
+      'native deletion confirmation needs no content from the parent',
     );
     assert.match(revisions()[1].textContent, /Deleted/);
     assert.match(
@@ -132,25 +138,30 @@ test('history retains confirmed deletion badges and reports missing blobs as rea
       workflow().querySelector('[role="alert"]').textContent,
       /Snapshot content missing/,
     );
+    assert.equal(fetch.countOf('/api/v1/snapshot/diff'), 1);
   } finally {
     await view.unmount();
   }
 });
 
-for (const [label, confirmation, message] of [
-  ['a matching first parent', () => ok([{ ...removed, parents: [older.oid] }])],
+for (const [label, response, message] of [
   [
-    'an older matching commit',
-    () => ok([{ ...older, parents: [missing.oid] }]),
+    'the first-parent path was a directory',
+    () => missingContent({ reason: 'path_not_found', deleted_file: false }),
     /Snapshot content missing/,
   ],
   [
-    'no first parent',
-    () => ok([{ ...removed, parents: [] }]),
+    'the older server did not report first-parent type',
+    () => missingContent({ reason: 'path_not_found' }),
     /Snapshot content missing/,
   ],
   [
-    'an authorization failure',
+    'the error declares another reason',
+    () => missingContent({ reason: 'object_not_found' }),
+    /Snapshot content missing/,
+  ],
+  [
+    'the typed check was denied',
     () =>
       replyError(403, {
         code: 'PERMISSION_DENIED',
@@ -159,47 +170,36 @@ for (const [label, confirmation, message] of [
     /Cannot read snapshot history/,
   ],
   [
-    'a timeout',
+    'the typed check timed out',
     () =>
       replyError(504, {
         code: 'DEADLINE_EXCEEDED',
-        message: 'Snapshot log timed out',
+        message: 'Snapshot tree lookup timed out',
       }),
-    /Snapshot log timed out/,
+    /Snapshot tree lookup timed out/,
   ],
 ]) {
-  test(`log and show gateway handles ${label}`, async () => {
+  test(`typed history stays a read error when ${label}`, async () => {
     const fetch = fixture(
       uri,
       false,
       (call) => {
         if (call.path.endsWith('/snapshot/versions'))
-          return replyError(404, {
-            code: 'NOT_FOUND',
-            message: 'Route unavailable',
-          });
-        if (call.path.endsWith('/snapshot/log'))
-          return call.query.branch ? confirmation() : ok([removed, older]);
-        if (call.path.endsWith('/snapshot/show'))
-          return missingContent('path_not_found');
+          return ok({ versions: [removed, older] });
+        if (call.path.endsWith('/snapshot/show')) return response();
       },
       [{ to: target }],
     );
     const view = await mount(tree(fetch, uri));
     try {
       await openAction('Version history');
-      assert.equal(fetch.countOf('/api/v1/snapshot/show'), 1);
-      assert.equal(fetch.countOf('/api/v1/snapshot/log'), 2);
+      assert.deepEqual(badges(), []);
+      assert.match(
+        workflow().querySelector('[role="alert"]').textContent,
+        message,
+      );
+      assert.equal(fetch.countOf('/api/v1/snapshot/log'), 0);
       assert.equal(fetch.countOf('/api/v1/snapshot/diff'), 0);
-      if (message) {
-        assert.deepEqual(badges(), []);
-        assert.match(
-          workflow().querySelector('[role="alert"]').textContent,
-          message,
-        );
-      } else {
-        assert.deepEqual(badges(), ['Deleted']);
-      }
     } finally {
       await view.unmount();
     }

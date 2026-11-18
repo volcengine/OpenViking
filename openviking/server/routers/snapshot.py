@@ -256,6 +256,8 @@ async def show(
         error = NotFoundError(resource, "git_blob" if canonical_path is not None else "git_ref")
         if canonical_path is not None and isinstance(e, AGFSPathNotFoundError):
             error.details["reason"] = "path_not_found"
+            if e.deleted_file is not None:
+                error.details["deleted_file"] = e.deleted_file
         raise error from e
     except (AGFSClientError, ValueError) as e:
         mapped = map_exception(e)
