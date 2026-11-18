@@ -83,14 +83,18 @@ def format_listing(uri, entries, budget, more_hint):
     return (lines, used, dropped) if used <= budget else ([], 0, len(entries))
 
 
-def sanitize_inline(text):
-    text = neutralize(re.sub(r"\s+", " ", text).strip())
+def contained(text):
+    """``text`` with the gateway's envelopes and this block's own elements made inert."""
     return re.sub(
         r"</?(?:agent-soul|available-skills|available-memories|user-profile|memory)\b[^>]*>",
         lambda match: html.escape(match[0], quote=False),
-        text,
+        neutralize(text),
         flags=re.I,
     )
+
+
+def sanitize_inline(text):
+    return contained(re.sub(r"\s+", " ", text).strip())
 
 
 def skill_groups(result):
@@ -180,7 +184,7 @@ async def resolve_user_space(fetch):
 
 async def read_file(fetch, uri):
     result = await fetch("/api/v1/content/read", {"uri": uri}, "")
-    return neutralize(result.strip()) if isinstance(result, str) else ""
+    return contained(result.strip()) if isinstance(result, str) else ""
 
 
 def framed(tag, uri, content, budget, shorten):
@@ -210,8 +214,8 @@ async def ls_dir(fetch, uri):
             abstract = entry.get("abstract")
             entries.append(
                 {
-                    "name": neutralize(name),
-                    "abstract": neutralize(abstract.strip()) if isinstance(abstract, str) else "",
+                    "name": contained(name),
+                    "abstract": contained(abstract.strip()) if isinstance(abstract, str) else "",
                 }
             )
     return sorted(entries, key=lambda entry: entry["name"])
