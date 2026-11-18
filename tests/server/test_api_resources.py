@@ -4,11 +4,13 @@
 """Tests for resource management endpoints."""
 
 import asyncio
+import io
 import zipfile
 from types import SimpleNamespace
 
 import httpx
 import pytest
+from PIL import Image
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources as resources_router
@@ -468,10 +470,13 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     }
 
 
+@pytest.mark.parametrize("failure", ["processing", "invalid_image", "bad_crc"])
 async def test_add_resource_business_error_uses_error_envelope(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
+    upload_temp_dir,
+    failure,
 ):
     async def fail_during_ingestion(**kwargs):
         return {
@@ -480,27 +485,46 @@ async def test_add_resource_business_error_uses_error_envelope(
             "source_path": kwargs["path"],
         }
 
-    monkeypatch.setattr(
-        service.resources,
-        "_execute_resource_ingestion",
-        fail_during_ingestion,
-    )
+    if failure == "processing":
+        monkeypatch.setattr(
+            service.resources,
+            "_execute_resource_ingestion",
+            fail_during_ingestion,
+        )
+        source = {"path": "https://example.com/bad.md"}
+    else:
+        content = bytearray(b"not an image")
+        if failure == "bad_crc":
+            buffer = io.BytesIO()
+            Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
+            content = bytearray(buffer.getvalue())
+            # Corrupt the IDAT checksum immediately before the 12-byte IEND chunk.
+            content[-13] ^= 1
+        upload = upload_temp_dir / "bad.png"
+        upload.write_bytes(content)
+        source = {"temp_file_id": upload.name}
 
     resp = await client.post(
         "/api/v1/resources",
         json={
-            "path": "https://example.com/bad.md",
+            **source,
             "reason": "test resource",
             "wait": True,
         },
     )
 
-    assert resp.status_code == 500
+    assert resp.status_code == (500 if failure == "processing" else 400), resp.text
     body = resp.json()
     assert body["status"] == "error"
     assert "result" not in body
-    assert body["error"]["code"] == "PROCESSING_ERROR"
-    assert body["error"]["message"] == "Parse error: boom"
+    if failure == "processing":
+        assert body["error"]["code"] == "PROCESSING_ERROR"
+        assert body["error"]["message"] == "Parse error: boom"
+    else:
+        assert body["error"]["code"] == "INVALID_ARGUMENT"
+        assert "Invalid image file:" in body["error"]["message"]
+        if failure == "bad_crc":
+            assert "bad header checksum in b'IDAT'" in body["error"]["message"]
 
 
 async def test_add_skill_business_error_uses_error_envelope(
