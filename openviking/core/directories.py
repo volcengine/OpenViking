@@ -490,6 +490,8 @@ class DirectoryInitializer:
         for result in results:
             if isinstance(result, BaseException):
                 raise result
+        if any(result is False for result in results):
+            raise RuntimeError("Failed to enqueue preset directory index records")
 
     @staticmethod
     def _owner_space_for_scope(scope: str, ctx: RequestContext) -> str:

@@ -13,10 +13,15 @@ from openviking.core.namespace import (
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
+from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.exceptions import FailedPreconditionError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 from tests.utils.mock_agfs import MockLocalAGFS
 
 
@@ -343,3 +348,50 @@ async def test_account_workspace_failure_joins_started_index_enqueues_before_rel
     assert exc.value is failure
     fs._async_agfs.pathlock_release.assert_awaited_once()
     assert len(db.embedding_messages) == len(db.get_calls[0][0]) - 1
+
+
+@pytest.mark.asyncio
+async def test_account_workspace_rejects_failed_queue_write_after_siblings_finish(tmp_path):
+    fs = _FakeVikingFS()
+    agfs = MockLocalAGFS(root_path=tmp_path)
+    queue = EmbeddingQueue(agfs, "/queue", QueueManager.EMBEDDING)
+    manager = SimpleNamespace(EMBEDDING=QueueManager.EMBEDDING, get_queue=lambda _: queue)
+    db = VikingDBManager(VectorDBBackendConfig(), queue_manager=manager)
+    db.get = AsyncMock(return_value=[])
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._initialized = True
+    service._viking_fs = fs
+    service._directory_initializer = DirectoryInitializer(db, viking_fs=fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+    sibling_started = asyncio.Event()
+    queue_write_failed = asyncio.Event()
+    finish_sibling = asyncio.Event()
+    sibling_finished = asyncio.Event()
+
+    async def write(path, payload):
+        if not path.endswith("/enqueue"):
+            return "ok"
+        data = EmbeddingMsg.from_json(payload.decode()).context_data
+        if (data["uri"], data["level"]) == ("viking://resources", 0):
+            await sibling_started.wait()
+            queue_write_failed.set()
+            raise OSError("synthetic queue write failed")
+        if (data["uri"], data["level"]) == ("viking://resources", 1):
+            sibling_started.set()
+            await finish_sibling.wait()
+            sibling_finished.set()
+        return "synthetic-id"
+
+    queue._async_agfs.write = write
+    init = asyncio.create_task(service.initialize_account_workspace(ctx))
+    try:
+        await asyncio.wait_for(queue_write_failed.wait(), timeout=3)
+        assert not init.done()
+        fs._async_agfs.pathlock_release.assert_not_awaited()
+    finally:
+        finish_sibling.set()
+        with pytest.raises(RuntimeError, match="Failed to enqueue preset directory index records"):
+            await asyncio.wait_for(init, timeout=3)
+
+    assert sibling_finished.is_set()
+    fs._async_agfs.pathlock_release.assert_awaited_once()
