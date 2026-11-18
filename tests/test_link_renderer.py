@@ -89,6 +89,27 @@ class TestLinkSatisfaction:
     source_uri = "viking://resources/wiki/overview.md"
     target_uri = "viking://resources/wiki/tags.md"
 
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "![OpenViking][demo]\n\n[demo]: image.png",
+            "![OpenViking][]\n\n[OpenViking]: image.png",
+            "![OpenViking]\n\n[OpenViking]: image.png",
+            "![nested [OpenViking] label](image.png)",
+            "> ![nested [OpenViking]][demo]\n\n[demo]: image.png",
+            "- ![OpenViking\r\n  illustration](image.png)",
+        ],
+    )
+    def test_commonmark_images_are_not_knowledge_links(self, content):
+        assert not LinkRenderer.can_render_link(
+            content, "OpenViking", self.source_uri, self.target_uri
+        )
+        assert LinkRenderer.render_links_with_count(
+            content,
+            self.source_uri,
+            [{"match_text": "OpenViking", "to_uri": self.target_uri}],
+        ) == (content, 0)
+
     def test_unprotected_anchor_can_be_linked(self):
         assert LinkRenderer.can_render_link(
             "Read the behavior tags.",

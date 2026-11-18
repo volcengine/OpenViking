@@ -1,5 +1,6 @@
 import posixpath
 import re
+from collections import deque
 from dataclasses import dataclass
 from functools import partial
 from typing import Callable, Dict, Iterator, List, Optional
@@ -23,15 +24,10 @@ def _inline_with_source_span(rule, state, silent):
     return matched
 
 
-def _inline_code_spans(tokens, offset=0):
+def _inline_protected_spans(tokens):
     for token in tokens:
-        if token.type == "code_inline":
-            start, end = token.meta["source_span"]
-            yield offset + start, offset + end
-        elif token.type == "image":
-            # Image alt text is parsed separately, starting just after ![.
-            start, _ = token.meta["source_span"]
-            yield from _inline_code_spans(token.children or [], offset + start + 2)
+        if token.type in {"code_inline", "image"}:
+            yield token.meta["source_span"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,29 +163,43 @@ class LinkRenderer:
         parser = MarkdownIt("commonmark")
         parser.inline.ruler.at("backticks", partial(_inline_with_source_span, backtick))
         parser.inline.ruler.at("image", partial(_inline_with_source_span, image_rule))
-        for token in parser.parse(content):
+        environment = {}
+        for token in parser.parse(content, environment):
             if token.map is None:
                 continue
             start, end = (offsets[line] for line in token.map)
             if token.type in {"fence", "code_block"}:
                 spans.append((start, end))
             elif token.type == "inline":
-                code_spans = list(_inline_code_spans(token.children or []))
-                if not code_spans:
+                protected = list(_inline_protected_spans(token.children or []))
+                if not protected:
                     continue
-                # Container/heading markers and indentation are stripped from
-                # token.content, but every backtick remains in source order.
-                # Map only delimiters; HTML attributes and escaped backticks are
-                # interpreted by the parser instead of guessed here.
-                ticks = dict(
-                    zip(
-                        (m.start() for m in re.finditer("`", token.content)),
-                        (start + m.start() for m in re.finditer("`", content[start:end])),
-                        strict=True,
-                    )
-                )
-                for opening, closing in code_spans:
-                    spans.append((ticks[opening], ticks[closing - 1] + 1))
+                # Map parser offsets through stripped container prefixes and
+                # CRLF normalization, keeping complete image syntax protected.
+                positions = {}
+                needed = deque(sorted({point for a, b in protected for point in (a, b - 1)}))
+                inline_offset, source_offset = 0, start
+                for inline_line, source_line in zip(
+                    token.content.splitlines(keepends=True),
+                    content[start:end].splitlines(keepends=True),
+                    strict=False,
+                ):
+                    text = inline_line.rstrip("\r\n")
+                    at = source_line.find(text)
+                    while needed and needed[0] < inline_offset + len(inline_line):
+                        point = needed.popleft()
+                        if at >= 0 and point < inline_offset + len(text):
+                            positions[point] = source_offset + at + point - inline_offset
+                    inline_offset += len(inline_line)
+                    source_offset += len(source_line)
+                if any(a not in positions or b - 1 not in positions for a, b in protected):
+                    # Unusual indentation must not expose image alt text.
+                    spans.append((start, end))
+                else:
+                    spans.extend((positions[a], positions[b - 1] + 1) for a, b in protected)
+
+        for reference in environment.get("references", {}).values():
+            spans.append(tuple(offsets[line] for line in reference["map"]))
 
         for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):
             if not any(start <= match.start() < end for start, end in spans):
@@ -275,8 +285,6 @@ class LinkRenderer:
             expected_targets.add(posixpath.normpath(relative_target))
 
         for link in markdown_links:
-            if link.start > 0 and content[link.start - 1] == "!":
-                continue
             if any(
                 not (link.end <= start or link.start >= end) for start, end in non_link_protected
             ):
