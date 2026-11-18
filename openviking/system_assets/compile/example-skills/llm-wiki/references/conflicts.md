@@ -29,6 +29,13 @@ For each material source disagreement, write a record on the page that carries t
 affected claim, even if the prose accurately attributes both sides.
 In `reason`, identify the conflicting claims and their known locations, which may
 be in the same source. State any gaps in the evidence.
+For a new or substantively updated `unfixed` record, consider adding a concise
+human-review suggestion in `reason`: identify the evidence or conditions to verify,
+and the rule, table, or scope that would need updating if verified. Keep uncertain
+suggestions conditional; do not choose a disputed value, invent sources or reviewers,
+or treat a suggestion as a resolution. Retain `unfixed` and empty repair fields.
+Revise an existing suggestion when its evidence changes rather than accumulating
+copies. Do not alter unrelated records or human resolutions merely to add a suggestion.
 Do not silently choose a side, omit a relevant opposing claim, or replace the record
 with only "sources disagree." Do not manufacture an incorrect Wiki sentence to justify
 a record. Recency, repetition, and model familiarity alone do not establish authority;
