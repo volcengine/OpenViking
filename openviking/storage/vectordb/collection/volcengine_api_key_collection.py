@@ -51,15 +51,21 @@ class VolcengineApiKeyCollection(ICollection):
         except json.JSONDecodeError:
             result = {}
 
-        message = ""
-        if isinstance(result, dict):
-            message = (
-                result.get("message") or result.get("msg") or result.get("error") or response.text
+        payload = result if isinstance(result, dict) else {}
+        message = payload.get("message") or payload.get("msg") or payload.get("error")
+        if response.status_code == 400:
+            code, request_id = payload.get("code"), payload.get("request_id")
+            return ConnectionError(
+                message if isinstance(message, str) else "VikingDB rejected the request",
+                status_code=400,
+                code=code if isinstance(code, str) else None,
+                action=action,
+                request_id=request_id if isinstance(request_id, str) else None,
             )
-        else:
-            message = response.text
 
-        return ConnectionError(f"Request to {action} failed: {response.status_code} {message}")
+        return ConnectionError(
+            f"Request to {action} failed: {response.status_code} {message or response.text}"
+        )
 
     @staticmethod
     def _sanitize_uri_value(v: Any) -> Any:

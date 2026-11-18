@@ -15,6 +15,7 @@ class VikingDBException(Exception):
         error_type: str | None = None,
         retryable: bool = False,
         action: str | None = None,
+        request_id: str | None = None,
     ) -> None:
         super().__init__(message)
         # 私有化下游需要结构化判定重试边界；默认值保持其他存储后端原有异常语义。
@@ -23,6 +24,7 @@ class VikingDBException(Exception):
         self.error_type = error_type
         self.retryable = retryable
         self.action = action
+        self.request_id = request_id
 
 
 class StorageException(VikingDBException):

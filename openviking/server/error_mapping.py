@@ -7,6 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
+from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -31,6 +32,7 @@ from openviking.pyagfs.exceptions import (
     AGFSTimeoutError,
     GitConcurrentCommitError,
 )
+from openviking.storage.errors import ConnectionError as StorageConnectionError
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.exceptions import (
     AllCredentialsFailedError,
@@ -352,6 +354,17 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             )
 
     status, source = _extract_structured_http_status(exc)
+    if status == 400 and isinstance(source, StorageConnectionError):
+        public = sanitize_public_http_error(
+            code="INVALID_ARGUMENT",
+            message=str(source),
+            details={
+                "upstream_status_code": status,
+                "upstream_code": source.code,
+                "upstream_request_id": source.request_id,
+            },
+        )
+        return InvalidArgumentError(public.message, details=public.details)
     if status is None:
         for item in _iter_exception_chain(exc):
             if isinstance(item, httpx.TimeoutException):
