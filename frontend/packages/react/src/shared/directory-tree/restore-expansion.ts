@@ -3,6 +3,8 @@ import type { DirectoryQueries } from './directory-queries.js';
 import { expansionPath } from './expansion-path.js';
 import type { DirState } from './types.js';
 
+export type UnresolvedExpansion = ReadonlyMap<string, readonly string[]>;
+
 /** Resolve saved folders from actual listings, including rows on later pages. */
 export async function restoreDirectoryExpansion(
   load: DirectoryQueries['load'],
@@ -12,7 +14,7 @@ export async function restoreDirectoryExpansion(
   isExpanded: (uri: string) => boolean,
   signal: AbortSignal,
   onMatch: (savedUri: string, listedUri: string) => void,
-) {
+): Promise<UnresolvedExpansion> {
   const root = normalizeResourceUri(rootUri);
   const children = new Map<string, Set<string>>();
   for (const uri of expanded) {
@@ -29,7 +31,13 @@ export async function restoreDirectoryExpansion(
     children.set(parent, folders);
   }
 
-  let complete = true;
+  const unresolved = new Map<string, string[]>();
+  const preserve = (parent: string, wanted: ReadonlySet<string>) => {
+    const pending = [...wanted];
+    for (const uri of pending)
+      for (const child of children.get(uri) ?? []) pending.push(child);
+    unresolved.set(parent, pending);
+  };
   const restore = async (
     parent: string,
     savedParent: string,
@@ -56,7 +64,7 @@ export async function restoreDirectoryExpansion(
       }
       if (!wanted.size || !page.hasMore) break;
       if (page.entries.length <= scanned) {
-        complete = false;
+        if (parentExpanded()) preserve(parent, wanted);
         break;
       }
       scanned = page.entries.length;
@@ -64,9 +72,8 @@ export async function restoreDirectoryExpansion(
       page = await load(parent, scanned, signal);
     }
     if ((!page || page.error) && wanted.size && parentExpanded())
-      complete = false;
+      preserve(parent, wanted);
   };
-  if (!rootPage || rootPage.error) return false;
   await restore(rootUri, root, rootPage);
-  return complete && !signal.aborted;
+  return unresolved;
 }

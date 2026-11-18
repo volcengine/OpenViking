@@ -295,8 +295,9 @@ export interface FileBrowserProps extends Omit<
   /** 用户选中目录树条目时触发，包含重复选中。Reports a tree entry selection, including reselecting the same row. */
   onSelect?: (row: FileTreeEntryRow) => void;
   /**
-   * 目录树初始化完成后，上报可见的展开目录，不含根目录。
-   * Reports visible expanded directory URIs after initialization, excluding the root.
+   * 目录树初始化完成后上报展开快照，不含根目录。恢复失败时，保留仍展开分支中未加载的路径。
+   * Reports the expansion snapshot after initialization, excluding the root.
+   * When restoration fails, it preserves unresolved paths in open branches.
    */
   onExpandedUrisChange?: (uris: readonly string[]) => void;
   /** Host gateway/view override; nullish values retain the native dashboard. */

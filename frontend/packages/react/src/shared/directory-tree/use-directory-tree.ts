@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
 } from 'react';
 import { useRequestScope } from '../request/use-request-scope.js';
@@ -47,6 +48,7 @@ export function useDirectoryTree({
     session?.getSnapshot ?? emptySnapshot,
   );
   const activeSession = useRef(session);
+  const [editedSession, setEditedSession] = useState<DirectoryQueries>();
   // Publish committed query subscriptions for stable event callbacks. Abandoned
   // renders must not replace the session used by the visible preview.
   useEffect(() => {
@@ -65,7 +67,7 @@ export function useDirectoryTree({
     defaultExpandedUris,
   );
   const initialPath = hasSavedExpansion ? undefined : defaultExpandedUri;
-  const { initialLoad, initializing, expansionComplete, retryExpansion } =
+  const { initialLoad, initializing, unresolved, retryExpansion } =
     useInitializeDirectoryTree({
       session,
       rootUri,
@@ -107,6 +109,7 @@ export function useDirectoryTree({
       toggleExpand: async (row: { uri: string; disabled?: boolean }) => {
         if (row.disabled) return;
         const isOpen = expandedRef.current.has(row.uri);
+        setEditedSession(activeSession.current);
         setExpanded((previous) => {
           const next = new Set(previous);
           if (isOpen) next.delete(row.uri);
@@ -123,13 +126,13 @@ export function useDirectoryTree({
         if (!current) return retryScope();
         const page = await fetchPage(uri, 0, undefined, true);
         if (page && !page.error && activeSession.current === current)
-          retryExpansion?.();
+          retryExpansion();
       },
       refresh: async () => {
         const current = activeSession.current;
         if (!current) return retryScope();
         await current.refresh();
-        if (activeSession.current === current) retryExpansion?.();
+        if (activeSession.current === current) retryExpansion();
       },
     }),
     [
@@ -159,8 +162,13 @@ export function useDirectoryTree({
   const isReady = dirs[rootUri]?.ready ?? false;
   useReportExpansion(
     session,
-    isReady && expansionComplete && !dirs[rootUri]?.error,
+    isReady &&
+      !isInitializing &&
+      !dirs[rootUri]?.error &&
+      (!unresolved.size || editedSession === session),
+    rootUri,
     rows,
+    unresolved,
     onExpandedUrisChange,
   );
   return {

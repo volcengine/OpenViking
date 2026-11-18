@@ -1,8 +1,20 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { DirectoryQueries } from './directory-queries.js';
 import { expandChain } from './fs-path.js';
-import { restoreDirectoryExpansion } from './restore-expansion.js';
+import {
+  restoreDirectoryExpansion,
+  type UnresolvedExpansion,
+} from './restore-expansion.js';
+
+const emptyExpansion: UnresolvedExpansion = new Map();
+
+interface RestoreAttempt {
+  session: DirectoryQueries;
+  signal: AbortSignal;
+  retryQueued: boolean;
+  unresolved: UnresolvedExpansion;
+}
 
 export function useInitializeDirectoryTree({
   session,
@@ -23,22 +35,59 @@ export function useInitializeDirectoryTree({
     session: DirectoryQueries | undefined;
     uri?: string;
     attempt: number;
-    expansionComplete: boolean;
+    unresolved: UnresolvedExpansion;
   }>();
-  const [attempt, retryExpansion] = useReducer((count: number) => count + 1, 0);
+  const [attempt, restart] = useReducer((count: number) => count + 1, 0);
   const initialLoad = useRef<Promise<void> | undefined>(undefined);
+  const activeAttempt = useRef<RestoreAttempt | undefined>(undefined);
+  const retryExpansion = useCallback(() => {
+    const current = activeAttempt.current;
+    if (
+      !savedExpansion ||
+      !current ||
+      current.session !== session ||
+      current.signal.aborted ||
+      current.retryQueued
+    )
+      return;
+    current.retryQueued = true;
+    // Let the current pass finish without cancelling a sibling listing.
+    void initialLoad.current?.then(() => {
+      if (activeAttempt.current !== current || current.signal.aborted) return;
+      if (current.unresolved.size) restart();
+      else current.retryQueued = false;
+    });
+  }, [session, savedExpansion]);
   // Synchronize the initial/default path with directory subscriptions after commit.
   // Navigation and identity can change without a click. Cleanup only invalidates
   // this navigation; Query observers own shared request cancellation.
   useEffect(() => {
     if (!session) return;
     const controller = new AbortController();
-    let expansionComplete = savedExpansion === undefined;
+    const saved = [...(savedExpansion ?? [])].filter((uri) => uri !== rootUri);
+    const previous = activeAttempt.current;
+    const cached =
+      previous?.session === session && previous.retryQueued
+        ? session.dirs.current
+        : undefined;
+    const load: DirectoryQueries['load'] = async (uri, offset, signal) => {
+      const page = cached?.[uri];
+      if (offset === 0 && page?.ready && !page.loading && !page.error)
+        return page;
+      return session.load(uri, offset, signal);
+    };
+    const current: RestoreAttempt = {
+      session,
+      signal: controller.signal,
+      retryQueued: false,
+      unresolved: saved.length ? new Map([[rootUri, saved]]) : emptyExpansion,
+    };
+    activeAttempt.current = current;
     initialLoad.current = (async () => {
-      const page = await session.load(rootUri, 0, controller.signal);
+      const page = await load(rootUri, 0, controller.signal);
       if (savedExpansion) {
-        expansionComplete = await restoreDirectoryExpansion(
-          session.load,
+        current.unresolved = await restoreDirectoryExpansion(
+          load,
           rootUri,
           page,
           savedExpansion,
@@ -72,7 +121,7 @@ export function useInitializeDirectoryTree({
             session,
             uri: initialPath,
             attempt,
-            expansionComplete,
+            unresolved: current.unresolved,
           });
       });
     return () => controller.abort();
@@ -90,12 +139,10 @@ export function useInitializeDirectoryTree({
     initialized?.session !== session ||
     initialized.uri !== initialPath ||
     initialized.attempt !== attempt;
-  const expansionComplete = !initializing && initialized.expansionComplete;
   return {
     initialLoad,
     initializing,
-    expansionComplete,
-    retryExpansion:
-      !initializing && !expansionComplete ? retryExpansion : undefined,
+    unresolved: initializing ? emptyExpansion : initialized.unresolved,
+    retryExpansion,
   };
 }
