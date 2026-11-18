@@ -57,14 +57,18 @@ export function VideoFrames({
                 <img
                   key={frame.src}
                   src={frame.src}
-                  alt={frame.name}
+                  alt=""
                   loading="lazy"
                   onError={() => fail(frame)}
                 />
               </button>
-            ) : (
-              <span>{frame.name}</span>
-            )}
+            ) : null}
+            <span
+              className="ov-file-preview__video-frame-name"
+              title={frame.name}
+            >
+              {frame.name}
+            </span>
           </li>
         ))}
       </ul>
