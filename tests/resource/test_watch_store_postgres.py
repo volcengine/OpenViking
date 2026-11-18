@@ -447,6 +447,102 @@ async def test_postgres_short_prefix_uses_expression_index(make_store):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prefix_chars", [127, 128, 129, 147, 900])
+@pytest.mark.parametrize("character", ["a", "\U00011000"])
+async def test_postgres_prefix_boundaries_check_full_uri(make_store, prefix_chars, character):
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL path expression-index contract")
+    base = "viking://resources/"
+    parent = base + character * (prefix_chars - len(base) - 1)
+    exact = await create(store, parent)
+    child = await create(store, parent + "/child")
+    sibling = await create(store, parent + "sibling/child")
+    # For long paths this sibling has the same entire indexed key.
+    shared_prefix = await create(store, parent[:-1] + "b/child")
+    other_account = await create(store, parent + "/other", account_id="other-account")
+    moved = await store.move(
+        account_id=ACCOUNT,
+        from_uri=parent + "/",
+        to_uri="viking://resources/moved",
+    )
+    assert set(moved.task_ids) == {exact.task_id, child.task_id}
+    assert (await store.get_task(child.task_id)).to_uri == "viking://resources/moved/child"
+    for task in (sibling, shared_prefix, other_account):
+        assert (await store.get_task(task.task_id)).to_uri == task.to_uri
+
+
+@pytest.mark.asyncio
+async def test_postgres_long_prefix_limits_expression_index_candidates(make_store):
+    from sqlalchemy import text
+
+    store = await make_store()
+    if store.provider != "postgres":
+        pytest.skip("PostgreSQL long-path index scan contract")
+    # A 147-character directory prefix previously scanned every account row.
+    parent = "viking://resources/" + "a" * 127
+    assert len(parent + "/") == 147
+    task = await create(store, parent + "/child")
+    c = store._tasks.c
+    columns = ", ".join(f'"{name}"' for name in c.keys())
+    unrelated_uri = "'viking://resources/unrelated/' || n::text"
+    overrides = {
+        "task_id": "'unrelated-' || n::text",
+        "target_uri": unrelated_uri,
+        "target_uri_key": unrelated_uri,
+    }
+    values = ", ".join(overrides.get(name, f'w."{name}"') for name in c.keys())
+
+    async def explain():
+        async with store._transaction() as session:
+            await session.execute(
+                text(
+                    f'INSERT INTO "{store._table_name}" ({columns}) '
+                    f'SELECT {values} FROM "{store._table_name}" AS w '
+                    "CROSS JOIN generate_series(1, 19999) AS n "
+                    "WHERE w.task_id = :task_id AND w.service_name = :service"
+                ),
+                {"task_id": task.task_id, "service": store._service_name},
+            )
+            await session.execute(text(f'ANALYZE "{store._table_name}"'))
+            query = select(c.task_id).where(
+                store._scope,
+                c.account_id == ACCOUNT,
+                c.deleted.is_(False),
+                store._target_descendants(parent),
+            )
+            compiled = str(
+                query.compile(dialect=store._engine.dialect, compile_kwargs={"literal_binds": True})
+            )
+            result = await session.execute(
+                text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + compiled)
+            )
+            return result.scalar_one()[0]["Plan"]
+
+    plan = await store._sql_runtime.run(explain)
+
+    def nodes(node):
+        yield node
+        for child in node.get("Plans", []):
+            yield from nodes(child)
+
+    scans = [
+        node
+        for node in nodes(plan)
+        if node.get("Index Name") == f"ix_{store._table_name}_target_prefix"
+    ]
+    assert scans, plan
+    condition = scans[0].get("Index Cond", "")
+    assert "substr((target_uri_key)::text, 1, 128)" in condition, plan
+    assert ">=" in condition and "<" in condition, plan
+    assert plan["Actual Rows"] == 1, plan
+    assert sum(node.get("Rows Removed by Filter", 0) for node in nodes(plan)) == 0, plan
+    assert [item.task_id for item in await store.deactivate_under_uri(ACCOUNT, parent)] == [
+        task.task_id
+    ]
+
+
+@pytest.mark.asyncio
 async def test_postgres_due_scan_uses_time_range_index_condition(make_store):
     from sqlalchemy import event, text
 

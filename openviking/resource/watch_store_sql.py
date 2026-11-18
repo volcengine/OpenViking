@@ -427,13 +427,14 @@ class SQLWatchStore(WatchStore):
         c = self._tasks.c
         descendant_prefix = f"{prefix}/"
         descendant = func.substr(c.target_uri, 1, len(descendant_prefix)) == descendant_prefix
-        if len(descendant_prefix) <= self.target_prefix_index_chars:
-            upper = _prefix_upper_bound(descendant_prefix)
-            key_range = self._target_key_expression >= descendant_prefix
-            if upper is not None:
-                key_range = and_(key_range, self._target_key_expression < upper)
-            descendant = and_(key_range, descendant)
-        return descendant
+        # Long paths still have an index-covered prefix. Narrow candidates with
+        # that prefix, then check the full URI to exclude siblings sharing it.
+        indexed_prefix = descendant_prefix[: self.target_prefix_index_chars]
+        upper = _prefix_upper_bound(indexed_prefix)
+        key_range = self._target_key_expression >= indexed_prefix
+        if upper is not None:
+            key_range = and_(key_range, self._target_key_expression < upper)
+        return and_(key_range, descendant)
 
     def _prefix(self, uri: str) -> Any:
         """Equality or a descendant on a path boundary, without LIKE escaping."""
