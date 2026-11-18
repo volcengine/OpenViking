@@ -11,8 +11,8 @@ export interface CommandConsoleUriTextProps {
   onOpenUri?: (uri: string) => void;
   /** 编辑镜像隐藏重复文字，但保留链接语义及输入框焦点。 */
   editor?: boolean;
-  /** Every caller declares its content semantics; literal values retain filename punctuation. */
-  mode: 'prose' | 'literal';
+  /** Command arguments and formatted JSON URI fields have explicit value boundaries. */
+  mode: 'prose' | 'literal' | 'command' | 'json';
   wholeUri?: boolean;
 }
 
@@ -51,8 +51,14 @@ export function CommandConsoleUriLink({
   );
 }
 
-// Quoted arguments and JSON string values supply an explicit URI boundary.
-const QUOTED_VIKING_URI_PATTERN = String.raw`"(?<double>viking:\/\/(?:\\.|[^"\\\r\n])+)"|'(?<single>viking:\/\/[^'\r\n]+)'|`;
+const DOUBLE_QUOTED_URI = String.raw`"(?<double>viking:\/\/(?:\\.|[^"\\\r\n])+)"`;
+const QUOTED_COMMAND_URI =
+  DOUBLE_QUOTED_URI + String.raw`|'(?<single>viking:\/\/[^'\r\n]+)'|`;
+// The JSON formatter puts each object key on its own line.
+const JSON_URI_FIELD =
+  String.raw`^(?<field>[ \t]*"(?:[^"\\]*_)?uri":[ \t]*)` +
+  DOUBLE_QUOTED_URI +
+  '|';
 
 /** 把纯文本中的 URI 渲染成链接；宿主可通过回调接管打开。 */
 export function CommandConsoleUriText({
@@ -71,13 +77,19 @@ export function CommandConsoleUriText({
   }
   const parts: ReactNode[] = [];
   let cursor = 0;
+  const quotedPattern =
+    mode === 'command'
+      ? QUOTED_COMMAND_URI
+      : mode === 'json'
+        ? JSON_URI_FIELD
+        : '';
   const pattern = new RegExp(
-    QUOTED_VIKING_URI_PATTERN +
+    quotedPattern +
       (mode === 'prose'
         ? COMMAND_CONSOLE_PROSE_URI_PATTERN
         : COMMAND_CONSOLE_URI_PATTERN
       ).source,
-    'gi',
+    'gim',
   );
   const plain = (value: string, key: number) =>
     editor ? (
@@ -90,7 +102,9 @@ export function CommandConsoleUriText({
 
   for (const matched of text.matchAll(pattern)) {
     const quoted = matched.groups?.double ?? matched.groups?.single;
-    const index = (matched.index ?? 0) + (quoted === undefined ? 0 : 1);
+    const index =
+      matched.index +
+      (quoted === undefined ? 0 : (matched.groups?.field?.length ?? 0) + 1);
     const display =
       quoted ??
       (mode === 'prose'
@@ -99,7 +113,9 @@ export function CommandConsoleUriText({
     const uri =
       matched.groups?.double === undefined
         ? display
-        : display.replace(/\\(["\\])/g, '$1');
+        : mode === 'json'
+          ? (JSON.parse(`"${display}"`) as string)
+          : display.replace(/\\(["\\])/g, '$1');
     if (index > cursor) parts.push(plain(text.slice(cursor, index), cursor));
     parts.push(
       <CommandConsoleUriLink

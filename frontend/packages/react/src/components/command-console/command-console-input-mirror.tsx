@@ -49,7 +49,7 @@ export function CommandConsoleInputMirror({
             </span>
             <CommandConsoleUriText
               text={input.rest}
-              mode="literal"
+              mode="command"
               onOpenUri={onOpenUri}
               editor
             />

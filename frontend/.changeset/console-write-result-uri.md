@@ -4,8 +4,8 @@
 
 ## en-US
 
-Keep the full resource URI clickable in Console write results when a path contains spaces. Complete links are also preserved in structured results and for quoted URIs in text, including Markdown inline code.
+Keep resource URIs with spaces clickable in Console result URI fields and quoted command arguments. In plain text and Markdown code, link each URI token separately.
 
 ## zh-CN
 
-修复终端写入结果中的资源路径包含空格时，链接被截断的问题。结构化结果和文本中带引号的 URI 都保留完整链接，Markdown 行内代码也支持带引号的 URI。
+终端结果的 URI 字段和带引号的命令参数会为含空格的资源路径保留完整链接。普通文本和 Markdown 代码按 URI 逐项生成链接。

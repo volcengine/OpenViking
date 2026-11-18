@@ -8,10 +8,9 @@ test('quoted input, JSON and structured results link the complete URI', async ()
   const view = await mount({
     value: `ov read "${uri}"`,
     records: [
-      record({ variant: 'text', text: JSON.stringify({ uri }) }),
       {
-        ...record({ variant: 'text', text: `See "${uri}" and continue.` }),
-        id: 'prose',
+        ...record({ variant: 'text', text: JSON.stringify({ uri }) }),
+        command: `ov read "${uri}"`,
       },
       {
         ...record({
@@ -47,7 +46,7 @@ test('quoted input, JSON and structured results link the complete URI', async ()
   try {
     const links = [
       ...view.container.querySelectorAll(
-        '.ov-command-console__result-body a, .ov-command-console__input-mirror a',
+        '.ov-command-console__result-body a, .ov-command-console__input-mirror a, .ov-command-console__bubble-text a',
       ),
     ];
     assert.equal(links.length, 8);
@@ -100,7 +99,32 @@ test('markdown inline code leaves a local destination outside the resource link'
   await assertInlineCodeLinks(`${uri} -> /tmp/a.md`, [uri]);
 });
 
-test('markdown inline code links a quoted URI with spaces', async () => {
-  const uri = 'viking://resources/dir with whitespace/a.md';
-  await assertInlineCodeLinks(`"${uri}" -> /tmp/a.md`, [uri]);
+test('JSON message links only the resource URI before a local destination', async () => {
+  const uri = 'viking://resources/a.md';
+  const message = `${uri} -> /tmp/a.md`;
+  const opened = [];
+  const view = await mount({
+    records: [record({ variant: 'text', text: JSON.stringify({ message }) })],
+    onOpenUri: (target) => opened.push(target),
+  });
+  try {
+    const result = view.container.querySelector(
+      '.ov-command-console__code-content',
+    );
+    const links = [...result.querySelectorAll('a')];
+    assert.deepEqual(JSON.parse(result.textContent), { message });
+    assert.deepEqual(
+      links.map((link) => link.getAttribute('href')),
+      [uri],
+    );
+    await click(links[0]);
+    assert.deepEqual(opened, [uri]);
+  } finally {
+    await view.dispose();
+  }
+});
+
+test('quoted markdown inline code links each resource URI separately', async () => {
+  const uris = ['viking://resources/a.md', 'viking://resources/b.md'];
+  await assertInlineCodeLinks(`"${uris.join(' -> ')}"`, uris);
 });

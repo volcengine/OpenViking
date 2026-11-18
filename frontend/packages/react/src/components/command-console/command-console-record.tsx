@@ -43,7 +43,7 @@ export function CommandConsoleRecordItem(props: CommandConsoleRecordProps) {
               </span>
               <CommandConsoleUriText
                 text={input.rest}
-                mode="literal"
+                mode="command"
                 onOpenUri={props.onOpenUri}
               />
             </>
