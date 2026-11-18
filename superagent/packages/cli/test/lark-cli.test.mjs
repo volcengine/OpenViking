@@ -33,7 +33,9 @@ test('logoutUser clears the selected profile and ignores a profile that does not
   assert.equal(await larkCli.logoutUser({ profile: 'superagent-asd' }), true);
   assert.deepEqual(spawnResult.last.args, ['--profile', 'superagent-asd', 'auth', 'logout', '--json']);
 
-  const missing = spawnResult({ code: 1, stdout: '{"ok":false,"error":{"subtype":"not_configured"}}\n' });
+  // As lark-cli 1.0.99 reports it: exit 3, the error on stderr, stdout empty.
+  const missing = spawnResult({ code: 3, stderr: '{\n  "ok": false,\n  "error": {\n    "type": "config",\n    "subtype": "not_configured",\n'
+    + '    "message": "profile \\"superagent-new\\" not found"\n  }\n}\n' });
   assert.equal(await new LarkCli('lark-cli', { spawnImpl: missing }).logoutUser({ profile: 'superagent-new' }), false);
 });
 

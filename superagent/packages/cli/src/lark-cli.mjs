@@ -86,8 +86,9 @@ export class LarkCli {
   // does not exist yet has nothing to clear.
   async logoutUser({ profile }) {
     const result = await this.run(['--profile', profile, 'auth', 'logout', '--json'], { timeoutMs: 30_000 });
-    const body = parseJson(result.stdout);
     if (result.code === 0) return true;
+    // lark-cli prints its error envelope on stderr, not stdout.
+    const body = parseJson(result.stderr) ?? parseJson(result.stdout);
     if (body?.error?.subtype === 'not_configured') return false;
     throw new Error(`lark-cli auth logout failed: ${failure(result)}`);
   }
