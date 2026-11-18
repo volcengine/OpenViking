@@ -51,6 +51,9 @@ pub enum CoordinationConfig {
     },
     /// Use the client's shared cache runtime.
     Cache {
+        /// Named Runtime selected for coordination.
+        #[serde(default = "default_cache_instance")]
+        instance: String,
         /// Maximum duration of one shared-backend operation, including retries.
         #[serde(default = "default_operation_timeout_ms")]
         operation_timeout_ms: u64,
@@ -59,6 +62,11 @@ pub enum CoordinationConfig {
 
 fn default_operation_timeout_ms() -> u64 {
     5_000
+}
+
+/// Return the default named cache Runtime instance.
+fn default_cache_instance() -> String {
+    "default".to_string()
 }
 
 impl Default for CoordinationConfig {
@@ -81,24 +89,30 @@ impl CoordinationRuntime {
     /// Clients with the same backend namespace share coordination.
     /// Initialization is lazy so unused coordination needs no files or capabilities.
     pub fn new(
-        cache: Option<Arc<CacheRuntime>>,
+        cache_runtimes: &HashMap<String, Arc<CacheRuntime>>,
         config: CoordinationConfig,
         service_name: String,
     ) -> CacheResult<Self> {
         validate_component("service_name", &service_name)?;
+        let cache = match &config {
+            CoordinationConfig::Cache { instance, .. } => Some(
+                cache_runtimes.get(instance).cloned().ok_or_else(|| {
+                    CacheError::InvalidArgument(format!(
+                        "coordination references unknown cache instance '{instance}'"
+                    ))
+                })?,
+            ),
+            _ => None,
+        };
         match &config {
             CoordinationConfig::Sqlite { sqlite_path } if !sqlite_path.is_absolute() => {
                 return Err(CacheError::InvalidArgument(
                     "coordination.sqlite_path must be an absolute local file path".into(),
                 ));
             }
-            CoordinationConfig::Cache { .. } if cache.is_none() => {
-                return Err(CacheError::InvalidArgument(
-                    "cache coordination requires a shared CacheRuntime".into(),
-                ));
-            }
             CoordinationConfig::Cache {
                 operation_timeout_ms: 0,
+                ..
             } => {
                 return Err(CacheError::InvalidArgument(
                     "coordination.operation_timeout_ms must be positive".into(),
@@ -132,6 +146,7 @@ impl CoordinationRuntime {
                         }
                         CoordinationConfig::Cache {
                             operation_timeout_ms,
+                            ..
                         } => Backend::Cache(CacheBackend::new(
                             cache.unwrap(),
                             &service_name,

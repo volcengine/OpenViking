@@ -279,10 +279,10 @@ async fn redis_batch_preserves_kind_ownership_errors_and_hash_ttl() {
             .unwrap();
     }
     runtime
-        .register_script(ScriptDefinition {
-            id: "pathlock.test.batch_corrupt.v1",
-            redis_lua: "return redis.call('HSET', KEYS[1], ARGV[1], 'broken')",
-        })
+        .register_script(
+            "pathlock.test.batch_corrupt.v1".to_string(),
+            "return redis.call('HSET', KEYS[1], ARGV[1], 'broken')".to_string(),
+        )
         .unwrap();
     runtime
         .execute_script(ScriptRequest {
@@ -293,10 +293,10 @@ async fn redis_batch_preserves_kind_ownership_errors_and_hash_ttl() {
         .await
         .unwrap();
     runtime
-        .register_script(ScriptDefinition {
-            id: "pathlock.test.batch_long_ttl.v1",
-            redis_lua: "return redis.call('PEXPIRE', KEYS[1], 60000)",
-        })
+        .register_script(
+            "pathlock.test.batch_long_ttl.v1".to_string(),
+            "return redis.call('PEXPIRE', KEYS[1], 60000)".to_string(),
+        )
         .unwrap();
     for path in [&paths[1], &paths[4], &paths[6]] {
         runtime
@@ -337,10 +337,10 @@ async fn redis_batch_preserves_kind_ownership_errors_and_hash_ttl() {
         originals[1]
     );
     runtime
-        .register_script(ScriptDefinition {
-            id: "pathlock.test.batch_ttl.v1",
-            redis_lua: "return redis.call('PTTL', KEYS[1])",
-        })
+        .register_script(
+            "pathlock.test.batch_ttl.v1".to_string(),
+            "return redis.call('PTTL', KEYS[1])".to_string(),
+        )
         .unwrap();
     for (path, refreshed) in [(&paths[1], true), (&paths[4], true), (&paths[6], false)] {
         let ttl = runtime

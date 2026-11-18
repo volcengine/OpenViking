@@ -295,7 +295,11 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
+| `cache.instances` | object | 启用 cache consumer 时必填 | 命名 CacheRuntime Provider，必须包含 `default` |
+| `agfs.cachefs.instance` | 实例名 | `"default"` | `cachefs.backend="cache"` 时使用的 Runtime |
+| `agfs.queuefs.instance` | 实例名 | `"default"` | `queuefs.backend="cache"` 时使用的 Runtime |
 | `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`postgres`、`cache` | `filesystem` | 路径锁存储；`postgres` 直连 PostgreSQL，`cache` 使用 Redis |
+| `agfs.pathlock.instance` | 实例名 | `"default"` | `pathlock.provider="cache"` 时使用的 Runtime，必须是 Redis |
 | `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | 使用 `sqlite` 时为 `{workspace}/_system/pathlock/pathlock.db` | SQLite 共享锁数据库，可显式覆盖 |
 | `agfs.pathlock.postgres_dsn_env` | 环境变量名 / `null` | `null` | `postgres` 必填；指定服务进程中保存 PostgreSQL DSN 的环境变量名 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb`、`opengauss`、`pgvector` | `local` | 向量数据库后端；参见 [pgvector 配置](../guides/25-pgvector.md) |
@@ -417,7 +421,8 @@ PathLock 不提供租约失效后的存储侧 fencing，也不改变 CachedFileS
 #### Redis PathLock
 
 使用 Redis 协调时，
-设置 `storage.agfs.pathlock.provider="cache"` 和顶层 `cache.provider="redis"`。
+设置 `storage.agfs.pathlock.provider="cache"`，并通过
+`storage.agfs.pathlock.instance` 选择 `cache.instances` 中的 Redis 实例。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
 参见[共享 Redis 配置示例](../guides/01-configuration.md)。
 无论选择哪种 PathLock，共享 QueueFS 都需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
