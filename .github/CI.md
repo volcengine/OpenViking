@@ -164,9 +164,24 @@ output into new immutable entries. Prefix restores select the newest compatible
 cache, preferring the same Cargo lockfile before other entries for that toolchain.
 Only non-PR runs on the official repository's `main`
 branch save these caches; PR, fork and tag runs restore only. Ccache is capped at
-256 MiB per entry and Cargo incremental output is disabled. Older main entries
-remain subject to GitHub's cache quota and eviction. Source changes still rebuild
-correctly through Cargo/ccache input validation.
+256 MiB per entry and Cargo incremental output is disabled. After a successful
+macOS Intel warmup, a separate job removes superseded `cargo-v3-*` main entries,
+keeping the two newest per OS/architecture/target/cache-format version plus all
+entries created within 24 hours. Older toolchain and lockfile variants share
+this retention group. Other main cache families are untouched. PR-scoped caches
+are removed only for closed/merged PRs and only after the cache is seven days old.
+Unknown key formats and refs are preserved; PR lookup errors abort cleanup.
+Only the cleanup job receives `actions: write`; warmup remains read-only.
+Preview the current deletion plan locally with
+`python3 .github/scripts/cache_maintenance.py --repo volcengine/OpenViking`
+(authenticated `gh` required); `--apply` performs deletion. GitHub's cache quota
+and eviction still apply, including during bursts inside the retention windows.
+Source changes still rebuild correctly through Cargo/ccache input validation.
+Rust, C/C++ compiler or CMake upgrades change the toolchain fingerprint and can
+miss both Cargo and ccache restores until main warmup finishes. A cold build
+after such an upgrade is expected; compare timings with the same fingerprint.
+Non-Linux wheel jobs have a 90-minute timeout and the shared Studio job has a
+15-minute timeout, so a stuck producer cannot indefinitely block later warmups.
 Wheel building compiles each native component once.
 Studio is built once per distribution workflow and downloaded by each wheel job.
 Bootstrap/version/repair/test commands use `uv run --no-sync`; test environments
@@ -185,10 +200,14 @@ python3 -m pip install pytest PyYAML
 python3 -m pytest --noconftest -q -o addopts='' \
   tests/misc/test_abi3_packaging_config.py \
   tests/misc/test_release_tag_selection.py \
-  tests/misc/test_linux_runner.py
+  tests/misc/test_linux_runner.py \
+  tests/misc/test_macos_wheel_cache.py \
+  tests/misc/test_cli_model_query_retry.py \
+  tests/misc/test_cache_maintenance.py
 actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
   .github/workflows/_build.yml .github/workflows/_test_lite.yml \
-  .github/workflows/_test_full.yml .github/workflows/rust-cli.yml
+  .github/workflows/_test_full.yml .github/workflows/rust-cli.yml \
+  .github/workflows/macos-wheel-cache.yml
 ```
 
 Compare wall time, runner queue time, compiler cache hits and native build counts

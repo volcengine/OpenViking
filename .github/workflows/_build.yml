@@ -111,6 +111,7 @@ jobs:
     name: Build shared Studio bundle
     if: inputs.build_wheels
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v6
     - uses: actions/setup-node@v6
@@ -248,17 +249,17 @@ jobs:
           libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev
           libncursesw5-dev tk-dev uuid-dev libexpat1-dev
         )
-        ready=true
+        missing=()
         for package in "${packages[@]}"; do
           if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
-            ready=false
-            break
+            missing+=("$package")
           fi
         done
-        if "$ready"; then
+        if [ "${#missing[@]}" -eq 0 ]; then
           echo "System dependencies are already installed in the CI image."
           exit 0
         fi
+        echo "CI image is missing required packages: ${missing[*]}; falling back to apt."
         sed -i 's|http://|https://|g' /etc/apt/sources.list
         if [ -n "$UBUNTU_MIRROR" ]; then
           case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
@@ -539,6 +540,7 @@ jobs:
     # Run only when non-Linux runners are explicitly requested
     if: inputs.build_wheels && (contains(inputs.os_json, 'macos') || contains(inputs.os_json, 'windows'))
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
