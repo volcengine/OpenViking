@@ -91,7 +91,7 @@ class TypedQuery:
 
 `find()` 使用 QUICK。`search()` 配置了可用的 Rerank 时自动使用 THINKING，否则使用 QUICK。这是内部检索模式，不是 LLM 的思考参数，也不控制会话意图分析。意图分析生成的多条查询仍分别检索和排序，再按现有方式汇总。Context 模式（`search(mode="context")`）通过 `find()` 召回，因此默认使用向量分数；服务端开启 `retrieval.apply_rerank_to_context` 后，会在配额和 token 预算之前，用原始查询及其会话扩展查询对合并后的候选每个请求统一重排一次。
 
-图像查询跳过文本 Rerank，候选数为 `limit`；未指定 `level` 时默认搜索 L2。
+图像查询跳过纯文本 Reranker，候选数为 `limit`。配置 `rerank.input: "multimodal"` 并使用兼容端点后，THINKING 模式召回 `2 × limit` 个候选，使用查询图片及 L2 候选图片进行重排。候选图片通过 VikingFS 按当前请求权限读取；无法读取的图片保留向量分数。未指定 `level` 时仍默认搜索 L2。Reranker 无法补回未被向量检索召回的资源。
 
 ## Rerank 策略
 
