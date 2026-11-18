@@ -468,39 +468,32 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
     assert pipeline.failures
 
 
+@pytest.mark.parametrize("collision", ["same_worker", "other_worker"])
 @pytest.mark.parametrize(
-    "paths",
-    [
-        ["topic/Retry.md", "TOPIC/retry.md"],
-        ["topic/Caf\u00e9.md", "topic/Cafe\u0301.md"],
-    ],
+    "names", [("topic/Retry.md", "TOPIC/retry.md"), ("topic/Café.md", "topic/Cafe\u0301.md")]
 )
-async def test_portable_path_aliases_are_merged_before_publication(pipeline, paths):
-    docs = [
-        Document(path, f"candidate-{index}.md", [f"source-{index}"])
-        for index, path in enumerate(paths)
-    ]
-    for doc in docs:
-        await pipeline.files.sandbox.write_file(
-            doc.workspace_path, "# Facts\n\nUnique contribution."
-        )
-    with pytest.raises(ValueError, match="Multiple output writers"):
-        await finalize.run(pipeline, docs)
-
-    merged = Document("topic/Merged.md", "merged.md", ["source-0", "source-1"])
-    pipeline.generate = AsyncMock(return_value=[merged])
-    assert await reduce_op.resolve_files(pipeline, docs) == [merged]
-    assert pipeline.generate.await_args.args[2]["documents"] == [vars(doc) for doc in docs]
-    assert pipeline.generate.await_args.args[3] == ["source-0", "source-1"]
-
-
-async def test_renamed_paths_are_reserved_across_collision_workers(pipeline):
-    paths = ["a.md", "a.md", "b.md", "b.md"]
-    docs = [Document(path, f"candidate-{index}.md") for index, path in enumerate(paths)]
-    first = Document("renamed/Title.md", "first.md")
-    alias = Document("RENAMED/title.md", "alias.md")
-    second = Document("b.md", "second.md")
-    pipeline.generate = AsyncMock(side_effect=[[first], [alias], [second]])
-    assert await reduce_op.resolve_files(pipeline, docs) == [first, second]
-    assert pipeline.generate.await_count == 3
-    assert "renamed/Title.md" in pipeline.generate.await_args.args[2]["reserved_paths"]
+async def test_alias_conflicts_retry_without_blocking_unrelated_publication(
+    pipeline, collision, names
+):
+    paths = ["a.md", "a.md"] + (["b.md", "b.md"] if collision == "other_worker" else [])
+    docs = [Document(path, f"candidate-{i}.md", [f"source-{i}"]) for i, path in enumerate(paths)]
+    unrelated = Document("unrelated.md", "unrelated.md", ["other-source"])
+    first = Document(names[0], "first.md")
+    alias = Document(names[1], "alias.md")
+    merged = Document("merged.md", "merged.md")
+    for doc in [unrelated, first, alias, merged]:
+        await pipeline.files.sandbox.write_file(doc.workspace_path, "# Facts\n\nPreserved.")
+    results = (
+        [[first], [alias], [merged]] if collision == "other_worker" else [[first, alias], [merged]]
+    )
+    pipeline.generate = AsyncMock(side_effect=results)
+    outputs = await reduce_op.resolve_files(pipeline, [*docs, unrelated])
+    assert pipeline.generate.await_count == len(results)
+    assert outputs == (
+        [unrelated, first, merged] if collision == "other_worker" else [unrelated, merged]
+    )
+    bundle = await finalize.run(pipeline, outputs)
+    assert {item["uri"] for item in bundle.operations} == {
+        pipeline.target + "/" + doc.path for doc in outputs
+    }
+    assert any(item["uri"].endswith("/unrelated.md") for item in bundle.operations)
