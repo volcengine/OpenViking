@@ -1,6 +1,8 @@
 """Exercise retention, GitHub pagination, and deletion failure boundaries."""
 
 import importlib.util
+import os
+import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -199,6 +201,7 @@ def test_workflow_scopes_cleanup_permissions_and_waits_for_cache_save():
     assert cleanup["timeout-minutes"] == 15
     assert ".github/scripts/cache_maintenance.py" in workflow[True]["push"]["paths"]
     step = cleanup["steps"][1]
+    assert step["run"].splitlines()[0] == "set -euo pipefail"
     assert "--apply" in step["run"]
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
     build = yaml.safe_load((ROOT / ".github/workflows/_build.yml").read_text())["jobs"]
@@ -208,3 +211,44 @@ def test_workflow_scopes_cleanup_permissions_and_waits_for_cache_save():
     contract = pr["jobs"]["check-deps"]["steps"][-1]["run"]
     assert "tests/misc/test_cache_maintenance.py" in contract
     assert "tests/misc/test_cli_model_query_retry.py" in contract
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bash") is None,
+    reason="The cleanup job uses bash on Ubuntu",
+)
+@pytest.mark.parametrize("script_status", [0, 17])
+def test_cleanup_pipeline_propagates_script_failure_before_writing_summary(tmp_path, script_status):
+    """Run the actual step with GitHub's default bash -e and a stub producer."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows/macos-wheel-cache.yml").read_text())
+    command = workflow["jobs"]["cleanup"]["steps"][1]["run"]
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    python = commands / "python3"
+    python.write_text(
+        "#!/bin/sh\n"
+        + ('printf \'{"mode":"apply"}\\n\'\n' if script_status == 0 else "")
+        + f"exit {script_status}\n"
+    )
+    python.chmod(0o755)
+    summary = tmp_path / "summary.md"
+    result = subprocess.run(
+        ["bash", "-e", "-c", command],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+            "GH_REPO": "volcengine/OpenViking",
+            "RUNNER_TEMP": str(tmp_path),
+            "GITHUB_STEP_SUMMARY": str(summary),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == script_status
+    if script_status:
+        assert not summary.exists()
+    else:
+        assert '{"mode":"apply"}' in summary.read_text()
+        assert (tmp_path / "cache-maintenance.json").read_text() == '{"mode":"apply"}\n'
