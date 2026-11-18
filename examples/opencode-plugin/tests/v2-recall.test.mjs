@@ -171,6 +171,28 @@ test("a new plugin instance replays the stored ledger and deletion clears it", a
   assert.equal(storage.size, 0)
 })
 
+test("late profile completion cannot repopulate state after forget or dispose", async () => {
+  for (const teardown of [(recall) => recall.forget("ses_1"), (recall) => recall.dispose()]) {
+    const late = deferred()
+    let first = true
+    const { v2Recall } = recallFixture({ config: { recallWaitMs: 5, recallLedger: false }, session: () => {
+      if (!first) return undefined
+      first = false
+      return late.promise
+    } })
+    v2Recall.prefetch({ sessionID: "ses_1", messageID: "m1", prompt: { text: "first" } })
+    const keepAlive = setInterval(() => {}, 50)
+    try { await v2Recall.inject(contextEvent(userMessage("m1", "first"))) } finally { clearInterval(keepAlive) }
+    await teardown(v2Recall)
+    late.resolve("stale profile must not survive")
+    await new Promise((resolve) => setImmediate(resolve))
+    v2Recall.prefetch({ sessionID: "ses_1", messageID: "m2", prompt: { text: "second" } })
+    const next = contextEvent(userMessage("m2", "second"))
+    await v2Recall.inject(next)
+    assert.doesNotMatch(JSON.stringify(next), /stale profile/)
+  }
+})
+
 test("recallLedger=false keeps the ledger in memory only", async () => {
   const { ctx, storage } = storageFixture()
   const { v2Recall } = recallFixture({ ctx, config: { recallLedger: false }, memories: "<openviking-context>memory</openviking-context>" })

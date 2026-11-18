@@ -158,9 +158,11 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   }
 
   return async () => {
+    const recallCleanup = v2Recall.dispose()
     controller.abort()
     try {
       await eventTask
+      await recallCleanup
       await sessionTask
       await runtime.ready
       await runtime.background

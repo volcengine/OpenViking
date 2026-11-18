@@ -3,8 +3,8 @@ import { isBypassed } from "./shared/session-model.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
-  async function buildRelevantMemories(input, parts) {
-    if (!isRecallEnabled(config)) return
+  async function buildRelevantMemories(input, parts, { signal } = {}) {
+    if (signal?.aborted || !isRecallEnabled(config)) return
     const query = extractCurrentUserText(parts ?? [])
     if (!query) return
     if (query.length < config.minQueryLength) return
@@ -14,15 +14,15 @@ export function createMemoryRecall({ config, sessionManager }) {
       cwd: input.directory ?? input.cwd,
     })) return
 
-    const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
-    if (!health.ok) return
+    const health = await fetchJSON(config, "/health", { signal }, { timeoutMs: 5000 })
+    if (signal?.aborted || !health.ok) return
 
     const block = await buildRecallBlock(
       // 5s is this hook's own budget for a bare retrieval; when the request
       // also spends a server fuse the helper hands down a longer deadline, and
       // overriding it here would abort a request the server was still inside.
       (path, init = {}, options = {}) =>
-        fetchJSON(config, path, init, { ...options, timeoutMs: options.timeoutMs ?? 5000 }),
+        fetchJSON(config, path, { ...init, signal: signal ?? init.signal }, { ...options, timeoutMs: options.timeoutMs ?? 5000 }),
       config,
       query,
       {
@@ -34,7 +34,7 @@ export function createMemoryRecall({ config, sessionManager }) {
         log: (stage, data) => log("DEBUG", "recall", stage, data),
       },
     )
-    return block || undefined
+    return signal?.aborted ? undefined : block || undefined
   }
 
   async function injectRelevantMemories(input, output) {

@@ -42,32 +42,42 @@ export function createV2Recall({
   // archive are not tied to one query, so they ride on the next message
   // instead of being dropped; the message they missed is never rewritten.
   const carryover = new Map()
+  const lifetimes = new Map()
+  const writes = new Map()
+  let disposed = false
 
   function prefetch(event) {
     const sessionID = event?.sessionID
     const messageID = event?.messageID
-    if (!sessionID || !messageID) return
+    if (disposed || !sessionID || !messageID) return
     prune()
     const text = event?.prompt?.text
     const parts = typeof text === "string" && text.trim() ? [{ type: "text", text }] : []
     const input = { sessionID, messageID, directory }
     const carried = carryover.get(sessionID) ?? []
     carryover.delete(sessionID)
+    const startedAt = now()
+    const lifetime = lifetimes.get(sessionID) ?? new AbortController()
+    lifetimes.set(sessionID, lifetime)
     pending.set(messageID, {
       sessionID,
-      startedAt: now(),
+      signal: lifetime.signal,
+      startedAt,
       carried,
-      session: settle(() => sessionInject.buildSessionContext(input), "session.prompt.profile"),
+      session: settle(() => sessionInject.buildSessionContext(input, { signal: lifetime.signal }), "session.prompt.profile"),
       memories: recallEnabled
-        ? settle(() => recall.buildRelevantMemories(input, parts), "session.prompt.recall")
+        ? settle(() => recall.buildRelevantMemories(input, parts, { signal: lifetime.signal }), "session.prompt.recall")
         : Promise.resolve(undefined),
     })
   }
 
   async function inject(event) {
     const sessionID = event?.sessionID
-    if (!sessionID || !Array.isArray(event?.messages)) return
+    if (disposed || !sessionID || !Array.isArray(event?.messages)) return
+    const lifetime = lifetimes.get(sessionID) ?? new AbortController()
+    lifetimes.set(sessionID, lifetime)
     const ledger = await loadLedger(sessionID)
+    if (lifetime.signal.aborted) return
     let recorded = false
     for (const message of event.messages) {
       if (message?.role !== "user" || !message.id) continue
@@ -78,6 +88,7 @@ export function createV2Recall({
         if (entry) {
           pending.delete(message.id)
           text = await resolve(entry, message.id)
+          if (lifetime.signal.aborted) return
           if (text) {
             record(ledger, message.id, text)
             recorded = true
@@ -90,10 +101,19 @@ export function createV2Recall({
       }
       if (text) prepend(message, text)
     }
-    if (recorded) await saveLedger(sessionID, ledger)
+    if (recorded) {
+      const write = (writes.get(sessionID) ?? Promise.resolve()).then(() => {
+        if (!lifetime.signal.aborted) return saveLedger(sessionID, ledger)
+      })
+      writes.set(sessionID, write)
+      await write
+      if (writes.get(sessionID) === write) writes.delete(sessionID)
+    }
   }
 
   async function forget(sessionID) {
+    lifetimes.get(sessionID)?.abort()
+    lifetimes.delete(sessionID)
     for (const [messageID, entry] of pending) {
       if (entry.sessionID === sessionID) pending.delete(messageID)
     }
@@ -101,6 +121,7 @@ export function createV2Recall({
     ledgers.delete(sessionID)
     if (!persist || !ctx?.storage?.remove) return
     try {
+      await writes.get(sessionID)
       await ctx.storage.remove(LEDGER_KEY_PREFIX + sessionID)
     } catch (error) {
       logHookError("storage.remove", error)
@@ -114,13 +135,22 @@ export function createV2Recall({
       timer = setTimeout(done, remaining)
       timer.unref?.()
     })
-    const inTime = (promise) => Promise.race([promise.then((value) => ({ value })), deadline.then(() => null)])
+    const abort = () => clearTimeout(timer)
+    let onAbort
+    const aborted = new Promise((done) => {
+      onAbort = () => { abort(); done(null) }
+      if (entry.signal.aborted) onAbort()
+      else entry.signal.addEventListener("abort", onAbort, { once: true })
+    })
+    const inTime = (promise) => Promise.race([promise.then((value) => ({ value })), deadline.then(() => null), aborted])
     const [session, memories] = await Promise.all([inTime(entry.session), inTime(entry.memories)])
     clearTimeout(timer)
+    entry.signal.removeEventListener("abort", onAbort)
+    if (entry.signal.aborted) return
 
     if (!session) {
       entry.session.then((block) => {
-        if (!block) return
+        if (!block || entry.signal.aborted) return
         carryover.set(entry.sessionID, [...(carryover.get(entry.sessionID) ?? []), block])
       })
     }
@@ -199,7 +229,17 @@ export function createV2Recall({
     }
   }
 
-  return { prefetch, inject, forget }
+  async function dispose() {
+    disposed = true
+    for (const lifetime of lifetimes.values()) lifetime.abort()
+    lifetimes.clear()
+    pending.clear()
+    carryover.clear()
+    ledgers.clear()
+    await Promise.all(writes.values())
+  }
+
+  return { prefetch, inject, forget, dispose }
 }
 
 function record(ledger, messageID, text) {
