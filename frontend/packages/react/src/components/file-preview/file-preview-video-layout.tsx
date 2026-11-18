@@ -34,7 +34,8 @@ export function FilePreviewVideoLayout({
       className="ov-file-preview__video-layout"
       role={expanded ? undefined : 'presentation'}
       aria-label={expanded ? fileName : undefined}
-      onClose={() => {
+      onClose={(event) => {
+        if (event.target !== event.currentTarget) return;
         setExpanded(false);
         toggle.current?.focus({ preventScroll: true });
       }}

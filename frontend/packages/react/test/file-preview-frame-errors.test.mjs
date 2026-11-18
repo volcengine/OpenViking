@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { h, mount } from './helpers/monitoring-dom.mjs';
+import { act, h, mount } from './helpers/monitoring-dom.mjs';
 import { runtime as r } from './helpers/monitoring.mjs';
 
 const frame = { id: 'frame-1', name: 'Frame 1', src: '/frame.jpg' };
@@ -101,6 +101,31 @@ test('an enlarged image failure closes the dialog and marks its thumbnail failed
     assert.equal(frameImage(app), null);
     assert.ok(retry(app));
     assert.deepEqual(failures, [[frame.id, frame.src]]);
+  } finally {
+    await app.dispose();
+  }
+});
+
+test('closing an enlarged frame leaves focus on the thumbnail', async () => {
+  const app = await mount(media());
+  try {
+    await app.event(app.container.querySelector('video'), 'loadedmetadata');
+    await openFrames(app);
+    const thumbnail = frameImage(app).closest('button');
+    thumbnail.focus();
+    await app.event(thumbnail, 'click');
+
+    const imageDialog = app.container.querySelector('dialog[open]');
+    assert.ok(imageDialog);
+    // Native dialogs restore focus before dispatching close. The DOM test
+    // helper only dispatches the event, so the thumbnail is already focused.
+    await act(() => imageDialog.close());
+
+    assert.equal(imageDialog.open, false);
+    assert.ok(
+      thumbnail.matches(':focus'),
+      'Focus should stay on the thumbnail',
+    );
   } finally {
     await app.dispose();
   }
