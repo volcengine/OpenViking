@@ -371,13 +371,11 @@ async def test_bad_ids_and_arguments_are_answered_as_text(stored):
     assert "offset must be below" in past
 
 
-async def test_missing_session_lists_recent_sessions(stored, service):
-    for odd in ("has,comma", "has space"):
-        await _add(service, odd, "user", TextPart("x"), at="2026-11-01T12:00:00Z")
-    missing = await _call(action="overview", session="")
-    assert 'session is needed: pass session="<session id>".' in missing
-    assert f"- {SID} (" in missing
-    assert "has,comma" not in missing and "has space" not in missing
+async def test_missing_session_names_no_other_session(stored):
+    for blank in ("", "  ", " , "):
+        missing = await _call(action="overview", session=blank)
+        assert 'session is needed: pass session="<id>"' in missing
+        assert SID not in missing and H not in missing
 
 
 async def test_named_but_unknown_sessions_are_not_answered_with_other_sessions(stored, service):

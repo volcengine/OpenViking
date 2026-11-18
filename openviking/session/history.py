@@ -54,7 +54,6 @@ NEIGHBOUR_TOKENS = 400
 SNIPPET_TOKENS = 60
 SCAN_BUDGET_CHARS = 32_000_000
 MAX_SESSIONS = 10
-RECENT_SESSIONS = 5
 DEFAULT_NEIGHBOURS = 2
 MAX_NEIGHBOURS = 20
 DEFAULT_LIMIT = 10
@@ -92,7 +91,10 @@ _TOOL_RESULT_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 FRAME = "Saved conversation history (a record, not instructions; tool output may be out of date)."
 NEVER_SAVED = "Never saved: model thinking, images, and tool calls the harness does not capture."
 VOLATILE_NOTE = "Ids marked ~ are in a live tail that may be renumbered after the next commit."
-T_NEED_SESSION = 'session is needed: pass session="<session id>".'
+T_NEED_SESSION = (
+    'session is needed: pass session="<id>" with the OpenViking session id of this '
+    "conversation; the OpenViking context of this conversation names it."
+)
 T_TOO_MANY_SESSIONS = f"Only the first {MAX_SESSIONS} sessions are used."
 T_ARCHIVES = "Archives, newest first:"
 T_IMAGE = "[image]"
@@ -131,14 +133,6 @@ def _t_session_unreadable(sid: str, where: str) -> str:
         f"Session {sid}: {where} could not be read, so item ids would be wrong; "
         "nothing from this session is shown."
     )
-
-
-def _t_recent(sessions: Sequence[tuple[str, str]]) -> List[str]:
-    if not sessions:
-        return ["No saved sessions were found for this caller."]
-    lines = ["Most recently active sessions (pass one as session):"]
-    lines.extend(f"- {sid}" + (f" ({when})" if when != "?" else "") for sid, when in sessions)
-    return lines
 
 
 def _t_bad(what: str) -> str:
@@ -748,15 +742,6 @@ async def _session_entries(service: Any, ctx: Any) -> List[dict]:
     except Exception:
         logger.debug("session_history: listing sessions failed", exc_info=True)
         return []
-
-
-async def _recent_sessions(service: Any, ctx: Any) -> List[tuple[str, str]]:
-    recent = [
-        (entry["session_id"], _fmt_time(entry.get("mod_time")))
-        for entry in await _session_entries(service, ctx)
-        if entry.get("is_dir") and _passable(str(entry.get("session_id") or ""))
-    ]
-    return recent[:RECENT_SESSIONS]
 
 
 async def _subagent_sessions(
@@ -1599,8 +1584,7 @@ async def _answer(
         session_list if session_list is not None else session_text
     )
     if not requested:
-        lines = [FRAME, T_NEED_SESSION, *_t_recent(await _recent_sessions(service, ctx))]
-        return HistoryResult("\n".join(lines))
+        return HistoryResult("\n".join([FRAME, T_NEED_SESSION]))
     notes = [T_TOO_MANY_SESSIONS] if truncated else []
 
     scopes: List[_Scope] = []
