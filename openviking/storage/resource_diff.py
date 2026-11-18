@@ -310,9 +310,7 @@ async def resolve_resource_diff(
         compare_paths, compare, concurrency=FILE_TASK_CONCURRENCY
     ):
         states[rel_path] = (state, md5)
-    for rel_path, md5 in await bounded_map(
-        hash_paths, hash_new, concurrency=FILE_TASK_CONCURRENCY
-    ):
+    for rel_path, md5 in await bounded_map(hash_paths, hash_new, concurrency=FILE_TASK_CONCURRENCY):
         state, _ = states[rel_path]
         states[rel_path] = (state, md5)
 

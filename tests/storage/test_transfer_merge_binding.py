@@ -130,7 +130,7 @@ async def test_transfer_uses_complete_directory_scan_and_legacy_file_reads(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("disappear_all", [False, True])
-async def test_directory_transfer_rejects_source_record_disappearing_before_fetch(
+async def test_directory_transfer_skips_source_record_disappearing_before_fetch(
     indexed_fs, monkeypatch, operation, disappear_all
 ):
     fs, backend = indexed_fs
@@ -140,6 +140,8 @@ async def test_directory_transfer_rejects_source_record_disappearing_before_fetc
     for uri in [a, b]:
         await fs.write_file_bytes(uri, b"new", ctx=ctx)
         await seed_vector(backend, uri, "new")
+    await fs.write_file_bytes(target + "/keep.md", b"important old data", ctx=ctx)
+    await seed_vector(backend, target + "/keep.md", "keep old index")
     await seed_vector(backend, target + "/b.md", "old target index")
     original_get = backend._strict_transfer_get
 
@@ -150,14 +152,18 @@ async def test_directory_transfer_rejects_source_record_disappearing_before_fetc
         return await original_get(ctx, ids)
 
     monkeypatch.setattr(backend, "_strict_transfer_get", get_after_delete)
-    with pytest.raises(RuntimeError, match="fetch complete"):
-        await getattr(fs, operation)(
-            source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
-        )
-    assert await fs.exists(source, ctx=ctx)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+    assert result["vectors"]["written"] == (0 if disappear_all else 1)
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
+    assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"important old data"
+    assert await fs.read_file_bytes(target + "/b.md", ctx=ctx) == b"new"
     records = await backend.get([target + "/b.md"], ctx=ctx)
     assert [record["abstract"] for record in records] == ["old target index"]
-    assert not await backend.get([vector_record_id(ctx.account_id, target + "/a.md", 2)], ctx=ctx)
+    assert bool(
+        await backend.get([vector_record_id(ctx.account_id, target + "/a.md", 2)], ctx=ctx)
+    ) == (not disappear_all)
 
 
 @pytest.mark.asyncio
@@ -845,3 +851,38 @@ async def test_partial_source_sync_fails_task_without_replaying_moves(
     reenqueue.assert_not_awaited()
     assert await fs.read_file_bytes(f"{target}/a.md", ctx=ctx) == b"payload"
     assert await fs.read_file_bytes(f"{source}/z.md", ctx=ctx) == b"payload"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+@pytest.mark.parametrize("phase", ["source", "target"])
+async def test_directory_transfer_keeps_old_target_when_record_disappears_after_count(
+    indexed_fs, monkeypatch, operation, phase
+):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/target"
+    for uri in [source + "/a.md", source + "/b.md"]:
+        await fs.write_file_bytes(uri, b"new", ctx=ctx)
+        await seed_vector(backend, uri, "new")
+    await fs.write_file_bytes(target + "/keep.md", b"important old data", ctx=ctx)
+    await seed_vector(backend, target + "/a.md", "old a")
+    count = backend._strict_transfer_count
+    calls = 0
+
+    async def count_then_delete(ctx, scope):
+        nonlocal calls
+        calls += 1
+        actual = await count(ctx, scope)
+        if calls == (1 if phase == "source" else 2):
+            missing = source + "/b.md" if phase == "source" else target + "/a.md"
+            await (await backend._get_backend_for_context(ctx)).strict_delete([missing])
+        return actual
+
+    monkeypatch.setattr(backend, "_strict_transfer_count", count_then_delete)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+    assert result["vectors"]["written"] == (1 if phase == "source" else 2)
+    assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"important old data"
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")

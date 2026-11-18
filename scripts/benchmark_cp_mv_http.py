@@ -141,6 +141,38 @@ class OpenVikingHttpClient:
     def wait(self) -> None:
         self._request("POST", "/api/v1/system/wait", payload={})
 
+    def vector_records(self, uri: str) -> list[dict[str, Any]]:
+        _, payload = self._request(
+            "GET", "/api/v1/debug/vector/scroll", query={"uri": uri, "limit": 1000}
+        )
+        result = self._result(payload)
+        records = result.get("records")
+        # Per-file reads avoid unstable root pagination for tied updated_at values.
+        if not isinstance(records, list) or result.get("next_cursor"):
+            raise BenchmarkError(f"incomplete per-file vector records: {uri}")
+        return records
+
+    def vector_l2_count(self, uri: str) -> int:
+        _, payload = self._request(
+            "GET",
+            "/api/v1/debug/vector/count",
+            query={
+                "filter": json.dumps(
+                    {
+                        "op": "and",
+                        "conds": [
+                            {"op": "must", "field": "uri", "conds": [uri], "para": "-d=-1"},
+                            {"op": "must", "field": "level", "conds": [2]},
+                        ],
+                    }
+                )
+            },
+        )
+        count = self._result(payload).get("count")
+        if not isinstance(count, int) or count < 0:
+            raise BenchmarkError(f"unexpected L2 vector count for {uri}: {count!r}")
+        return count
+
     def stat_status(self, uri: str) -> int:
         status, _ = self._request(
             "GET",
@@ -218,6 +250,37 @@ def _assert_vector_count(result: dict[str, Any], expected: int) -> None:
         raise BenchmarkError(f"indexed cp wrote {written!r} vectors, expected at least {expected}")
 
 
+def _validate_l2_vectors(
+    client: Any,
+    root_uri: str,
+    file_count: int,
+    expected_md5s: dict[str, str] | None = None,
+) -> dict[str, str]:
+    md5s: dict[str, str] = {}
+    for index in range(file_count):
+        name = f"{index:06d}.txt"
+        uri = f"{root_uri}/{name}"
+        records = [
+            record
+            for record in client.vector_records(uri)
+            if record.get("uri") == uri and record.get("level") == 2
+        ]
+        if len(records) != 1:
+            raise BenchmarkError(f"expected exactly one L2 vector for {uri}, found {len(records)}")
+        md5 = records[0].get("md5")
+        if not isinstance(md5, str) or not md5:
+            raise BenchmarkError(f"L2 vector md5 is missing: {uri}")
+        if expected_md5s is not None and md5 != expected_md5s[name]:
+            raise BenchmarkError(f"L2 vector md5 differs from source: {uri}")
+        md5s[name] = md5
+    count = client.vector_l2_count(root_uri)
+    if count != file_count:
+        raise BenchmarkError(
+            f"expected exactly {file_count} L2 vectors under {root_uri}, found {count}"
+        )
+    return md5s
+
+
 def benchmark_endpoint(
     client: Any,
     *,
@@ -258,6 +321,7 @@ def benchmark_endpoint(
             )
         if indexed:
             client.wait()
+            source_md5s = _validate_l2_vectors(client, template, file_count)
 
         samples: dict[str, list[float]] = {"cp": [], "mv": []}
         total_iterations = warmups + runs
@@ -273,6 +337,8 @@ def benchmark_endpoint(
             _assert_transfer_count(cp_result, expected_entries, "cp")
             if indexed:
                 _assert_vector_count(cp_result, file_count)
+                _validate_l2_vectors(client, cp_target, file_count, source_md5s)
+                _validate_l2_vectors(client, template, file_count, source_md5s)
             if client.stat_status(f"{cp_target}/{sentinel_name}") != 200:
                 raise BenchmarkError(f"cp target sentinel is missing: {cp_target}/{sentinel_name}")
             if measured:
@@ -286,10 +352,20 @@ def benchmark_endpoint(
             if indexed:
                 _assert_vector_count(mv_setup_result, file_count)
             client.wait()
+            if indexed:
+                _validate_l2_vectors(client, mv_source, file_count, source_md5s)
+                _validate_l2_vectors(client, template, file_count, source_md5s)
             started = timer()
             client.mv(mv_source, mv_target)
             elapsed = timer() - started
             client.wait()
+            if indexed:
+                _validate_l2_vectors(client, mv_target, file_count, source_md5s)
+                source_l2_count = client.vector_l2_count(mv_source)
+                if source_l2_count:
+                    raise BenchmarkError(
+                        f"mv source still has {source_l2_count} L2 vectors: {mv_source}"
+                    )
             if client.stat_status(f"{mv_source}/{sentinel_name}") != 404:
                 raise BenchmarkError(f"mv source still exists: {mv_source}")
             if client.stat_status(f"{mv_target}/{sentinel_name}") != 200:

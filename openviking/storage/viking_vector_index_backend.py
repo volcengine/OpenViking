@@ -2819,11 +2819,17 @@ class VikingVectorIndexBackend:
         return list(records.values()), len(entries)
 
     async def _read_transfer_inventory(
-        self, ctx: RequestContext, scope: FilterExpr, *, what: str
+        self,
+        ctx: RequestContext,
+        scope: FilterExpr,
+        *,
+        what: str,
+        entry_uris: List[str] | None = None,
     ) -> List[Dict[str, Any]]:
-        """Read a complete lightweight transfer scope using AddResource pagination."""
+        """Read paged inventory with legacy fallback for changing filesystem scopes."""
         expected_count = await self._strict_transfer_count(ctx, scope)
         records: Dict[str, Dict[str, Any]] = {}
+        changed = False
         for timestamp_bounds in (True, False):
             async for page in self._timestamp_scan_pages(
                 ctx,
@@ -2835,21 +2841,38 @@ class VikingVectorIndexBackend:
                 for record in page:
                     record_id = str(record.get("id") or "")
                     if not record_id or not isinstance(record.get("uri"), str) or not record["uri"]:
-                        raise RuntimeError(f"{what} returned an invalid vector record")
+                        if entry_uris is None:
+                            raise RuntimeError(f"{what} returned an invalid vector record")
+                        changed = True
+                        break
                     previous = records.get(record_id)
                     if previous is not None and previous["uri"] != record["uri"]:
-                        raise RuntimeError(
-                            f"{what} returned a changed vector identity: {record_id}"
-                        )
+                        if entry_uris is None:
+                            raise RuntimeError(
+                                f"{what} returned a changed vector identity: {record_id}"
+                            )
+                        changed = True
+                        break
                     records.setdefault(record_id, record)
                 if len(records) > expected_count:
-                    raise RuntimeError(
-                        f"{what} returned more records than count was {expected_count}"
-                    )
-            if len(records) == expected_count:
+                    if entry_uris is None:
+                        raise RuntimeError(
+                            f"{what} returned more records than count was {expected_count}"
+                        )
+                    changed = True
+                if changed:
+                    break
+            if changed or len(records) == expected_count:
                 break
             # SQL NULLS LAST records are excluded by timestamp ranges. Recover
             # them once using the original scope, then verify its original count.
+        if entry_uris is not None and (changed or len(records) != expected_count):
+            # Filesystem transfers retain legacy tolerance for concurrent V
+            # changes. Backend failures still propagate from either read path.
+            legacy_records, _ = await self._read_uri_transfer_entries(
+                ctx, entry_uris, include_full_records=False
+            )
+            return legacy_records
         if len(records) != expected_count:
             raise RuntimeError(
                 f"{what} returned {len(records)} unique records but count was {expected_count}"
@@ -2863,19 +2886,18 @@ class VikingVectorIndexBackend:
             expected = {str(record["id"]): record["uri"] for record in chunk}
             records = await self._strict_transfer_get(ctx, list(expected))
             by_id: Dict[str, Dict[str, Any]] = {}
+            # Match legacy per-entry reads: concurrent misses/URI changes are
+            # skipped; backend read failures still propagate.
             for record in records:
                 record_id = str(record.get("id") or "")
                 if (
                     record_id not in expected
-                    or record_id in by_id
                     or record.get("uri") != expected[record_id]
-                    or record.get("account_id") not in {None, ctx.account_id}
+                    or record.get("account_id") not in (None, ctx.account_id)
                 ):
-                    raise RuntimeError(f"Vector fetch identity mismatch for record: {record_id}")
+                    continue
                 by_id[record_id] = record
-            if len(by_id) != len(expected):
-                raise RuntimeError("Failed to fetch complete vector transfer records")
-            return [by_id[record_id] for record_id in expected]
+            return [by_id[record_id] for record_id in expected if record_id in by_id]
 
         pages = await bounded_map(
             (inventory[start : start + 100] for start in range(0, len(inventory), 100)),
@@ -3045,12 +3067,8 @@ class VikingVectorIndexBackend:
                 ctx,
                 And([Eq("account_id", ctx.account_id), PathScope("uri", source_uri, depth=-1)]),
                 what=f"Vector transfer scan under {source_uri}",
+                entry_uris=list(selected_source_uris),
             )
-            if any(
-                not uri_in_transfer_scope(record["uri"], source_uri, recursive=True)
-                for record in inventory
-            ):
-                raise RuntimeError("Vector transfer scan returned a URI outside source scope")
             source_records = await self._fetch_transfer_records(
                 ctx, [record for record in inventory if record["uri"] in selected_source_uris]
             )
@@ -3125,10 +3143,9 @@ class VikingVectorIndexBackend:
                         [Eq("account_id", ctx.account_id), Or([Eq("uri", uri) for uri in entries])]
                     ),
                     what=f"Vector transfer target scan under {target_uri}",
+                    entry_uris=entries,
                 )
-                if any(record["uri"] not in entries for record in records):
-                    raise RuntimeError("Vector transfer target scan returned an unrelated URI")
-                return records
+                return [record for record in records if record["uri"] in entries]
 
             target_pages = await bounded_map(
                 (

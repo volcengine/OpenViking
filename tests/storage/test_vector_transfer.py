@@ -1995,7 +1995,7 @@ async def test_manifest_transfer_uses_prefix_scan_and_parallel_complete_reads(mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad_fetch", ["missing", "changed-uri", "wrong-account"])
-async def test_manifest_transfer_fetch_failure_precedes_target_deletion(monkeypatch, bad_fetch):
+async def test_manifest_transfer_skips_missing_or_changed_fetch_records(monkeypatch, bad_fetch):
     source, target = "viking://resources/source", "viking://resources/target"
     record = _record("source", f"{source}/a.md")
     old = _record("target", f"{target}/a.md")
@@ -2010,12 +2010,50 @@ async def test_manifest_transfer_fetch_failure_precedes_target_deletion(monkeypa
         fetched = [{**record, **changed}]
     monkeypatch.setattr(backend, "_strict_transfer_get", AsyncMock(return_value=fetched))
 
-    with pytest.raises(RuntimeError, match="fetch|identity"):
-        await backend.copy_uri_mapping(
-            _ctx(), source, target, recursive=True, source_uris=[source, record["uri"]]
-        )
+    result = await backend.copy_uri_mapping(
+        _ctx(), source, target, recursive=True, source_uris=[source, record["uri"]]
+    )
+    assert result.scanned == result.written == 0
     assert backend.delete_calls == backend.upsert_calls == 0
     assert backend.records["target"] == old
+
+
+@pytest.mark.asyncio
+async def test_transfer_fetch_keeps_legacy_duplicate_and_unrelated_record_filtering(monkeypatch):
+    record = _record("source", "viking://resources/source/a.md", abstract="first")
+    backend = _MemoryTransferBackend([record])
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_get",
+        AsyncMock(
+            return_value=[
+                record,
+                {**record, "abstract": "last"},
+                {**record, "uri": "viking://resources/other.md"},
+                {**record, "id": "unexpected"},
+            ]
+        ),
+    )
+    records = await backend._fetch_transfer_records(_ctx(), [record])
+    assert records == [{**record, "abstract": "last"}]
+
+
+@pytest.mark.asyncio
+async def test_manifest_transfer_propagates_fetch_backend_failure(monkeypatch):
+    source = "viking://resources/source/a.md"
+    backend = _RealAclMemoryTransferBackend([_record("source", source)])
+    monkeypatch.setattr(
+        backend, "_strict_transfer_get", AsyncMock(side_effect=RuntimeError("backend unavailable"))
+    )
+    with pytest.raises(RuntimeError, match="backend unavailable"):
+        await backend.copy_uri_mapping(
+            _ctx(),
+            "viking://resources/source",
+            "viking://resources/target",
+            recursive=True,
+            source_uris=[source],
+        )
+    assert backend.delete_calls == backend.upsert_calls == 0
 
 
 @pytest.mark.asyncio
@@ -2068,3 +2106,36 @@ async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact):
     assert {record["id"] for record in found} == set(backend.records)
     assert [request["offset"] for request in requests[-2:]] == [0, 100]
     assert all(request["filter"] == scope for request in requests[-2:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["source", "target"])
+@pytest.mark.parametrize("delta", [-1, 1])
+async def test_manifest_transfer_keeps_legacy_reads_when_inventory_count_changes(
+    monkeypatch, phase, delta
+):
+    source, target = "viking://resources/source", "viking://resources/target"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("source", source + "/a.md"),
+            _record("old-target", target + "/a.md"),
+            _record("keep", target + "/keep.md"),
+        ]
+    )
+    backend.acl_manager = None
+    count = backend._strict_transfer_count
+    calls = 0
+
+    async def changed_count(ctx, scope):
+        nonlocal calls
+        calls += 1
+        actual = await count(ctx, scope)
+        return actual + delta if calls == (1 if phase == "source" else 2) else actual
+
+    monkeypatch.setattr(backend, "_strict_transfer_count", changed_count)
+    result = await backend.copy_uri_mapping(
+        _ctx(), source, target, recursive=True, source_uris=[source, source + "/a.md"]
+    )
+    assert result.written == 1
+    assert backend.records["keep"]["uri"] == target + "/keep.md"
+    assert "old-target" not in backend.records

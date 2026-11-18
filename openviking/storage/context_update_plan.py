@@ -1407,6 +1407,7 @@ async def execute_content_tree_actions(
     file_actions = [action for action in actions if action.new_kind == "file"]
     if not file_actions:
         return
+
     async def write(action: ContentTreeAction) -> None:
         async def read_and_write() -> None:
             data = await store.read_bytes(artifact_ref, action.artifact_path)
