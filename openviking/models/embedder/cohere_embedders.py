@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from openviking.models.embedder.attempt import observe_embedding
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, truncate_and_normalize
 from openviking.models.model_error import model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
@@ -109,6 +110,7 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         resp = self._client.post("/v2/embed", json=self._build_payload(texts, input_type))
         resp.raise_for_status()
         data = resp.json()
+        self._update_reported_embedding_usage(data.get("meta", {}).get("tokens"), provider="cohere")
         return data["embeddings"]["float"]
 
     async def _call_api_async(self, texts: List[str], input_type: str) -> List[List[float]]:
@@ -125,6 +127,7 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         resp = await client.post("/v2/embed", json=self._build_payload(texts, input_type))
         resp.raise_for_status()
         data = resp.json()
+        self._update_reported_embedding_usage(data.get("meta", {}).get("tokens"), provider="cohere")
         return data["embeddings"]["float"]
 
     def _normalize_vector(self, vector: List[float]) -> List[float]:
@@ -133,6 +136,7 @@ class CohereDenseEmbedder(DenseEmbedderBase):
             return truncate_and_normalize(vector, self._dimension)
         return vector
 
+    @observe_embedding("cohere")
     @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         input_type = "search_query" if is_query else "search_document"
@@ -149,6 +153,8 @@ class CohereDenseEmbedder(DenseEmbedderBase):
                 model_name=self.model_name,
                 provider="cohere",
                 prompt_tokens=estimated_tokens,
+                usage_quality="estimated",
+                usage_provenance="character_estimate",
                 completion_tokens=0,
             )
             return result
@@ -159,6 +165,7 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Cohere embedding failed: {e}") from e
 
+    @observe_embedding("cohere")
     @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         input_type = "search_query" if is_query else "search_document"
@@ -179,6 +186,8 @@ class CohereDenseEmbedder(DenseEmbedderBase):
                 model_name=self.model_name,
                 provider="cohere",
                 prompt_tokens=estimated_tokens,
+                usage_quality="estimated",
+                usage_provenance="character_estimate",
                 completion_tokens=0,
             )
             return result

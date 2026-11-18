@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import litellm
 
+from openviking.models.embedder.attempt import embedding_usage, observe_embedding
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import get_current_telemetry
@@ -143,20 +144,13 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         if not usage:
             return
 
-        def _usage_value(key: str, default: int = 0) -> int:
-            if isinstance(usage, dict):
-                return int(usage.get(key, default) or default)
-            return int(getattr(usage, key, default) or default)
-
-        prompt_tokens = _usage_value("prompt_tokens", 0)
-        total_tokens = _usage_value("total_tokens", prompt_tokens)
-        output_tokens = max(total_tokens - prompt_tokens, 0)
+        prompt_tokens, completion_tokens = embedding_usage(usage)
 
         # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
-            prompt_tokens,
-            output_tokens,
+            prompt_tokens or 0,
+            completion_tokens or 0,
         )
 
         # Update token usage tracker
@@ -164,9 +158,10 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             model_name=self.model_name,
             provider="litellm",
             prompt_tokens=prompt_tokens,
-            completion_tokens=output_tokens,
+            completion_tokens=completion_tokens,
         )
 
+    @observe_embedding("litellm")
     @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text via litellm.
@@ -201,6 +196,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"LiteLLM embedding failed: {e}") from e
 
+    @observe_embedding("litellm")
     @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import openai
 
+from openviking.models.embedder.attempt import observe_embedding
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.models.model_error import model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
@@ -104,12 +105,16 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             )
         )
 
+    @observe_embedding("voyage")
     @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text."""
 
         def _call() -> EmbedResult:
             response = self.client.embeddings.create(**self._build_kwargs(text))
+            self._update_reported_embedding_usage(
+                getattr(response, "usage", None), provider="voyage"
+            )
             vector = response.data[0].embedding
             return EmbedResult(dense_vector=vector)
 
@@ -125,6 +130,8 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
                 model_name=self.model_name,
                 provider="voyage",
                 prompt_tokens=estimated_tokens,
+                usage_quality="estimated",
+                usage_provenance="character_estimate",
                 completion_tokens=0,
             )
             return result
@@ -133,12 +140,16 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
+    @observe_embedding("voyage")
     @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
 
         async def _call() -> EmbedResult:
             response = await client.embeddings.create(**self._build_kwargs(text))
+            self._update_reported_embedding_usage(
+                getattr(response, "usage", None), provider="voyage"
+            )
             return EmbedResult(dense_vector=response.data[0].embedding)
 
         try:
@@ -153,6 +164,8 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
                 model_name=self.model_name,
                 provider="voyage",
                 prompt_tokens=estimated_tokens,
+                usage_quality="estimated",
+                usage_provenance="character_estimate",
                 completion_tokens=0,
             )
             return result

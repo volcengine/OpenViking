@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import requests
 
+from openviking.models.embedder.attempt import observe_embedding
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
@@ -215,6 +216,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"MiniMax embedding failed: {str(e)}") from e
 
+    @observe_embedding("minimax")
     @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text"""
@@ -230,10 +232,13 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             model_name=self.model_name,
             provider="minimax",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result
 
+    @observe_embedding("minimax")
     @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
@@ -251,6 +256,8 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             model_name=self.model_name,
             provider="minimax",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result

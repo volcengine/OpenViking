@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
+from openviking.models.embedder.attempt import (
+    current_scope,
+    embedding_usage,
+    observe_request,
+    token_count,
+)
 from openviking.models.model_error import model_error_kind
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_input import (
@@ -394,7 +400,8 @@ class EmbedderBase(ABC):
         previous_started_at = self._active_call_started_at
         self._active_call_started_at = time.monotonic()
         try:
-            return func()
+            with observe_request(self, outer=True):
+                return func()
         finally:
             self._active_call_started_at = previous_started_at
 
@@ -424,7 +431,8 @@ class EmbedderBase(ABC):
         previous_started_at = self._active_call_started_at
         self._active_call_started_at = started
         try:
-            return await func()
+            with observe_request(self, outer=True):
+                return await func()
         finally:
             elapsed = time.monotonic() - started
             telemetry.set("embedding.async.duration_ms", round(elapsed * 1000, 3))
@@ -471,49 +479,100 @@ class EmbedderBase(ABC):
         self,
         model_name: str,
         provider: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
         duration_seconds: float = 0.0,
+        *,
+        usage_quality: str = "actual",
+        usage_provenance: str = "provider_reported",
     ) -> None:
-        """Update token usage
-
-        Args:
-            model_name: Model name
-            provider: Provider name (openai, volcengine, etc.)
-            prompt_tokens: Number of input tokens
-            completion_tokens: Number of output tokens
-            duration_seconds: Wall-clock duration of the embedding provider call in seconds
-        """
-        self._token_tracker.update(
-            model_name=model_name,
-            provider=provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+        """Attach usage to the existing request, or emit one legacy observation."""
+        values = {
+            "model_name": model_name,
+            "provider": provider,
+            "prompt_tokens": token_count(prompt_tokens),
+            "completion_tokens": token_count(completion_tokens),
+            "usage_quality": usage_quality,
+            "usage_provenance": usage_provenance,
+        }
+        scope = current_scope(self)
+        if scope is not None and scope.attempts:
+            previous = scope.attempts[-1].usage
+            if (
+                usage_quality == "estimated"
+                and previous.get("usage_quality") == "actual"
+                and previous.get("prompt_tokens") is not None
+            ):
+                return
+            scope.attempts[-1].usage = values
+            return
+        self._record_token_usage(
+            **values,
+            duration_seconds=self._resolve_metrics_duration_seconds(duration_seconds),
+            observation_scope="legacy_usage",
         )
+
+    def _update_reported_embedding_usage(self, usage, *, provider: str) -> None:
+        prompt_tokens, completion_tokens = embedding_usage(usage)
+        if prompt_tokens is not None:
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider=provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+
+    def _record_token_usage(
+        self,
+        *,
+        model_name,
+        provider,
+        prompt_tokens,
+        completion_tokens,
+        duration_seconds=0.0,
+        observation_scope="legacy_usage",
+        attempt_id=None,
+        outcome="success",
+        error_code="OK",
+        usage_quality="unknown",
+        usage_provenance="unknown",
+    ) -> None:
+        # Historical pull counters retain known subtotals. The event is authoritative
+        # for missing values and quality; these counters are not complete billing.
+        if prompt_tokens is not None or completion_tokens is not None:
+            self._token_tracker.update(
+                model_name=model_name,
+                provider=provider,
+                prompt_tokens=prompt_tokens or 0,
+                completion_tokens=completion_tokens or 0,
+            )
         try:
             from openviking.metrics.datasources import EmbeddingEventDataSource
-            from openviking.observability.context import get_root_observability_context
+            from openviking.observability.reporting.facts import event_context
             from openviking.telemetry import get_ingestion_source_type
-
-            root_context = get_root_observability_context()
 
             EmbeddingEventDataSource.record_call(
                 provider=str(provider),
                 model_name=str(model_name),
-                duration_seconds=self._resolve_metrics_duration_seconds(duration_seconds),
-                prompt_tokens=int(prompt_tokens),
-                completion_tokens=int(completion_tokens),
+                duration_seconds=duration_seconds,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
                 account_id=getattr(self, "_account_id", None)
-                or (root_context.account_id if root_context is not None else None),
+                or event_context("embedding.call").get("account_id"),
                 source_type=get_ingestion_source_type(),
                 cost_bearer=getattr(self, "cost_bearer", None),
+                observation_scope=observation_scope,
+                attempt_id=attempt_id,
+                outcome=outcome,
+                error_code=error_code,
+                usage_quality=usage_quality,
+                usage_provenance=usage_provenance,
             )
-        except Exception as e:
-            # Metrics must never break embedding execution.
+        except Exception as error:
             logger.info(
                 "embedder metrics unavailable; continuing without observation error_type=%s degraded=true",
-                type(e).__name__,
-                extra={"error_type": type(e).__name__, "degraded": True},
+                type(error).__name__,
+                extra={"error_type": type(error).__name__, "degraded": True},
             )
 
     def get_token_usage(self) -> Dict[str, Any]:

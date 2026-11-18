@@ -15,6 +15,7 @@ try:
 except ImportError:
     _HTTP_RETRY_AVAILABLE = False
 
+from openviking.models.embedder.attempt import observe_embedding
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
@@ -190,6 +191,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             f"task_type={self.task_type!r})"
         )
 
+    @observe_embedding("gemini")
     @model_error_boundary
     def embed(
         self,
@@ -229,12 +231,15 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 model_name=self.model_name,
                 provider="gemini",
                 prompt_tokens=estimated_tokens,
+                usage_quality="estimated",
+                usage_provenance="character_estimate",
                 completion_tokens=0,
             )
             return result
         except (APIError, ClientError) as e:
             _raise_api_error(e, self.model_name)
 
+    @observe_embedding("gemini")
     @model_error_boundary
     async def embed_async(
         self,
@@ -278,6 +283,8 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 model_name=self.model_name,
                 provider="gemini",
                 prompt_tokens=estimated_tokens,
+                usage_quality="estimated",
+                usage_provenance="character_estimate",
                 completion_tokens=0,
             )
             return result
