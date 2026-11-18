@@ -8,13 +8,9 @@ test('Console shows the Compile guide and extended parameters in the selected lo
     [
       'en-US',
       'ov find "What is the value of OpenViking?"',
-      /Use ov compile create to save a configuration/,
+      /Create and save a compile configuration/,
     ],
-    [
-      'zh-CN',
-      'ov find "OpenViking 有什么价值？"',
-      /使用 ov compile create 创建编译配置/,
-    ],
+    ['zh-CN', 'ov find "OpenViking 有什么价值？"', /创建并保存编译配置/],
   ]) {
     const host = await mount(
       async () => assert.fail('Examples and help are local to the Console'),
@@ -30,9 +26,11 @@ test('Console shows the Compile guide and extended parameters in the selected lo
       );
       await click(find);
       assert.equal(host.input.value, example);
-      await type(host.input, '/compile');
-      const compile = host.container.querySelector('[role="option"]');
-      await act(() => compile.focus());
+      await type(host.input, '/compile create');
+      const create = [
+        ...host.container.querySelectorAll('[role="option"]'),
+      ].find((option) => option.textContent.includes('compile create'));
+      await act(() => create.focus());
       const hint = host.container.querySelector('.ov-command-console__hint');
       assert.match(
         hint.querySelector('.ov-command-console__hint-usage').textContent,
@@ -52,6 +50,7 @@ test('Console shows the Compile guide and extended parameters in the selected lo
           'update_schedule.minute',
         ],
       );
+      assert.match(hint.textContent, /00:00.{1,4}23:59/);
       await host.execute('ov help');
       assert.match(host.records.at(-1).textContent, help);
     } finally {

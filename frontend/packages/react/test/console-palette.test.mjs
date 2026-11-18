@@ -31,6 +31,7 @@ test('slash palette uses the built-in group order and keeps cross-group commands
     assert.deepEqual(names(groups[0]), [
       'add-resource',
       'add-skill',
+      'compile create',
       'compile',
       'find',
       'read',
@@ -73,11 +74,7 @@ test('slash palette uses the built-in group order and keeps cross-group commands
     ];
     assert.deepEqual(
       commands.map((button) => button.textContent),
-      [
-        'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
-        'ov compile --compile-name <name>',
-        'ov task status <task_id>',
-      ],
+      ['ov compile --compile-name <name>', 'ov task status <task_id>'],
     );
     await click(commands[0]);
     assert.equal(host.input.value, commands[0].textContent);
