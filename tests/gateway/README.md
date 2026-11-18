@@ -211,7 +211,7 @@ the supplied release tag. It does not rebuild native extensions or Studio.
 | 16. Shared root key and missing-key startup failure | Yes | — |
 | 17. A turn that ends during an OpenViking outage is not retried and is written by the next turn | Yes | — |
 | 18. A turn past `commit_tokens` commits at once, keeping `keep_recent_messages`; the idle commit follows `idle_seconds` after the last turn, on the Pod that saved it | Yes | — |
-| 19. With `openviking_auto_commit`, the session carries OpenViking's automatic commit policy and the gateway never commits | Yes | — |
+| 19. With `openviking_auto_commit`, the session carries OpenViking's automatic commit policy and the gateway does not commit it | Yes | — |
 
 Assertions inspect raw mock calls, source message IDs, Redis keys, Pod lifecycle,
 and client completion markers. Missing SDKs, incomplete streams, and failed

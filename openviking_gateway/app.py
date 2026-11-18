@@ -168,6 +168,8 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 maintenance = [
                     asyncio.create_task(health_loop(app, config.health_interval_seconds)),
                     asyncio.create_task(cleanup_loop()),
+                    # With openviking_auto_commit too: OpenViking does not commit a session
+                    # set up before the switch until its conversation saves another turn.
                     asyncio.create_task(commit_loop(app)),
                 ]
                 if config.snapshot_interval_seconds:

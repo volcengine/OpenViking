@@ -86,6 +86,26 @@ async def test_idle_commit_due_while_stopped_runs_after_a_restart(
         assert len(await gateway[0].state.store.capture.waiting(float("inf"))) == 1
 
 
+async def test_idle_commit_waiting_at_the_switch_to_openviking_is_still_made(
+    tmp_path, gateway_backend, gateway_config, monkeypatch
+):
+    monkeypatch.setattr(capture, "SWEEP_SECONDS", 0.05)
+    monkeypatch.setattr(app_module, "SWEEP_SECONDS", 0.05)
+    async with serve_gateway(tmp_path, gateway_backend, gateway_config) as gateway:
+        await converse(gateway, "first", idle_seconds=1)
+        (created,) = gateway[0].state.test_backend["sessions"]
+    # OpenViking does not commit this session: its conversation never saves again.
+    assert not any(created["auto_commit_policy"].values())
+    config = {**gateway_config, "openviking_auto_commit": True}
+    async with serve_gateway(tmp_path, gateway_backend, config) as gateway:
+        backend = gateway[0].state.test_backend
+        async with async_timeout.timeout(5):
+            while "commits" not in backend:
+                await asyncio.sleep(0.05)
+        ((_, commit),) = backend["commits"]
+        assert commit["keep_recent_count"] == 0
+
+
 async def test_openviking_commits_by_itself_when_configured(
     tmp_path, gateway_backend, gateway_config
 ):
