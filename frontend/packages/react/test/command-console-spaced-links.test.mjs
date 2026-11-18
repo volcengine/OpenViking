@@ -68,3 +68,34 @@ test('quoted input, JSON, inline code and structured results link the complete U
     await view.dispose();
   }
 });
+
+test('markdown inline code links each URI to its own target', async () => {
+  const uris = ['viking://resources/a.md', 'viking://resources/b.md'];
+  const snippet = uris.join(' -> ');
+  const opened = [];
+  const view = await mount({
+    records: [
+      record({
+        variant: 'text',
+        format: 'markdown',
+        text: '`' + snippet + '`',
+      }),
+    ],
+    onOpenUri: (target) => opened.push(target),
+  });
+  try {
+    const code = view.container.querySelector(
+      '.ov-command-console__result-body code',
+    );
+    const links = [...code.querySelectorAll('a')];
+    assert.equal(code.textContent, snippet);
+    assert.deepEqual(
+      links.map((link) => link.getAttribute('href')),
+      uris,
+    );
+    for (const link of links) await click(link);
+    assert.deepEqual(opened, uris);
+  } finally {
+    await view.dispose();
+  }
+});
