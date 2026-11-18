@@ -282,6 +282,7 @@ The V2 server registers RPC `openviking.controls` for a native TUI/client consum
 | Method | Input | Result |
 | --- | --- | --- |
 | `status`, `doctor` | `{ "offline": true }` (optional boolean) | `schemaVersion: 1`, installation, MCP, skills, connection, capture, effective config, findings (`sections`), `text`, `exitCode` |
+| `recall` | `{ "sessionID": "<current OpenCode session>" }` | Stored OpenViking prompt context with source references, where available |
 | `commit` | `{ "sessionID": "<current OpenCode session>" }` | `status`, `traceId` when available, `extraction` |
 
 Read methods return only selected configuration fields and redact credentials. Inventory
@@ -297,8 +298,30 @@ recovery before retrying. Auth/network errors remain failures (`operation_failed
 and HTTP acceptance returns `extraction: "not_verified"`, never completed extraction.
 Automatic lifecycle commits retain their existing retry behavior.
 
-Visible `/ov status`, `/ov doctor` and `/ov commit` controls require the TUI consumer.
-OpenCode V2 server command callbacks return no display value; writing a synthetic session
-message merely to show diagnostics would alter conversation history and contaminate capture.
-The server therefore exposes RPC rather than registering silent commands. The consumer
-should show read results in native UI and invoke `commit` only after intentional user action.
+### Terminal companion (OpenCode V2)
+
+The package exports an optional `./tui` part. OpenCode loads it alongside the server
+part in its terminal UI. Headless clients use the server entrypoint without UI imports.
+OpenCode supplies the Solid/OpenTUI runtime.
+
+- `/ov` opens the control picker.
+- `/ov status` and `/ov doctor` show read-only, scrollable native dialogs.
+- `/ov recall` shows recent OpenViking context stored with the current session.
+- `/ov commit` confirms before sending current-session activity to OpenViking.
+  Changing sessions dismisses the original intent.
+
+The footer shows the last requested connection/capture result. It starts `unchecked`;
+run status or Doctor to refresh it. No diagnostics are added to chat history.
+
+The recall inspector reads saved prompt metadata or the plugin's replay ledger when
+available. It exposes at most ten recent records, bounded text and source references.
+Stored context can be absent or incomplete and does not prove what reached a model.
+Live pending requests, wait budgets and runtime errors are unavailable here.
+
+To disable just the terminal companion, add the following filter to OpenCode's `cli.json`:
+
+```json
+{ "plugins": ["*", "-openviking.tui"] }
+```
+
+Run `pnpm run check:tui` for a Bun TSX build and `pnpm test` for command/RPC coverage.

@@ -1,17 +1,17 @@
 import { diagnoseOpenCode, sanitizeDiagnosticText } from "./diagnostics.mjs"
 import { isCaptureEnabled } from "./shared/capture-utils.mjs"
 
-const sessionInput = { type: "object", properties: { sessionID: { type: "string", minLength: 1 } }, required: ["sessionID"], additionalProperties: false }
-const readInput = { type: "object", properties: { offline: { type: "boolean" } }, additionalProperties: false }
-// JSON Schema is the portable definition accepted by both plugin hosts.
-export const OPENVIKING_CONTROLS = {
-  id: "openviking.controls",
-  methods: {
-    status: { input: readInput, output: { type: "object" } },
-    doctor: { input: readInput, output: { type: "object" } },
-    commit: { input: sessionInput, output: { type: "object" }, errors: { operation_failed: { type: "object" } } },
-  },
-  events: {},
+import { inspectV2Recall } from "./v2-recall-inspector.mjs"
+import { OPENVIKING_CONTROLS } from "./controls-contract.mjs"
+export { OPENVIKING_CONTROLS } from "./controls-contract.mjs"
+
+async function getOwnedSession(ctx, sessionID) {
+  const session = await ctx.session.get({ sessionID })
+  if (session?.location?.directory !== ctx.location.directory ||
+      (ctx.location.project?.id && session.projectID !== ctx.location.project.id)) {
+    throw new Error("Session belongs to another OpenCode location")
+  }
+  return session
 }
 
 export async function registerV2Controls(ctx, runtime, { pluginRoot, serializeSession, captureCurrent }) {
@@ -20,14 +20,21 @@ export async function registerV2Controls(ctx, runtime, { pluginRoot, serializeSe
   await ctx.rpc.register(OPENVIKING_CONTROLS, {
     status: diagnose,
     doctor: diagnose,
+    recall: async ({ sessionID }, { error: rpcError } = {}) => {
+      try {
+        await getOwnedSession(ctx, sessionID)
+        return await inspectV2Recall(ctx, runtime.config, sessionID)
+      } catch (error) {
+        if (!rpcError) throw error
+        return rpcError("operation_failed", "Could not inspect this session's stored OpenViking prompt context", {})
+      }
+    },
     commit: async ({ sessionID }, { signal, error: rpcError } = {}) => {
       try {
         signal?.throwIfAborted()
         if (!isCaptureEnabled(runtime.config)) return { status: "disabled", extraction: "not_started" }
         // Caller selects its current session; never flushAll or accept an OV id.
-        const session = await ctx.session.get({ sessionID })
-        if (session.location.directory !== ctx.location.directory ||
-          (ctx.location.project?.id && session.projectID !== ctx.location.project.id)) throw new Error("Session belongs to another OpenCode location")
+        const session = await getOwnedSession(ctx, sessionID)
         if (runtime.config.skipSubagentSessions && session.parentID) return { status: "disabled", extraction: "not_started" }
         return await serializeSession(async () => {
           await runtime.ready
