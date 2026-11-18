@@ -14,17 +14,19 @@ export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
       ...toSystemDirectoryTab(uri),
       loading: true,
     };
+  const name = nameFromUri(uri);
   if (isDirectory) {
     return {
       kind: 'directory',
       key: uri,
+      title: name,
       loading: true,
       levels: [
         {
           key: 'l0',
           label: '',
           source: {
-            fileName: `${nameFromUri(uri)}.md`,
+            fileName: `${name}.md`,
             path: uri,
             fileType: 'markdown',
             content: '',
@@ -34,7 +36,7 @@ export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
           key: 'l1',
           label: '',
           source: {
-            fileName: `${nameFromUri(uri)}.md`,
+            fileName: `${name}.md`,
             path: uri,
             fileType: 'markdown',
             content: '',
@@ -47,6 +49,6 @@ export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
     kind: 'file',
     key: uri,
     loading: true,
-    source: { fileName: nameFromUri(uri), path: uri, content: '' },
+    source: { fileName: name, path: uri, content: '' },
   };
 }
