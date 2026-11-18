@@ -30,7 +30,13 @@ class LiteLLMRerankClient(RerankBase):
     LiteLLM rerank API client.
     """
 
-    def __init__(self, api_key: Optional[str], api_base: Optional[str], model_name: str):
+    def __init__(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        model_name: str,
+        timeout: float = 30.0,
+    ):
         """
         Initialize LiteLLM rerank client.
 
@@ -38,12 +44,14 @@ class LiteLLMRerankClient(RerankBase):
             api_key: API key for LiteLLM providers (optional, can come from env)
             api_base: API base for LiteLLM providers (optional, can come from env)
             model_name: Model name to use for reranking
+            timeout: HTTP request timeout in seconds
         """
         super().__init__()
         self.api_key = api_key
         self.api_base = api_base
         self.model_name = model_name
         self.provider = "litellm"
+        self._timeout = timeout
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
         """
@@ -70,6 +78,7 @@ class LiteLLMRerankClient(RerankBase):
                 documents=documents,
                 api_key=self.api_key,
                 api_base=self.api_base,
+                timeout=self._timeout,
             )
 
             # Update token usage tracking (estimate from response or input)
@@ -143,4 +152,5 @@ class LiteLLMRerankClient(RerankBase):
             api_key=config.api_key,
             api_base=config.api_base,
             model_name=config.model,
+            timeout=config.timeout,
         )
