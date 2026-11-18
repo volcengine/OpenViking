@@ -608,6 +608,12 @@ jobs:
       with:
         target: ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-msvc' || 'host' }}
 
+    - name: Reset macOS Intel compiler cache statistics
+      id: ccache-stats
+      if: matrix.os == 'macos-15-intel'
+      shell: bash
+      run: ccache --zero-stats
+
     - name: Create build environment without installing the project
       run: uv venv
 
@@ -692,6 +698,17 @@ jobs:
       env:
         OV_SKIP_OV_BUILD: '1'
       run: uv build --wheel
+
+    - name: Report macOS Intel compiler cache statistics
+      if: always() && matrix.os == 'macos-15-intel' && steps.ccache-stats.outcome == 'success'
+      shell: bash
+      run: |
+        {
+          echo '### macOS Intel C++ compiler cache (this run)'
+          echo '```text'
+          ccache --show-stats
+          echo '```'
+        } | tee -a "$GITHUB_STEP_SUMMARY"
 
     - name: Check bundled ov version matches wheel
       shell: bash
