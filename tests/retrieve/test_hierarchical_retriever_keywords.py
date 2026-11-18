@@ -79,3 +79,21 @@ async def test_keywords_thinking_search_uses_global_keyword_recall_and_rerank():
     assert len(storage.calls) == 1
     assert storage.calls[0]["query"] == "OAuth token"
     assert storage.calls[0]["limit"] == 10
+
+
+@pytest.mark.asyncio
+async def test_keywords_search_forwards_advanced_args_to_storage():
+    storage = KeywordStorage()
+    retriever = HierarchicalRetriever(storage=storage, embedder=FailingEmbedder())
+    args = {"bm25_k1": 1.2, "bm25_b": 0.75, "post_process_input_limit": 20}
+
+    await retriever.retrieve(
+        TypedQuery("OAuth token", None, ""),
+        ctx=_ctx(),
+        limit=5,
+        mode=RetrieverMode.QUICK,
+        search_type="keywords",
+        keywords_args=args,
+    )
+
+    assert storage.calls[0]["keywords_args"] == args

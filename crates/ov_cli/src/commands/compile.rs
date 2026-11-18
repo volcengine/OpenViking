@@ -93,7 +93,7 @@ fn normalize_target(value: Option<String>, memory_mode: bool) -> Result<String> 
     }
 }
 
-fn parse_args(value: Option<&str>) -> Result<Option<Map<String, Value>>> {
+pub(crate) fn parse_args(value: Option<&str>) -> Result<Option<Map<String, Value>>> {
     let Some(value) = value else {
         return Ok(None);
     };

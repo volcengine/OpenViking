@@ -111,6 +111,7 @@ class HierarchicalRetriever:
         request_now: Optional[datetime] = None,
         search_type: SearchType = "semantic",
         has_explicit_target: Optional[bool] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> QueryResult:
         """
         Run one global vector search, then optionally rerank its candidates.
@@ -125,6 +126,7 @@ class HierarchicalRetriever:
             scope_dsl: Additional scope constraints passed from public find/search filter
             level: Optional result level filter (0=L0, 1=L1, 2=L2)
             has_explicit_target: Whether target_uri was supplied before default expansion
+            keywords_args: Advanced keyword-search options forwarded to the engine
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
@@ -208,6 +210,7 @@ class HierarchicalRetriever:
                     extra_filter=scope_dsl,
                     level=level,
                     limit=search_limit,
+                    keywords_args=keywords_args,
                 )
             else:
                 vector_results = await vector_proxy.search_in_tenant(

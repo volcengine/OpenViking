@@ -343,6 +343,54 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
 
 
 @pytest.mark.asyncio
+async def test_keywords_tenant_search_forwards_advanced_args():
+    ctx = _ctx()
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = None
+    backend._acl_enabled = AsyncMock(return_value=False)
+    tenant_backend = SimpleNamespace(search_by_keywords=AsyncMock(return_value=[]))
+    backend._get_backend_for_context = AsyncMock(return_value=tenant_backend)
+
+    await backend.search_by_keywords_in_tenant(
+        ctx=ctx,
+        query="OAuth token",
+        limit=5,
+        keywords_args={
+            "bm25_k1": 1.2,
+            "bm25_b": 0.75,
+            "post_process_input_limit": 100,
+        },
+    )
+
+    kwargs = tenant_backend.search_by_keywords.await_args.kwargs
+    assert kwargs["bm25_k1"] == 1.2
+    assert kwargs["bm25_b"] == 0.75
+    assert kwargs["advance"] == {"post_process_input_limit": 100}
+
+
+@pytest.mark.asyncio
+async def test_keywords_tenant_search_clamps_post_process_limit_to_recall_limit():
+    ctx = _ctx()
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = None
+    backend._acl_enabled = AsyncMock(return_value=False)
+    tenant_backend = SimpleNamespace(search_by_keywords=AsyncMock(return_value=[]))
+    backend._get_backend_for_context = AsyncMock(return_value=tenant_backend)
+
+    await backend.search_by_keywords_in_tenant(
+        ctx=ctx,
+        query="OAuth token",
+        limit=20,
+        keywords_args={"post_process_input_limit": 10},
+    )
+
+    kwargs = tenant_backend.search_by_keywords.await_args.kwargs
+    assert kwargs["bm25_k1"] is None
+    assert kwargs["bm25_b"] is None
+    assert kwargs["advance"] == {"post_process_input_limit": 20}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "legacy_mode,action",
     [

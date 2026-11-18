@@ -567,6 +567,9 @@ class HttpCollection(ICollection):
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         url = self.url_prefix + "api/vikingdb/data/search/keywords"
         payload = {
@@ -579,6 +582,9 @@ class HttpCollection(ICollection):
             "fields": json.dumps(fields) if fields else None,
             "filter": json.dumps(filters) if filters else None,
             "output_fields": json.dumps(output_fields) if output_fields else None,
+            "bm25_k1": bm25_k1,
+            "bm25_b": bm25_b,
+            "advance": json.dumps(advance) if advance else None,
             "limit": limit,
             "offset": offset,
         }

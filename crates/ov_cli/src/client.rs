@@ -876,6 +876,7 @@ impl HttpClient {
         tags: Option<Vec<String>>,
         read_content: bool,
         events_time_decay_protection: Option<String>,
+        args: Option<&Map<String, Value>>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -896,6 +897,7 @@ impl HttpClient {
             "tags": tags,
             "read_content": read_content.then_some(true),
             "events_time_decay_protection": events_time_decay_protection,
+            "args": args,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -2604,6 +2606,7 @@ mod tests {
                 None,
                 false,
                 None,
+                None,
             )
             .await
             .expect("list search should succeed");
@@ -2639,6 +2642,7 @@ mod tests {
                 Some(vec!["project=openviking".to_string()]),
                 false,
                 Some("7d".to_string()),
+                None,
             )
             .await
             .expect("context search should succeed");
@@ -2658,6 +2662,50 @@ mod tests {
                 "context_type": ["memory"],
                 "tags": ["project=openviking"],
                 "events_time_decay_protection": "7d"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn search_request_forwards_keyword_args() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let mut args = Map::new();
+        args.insert("bm25_k1".to_string(), json!(1.2));
+        args.insert("bm25_b".to_string(), json!(0.75));
+        args.insert("post_process_input_limit".to_string(), json!(100));
+        client
+            .search(
+                "OAuth token".to_string(),
+                String::new(),
+                None,
+                "keywords".to_string(),
+                "list".to_string(),
+                None,
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+                Some(&args),
+            )
+            .await
+            .expect("keyword search should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            body["args"],
+            json!({
+                "bm25_k1": 1.2,
+                "bm25_b": 0.75,
+                "post_process_input_limit": 100
             })
         );
     }

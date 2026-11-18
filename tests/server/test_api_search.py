@@ -79,6 +79,107 @@ async def test_search_forwards_keywords_search_type(
     assert captured["search_type"] == "keywords"
 
 
+async def test_search_forwards_keyword_args(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+        return FindResult(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    response = await client.post(
+        "/api/v1/search/search",
+        json={
+            "query": "OAuth token",
+            "search_type": "keywords",
+            "limit": 5,
+            "args": {
+                "bm25_k1": 1.2,
+                "bm25_b": 0.75,
+                "post_process_input_limit": 5,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["args"] == {
+        "bm25_k1": 1.2,
+        "bm25_b": 0.75,
+        "post_process_input_limit": 5,
+    }
+
+
+async def test_search_args_post_process_floor_uses_node_limit(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+        return FindResult(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    response = await client.post(
+        "/api/v1/search/search",
+        json={
+            "query": "OAuth token",
+            "search_type": "keywords",
+            "limit": 5,
+            "node_limit": 50,
+            "args": {"post_process_input_limit": 50},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["args"] == {"post_process_input_limit": 50}
+
+    response = await client.post(
+        "/api/v1/search/search",
+        json={
+            "query": "OAuth token",
+            "search_type": "keywords",
+            "limit": 5,
+            "node_limit": 50,
+            "args": {"post_process_input_limit": 49},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"search_type": "keywords", "args": {"bm25_k1": 0}},
+        {"search_type": "keywords", "args": {"bm25_k1": -0.1}},
+        {"search_type": "keywords", "args": {"bm25_b": -0.1}},
+        {"search_type": "keywords", "args": {"bm25_b": 1.1}},
+        {"search_type": "keywords", "args": {"post_process_input_limit": 9}},
+        {"search_type": "keywords", "args": {"post_process_input_limit": 2_000_001}},
+        {"search_type": "keywords", "args": {"unknown": 1}},
+        {"search_type": "keywords", "args": {"bm25_k1": "1.2"}},
+        {"search_type": "keywords", "args": {"bm25_k1": True}},
+        {"args": {"bm25_k1": 1.2}},
+        {
+            "search_type": "keywords",
+            "mode": "context",
+            "args": {"bm25_k1": 1.2},
+        },
+    ],
+)
+async def test_search_rejects_invalid_args(client: httpx.AsyncClient, payload):
+    response = await client.post(
+        "/api/v1/search/search",
+        json={"query": "OAuth token", **payload},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
 @pytest.mark.parametrize(
     "payload",
     [

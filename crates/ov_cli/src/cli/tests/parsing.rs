@@ -160,6 +160,33 @@ fn cli_parses_search_image_with_query() {
 }
 
 #[test]
+fn cli_parses_search_args_json() {
+    let cli = Cli::try_parse_from([
+        "ov",
+        "search",
+        "invoice",
+        "--search-type",
+        "keywords",
+        "--args",
+        r#"{"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":100}"#,
+    ])
+    .expect("search args should parse");
+
+    match cli.command {
+        Commands::Search {
+            search_type, args, ..
+        } => {
+            assert_eq!(search_type, "keywords");
+            assert_eq!(
+                args.as_deref(),
+                Some(r#"{"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":100}"#)
+            );
+        }
+        _ => panic!("expected search command"),
+    }
+}
+
+#[test]
 fn cli_parses_grep_context_lines() {
     let cli = Cli::try_parse_from([
         "ov",

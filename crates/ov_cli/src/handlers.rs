@@ -1654,6 +1654,7 @@ pub async fn handle_search(
     tags: Option<Vec<String>>,
     read_content: bool,
     events_time_decay_protection: Option<String>,
+    args: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
@@ -1667,6 +1668,7 @@ pub async fn handle_search(
             "--image is not supported with --search-type keywords.".to_string(),
         ));
     }
+    let args = commands::compile::parse_args(args.as_deref())?;
     validate_search_mode_options(&mode, &uri, read_content)?;
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if search_type != "semantic" {
@@ -1706,6 +1708,12 @@ pub async fn handle_search(
     if let Some(ref protection) = events_time_decay_protection {
         params.push(format!("--events-time-decay-protection {}", protection));
     }
+    if let Some(ref args) = args {
+        params.push(format!(
+            "--args {}",
+            serde_json::Value::Object(args.clone())
+        ));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1727,6 +1735,7 @@ pub async fn handle_search(
         tags,
         read_content,
         events_time_decay_protection,
+        args,
         ctx.output_format,
         ctx.compact,
     )

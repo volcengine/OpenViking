@@ -47,6 +47,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
+from openviking.core.search_args import validate_search_args
 from openviking.core.uri_validation import (
     validate_content_target_uri,
     validate_request_viking_uri,
@@ -634,6 +635,10 @@ _EXCLUDE_URIS_DESCRIPTION = (
 _REWRITE_MAX_BULLETS_DESCRIPTION = (
     "In mode='context' with rewrite='auto', maximum number of bullets in the digest."
 )
+_SEARCH_ARGS_DESCRIPTION = (
+    "Advanced engine options for search_type='keywords' in mode='list': "
+    '{"bm25_k1": >0, "bm25_b": 0..1, "post_process_input_limit": limit..2000000}.'
+)
 _DETAIL_BY_CATEGORY_DESCRIPTION = (
     "In mode='context', request abstract, overview, or full detail per category "
     "(events, entities, preferences, experiences, resources, skills, or memories); "
@@ -842,6 +847,10 @@ async def search(
         Optional[str],
         Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
     ] = None,
+    args: Annotated[
+        Optional[Dict[str, Any]],
+        Field(description=_SEARCH_ARGS_DESCRIPTION),
+    ] = None,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 
@@ -869,6 +878,8 @@ async def search(
         tags=tags,
     )
     if mode == "context":
+        if args is not None:
+            raise InvalidArgumentError("args are only supported in mode='list'")
         if read_content:
             raise InvalidArgumentError("read_content is only supported in mode='list'")
         if target_uri:
@@ -952,6 +963,11 @@ async def search(
     error = context_only_fields_error(as_named_by_caller, as_named_by_caller=as_named_by_caller)
     if error:
         raise InvalidArgumentError(error)
+
+    try:
+        args = validate_search_args(args, search_type=search_type, limit=limit)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
 
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)

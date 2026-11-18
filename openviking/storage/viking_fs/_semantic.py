@@ -380,6 +380,7 @@ class _SemanticMixin:
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
+        args: Optional[Dict[str, Any]] = None,
     ):
         """Complex search with session context.
 
@@ -389,6 +390,7 @@ class _SemanticMixin:
             session_info: Session information
             limit: Return count
             filter: Metadata filter
+            args: Advanced keyword-search options passed through to the engine
 
         Returns:
             FindResult
@@ -525,6 +527,7 @@ class _SemanticMixin:
                 events_time_decay_protection=events_time_decay_protection,
                 request_now=request_now,
                 search_type=search_type,
+                keywords_args=args,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])

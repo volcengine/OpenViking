@@ -713,6 +713,9 @@ class CollectionAdapter(ABC):
         output_fields: Optional[list[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[list[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         compiled_filter = self._compile_filter(filter)
@@ -734,6 +737,9 @@ class CollectionAdapter(ABC):
             offset=offset,
             filters=compiled_filter,
             output_fields=output_fields,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
+            advance=advance,
         )
         records: list[Dict[str, Any]] = []
         for item in result.data:
