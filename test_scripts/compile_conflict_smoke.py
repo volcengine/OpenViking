@@ -68,9 +68,13 @@ async def test_real_worker_comparison(pipeline, agent_loop, case):
     pipeline.model.max_tokens = 6000
     pipeline.request = pipeline.request.model_copy(update={"global_conflict_detection": True})
     pipeline.timestamp = utc_now()
-    pipeline.skill = (
-        BASE / "openviking/system_assets/compile/example-skills/llm-wiki/SKILL.md"
-    ).read_text()
+    skill_dir = BASE / "openviking/system_assets/compile/example-skills/llm-wiki"
+    pipeline.skill = (skill_dir / "SKILL.md").read_text()
+    # Serve only the bundled public rules, never the caller's private Skill/config.
+    skill_files = {
+        pipeline.resources.root + "/" + path: (skill_dir / path).read_bytes()
+        for path in ("references/map.md", "references/conflicts.md")
+    }
     pipeline.request.instruction = "For this isolated subject assignment, write topic.md about export limits. Root navigation is handled separately. Cite the actual source URIs. No external facts."
     old = _human_conflict_page() if case == "human" else None
     if case == "history":
@@ -78,17 +82,22 @@ async def test_real_worker_comparison(pipeline, agent_loop, case):
     uri = pipeline.target + "/topic.md"
 
     async def stat(target):
+        if target in skill_files:
+            return {"uri": target, "size": len(skill_files[target]), "isDir": False}
         if old is not None and target == uri:
             return {"uri": target, "isDir": False}
         raise NotFoundError(target)
 
     async def download(target):
+        if target in skill_files:
+            return skill_files[target]
         if old is not None and target == uri:
             return old.encode()
         raise NotFoundError(target)
 
     pipeline.client.stat = AsyncMock(side_effect=stat)
     pipeline.client.download_bytes = AsyncMock(side_effect=download)
+    await pipeline.resources.prepare_stages(pipeline.skill)
     loop, key, _ = agent_loop
     pipeline.model.agent_runner = agent_runner(
         loop, key, None, CompileLimits(subagent_iterations=16)
@@ -126,6 +135,7 @@ async def test_real_worker_comparison(pipeline, agent_loop, case):
             ],
         },
         [s.source_id for s in sources],
+        skill_stage="reduce",
     )
     bundle = await finalize.run(pipeline, output)
     contents = {op["uri"]: op["content"] for op in bundle.operations}

@@ -318,3 +318,35 @@ def test_centered_comparison_accepts_iterable_document_ids():
     assert group_related_documents(iter("abc"), [("a", "b"), ("a", "c")], centered=True) == [
         ["a", "b", "c"]
     ]
+
+
+async def test_opt_in_smoke_supplies_public_final_rules_without_model_calls(
+    pipeline, agent_loop, tmp_path, monkeypatch
+):
+    import json
+
+    from test_scripts import compile_conflict_smoke as smoke
+
+    config = tmp_path / "synthetic.json"
+    config.write_text(json.dumps({"model": "deepseek-synthetic", "api_key": "synthetic-not-a-key"}))
+    monkeypatch.setenv("OV_TEST_VLM_CONFIG", str(config))
+    monkeypatch.setattr(smoke, "OpenAIVLM", lambda cfg: object())
+    monkeypatch.setattr(
+        smoke, "VLMProviderAdapter", lambda *args, **kwargs: pipeline.model.provider
+    )
+    seen = []
+
+    class StopProbe(Exception):
+        pass
+
+    async def runner(system, *args, **kwargs):
+        seen.append(system)
+        raise StopProbe("No model request is made")
+
+    monkeypatch.setattr(smoke, "agent_runner", lambda *args, **kwargs: runner)
+    with pytest.raises(StopProbe):
+        await smoke.test_real_worker_comparison(pipeline, agent_loop, "compatible")
+    assert seen
+    assert "| `match_text` |" in seen[0]
+    assert "用户手动解决内容冲突，修正后的内容如正文所示" in seen[0]
+    assert set(pipeline.resources.hashes) == {"references/map.md", "references/conflicts.md"}
