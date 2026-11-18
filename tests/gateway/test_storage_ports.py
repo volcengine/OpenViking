@@ -660,10 +660,17 @@ async def test_capture_document_of_the_old_layout_is_read_and_swapped(kernel_sto
     assert await store.capture.waiting(10) == [("scope", "session")]
     assert await store.capture.swap("scope", "session", document, {"delivered": "a2"})
     assert await store.capture.waiting(10) == []
-    # forget drops the listing of a document that is gone or that nothing can commit.
+    # forget drops a listing, unless its document changed since the caller read it.
     assert await store.capture.swap("scope", "other", Document(), {"idle_at": 1.0})
-    await store.capture.forget("scope", "other")
+    await store.capture.forget("scope", "other", 0)
+    assert await store.capture.waiting(10) == [("scope", "other")]
+    await store.capture.forget("scope", "other", 1)
     assert await store.capture.waiting(10) == []
+    if hasattr(store, "client"):
+        # A document that expired left its listing behind.
+        await store.client.zadd(f"{store.prefix}k:{{cap}}:ready", {"scope\0gone": 0})
+        await store.capture.forget("scope", "gone", 0)
+        assert await store.capture.waiting(10) == []
 
 
 async def test_scope_delete_blocks_concurrent_writes(kernel_store):

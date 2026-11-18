@@ -18,8 +18,8 @@ k:{<scope>}:r:<anchor>              set     sessions with reply:<anchor>;     ke
 k:{<scope>}:st:<h(key)>             hash    v, ver; ttl                       kernel_state_swap,
                                                                               kernel_keep
 k:{cap}:<scope>:<h(session)>        hash    v, ver; ttl                       kernel_capture_swap
-k:{cap}:ready                       zset    scope NUL session -> idle commit  kernel_capture_swap
-                                            due (epoch s)
+k:{cap}:ready                       zset    scope NUL session -> idle commit  kernel_capture_swap,
+                                            due (epoch s)                     kernel_capture_forget
 
 Capture keys share the ``{cap}`` slot so a swap can update the waiting set in one script; the
 tombstone is mirrored there because a script may only touch one slot. For the same reason
@@ -518,5 +518,9 @@ class RedisCaptureStore:
         members = await self.store.client.zrangebyscore(self.ready, "-inf", before)
         return [tuple(member.decode().split("\0", 1)) for member in members]
 
-    async def forget(self, scope, session):
-        await self.store.client.zrem(self.ready, scope + "\0" + session)
+    async def forget(self, scope, session, version):
+        await self.store.script(
+            "kernel_capture_forget",
+            [self.store.capture_key(scope, session), self.ready],
+            [version, scope + "\0" + session],
+        )

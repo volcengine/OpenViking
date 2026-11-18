@@ -3,8 +3,9 @@
 """One versioned document per session. Every CAS affects exactly one document.
 
 A document whose ``idle_at`` is set is listed by ``waiting`` once that time is reached,
-until a swap clears the field or ``forget`` drops the listing. Neither replay keys nor capture branch rules
-participate in its transactions.
+until a swap clears the field. ``forget`` drops a listing unless the document changed
+since the caller read it at ``version``; it is for listings with no due time behind them.
+Neither replay keys nor capture branch rules participate in its transactions.
 """
 
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ class CaptureStore(Protocol):
     async def get(self, scope, session) -> Document: ...
     async def swap(self, scope, session, previous: Document, value) -> bool: ...
     async def waiting(self, before) -> list[tuple[str, str]]: ...
-    async def forget(self, scope, session) -> None: ...
+    async def forget(self, scope, session, version) -> None: ...
 
 
 class SQLiteCaptureStore:
@@ -72,11 +73,12 @@ class SQLiteCaptureStore:
 
         return await self.db.run(waiting)
 
-    async def forget(self, scope, session):
+    async def forget(self, scope, session, version):
         def forget():
             with self.db.connect() as c:
                 c.execute(
-                    "UPDATE capture SET ready=NULL WHERE scope=? AND session=?", (scope, session)
+                    "UPDATE capture SET ready=NULL WHERE scope=? AND session=? AND version=?",
+                    (scope, session, version),
                 )
 
         await self.db.run(forget, write=True)

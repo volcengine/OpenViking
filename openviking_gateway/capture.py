@@ -248,10 +248,11 @@ class CapturePipeline:
             if name in self.running:
                 continue
             try:
-                due = (await self.store.get(*name)).value.get("idle_at")
+                doc = await self.store.get(*name)
+                due = doc.value.get("idle_at")
                 if due is None:
                     # An earlier version listed it, or its document expired.
-                    await self.store.forget(*name)
+                    await self.store.forget(*name, doc.version)
                 elif due <= before:
                     # Not one that a turn ending meanwhile set to a later time.
                     await self.idle_commit(name, due)
