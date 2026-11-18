@@ -23,6 +23,7 @@ from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE
 from openviking.telemetry import bind_telemetry, resolve_telemetry, unregister_telemetry
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import OpenVikingError
@@ -405,10 +406,12 @@ class ContentWriteProcessor(DequeueHandlerBase):
         if kind == "memory":
             root_uri = str(refresh["root_uri"])
             uri = str(refresh["uri"])
+            processing_mode = refresh.get("processing_mode", DEFAULT_PROCESSING_MODE)
             overview_refreshed, embedding_requested = await coordinator._refresh_memory_after_write(
                 root_uri=root_uri,
                 uri=uri,
                 ctx=ctx,
+                processing_mode=processing_mode,
                 ingest_options=IngestOptions.from_value(refresh.get("ingest_options")),
             )
             return (

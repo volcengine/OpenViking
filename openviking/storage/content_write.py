@@ -32,6 +32,7 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     ProcessingMode,
+    VECTORS_ONLY,
     normalize_processing_mode,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -642,6 +643,7 @@ class ContentWriteCoordinator:
                 response_mode=response_mode,
                 ctx=ctx,
                 telemetry_id=telemetry_id,
+                processing_mode=processing_mode,
                 ingest_options=ingest_options,
                 root_operation=root_operation,
                 root_task_factory=root_task_factory,
@@ -2747,13 +2749,17 @@ class ContentWriteCoordinator:
         root_uri: str,
         uri: str,
         ctx: RequestContext,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         ingest_options: IngestOptions | None = None,
     ) -> tuple[bool, bool]:
-        overview_refreshed = await MemoryUpdater.refresh_schema_overview(
-            viking_fs=self._viking_fs,
-            directory_uri=root_uri,
-            ctx=ctx,
-        )
+        vectors_only = normalize_processing_mode(processing_mode) == VECTORS_ONLY
+        overview_refreshed = False
+        if not vectors_only:
+            overview_refreshed = await MemoryUpdater.refresh_schema_overview(
+                viking_fs=self._viking_fs,
+                directory_uri=root_uri,
+                ctx=ctx,
+            )
         embedding_requested = await MemoryUpdater.refresh_file_embedding(
             viking_fs=self._viking_fs,
             vikingdb=self._vikingdb,
@@ -2775,10 +2781,19 @@ class ContentWriteCoordinator:
         response_mode: str,
         ctx: RequestContext,
         telemetry_id: str,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         ingest_options: IngestOptions | None = None,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
     ) -> Dict[str, Any]:
+        # Temporary rollout guard: memory writes must not create semantic
+        # overview work or invoke VLM. Keep the file embedding refresh below.
+        if normalize_processing_mode(processing_mode) != VECTORS_ONLY:
+            logger.warning(
+                "[TemporaryVectorsOnly] forcing memory write processing_mode=vectors_only uri=%s",
+                uri,
+            )
+        processing_mode = VECTORS_ONLY
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         lock_guard = PathLockGuard(self._viking_fs._async_agfs)
         try:
@@ -2833,6 +2848,7 @@ class ContentWriteCoordinator:
                             "kind": "memory",
                             "root_uri": root_uri,
                             "uri": uri,
+                            "processing_mode": processing_mode,
                             "ingest_options": ingest_options.to_dict()
                             if ingest_options is not None
                             else IngestOptions().to_dict(),

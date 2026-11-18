@@ -86,6 +86,42 @@ async def test_content_write_processor_recovers_checkpoint(monkeypatch, operatio
         set_task_tracker(None)
 
 
+@pytest.mark.asyncio
+async def test_memory_refresh_vectors_only_skips_overview_and_keeps_embedding(monkeypatch):
+    overview = AsyncMock(return_value=True)
+    embedding = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "openviking.storage.content_write.MemoryUpdater.refresh_schema_overview", overview
+    )
+    monkeypatch.setattr(
+        "openviking.storage.content_write.MemoryUpdater.refresh_file_embedding", embedding
+    )
+    processor = ContentWriteProcessor(SimpleNamespace())
+    result, semantic_lock_handoff = await processor._execute_refresh(
+        ContentWriteMsg(
+            task_id="task",
+            _task_work_id="work",
+            operation="content_write",
+            resource_id="viking://user/account/memories/preferences/doc.md",
+            result={},
+            refresh={
+                "kind": "memory",
+                "root_uri": "viking://user/account/memories/preferences",
+                "uri": "viking://user/account/memories/preferences/doc.md",
+                "processing_mode": "vectors_only",
+            },
+            account_id="account",
+            user_id="user",
+            role="user",
+        ),
+        _ctx(),
+    )
+    overview.assert_not_awaited()
+    embedding.assert_awaited_once()
+    assert semantic_lock_handoff is False
+    assert result == {"overview_status": "skipped", "vector_status": "queued"}
+
+
 @pytest.mark.parametrize("pending", [False, OSError("index offline"), LockAcquisitionError("busy")])
 async def test_compile_tag_retry_preserves_work_and_progress(monkeypatch, pending):
     """A restarted processor completes the same Work after lag or a transient failure."""
