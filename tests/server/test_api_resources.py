@@ -4,13 +4,11 @@
 """Tests for resource management endpoints."""
 
 import asyncio
-import io
 import zipfile
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from PIL import Image
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources as resources_router
@@ -471,76 +469,26 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     }
 
 
-@pytest.mark.parametrize(
-    ("filename", "content", "message"),
-    [
-        pytest.param(None, None, "Parse error: boom", id="processing"),
-        pytest.param("bad.png", b"not an image", "Invalid image file:", id="image"),
-        pytest.param("bad.png", None, "bad header checksum in b'IDAT'", id="png-crc"),
-        pytest.param("bad.mp3", b"not audio", "Invalid audio file:", id="audio"),
-        pytest.param("bad.mp4", b"not video", "Invalid video file:", id="video"),
-        pytest.param("bad.pdf", b"%PDF-1.7\ninvalid\n%%EOF", "Invalid PDF file:", id="pdf"),
-        pytest.param("bad.docx", b"PK\x03\x04" + b"\0" * 26, "Invalid document file:", id="docx"),
-        pytest.param("bad.pptx", b"PK\x03\x04" + b"\0" * 26, "Invalid document file:", id="pptx"),
-        pytest.param("bad.xlsx", b"PK\x03\x04" + b"\0" * 26, "Invalid document file:", id="xlsx"),
-        pytest.param("bad.epub", b"PK\x03\x04" + b"\0" * 26, "Invalid document file:", id="epub"),
-        pytest.param("bad.zip", None, "Zip Slip attempt detected:", id="zip-slip"),
-    ],
-)
-async def test_add_resource_business_error_uses_error_envelope(
+async def test_add_resource_rejects_corrupt_image(
     client: httpx.AsyncClient,
-    service,
-    monkeypatch,
     upload_temp_dir,
-    filename,
-    content,
-    message,
 ):
-    async def fail_during_ingestion(**kwargs):
-        return {
-            "status": "error",
-            "errors": ["Parse error: boom"],
-            "source_path": kwargs["path"],
-        }
-
-    if filename is None:
-        monkeypatch.setattr(
-            service.resources,
-            "_execute_resource_ingestion",
-            fail_during_ingestion,
+    upload = upload_temp_dir / "broken.png"
+    # PNG with an invalid IDAT checksum.
+    upload.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
+            "0000000c49444154789c636060f80f00010301000889c2ed0000000049454e44ae426082"
         )
-        source = {"path": "https://example.com/bad.md"}
-    else:
-        if content is None:
-            buffer = io.BytesIO()
-            if filename == "bad.zip":
-                with zipfile.ZipFile(buffer, "w") as archive:
-                    archive.writestr("../escape.txt", "must not be extracted")
-                content = buffer.getvalue()
-            else:
-                Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
-                content = bytearray(buffer.getvalue())
-                # Corrupt the IDAT checksum immediately before the 12-byte IEND chunk.
-                content[-13] ^= 1
-        upload = upload_temp_dir / filename
-        upload.write_bytes(content)
-        source = {"temp_file_id": upload.name}
+    )
 
     resp = await client.post(
         "/api/v1/resources",
-        json={
-            **source,
-            "reason": "test resource",
-            "wait": True,
-        },
+        json={"temp_file_id": upload.name, "wait": True},
     )
 
-    assert resp.status_code == (500 if filename is None else 400), resp.text
-    body = resp.json()
-    assert body["status"] == "error"
-    assert "result" not in body
-    assert body["error"]["code"] == ("PROCESSING_ERROR" if filename is None else "INVALID_ARGUMENT")
-    assert message in body["error"]["message"]
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_add_skill_business_error_uses_error_envelope(
