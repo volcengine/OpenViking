@@ -28,7 +28,7 @@ test('Console tracks native tasks after submission, keeps input available and di
     { requestOptions: { userId: 'task-user' }, locale: 'zh-CN' },
   );
   try {
-    await host.execute('ov add-resource https://example.com/resource');
+    await host.execute('ov add-skill https://example.com/skill');
     await tick();
     assert.equal(host.input.disabled, false);
     assert.equal(host.records[0].dataset.status, 'pending');
@@ -109,6 +109,7 @@ test('a completed resource import shows its ID once and opens the final resource
     await host.execute('ov add-resource https://example.com/resource');
     await tick();
     assert.equal(host.records[0].dataset.status, 'pending');
+    assert.equal(document.querySelector('.ov-notification'), null);
     await act(() =>
       finish(
         ok({
@@ -168,7 +169,7 @@ test('dismissing a task stays hidden when its pending query fails during the exi
     locale: 'en-US',
   });
   try {
-    await host.execute('ov add-resource https://example.com/resource');
+    await host.execute('ov add-skill https://example.com/skill');
     await tick();
     assert.equal(typeof resolveTask, 'function');
     const close = document.querySelector(

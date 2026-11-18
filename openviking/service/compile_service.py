@@ -21,8 +21,8 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSInternalError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import (
-    COMPILE_NAME_PATTERN,
     CompileLifecycle,
+    CompileName,
     UpdateSchedule,
     execution_signature,
     is_versioned,
@@ -143,9 +143,8 @@ class CompileInputs(BaseModel):
 class CompileCreateRequest(CompileInputs):
     """Save complete inputs under a caller-supplied configuration name unique to its creator within the account."""
 
-    compile_name: str = Field(
-        pattern=COMPILE_NAME_PATTERN,
-        description="Case-sensitive configuration name: 1–64 ASCII letters, digits, underscores or hyphens. The first character cannot be a hyphen.",
+    compile_name: CompileName = Field(
+        description="Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Maximum length: 64 characters for ASCII-only names, 32 for names containing Han characters.",
     )
 
 
@@ -154,9 +153,8 @@ class CompileRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    compile_name: str | None = Field(
+    compile_name: CompileName | None = Field(
         default=None,
-        pattern=COMPILE_NAME_PATTERN,
         description="Saved configuration name; omit for a one-off execution with complete inputs.",
     )
     from_: list[str] = Field(default_factory=list, alias="from")
@@ -663,16 +661,14 @@ class CompileService:
         compile_name = request.compile_name
         owner_user_id = (request.args or {}).get("owner_user_id", ctx.user.user_id)
         if compile_name and locked_record is None:
-            configuration = await self._configuration(
-                compile_name, ctx, action=AclAction.WRITE, owner_user_id=owner_user_id
-            )
+            lifecycle = self._require_lifecycle()
+            await lifecycle.store.require_config_exists(ctx.account_id, owner_user_id, compile_name)
             task = None
             try:
-                async with self._require_lifecycle().store.edit(
-                    ctx.account_id,
-                    configuration["execution_context"]["owner_user_id"],
-                    compile_name,
+                async with lifecycle.store.edit(
+                    ctx.account_id, owner_user_id, compile_name
                 ) as record:
+                    await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
                     task = await self.create(
                         request,
                         connection=connection,
@@ -1111,7 +1107,7 @@ class CompileService:
     async def list_runs(
         self, compile_name: str, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        await self._configuration(compile_name, ctx, action=None)
+        """Page the caller's run history."""
         runs = await self._require_lifecycle().store.list_runs(
             ctx.account_id, ctx.user.user_id, compile_name, cursor=cursor, limit=limit + 1
         )
@@ -1119,8 +1115,7 @@ class CompileService:
         return {"runs": page, "next_cursor": page[-1]["task_id"] if len(runs) > limit else None}
 
     async def get_run(self, compile_name: str, task_id: str, ctx: RequestContext) -> dict[str, Any]:
-        """Return one frozen run belonging to the caller's named configuration."""
-        await self._configuration(compile_name, ctx, action=None)
+        """Return the caller's frozen run, raising NotFoundError when the run is absent."""
         run = await self._require_lifecycle().store.get_run(
             ctx.account_id, ctx.user.user_id, compile_name, task_id
         )

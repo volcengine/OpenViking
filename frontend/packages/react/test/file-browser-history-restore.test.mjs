@@ -56,7 +56,7 @@ for (const directory of [true, false]) {
                   { status: 409 },
                 ),
               )
-            : ok({ result: 'noop' });
+            : ok({ result: directory ? 'noop' : 'created' });
         }
       },
       [{ to: target }],
@@ -98,7 +98,15 @@ for (const directory of [true, false]) {
       }
       await click(button('Confirm restore', confirmation()));
       assert.equal(confirmation(), undefined);
-      assert.match(workflow().textContent, /no new version was created/);
+      const success = () =>
+        [...document.querySelectorAll('.ov-toast--success')].map(
+          (node) => node.textContent,
+        );
+      assert.deepEqual(success(), [
+        directory
+          ? 'The selected version matches the current file. No new version was created.'
+          : 'Restore completed.',
+      ]);
       const writes = fetch.calls.filter((call) =>
         call.path.endsWith('/snapshot/restore'),
       );

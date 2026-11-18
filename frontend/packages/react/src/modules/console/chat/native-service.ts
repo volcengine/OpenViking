@@ -26,7 +26,10 @@ const sessionView = (item: SessionDTO): VikingBotSession => ({
 export function createNativeBotService(
   client: OvClient,
   options: OvRequestOptions,
-): VikingBotChatService & VikingBotSessionService {
+): VikingBotChatService &
+  VikingBotSessionService & {
+    patchSessionTitle: NonNullable<VikingBotSessionService['renameSession']>;
+  } {
   const request = <T>(spec: OvRequestSpec, signal: AbortSignal) =>
     client.request<T>({ ...spec, options: { ...options, signal } });
   return nativeService(
@@ -56,6 +59,16 @@ export function createNativeBotService(
         return items
           .map(sessionView)
           .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+      },
+      async patchSessionTitle(id, title, signal) {
+        await request(
+          {
+            method: 'PATCH',
+            path: OV_PATH_BUILDERS.session(id),
+            body: { title },
+          },
+          signal,
+        );
       },
       async removeSession(id, signal) {
         await request(

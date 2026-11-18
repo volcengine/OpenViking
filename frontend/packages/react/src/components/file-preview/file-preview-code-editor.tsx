@@ -13,6 +13,7 @@ import {
 } from '../../shared/prism-language.js';
 import { prismHighlight } from './prism-highlight.js';
 import { editorAnnotations } from './editor-annotations.js';
+import { editorReadOnlySuffix } from './editor-read-only-suffix.js';
 import type {
   FilePreviewEditorAnnotation,
   FilePreviewLabels,
@@ -23,6 +24,7 @@ export interface FilePreviewCodeEditorProps {
   draft: string;
   source: FilePreviewSource;
   annotations?: readonly FilePreviewEditorAnnotation[];
+  readOnlySuffix?: string;
   saving: boolean;
   text: Required<FilePreviewLabels>;
   onChange: (value: string) => void;
@@ -35,38 +37,51 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   latest.current = props;
   const access = useRef(new Compartment());
   const highlighting = useRef(new Compartment());
-  const annotations = useRef(new Compartment());
+  const decorations = useRef(new Compartment());
   const [highlightFailure, setHighlightFailure] = useState<{
     reason: unknown;
   }>();
   const [attempt, setAttempt] = useState(0);
   const language = prismLanguage(props.source);
 
-  // useEffect 必要性：容器 DOM 提交后，以最新草稿创建 CodeMirror 命令式控件；
+  // useEffect 必要性：容器 DOM 提交后，以本次编辑的草稿和标注创建 CodeMirror 控件；
   // React 渲染无法管理该控件的 DOM、监听器与历史记录。
   // 卸载时 destroy，释放监听器并销毁插件及其高亮定时器。
   useEffect(() => {
+    const { draft, annotations, readOnlySuffix } = latest.current;
+    const marked = annotations?.length
+      ? editorAnnotations(annotations)
+      : undefined;
+    const state = EditorState.create({
+      doc: draft,
+      extensions: [
+        lineNumbers(),
+        history(),
+        EditorView.lineWrapping,
+        keymap.of([...defaultKeymap, ...historyKeymap]),
+        access.current.of([]),
+        highlighting.current.of([]),
+        decorations.current.of([
+          marked?.extensions ?? [],
+          readOnlySuffix ? editorReadOnlySuffix(readOnlySuffix) : [],
+        ]),
+        EditorView.updateListener.of((update) => {
+          if (
+            update.docChanged &&
+            update.state.doc.toString() !== latest.current.draft
+          )
+            latest.current.onChange(update.state.doc.toString());
+        }),
+      ],
+    });
+    const first = marked?.firstLine(state);
     const view = new EditorView({
       parent: container.current!,
-      state: EditorState.create({
-        doc: latest.current.draft,
-        extensions: [
-          lineNumbers(),
-          history(),
-          EditorView.lineWrapping,
-          keymap.of([...defaultKeymap, ...historyKeymap]),
-          access.current.of([]),
-          highlighting.current.of([]),
-          annotations.current.of([]),
-          EditorView.updateListener.of((update) => {
-            if (
-              update.docChanged &&
-              update.state.doc.toString() !== latest.current.draft
-            )
-              latest.current.onChange(update.state.doc.toString());
-          }),
-        ],
-      }),
+      state,
+      scrollTo:
+        first === undefined
+          ? undefined
+          : EditorView.scrollIntoView(first, { y: 'center' }),
     });
     editor.current = view;
     return () => {
@@ -106,16 +121,18 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
       });
   }, [props.draft]);
 
-  // useEffect 必要性：标注随 props 同步到命令式 CodeMirror 实例，React 渲染无法更新编辑器扩展。
-  // Compartment 重配置和编辑器销毁时都会卸载旧扩展，由扩展释放悬浮事件监听及定时器。
+  // useEffect 必要性：标注与只读尾段需同步到 CodeMirror，React 渲染无法更新编辑器扩展。
+  // 重配置和编辑器销毁都会卸载旧扩展，释放标注监听及定时器。
   useEffect(() => {
-    const extension = props.annotations?.length
-      ? editorAnnotations(props.annotations)
-      : [];
     editor.current!.dispatch({
-      effects: annotations.current.reconfigure(extension),
+      effects: decorations.current.reconfigure([
+        props.annotations?.length
+          ? editorAnnotations(props.annotations).extensions
+          : [],
+        props.readOnlySuffix ? editorReadOnlySuffix(props.readOnlySuffix) : [],
+      ]),
     });
-  }, [props.annotations]);
+  }, [props.annotations, props.readOnlySuffix]);
 
   // useEffect 必要性：按语言和重试次数加载 Prism 语法并配置 CodeMirror 插件；
   // 异步模块加载与命令式插件安装不能在 React 渲染中执行。
@@ -146,7 +163,11 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
 
   return (
     <>
-      <div className="ov-file-preview__code-editor" ref={container} />
+      <div
+        className="ov-file-preview__code-editor"
+        data-language={language}
+        ref={container}
+      />
       {highlightFailure ? (
         <>
           <ErrorNotification

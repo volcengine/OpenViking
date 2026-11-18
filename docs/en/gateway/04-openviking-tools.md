@@ -123,12 +123,12 @@ A request can reach the model without OpenViking tools even though its [context 
 | **The client required a specific tool** (`tools_forced_choice`) | `tool_choice` is anything other than `auto` or `none`: for example `required`, Anthropic `any` or `tool`, a named function, or a Responses object such as `allowed_tools`. |
 | **DeepSeek thinking is on and earlier reasoning cannot be sent back** (`deepseek_reasoning_history_required`) | The upstream is DeepSeek, thinking is on (standard Responses requests have no `thinking` field and count as on), and earlier replies would reach DeepSeek without their reasoning. Turn on **Restore reasoning the client drops** in the upstream's **Routing** section ([details and cases it cannot cover](07-upstreams.md#restore-reasoning)), or send `"thinking": {"type": "disabled"}`. |
 | **The client already has OpenViking tools** (`tool_name_collision`) | The gateway stops offering its own tools for the rest of the conversation (requests that resend history in which the model already called gateway tools keep them). See [When the client has its own OpenViking tools](#client-has-openviking-tools). |
-| **OpenViking's tool list couldn't be loaded when this conversation first needed it** (`tools_unavailable`) | The tool list could not be loaded from OpenViking, and no earlier list was available. Start a new conversation once the connection is back. |
+| **OpenViking's tool list couldn't be loaded when this conversation first needed it** (`tools_unavailable`) | The tool list could not be loaded from OpenViking, and no earlier list was available. The conversation's next request that could use tools loads it again; until a list has loaded once, the gateway tries at most every 30 seconds. When the tools arrive after the conversation's first turn, the model is told about them at the start of the next user turn. |
 | **This conversation has no OpenViking tools** (`tools_not_selected_at_session_start`) | The profile has tools on, but this conversation's tool list is empty: either the profile selects no tools, or the conversation started before a gateway upgrade. Start a new conversation. |
 
 ### When the decision is made {#when-the-decision-is-made}
 
-Whether a conversation gets tools is decided at its first request that could use them (housekeeping requests such as title generation do not count) and then stays fixed, so profile changes only reach new conversations. The one exception switches tools off: the client turns out to have OpenViking tools of its own before the model has called a gateway tool, for example because an MCP server connected after the first turn.
+Whether a conversation gets tools is decided at its first request that could use them (housekeeping requests such as title generation do not count; neither does a request for which the tool list could not be loaded) and then stays fixed, so profile changes only reach new conversations. The one exception switches tools off: the client turns out to have OpenViking tools of its own before the model has called a gateway tool, for example because an MCP server connected after the first turn.
 
 Housekeeping requests, sub-agent requests and conversations where an OpenViking plugin was detected never get OpenViking tools. If such a request sends back history in which the model used these tools, the gateway still attaches the tool definitions so the history stays valid, but refuses new OpenViking calls. The client's own tools stay available in every request.
 
@@ -187,16 +187,17 @@ When a single OpenViking call fails, the model receives an error result and can 
 
 - The provider rejects a follow-up model request.
 - The model calls an OpenViking tool that is not available in this conversation, or keeps calling OpenViking tools after they were refused.
-- **Hidden tool request timed out**: the OpenViking tool rounds took longer than the profile's tool **Total time**; or, during the rounds, the provider took longer than `upstream_timeout_seconds` to start a reply or sent nothing for that long in the middle of one. A model reply that keeps arriving is limited only by **Total time**.
+- **Hidden tool request timed out**: the OpenViking tool rounds took longer than the profile's tool **Total time**. A model reply that keeps arriving is limited only by **Total time**.
+- **Model upstream did not answer in time**: during the rounds, the provider took longer than `upstream_timeout_seconds` to start a reply or sent nothing for that long in the middle of one.
 
 The client then receives an error, and the request log shows **OpenViking tools failed** (`hidden_tool_loop_failed`). What the error looks like depends on the request:
 
 | Request | What the client receives |
 | --- | --- |
-| Streaming | An error event at the end of the stream: `response.failed` in Responses, and an `error` of type `gateway_tool_error` in Chat Completions and Anthropic Messages. The HTTP status is already 200 by then. |
+| Streaming | An error event at the end of the stream: `response.failed` in Responses, and an `error` in Chat Completions and Anthropic Messages. Its type is `upstream_timeout`, `upstream_disconnected` or `upstream_unreachable` when the provider did not answer or dropped the connection, and `gateway_tool_error` otherwise. The HTTP status is already 200 by then. |
 | Non-streaming, the provider rejected a follow-up request | The provider's own error body and status. |
-| Non-streaming, timed out | 504 (`gateway_http_504`). |
-| Non-streaming, any other failure | 502 with body `{"reason": "gateway_http_502", "detail": "..."}`. |
+| Non-streaming, timed out | 504 `tool_loop_timeout` when **Total time** ran out, 504 `upstream_timeout` when the provider did not answer in time. |
+| Non-streaming, any other failure | 502 with body `{"reason": "...", "detail": "...", "request_id": "..."}`; the reason is `tool_upstream_invalid`, `tool_upstream_incomplete`, `tool_upstream_stream_error`, `tool_call_invalid`, `tool_loop_limit`, `upstream_unreachable` or `upstream_disconnected` (see [Model route errors](../api/25-gateway.md#model-route-errors)). |
 
 Two more cases:
 

@@ -284,6 +284,7 @@ export function useFileBrowser({
     currentUri: activeUri,
     treeMonitoring: tree.monitoring,
     previewMonitoring: preview.monitoring,
+    wikiSaving: preview.wikiSaving,
     isReady: tree.isReady,
     error: tree.error ?? previewError,
     treeError: tree.error,

@@ -4,6 +4,11 @@ import type { FilePreviewLabels } from '../types.js';
 const messages = {
   previewImage: '放大图片',
   closePreview: '关闭预览',
+  videoTranscript: '转录文稿',
+  videoFrames: (count: number) => (count ? `抽帧图片 (${count})` : '抽帧图片'),
+  videoSpeaker: '说话人',
+  videoNoTranscript: '暂无转录文稿',
+  videoNoFrames: '暂无抽帧图片',
   showHiddenPath: '显示隐藏的路径层级',
   moreActions: '更多操作',
   actionFailed: '操作失败',

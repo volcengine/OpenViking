@@ -43,7 +43,7 @@ SQLite 文件只有运行网关的系统用户能读取；Redis 由网络和 ACL
 
 每个[上游](../guides/15-gateway.md#key-terms)都收到完整的模型输入，包括网关补充的记忆和 OpenViking 工具的结果。只添加你放心交出这些数据的服务商。
 
-也有一些内容不会离开网关：`X-OpenViking-*` 请求头、客户端凭证和 Cookie 从不转发给上游。上游设为由每个客户端提供自己的服务商密钥时，这把密钥只作为该上游的凭证发给服务商。
+也有一些内容不会离开网关：`X-OpenViking-*` 请求头、客户端凭证和 Cookie 从不转发给上游，服务商响应中的 `X-OpenViking-*` 响应头也从不传给客户端。上游设为由每个客户端提供自己的服务商密钥时，这把密钥只作为该上游的凭证发给服务商。
 
 ## 访问控制 {#access-control}
 
@@ -63,6 +63,10 @@ SQLite 文件只有运行网关的系统用户能读取；Redis 由网络和 ACL
 
 包括管理 API 在内的完整规则见[权限矩阵](../api/25-gateway.md#credentials-and-account-scope)；各角色在 Studio 中能做什么，见[谁能修改什么](06-manage-in-studio.md#who-can-change-what)。
 
+### 来自宿主的请求头 {#headers-from-a-host}
+
+`trusted_host_headers: true` 时，请求记录从请求头 `X-OpenViking-Resource-Id` 和 `X-OpenViking-Request-Source` 取得 `resource_id` 和 `request_source`。网关无法分辨这些请求头是谁设置的，能直接访问网关的客户端就可以往自己的记录里写入任意值。只有网络策略只允许网关前面的宿主访问网关时，才打开这个设置；并让宿主覆盖这些请求头，而不是透传客户端发来的值。`X-OpenViking-Request-Id` 对任何调用方都会采用，它只用于标识请求，不授予任何权限。
+
 ## 保留期限 {#retention}
 
 网关数据会自动过期。SQLite 每小时执行清理，Redis 使用键 TTL：
@@ -75,7 +79,7 @@ SQLite 文件只有运行网关的系统用户能读取；Redis 由网络和 ACL
 | Responses 响应与上游的对应关系 | 30 天 | `response_ttl_seconds` |
 | OpenViking 中的会话和记忆 | 遵循 OpenViking 自己的规则 | — |
 
-OpenViking 密钥记录过期，或被使用 `volatile-lru` 的 Redis 后端驱逐后，写回任务因读不到凭据而以 `gateway_key_revoked` 暂停。用户的下一个请求会重建记录，并在同一 scope 中恢复写回。如果用户不再请求，最后一轮待写回内容不会存入 OpenViking。这些状态属于缓存，允许丢失。与吊销一样，现有的短时进程内缓存可能延迟观察到过期。
+OpenViking 密钥记录在密钥使用期间会自动续期：剩余时间不到 `session_ttl_seconds` 的一半时，请求会把记录按完整时长重新保存。记录仍然过期，或被使用 `volatile-lru` 的 Redis 后端驱逐后，写回任务读不到凭据，会以 `gateway_key_missing` 每 5 分钟重试一次，最多持续 `session_ttl_seconds`，之后以 `gateway_key_revoked` 暂停。用户的下一个请求会重建记录，并在同一 scope 中恢复写回。如果用户不再请求，最后一轮待写回内容不会存入 OpenViking。这些状态属于缓存，允许丢失。与吊销一样，现有的短时进程内缓存可能延迟观察到过期。
 
 Redis 每个账号最多保留 10,000 条请求日志。读取时跳过早于 `log_retention_days` 的条目；这些条目仍留在存储中，直到被更新的条目挤出上限，或者该账号连续 `log_retention_days` 没有新日志。Redis 不需要每小时清理。Redis Responses 路由记录按 TTL 过期，删除用户时不扫描它们；被吊销的密钥无法访问这些记录。
 

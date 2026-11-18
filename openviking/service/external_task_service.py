@@ -657,8 +657,9 @@ class ExternalTaskService:
                                 **self._session_request(task, auth),
                             )
                         except ExternalTaskError as exc:
-                            logger.warning(
-                                "Failed to stop Compile session %s: %s", session_id, exc.code
+                            logger.info(
+                                "Compile session cancellation failed; continuing recovered cleanup",
+                                extra={"task_id": task_id, "error_type": type(exc).__name__},
                             )
             elif saved_failure:
                 failure = ExternalTaskError(
@@ -1058,12 +1059,16 @@ class ExternalTaskService:
                         sanitize_error(str(exc) or type(exc).__name__),
                         transient=False,
                     ) from exc
-                logger.warning(
-                    "External task %s will retry task=%s code=%s: %s",
-                    operation_name,
-                    task_id,
-                    getattr(exc, "code", type(exc).__name__),
-                    sanitize_error(str(exc)),
+                logger.info(
+                    "External task operation will retry",
+                    extra={
+                        "task_id": task_id,
+                        "operation": operation_name,
+                        "error_type": type(exc).__name__,
+                        "attempt": attempt + 1,
+                        "retry_limit": max_attempts,
+                        "delay": delay,
+                    },
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 30.0)

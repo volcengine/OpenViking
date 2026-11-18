@@ -3,7 +3,7 @@
 use super::envelope::QueryCacheEnvelope;
 use super::CacheMetrics;
 use crate::cache_runtime::{
-    CacheError, CacheResult, CacheRuntime, ScriptDefinition, ScriptRequest, ScriptValue,
+    CacheError, CacheResult, CacheRuntime, ScriptRequest, ScriptValue,
 };
 use crate::core::filesystem::{apply_read_dir_options, normalize_prefix_path};
 use crate::core::internal_names::is_hidden_internal_name;
@@ -96,19 +96,10 @@ redis.call("UNLINK", KEYS[1])
 redis.call("ZREM", KEYS[2], KEYS[1])
 return 1
 "#;
-const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
-    ScriptDefinition {
-        id: BEGIN_FILL_SCRIPT_ID,
-        redis_lua: BEGIN_FILL_SCRIPT,
-    },
-    ScriptDefinition {
-        id: FILL_SCRIPT_ID,
-        redis_lua: FILL_SCRIPT,
-    },
-    ScriptDefinition {
-        id: DELETE_BUCKET_SCRIPT_ID,
-        redis_lua: DELETE_BUCKET_SCRIPT,
-    },
+const SCRIPT_DEFINITIONS: &[(&str, &str)] = &[
+    (BEGIN_FILL_SCRIPT_ID, BEGIN_FILL_SCRIPT),
+    (FILL_SCRIPT_ID, FILL_SCRIPT),
+    (DELETE_BUCKET_SCRIPT_ID, DELETE_BUCKET_SCRIPT),
 ];
 
 /// A provider-independent read-through filesystem cache.
@@ -141,9 +132,9 @@ impl CachedFileSystem {
         runtime: Arc<CacheRuntime>,
         service_name: String,
     ) -> Self {
-        for definition in SCRIPT_DEFINITIONS {
+        for &(script_id, redis_lua) in SCRIPT_DEFINITIONS {
             runtime
-                .register_script(*definition)
+                .register_script(script_id.to_string(), redis_lua.to_string())
                 .expect("CacheFS script registration must succeed");
         }
         Self {

@@ -85,6 +85,8 @@ def labels(
     enabled="true",
     run_number=2,
     ubuntu24_image="",
+    ubuntu20_image="",
+    check_linux_runner=False,
     contexts=None,
 ):
     """Evaluate only the routing expressions in these checked-in workflows."""
@@ -102,6 +104,8 @@ def labels(
         "vars.CI_LINUX_BUILDS_ENABLED": enabled,
         "github.run_number": run_number,
         "vars.CI_UBUNTU24_IMAGE": ubuntu24_image,
+        "vars.CI_UBUNTU20_IMAGE": ubuntu20_image,
+        "inputs.check_linux_runner": check_linux_runner,
     }.items():
         expression = expression.replace(key, repr(value))
     expression = re.sub(r"matrix\.(\w+)", lambda match: repr(row[match[1]]), expression)
@@ -185,8 +189,79 @@ def test_only_selected_builds_and_explicit_diagnostic_reference_self_hosted():
 
 def test_wheels_keep_glibc_baseline_and_native_arm_runner():
     wheel = jobs("_build.yml")["build-linux"]
-    assert wheel["container"]["image"] == "ubuntu:20.04"
+    assert labels(wheel["container"]["image"], {"arch": "x86_64"}) == ["ubuntu:20.04"]
+    image = "ghcr.io/volcengine/openviking-ci-ubuntu20@sha256:tested"
+    assert labels(wheel["container"]["image"], {"arch": "x86_64"}, ubuntu20_image=image) == [image]
+    assert labels(wheel["container"]["image"], {"arch": "aarch64"}, ubuntu20_image=image) == [
+        "ubuntu:20.04"
+    ]
     assert labels(wheel["runs-on"], {"arch": "aarch64"}) == ["ubuntu-24.04-arm"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux compiler selection uses bash")
+@pytest.mark.parametrize("glibc,expected_status", [("glibc 2.31", 0), ("glibc 2.39", 1)])
+def test_wheel_toolchain_rejects_newer_glibc(tmp_path, glibc, expected_status):
+    step = next(
+        step
+        for step in jobs("_build.yml")["build-linux"]["steps"]
+        if step.get("name") == "Select compiler toolchain (Linux)"
+    )
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    for name, output in [
+        ("getconf", glibc),
+        ("gcc", "gcc 9"),
+        ("g++", "g++ 9"),
+        ("gcc-10", "gcc 10"),
+        ("g++-10", "g++ 10"),
+    ]:
+        executable = command_dir / name
+        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\n")
+        executable.chmod(0o755)
+    env_file = tmp_path / "environment"
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+        env={
+            **environ,
+            "PATH": f"{command_dir}{pathsep}{environ['PATH']}",
+            "GITHUB_ENV": str(env_file),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == expected_status
+    if expected_status == 0:
+        assert env_file.read_text().splitlines() == [
+            "CC=gcc-10",
+            "CXX=g++-10",
+            "OV_REQUIRE_RAGFS_BUILD=1",
+        ]
+    else:
+        assert "glibc 2.31" in result.stdout
+        assert not env_file.exists()
+
+
+def test_ubuntu20_image_preinstalls_all_wheel_bootstrap_packages():
+    step = next(
+        step
+        for step in jobs("_build.yml")["build-linux"]["steps"]
+        if "packages=(" in step.get("run", "")
+    )
+    packages = re.search(r"packages=\((.*?)\)", step["run"], re.DOTALL).group(1).split()
+    dockerfile = (WORKFLOWS.parent / "images/ubuntu20-ci.Dockerfile").read_text()
+    installed = re.search(
+        r"install -y --no-install-recommends(.*?)&&", dockerfile, re.DOTALL
+    ).group(1)
+    assert set(packages) == set(installed.replace("\\", "").split())
+    assert "clang" not in packages
+    assert dockerfile.startswith("FROM ubuntu:20.04\n")
+    publish = next(
+        step
+        for step in jobs("ci-linux-image.yml")["build"]["steps"]
+        if step.get("name") == "Verify installed system dependencies"
+    )
+    verified = re.search(r"packages=\((.*?)\)", publish["run"], re.DOTALL).group(1).split()
+    assert set(verified) == set(packages)
 
 
 def test_studio_stays_hosted_and_native_runtime_keeps_ubuntu24_baseline():
@@ -214,7 +289,7 @@ def test_all_musl_targets_stay_hosted():
 
 def test_wheel_container_restores_workspace_ownership():
     job = jobs("_build.yml")["build-linux"]
-    assert job["container"]["image"] == "ubuntu:20.04"
+    assert labels(job["container"]["image"], {"arch": "x86_64"}) == ["ubuntu:20.04"]
     assert 0 < job["timeout-minutes"] <= 60
     assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in job["steps"])
 
@@ -285,7 +360,32 @@ def test_runner_diagnostic_is_explicit_and_does_not_checkout_code():
     assert diagnostic["timeout-minutes"] == 5
     assert "workflow_dispatch" in diagnostic["if"]
     assert "inputs.check_linux_runner" in diagnostic["if"]
+    assert "!inputs.build_wheels" in diagnostic["if"]
     assert all("uses" not in step for step in diagnostic["steps"])
+
+
+@pytest.mark.parametrize("number", [1, 2])
+@pytest.mark.parametrize("check_linux_runner", [False, True])
+@pytest.mark.parametrize(
+    "arch,expected",
+    [
+        ("x86_64", ["ubuntu-24.04"]),
+        ("aarch64", ["ubuntu-24.04-arm"]),
+    ],
+)
+def test_manual_runner_check_does_not_change_wheel_routing(
+    number, check_linux_runner, arch, expected
+):
+    assert (
+        labels(
+            jobs("_build.yml")["build-linux"]["runs-on"],
+            {"arch": arch},
+            event="workflow_dispatch",
+            check_linux_runner=check_linux_runner,
+            run_number=number,
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize("number", [1, 2])
@@ -374,6 +474,7 @@ def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
 @pytest.mark.parametrize(
     "file,name",
     [
+        ("_build.yml", "build-linux"),
         ("api_test.yml", "native-runtime"),
         ("api_test.yml", "api-tests"),
         ("api_test.yml", "database-tests"),
@@ -382,7 +483,13 @@ def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
 )
 @pytest.mark.parametrize("installed", [True, False])
 def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, file, name, installed):
-    step = next(step for step in jobs(file)[name]["steps"] if "packages=(" in step.get("run", ""))
+    job = jobs(file)[name]
+    step = next(step for step in job["steps"] if "packages=(" in step.get("run", ""))
+    shell = step.get("shell", job.get("defaults", {}).get("run", {}).get("shell"))
+    if shell and shell.startswith("${{"):
+        shell = labels(shell, {"os": "ubuntu-24.04"})[0]
+    # Container jobs default to sh, which cannot execute the package arrays.
+    assert shell == "bash"
     command_dir = tmp_path / "bin"
     command_dir.mkdir()
     apt_log = tmp_path / "apt.log"
@@ -395,18 +502,20 @@ def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, fil
         ),
         "sed": "#!/bin/sh\nexit 0\n",
         "apt-get": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$APT_LOG"\n',
+        "ln": "#!/bin/sh\nexit 0\n",
+        "dpkg-reconfigure": "#!/bin/sh\nexit 0\n",
     }
     for name, script in scripts.items():
         executable = command_dir / name
         executable.write_text(script)
         executable.chmod(0o755)
     result = subprocess.run(
-        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+        [shell, "-e", "-o", "pipefail", "-c", step["run"]],
         env={
             **environ,
             "PATH": f"{command_dir}{pathsep}{environ['PATH']}",
             "APT_LOG": str(apt_log),
-            "MISSING_PACKAGE": "" if installed else "git",
+            "MISSING_PACKAGE": "" if installed else "gcc-10" if file == "_build.yml" else "git",
             "UBUNTU_MIRROR": "",
         },
         capture_output=True,
@@ -422,6 +531,8 @@ def test_preinstalled_image_skips_apt_but_partial_image_bootstraps(tmp_path, fil
         assert calls[0].endswith(" update")
         assert "install -y --no-install-recommends" in calls[1]
         assert "git" in calls[1].split()
+        if file == "_build.yml":
+            assert {"gcc-10", "g++-10"} <= set(calls[1].split())
 
 
 @pytest.mark.parametrize("container", ["", "ubuntu:24.04"])

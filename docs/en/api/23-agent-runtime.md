@@ -4,7 +4,7 @@ OpenViking owns Compile configuration, task submission, snapshots and recovery. 
 
 ## Compile configuration and execution
 
-A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain 1–64 ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique for each user within an account. Whitespace is rejected rather than trimmed. The first character cannot be a hyphen. Different users or accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
+A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain Han characters, ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique for each user within an account. Whitespace is rejected rather than trimmed. ASCII-only names allow up to 64 characters. A name containing any Han character allows up to 32 characters in total. The first character cannot be a hyphen. Different users or accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
 
 Ordinary Compile validates normalized directory URIs when creating or updating configuration and when submitting a new manual or scheduled execution:
 
@@ -172,6 +172,8 @@ The Python example uses `SyncHTTPClient`; use `await` with `AsyncHTTPClient`.
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | One frozen run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | Changed output files derived from run snapshots; `outputs` and `next_cursor` |
 
+Run history queries use the caller's account and user scope. An absent runs directory returns an empty list; an absent run returns 404 for run details and outputs.
+
 List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id`, `latest_snapshot_id` and `change_type`. `snapshot_id` is the frozen run snapshot; `latest_snapshot_id` is the file’s latest change commit at query time (null if no history). It may identify a later deletion, in which case reading that version returns 404. History errors propagate; only returned page items require history reads.
 
 Configuration updates require `compile_name`, `from`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. The optional `to` field preserves the saved output directory when omitted or null. When supplied, its normalized value must match the configuration's saved output directory. Changing the output directory returns `400 INVALID_ARGUMENT` and leaves the configuration unchanged; other inputs such as `from` and `skill` remain editable. Omitting or passing null for top-level `update_schedule` preserves the saved plan. Enabling updates requires a supplied or saved plan. Disabling updates preserves the plan, clears execution credentials and the next trigger time, and unregisters scheduling; `auto_update` controls whether the plan is active. Do not place schedule controls in update `args`. Configuration updates preserve the last successful `progress`. Execution compares the instruction, Skill and its snapshot, and `model_name`; mismatches require a full compile. Existing source directories use incremental changes, while new source directories are processed in full. Updates apply the same directory constraints and durably enqueue independent tagging without waiting for tags. Updating configuration does not run Compile or reset invocation times.
@@ -207,7 +209,7 @@ The only Compile business files are:
 /local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-`configuration_directory` is the lowercase hexadecimal encoding of the name's ASCII bytes (`compile_name.encode("ascii").hex()`), with no prefix. This preserves case-sensitive names even on case-insensitive storage. Public APIs receive and return the original `compile_name`, not its directory encoding.
+ASCII names use their lowercase hexadecimal bytes as `configuration_directory`. Names containing Han characters use `u-` followed by the unpadded lowercase Base32 encoding of their UTF-8 bytes. Both directory formats preserve case distinctions on case-insensitive storage.
 
 Configurations are stored in account and user directories. Public APIs locate configurations by their original `compile_name`.
 

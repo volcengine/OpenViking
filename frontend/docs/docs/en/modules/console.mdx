@@ -42,11 +42,15 @@ Omit `conversation.messages`, `conversation.onSend`, and `conversation.composer`
 
 Console manages requests, sessions and streaming state internally. Adapt another backend with a stable `chatOptions.service` implementing both chat and session contracts. Changing panel mode preserves the conversation; selecting or starting a session cancels the old connection. Persistence errors appear separately and do not turn a successful answer into a failed send.
 
+Select **Create Wiki** or **Schedule daily report** to fill an empty draft or switch presets. When you send the prompt, the configured conversation service handles the request. Console shows any compilation questions the service returns through the same confirmation flow described below. Set `conversation.quickInputs` to supply your own list, or pass `[]` to hide the shortcuts.
+
 ```tsx file="../../_demos/console-chat.tsx" preview
 
 ```
 
 This example uses simulated services, including native capabilities and the current commercial contract. The native adapter implements `interrupt` and `steer` for stopping and in-flight follow-ups. The current commercial adapter omits both: sending is disabled during generation and stop is hidden. Both support another question after completion.
+
+Click the toolbar `@` or type `@` in the draft to browse, search and reference files or directories. The built-in picker uses `/api/v1/fs/ls` and `/api/v1/search/glob` in the current request scope and loads only when opened. Set `conversation.references` to supply your own candidates and selection. Custom chat services receive the chosen items in the `references` field.
 
 ### Human input
 
@@ -191,11 +195,12 @@ Return `kind: 'custom'` from `createRequest` to render a component that submits 
 
 ### VikingBotSessionService
 
-| Property      | Description      | Type                                                            | Default  |
-| ------------- | ---------------- | --------------------------------------------------------------- | -------- |
-| listSessions  | List sessions    | `(signal: AbortSignal) => Promise<readonly VikingBotSession[]>` | Required |
-| createSession | Create a session | `(signal: AbortSignal) => Promise<VikingBotSession>`            | Required |
-| removeSession | Delete a session | `(id: string, signal: AbortSignal) => Promise<void>`            | Required |
+| Property      | Description                                              | Type                                                                | Default  |
+| ------------- | -------------------------------------------------------- | ------------------------------------------------------------------- | -------- |
+| listSessions  | List sessions                                            | `(signal: AbortSignal) => Promise<readonly VikingBotSession[]>`     | Required |
+| createSession | Create a session                                         | `(signal: AbortSignal) => Promise<VikingBotSession>`                | Required |
+| removeSession | Delete a session                                         | `(id: string, signal: AbortSignal) => Promise<void>`                | Required |
+| renameSession | Persist a session title and enable renaming from history | `(id: string, title: string, signal: AbortSignal) => Promise<void>` | Optional |
 
 ### VikingBotChatEvent
 
@@ -232,7 +237,7 @@ Declare tasks started by a tool in `tool-result.tasks`, with a required `id` and
 | error      | Server task error                                             | `string`                                                                           | -        |
 | queryError | Scheduler query error; the last known task state is preserved | `{ code: 'request' \| 'invalid-response'; message?: string }`                      | -        |
 
-Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Active task notifications use the built-in loading icon; terminal states replace it with their result icon. Query failures display a warning without changing the task status.
+Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Resource import progress is shown in its result record. Other active tasks also show a loading notification. Terminal states show the result icon, and query failures display a warning while the task status stays the same.
 
 The task snapshot uses the completed result's resource URI when available and retains the submission URI as a fallback. A custom task service can provide the final resource directly in `uri`. When a terminal task completes with a resource URI, **View result** opens it through `command.onOpenUri` or `Console.onOpenUri`. The notification remains until the user opens the result or dismisses it.
 
@@ -280,30 +285,30 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 
 - Write a command as `ov find`, `/find` or just `find`.
 - Wrap arguments that contain spaces in single or double quotes; a backslash also escapes a character.
-- Quote values that start with `--`, for example `ov write viking://resources/a.md "--heading"`, or end option parsing with `--`, for example `ov write viking://resources/a.md -- --heading`. Option values work the same way, for example `--description "--example"`.
+- Quote values that start with `--`, as in `ov write viking://resources/a.md --content "--heading"`. Use `--` to end option parsing before a positional value. Short options are case-sensitive. In `tree`, `-L` sets tree depth and `-l` sets the abstract length limit.
 - Arguments are parsed as data and no shell runs. Unquoted `| ; & < > $` and backticks are rejected, so quote URLs that contain `&`.
-- Unknown options, repeated single-value options, missing arguments, URIs that do not start with `viking://` and unclosed quotes produce a failed record without sending a request.
+- Unknown options, repeated single-value options, missing arguments, invalid resource URIs and unclosed quotes produce a failed record without sending a request.
 
 ### Supported commands
 
-| Capability      | Commands                                                                                                                                                                                                                       |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Add and compile | `add-resource <path>`, `add-skill <path>`, `add-memory <content> --session-id <session-id>`, `compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>`, `compile --compile-name <name>` |
-| Local           | `help`, `clear`                                                                                                                                                                                                                |
-| Service         | `health`, `status`                                                                                                                                                                                                             |
-| Browse          | `ls [uri]`, `tree [uri]`, `stat <uri>`                                                                                                                                                                                         |
-| Content         | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                                                                                                                                               |
-| Search          | `find <query>`, `search <query>`, `grep <pattern>`, `glob <pattern>`                                                                                                                                                           |
-| Write           | `mkdir <uri>`, `write <uri> <content>`, `cp <from_uri> <to_uri>`, `mv <from_uri> <to_uri>`, `rm <uri>`                                                                                                                         |
-| Tasks           | `task list`, `task status <id>`, `task cancel <id>`                                                                                                                                                                            |
+| Capability      | Commands                                                                                                                                                                                                                                      |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Add and compile | `add-resource [path-or-url]`, `add-skill [skill-content-or-url]`, `add-memory <content> --session-id <id>`, `compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>`, `compile --compile-name <name>` |
+| Local           | `help`, `clear`                                                                                                                                                                                                                               |
+| Service         | `health`, `status`                                                                                                                                                                                                                            |
+| Browse          | `ls [uri]`, `tree <uri>`, `stat <uri>`                                                                                                                                                                                                        |
+| Content         | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                                                                                                                                                              |
+| Search          | `find [query]`, `search [query]`, `grep <pattern>`, `glob <pattern>`                                                                                                                                                                          |
+| Write           | `mkdir <uri>`, `write <uri> --content <text>`, `cp <from-uri> <to-uri>`, `mv <from-uri> <to-uri>`, `rm <uri>`                                                                                                                                 |
+| Tasks           | `task list [--task-type <type>] [--status <status>]`, `task status <task-id>`, `task cancel <task-id>`                                                                                                                                        |
 
-- `ls` and `tree` start from `viking://` by default and return at most 100 entries; page with `--limit` and `--offset`, and `tree` also accepts `--level_limit`.
-- `write` replaces existing content by default; `--mode create` creates a file and `--mode append` appends.
-- `add-resource` and `add-skill` accept remote addresses, not local file paths.
+- `ls` defaults to `viking://`. Both `ls` and `tree` use `-n` or `--node-limit` to cap results, with a default of 256, and `-a` or `--all` to include hidden files. Use `-r` or `--recursive` and `-s` or `--simple` with `ls`. Set depth with `ov tree viking://resources -L 2` or `ov tree viking://resources --level-limit 2`. Tree depth defaults to 3. The existing `--offset` option also works for paging.
+- For ranked `find` and `search`, use `-u` or `--uri` to scope the results, `-n` or `--node-limit` to cap them, and `-t` or `--threshold` to set a minimum score. Both accept `--image <url>` to search by image and `--after` or `--before` to filter by time. Use `--mode context` with `search` to assemble context. `grep` accepts `-i` or `--ignore-case`, `-x` or `--exclude-uri`, and `-L` or `--level-limit`.
+- `write` replaces existing content by default. Choose `--mode create` to create a file or `--append` to append text. Pass a quoted JSON object to `--acl` on `mkdir` or `write`, as in `ov mkdir viking://resources/demo --acl '{"acl_mode":"inherit","entries":[]}'`. Use `-r` or `--recursive` when copying or removing a directory tree.
+- `add-resource` accepts a remote address with optional `--include` and `--exclude` filters. Both `add-resource` and `add-skill` accept `--temp-file-id <id>` for a file uploaded by the host application. `add-skill` also accepts inline Skill content and uses `-p` or `--target-uri` to set the destination.
 - `add-memory` appends the content to the session given by `--session-id` as a user message, then commits that session.
-- Save a named configuration with `compile create`, then run it with `compile --compile-name <name>`. Repeat `--from` or separate source directory URIs with commas. Use `--instruction` for extra instructions and `--args` for model and scheduling options as a JSON object. `task status <id>` checks the returned task ID.
+- Save a named configuration with `compile create`, then run it with `compile --compile-name <name>`. Repeat `--from` or separate source directory URIs with commas. Use `--instruction` for extra instructions and `--args` for model and scheduling options as a JSON object. `task status <task-id>` checks the returned task ID.
 - `task cancel` asks the server for cooperative cancellation, so a task may not stop immediately.
-- Option spelling differs by command: `add-skill` uses `--target-uri` while `find` uses `--target_uri`. Check `ov help` for the exact names.
 - Imports, compiles and memory commits returning task IDs are tracked automatically. Task state is separate from submission results, and the terminal unlocks when submission returns.
 - The command set covers only native APIs that a browser can call; local configuration, login, local file upload or download and session management commands are not included.
 

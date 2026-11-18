@@ -303,7 +303,11 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
+| `cache.instances` | object | required when a cache consumer is enabled | Named CacheRuntime providers; must include `default` |
+| `agfs.cachefs.instance` | instance name | `"default"` | Runtime used when `cachefs.backend="cache"` |
+| `agfs.queuefs.instance` | instance name | `"default"` | Runtime used when `queuefs.backend="cache"` |
 | `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `postgres`, `cache` | `filesystem` | Path lock storage; `postgres` uses PostgreSQL directly, `cache` uses Redis |
+| `agfs.pathlock.instance` | instance name | `"default"` | Runtime used when `pathlock.provider="cache"`; it must use Redis |
 | `agfs.pathlock.sqlite_path` | absolute local file path | `{workspace}/_system/pathlock/pathlock.db` for `sqlite` | Shared SQLite lock database; optional override |
 | `agfs.pathlock.postgres_dsn_env` | environment variable name / `null` | `null` | Required for `postgres`; names the server environment variable containing the PostgreSQL DSN |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb`, `opengauss`, `pgvector` | `local` | Vector database backend; see [pgvector setup](../guides/25-pgvector.md) |
@@ -444,7 +448,8 @@ requirement, local vector storage's process lock, or other backend concurrency l
 #### Redis PathLock
 
 For Redis coordination,
-set `storage.agfs.pathlock.provider="cache"` and top-level `cache.provider="redis"`.
+set `storage.agfs.pathlock.provider="cache"` and select a Redis entry from
+`cache.instances` with `storage.agfs.pathlock.instance`.
 All replicas must use the same Redis deployment, top-level `service_name`, and
 lock expiry setting. See the [shared Redis configuration example](../guides/01-configuration.md).
 With either PathLock provider, shared QueueFS must also use a backend suitable for that deployment, such as
@@ -592,7 +597,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
     "host": "127.0.0.1",
     "port": 1933,
     "workers": 1,
-    "executor_threads": 0,
+    "executor_threads": 64,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -610,7 +615,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `host` | IP / hostname | `"127.0.0.1"` | Listen address |
 | `port` | integer | `1933` | Listen port |
 | `workers` | integer | `1` | Worker process count |
-| `executor_threads` | non-negative integer | `0` | Maximum threads in each worker process's default asyncio executor; `0` uses Python's default sizing policy |
+| `executor_threads` | non-negative integer | `64` | Maximum threads in each worker process's default asyncio executor; `0` uses Python's default sizing policy |
 | `timeout_keep_alive` | integer (seconds) | `5` | Idle HTTP keep-alive timeout; raise it above the upstream's idle-connection lifetime |
 | `auth_mode` | `dev`, `api_key`, `trusted` / `null` | `null` | Auth mode; null is inferred from `root_api_key` |
 | `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |

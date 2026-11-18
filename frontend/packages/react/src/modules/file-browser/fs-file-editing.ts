@@ -2,7 +2,8 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewEditing } from '../../components/file-preview/index.js';
 import { isExperienceFile } from './experience-data.js';
-import { isSummaryUri, isSystemUri } from './preview-policy.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
+import { isSummaryUri } from './preview-policy.js';
 import { readFileContent } from './fs-read-content.js';
 import { parseWikiFileConflicts } from './wiki-conflicts.js';
 
@@ -15,6 +16,7 @@ export function createFileEditing(
   options: OvRequestOptions,
   onSave?: () => void,
   isWiki = false,
+  onWikiSaving?: (saving: boolean) => void,
 ): FilePreviewEditing | undefined {
   if (
     !EDITABLE_TEXT.test(name) ||
@@ -44,21 +46,32 @@ export function createFileEditing(
                 reason,
               }))
           : undefined;
-      return { content, annotations };
+      return {
+        content,
+        annotations,
+        // The full Wiki read keeps the projected body as an exact prefix.
+        readOnlySuffix: wikiSource?.slice(content.length) || undefined,
+      };
     },
     save: async (content) => {
-      await client.request({
-        method: 'POST',
-        path: OV_PATHS.contentWrite,
-        body: {
-          uri,
-          content,
-          mode: 'replace',
-          // The native write contract preserves and updates Wiki conflict history.
-          ...(wiki ? { resolve_conflicts: true, use_snapshot: true } : {}),
-        },
-        options,
-      });
+      const notify = wiki ? onWikiSaving : undefined;
+      notify?.(true);
+      try {
+        await client.request({
+          method: 'POST',
+          path: OV_PATHS.contentWrite,
+          body: {
+            uri,
+            content,
+            mode: 'replace',
+            // The native write contract preserves and updates Wiki conflict history.
+            ...(wiki ? { resolve_conflicts: true, use_snapshot: true } : {}),
+          },
+          options,
+        });
+      } finally {
+        notify?.(false);
+      }
     },
     onSave,
   };

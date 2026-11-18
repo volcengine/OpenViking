@@ -505,6 +505,22 @@ html.dark .ov-file-browser-search {
 .ov-file-preview {
   --ov-ui-syntax-number-default: #722ed1;
   --ov-ui-preview-inline-code-bg-default: #fbfbfd;
+  --ov-ui-editor-code-text-default: #000000;
+  --ov-ui-editor-code-keyword-default: #0000ff;
+  --ov-ui-editor-code-comment-default: #008000;
+  --ov-ui-editor-selection-default: #b9cbe1;
+  --ov-ui-editor-markdown-link-default: #a31515;
+  --ov-ui-editor-markdown-code-default: #001188;
+  --ov-ui-editor-yaml-key-default: #008080;
+  --ov-ui-editor-yaml-string-default: #0451a5;
+  --ov-ui-editor-yaml-number-default: #098658;
+  --ov-ui-editor-yaml-tag-default: #800000;
+  --ov-ui-editor-conflict-line-default: rgb(255 128 0 / 14%);
+  --ov-ui-editor-conflict-gutter-default: #ffeddb;
+  --ov-ui-editor-conflict-accent-default: #ff9900;
+  --ov-ui-editor-conflict-tooltip-default: #fff5eb;
+  --ov-ui-editor-conflict-border-default: #f6ba7b;
+  --ov-ui-editor-conflict-shadow-default: rgb(0 0 0 / 8%);
 }
 html.dark .ov-file-preview {
   --ov-ui-syntax-number-default: #b37feb;
@@ -512,6 +528,22 @@ html.dark .ov-file-preview {
     --color-bg-2,
     var(--ov-ui-bg-2-default)
   );
+  --ov-ui-editor-code-text-default: var(--ov-ui-text-1-default);
+  --ov-ui-editor-code-keyword-default: #569cd6;
+  --ov-ui-editor-code-comment-default: #6a9955;
+  --ov-ui-editor-selection-default: #264f78;
+  --ov-ui-editor-markdown-link-default: #ce9178;
+  --ov-ui-editor-markdown-code-default: #9cdcfe;
+  --ov-ui-editor-yaml-key-default: #9cdcfe;
+  --ov-ui-editor-yaml-string-default: #ce9178;
+  --ov-ui-editor-yaml-number-default: #b5cea8;
+  --ov-ui-editor-yaml-tag-default: #d7ba7d;
+  --ov-ui-editor-conflict-line-default: rgb(255 128 0 / 14%);
+  --ov-ui-editor-conflict-gutter-default: var(--ov-ui-warning-light-default);
+  --ov-ui-editor-conflict-accent-default: var(--ov-ui-warning-default);
+  --ov-ui-editor-conflict-tooltip-default: var(--ov-ui-warning-light-default);
+  --ov-ui-editor-conflict-border-default: var(--ov-ui-warning-default);
+  --ov-ui-editor-conflict-shadow-default: rgb(0 0 0 / 32%);
 }
 
 .ov-file-preview,
@@ -526,6 +558,22 @@ html.dark .ov-error-boundary,
 html.dark .ov-file-browser-search {
   --ov-ui-preview-backdrop-default: var(--ov-ui-bg-4-default);
   --ov-ui-preview-dot-default: rgb(255 255 255 / 12%);
+}
+
+.ov-experience-dashboard {
+  --ov-ui-test-message-surface-default: #fcfcfc;
+}
+
+html.dark .ov-experience-dashboard {
+  --ov-ui-test-message-surface-default: var(--ov-ui-bg-2-default);
+}
+
+.ov-experience-trajectory-detail {
+  --ov-ui-trajectory-message-surface-default: #f9f9f9;
+}
+
+html.dark .ov-experience-trajectory-detail {
+  --ov-ui-trajectory-message-surface-default: var(--ov-ui-bg-3-default);
 }
 
 /* Shared dashboards: mapped from the 2026-11-12 console release, with host-overridable semantics. */

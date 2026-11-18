@@ -2,46 +2,105 @@ import { OV_PATH_BUILDERS, OV_PATHS } from '../../client/paths.js';
 import type { CommandSpec } from './command-specs.js';
 import type { Argument } from './command-parser.js';
 import { ConsoleCommandError } from './command-messages.js';
+import { COMPILE_COMMAND_SPECS } from './compile-command-specs.js';
 
-const wikiSkill = 'viking://system/compile/example-skills/llm-wiki/SKILL.md';
-const compileName: Argument = {
-  name: 'compile-name',
-  placeholder: 'name',
-  pattern: /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/,
-  required: true,
+const tempFileId: Argument = {
+  name: 'temp-file-id',
+  valueKey: 'temp_file_id',
+  placeholder: 'id',
+  pattern: /\S/,
 };
-const compileInputs: readonly Argument[] = [
-  { name: 'from', kind: 'uri-list', placeholder: 'source-uri', required: true },
-  { name: 'to', kind: 'uri', placeholder: 'target-uri', required: true },
-  { name: 'skill', kind: 'uri', placeholder: 'skill-uri', required: true },
-  { name: 'instruction', placeholder: 'text' },
-];
+const telemetry: Argument = {
+  name: 'telemetry',
+  kind: 'boolean-or-json',
+  placeholder: 'true|json',
+};
 
-function jsonOptions(input: unknown): Record<string, unknown> {
+function validateSource(source: unknown, uploadId: unknown, label: string) {
+  const options = `${label} / --temp-file-id`;
+  if (!source && !uploadId)
+    throw new ConsoleCommandError('missingArgument', options);
+  if (source && uploadId)
+    throw new ConsoleCommandError('invalidArgument', options);
+}
+
+/** The native skill endpoint accepts Markdown, a URL or a structured Skill. */
+function skillSource(source: unknown) {
+  if (typeof source !== 'string' || !source.trimStart().startsWith('{'))
+    return source;
   try {
-    const value: unknown = JSON.parse(String(input));
-    if (value && typeof value === 'object' && !Array.isArray(value))
-      return value as Record<string, unknown>;
+    return JSON.parse(source) as unknown;
   } catch {
-    // Parser errors and non-object input use the same command error.
+    throw new ConsoleCommandError('invalidArgument', '<skill-content-or-url>');
   }
-  throw new ConsoleCommandError('invalidArgument', '--args');
 }
 
 export const CORE_COMMAND_SPECS: readonly CommandSpec[] = [
   {
     name: 'add-resource',
-    positional: [{ name: 'path' }],
+    positional: [
+      {
+        name: 'path',
+        descriptionKey: 'resource-source',
+        placeholder: 'path-or-url',
+        pattern: /\S/,
+        optional: true,
+      },
+    ],
     flags: [
+      tempFileId,
       { name: 'to', kind: 'uri' },
       { name: 'parent', kind: 'uri' },
       { name: 'parent-auto-create', kind: 'uri', alias: '-p' },
-      { name: 'reason' },
-      { name: 'args' },
+      {
+        name: 'create-parent',
+        valueKey: 'create_parent',
+        kind: 'boolean',
+        hidden: true,
+      },
+      { name: 'reason', placeholder: 'text' },
+      {
+        name: 'instruction',
+        placeholder: 'text',
+        descriptionKey: 'resource-instruction',
+      },
+      { name: 'ignore-dirs', valueKey: 'ignore_dirs', placeholder: 'names' },
+      { name: 'include', placeholder: 'patterns' },
+      { name: 'exclude', placeholder: 'patterns' },
+      { name: 'strict', kind: 'boolean', hidden: true },
+      {
+        name: 'directly-upload-media',
+        valueKey: 'directly_upload_media',
+        kind: 'boolean',
+        hidden: true,
+      },
+      {
+        name: 'preserve-structure',
+        valueKey: 'preserve_structure',
+        kind: 'boolean',
+        hidden: true,
+      },
+      { ...telemetry, hidden: true },
+      {
+        name: 'watch-interval',
+        valueKey: 'watch_interval',
+        kind: 'number',
+        min: 0,
+        placeholder: 'minutes',
+        helpDefault: 0,
+      },
+      { name: 'args', kind: 'json-object', placeholder: 'json-object' },
+      {
+        name: 'acl',
+        descriptionKey: 'resource-acl',
+        kind: 'json-object',
+        placeholder: 'json-object',
+      },
       { name: 'wait', kind: 'boolean' },
     ],
     skeleton: 'write',
-    request: ({ 'parent-auto-create': autoParent, args, ...body }) => {
+    request: ({ 'parent-auto-create': autoParent, ...body }) => {
+      validateSource(body.path, body.temp_file_id, '<path-or-url>');
       if ([body.to, body.parent, autoParent].filter(Boolean).length > 1)
         throw new ConsoleCommandError(
           'invalidArgument',
@@ -53,40 +112,66 @@ export const CORE_COMMAND_SPECS: readonly CommandSpec[] = [
         body: {
           ...body,
           ...(autoParent ? { parent: autoParent, create_parent: true } : {}),
-          ...(args === undefined ? {} : { args: jsonOptions(args) }),
         },
       };
     },
   },
   {
     name: 'add-skill',
-    positional: [{ name: 'path' }],
+    positional: [
+      {
+        name: 'data',
+        placeholder: 'skill-content-or-url',
+        pattern: /\S/,
+        optional: true,
+      },
+    ],
     flags: [
-      { name: 'target-uri', kind: 'uri', alias: '-p' },
+      { name: 'target-uri', valueKey: 'target_uri', kind: 'uri', alias: '-p' },
+      tempFileId,
       { name: 'wait', kind: 'boolean' },
+      telemetry,
     ],
     skeleton: 'write',
-    request: ({ path, 'target-uri': target, ...rest }) => ({
-      method: 'POST',
-      path: OV_PATHS.skills,
-      body: { data: path, target_uri: target, ...rest },
-    }),
+    request: ({ data, ...body }) => {
+      validateSource(data, body.temp_file_id, '<skill-content-or-url>');
+      return {
+        method: 'POST',
+        path: OV_PATHS.skills,
+        body: data === undefined ? body : { ...body, data: skillSource(data) },
+      };
+    },
   },
   {
     name: 'add-memory',
-    positional: [{ name: 'content' }],
-    flags: [{ name: 'session-id', required: true }],
+    positional: [{ name: 'content', rest: true, pattern: /\S/ }],
+    flags: [
+      {
+        name: 'session-id',
+        valueKey: 'session_id',
+        placeholder: 'id',
+        pattern: /\S/,
+        required: true,
+      },
+      {
+        name: 'role',
+        choices: ['user', 'assistant'],
+        defaultValue: 'user',
+        hidden: true,
+      },
+    ],
     skeleton: 'write',
-    execute: async ({ content, 'session-id': sessionId }, request) => {
-      const id = String(sessionId);
+    execute: async ({ content, session_id: sessionId, role }, request) => {
+      if (typeof sessionId !== 'string')
+        throw new ConsoleCommandError('invalidArgument', '--session-id');
       const message = await request({
         method: 'POST',
-        path: OV_PATH_BUILDERS.sessionMessages(id),
-        body: { role: 'user', content },
+        path: OV_PATH_BUILDERS.sessionMessages(sessionId),
+        body: { role, content },
       });
       const commit = await request({
         method: 'POST',
-        path: OV_PATH_BUILDERS.sessionCommit(id),
+        path: OV_PATH_BUILDERS.sessionCommit(sessionId),
         body: {},
       });
       return {
@@ -98,57 +183,5 @@ export const CORE_COMMAND_SPECS: readonly CommandSpec[] = [
       };
     },
   },
-  {
-    name: 'compile',
-    preferredFlags: [compileName],
-    flags: [
-      { ...compileName, required: false },
-      ...compileInputs.map((flag) => ({ ...flag, required: false })),
-    ],
-    skeleton: 'write',
-    request: ({ 'compile-name': name, from, to, skill, instruction }) => {
-      if (name !== undefined) {
-        if ([from, to, skill, instruction].some((value) => value !== undefined))
-          throw new ConsoleCommandError('compileNamedRunInputs');
-        return {
-          method: 'POST',
-          path: OV_PATHS.compile,
-          body: { compile_name: name },
-        };
-      }
-      if (!from)
-        throw new ConsoleCommandError(
-          'missingArgument',
-          to ? '--from' : '--compile-name',
-        );
-      if (!to) throw new ConsoleCommandError('missingArgument', '--to');
-      return {
-        method: 'POST',
-        path: OV_PATHS.compile,
-        body: { from, to, skill: skill ?? wikiSkill, instruction },
-      };
-    },
-  },
-  {
-    name: 'compile create',
-    flags: [
-      compileName,
-      ...compileInputs,
-      {
-        name: 'args',
-        placeholder: 'json-object',
-        descriptionKey: 'compile-args',
-      },
-    ],
-    skeleton: 'write',
-    request: ({ 'compile-name': name, args, ...body }) => ({
-      method: 'POST',
-      path: OV_PATHS.compileCreate,
-      body: {
-        ...body,
-        compile_name: name,
-        args: args === undefined ? undefined : jsonOptions(args),
-      },
-    }),
-  },
+  ...COMPILE_COMMAND_SPECS,
 ];

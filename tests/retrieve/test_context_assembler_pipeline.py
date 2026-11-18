@@ -5,6 +5,8 @@ import re
 from collections import Counter
 from types import SimpleNamespace
 
+import pytest
+
 from openviking.retrieve.context_assembler import pipeline as pipeline_module
 from openviking.retrieve.context_assembler import rewrite as rewrite_module
 from openviking.retrieve.context_assembler.budget import (
@@ -22,10 +24,11 @@ from openviking.retrieve.context_assembler.params import (
     normalize_quotas,
 )
 from openviking.retrieve.context_assembler.pipeline import assemble_context
-from openviking.retrieve.context_assembler.render import render_entry
+from openviking.retrieve.context_assembler.render import render_context, render_entry
 from openviking.retrieve.context_assembler.tiers import tier_window
 from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.session.user_id import UserIdentifier
 
 USER_ROOT = "viking://user/test_user"
@@ -580,6 +583,55 @@ def test_memory_keeps_overview_as_the_cheaper_abstract_substitute():
     assert oversized_abstract_needs_body(candidate, per_entry_cap(60, 1))
     plan = plan_entries([candidate], {uri: body}, max_tokens=60, detail=None)
     assert [(e.detail, e.text) for e in plan.entries] == [("overview", "A thing happened.")]
+
+
+@pytest.mark.parametrize(
+    "category,directory", [("resources", False), ("skills", False), ("resources", True)]
+)
+def test_spare_budget_restores_complete_content_above_the_per_entry_cap(category, directory):
+    candidates, contents, originals = [], {}, {}
+    for i in range(10):
+        uri = f"viking://resources/{i}.md"
+        text = str(i) + "摘" * 255
+        candidate = _resource_candidate("" if directory else text, category=category, uri=uri)
+        candidate.is_directory = directory
+        candidates.append(candidate)
+        originals[uri] = text
+        if directory:
+            contents[f"{uri}/.overview.md"] = text
+
+    plan = plan_entries(candidates, contents, max_tokens=1600)
+    assert len(plan.entries) == 10
+    assert sum(bool(e.text) for e in plan.entries) == 3
+    assert all(not e.text or e.text == originals[e.uri] for e in plan.entries)
+    assert any(e.tokens > plan.stats["per_entry_cap"] for e in plan.entries)
+    assert estimate_text_tokens(render_context(plan.entries)) <= plan.stats["used_tokens"] <= 1600
+
+
+def test_restored_abstracts_do_not_duplicate_the_same_body():
+    candidates = [
+        _resource_candidate("摘" * 256, uri=f"viking://resources/{i}.md") for i in range(10)
+    ]
+    plan = plan_entries(candidates, {}, max_tokens=1600)
+    assert len(plan.entries) == 10
+    assert [e.text for e in plan.entries if e.text] == ["摘" * 256]
+
+
+def test_spare_summaries_do_not_displace_existing_full_upgrades():
+    uri = f"{USER_ROOT}/memories/events/a.md"
+    event = _resource_candidate("event", category="events", uri=uri)
+    resources = [
+        _resource_candidate(str(i) + "摘" * 255, uri=f"{USER_ROOT}/resources/{i}.md")
+        for i in range(9)
+    ]
+    body = "# Summary\nEvent gist\n\n# Detail\n" + "x" * 5000
+
+    plan = plan_entries([event, *resources], {uri: body}, max_tokens=1600)
+
+    assert len(plan.entries) == 10
+    assert (plan.entries[0].detail, plan.entries[0].text) == ("full", body)
+    assert all(entry.detail == "uri" for entry in plan.entries[1:])
+    assert estimate_text_tokens(render_context(plan.entries)) <= plan.stats["used_tokens"] <= 1600
 
 
 def test_built_in_memory_types_report_one_declared_category():

@@ -10,6 +10,7 @@ interface NativeCommit {
   committer?: { time_seconds: number };
 }
 interface VersionPage {
+  uri?: string;
   versions: (
     | NativeCommit
     | {
@@ -24,6 +25,15 @@ interface VersionPage {
   next_before_snapshot?: string | null;
   next_before_version?: string | null;
 }
+
+/** The native file restore writes this message on the new commit. */
+function isRestoreCommit(message: string | undefined, uri: string): boolean {
+  const prefix = `restore ${uri} to `;
+  if (!message?.startsWith(prefix)) return false;
+  const source = message.slice(prefix.length);
+  return source.length === 40 && /^[0-9a-f]{40}$/.test(source);
+}
+
 export async function readPreviewHistory(
   client: OvClient,
   uri: string,
@@ -43,6 +53,7 @@ export async function readPreviewHistory(
           query: { uri, limit: 100, [cursorField]: before },
           options,
         });
+        const fileUri = page.uri ?? uri;
         entries.push(
           ...page.versions.map((entry) =>
             'oid' in entry
@@ -52,6 +63,7 @@ export async function readPreviewHistory(
                   path: uri,
                   title: entry.message,
                   note: entry.message,
+                  restored: isRestoreCommit(entry.message, fileUri),
                   timestamp:
                     entry.committer?.time_seconds ?? entry.author?.time_seconds,
                 }
@@ -62,6 +74,7 @@ export async function readPreviewHistory(
                   title: String(entry.version_number),
                   numbered: true,
                   note: entry.message,
+                  restored: isRestoreCommit(entry.message, fileUri),
                   timestamp: entry.created_at,
                 },
           ),
@@ -92,6 +105,7 @@ export async function readPreviewHistory(
     path: uri,
     title: entry.message,
     note: entry.message,
+    restored: versioned && isRestoreCommit(entry.message, uri),
     timestamp: entry.committer?.time_seconds ?? entry.author?.time_seconds,
   }));
 }

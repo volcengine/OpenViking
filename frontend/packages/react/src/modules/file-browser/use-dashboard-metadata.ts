@@ -5,7 +5,7 @@ import type {
   FileTreeRow,
 } from '../../components/file-tree/types.js';
 import { within } from './dashboard-model.js';
-import { normalizeResourceUri } from './fs-uri.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { readWikiConflictIndex } from './wiki-conflict-index.js';
 import { readDashboardHint } from './dashboard-resource.js';

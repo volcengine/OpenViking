@@ -45,6 +45,8 @@ export interface VikingBotChatService {
   stream: (
     input: VikingBotChatInput,
     signal: AbortSignal,
+    /** Report acceptance of this input before any response events are available. */
+    onAccepted?: () => void,
   ) => AsyncIterable<VikingBotChatEvent>;
   createSession: (signal: AbortSignal) => Promise<VikingBotSession>;
   loadMessages: (
@@ -74,6 +76,12 @@ export interface VikingBotSessionService {
   listSessions: (signal: AbortSignal) => Promise<readonly VikingBotSession[]>;
   createSession: (signal: AbortSignal) => Promise<VikingBotSession>;
   removeSession: (id: string, signal: AbortSignal) => Promise<void>;
+  /** Omit when the service cannot persist a session title. */
+  renameSession?: (
+    id: string,
+    title: string,
+    signal: AbortSignal,
+  ) => Promise<void>;
 }
 
 export interface VikingBotHookOptions {
@@ -117,7 +125,11 @@ export interface VikingBotChatResult extends VikingBotChatState {
   /** True only when this service supplies an actual interrupt operation. */
   canInterrupt: boolean;
   canSteer: boolean;
-  send: (input: string | VikingBotDraft) => Promise<boolean>;
+  /** For a new turn, the optional callback runs once the stream acknowledges the input. */
+  send: (
+    input: string | VikingBotDraft,
+    onDelivered?: () => void,
+  ) => Promise<boolean>;
   abort: () => Promise<void>;
   reset: () => void;
   selectSession: (sessionId: string) => void;
@@ -139,4 +151,5 @@ export interface VikingBotSessionsResult extends VikingBotSessionsState {
   refresh: () => Promise<void>;
   create: () => Promise<VikingBotSession | undefined>;
   remove: (id: string) => Promise<boolean>;
+  rename?: (id: string, title: string) => Promise<boolean>;
 }

@@ -826,14 +826,11 @@ return { "created" }
 
 macro_rules! script {
     ($id:expr, $lua:expr) => {
-        ScriptDefinition {
-            id: $id,
-            redis_lua: $lua,
-        }
+        ($id, $lua)
     };
 }
 
-pub(super) const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
+pub(super) const SCRIPT_DEFINITIONS: &[(&str, &str)] = &[
     script!(ACQUIRE_BATCH_ID, ACQUIRE_BATCH_SCRIPT),
     script!(ROLLBACK_BATCH_ID, ROLLBACK_BATCH_SCRIPT),
     script!(COMPARE_WRITE_ID, COMPARE_WRITE_SCRIPT),

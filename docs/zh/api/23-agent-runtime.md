@@ -4,7 +4,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 
 ## Compile 配置与执行
 
-`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由 1–64 位 ASCII 字母、数字、下划线或连字符组成，首字符不能是连字符，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
+`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由汉字、ASCII 字母、数字、下划线或连字符组成，纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符，首字符不能是连字符，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
 
 普通 Compile 在创建或更新配置、手动或定时提交新执行时，统一校验规范化后的目录 URI：
 
@@ -172,6 +172,8 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | 本次执行冻结的 run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | 由本次快照推导的变更产出，包含 `outputs` 和 `next_cursor` |
 
+运行历史查询按当前账号和用户限定范围。runs 目录不存在时返回空列表；指定 run 不存在时，详情和产出接口返回 404。
+
 列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`latest_snapshot_id`、`change_type`。`snapshot_id` 固定为本次 run 的产出快照；`latest_snapshot_id` 为查询时该文件最近变更的 commit，无历史时为 null。最近变更可能是后续删除，此时读取该版本正文返回 404。仅查询本页产出的文件历史，查询失败直接报错。
 
 配置更新必填 `compile_name`、`from`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。`to` 可选，省略或为 null 时沿用该配置已保存的目标目录；显式传入的 `to` 规范化后必须与已保存的目标目录一致，修改目标目录返回 `400 INVALID_ARGUMENT`，配置保持不变；`from`、`skill` 等其他参数仍可修改。顶层 `update_schedule` 省略或为 null 时保留已保存的计划。启用自动更新需要本次提供或已保存的计划；关闭时保留计划，清除执行凭据和下次触发时间，并取消调度注册，是否启用计划由 `auto_update` 决定。更新请求的 `args` 不接受调度控制。更新配置保留上次成功执行的 `progress`。执行时比较指令、Skill 及其快照、`model_name`，不一致时全量编译；已有源目录计算增量，新增源目录完整处理。更新同样校验目录约束并持久入队独立补标任务，不等待 tag 就绪。配置更新不执行编译、不重置调用时间。
@@ -207,7 +209,7 @@ Compile 业务文件仅有：
 /local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-`configuration_directory` 为名称 ASCII 字节的小写十六进制编码（`compile_name.encode("ascii").hex()`），不添加前缀，保证存储系统不区分大小写时，不同大小写的名称仍相互独立。公开 API 接收和返回原始 `compile_name`，不使用目录编码。
+纯 ASCII 名称的小写十六进制编码用作 `configuration_directory`。含汉字的名称使用 `u-` 加上名称 UTF-8 字节的小写 Base32 编码作为目录名，省略末尾的填充符 `=`。两种目录格式在不区分大小写的存储上都能区分名称大小写。
 
 配置按账号和用户分目录存储，公开 API 使用原始 `compile_name` 定位配置。
 

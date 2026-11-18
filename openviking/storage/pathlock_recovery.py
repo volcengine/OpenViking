@@ -13,6 +13,7 @@ from openviking.storage.errors import (
     HandoffRecoveryRequired,
     InvalidPathLockRequestError,
     LockAcquisitionError,
+    ResourceBusyError,
 )
 from openviking.storage.internal_names import MULTIWRITE_PATH_LOCK_FILE
 from openviking_cli.utils.logger import get_logger
@@ -21,6 +22,32 @@ logger = get_logger(__name__)
 Requests = list[dict[str, str]]
 HANDOFF_RECOVERY_MAX_RETRIES = 8
 HANDOFF_RECOVERY_MAX_DELAY_SECS = 30.0
+
+
+def is_stale_compile_lease(error: Exception) -> bool:
+    """Identify leases that require fresh ownership."""
+    if not isinstance(error, ValueError):
+        return isinstance(error, HandoffRecoveryRequired)
+    reason = str(error)
+    return reason == "invalid lock request: pathlock lease expired during acquisition" or (
+        reason.startswith("invalid lock request: owned lease capability does not match ref '")
+    )
+
+
+def is_compile_lock_conflict(error: Exception) -> bool:
+    """Identify contention and lease loss eligible for a Compile retry."""
+    return (
+        isinstance(error, LockAcquisitionError)
+        or (isinstance(error, ResourceBusyError) and error.retryable)
+        or is_stale_compile_lease(error)
+    )
+
+
+def lock_retry_delay(retries: int, limit: int) -> float | None:
+    """Return backoff in seconds, or None when the retry limit is reached."""
+    if retries >= limit:
+        return None
+    return min(2 ** (retries - 1), HANDOFF_RECOVERY_MAX_DELAY_SECS)
 
 
 async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> dict | None:
@@ -32,7 +59,8 @@ async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> di
     retry = msg.lock_handoff_retry
     blocked = isinstance(error, HandoffRecoveryBlocked)
     limit = HANDOFF_RECOVERY_MAX_RETRIES if blocked else 2
-    exhausted = retry >= limit
+    delay = lock_retry_delay(retry, limit)
+    exhausted = delay is None
     if blocked:
         EventMetricDataSource._emit(
             "pathlock.recovery_blocked",
@@ -51,7 +79,7 @@ async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> di
     if exhausted:
         return None
     if blocked:
-        await sleep(min(0.5 * 2**retry, HANDOFF_RECOVERY_MAX_DELAY_SECS))
+        await sleep(delay)
     payload = msg.to_dict()
     payload["lock_handoff_retry"] = retry + 1
     return payload

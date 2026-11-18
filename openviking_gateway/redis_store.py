@@ -32,6 +32,7 @@ import uuid
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
+import async_timeout
 import orjson
 from redis import VERSION
 from redis.asyncio.cluster import RedisCluster
@@ -39,10 +40,12 @@ from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 from redis.crc import key_slot
 from redis.exceptions import ResponseError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from openviking.server.account_stores.redis_client import create_redis_client
+from openviking_cli.utils.config.agfs_config import RedisCacheConfig
 
-from .capture_store import Document, LeaseLost
+from .capture_store import Document, LeaseLost, backlog_counts
 from .records import RecordKind as K
 from .replay_store import INHERITED
 from .storage import AsyncCodec, digest
@@ -71,10 +74,26 @@ def connect(settings):
     )
     # redis-py pools raise once ``pool_size`` connections are busy; queue commands instead.
     gate, execute = asyncio.Semaphore(settings["pool_size"]), handle.client.execute_command
+    # One deadline covers the whole command, the wait for a free slot included: redis-py
+    # opens connections one at a time under the pool lock, so a store that stopped
+    # answering would otherwise queue a command behind every other connect attempt.
+    # The client's own view of the settings, defaults filled in.
+    config = RedisCacheConfig.model_validate(settings)
+    command = config.command_timeout_ms / 1000
+    limit = config.connect_timeout_ms / 1000 + command if command > 0 else None
 
     async def execute_command(*args, **kwargs):
-        async with gate:
-            return await execute(*args, **kwargs)
+        acquired = False
+        try:
+            async with async_timeout.timeout(limit):
+                await gate.acquire()
+                acquired = True
+                return await execute(*args, **kwargs)
+        except asyncio.TimeoutError:
+            raise RedisTimeoutError("store command timed out") from None
+        finally:
+            if acquired:
+                gate.release()
 
     handle.client.execute_command = execute_command
     return handle
@@ -519,6 +538,14 @@ class RedisCaptureQueue:
                     "document": Document(await self.store.codec.decode(result[0]), int(result[1])),
                 }
         return None
+
+    async def backlog(self, now):
+        client, due = self.store.client, now * 1000
+        scheduled = await client.zcard(self.ready)
+        count = await client.zcount(self.ready, "-inf", due)
+        # Scores are ready times in ms, or 0 for a capture due at once.
+        oldest = await client.zrangebyscore(self.ready, "(0", due, start=0, num=1, withscores=True)
+        return backlog_counts(scheduled, count, oldest[0][1] / 1000 if oldest else 0, now)
 
     async def release(self, item):
         await self.store.script(

@@ -57,6 +57,7 @@ import '@openviking/react/components/experience-dashboard/style.css';
 | onPageChange     | 点击翻页时触发，参数为目标页码；未提供 `onLoadMore` 时「加载更多」也调用它；两者都省略时这些按钮禁用                  | `(page: number) => void`                                                                                                | -                        |
 | onLoadMore       | 点击「加载更多」时触发，由宿主追加下一页；优先于 `onPageChange`，省略时回退到 `onPageChange(page + 1)`                | `() => void`                                                                                                            | -                        |
 | onOpenUri        | 点击经验名称或轨迹的打开按钮时触发，参数为对应的 URI；省略时这些按钮禁用                                              | `(uri: string) => void`                                                                                                 | -                        |
+| onOpenTrajectory | 点击来源轨迹的「轨迹详情」时触发。提供后显示入口。                                                                    | `(trajectory: ExperienceTrajectory, trigger: HTMLButtonElement) => void`                                                | -                        |
 | labels           | 覆盖界面文案                                                                                                          | `Partial<ExperienceDashboardLabels>`                                                                                    | -                        |
 | slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                     | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                                   | -                        |
 | locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                               | `'zh-CN' \| 'en-US'`                                                                                                    | 继承上级，默认 `'en-US'` |
@@ -73,6 +74,7 @@ import '@openviking/react/components/experience-dashboard/style.css';
 | trajectories    | 「应用效果」页签中的注入轨迹，按传入顺序显示                                                                | `readonly ExperienceTrajectory[]`                                                                         | -      |
 | trajectoryTotal | 注入轨迹总数，显示在标题后，省略时不显示                                                                    | `number`                                                                                                  | -      |
 | sources         | 「来源追溯」页签中生成该经验的轨迹，按传入顺序显示                                                          | `readonly ExperienceTrajectory[]`                                                                         | -      |
+| sourceGroups    | 按更新时间倒序排列的提交分组。优先于扁平的 `sources` 列表。                                                 | `readonly ExperienceSourceGroup[]`                                                                        | -      |
 | testMaterials   | 测试材料，字段见下方 `data.testMaterials`；提供后（包括空数组）才显示「测试」页签                           | `readonly { id: string; title: string; content: string; taskQuery?: string; uri?: string }[]`             | -      |
 
 ### ExperienceItem

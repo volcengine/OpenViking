@@ -43,8 +43,13 @@ V2 的顶层配置是：
 每个 `items[]` 需要 `name`、`backend` 和 backend 专用 `params`。
 `encryption` 可选。backup 名称必须唯一，且不能为 `primary`。
 
-`provider` 为 `cache` 时，多写复用顶层 CacheRuntime。实际实现由顶层
-`cache.provider` 选择；多写没有独立 Cache Provider 连接配置。
+`provider` 为 `cache` 时，多写复用命名的顶层 CacheRuntime。
+`backups.instance` 选择 `cache.instances.<name>`，默认是 `default`；
+多写没有独立 Cache Provider 连接配置。
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `instance` | `"default"` | `provider` 为 `cache` 时选择的 Runtime |
 
 Python 配置层仍接受 V1 的 sync、ack、retry、operations、excludes 和
 redirects 字段，输出 warning 后会在调用 Rust 前删除，字段不生效。

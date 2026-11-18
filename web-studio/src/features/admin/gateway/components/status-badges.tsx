@@ -110,6 +110,7 @@ const CAPTURE_TONES: Record<string, Tone> = {
   disabled: 'neutral',
   retrying: 'warning',
   paused: 'danger',
+  lost: 'danger',
 }
 
 /** Whether the conversation is being saved to OpenViking; the reason shows on hover. */

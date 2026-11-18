@@ -62,19 +62,26 @@ export function PreviewHistoryList({
             const title = entry.numbered
               ? `${text.version} ${entry.title}`
               : entry.title;
+            const versionLabel = historyVersionLabel(entry, locale);
             const label = (
               <>
                 <time
                   className="ov-file-history__version-name"
+                  title={versionLabel}
                   dateTime={
                     entry.timestamp
                       ? new Date(entry.timestamp * 1000).toISOString()
                       : undefined
                   }
                 >
-                  {historyVersionLabel(entry, locale)}
+                  {versionLabel}
                 </time>
                 {index === 0 ? <i>{text.latest}</i> : null}
+                {entry.restored ? (
+                  <span className="ov-file-history__version-badge">
+                    {text.rollbackBadge}
+                  </span>
+                ) : null}
               </>
             );
             return (
@@ -87,7 +94,13 @@ export function PreviewHistoryList({
                         ? 'ov-file-history__commit-active'
                         : undefined
                     }
-                    aria-label={entry.numbered ? title : undefined}
+                    aria-label={
+                      entry.numbered
+                        ? entry.restored
+                          ? `${title} · ${text.rollbackBadge}`
+                          : title
+                        : undefined
+                    }
                     aria-pressed={selectedId === entry.id}
                     onClick={() => {
                       track('file_browser_history_revision_select');
