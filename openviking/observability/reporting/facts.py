@@ -12,11 +12,13 @@ from dataclasses import dataclass, field, replace
 from openviking.observability.context import get_observability_context
 from openviking.observability.events import build_event, get_event_bus, try_publish_event
 
-from .fact_context import bind_embedding_purpose as bind_embedding_purpose
-from .fact_context import bind_memory_batch as bind_memory_batch
-from .fact_context import bind_memory_type as bind_memory_type
-from .fact_context import event_context as event_context
-from .fact_context import get_memory_type
+from . import fact_context as _fact_context
+
+# Preserve the existing import paths for these context helpers.
+bind_embedding_purpose = _fact_context.bind_embedding_purpose
+bind_memory_batch = _fact_context.bind_memory_batch
+bind_memory_type = _fact_context.bind_memory_type
+event_context = _fact_context.event_context
 
 _deferred_file_changes: ContextVar[DeferredFileChanges | None] = ContextVar(
     "metric_deferred_file_changes", default=None
@@ -145,7 +147,7 @@ def file_metadata(uri, ctx=None, *, is_dir=False):
     if ctx is not None:
         data.update(account_id=ctx.account_id, user_id=ctx.user.user_id)
     if classification.context_type == "memory":
-        data["memory_type"] = get_memory_type()
+        data["memory_type"] = _fact_context.get_memory_type()
         if data["memory_type"] is None and not sidecar and not internal:
             # Manual ContentWrite reuses the registered memory schema, including
             # static single-file templates such as profile.md and identity.md.
