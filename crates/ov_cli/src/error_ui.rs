@@ -801,14 +801,6 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 }
 
 pub(crate) fn display_command(args: &[OsString]) -> String {
-    // A failed run may contain an accidentally supplied plaintext value.
-    if args
-        .windows(2)
-        .take_while(|pair| pair[0] != "--")
-        .any(|pair| pair[0] == "privacy" && pair[1] == "run")
-    {
-        return "ov privacy run".to_string();
-    }
     let mut parts = vec!["ov".to_string()];
     parts.extend(
         args.iter()

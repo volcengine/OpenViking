@@ -161,11 +161,6 @@ pub(crate) struct PrivacyRunArgs {
     #[arg(long = "env-file", value_name = "path")]
     pub(crate) env_file: Vec<PathBuf>,
     /// Program and arguments to run; Privacy references in arguments are resolved
-    #[arg(
-        value_name = "command",
-        required = true,
-        trailing_var_arg = true,
-        allow_hyphen_values = true
-    )]
+    #[arg(value_name = "command", required = true, trailing_var_arg = true)]
     pub(crate) command: Vec<OsString>,
 }
