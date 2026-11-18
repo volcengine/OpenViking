@@ -26,13 +26,21 @@ export function getAgentConnectInstructions(
   apiKey: string,
   baseUrl: string,
   guideId?: string,
+  isEnterprise = false,
 ) {
   const text = resolveAgentConnectLabels(locale);
   const content = getAgentConnectContent(locale)[id];
   const harness = INSTALLER_HARNESSES[id];
   if (harness) {
     const instructions = (key: string) =>
-      getInstallerInstructions(content.name, harness, locale, key, baseUrl);
+      getInstallerInstructions(
+        content.name,
+        harness,
+        locale,
+        key,
+        baseUrl,
+        isEnterprise,
+      );
     return {
       fixed: true,
       display: instructions('••••••••'),
