@@ -171,45 +171,10 @@ describe('TaskManager', () => {
     const brief = executor.turns[1].prompt;
     assert.match(brief, /^\[task t2\] 修 X\n/);
     assert.match(brief, /This task follows t1 "查 X" \(done\), earlier work it builds on\. Its request:\n\| \[chat=oc_a msg=om_\d+ event=e\d+\] 查一下 X/);
-    assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nYour directory is the one it worked in, as it left it/);
+    assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nIts directory, with whatever it left there: .*tasks\/t1\n/);
     assert.match(tasks.list()[0], /^t2 \[running\] "修 X" for unknown in chat=oc_a \(follows t1\) · working for 0m$/);
     tasks.stop('t2', 'Alice said stop');
     assert.throws(() => tasks.route('t2', [row()], 'owner'), /has ended \(stopped\)/);
-  });
-
-  it('works on in the directory of the ended task it follows, unless a task works there or worked there since', async (t) => {
-    const { tasks, executor, workspace } = setup(t);
-    const dir = (id) => path.join(workspace, 'tasks', id);
-    const end = async (id, turn) => {
-      tasks.report(id, { state: 'done', draft: `${id} done` });
-      executor.turns[turn].finish({ text: '' });
-      await settle();
-    };
-    tasks.create({ rows: [row({ content: '查一下 X' })], title: '查 X', runtime: 'pi' });
-    fs.writeFileSync(path.join(dir('t1'), 'notes.md'), 'X 慢在索引');
-    await end('t1', 0);
-    tasks.create({ rows: [row({ content: '提个 PR 修一下' })], title: '修 X', runtime: 'pi', parent: 't1' });
-    assert.equal(tasks.get('t2').workdir, dir('t1'));
-    assert.equal(fs.existsSync(dir('t2')), false);
-    const brief = executor.turns[1].prompt;
-    assert.match(brief, /\nYour directory is the one it worked in, as it left it \(clones, branches, changes, installed dependencies\): check its state first, and continue there instead of cloning or installing again\.\n/);
-    assert.match(brief, new RegExp(`\\nYour directory: ${dir('t1')}\\n`));
-    assert.doesNotMatch(brief, /Its directory, with whatever/);
-    // While t2 works there, another task following t1 gets its own and reads t1's.
-    tasks.create({ rows: [row({ content: '顺便看下 Y' })], title: '查 Y', runtime: 'pi', parent: 't1' });
-    assert.equal(tasks.get('t3').workdir, dir('t3'));
-    assert.match(executor.turns[2].prompt, new RegExp(`\\nIts directory, with whatever it left there: ${dir('t1')}\\nt2 worked in that directory after it, so it may hold later work\\.\\n`));
-    await end('t2', 1);
-    await end('t3', 2);
-    // t1 was not the last to work there: a task following it gets its own.
-    tasks.create({ rows: [row()], title: 'Z', runtime: 'pi', parent: 't1' });
-    assert.equal(tasks.get('t4').workdir, dir('t4'));
-    await end('t4', 3);
-    // A chain of follows keeps one directory, but never takes a live task's.
-    tasks.create({ rows: [row()], title: '再改一下', runtime: 'pi', parent: 't2' });
-    assert.equal(tasks.get('t5').workdir, dir('t1'));
-    tasks.create({ rows: [row()], title: 'W', runtime: 'pi', parent: 't5' });
-    assert.equal(tasks.get('t6').workdir, dir('t6'));
   });
 
   it('deletes what ended tasks left in stages: dependency folders, then the directory and its sessions, never what a task uses', async (t) => {
@@ -247,43 +212,33 @@ describe('TaskManager', () => {
     assert.equal(fs.existsSync(path.join(workspace, 'tasks', '.trash')), false, 'the trash is emptied');
     assert.equal(activities.at(-1).kind, 'task.dirs_cleaned');
 
-    // A task that follows it works on there, told its dependencies are gone,
-    // and nothing is deleted while it works.
+    // A task that follows it is told its dependencies are gone, and nothing
+    // is deleted from the directory its brief points to while it works.
     tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
-    assert.equal(tasks.get('t2').workdir, dir);
-    assert.match(executor.turns[1].prompt, /\nIts dependency folders \(node_modules, virtual environments, build caches\) were deleted to save disk: install again only what you need\.\n/);
-    write(gone[0]);
+    assert.equal(tasks.get('t2').workdir, path.join(workspace, 'tasks', 't2'));
+    assert.match(executor.turns[1].prompt, new RegExp(`\\nIts directory, with whatever it left there: ${dir}\\nIts dependency folders \\(node_modules, virtual environments, build caches\\) were deleted to save disk: install again only what you need\\.\\n`));
     write(path.join(dataDir, 'workers', 't2', 'session.jsonl'));
     now += 30 * day;
     assert.deepEqual(await tasks.sweepDirs().then(({ pruned: a, removed: b }) => [a, b]), [[], []]);
-    assert.ok(fs.existsSync(gone[0]));
+    assert.ok(fs.existsSync(kept[0]));
     tasks.report('t2', { state: 'done', draft: 'b' });
     executor.turns[1].finish({ text: '' });
     await settle();
 
-    now += 14 * day;
     const removed = await tasks.sweepDirs();
-    assert.deepEqual(removed.removed, ['t1']);
+    assert.deepEqual(removed.removed, ['t1'], 'once nothing reads it');
     assert.equal(fs.existsSync(dir), false);
-    assert.deepEqual(fs.readdirSync(path.join(dataDir, 'workers')), []);
+    assert.deepEqual(fs.readdirSync(path.join(dataDir, 'workers')), ['t2']);
     assert.ok(fs.existsSync(outside));
     assert.equal(tasks.get('t1').status, 'done', 'the task records stay');
-    tasks.create({ rows: [row()], title: 'C', runtime: 'pi', parent: 't2' });
-    assert.equal(tasks.get('t3').workdir, path.join(workspace, 'tasks', 't3'));
+    tasks.create({ rows: [row()], title: 'C', runtime: 'pi', parent: 't1' });
     assert.match(executor.turns[2].prompt, /\nIts directory was deleted to save disk some days after it ended: start from what it reported\.\n/);
-
-    // The directory a live task's brief points to, as its parent's, stays.
-    tasks.create({ rows: [row()], title: 'D', runtime: 'pi', parent: 't3' });
-    assert.equal(tasks.get('t4').workdir, path.join(workspace, 'tasks', 't4'));
     tasks.report('t3', { state: 'done', draft: 'c' });
     executor.turns[2].finish({ text: '' });
     await settle();
-    now += 20 * day;
-    assert.deepEqual((await tasks.sweepDirs()).removed, []);
-    tasks.report('t4', { state: 'done', draft: 'd' });
-    executor.turns[3].finish({ text: '' });
-    await settle();
-    assert.deepEqual((await tasks.sweepDirs()).removed, ['t3']);
+    now += 14 * day;
+    assert.deepEqual((await tasks.sweepDirs()).removed.sort(), ['t2', 't3']);
+    assert.deepEqual(fs.readdirSync(path.join(dataDir, 'workers')), []);
   });
 
   it('never deletes through a link: a trash that is one, or a folder that sits behind one since the scan', async (t) => {

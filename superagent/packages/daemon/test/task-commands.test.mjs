@@ -100,18 +100,19 @@ describe('/tasks', () => {
     assert.match(run('nonsense').text, /^用法：/);
   });
 
-  it('shows how much the task directories take, and which tasks share one', async (t) => {
+  it('shows how much the task directories take, and a directory that was cleaned', async (t) => {
     const { tasks, turns, row, run } = setup(t);
     tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
-    tasks.report('t1', { state: 'done', draft: 'a' });
-    turns[0].finish({ text: '' });
-    await settle();
-    tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
-    fs.writeFileSync(path.join(tasks.get('t2').workdir, 'a.bin'), randomBytes(2 * 1024 * 1024));
+    fs.writeFileSync(path.join(tasks.get('t1').workdir, 'a.bin'), randomBytes(2 * 1024 * 1024));
     assert.doesNotMatch(run('').text, /任务目录/, 'not before the first sweep');
     await tasks.sweepDirs();
     assert.match(run('').text, /\n任务目录占用 2 MB（上限 20\.0 GB）\n/);
-    assert.match(run('t2').text, /目录：.*tasks[\\/]t1（与 t1 共用）$/);
+    tasks.report('t1', { state: 'done', draft: 'a' });
+    turns[0].finish({ text: '' });
+    await settle();
+    tasks.config.taskDirBudgetGb = 1e-12;
+    await tasks.sweepDirs();
+    assert.match(run('t1').text, /目录：.*tasks[\\/]t1（已清理）$/);
   });
 
   it('stops a live task, and refuses an ended one', async (t) => {

@@ -137,10 +137,10 @@ So a task takes only what changes or answers the work it is doing:
 - **Owner input reaches a working task, nothing reaches an ended one.**
   `task_route` refuses an ended task. More work on it is a new task that
   **follows** it (`task_create` with `follows`, `parent_id`): its brief carries
-  that task's request, summary, last answer and artifacts, and it works on in
-  that task's directory (see Task directories), so a wrong split costs
-  nothing, while a wrong merge makes a worker do unrelated work and keeps the
-  person waiting behind it. A follows task may take the follow-up slot.
+  that task's request, summary, last answer, artifacts and directory, so a
+  wrong split costs nothing, while a wrong merge makes a worker do unrelated
+  work and keeps the person waiting behind it. A follows task may take the
+  follow-up slot.
 - **The router decides by what an input asks for.** The `[daemon tasks]` line
   lists the tasks near an input (same thread, a reply to their messages,
   waiting for this person) and what each is doing (`working`, `waiting for
@@ -240,49 +240,37 @@ outside actions are not guaranteed to run exactly once.
 ### Task directories
 
 A task works in `<workspace>/tasks/<id>/`, where its worker clones, installs
-and builds. With `follows`, more work on a result is a new task, so each
-would start from an empty directory: in replays, follows tasks cloned a
-repository and ran `npm ci` again next to their parent's copy, and nothing
-was ever deleted.
+and builds; its policy says to keep all of that inside the directory. Nothing
+deleted these directories, and each can hold a clone, `node_modules`, virtual
+environments and build output. The download caches (`~/.npm`, pip, uv) are
+already shared, since workers use the same home.
 
-**A follows task works on in its parent's directory**, as the parent left it
-(clones, branches, changes, installed dependencies): the directory's
-counterpart of the session fork, and a chain of follows keeps one directory.
-It does so when the parent has ended and was the last task to work there, and
-no live task uses it. Otherwise (the parent is still at work, or another task
-took the directory since) the new task gets its own directory and its brief
-points to the parent's, naming the tasks that worked there since. The worker
-policy says to check the directory's state (`git status`, the branch) before
-changing anything, and to keep clones, installs and build output inside it.
-
-**What ended tasks left is deleted in stages**, per directory, counted from
-when the last task that worked there ended:
+What an ended task left is deleted in stages, counted from when it ended:
 
 | After | Deleted | Kept |
 |---|---|---|
 | 3 days (`OV_SUPERAGENT_TASK_DIR_PRUNE_DAYS`) | Dependency folders: `node_modules`, Python virtual environments (a folder with `pyvenv.cfg`), `__pycache__` and the test/type-checker caches, `.tox`, `.nox`, `.gradle`, `.next`, `.nuxt`, `.turbo`, `.parcel-cache`, and `target` next to `Cargo.toml` or `pom.xml` | Sources, changes, `.git`, results |
-| 14 days (`OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS`) | The whole directory, and the worker sessions of the tasks that worked there | The task records |
+| 14 days (`OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS`) | The whole directory, and its worker's sessions | The task record |
 
 Past `OV_SUPERAGENT_TASK_DIR_BUDGET_GB` (20 by default) for all task
-directories, dependency folders go first and whole directories after, the
-directory that ended longest ago first. 0 turns each limit off. A directory a
+directories, dependency folders go first and whole directories after, those of
+the task that ended longest ago first. 0 turns each limit off. A directory a
 live task works in, or reads as its parent's, is never touched, nor are those
 of a stopped task until its worker process has exited, nor anything outside
 `<workspace>/tasks/t<n>`. Links are never followed: a folder is deleted only
 if it is still a real directory reached with no link on the way, and the trash
 is removed as a whole, so a link in its place goes as a link. A task that
 follows one whose directory was deleted starts from its report, as when its
-session cannot be forked; one that works on in a directory whose dependencies
-were deleted is told to install again what it needs.
+session cannot be forked; one whose parent lost its dependency folders is told
+to install again what it needs.
 
 The daemon sweeps a minute after it starts and every hour. Measuring runs in
 the background; choosing what to delete and moving it to a trash folder next
 to it happen in one step, so a task never starts in, or reads, a directory
 being deleted, and the trash is emptied after. A directory a task used while
-it was being measured waits for the next sweep. `/tasks` shows how much the task
-directories took at the last sweep, and a task's detail which tasks share its
-directory. Claude Code and Codex keep their own session files in their homes;
-those are not swept.
+it was being measured waits for the next sweep. `/tasks` shows how much the
+task directories took at the last sweep. Claude Code and Codex keep their own
+session files in their homes; those are not swept.
 
 ### What the router sees
 

@@ -35,11 +35,10 @@ import { emptyTrash, formatBytes, isDirectory, isDirectoryWithin, moveToTrash, s
 // was shown it: one the router was shown and left is offered again, so a
 // report is neither lost to a failed router turn nor sent twice.
 //
-// Each task works in a directory under <workspace>/tasks. A task that follows
-// an ended one works on in that one's directory, so a chain of follows keeps
-// one copy of its clones and installed dependencies. What ended tasks leave
-// there is deleted in stages (sweepDirs): dependency folders first, then the
-// whole directory with its workers' sessions, sooner past a disk budget.
+// Each task works in its own directory, <workspace>/tasks/<id>. What ended
+// tasks leave there is deleted in stages (sweepDirs): dependency folders
+// first, then the whole directory with its worker's sessions, sooner past a
+// disk budget.
 
 export const WORKER_SLOTS = 3;
 // A slot only a follow-up to an existing task may take, so new work cannot
@@ -62,9 +61,9 @@ const SUMMARY_CHARS = 600;
 const REPORT_RETRY_MS = 1_000;
 const CANDIDATES = 3;
 // Ended tasks' directories: dependency folders are deleted this many days
-// after the last task in a directory ended, the whole directory and its
-// workers' sessions after DIR_REMOVE_DAYS, and past the budget the directories
-// that ended longest ago go first. The config overrides each; 0 turns it off.
+// after the task ended, the whole directory and its worker's sessions after
+// DIR_REMOVE_DAYS, and past the budget the directories of the tasks that ended
+// longest ago go first. The config overrides each; 0 turns it off.
 export const DIR_PRUNE_DAYS = 3;
 export const DIR_REMOVE_DAYS = 14;
 export const DIR_BUDGET_GB = 20;
@@ -141,9 +140,8 @@ const SCHEMA = `
     inbox_id INTEGER,
     created_at_ms INTEGER NOT NULL
   );
-  -- A task directory's clean-up, shared by the tasks that worked in it:
-  -- pruned_at_ms, its dependency folders were last deleted; removed_at_ms,
-  -- the directory itself is gone.
+  -- A task directory's clean-up: pruned_at_ms, its dependency folders were
+  -- last deleted; removed_at_ms, the directory itself is gone.
   CREATE TABLE IF NOT EXISTS task_workdirs (
     path TEXT PRIMARY KEY,
     pruned_at_ms INTEGER,
@@ -446,7 +444,8 @@ export class TaskManager {
     const [origin] = rows;
     const id = this.nextId();
     const time = this.now();
-    const workdir = this.workdirFor(id, parent);
+    const workdir = path.join(this.config.workspace, 'tasks', id);
+    fs.mkdirSync(workdir, { recursive: true });
     this.transaction(() => {
       this.db.prepare(`INSERT INTO tasks(id, title, status, origin_seq, origin_event, origin_instance, origin_scope, origin_chat,
         origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, runtime, session_id, workdir,
@@ -460,22 +459,6 @@ export class TaskManager {
     this.recordActivity('task.created', { summary: `${id} ${title}`, inboundSeq: origin.seq, metadata: { task: id, ...(parent ? { parent } : {}) } });
     this.request(id);
     return this.get(id);
-  }
-
-  // A task that follows an ended one works on in that one's directory, as it
-  // left it (clones, branches, changes, installed dependencies), when that
-  // task was the last to work there and nothing else uses it. Otherwise the
-  // task gets its own directory, and its brief points to the earlier one.
-  workdirFor(id, parentId) {
-    const parent = parentId ? this.get(parentId) : null;
-    if (parent && ENDED.has(parent.status) && !this.heldDirs().has(parent.workdir) && isDirectory(parent.workdir)
-      && this.dirState(parent.workdir)?.removed_at_ms == null
-      && this.db.prepare('SELECT id FROM tasks WHERE workdir = ? ORDER BY rowid DESC LIMIT 1').get(parent.workdir)?.id === parent.id) {
-      return parent.workdir;
-    }
-    const workdir = path.join(this.config.workspace, 'tasks', id);
-    fs.mkdirSync(workdir, { recursive: true });
-    return workdir;
   }
 
   addInput(taskId, row, role) {
@@ -725,28 +708,18 @@ export class TaskManager {
       ...(parent.summary ? ['What that work found:', quoted(clip(parent.summary, SUMMARY_CHARS))] : []),
       ...(parent.draft ? ['Its last answer to the requester:', quoted(clip(parent.draft, PARENT_DRAFT_CHARS))] : []),
       ...(artifacts.length ? [`Its artifacts: ${artifacts.map(oneLine).join(', ')}`] : []),
-      ...this.parentDirBrief(task, parent),
+      ...this.parentDirBrief(parent),
       'Do only what this task asks; check what that work already did before redoing it.',
     ];
   }
 
-  // Where the files of the work a task follows are.
-  parentDirBrief(task, parent) {
+  // Where the files of the work a task follows are, after the sweep.
+  parentDirBrief(parent) {
     const state = this.dirState(parent.workdir);
-    const pruned = state?.pruned_at_ms != null && state.pruned_at_ms >= (parent.ended_at_ms ?? 0);
-    if (task.workdir === parent.workdir) {
-      return [
-        'Your directory is the one it worked in, as it left it (clones, branches, changes, installed dependencies): check its state first, and continue there instead of cloning or installing again.',
-        ...(pruned ? ['Its dependency folders (node_modules, virtual environments, build caches) were deleted to save disk: install again only what you need.'] : []),
-      ];
-    }
     if (state?.removed_at_ms != null) return ['Its directory was deleted to save disk some days after it ended: start from what it reported.'];
-    const later = this.db.prepare(`SELECT id FROM tasks WHERE workdir = ? AND id != ? AND rowid > (SELECT rowid FROM tasks WHERE id = ?)
-      ORDER BY rowid`).all(parent.workdir, task.id, parent.id).map((row) => row.id);
     return [
       `Its directory, with whatever it left there: ${parent.workdir}`,
-      ...(later.length ? [`${later.join(', ')} worked in that directory after it, so it may hold later work.`] : []),
-      ...(pruned ? ['Its dependency folders were deleted to save disk.'] : []),
+      ...(state?.pruned_at_ms != null ? ['Its dependency folders (node_modules, virtual environments, build caches) were deleted to save disk: install again only what you need.'] : []),
     ];
   }
 
@@ -1105,8 +1078,8 @@ export class TaskManager {
         return;
       }
       this.markDir(dir, 'removed_at_ms');
-      // The sessions of the tasks that worked there: a task that follows one
-      // of them now starts from its summary instead of a copy of its session.
+      // Its worker's sessions: a task that follows it now starts from its
+      // summary instead of a copy of its session.
       if (this.config.dataDir) {
         for (const { id } of this.db.prepare('SELECT id FROM tasks WHERE workdir = ?').all(dir)) {
           const sessions = path.join(this.config.dataDir, 'workers', id);
@@ -1190,10 +1163,7 @@ export class TaskManager {
       reports: this.db.prepare(`SELECT r.*, d.inbox_id, d.settled_at_ms, d.settled_by, d.offers FROM task_reports r
         LEFT JOIN task_report_deliveries d ON d.report_id = r.id WHERE r.task_id = ? ORDER BY r.id`).all(task.id),
       children: this.db.prepare('SELECT id, title, status FROM tasks WHERE parent_id = ? ORDER BY created_at_ms').all(task.id),
-      dir: {
-        ...(this.dirState(task.workdir) ?? {}),
-        sharedWith: this.db.prepare('SELECT id FROM tasks WHERE workdir = ? AND id != ? ORDER BY rowid').all(task.workdir, task.id).map((row) => row.id),
-      },
+      dir: this.dirState(task.workdir),
       lastError,
     };
   }

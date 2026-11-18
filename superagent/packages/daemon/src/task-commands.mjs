@@ -128,8 +128,7 @@ function detailText(tasks, taskId, now) {
   const artifacts = JSON.parse(task.artifacts_json || '[]');
   if (artifacts.length) lines.push(`产出：${artifacts.slice(0, 5).join('、')}`);
   if (task.lastError) lines.push(`最近一次失败（${clock(task.lastError.occurred_at_ms)}）：${oneLine(task.lastError.summary, 160)}`);
-  const dir = task.dir?.removed_at_ms ? '（已清理）'
-    : `${task.dir?.sharedWith?.length ? `（与 ${task.dir.sharedWith.join('、')} 共用）` : ''}${task.dir?.pruned_at_ms ? '（依赖目录已清理）' : ''}`;
+  const dir = task.dir?.removed_at_ms ? '（已清理）' : task.dir?.pruned_at_ms ? '（依赖目录已清理）' : '';
   lines.push(`worker 轮数：${task.turns} · 目录：${task.workdir}${dir}`);
   return { ok: true, text: lines.join('\n') };
 }
