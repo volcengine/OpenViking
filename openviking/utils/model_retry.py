@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import AsyncIterator, Awaitable, Callable, TypeVar
 
+from httpx import TimeoutException
+
 from openviking.models.model_error import (
     ModelErrorKind,
     model_error_from_exception,
@@ -100,7 +102,7 @@ def extract_metric_error_code(error: BaseException) -> str:
                 if normalized is not None:
                     return normalized
 
-    if any(isinstance(exc, TimeoutError) for exc in error_chain):
+    if any(isinstance(exc, (TimeoutError, TimeoutException)) for exc in error_chain):
         return "timeout"
     if any(isinstance(exc, ConnectionError) for exc in error_chain):
         return "connection_error"
