@@ -42,7 +42,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `default_upstreams` | 两者 | `{}` | 稳定 ID 到[上游设置](#upstream-settings)的对象映射 | 账号没有存储上游时供 OpenViking 密钥使用，见[部署默认上游](07-upstreams.md#deployment-default-upstreams) |
 | `default_profile` | 两者 | 内置上下文配置默认值 | [上下文配置设置](#context-profile-settings) | 账号没有 ID 为 `default` 的配置时使用，也是嵌入式 dev 模式初始化写入的配置 |
 | `min_server_version` | 两者 | `0.4.16` | 版本号 | 独立网关要求的 OpenViking Server 最低版本 |
-| `session_ttl_seconds` | 两者 | `2592000`（30 天） | 3600 及以上 | 对话闲置多少秒后过期；也决定缓存的 OpenViking 密钥及其用户记录的固定寿命 |
+| `session_ttl_seconds` | 两者 | `86400`（1 天） | 3600 及以上 | 对话闲置多少秒后过期；也决定缓存的 OpenViking 密钥及其用户记录的固定寿命。过期后再继续的对话会丢失什么，见[保留期限](11-security-and-data.md#retention) |
 | `response_ttl_seconds` | 两者 | `2592000`（30 天） | 60 及以上 | Responses 响应与上游的对应关系保留多少秒 |
 | `request_log_sink` | 两者 | `store` | `store`, `stdout`, `file` | 将请求记录写入存储，或以每条一行 JSON 写到 stdout 并立即刷新，或由后台线程把同样的行写入 `request_log_path`；见[观测](../guides/22-gateway-operations.md#monitoring)。`file` 输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker |
 | `request_log_path` | 两者 | 空 | 文件路径 | `file` 输出写入的文件；使用 `file` 时必填 |

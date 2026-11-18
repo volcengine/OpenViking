@@ -25,6 +25,7 @@ OpenViking 的所有重要变更都将记录在此文件中。
     见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header)。
   - `session_ttl_seconds`（不低于 3600）取代 `session_ttl_days`，对话可以在一天内过期；
     旧字段会被忽略并在启动时打印警告，升级时请改用新字段。
+  - `session_ttl_seconds` 的默认值从 30 天改为 1 天（`86400`），Helm chart 不再把它设为 7 天（升级需操作）。闲置超过这个时长的对话会丢失网关状态：再继续时，之前补充的记忆、工具结果和摘要不会放回，完整历史会重新保存到一个新的 OpenViking 会话。需要更长的保留时间时，设置 `session_ttl_seconds`。
   - 无需修改配置的行为变化：独立网关 keep-alive 从 5 秒提高到 75 秒；
     绑定公网地址的网关在启动时遇到 OpenViking 不可达或返回 5xx 会等待并重试；
     空闲 SSE 流每 15 秒发送一条注释心跳；OpenViking 以 402 或 403 拒绝密钥的请求会被拒绝，

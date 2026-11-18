@@ -30,6 +30,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
   - `session_ttl_days` is replaced by `session_ttl_seconds` (at least 3600), so sessions can
     expire in under a day. The old setting is ignored with a startup warning; set the new one
     when upgrading.
+  - `session_ttl_seconds` now defaults to one day (`86400`) instead of 30 days, and the Helm chart no longer sets it to seven days (upgrade action). A conversation idle for longer loses its gateway state: when it continues, the memory, tool results and summaries added earlier are not put back and its whole history is saved again into a new OpenViking session. Set `session_ttl_seconds` to keep a longer retention.
   - Behavior changes with no configuration change: standalone keep-alive rises from 5 to 75
     seconds; a gateway bound to a public address waits and retries at startup while
     OpenViking is unreachable or returns 5xx; idle SSE streams carry a comment heartbeat every

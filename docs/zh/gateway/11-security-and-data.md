@@ -74,11 +74,13 @@ SQLite 文件只有运行网关的系统用户能读取；Redis 由网络和 ACL
 
 | 数据 | 保留时长 | 设置 |
 | --- | --- | --- |
-| 对话状态 | 最后一次使用后 30 天 | `session_ttl_seconds` |
+| 对话状态 | 最后一次使用后 1 天 | `session_ttl_seconds` |
 | 缓存的 OpenViking 密钥及其用户记录 | 从创建时起经过配置的 TTL，不续期 | `session_ttl_seconds` |
 | 存储的请求日志 | 30 天 | `log_retention_days` |
 | Responses 响应与上游的对应关系 | 30 天 | `response_ttl_seconds` |
 | OpenViking 中的会话和记忆 | 遵循 OpenViking 自己的规则 | — |
+
+对话状态过期后再继续的对话，对网关来说是一段新对话：之前补充的记忆、工具结果和摘要不会再放回，对话改用密钥当前的上下文配置和上游，完整历史会重新保存到一个新的 OpenViking 会话，OpenViking 可能把部分记忆提取两次。对话经常隔一天以上才继续时，调大 `session_ttl_seconds`。它还应当比**空闲提交时间**长：状态过期时仍在等待的空闲提交不再执行。
 
 OpenViking 密钥记录在密钥使用期间会自动续期：剩余时间不到 `session_ttl_seconds` 的一半时，请求会把记录按完整时长重新保存。记录仍然过期，或被使用 `volatile-lru` 的 Redis 后端驱逐后，用户的下一个请求会向 OpenViking 确认密钥，并在同一 scope 中重建记录。网关只在用户自己的请求里用这份记录写入对话。默认由网关提交时，空闲提交在执行时从保存进度中记下的那份密钥记录里取 OpenViking 密钥；记录到那时已被吊销或过期的，这次提交不再执行。这些状态属于缓存，允许丢失。与吊销一样，现有的短时进程内缓存可能延迟观察到过期。
 

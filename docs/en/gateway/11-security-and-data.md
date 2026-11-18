@@ -74,11 +74,13 @@ Gateway data expires on its own. SQLite runs an hourly cleanup job; Redis uses k
 
 | Data | Kept for | Setting |
 | --- | --- | --- |
-| Conversation state | 30 days after last use | `session_ttl_seconds` |
+| Conversation state | 1 day after last use | `session_ttl_seconds` |
 | Cached OpenViking keys and their user records | Configured TTL from creation, without renewal | `session_ttl_seconds` |
 | Stored request logs | 30 days | `log_retention_days` |
 | Which upstream created each Responses response | 30 days | `response_ttl_seconds` |
 | Sessions and memories in OpenViking | OpenViking's own rules | — |
+
+A conversation that continues after its state expired is a new one to the gateway: the memory, tool results and summaries it added earlier are not put back, the conversation takes the key's current context profile and upstream, and its whole history is saved again into a new OpenViking session, so OpenViking may extract some memories twice. Raise `session_ttl_seconds` when conversations are often continued after more than a day. Keep it longer than **Commit when idle for**: an idle commit still waiting when the state expires is not made.
 
 An OpenViking key record is extended while the key is in use: a request made when less than half of `session_ttl_seconds` is left saves it again for the full period. When the record expires anyway, or is evicted by a Redis backend using `volatile-lru`, the user's next request confirms the key with OpenViking and recreates the record in the same scope. Saving uses the key only while serving that user's requests; only the idle commit uses it later, and it reads the key from this record when it is made, so an idle commit whose record has been revoked or has expired by then is dropped. This state is a cache and can be lost. The existing short process-local cache can delay visibility of expiry, like revocation.
 

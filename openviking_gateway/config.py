@@ -116,7 +116,7 @@ class GatewayConfig(BaseModel):
     default_upstreams: dict[str, Upstream] = Field(default_factory=dict, repr=False)
     default_profile: Policy = Field(default_factory=Policy)
     min_server_version: str = "0.4.16"
-    session_ttl_seconds: int = Field(default=30 * 86400, ge=3600)
+    session_ttl_seconds: int = Field(default=86400, ge=3600)
     response_ttl_seconds: int = Field(default=30 * 86400, ge=60)
     request_log_sink: Literal["store", "stdout", "file"] = "store"
     # The file sink's JSON lines; it rotates at request_log_max_bytes and keeps four old files.
