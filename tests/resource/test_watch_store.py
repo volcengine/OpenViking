@@ -105,6 +105,26 @@ async def store(make_store):
     return await make_store()
 
 
+@pytest.mark.asyncio
+async def test_unreadable_store_refuses_to_initialize_empty():
+    """An unreadable snapshot must not be cached as an empty task list.
+
+    Initializing with zero rows lets the next commit write a snapshot that
+    omits every task the store failed to read.
+    """
+
+    class _UnreadableFS:
+        async def read_file(self, uri, **kwargs):
+            raise OSError(f"storage backend unavailable: {uri}")
+
+    store = FileWatchStore(_UnreadableFS())
+    with pytest.raises(RuntimeError, match="unreadable"):
+        await store.initialize()
+    # Keep the store uninitialized so no mutation can persist an empty snapshot.
+    with pytest.raises(RuntimeError, match="must be initialized"):
+        await store.get_state("task-1")
+
+
 async def create(store, uri="viking://resources/a", *, initial_run_id=None, due=False, **values):
     values.setdefault("account_id", ACCOUNT)
     values.setdefault("user_id", "user-a")
