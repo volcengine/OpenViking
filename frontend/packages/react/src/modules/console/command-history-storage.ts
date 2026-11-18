@@ -35,12 +35,14 @@ function isPersistableCommand(command: string) {
   try {
     const tokens = tokenize(command);
     const spec = resolveCommandSpec(tokens);
-    if (!spec || !persistable.has(spec.name)) return false;
-    parseArguments(
+    if (!spec || spec.execute || !persistable.has(spec.name)) return false;
+    const values = parseArguments(
       tokens.slice(spec.name.split(' ').length),
       spec.positional ?? [],
       spec.flags,
     );
+    // Use the execution path's pure request builder to validate flag combinations.
+    spec.request?.(values);
     return true;
   } catch {
     return false;
@@ -110,13 +112,21 @@ export function readCommandHistory(key: string): ConsoleHistoryEntry[] {
   try {
     const storage = window.sessionStorage;
     migrateHistory(storage);
-    return parseStoredEntries(storage.getItem(prefix + key)).map(
-      ({ command, createdAtMs }, index) => ({
-        id: `restored-command-${index}`,
-        command,
-        createdAtMs,
-      }),
-    );
+    const storageKey = prefix + key;
+    const raw = storage.getItem(storageKey);
+    const entries = parseStoredEntries(raw);
+    if (raw !== null && raw !== JSON.stringify(entries)) {
+      try {
+        saveEntries(storage, storageKey, entries);
+      } catch {
+        // Restore the validated entries even if storage cannot be updated.
+      }
+    }
+    return entries.map(({ command, createdAtMs }, index) => ({
+      id: `restored-command-${index}`,
+      command,
+      createdAtMs,
+    }));
   } catch {
     return [];
   }

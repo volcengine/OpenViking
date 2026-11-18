@@ -143,3 +143,48 @@ test('Console preserves long read-only commands and keeps failed write bodies ou
     await reopened.dispose();
   }
 });
+
+test('Console keeps searches rejected by request validation out of persisted history', async (t) => {
+  const storage = new JSDOM('', { url: 'https://workbench.test' }).window;
+  t.after(() => storage.close());
+  t.mock.getter(window, 'sessionStorage', () => storage.sessionStorage);
+
+  const storageKey = 'openviking.console.command-history.v2:' + member;
+  const invalid = 'ov search "synthetic private query" --mode context -L 2';
+  const valid = 'ov search "synthetic public query" --mode context';
+  const oldEntry = { command: invalid, createdAtMs: 1000 };
+  storage.sessionStorage.setItem(storageKey, JSON.stringify([oldEntry]));
+
+  const transport = t.mock.fn(async () =>
+    ok({ memories: [], resources: [], skills: [] }),
+  );
+  const first = await mount(transport, props(member));
+  try {
+    await first.press('Command history');
+    assert.deepEqual(listedCommands(), []);
+    assert.equal(storage.sessionStorage.getItem(storageKey), null);
+    await first.press('Command history');
+    await first.execute(valid);
+    await first.execute(invalid);
+    assert.equal(first.records.at(-1).dataset.status, 'error');
+    assert.equal(transport.mock.calls.length, 1);
+    await key(first.input, 'ArrowUp');
+    assert.equal(first.input.value, invalid);
+    assert.deepEqual(
+      JSON.parse(storage.sessionStorage.getItem(storageKey)).map(
+        ({ command }) => command,
+      ),
+      [valid],
+    );
+  } finally {
+    await first.dispose();
+  }
+
+  const reopened = await mount(transport, props(member));
+  try {
+    await reopened.press('Command history');
+    assert.deepEqual(listedCommands(), [valid]);
+  } finally {
+    await reopened.dispose();
+  }
+});
