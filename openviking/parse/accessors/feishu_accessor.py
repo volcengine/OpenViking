@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlunparse
 
 from lark_oapi.core.cache import ICache
 
+from openviking.observability.log_safety import safe_log_fields, safe_path_for_log, safe_uri_for_log
 from openviking.parse.base import format_table_to_markdown
 from openviking.parse.feishu_import import FeishuImportPlan, recursive_wiki
 from openviking.parse.image_validation import IMAGE_MAX_FILE_BYTES, is_valid_image
@@ -241,12 +242,11 @@ def _raise_from_lark_response(
     if required_scope:
         details["required_scope"] = required_scope
 
-    logger.error(
-        "[FeishuAPI] %s failed: code=%s msg=%s http=%s",
-        operation,
-        code,
-        msg,
-        http_status,
+    logger.debug(
+        "Feishu API request rejected",
+        extra=safe_log_fields(
+            {"operation": operation, "error_code": str(code), "http_status_code": http_status}
+        ),
     )
     if code == _FEISHU_BITABLE_PERMISSION_REQUIRED:
         public_code = "FAILED_PRECONDITION"
@@ -589,6 +589,11 @@ class FeishuAccessor(DataAccessor):
                 except BaseException:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     raise
+                if skipped_items:
+                    logger.info(
+                        "Drive folder import incomplete skipped=%d degraded=true",
+                        len(skipped_items),
+                    )
                 return LocalResource(
                     path=temp_dir,
                     feishu_plan=plan,
@@ -641,6 +646,10 @@ class FeishuAccessor(DataAccessor):
                 if not root_dir.exists():
                     root_dir = temp_dir
                 plan.root = root_dir if root_dir.is_dir() else root_dir.parent
+                if skipped_items:
+                    logger.info(
+                        "Wiki import incomplete skipped=%d degraded=true", len(skipped_items)
+                    )
                 return LocalResource(
                     path=root_dir,
                     feishu_plan=plan,
@@ -721,11 +730,10 @@ class FeishuAccessor(DataAccessor):
             )
 
         except Exception as e:
-            logger.error(
-                "[FeishuAccessor] Failed to access %s: %s",
-                _redact_feishu_source_url(source_str),
-                e,
-                exc_info=True,
+            logger.debug(
+                "Feishu source access failed source=%s error_type=%s",
+                safe_uri_for_log(source_str),
+                type(e).__name__,
             )
             raise
 
@@ -1346,11 +1354,10 @@ class FeishuAccessor(DataAccessor):
         error: Exception,
     ) -> None:
         message = str(error).replace("\n", " ")
-        logger.warning(
-            "[FeishuAccessor] Skipping Wiki node %s under %s: %s",
-            node.wiki_node_token,
-            target_dir,
-            message,
+        logger.debug(
+            "Wiki node skipped target=%s error_type=%s",
+            safe_path_for_log(str(target_dir)),
+            type(error).__name__,
         )
         if skipped_items is None:
             return
@@ -1392,12 +1399,10 @@ class FeishuAccessor(DataAccessor):
         error: Exception,
     ) -> None:
         message = str(error).replace("\n", " ")
-        logger.warning(
-            "[FeishuAccessor] Skipping Drive %s %s under %s: %s",
-            item_type,
-            token,
-            target_dir,
-            message,
+        logger.debug(
+            "Drive item skipped target=%s error_type=%s",
+            safe_path_for_log(str(target_dir)),
+            type(error).__name__,
         )
         if skipped_items is None:
             return
@@ -1515,10 +1520,9 @@ class FeishuAccessor(DataAccessor):
                 feishu_access_token=feishu_access_token,
             )
         except Exception as exc:
-            logger.warning(
-                "[FeishuAccessor] Falling back to Drive folder token %s as name: %s",
-                folder_token,
-                exc,
+            logger.info(
+                "Drive folder name unavailable; using folder identifier error_type=%s degraded=true",
+                type(exc).__name__,
             )
             return folder_token
         return name or folder_token
@@ -2005,9 +2009,7 @@ class FeishuAccessor(DataAccessor):
                 verify(client._config, request, option)
         return option
 
-    async def _download_export_file(
-        self, client, request, feishu_access_token, *, max_bytes: int
-    ):
+    async def _download_export_file(self, client, request, feishu_access_token, *, max_bytes: int):
         """Keep the Slides download cancellable by the export deadline."""
         import httpx
         from lark_oapi.core.http.transport import _build_header, _build_url
@@ -2967,7 +2969,10 @@ class FeishuAccessor(DataAccessor):
         try:
             raw_resp = self._call_api(client.request, raw_req, feishu_access_token)
         except Exception as exc:
-            logger.warning("[FeishuAccessor] Error downloading image %s: %s", file_token, exc)
+            logger.info(
+                "Image download failed; omitting image error_type=%s degraded=true",
+                type(exc).__name__,
+            )
             return None
 
         if not raw_resp.success():
@@ -2976,19 +2981,22 @@ class FeishuAccessor(DataAccessor):
             detail = getattr(raw_resp, "msg", "") or f"HTTP {http_status}"
             if http_status == 403:
                 detail = f"{detail} (missing Feishu permission docs:document.media:download)"
-            logger.warning(
-                "[FeishuAccessor] Failed to download image %s: code=%s, http=%s, msg=%s",
-                file_token,
-                getattr(raw_resp, "code", None),
-                http_status,
-                detail,
+            logger.info(
+                "Image download rejected; omitting image",
+                extra=safe_log_fields(
+                    {
+                        "error_code": str(getattr(raw_resp, "code", "")),
+                        "http_status_code": http_status,
+                        "degraded": True,
+                    }
+                ),
             )
             return None
 
         raw = getattr(raw_resp, "raw", None)
         content = getattr(raw, "content", None)
         if not content:
-            logger.warning("[FeishuAccessor] Empty image response for %s", file_token)
+            logger.info("Empty image response; omitting image degraded=true")
             return None
         return content, self._response_content_type(raw)
 
@@ -3381,11 +3389,11 @@ class FeishuAccessor(DataAccessor):
         )
         response = self._call_api(client.request, request, feishu_access_token)
         if not response.success():
-            logger.warning(
-                "[FeishuAccessor] Failed to inspect embedded sheet %s: code=%s msg=%s",
-                block.block_id,
-                getattr(response, "code", None),
-                getattr(response, "msg", None),
+            logger.info(
+                "Embedded sheet inspection failed; omitting sheet",
+                extra=safe_log_fields(
+                    {"error_code": str(getattr(response, "code", "")), "degraded": True}
+                ),
             )
             return None
 
@@ -3405,10 +3413,9 @@ class FeishuAccessor(DataAccessor):
                 feishu_access_token=feishu_access_token,
             )
         except Exception as exc:
-            logger.warning(
-                "[FeishuAccessor] Failed to read embedded sheet %s: %s",
-                sheet_token,
-                exc,
+            logger.info(
+                "Embedded sheet read failed; omitting sheet error_type=%s degraded=true",
+                type(exc).__name__,
             )
             return None
 

@@ -741,9 +741,9 @@ Submit module groups in order and refresh from upstream before starting each gro
 | --- | --- | --- |
 | 1 | Model logs and safe payload summaries | Merged in #7769 |
 | 2 | Logging initialization, observability logs, Python/Rust/C++ output | Merged in #7778; C++ compatibility fixes in #7794 |
-| 3 | Existing authentication, account, ACL, and ROOT-related logs | Implemented; shares a PR with batch 4, adds no audit capabilities |
-| 4 | Existing business service logs | Implemented; shares a PR with batch 3 |
-| 5 | Parsing, ingestion, and connectors | After batch 4 merges |
+| 3 | Existing authentication, account, ACL, and ROOT-related logs | Merged in #7806 with batch 4; adds no audit capabilities |
+| 4 | Existing business service logs | Merged in #7806 with batch 3 |
+| 5 | Parsing, ingestion, and connectors | Implemented; independent PR |
 | 6 | Storage and queues | After batch 5 merges |
 | 7 | Retrieval, core, and utilities | After batch 6 merges |
 | 8 | Sessions, memory, compilation, CLI, and Gateway | After batch 7 merges |
