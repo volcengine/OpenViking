@@ -41,9 +41,7 @@ def _load_tag_query(lang: str) -> Optional[str]:
         logger.debug("No maintained tags query", extra=safe_log_fields({"file_type": lang}))
         return None
     except OSError as exc:
-        logger.info(
-            "Tags query load failed; using alternate extractor error_type=%s", type(exc).__name__
-        )
+        logger.debug("Tags query load failed error_type=%s", type(exc).__name__)
         return None
     return query_scm.strip() or None
 
@@ -56,8 +54,8 @@ def has_tag_query(file_name: str) -> bool:
 
         lang = filename_to_lang(Path(file_name).name or "source.txt")
     except Exception as exc:
-        logger.info(
-            "Tags query language detection failed; using alternate extractor path=%s error_type=%s",
+        logger.debug(
+            "Tags query language detection failed path=%s error_type=%s",
             safe_path_for_log(file_name),
             type(exc).__name__,
         )
@@ -74,8 +72,8 @@ def _extract_with_grep_ast(
     try:
         from grep_ast import TreeContext
     except Exception as exc:
-        logger.info(
-            "RepoMap extractor unavailable; using alternate extractor error_type=%s",
+        logger.debug(
+            "RepoMap extractor unavailable error_type=%s",
             type(exc).__name__,
         )
         return None
@@ -107,8 +105,8 @@ def _extract_with_grep_ast(
         mode = "verbose" if verbose else "compact"
         return f"# {file_name} [aider-repomap-lite, {mode}]\n\n{rendered}"
     except Exception as exc:
-        logger.info(
-            "RepoMap extraction failed; using alternate extractor path=%s error_type=%s",
+        logger.debug(
+            "RepoMap extraction failed path=%s error_type=%s",
             safe_path_for_log(file_name),
             type(exc).__name__,
         )

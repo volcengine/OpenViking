@@ -498,7 +498,7 @@ async def _generate_media_summary(
     except (_InvalidMediaContentError, _MediaTooLargeError):
         return result
     except Exception as error:
-        error_type, status, code, request_id = _exception_metadata(error)
+        error_type, status, code, _ = _exception_metadata(error)
         logger.info(
             "Media understanding failed; using empty summary media_type=%s degraded=true",
             media_type,
@@ -507,7 +507,6 @@ async def _generate_media_summary(
                     "error_type": error_type,
                     "http_status_code": int(status) if status.isdecimal() else None,
                     "error_code": code,
-                    "request_id": request_id,
                 }
             ),
         )
@@ -517,13 +516,11 @@ async def _generate_media_summary(
             try:
                 temporary_path.unlink(missing_ok=True)
             except OSError as cleanup_error:
-                error_type, status, code, request_id = _exception_metadata(cleanup_error)
+                error_type, _, code, _ = _exception_metadata(cleanup_error)
                 logger.info(
                     "Media temporary file cleanup failed media_type=%s",
                     media_type,
-                    extra=safe_log_fields(
-                        {"error_type": error_type, "error_code": code, "request_id": request_id}
-                    ),
+                    extra=safe_log_fields({"error_type": error_type, "error_code": code}),
                 )
 
     result["summary"] = _normalize_media_markdown(

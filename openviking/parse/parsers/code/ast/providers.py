@@ -63,8 +63,8 @@ def extract_skeleton_result(
         if is_skeleton_useful(text):
             return SkeletonExtractionResult(text, "aider_repomap", False, "maintained tags query")
         reason = "tags query produced no useful skeleton"
-        logger.info(
-            "Code skeleton unavailable; using LLM fallback path=%s reason=empty_tags_skeleton",
+        logger.debug(
+            "Code skeleton unavailable path=%s reason=empty_tags_skeleton",
             safe_path_for_log(file_name),
         )
         return SkeletonExtractionResult(None, "llm", True, reason)
@@ -77,8 +77,8 @@ def extract_skeleton_result(
     reasons.append("process produced no useful skeleton")
 
     reason = "; ".join(reasons)
-    logger.info(
-        "Code skeleton unavailable; using LLM fallback path=%s reason=empty_process_skeleton",
+    logger.debug(
+        "Code skeleton unavailable path=%s reason=empty_process_skeleton",
         safe_path_for_log(file_name),
     )
     return SkeletonExtractionResult(None, "llm", True, reason)

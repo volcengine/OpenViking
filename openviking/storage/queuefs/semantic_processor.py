@@ -18,6 +18,7 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.image_rewrite import (
     IMAGE_MAPPINGS_FILENAME,
     rewrite_image_uris,
@@ -1394,7 +1395,10 @@ class SemanticProcessor(DequeueHandlerBase):
         vlm = await self._get_vlm_config(active_ctx)
         if not vlm.is_available():
             if file_type == FILE_TYPE_CODE:
-                logger.warning("VLM not available for code summary fallback: %s", file_path)
+                logger.info(
+                    "Code summary model unavailable; using empty summary target=%s degraded=true",
+                    safe_uri_for_log(file_path),
+                )
             else:
                 logger.warning("VLM not available, using empty summary")
             return result("")
@@ -1431,6 +1435,11 @@ class SemanticProcessor(DequeueHandlerBase):
 
         async with llm_sem:
             with bind_telemetry_stage("semantic_execute"):
+                if prompt_id == "semantic.code_summary":
+                    logger.info(
+                        "Code skeleton unavailable; using LLM fallback target=%s",
+                        safe_uri_for_log(file_path),
+                    )
                 summary = await vlm.get_completion_async(prompt)
         return result(summary.strip())
 

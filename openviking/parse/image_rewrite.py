@@ -304,6 +304,7 @@ async def rewrite_image_uris(
     files_processed = 0
     references_rewritten = 0
     failed_files = 0
+    log_stats = {"skipped": 0}
 
     for md_uri in md_uris:
         # Resolve this markdown file's mapping from the sidecar of the document
@@ -338,7 +339,7 @@ async def rewrite_image_uris(
             continue
 
         new_content, rewrite_count = _rewrite_content(
-            content, md_dir, available_images, path_to_image_name
+            content, md_dir, available_images, path_to_image_name, log_stats=log_stats
         )
 
         if rewrite_count > 0:
@@ -375,8 +376,12 @@ async def rewrite_image_uris(
                 type(e).__name__,
             )
 
-    if failed_files:
-        logger.info("Image rewrite incomplete failed=%d degraded=true", failed_files)
+    if failed_files or log_stats["skipped"]:
+        logger.info(
+            "Image rewrite incomplete failed=%d skipped=%d degraded=true",
+            failed_files,
+            log_stats["skipped"],
+        )
     logger.debug(
         "Image rewrite completed total=%d rewritten=%d files=%d",
         len(md_uris),
@@ -392,10 +397,12 @@ def _rewrite_content(
     image_dir: str,
     available_images: Set[str],
     path_to_image_name: Optional[Dict[str, str]] = None,
+    *,
+    log_stats: Optional[Dict[str, int]] = None,
 ) -> tuple[str, int]:
     """Rewrite local image references in markdown content.
 
-    Returns (new_content, rewrite_count).
+    Returns (new_content, rewrite_count). Optional log_stats accumulates skipped references.
     """
     rewrite_count = 0
     mappings = path_to_image_name or {}
@@ -413,6 +420,8 @@ def _rewrite_content(
         image_name = mappings.get(path)
         if image_name and image_name in available_images:
             return f"{image_dir}/{quote(image_name, safe='')}"
+        if log_stats is not None:
+            log_stats["skipped"] = log_stats.get("skipped", 0) + 1
         logger.debug("Image missing; leaving reference unchanged target=%s", safe_uri_for_log(path))
         return None
 

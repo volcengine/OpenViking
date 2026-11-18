@@ -162,8 +162,8 @@ def _detect_process_language(file_name: str) -> Optional[str]:
     try:
         lang = detect_language_from_path(str(path))
     except Exception as exc:
-        logger.info(
-            "Code language detection failed; using LLM fallback path=%s error_type=%s",
+        logger.debug(
+            "Code language detection failed path=%s error_type=%s",
             safe_path_for_log(file_name),
             type(exc).__name__,
         )
@@ -222,8 +222,8 @@ def extract_process_skeleton(
     try:
         return _extract_process_skeleton(file_name, content, lang)
     except Exception as exc:
-        logger.info(
-            "Code extraction failed; using LLM fallback path=%s error_type=%s",
+        logger.debug(
+            "Code extraction failed path=%s error_type=%s",
             safe_path_for_log(file_name),
             type(exc).__name__,
         )
