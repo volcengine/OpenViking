@@ -16,8 +16,6 @@ L0 and L1 are normally generated together, but either one may exist independentl
 
 For resource-directory summary generation, `semantic.abstract_max_chars` and `semantic.overview_max_chars` set character budgets; the table shows their defaults. The budgets apply to the generated Markdown body. Sidecar metadata is excluded.
 
-Truncation prefers complete sentences. If no sentence ends within the budget, it can retain the first complete sentence even when that sentence is longer. These settings therefore do not impose hard size limits on stored sidecars.
-
 ## L0: Abstract
 
 L0 is the shortest representation of a directory, used for vector retrieval and quick relevance decisions.
@@ -52,7 +50,7 @@ This directory covers the primary API authentication methods.
 overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
-For ordinary directories, the model generates L0 from file summaries and child-directory L0 bodies. L1 renders the directory description, navigation, and access guide. When space is limited, entry links take priority over descriptions. On a memory directory refresh, a type template can supply a missing L0 as a `manual` preset. L1 renders from stored memory fields, so directory refresh after a normal memory write needs no text generation call. For Skill roots, L0 comes from Skill metadata and L1 uses the `SKILL.md` body.
+For ordinary directories, the model writes a directory summary from file summaries and child-directory L0 bodies. L1 opens with that complete summary. The template adds directory navigation and an access guide, using the remaining space for as many entry links and descriptions as fit. L0 takes a short prefix from the same summary. On a memory directory refresh, a type template can supply a missing L0 as a `manual` preset. L1 renders from stored memory fields, so directory refresh after a normal memory write needs no text generation call. For Skill roots, L0 comes from Skill metadata and L1 uses the `SKILL.md` body.
 
 ## L2: Detail
 

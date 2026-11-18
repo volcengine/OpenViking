@@ -22,7 +22,7 @@ from tests.storage.test_abstract_overview_freshness import _FakeFS
 
 
 @pytest.mark.asyncio
-async def test_directory_generation_uses_model_only_for_l0_and_renders_real_navigation():
+async def test_directory_generation_uses_the_same_summary_for_l0_and_l1():
     full_abstract = "Documentation for the search service."
     complete = AsyncMock(return_value=full_abstract)
     result = await generate_directory_semantics(
@@ -45,6 +45,7 @@ async def test_directory_generation_uses_model_only_for_l0_and_renders_real_navi
     assert "Access guide" in result.overview
     complete.assert_awaited_once()
     assert "Coverage: 2 of 513" in complete.await_args.args[0]
+    assert "at most 17 characters" not in complete.await_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -112,9 +113,11 @@ async def test_manual_l0_survives_generation_and_rejects_public_metadata_changes
 
 
 @pytest.mark.asyncio
-async def test_overview_budget_preserves_navigation_when_the_first_summary_is_too_long():
+async def test_overview_budget_preserves_full_summary_before_navigation():
     abstract = "Short abstract."
-    full_abstract = f"{abstract} {'x' * 700}"
+    full_abstract = (
+        f"{abstract} " + "This directory contains implementation notes for the service. " * 4
+    ).strip()
     result = await generate_directory_semantics(
         "viking://resources/docs",
         {
@@ -123,17 +126,17 @@ async def test_overview_budget_preserves_navigation_when_the_first_summary_is_to
         },
         previous=None,
         total_entries=3,
-        config=SemanticConfig(abstract_max_chars=len(abstract), overview_max_chars=700),
+        config=SemanticConfig(abstract_max_chars=len(abstract), overview_max_chars=722),
         language="en",
         complete=AsyncMock(return_value=full_abstract),
     )
-    assert len(result.overview) <= 700
-    assert f"\n\n{abstract}\n\n" in result.overview
+    assert result.abstract == abstract
+    assert len(result.overview) <= 722
+    assert f"\n\n{full_abstract}\n\n" in result.overview
     lines = [line for line in result.overview.splitlines() if line.startswith("- [")]
-    assert len(lines) == 2
+    assert len(lines) == 1
     assert lines[0].startswith("- [api.py](viking://resources/docs/api.py)")
     assert lines[0].endswith("…")
-    assert lines[1] == "- [readme.md](viking://resources/docs/readme.md): Getting started."
     assert "Only some entries are listed" in result.overview
     assert result.overview.endswith("support these operations.")
 
