@@ -11,14 +11,12 @@ const text = resolveLabels(undefined, 'en-US');
 const scope = 'viking://resources';
 const query = 'Shenzhen';
 
-function modeSelector() {
-  return document.querySelector(
-    'button[role="combobox"][aria-haspopup="listbox"]',
-  );
+function summary() {
+  return document.querySelector('.ov-file-browser-search__summary');
 }
 
 async function selectMode(mode) {
-  await act(() => modeSelector().click());
+  await act(() => summary().querySelector('button').click());
   const option = [...document.querySelectorAll('[role="option"]')].find(
     (option) =>
       option.querySelector('.ov-file-browser-search__menu-name')
@@ -27,7 +25,10 @@ async function selectMode(mode) {
   assert.ok(option);
   await act(() => option.click());
   await settle();
-  assert.equal(modeSelector().textContent.trim(), mode);
+  assert.equal(
+    summary().querySelector('.ov-file-browser-search__mode-chip').textContent,
+    mode,
+  );
 }
 
 for (const from of ['glob', 'grep']) {
@@ -58,6 +59,17 @@ for (const from of ['glob', 'grep']) {
         ),
       );
       try {
+        assert.equal(
+          document.querySelector(
+            '.ov-file-browser-search__header button[role="combobox"]',
+          ),
+          null,
+        );
+        assert.equal(
+          summary().querySelector('button').textContent.trim(),
+          text.searchSwitchMode,
+        );
+        assert.ok(!summary().textContent.includes(text.searchResultCount(0)));
         await selectMode(from);
         const scopeInput = [...document.querySelectorAll('label')]
           .find((label) => label.textContent.trim() === scope)
@@ -87,6 +99,11 @@ for (const from of ['glob', 'grep']) {
             .textContent.trim(),
           text.searchEmpty,
         );
+        assert.equal(
+          summary().firstElementChild.textContent,
+          text.searchResultCount(0),
+        );
+        const switchButton = summary().querySelector('button');
         assert.equal(fetch.calls.at(-1).path, `/api/v1/search/${from}`);
         assert.equal(fetch.calls.at(-1).body.uri, scope);
         if (from === 'grep')
@@ -94,6 +111,11 @@ for (const from of ['glob', 'grep']) {
 
         await selectMode(to);
 
+        assert.equal(summary().querySelector('button'), switchButton);
+        assert.equal(
+          summary().firstElementChild.textContent,
+          text.searchResultCount(1),
+        );
         assert.equal(input.value, query);
         assert.equal(fetch.calls.at(-1).path, `/api/v1/search/${to}`);
         assert.deepEqual(fetch.calls.at(-1).body, {

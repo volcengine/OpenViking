@@ -122,9 +122,9 @@ export interface FileBrowserLabels {
   searchFilterUnsupported?: string;
   /** 检索结果数量，参数为条数。Result count; receives the number. */
   searchResultCount?: (count: number) => string;
-  /** @deprecated 模式已移到搜索框旁。The search field now shows the mode. */
+  /** 模式标签旁的说明。Description beside the mode chip. */
   searchVia?: string;
-  /** 模式选择器的无障碍名称。Accessible label for the retrieval mode selector. */
+  /** 切换检索方式的入口。Entry that switches the retrieval mode. */
   searchSwitchMode?: string;
   /** 高级筛选按钮的无障碍名称。Accessible name of the advanced-filter button. */
   searchAdvancedLabel?: string;

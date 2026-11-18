@@ -12,6 +12,7 @@ import { Modal } from '../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
 import { FileBrowserSearchAdvanced } from './file-browser-search-advanced.js';
 import { FileBrowserSearchHeader } from './file-browser-search-header.js';
+import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
 import { useSearchHighlight } from './use-search-highlight.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
 import {
@@ -153,13 +154,9 @@ export function FileBrowserSearch({
     inputRef.current?.focus();
     search.retry();
   };
+  const retryOnEnter = search.error ? retry : undefined;
   const { active, activeIndex, listId, onHighlight, onKeyDown } =
-    useSearchHighlight(
-      hits,
-      composing,
-      openResult,
-      search.error ? retry : undefined,
-    );
+    useSearchHighlight(hits, composing, openResult, retryOnEnter);
 
   return (
     <Modal
@@ -195,10 +192,6 @@ export function FileBrowserSearch({
           },
         }}
         onChange={setDraft}
-        onSelectMode={(next) => {
-          setMode(next);
-          setFilters((current) => normalizeFilters(current, next));
-        }}
         onToggleAdvanced={() => onToggleAdvanced(!advancedOpen)}
       />
       <div ref={exposure} className="ov-file-browser-search__content">
@@ -212,6 +205,15 @@ export function FileBrowserSearch({
               message={useRenderErrors(locale).search}
               resetKeys={[rootUri, query, mode]}
             >
+              <FileBrowserSearchModeRow
+                mode={mode}
+                count={search.result === null ? null : hits.length}
+                text={text}
+                onSelectMode={(next) => {
+                  setMode(next);
+                  setFilters((current) => normalizeFilters(current, next));
+                }}
+              />
               <FileBrowserSearchResults
                 open={open}
                 hits={hits}

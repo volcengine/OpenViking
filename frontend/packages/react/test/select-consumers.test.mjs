@@ -100,7 +100,7 @@ test('search mode uses the menu inside the dialog without clearing the query or 
     });
     const trigger = () =>
       dialog.querySelector(
-        '.ov-file-browser-search__header button[role="combobox"]',
+        '.ov-file-browser-search__summary button[role="combobox"]',
       );
     await act(async () => new Promise((resolve) => setTimeout(resolve, 450)));
     await settle();
@@ -123,7 +123,7 @@ test('search mode uses the menu inside the dialog without clearing the query or 
     assert.equal(menu(), null);
     assert.ok(dialog.isConnected);
     assert.equal(document.activeElement, trigger());
-    assert.equal(trigger().textContent, 'grep');
+    assert.match(trigger().getAttribute('aria-label'), /grep/);
     assert.equal(input.value, 'profile');
   } finally {
     await view.unmount();
