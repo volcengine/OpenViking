@@ -3,8 +3,8 @@
 """One capture document per client session: its OpenViking session and how far it is saved.
 
 The request that ends a turn writes the turn to OpenViking. A gateway cut inside a turn
-writes the history before it at once, and so does a client's compaction request appended
-to a tool result. A commit then archives the saved messages and extracts memories from
+writes the history before it at once, and so does Claude Code's or Codex's compaction
+request inside a turn. A commit then archives the saved messages and extracts memories from
 them: the gateway commits, or with ``openviking_auto_commit`` OpenViking does by itself.
 The document holds no conversation text, only where the session stands and when its idle
 commit is due. Replay records are independent: a failed save never invalidates an old

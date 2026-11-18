@@ -103,7 +103,7 @@ Every record has one type. The type decides whether the request searches memory 
 | --- | --- | --- |
 | New message | A request whose last message is a new user message | Searched once, earlier memory replayed; saves the turn when its reply ends it |
 | Tool step | The same turn continuing, for example with tool results | Earlier memory replayed; the one whose reply ends the turn saves all of it |
-| Housekeeping | Title, summary, compaction, suggestion and permission-check requests; once a conversation has sent client tools, a separate request in it with neither tools nor earlier replies, such as Claude Code summarizing a fetched page. Operators can add a client's own requests in [Client rules](13-configuration.md#client-rules) | Earlier memory replayed; never saved, but a compaction request added to a tool result saves the history before it |
+| Housekeeping | Title, summary, compaction, suggestion and permission-check requests; once a conversation has sent client tools, a separate request in it with neither tools nor earlier replies, such as Claude Code summarizing a fetched page. Operators can add a client's own requests in [Client rules](13-configuration.md#client-rules) | Earlier memory replayed; never saved, but Claude Code's or Codex's compaction request inside a turn saves the history before it |
 | Sub-agent | Requests from a client's sub-agents | Earlier memory replayed; never saved |
 | Token count | Token-counting requests (`/gateway/v1/messages/count_tokens`) | Earlier memory replayed, so the count matches what is actually sent |
 | Forwarded | Requests passed through unchanged, without memory: other endpoints, Responses requests that rely on provider-side state, compressed or unreadable bodies | None |

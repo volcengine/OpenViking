@@ -1,5 +1,5 @@
-"""Client compaction as real clients send it: Claude Code recorded through a proxy,
-Codex and OpenCode rebuilt from their source and upstream request snapshots."""
+"""Client compaction as real clients send it: Claude Code and Codex recorded through a
+proxy, OpenCode rebuilt from its source and upstream request snapshots."""
 
 import copy
 import json
@@ -10,7 +10,6 @@ from test_capture_delivery import sent
 from openviking_gateway.tool_protocols import ResponseCapture
 
 ANTHROPIC_TOOLS = [{"name": "Read", "description": "Read a file", "input_schema": {}}]
-RESPONSES_TOOLS = [{"type": "function", "name": "shell", "parameters": {}}]
 
 
 class Client:
@@ -21,13 +20,11 @@ class Client:
         self.credential, self.policy, self.protocol = credential, policy, protocol
         self.headers = headers
 
-    async def send(self, messages, reply, headers=None, tools=True):
+    async def send(self, messages, reply, headers=None):
         responses = self.protocol == "responses"
         body = {"model": "model", "input" if responses else "messages": copy.deepcopy(messages)}
-        if tools:
-            body["tools"] = RESPONSES_TOOLS if responses else ANTHROPIC_TOOLS
-        if responses:
-            body["store"] = False
+        # Codex lists its tools in an input item instead.
+        body.update({"store": False} if responses else {"tools": ANTHROPIC_TOOLS})
         headers = {**self.headers, **(headers or {})}
         request = await self.kernel.prepare(
             body, self.protocol, headers, self.credential, {"id": "upstream"}, self.policy
@@ -35,7 +32,7 @@ class Client:
         items = reply if isinstance(reply, list) else [reply]
         output = items if responses else None
         # A reply with tool calls hands the turn to the client; any other ends it.
-        handoff = any(k in str(items) for k in ("tool_use", "function_call"))
+        handoff = any(k in str(items) for k in ("tool_use", "tool_call"))
         response = ResponseCapture(
             self.protocol, items[-1], complete=not handoff, handoff=handoff, output_items=output
         )
@@ -237,8 +234,10 @@ async def test_claude_code_mid_turn_compaction(client, shape, then):
     assert cc.saved() == expected[shape]
 
 
-# Codex 0.169 with a custom provider: inline compaction on /responses, marked by its turn
-# metadata; the history is rebuilt from the user messages and a summary message.
+# Codex 0.160.1 with a custom provider, recorded: tools travel in a first input item that
+# differs in a compaction request; the compaction request is the history and an instruction
+# message, named by the turn metadata with its phase; the history is then rebuilt from the
+# user messages and a summary message.
 
 
 def item(role, value):
@@ -246,12 +245,18 @@ def item(role, value):
     return {"type": "message", "role": role, "content": [{"type": kind, "text": value}]}
 
 
-def function_call(name):
-    return {"type": "function_call", "call_id": name, "name": "shell", "arguments": "{}"}
+def tool_call(name):
+    return {"type": "custom_tool_call", "call_id": name, "name": "exec", "input": "cat f"}
 
 
-def function_output(name):
-    return {"type": "function_call_output", "call_id": name, "output": f"ok {name}"}
+def tool_output(name):
+    output = [{"type": "input_text", "text": f"ok {name}"}]
+    return {"type": "custom_tool_call_output", "call_id": name, "output": output}
+
+
+def tools(count):
+    listed = [{"type": "function", "name": "exec"}] * count
+    return {"type": "additional_tools", "id": f"at_{count}", "role": "developer", "tools": listed}
 
 
 INSTRUCTIONS = item("developer", "<model instructions>")
@@ -261,52 +266,47 @@ CHECKPOINT = "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a hando
 CODEX_SUMMARY = "Another language model started to solve this problem and produced a summary"
 
 
-def kind(value):
-    return {"x-codex-turn-metadata": json.dumps({"request_kind": value})}
-
-
 async def codex_turn(codex, history, reply):
-    await codex.send(history, reply, kind("turn"))
+    metadata = {"x-codex-turn-metadata": json.dumps({"request_kind": "turn"})}
+    await codex.send(history, reply, metadata)
     return [*history, *(reply if isinstance(reply, list) else [reply])]
+
+
+async def codex_compact(codex, history, phase):
+    metadata = {"request_kind": "compaction", "compaction": {"phase": phase}}
+    await codex.send(
+        [tools(0), *history[1:], item("user", CHECKPOINT)],
+        item("assistant", "summary"),
+        {"x-codex-turn-metadata": json.dumps(metadata)},
+    )
 
 
 @pytest.mark.parametrize("when", ["mid_turn", "between_turns"])
 async def test_codex_compaction(client, when):
     codex = client("responses", {"thread-id": "codex"})
-    start = [INSTRUCTIONS, PERMISSIONS, ENVIRONMENT]
+    start = [tools(3), INSTRUCTIONS, PERMISSIONS, ENVIRONMENT]
     if when == "mid_turn":
         prompt = item("user", "fix the failing unit test in parser")
-        history = await codex_turn(codex, [*start, prompt], [function_call("c1")])
-        history = await codex_turn(codex, [*history, function_output("c1")], [function_call("c2")])
-        history = [*history, function_output("c2")]
-        await codex.send(
-            [*history, item("user", CHECKPOINT)],
-            item("assistant", "summary"),
-            kind("compaction"),
-            tools=False,
-        )
-        history = [*start, prompt, item("user", CODEX_SUMMARY)]
-        history = await codex_turn(codex, history, [function_call("c3")])
-        await codex_turn(codex, [*history, function_output("c3")], item("assistant", "Fixed."))
+        first, second = item("user", CODEX_SUMMARY + " 1"), item("user", CODEX_SUMMARY + " 2")
+        history = await codex_turn(codex, [*start, prompt], [tool_call("c1")])
+        history = await codex_turn(codex, [*history, tool_output("c1")], [tool_call("c2")])
+        await codex_compact(codex, [*history, tool_output("c2")], "mid_turn")
+        history = await codex_turn(codex, [*start, prompt, first], [tool_call("c3")])
+        await codex_compact(codex, [*history, tool_output("c3")], "mid_turn")
+        history = await codex_turn(codex, [*start, prompt, second], [tool_call("c4")])
+        await codex_turn(codex, [*history, tool_output("c4")], item("assistant", "Fixed."))
     else:
         one, two = item("user", "USER_ONE"), item("user", "USER_TWO")
         history = await codex_turn(codex, [*start, one], item("assistant", "FIRST_REPLY"))
         history = await codex_turn(codex, [*history, two], item("assistant", "SECOND_REPLY"))
-        await codex.send(
-            [*history, item("user", CHECKPOINT)],
-            item("assistant", "summary"),
-            kind("compaction"),
-            tools=False,
-        )
-        history = [INSTRUCTIONS, one, PERMISSIONS, ENVIRONMENT, two, item("user", CODEX_SUMMARY)]
-        await codex_turn(
-            codex, [*history, item("user", "USER_THREE")], item("assistant", "THIRD_REPLY")
-        )
-    # Between turns, each message once. Mid-turn, not: the summary is saved as a user
-    # message, and the steps before the compaction (c1, c2) are lost, as the rebuilt
-    # history drops them and the compaction request saves nothing.
+        await codex_compact(codex, history, "pre_turn")
+        history = [tools(3), INSTRUCTIONS, one, two, item("user", CODEX_SUMMARY)]
+        history = [*history, PERMISSIONS, ENVIRONMENT, item("user", "USER_THREE")]
+        await codex_turn(codex, history, item("assistant", "THIRD_REPLY"))
+    # Each message once; mid-turn, each summary is also saved as the user message it is.
+    prompt, summary = "fix the failing unit test in parser", CODEX_SUMMARY
     expected = {
-        "mid_turn": ["fix the failing unit test in parser", CODEX_SUMMARY, "c3", "Fixed."],
+        "mid_turn": [prompt, "c1", "c2", summary + " 1", "c3", summary + " 2", "c4", "Fixed."],
         "between_turns": [
             *("USER_ONE", "FIRST_REPLY", "USER_TWO", "SECOND_REPLY"),
             *("USER_THREE", "THIRD_REPLY"),

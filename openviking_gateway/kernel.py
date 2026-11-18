@@ -37,6 +37,7 @@ from .protocols import (
     classify,
     clean_text,
     client_openviking_tools,
+    codex_turn,
     is_user,
     plugin_present,
     prefix_chain,
@@ -350,6 +351,11 @@ class MemoryKernel:
             last = {**last, "content": last["content"][:-1]}
             kept = [*body_chain[:-1], *hidden_chain([last], protocol, body_chain[:-1])]
             await self.capture.save_cut(prepared, credential, kept[-1], [*before, last], kept)
+        elif (codex_turn(headers).get("compaction") or {}).get("phase") == "mid_turn":
+            # Codex sends its request as a user message of its own, after the turn so far.
+            turn = next((i for i in range(anchor - 1, -1, -1) if is_user(messages[i])), -1)
+            cut = next((a for a in reversed(body_chain[: max(anchor, 0)]) if a), "")
+            await self.capture.save_cut(replace(prepared, anchor=turn), credential, cut)
         if kind in {"user", "continuation"}:
             prepared.context_window = window_size(prepared, policy)
             prepared.context_tokens = await self.measure(prepared)
