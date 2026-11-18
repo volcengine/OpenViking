@@ -122,7 +122,7 @@ const messages = {
     'session-id': 'Session to append and commit',
     limit: 'Maximum number of results',
     'compile-name':
-      '1–64 ASCII letters, digits, underscores, or hyphens. Names are case-sensitive, cannot start with a hyphen, and cannot contain spaces or Chinese characters. Names must be unique per user and cannot be renamed.',
+      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters. Names must be unique per user and cannot be renamed.',
     'compile-from':
       'At least one existing readable source directory. Repeat --from or separate URIs with commas. Duplicate URIs are removed.',
     'compile-to':

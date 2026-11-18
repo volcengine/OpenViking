@@ -8,7 +8,8 @@ const compileName: Argument = {
   name: 'compile-name',
   valueKey: 'compile_name',
   placeholder: 'name',
-  pattern: /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/,
+  pattern:
+    /^(?:[A-Za-z0-9_][A-Za-z0-9_-]{0,63}|[A-Za-z0-9_〇\p{Unified_Ideograph}][A-Za-z0-9_〇\p{Unified_Ideograph}-]{0,31})$/u,
   required: true,
 };
 const compileInputs: readonly Argument[] = [
