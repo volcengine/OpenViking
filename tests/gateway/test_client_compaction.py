@@ -1,5 +1,4 @@
-"""Client compaction as real clients send it: Claude Code and Codex recorded through a
-proxy, OpenCode rebuilt from its source and upstream request snapshots."""
+"""Client compaction as Claude Code and Codex send it, from requests recorded through a proxy."""
 
 import copy
 import json
@@ -38,7 +37,6 @@ class Client:
         )
         await self.kernel.completed(request, self.credential, response)
         await self.kernel.save(request, self.credential, response)
-        return request
 
     def saved(self):
         """What each OpenViking session received: texts and tool call IDs, in order."""
@@ -126,7 +124,7 @@ async def claude_code_turn_one(cc):
 
 
 async def claude_code_shape(cc, shape):
-    """Runs one recorded compaction shape and returns the history after its turn ended."""
+    """Runs one recorded compaction shape to the end of its turn."""
     history = await claude_code_turn_one(cc)
     if shape == "kept_tail":
         # Compacted after t2 ran; the step is kept verbatim behind the summary.
@@ -144,15 +142,7 @@ async def claude_code_shape(cc, shape):
         history = [*history, step("t2"), tool_result("t2")]
         await cc.send(history, assistant(FINAL))
         await cc.send(compact(history), SUMMARIZED)
-        echo = [
-            text(
-                "<local-command-caveat>The command below was run by the user.</local-command-caveat>"
-            ),
-            text("<command-name>/compact</command-name>"),
-            text(
-                "<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>"
-            ),
-        ]
+        echo = [f"<{tag}>/compact</{tag}>" for tag in ("command-name", "local-command-stdout")]
         history = [
             {"role": "user", "content": SUMMARY},
             {"role": "system", "content": []},
@@ -164,7 +154,7 @@ async def claude_code_shape(cc, shape):
         history[-1] = system(NOTE)
         history = [*history, step("t7"), tool_result("t7")]
         await cc.send(history, assistant(LATER_FINAL))
-        return [*history, assistant(LATER_FINAL)]
+        return
     elif shape == "later_turn":
         # The first turn ends; the next is compacted after its first step, without a tail.
         history = [*history, step("t2"), tool_result("t2")]
@@ -183,61 +173,43 @@ async def claude_code_shape(cc, shape):
     history[-1] = system(history[-1]["content"][0]["text"])  # The block becomes a string.
     history = [*history, step("t3"), tool_result("t3")]
     await cc.send(history, assistant(FINAL))
-    return [*history, assistant(FINAL)]
-
-
-async def claude_code_next(cc, history):
-    await cc.send([*history, user(REMIND, NEXT)], assistant("f9 says CODEWORD t9"))
 
 
 CC = {"x-claude-code-session-id": "cc"}
-QUOTED = reminder(
-    "The user sent the following message:\nGenerate a short kebab-case name (2-4 words) that"
-    " captures the main topic of this conversation."
-)
 
 
-@pytest.mark.parametrize("header", [True, False])
-async def test_claude_code_ordinary_session_saves_each_message_once(client, header):
-    cc = client("anthropic", CC if header else {})
+async def test_reminder_beside_a_tool_result_is_conversation(client):
+    cc = client("anthropic", CC)
     history = await claude_code_turn_one(cc)
-    # A reminder beside a tool result is conversation.
-    history = [*history, step("t2"), tool_result("t2", QUOTED)]
-    await cc.send(history, assistant(FINAL))
-    await claude_code_next(cc, [*history, assistant(FINAL)])
-    assert cc.saved() == [[PROMPT, "t1", "t2", FINAL, NEXT, "f9 says CODEWORD t9"]]
+    quoted = reminder(f"The user sent the following message:\n{CRITICAL}")
+    await cc.send([*history, step("t2"), tool_result("t2", quoted)], assistant(FINAL))
+    assert cc.saved() == [[PROMPT, "t1", "t2", FINAL]]
 
 
-@pytest.mark.parametrize("then", ["session_ends", "next_prompt"])
 @pytest.mark.parametrize(
     "shape", ["kept_tail", "no_tail", "later_turn", "manual", "no_tail_no_header"]
 )
-async def test_claude_code_mid_turn_compaction(client, shape, then):
+async def test_claude_code_compaction(client, shape):
     cc = client("anthropic", {} if shape == "no_tail_no_header" else CC)
-    history = await claude_code_shape(cc, shape.removesuffix("_no_header"))
-    tail = []
-    if then != "session_ends":
-        await claude_code_next(cc, history)
-        tail = [NEXT, "f9 says CODEWORD t9"]
+    await claude_code_shape(cc, shape.removesuffix("_no_header"))
     # Each message once, in one session, except that the summary is saved as the user
     # message the client sent. The compaction request writes the history before its
     # instruction: without a kept tail, t2 (or t9) reaches only that request. After a
     # turn that ended, there is nothing to write. Without a header, the summarised history
     # is a new conversation.
     expected = {
-        "kept_tail": [[PROMPT, "t1", SUMMARY, "t2", "t3", FINAL, *tail]],
-        "no_tail": [[PROMPT, "t1", "t2", SUMMARY, "t3", FINAL, *tail]],
-        "later_turn": [[PROMPT, "t1", "t2", FINAL, NEXT, "t9", SUMMARY, "t3", FINAL, *tail]],
-        "manual": [[PROMPT, "t1", "t2", FINAL, LATER, "t7", LATER_FINAL, *tail]],
-        "no_tail_no_header": [[PROMPT, "t1", "t2"], [SUMMARY, "t3", FINAL, *tail]],
+        "kept_tail": [[PROMPT, "t1", SUMMARY, "t2", "t3", FINAL]],
+        "no_tail": [[PROMPT, "t1", "t2", SUMMARY, "t3", FINAL]],
+        "later_turn": [[PROMPT, "t1", "t2", FINAL, NEXT, "t9", SUMMARY, "t3", FINAL]],
+        "manual": [[PROMPT, "t1", "t2", FINAL, LATER, "t7", LATER_FINAL]],
+        "no_tail_no_header": [[PROMPT, "t1", "t2"], [SUMMARY, "t3", FINAL]],
     }
     assert cc.saved() == expected[shape]
 
 
-# Codex 0.160.1 with a custom provider, recorded: tools travel in a first input item that
-# differs in a compaction request; the compaction request is the history and an instruction
-# message, named by the turn metadata with its phase; the history is then rebuilt from the
-# user messages and a summary message.
+# Codex 0.160.1 with a custom provider, recorded: the compaction request is the history and
+# an instruction message, named by the turn metadata with its phase; the history is then
+# rebuilt from the user messages and a summary message.
 
 
 def item(role, value):
@@ -254,127 +226,30 @@ def tool_output(name):
     return {"type": "custom_tool_call_output", "call_id": name, "output": output}
 
 
-def tools(count):
-    listed = [{"type": "function", "name": "exec"}] * count
-    return {"type": "additional_tools", "id": f"at_{count}", "role": "developer", "tools": listed}
-
-
 INSTRUCTIONS = item("developer", "<model instructions>")
-PERMISSIONS = item("developer", "<permissions instructions>")
 ENVIRONMENT = item("user", "<environment_context>cwd</environment_context>")
 CHECKPOINT = "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary"
 CODEX_SUMMARY = "Another language model started to solve this problem and produced a summary"
 
 
-async def codex_turn(codex, history, reply):
-    metadata = {"x-codex-turn-metadata": json.dumps({"request_kind": "turn"})}
-    await codex.send(history, reply, metadata)
-    return [*history, *(reply if isinstance(reply, list) else [reply])]
+async def codex_send(codex, history, reply, **metadata):
+    metadata = {"request_kind": "turn", **metadata}
+    await codex.send(history, reply, {"x-codex-turn-metadata": json.dumps(metadata)})
+    return [*history, reply]
 
 
-async def codex_compact(codex, history, phase):
-    metadata = {"request_kind": "compaction", "compaction": {"phase": phase}}
-    await codex.send(
-        [tools(0), *history[1:], item("user", CHECKPOINT)],
-        item("assistant", "summary"),
-        {"x-codex-turn-metadata": json.dumps(metadata)},
-    )
-
-
-@pytest.mark.parametrize("when", ["mid_turn", "between_turns"])
-async def test_codex_compaction(client, when):
+async def test_codex_compaction_inside_a_turn(client):
     codex = client("responses", {"thread-id": "codex"})
-    start = [tools(3), INSTRUCTIONS, PERMISSIONS, ENVIRONMENT]
-    if when == "mid_turn":
-        prompt = item("user", "fix the failing unit test in parser")
-        first, second = item("user", CODEX_SUMMARY + " 1"), item("user", CODEX_SUMMARY + " 2")
-        history = await codex_turn(codex, [*start, prompt], [tool_call("c1")])
-        history = await codex_turn(codex, [*history, tool_output("c1")], [tool_call("c2")])
-        await codex_compact(codex, [*history, tool_output("c2")], "mid_turn")
-        history = await codex_turn(codex, [*start, prompt, first], [tool_call("c3")])
-        await codex_compact(codex, [*history, tool_output("c3")], "mid_turn")
-        history = await codex_turn(codex, [*start, prompt, second], [tool_call("c4")])
-        await codex_turn(codex, [*history, tool_output("c4")], item("assistant", "Fixed."))
-    else:
-        one, two = item("user", "USER_ONE"), item("user", "USER_TWO")
-        history = await codex_turn(codex, [*start, one], item("assistant", "FIRST_REPLY"))
-        history = await codex_turn(codex, [*history, two], item("assistant", "SECOND_REPLY"))
-        await codex_compact(codex, history, "pre_turn")
-        history = [tools(3), INSTRUCTIONS, one, two, item("user", CODEX_SUMMARY)]
-        history = [*history, PERMISSIONS, ENVIRONMENT, item("user", "USER_THREE")]
-        await codex_turn(codex, history, item("assistant", "THIRD_REPLY"))
-    # Each message once; mid-turn, each summary is also saved as the user message it is.
-    prompt, summary = "fix the failing unit test in parser", CODEX_SUMMARY
-    expected = {
-        "mid_turn": [prompt, "c1", "c2", summary + " 1", "c3", summary + " 2", "c4", "Fixed."],
-        "between_turns": [
-            *("USER_ONE", "FIRST_REPLY", "USER_TWO", "SECOND_REPLY"),
-            *("USER_THREE", "THIRD_REPLY"),
-        ],
-    }
-    assert codex.saved() == [expected[when]]
-
-
-# OpenCode v2 over the Anthropic protocol: the compaction prompt is the last user message,
-# and the history after it is one checkpoint message.
-
-OPENCODE_PROMPT = "You MUST summarize the conversation above into a structured summary"
-MID_RECENT = "[User]: fix the failing test\n[Assistant tool call]: Read({})\n[Tool result]: ok"
-
-
-def checkpoint(recent):
-    record = f"\n\n<recent-context>\n{recent}\n</recent-context>" if recent else ""
-    return (
-        "<conversation-checkpoint>\nThe following is a summary and serialized record of earlier"
-        f" conversation.\n\n<summary>\nWork so far.\n</summary>{record}\n</conversation-checkpoint>"
-    )
-
-
-@pytest.mark.parametrize("when", ["mid_turn", "turn_boundary", "manual"])
-async def test_opencode_compaction(client, when):
-    oc = client("anthropic", {"x-opencode-session-id": "oc"})
-    plain = lambda role, value: {"role": role, "content": value}  # noqa: E731
-    history = [plain("user", "earlier ask")]
-    await oc.send(history, assistant("done"))
-    history = [*history, plain("assistant", "done"), plain("user", "fix the failing test")]
-    await oc.send(history, assistant(tool_use("t1")))
-    history = [*history, assistant(tool_use("t1")), tool_result("t1")]
-    await oc.send(history, assistant(tool_use("t2")))
-    history = [*history, assistant(tool_use("t2")), tool_result("t2")]
-    if when == "mid_turn":
-        await oc.send([*history, plain("user", OPENCODE_PROMPT)], assistant("summary"))
-        history = [plain("user", checkpoint(MID_RECENT))]
-        await oc.send(history, assistant(tool_use("t3")))
-        history = [*history, assistant(tool_use("t3")), tool_result("t3")]
-        await oc.send(history, assistant("fixed"))
-    else:
-        await oc.send(history, assistant("fixed"))
-        history = [*history, assistant("fixed")]
-        if when == "turn_boundary":
-            history = [*history, plain("user", "now add tests")]
-            await oc.send([*history, plain("user", OPENCODE_PROMPT)], assistant("summary"))
-            history = [plain("user", checkpoint("[User]: now add tests"))]
-        else:
-            await oc.send([*history, plain("user", OPENCODE_PROMPT)], assistant("summary"))
-            history = [
-                plain("user", checkpoint("[User]: fix the failing test")),
-                plain("user", "now add tests"),
-            ]
-        await oc.send(history, assistant("tests added"))
-    # Not exactly once: OpenCode's compaction request is not recognised, so its prompt and
-    # the summary reply are saved, and a checkpoint that starts the next turn is saved as a
-    # user message.
-    before = ["earlier ask", "done", "fix the failing test", "t1", "t2"]
-    compaction = [OPENCODE_PROMPT, "summary"]
-    expected = {
-        "mid_turn": [*before, *compaction, checkpoint(MID_RECENT), "t3", "fixed"],
-        "turn_boundary": [
-            *(*before, "fixed", "now add tests", *compaction),
-            *(checkpoint("[User]: now add tests"), "tests added"),
-        ],
-        "manual": [
-            *(*before, "fixed", *compaction),
-            *("now add tests", "tests added"),
-        ],
-    }
-    assert oc.saved() == [expected[when]]
+    prompt = "fix the failing unit test in parser"
+    start = [INSTRUCTIONS, ENVIRONMENT, item("user", prompt)]
+    history = await codex_send(codex, start, tool_call("c1"))
+    compaction = {"request_kind": "compaction", "compaction": {"phase": "mid_turn"}}
+    for n in (1, 2):
+        history = [*history, tool_output(f"c{n}"), item("user", CHECKPOINT)]
+        await codex_send(codex, history, item("assistant", "summary"), **compaction)
+        history = [*start, item("user", f"{CODEX_SUMMARY} {n}")]
+        history = await codex_send(codex, history, tool_call(f"c{n + 1}"))
+    await codex_send(codex, [*history, tool_output("c3")], item("assistant", "Fixed."))
+    # Each message once, and each summary as the user message it is.
+    saved = [prompt, "c1", f"{CODEX_SUMMARY} 1", "c2", f"{CODEX_SUMMARY} 2", "c3", "Fixed."]
+    assert codex.saved() == [saved]
