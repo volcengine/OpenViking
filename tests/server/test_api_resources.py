@@ -470,13 +470,30 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     }
 
 
-@pytest.mark.parametrize("failure", ["processing", "invalid_image", "bad_crc"])
+@pytest.mark.parametrize(
+    ("filename", "content", "message"),
+    [
+        pytest.param(None, None, "Parse error: boom", id="processing"),
+        pytest.param("bad.png", b"not an image", "Invalid image file:", id="image"),
+        pytest.param("bad.png", None, "bad header checksum in b'IDAT'", id="png-crc"),
+        pytest.param("bad.mp3", b"not audio", "Invalid audio file:", id="audio"),
+        pytest.param("bad.mp4", b"not video", "Invalid video file:", id="video"),
+        pytest.param("bad.pdf", b"%PDF-1.7\ninvalid\n%%EOF", "Invalid PDF file:", id="pdf"),
+        pytest.param("bad.docx", b"PK\x03\x04" + b"\0" * 26, "Invalid document file:", id="docx"),
+        pytest.param("bad.pptx", b"PK\x03\x04" + b"\0" * 26, "Invalid document file:", id="pptx"),
+        pytest.param("bad.xlsx", b"PK\x03\x04" + b"\0" * 26, "Invalid document file:", id="xlsx"),
+        pytest.param("bad.epub", b"PK\x03\x04" + b"\0" * 26, "Invalid document file:", id="epub"),
+        pytest.param("bad.zip", None, "Zip Slip attempt detected:", id="zip-slip"),
+    ],
+)
 async def test_add_resource_business_error_uses_error_envelope(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
     upload_temp_dir,
-    failure,
+    filename,
+    content,
+    message,
 ):
     async def fail_during_ingestion(**kwargs):
         return {
@@ -485,7 +502,7 @@ async def test_add_resource_business_error_uses_error_envelope(
             "source_path": kwargs["path"],
         }
 
-    if failure == "processing":
+    if filename is None:
         monkeypatch.setattr(
             service.resources,
             "_execute_resource_ingestion",
@@ -493,14 +510,18 @@ async def test_add_resource_business_error_uses_error_envelope(
         )
         source = {"path": "https://example.com/bad.md"}
     else:
-        content = bytearray(b"not an image")
-        if failure == "bad_crc":
+        if content is None:
             buffer = io.BytesIO()
-            Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
-            content = bytearray(buffer.getvalue())
-            # Corrupt the IDAT checksum immediately before the 12-byte IEND chunk.
-            content[-13] ^= 1
-        upload = upload_temp_dir / "bad.png"
+            if filename == "bad.zip":
+                with zipfile.ZipFile(buffer, "w") as archive:
+                    archive.writestr("../escape.txt", "must not be extracted")
+                content = buffer.getvalue()
+            else:
+                Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
+                content = bytearray(buffer.getvalue())
+                # Corrupt the IDAT checksum immediately before the 12-byte IEND chunk.
+                content[-13] ^= 1
+        upload = upload_temp_dir / filename
         upload.write_bytes(content)
         source = {"temp_file_id": upload.name}
 
@@ -513,18 +534,12 @@ async def test_add_resource_business_error_uses_error_envelope(
         },
     )
 
-    assert resp.status_code == (500 if failure == "processing" else 400), resp.text
+    assert resp.status_code == (500 if filename is None else 400), resp.text
     body = resp.json()
     assert body["status"] == "error"
     assert "result" not in body
-    if failure == "processing":
-        assert body["error"]["code"] == "PROCESSING_ERROR"
-        assert body["error"]["message"] == "Parse error: boom"
-    else:
-        assert body["error"]["code"] == "INVALID_ARGUMENT"
-        assert "Invalid image file:" in body["error"]["message"]
-        if failure == "bad_crc":
-            assert "bad header checksum in b'IDAT'" in body["error"]["message"]
+    assert body["error"]["code"] == ("PROCESSING_ERROR" if filename is None else "INVALID_ARGUMENT")
+    assert message in body["error"]["message"]
 
 
 async def test_add_skill_business_error_uses_error_envelope(
