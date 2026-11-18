@@ -156,6 +156,18 @@ export function useConversationReferences({
   const result =
     search?.scope === scope && search.keyword === keyword ? search : undefined;
   const hidden = collapsed?.result === result ? collapsed?.uris : undefined;
+  const expandDirectory = (uri: string) => {
+    if (keyword) {
+      const uris = new Set(hidden);
+      if (!uris.delete(uri)) uris.add(uri);
+      setCollapsed({ result, uris });
+    } else {
+      const row = tree.rows.find(
+        (item) => item.kind === 'entry' && item.uri === uri,
+      );
+      if (row?.kind === 'entry') return tree.toggleExpand(row);
+    }
+  };
   const references: VikingBotReferences = {
     rows: keyword
       ? (result?.rows ?? [])
@@ -176,16 +188,7 @@ export function useConversationReferences({
     onOpenChange,
     onQueryChange: setQuery,
     onExpand: (uri) => {
-      if (keyword) {
-        const uris = new Set(hidden);
-        if (!uris.delete(uri)) uris.add(uri);
-        setCollapsed({ result, uris });
-      } else {
-        const row = tree.rows.find(
-          (item) => item.kind === 'entry' && item.uri === uri,
-        );
-        if (row?.kind === 'entry') void tree.toggleExpand(row);
-      }
+      void expandDirectory(uri);
     },
     onLoadMore: (uri) => tree.loadMore(uri),
     onRetry: (uri) => {
@@ -196,5 +199,5 @@ export function useConversationReferences({
     isLoading: keyword ? !result : !tree.isReady && tree.isInitializing,
     error: keyword ? result?.error : tree.error?.message,
   };
-  return { references, clearReferences };
+  return { references, clearReferences, expandDirectory };
 }

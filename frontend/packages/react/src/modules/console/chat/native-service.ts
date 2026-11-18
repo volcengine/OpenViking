@@ -151,6 +151,33 @@ export function createNativeBotService(
           signal,
         );
       },
+      async commitSession(id, signal) {
+        const result = await request<{
+          status?: unknown;
+          reason?: unknown;
+          task_id?: unknown;
+        }>(
+          {
+            method: 'POST',
+            path: OV_PATH_BUILDERS.sessionCommit(id),
+            body: { keep_recent_count: 0 },
+          },
+          signal,
+        );
+        if (
+          result?.status === 'accepted' &&
+          typeof result.task_id === 'string' &&
+          result.task_id.trim()
+        )
+          return { status: 'accepted', taskId: result.task_id };
+        if (result?.status === 'skipped')
+          return {
+            status: 'skipped',
+            reason:
+              typeof result.reason === 'string' ? result.reason : undefined,
+          };
+        throw new Error('Invalid session commit response');
+      },
       interrupt: (id, signal) =>
         request(
           {

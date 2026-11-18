@@ -1,4 +1,6 @@
 import { Button } from '../../shared/primitives/button/button.js';
+import CommitSessionIcon from '../../../../icons/svg/viking-bot/session-commit.svg?react';
+import CheckIcon from '../../../../icons/svg/viking-bot/check.svg?react';
 import { Bubble } from '@ark-design/ui/bubble';
 import { ErrorCard } from '@ark-design/ui/error-card';
 
@@ -26,24 +28,41 @@ function MessageActions({
   if (actions.length === 0) return null;
   return (
     <div className="ov-viking-bot__message-actions">
-      {actions.map(({ messageId, action }) => (
-        <Button
-          size="small"
-          type="default"
-          key={`${messageId}:${action.key}`}
-          htmlType="button"
-          className="ov-viking-bot__message-action"
-          disabled={
-            Boolean(action.disabledReason) ||
-            action.status === 'pending' ||
-            action.status === 'success'
-          }
-          title={action.disabledReason}
-          onClick={() => onMessageAction?.(messageId, action.key)}
-        >
-          {action.label ?? action.key}
-        </Button>
-      ))}
+      {actions.map(({ messageId, action }) => {
+        const commit = action.key === 'commit-session';
+        const loading =
+          commit &&
+          (action.status === 'pending' || action.status === 'submitted');
+        const success = action.status === 'success';
+        return (
+          <Button
+            size="small"
+            type="default"
+            key={`${messageId}:${action.key}`}
+            htmlType="button"
+            className={`ov-viking-bot__message-action${commit ? ' ov-viking-bot__message-action--commit' : ''}`}
+            icon={
+              commit ? (
+                success ? (
+                  <CheckIcon />
+                ) : (
+                  <CommitSessionIcon />
+                )
+              ) : undefined
+            }
+            loading={loading}
+            disabled={
+              Boolean(action.disabledReason) ||
+              action.status === 'pending' ||
+              success
+            }
+            title={action.disabledReason}
+            onClick={() => onMessageAction?.(messageId, action.key)}
+          >
+            {action.label ?? action.key}
+          </Button>
+        );
+      })}
     </div>
   );
 }

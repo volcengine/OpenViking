@@ -54,7 +54,7 @@ import '@openviking/react/modules/console/style.css';
 
 ### 待确认交互
 
-发送任意消息触发模拟问题组。示例为名称注入异步校验、为输出目录提供选择器，并用自定义组件替换指令卡片；定时的外部规则将更新时间限制在 09:00–18:00。勾选「模拟答案发送失败」可检查输入保留、错误清理与重试。
+发送一条消息体验内置的 Wiki 澄清流程，或发送「日报」体验定时更新。勾选「启用宿主自定义表单」可体验名称异步校验、自定义输出目录选择器、替换指令卡片以及 09:00–18:00 的更新时段限制。勾选「模拟答案发送失败」可检查输入保留、错误清理与重试。
 
 ```tsx file="../../_demos/console-hitl.tsx" preview
 
@@ -67,6 +67,12 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 最后一项提交后，Console 发送 `request_user_input_response` JSON 继续下一轮对话，包含 `schema_version: '1.0'`、`tool_call_id` 和按原顺序排列的 `answers: { card_type, title, value }[]`。用户气泡、复制和历史展示采用标签/值摘要；发送与存储保留协议原文，选项名称从对应问题中恢复。
 
 宿主通过 `chatOptions.hitl.cards[card_type]` 提供扩展。同一类型的多个问题可用 `configureCard(card)` 按 `card.id` 或 `card.payload` 分别配置。字段名与值类型见 [VikingBotInteractionFields](../components/viking-bot#vikingbotinteractionfields)。校验通过后才进入下一项，最后一项才调用对话服务。目录存在性、权限和业务规则由宿主校验器检查；自定义选择器的数据与请求由宿主提供。
+
+### 提交会话
+
+点击最新一条完整回复下方的「提交会话」，可为当前对话发起记忆提取。Console 会显示提交状态，并在服务端返回任务 ID 时跟踪后台任务。如果任务返回记忆变更文件，且宿主提供了 `conversation.onOpenUri`，可从完成通知中打开结果。
+
+设为 `chatOptions.memoryCommit={false}` 可隐藏该操作。自定义对话服务可实现 `commitSession`；未实现时，由原生对话或已配置的 Provider 提供原生会话接口。
 
 ### 后台任务
 
@@ -129,6 +135,7 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 | requestOptions     | 对话请求配置                                        | `OvRequestOptions`                                    | 继承 Console     |
 | hitl               | 自动问题组、字段校验与自定义卡片配置                | `ConsoleHitlOptions \| false`                         | 自动启用内置卡片 |
 | referenceSelection | 内置 `@` 选择器的受控引用状态                       | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | 可选             |
+| memoryCommit       | 隐藏「提交会话」操作                                | `false`                                               | 服务支持时启用   |
 
 适配器每个方法都收到 `AbortSignal`，应响应取消并在失败时抛出错误。后端自动保存消息时省略 `saveMessage`。
 
@@ -159,15 +166,15 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 #### 内置卡片
 
-| card_type           | 默认表单字段              | 协议中的 value                                                 |
-| ------------------- | ------------------------- | -------------------------------------------------------------- |
-| compile_name        | `value`，文本             | `string`                                                       |
-| compile_output_type | `value`，单选             | 选项的 `value`                                                 |
-| compile_source      | `value`，每行一个目录 URI | 去空行、去重后的 `string[]`                                    |
-| compile_target      | `value`，目录 URI         | `string`                                                       |
-| compile_skill       | `value`，候选或自定义 URI | `string`                                                       |
-| compile_instruction | `value`，多行文本         | `string`                                                       |
-| compile_schedule    | `mode`、`time`、`weekday` | `{ frequency: 'disabled' }` 或包含频率、时间、星期和时区的对象 |
+| card_type           | 默认表单字段                | 协议中的 value                                                 |
+| ------------------- | --------------------------- | -------------------------------------------------------------- |
+| compile_name        | `value`，文本               | `string`                                                       |
+| compile_output_type | `value`，单选               | 选项的 `value`                                                 |
+| compile_source      | `value`，多选目录           | 去空值、去重后的 `string[]`                                    |
+| compile_target      | `value`，推荐或自定义目录   | `string`                                                       |
+| compile_skill       | `value`，推荐或自定义 Skill | `string`                                                       |
+| compile_instruction | `value`，多行文本           | `string`                                                       |
+| compile_schedule    | `mode`、`time`、`weekday`   | `{ frequency: 'disabled' }` 或包含频率、时间、星期和时区的对象 |
 
 工具结果支持直接 JSON、MCP `structuredContent` 或文本 `content`，`schema_version` 必须为 `'1.0'`。优先读取 `structuredContent`；一组中任一问题无效或未注册时，整组保留为工具结果。原生服务接受裸工具名及 `mcp_openviking-mcp_request_user_input`；自定义适配器应保留工具调用的唯一 `id`，将服务名设为 `openviking-mcp`、工具名设为 `request_user_input`。
 
@@ -184,15 +191,16 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 ### VikingBotChatService
 
-| 参数             | 说明                                                                     | 类型                                                                                    | 默认值 |
-| ---------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- | ------ |
-| stream           | 流式请求；必须发出 complete 或 interrupted 终止事件                      | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | 必填   |
-| createSession    | 新建会话                                                                 | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | 必填   |
-| loadMessages     | 读取完整会话历史                                                         | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | 必填   |
-| attachmentUpload | 启用添加资源按钮；发送时将 `upload` 返回的标识传给 `attachment.uploadId` | `VikingBotAttachmentUpload`                                                             | 可选   |
-| saveMessage      | 逐条保存；后端自动持久化时省略，避免重复                                 | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | 可选   |
-| interrupt        | 实际中断后端生成；与本地断开连接不同                                     | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | 可选   |
-| steer            | 向当前流追加输入；accepted 仅表示接受，不表示回复完成                    | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | 可选   |
+| 参数             | 说明                                                                     | 类型                                                                                                                             | 默认值 |
+| ---------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| stream           | 流式请求；必须发出 complete 或 interrupted 终止事件                      | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>`                                          | 必填   |
+| createSession    | 新建会话                                                                 | `(signal: AbortSignal) => Promise<VikingBotSession>`                                                                             | 必填   |
+| loadMessages     | 读取完整会话历史                                                         | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`                                                      | 必填   |
+| attachmentUpload | 启用添加资源按钮；发送时将 `upload` 返回的标识传给 `attachment.uploadId` | `VikingBotAttachmentUpload`                                                                                                      | 可选   |
+| saveMessage      | 逐条保存；后端自动持久化时省略，避免重复                                 | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`                                                  | 可选   |
+| commitSession    | 提交当前会话以提取记忆                                                   | `(id: string, signal: AbortSignal) => Promise<{ status: 'accepted'; taskId: string } \| { status: 'skipped'; reason?: string }>` | 可选   |
+| interrupt        | 实际中断后端生成；与本地断开连接不同                                     | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                                                         | 可选   |
+| steer            | 向当前流追加输入；accepted 仅表示接受，不表示回复完成                    | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`                                             | 可选   |
 
 `VikingBotAttachmentUpload` 接收可选的文件选择器过滤器 `accept`，以及必填的 `upload(file, signal)`，它返回已上传文件的标识。文件选择器不会过滤拖入的文件，适配器仍需验证文件。附件上传完成后才可发送。移除附件会取消该文件的上传；切换账号、请求身份或会话，或取消请求信号时，会取消待完成的上传并清空托管附件。通过 `conversation.sessions.currentId` 回写新建会话 ID 时，会保留该会话的正常上传。如果宿主提供草稿附件或文件选择回调，则使用宿主的配置。
 

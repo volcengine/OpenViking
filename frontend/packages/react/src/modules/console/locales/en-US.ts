@@ -58,6 +58,18 @@ const messages = {
     >
   >,
   telemetryResult: (value: string) => `Telemetry: ${value}`,
+  memoryCommit: {
+    idle: 'Commit session',
+    pending: 'Committing session',
+    submitted: 'Committing session',
+    success: 'Session committed',
+    empty: 'There are no new messages to extract memories from.',
+    skipped: 'No new memories were generated.',
+    failed: 'Could not submit the session',
+    completed: 'Memory extraction completed.',
+    saved: 'Memories were generated and saved.',
+    view: 'View memory',
+  },
   taskCompletion: {
     title: 'Task complete',
     description: 'Background task completed.',

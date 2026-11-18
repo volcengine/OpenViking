@@ -61,6 +61,14 @@ export interface VikingBotChatService {
     message: VikingBotMessage,
     signal: AbortSignal,
   ) => Promise<void>;
+  /** Submit the conversation for asynchronous memory extraction. */
+  commitSession?: (
+    id: string,
+    signal: AbortSignal,
+  ) => Promise<
+    | { status: 'accepted'; taskId: string }
+    | { status: 'skipped'; reason?: string }
+  >;
   interrupt?: (
     id: string,
     signal: AbortSignal,
@@ -125,6 +133,8 @@ export interface VikingBotChatResult extends VikingBotChatState {
   /** True only when this service supplies an actual interrupt operation. */
   canInterrupt: boolean;
   canSteer: boolean;
+  /** Commits the current session after its pending message writes finish. */
+  commitSession?: NonNullable<VikingBotChatService['commitSession']>;
   /** For a new turn, the optional callback runs once the stream acknowledges the input. */
   send: (
     input: string | VikingBotDraft,

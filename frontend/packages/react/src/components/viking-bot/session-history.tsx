@@ -4,7 +4,6 @@ import {
   Dropdown,
   DropdownItem,
 } from '../../shared/primitives/dropdown/index.js';
-import { LoadingIcon } from '../../shared/primitives/loading-icon/loading-icon.js';
 import { Select } from '../../shared/primitives/select/index.js';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import type { Locale } from '../../shared/locale.js';
@@ -13,10 +12,8 @@ import type { VikingBotSessions } from './capabilities.js';
 import type { VikingBotLabels } from './model.js';
 import { SessionHistoryDialog } from './session-history-dialog.js';
 
-import {
-  renderSessionHistoryRows,
-  type SessionHistoryAction,
-} from './session-history-rows.js';
+import { SessionHistoryList } from './session-history-list.js';
+import type { SessionHistoryAction } from './session-history-rows.js';
 
 const popupClass = 'ov-viking-bot__popover ov-viking-bot__history-popover';
 
@@ -70,55 +67,19 @@ export function SessionHistory({
       <VikingBotIcon name="history" />
     </Button>
   );
-  const hasSessions = sessions.items.length > 0;
   const hasMore = sessions.hasMore && sessions.onLoadMore;
   const list = (
-    <div
-      className="ov-viking-bot__session-history"
-      aria-busy={sessions.isLoading}
-    >
-      {!hasSessions && !sessions.isLoading && !sessions.error ? (
-        <div role="status" className="ov-viking-bot__history-placeholder">
-          {labels.emptySessions}
-        </div>
-      ) : null}
-      {sessions.isLoading ? (
-        <div
-          role="status"
-          className={
-            hasSessions
-              ? 'ov-viking-bot__history-refreshing'
-              : 'ov-viking-bot__history-placeholder'
-          }
-        >
-          {hasSessions ? null : <LoadingIcon />}
-          {labels.loading}
-        </div>
-      ) : null}
-      {sessions.error ? (
-        <p
-          role="alert"
-          className={
-            hasSessions
-              ? 'ov-viking-bot__history-error'
-              : 'ov-viking-bot__history-placeholder'
-          }
-        >
-          {sessions.error}
-        </p>
-      ) : null}
-      {renderSessionHistoryRows({
-        sessions,
-        labels,
-        locale,
-        managed,
-        onSelect,
-        onAction: (next) => {
-          setOpen(false);
-          setAction({ ...next, scopeKey, callback: actionCallback(next.kind) });
-        },
-      })}
-    </div>
+    <SessionHistoryList
+      sessions={sessions}
+      labels={labels}
+      locale={locale}
+      managed={managed}
+      onSelect={onSelect}
+      onAction={(next) => {
+        setOpen(false);
+        setAction({ ...next, scopeKey, callback: actionCallback(next.kind) });
+      }}
+    />
   );
   return (
     <>
@@ -135,6 +96,7 @@ export function SessionHistory({
               {list}
               {hasMore ? (
                 <DropdownItem
+                  className="ov-viking-bot__history-load-more"
                   closeOnClick={false}
                   disabled={sessions.isLoading}
                   onClick={sessions.onLoadMore}
@@ -174,6 +136,7 @@ export function SessionHistory({
                   <Button
                     type="text"
                     size="small"
+                    className="ov-viking-bot__history-load-more"
                     disabled={sessions.isLoading}
                     onClick={sessions.onLoadMore}
                   >

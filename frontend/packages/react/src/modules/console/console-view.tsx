@@ -91,7 +91,11 @@ export function ConsoleView({
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
         {feedback}
-        <ConsoleTaskNotifications locale={locale} onOpenUri={openCommandUri} />
+        <ConsoleTaskNotifications
+          locale={locale}
+          onOpenUri={openCommandUri}
+          onOpenMemoryUri={conversationProps.onOpenUri ?? onOpenUri}
+        />
         {state.mode ? (
           <ErrorBoundary message={renderErrors.toolbar} resetKeys={[scopeKey]}>
             <ConsoleToolbar

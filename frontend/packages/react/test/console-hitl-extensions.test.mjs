@@ -134,7 +134,7 @@ test('scope switches discard pending field validation and drafts', async () => {
   });
   try {
     await view.start();
-    await input(view.container.querySelector('[name=answer]'), 'Old account');
+    await input(view.container.querySelector('[name=answer]'), 'Old-account');
     await submit(view);
     await view.rerender({ scope: 'b' });
     await act(async () => validate(undefined));

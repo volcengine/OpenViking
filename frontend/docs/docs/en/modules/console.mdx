@@ -54,7 +54,7 @@ Click the toolbar `@` or type `@` in the draft to browse, search and reference f
 
 ### Human input
 
-Send any message to trigger simulated questions. The example injects asynchronous name validation, supplies a directory picker and replaces the instruction card with a custom component. An external schedule rule restricts updates to 09:00–18:00. Enable “Simulate answer send failure” to check retained input, error clearing and retry.
+Send a message to try the built-in Wiki questions, or send “daily report” to try scheduled updates. Enable host form customizations to try asynchronous name validation, a custom output directory picker, a replacement instruction card and a schedule limited to 09:00–18:00. Enable “Simulate answer send failure” to check retained input, error clearing and retry.
 
 ```tsx file="../../_demos/console-hitl.tsx" preview
 
@@ -67,6 +67,12 @@ History does not establish whether a turn completed normally. Loading history re
 Submitting the last card sends a `request_user_input_response` JSON message to continue the conversation. It includes `schema_version: '1.0'`, `tool_call_id` and ordered `answers: { card_type, title, value }[]`. User bubbles, copy actions and history show readable label/value rows. Transport and persistence retain the original protocol text; option labels come from the corresponding question.
 
 Configure cards through `chatOptions.hitl.cards[card_type]`. Use `configureCard(card)` to distinguish repeated types by `card.id` or `card.payload`. See [VikingBotInteractionFields](../components/viking-bot#vikingbotinteractionfields) for field names and value types. Validation runs before advancing, and only the final card calls the chat service. Hosts check directory existence, permissions and business rules through validators, and supply data and requests for custom pickers.
+
+### Commit a session
+
+Use **Commit session** below the latest completed reply to request memory extraction for the current conversation. Console shows the submission state and follows the background task when the server returns a task ID. When the task returns a memory change file and `conversation.onOpenUri` is available, the result can be opened from the completion notification.
+
+Set `chatOptions.memoryCommit={false}` to hide the action. A custom chat service can implement `commitSession`. Otherwise, Console uses the native session endpoint when native chat or a configured provider supplies that endpoint.
 
 ### Background tasks
 
@@ -129,6 +135,7 @@ When host content fails to render, the block shows the default fallback: an illu
 | requestOptions     | Conversation request settings                           | `OvRequestOptions`                                    | Inherited from Console |
 | hitl               | Automatic questions, field validation and custom cards  | `ConsoleHitlOptions \| false`                         | Built-in cards enabled |
 | referenceSelection | Controlled selection for the built-in `@` picker        | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | Optional               |
+| memoryCommit       | Hide the session commit action                          | `false`                                               | Enabled when supported |
 
 Every adapter method receives an `AbortSignal`, must honor cancellation, and throws on failure. Omit `saveMessage` when the backend persists messages automatically.
 
@@ -159,15 +166,15 @@ Every adapter method receives an `AbortSignal`, must honor cancellation, and thr
 
 #### Built-in cards
 
-| card_type           | Default form fields                 | Protocol value                                                                      |
-| ------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
-| compile_name        | `value`, text                       | `string`                                                                            |
-| compile_output_type | `value`, single choice              | The option's `value`                                                                |
-| compile_source      | `value`, one directory URI per line | A `string[]` with blank lines and duplicates removed                                |
-| compile_target      | `value`, directory URI              | `string`                                                                            |
-| compile_skill       | `value`, candidate or custom URI    | `string`                                                                            |
-| compile_instruction | `value`, multiline text             | `string`                                                                            |
-| compile_schedule    | `mode`, `time`, `weekday`           | `{ frequency: 'disabled' }` or an object with frequency, time, weekday and timezone |
+| card_type           | Default form fields                    | Protocol value                                                                      |
+| ------------------- | -------------------------------------- | ----------------------------------------------------------------------------------- |
+| compile_name        | `value`, text                          | `string`                                                                            |
+| compile_output_type | `value`, single choice                 | The option's `value`                                                                |
+| compile_source      | `value`, multiple folders              | A `string[]` with blank entries and duplicates removed                              |
+| compile_target      | `value`, suggested or custom directory | `string`                                                                            |
+| compile_skill       | `value`, suggested or custom Skill     | `string`                                                                            |
+| compile_instruction | `value`, multiline text                | `string`                                                                            |
+| compile_schedule    | `mode`, `time`, `weekday`              | `{ frequency: 'disabled' }` or an object with frequency, time, weekday and timezone |
 
 Tool results may be direct JSON, MCP `structuredContent` or text `content`, with `schema_version: '1.0'`. Structured content takes precedence. If any card is invalid or unregistered, the entire group remains an ordinary tool result. The native service accepts the bare tool name and `mcp_openviking-mcp_request_user_input`. Custom adapters should preserve unique tool call IDs and normalize the server to `openviking-mcp` and the name to `request_user_input`.
 
@@ -184,15 +191,16 @@ Return `kind: 'custom'` from `createRequest` to render a component that submits 
 
 ### VikingBotChatService
 
-| Property         | Description                                                                                             | Type                                                                                    | Default  |
-| ---------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------- |
-| stream           | Streaming request; must emit a complete or interrupted terminal event                                   | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | Required |
-| createSession    | Create a session                                                                                        | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | Required |
-| loadMessages     | Read complete session history                                                                           | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | Required |
-| attachmentUpload | Enables the add-resource button; `upload` returns the ID provided as `attachment.uploadId` when sending | `VikingBotAttachmentUpload`                                                             | Optional |
-| saveMessage      | Save a message; omit when the backend persists automatically                                            | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | Optional |
-| interrupt        | Interrupt backend generation; distinct from local connection cleanup                                    | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | Optional |
-| steer            | Append input to the active stream; acceptance is not completion                                         | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | Optional |
+| Property         | Description                                                                                             | Type                                                                                                                             | Default  |
+| ---------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| stream           | Streaming request; must emit a complete or interrupted terminal event                                   | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>`                                          | Required |
+| createSession    | Create a session                                                                                        | `(signal: AbortSignal) => Promise<VikingBotSession>`                                                                             | Required |
+| loadMessages     | Read complete session history                                                                           | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`                                                      | Required |
+| attachmentUpload | Enables the add-resource button; `upload` returns the ID provided as `attachment.uploadId` when sending | `VikingBotAttachmentUpload`                                                                                                      | Optional |
+| saveMessage      | Save a message; omit when the backend persists automatically                                            | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`                                                  | Optional |
+| commitSession    | Commit the current session for memory extraction                                                        | `(id: string, signal: AbortSignal) => Promise<{ status: 'accepted'; taskId: string } \| { status: 'skipped'; reason?: string }>` | Optional |
+| interrupt        | Interrupt backend generation; distinct from local connection cleanup                                    | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                                                         | Optional |
+| steer            | Append input to the active stream; acceptance is not completion                                         | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`                                             | Optional |
 
 `VikingBotAttachmentUpload` accepts an optional file picker filter, `accept`, and a required `upload(file, signal)` function that resolves to the uploaded file ID. Validate files in the adapter as the picker filter does not apply to dropped files. Console waits for files to upload before letting the user send. Removing a file aborts its upload; changing the account, request identity or session, or cancelling the request signal, aborts pending uploads and clears managed attachments. Echoing a newly created session ID through `conversation.sessions.currentId` preserves uploads for that conversation. If the host supplies its own draft attachments or file handler, Console uses those instead.
 
