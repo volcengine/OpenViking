@@ -103,27 +103,65 @@ test('normalizes saved paths and uses the listed spelling to load folders', asyn
   }
 });
 
-test('preserves a saved branch when its listed alias cannot yet be resolved', async () => {
+test('does not republish a collapsed branch while its alias is unresolved', async () => {
   const aliasFolder = `${root}/folder`;
+  const aliasNested = `${aliasFolder}/nested`;
+  const other = 'viking://user/default/resources/other';
+  const otherFile = `${other}/result.md`;
+  let homeAvailable = false;
   const fetch = recordingFetch(({ path, uri }) => {
-    if (path === '/api/v1/fs/stat')
-      return new Response('Home unavailable', { status: 503 });
-    assert.equal(path, listPath);
-    assert.equal(uri, root);
-    return ok([{ uri: aliasFolder, isDir: true }]);
+    if (path === '/api/v1/fs/stat' && uri === 'viking://~')
+      return homeAvailable
+        ? ok({ uri: 'viking://user/default', isDir: true })
+        : new Response('Home unavailable', { status: 503 });
+    if (path !== listPath) return ok('');
+    if (uri === root)
+      return ok([
+        { uri: aliasFolder, isDir: true },
+        { uri: other, isDir: true },
+      ]);
+    if (uri === aliasFolder) return ok([{ uri: aliasNested, isDir: true }]);
+    return ok(uri === other ? [{ uri: otherFile }] : []);
   });
   const snapshots = [];
-  const view = await mount(
-    browser(fetch, {
-      defaultExpandedUris: [folder, nested],
-      onExpandedUrisChange: (uris) => snapshots.push([...uris]),
-    }),
-  );
+  const onExpandedUrisChange = (uris) => snapshots.push([...uris]);
+  const open = (defaultExpandedUris) =>
+    mount(browser(fetch, { defaultExpandedUris, onExpandedUrisChange }));
+  const view = await open([folder, nested, other]);
   try {
     assert.ok(row(view, aliasFolder));
+    assert.ok(row(view, otherFile));
     assert.ok(fetch.calls.some(({ uri }) => uri === 'viking://~'));
     assert.deepEqual(snapshots, []);
+
+    await toggle(view, aliasFolder);
+    assert.equal(expanded(view, aliasFolder), 'true');
+    assert.ok(row(view, aliasNested));
+    const beforeCollapse = snapshots.length;
+    await toggle(view, aliasFolder);
+    assert.equal(expanded(view, aliasFolder), 'false');
+
+    homeAvailable = true;
+    await act(() =>
+      view.container.querySelector('[aria-label="Refresh"]').click(),
+    );
+    await settle();
+    assert.ok(fetch.calls.filter(({ uri }) => uri === 'viking://~').length > 1);
+    assert.equal(expanded(view, aliasFolder), 'false');
+    assert.deepEqual(snapshots.at(-1), [other]);
+    for (const snapshot of snapshots.slice(beforeCollapse))
+      assert.deepEqual(snapshot, [other]);
   } finally {
     await view.unmount();
+  }
+
+  const reloaded = await open(snapshots.at(-1));
+  try {
+    assert.equal(expanded(reloaded, aliasFolder), 'false');
+    assert.equal(row(reloaded, aliasNested), null);
+    assert.ok(row(reloaded, otherFile));
+    assert.deepEqual(snapshots.at(-1), [other]);
+  } finally {
+    await reloaded.unmount();
   }
 });

@@ -157,6 +157,26 @@ export class DirectoryQueries {
       signal?.removeEventListener('abort', abort);
     }
   };
+  /** Reuse loaded pages when the visible row gains an equivalent URI spelling. */
+  adoptListing = (uri: string, previousUri: string) => {
+    if (this.request.signal?.aborted) return;
+    const previous = this.observers
+      .get(previousUri)
+      ?.observer.getCurrentResult();
+    if (!previous?.data) return;
+    const { queryClient } = this.request;
+    const { queryKey } = directoryOptions(
+      this.request,
+      uri,
+      this.cacheScopeKey,
+    );
+    if (!queryClient.getQueryData(queryKey))
+      queryClient.setQueryData(queryKey, previous.data, {
+        updatedAt: previous.dataUpdatedAt,
+      });
+    this.observe(uri);
+  };
+
   refresh = async () => {
     if (this.request.signal?.aborted) return;
     await Promise.all(

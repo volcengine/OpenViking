@@ -12,7 +12,7 @@ import { expandChain } from './fs-path.js';
 import { useInitializeDirectoryTree } from './use-initialize-directory-tree.js';
 import { useReportExpansion } from './use-report-expansion.js';
 import { useDirectoryExpansion } from './use-directory-expansion.js';
-import { flattenTree } from './rows.js';
+import { useDirectoryRows } from './use-directory-rows.js';
 import { DirectoryQueries } from './directory-queries.js';
 import { useQueryScope } from '../request/use-query-scope.js';
 import type { DirState, UseDirectoryTreeOptions } from './types.js';
@@ -60,7 +60,7 @@ export function useDirectoryTree({
     cacheScopeKey,
     defaultExpandedUris,
   });
-  const { expanded, hasListedExpansion, edit, setExpanded } = expansion;
+  const { expanded, isExpanded, edit } = expansion;
   const {
     initialLoad,
     initializing,
@@ -90,15 +90,15 @@ export function useDirectoryTree({
   );
   const expandForNavigation = useCallback(
     (uri: string) => {
-      if (activeSession.current !== session || hasListedExpansion(uri)) return;
+      if (activeSession.current !== session || isExpanded(uri)) return;
       edit(uri, true);
     },
-    [session, hasListedExpansion, edit],
+    [session, isExpanded, edit],
   );
   const state = useMemo(
     () => ({
       open: async (uri: string) => {
-        setExpanded((previous) => new Set(previous).add(uri));
+        edit(uri, true);
         await fetchPage(uri, 0);
       },
       openPath: async (uri: string) => {
@@ -106,13 +106,13 @@ export function useDirectoryTree({
         for (const parent of expandChain(rootUri, uri)) {
           if (scope.current() !== current || current.controller.signal.aborted)
             return;
-          setExpanded((previous) => new Set(previous).add(parent));
+          edit(parent, true);
           await fetchPage(parent, 0);
         }
       },
       toggleExpand: async (row: { uri: string; disabled?: boolean }) => {
         if (row.disabled) return;
-        const isOpen = hasListedExpansion(row.uri);
+        const isOpen = isExpanded(row.uri);
         edit(row.uri, !isOpen);
         if (!isOpen) await fetchPage(row.uri, 0);
       },
@@ -131,19 +131,22 @@ export function useDirectoryTree({
     [
       scope,
       rootUri,
-      hasListedExpansion,
+      isExpanded,
       edit,
-      setExpanded,
       fetchPage,
       retryScope,
       retryDirectory,
       retryExpansion,
     ],
   );
-  const rows = useMemo(
-    () => flattenTree(rootUri, 0, dirs, expanded),
-    [rootUri, dirs, expanded],
-  );
+  const rows = useDirectoryRows({
+    session,
+    rootUri,
+    dirs,
+    expanded,
+    identifyUri: expansion.identifyUri,
+    initializing,
+  });
   const monitoring = useDirectoryMonitoring(
     dirs,
     dirs[rootUri]?.ready ?? false,
@@ -180,7 +183,7 @@ export function useDirectoryTree({
       scope,
       dirs: session?.dirs ?? emptyDirectoryRef,
       initialLoad,
-      isExpanded: expansion.isExpanded,
+      isExpanded,
       identifyUri: expansion.identifyUri,
       resolveHome: expansion.resolveHome,
       fetchPage,

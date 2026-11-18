@@ -132,10 +132,6 @@ export function useDirectoryExpansion({
       }),
     [readHome, update],
   );
-  const hasListedExpansion = useCallback(
-    (uri: string) => current.current.expanded.has(uri) && isExpanded(uri),
-    [isExpanded],
-  );
   const expanded = useMemo(() => {
     if (!state.collapsed.size) return state.expanded;
     const collapsed = new Set([...state.collapsed].map(identifyUri));
@@ -148,7 +144,6 @@ export function useDirectoryExpansion({
     collapsed: state.collapsed,
     edited: state.edited,
     savedExpansion: savedExpansion === undefined ? undefined : initial.expanded,
-    hasListedExpansion,
     identifyUri,
     readHome,
     resolveHome,

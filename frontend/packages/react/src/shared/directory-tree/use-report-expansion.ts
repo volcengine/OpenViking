@@ -1,9 +1,31 @@
 import { useEffect, useRef } from 'react';
+import {
+  HOME_URI,
+  needsHomeIdentity,
+  normalizeResourceUri,
+} from '../resource-uri.js';
 import type { DirectoryQueries } from './directory-queries.js';
 import { expansionPath } from './expansion-path.js';
 import type { UnresolvedExpansion } from './restore-expansion.js';
 import type { DirectoryRow } from './rows.js';
 import type { useDirectoryExpansion } from './use-directory-expansion.js';
+
+function homeRelativePath(uri: string) {
+  return normalizeResourceUri(uri).replace(
+    /^viking:\/\/user\/[^/]+(?=\/|$)/,
+    HOME_URI,
+  );
+}
+
+// Relative paths only detect uncertainty. An authenticated home decides identity.
+function mayBeFolded(uri: string, collapsed: ReadonlySet<string>) {
+  return [...collapsed].some((fold) => {
+    if (!needsHomeIdentity(fold, uri)) return false;
+    const ancestor = homeRelativePath(fold);
+    const target = homeRelativePath(uri);
+    return target === ancestor || target.startsWith(`${ancestor}/`);
+  });
+}
 
 export function useReportExpansion(
   session: DirectoryQueries | undefined,
@@ -46,6 +68,14 @@ export function useReportExpansion(
       }
     }
     const uris = [...saved.values()];
+    // Keep the fold in this session and defer publication until Refresh or
+    // another home lookup can establish which canonical branch it affected.
+    if (
+      collapsed.size &&
+      identifyUri(HOME_URI) === HOME_URI &&
+      uris.some((uri) => mayBeFolded(uri, collapsed))
+    )
+      return;
     const previous = last.current;
     if (
       previous?.session === session &&

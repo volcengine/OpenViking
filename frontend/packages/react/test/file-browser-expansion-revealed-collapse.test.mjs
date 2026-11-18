@@ -165,3 +165,43 @@ for (const { title, root = 'viking://resources', alias, removeOnRefresh } of [
     }
   });
 }
+
+test('keeps an expanded alias visible when refresh returns its canonical URI', async () => {
+  const root = `${home}/resources`;
+  const alias = `${homeAlias}/resources/folder`;
+  const folder = `${root}/folder`;
+  const snapshots = [];
+  const client = queryClient();
+  let listed = alias;
+  const fetch = recordingFetch(({ path, uri, query }) => {
+    if (path === '/api/v1/fs/stat' && uri === homeAlias)
+      return ok({ uri: home, isDir: true });
+    if (path !== listPath) return ok('');
+    if (uri === root) return ok([directory(listed)]);
+    return Number(query.offset) > 0
+      ? ok([{ uri: `${folder}/next.md` }])
+      : ok([{ uri: file(folder) }], true);
+  });
+  const persist = (next) => snapshots.push([...next]);
+  const view = await mount(browser(fetch, root, [folder], persist, client)());
+  try {
+    assert.equal(expanded(view, alias), 'true');
+    assert.ok(row(view, file(folder)));
+    assert.deepEqual(snapshots.at(-1), [alias]);
+
+    listed = folder;
+    await act(async () => client.invalidateQueries());
+    await settle();
+    assert.equal(expanded(view, folder), 'true');
+    assert.ok(row(view, file(folder)));
+    assert.deepEqual(snapshots.at(-1), [folder]);
+    await act(() =>
+      row(view, `${folder}::more`).querySelector('button').click(),
+    );
+    await settle();
+    assert.ok(fetch.calls.some((call) => laterPage(call, folder)));
+    assert.ok(row(view, `${folder}/next.md`));
+  } finally {
+    await view.unmount();
+  }
+});
