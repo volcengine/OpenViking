@@ -96,6 +96,16 @@ test('find and ranked search display requested content and fall back to the abst
           content: 'First line\nSecond line',
         },
         { uri: 'viking://resources/other.md', abstract: 'Other abstract' },
+        {
+          uri: 'viking://resources/empty.md',
+          abstract: 'Empty file abstract',
+          content: '',
+        },
+        {
+          uri: 'viking://resources/blank.md',
+          abstract: 'Blank file abstract',
+          content: ' \n\t ',
+        },
       ],
     });
   });
@@ -111,9 +121,12 @@ test('find and ranked search display requested content and fall back to the abst
         record.querySelector('.ov-command-console__search-content').textContent,
         'First line\nSecond line',
       );
-      assert.equal(
-        record.querySelector('.ov-command-console__search-preview').textContent,
-        'Other abstract',
+      const previews = [
+        ...record.querySelectorAll('.ov-command-console__search-preview'),
+      ];
+      assert.deepEqual(
+        previews.map((preview) => preview.textContent),
+        ['Other abstract', 'Empty file abstract', 'Blank file abstract'],
       );
       assert.doesNotMatch(record.textContent, /Notes abstract/);
     }

@@ -77,7 +77,8 @@ function SearchRow({
   item: CommandConsoleSearchResultItem;
   onOpenUri?: (uri: string) => void;
 }) {
-  const preview = item.content ?? item.preview;
+  const hasContent = Boolean(item.content?.trim());
+  const preview = hasContent ? item.content : item.preview;
   return (
     <>
       {item.scoreLabel || item.typeLabel ? (
@@ -121,9 +122,9 @@ function SearchRow({
         {preview ? (
           <span
             className={
-              item.content === undefined
-                ? 'ov-command-console__search-preview'
-                : 'ov-command-console__search-content'
+              hasContent
+                ? 'ov-command-console__search-content'
+                : 'ov-command-console__search-preview'
             }
           >
             <CommandConsoleUriText

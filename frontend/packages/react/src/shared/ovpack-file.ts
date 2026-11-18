@@ -32,25 +32,70 @@ export async function hasCompleteOvpack(file: Blob) {
       const endOffset = tailStart + offset;
       const size = tail.getUint32(offset + 12, true);
       const start = tail.getUint32(offset + 16, true);
-      const directory =
-        size === 0xffffffff || start === 0xffffffff
+      const count = tail.getUint16(offset + 10, true);
+      const needsZip64 = size === 0xffffffff || start === 0xffffffff;
+      const zip64 =
+        needsZip64 || count === 0xffff
           ? await readZip64Directory(file, endOffset)
-          : { size: BigInt(size), start: BigInt(start), endOffset };
+          : undefined;
+      const directory = zip64 ?? {
+        size: BigInt(size),
+        start: BigInt(start),
+        count: BigInt(count),
+        endOffset,
+      };
       if (
-        !directory ||
+        (needsZip64 && !zip64) ||
         directory.start < 30n ||
-        directory.size < 46n ||
+        directory.count === 0n ||
+        directory.size < directory.count * 46n ||
         directory.start + directory.size > BigInt(directory.endOffset)
       )
         continue;
-      const position = Number(directory.start);
-      const header = new DataView(
-        await file.slice(position, position + 4).arrayBuffer(),
-      );
-      if (header.getUint32(0, true) === 0x02014b50) return true;
+      if (
+        await hasCentralDirectory(
+          file,
+          Number(directory.start),
+          Number(directory.start + directory.size),
+          Number(directory.count),
+        )
+      )
+        return true;
     }
   }
   return false;
+}
+
+async function hasCentralDirectory(
+  file: Blob,
+  start: number,
+  end: number,
+  count: number,
+) {
+  // Only the fixed-size header is needed. Bound memory even for large ZIP64 directories.
+  const recordSize = 46;
+  let position = start;
+  let chunkStart = start;
+  let chunk = new DataView(new ArrayBuffer(0));
+  for (let index = 0; index < count; index++) {
+    if (position + recordSize > end) return false;
+    if (position + recordSize > chunkStart + chunk.byteLength) {
+      chunkStart = position;
+      chunk = new DataView(
+        await file
+          .slice(position, Math.min(end, position + 0x10000))
+          .arrayBuffer(),
+      );
+    }
+    const offset = position - chunkStart;
+    if (chunk.getUint32(offset, true) !== 0x02014b50) return false;
+    position +=
+      recordSize +
+      chunk.getUint16(offset + 28, true) + // Name
+      chunk.getUint16(offset + 30, true) + // Extra fields
+      chunk.getUint16(offset + 32, true); // Comment
+  }
+  return position === end;
 }
 
 async function readZip64Directory(file: Blob, endOffset: number) {
@@ -68,6 +113,7 @@ async function readZip64Directory(file: Blob, endOffset: number) {
   );
   if (record.getUint32(0, true) !== 0x06064b50) return;
   return {
+    count: record.getBigUint64(32, true),
     size: record.getBigUint64(40, true),
     start: record.getBigUint64(48, true),
     endOffset: position,

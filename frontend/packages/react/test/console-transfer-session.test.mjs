@@ -7,9 +7,9 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
   const picked = [];
   const saved = [];
   const fixture = new File(['fixture'], 'sample.md');
-  // A ZIP with one manifest entry and an archive comment.
+  // A ZIP with a manifest, a resource and an archive comment.
   const validPack = Buffer.from(
-    'UEsDBBQAAAAAAAAAIQBZX5KlJQAAACUAAAANAAAAbWFuaWZlc3QuanNvbnsicm9vdCI6eyJ1cmkiOiJ2aWtpbmc6Ly9yZXNvdXJjZXMifX1QSwECFAMUAAAAAAAAACEAWV+SpSUAAAAlAAAADQAAAAAAAAAAAAAAgAEAAAAAbWFuaWZlc3QuanNvblBLBQYAAAAAAQABADsAAABQAAAAFwBPcGVuVmlraW5nIHRlc3QgZml4dHVyZQ==',
+    'UEsDBBQAAAAAAAAAIQBZX5KlJQAAACUAAAANAAAAbWFuaWZlc3QuanNvbnsicm9vdCI6eyJ1cmkiOiJ2aWtpbmc6Ly9yZXNvdXJjZXMifX1QSwMEFAAAAAAAAAAhAGxuK2APAAAADwAAAAkAAAByZWFkbWUubWRBIHRlc3QgcmVzb3VyY2VQSwECFAMUAAAAAAAAACEAWV+SpSUAAAAlAAAADQAAAAAAAAAAAAAAgAEAAAAAbWFuaWZlc3QuanNvblBLAQIUAxQAAAAAAAAAIQBsbitgDwAAAA8AAAAJAAAAAAAAAAAAAACAAVAAAAByZWFkbWUubWRQSwUGAAAAAAIAAgByAAAAhgAAABcAT3BlblZpa2luZyB0ZXN0IGZpeHR1cmU=',
     'base64',
   );
   let exportBytes = validPack;
@@ -103,8 +103,15 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
 
     const endOffset = validPack.lastIndexOf(Buffer.from('PK\x05\x06'));
     const directoryOffset = validPack.readUInt32LE(endOffset + 16);
+    const secondEntry = validPack.indexOf(
+      Buffer.from('PK\x01\x02'),
+      directoryOffset + 4,
+    );
     const wrongDirectorySignature = Buffer.from(validPack);
-    wrongDirectorySignature.writeUInt32LE(0, directoryOffset);
+    wrongDirectorySignature.writeUInt32LE(0, secondEntry);
+    const wrongDirectoryCount = Buffer.from(validPack);
+    wrongDirectoryCount.writeUInt16LE(1, endOffset + 8);
+    wrongDirectoryCount.writeUInt16LE(1, endOffset + 10);
     for (const truncated of [
       validPack.subarray(0, 4),
       validPack.subarray(0, -1),
@@ -113,6 +120,7 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
         validPack.subarray(endOffset),
       ]),
       wrongDirectorySignature,
+      wrongDirectoryCount,
     ]) {
       exportBytes = truncated;
       await host.execute('ov export viking://resources/qa ./sample');

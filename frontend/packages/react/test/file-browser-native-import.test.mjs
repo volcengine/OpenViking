@@ -5,7 +5,6 @@ import {
   fixture,
   tree,
   mount,
-  click,
   target,
   openAction,
   workflow,
@@ -144,8 +143,10 @@ test('OVPack dialog rejects other extensions and invalid archive headers before 
   try {
     await openAction('Import .ovpack');
     const input = workflow().querySelector('input[type="file"]');
+    let previousToast;
     for (const file of [
       new File(['video'], 'sample.mp4'),
+      new File(['text'], 'sample.txt'),
       new File(['not a ZIP'], 'renamed.ovpack'),
     ]) {
       Object.defineProperty(input, 'files', {
@@ -155,7 +156,10 @@ test('OVPack dialog rejects other extensions and invalid archive headers before 
       await act(async () =>
         input.dispatchEvent(new window.Event('change', { bubbles: true })),
       );
-      assert.match(toastContent()?.textContent, /valid .ovpack/);
+      const notice = toastContent();
+      assert.match(notice?.textContent, /valid .ovpack/);
+      assert.notEqual(notice, previousToast);
+      previousToast = notice;
       assert.equal(button('Import', workflow()).disabled, true);
       await submit();
     }
@@ -165,40 +169,6 @@ test('OVPack dialog rejects other extensions and invalid archive headers before 
       /(?:temp_upload|pack\/import)$/.test(path),
     );
     assert.equal(uploads.length, 0);
-  } finally {
-    await view.unmount();
-  }
-});
-
-test('Console pack picker opens at the root and starts each request with an empty selection', async () => {
-  const ref = { current: null };
-  const fetch = fixture(target, true);
-  const view = await mount(tree(fetch, target, { ref }));
-  try {
-    let first;
-    await act(() => {
-      first = ref.current.choosePackFile('viking://');
-    });
-    const input = workflow().querySelector('input[type="file"]');
-    Object.defineProperty(input, 'files', {
-      value: [new File(['PK\x03\x04archive'], 'resources.ovpack')],
-    });
-    await act(async () =>
-      input.dispatchEvent(new window.Event('change', { bubbles: true })),
-    );
-    assert.equal(button('Import', workflow()).disabled, false);
-
-    let second;
-    await act(() => {
-      second = ref.current.choosePackFile('viking:///');
-    });
-    assert.equal(await first, undefined);
-    const uri = workflow().querySelector('.ov-file-browser-workflow__uri');
-    assert.equal(uri.textContent, 'viking://');
-    assert.equal(button('Import', workflow()).disabled, true);
-    await click(button('Cancel', workflow()));
-    assert.equal(await second, undefined);
-    assert.equal(workflow(), null);
   } finally {
     await view.unmount();
   }

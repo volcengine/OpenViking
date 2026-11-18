@@ -22,6 +22,7 @@ export interface FileBrowserWorkflowLabels {
   importDrop: string;
   importFormat: string;
   importInvalidFormat: string;
+  importWriteRequired: string;
   configuration: string;
   configurationEmpty: string;
   historyEmpty: string;

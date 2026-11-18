@@ -1,5 +1,5 @@
 import { hasOvpackHeader, hasOvpackName } from '../../shared/ovpack-file.js';
-import { useCallback, useId, useMemo, useState } from 'react';
+import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { DocumentIcon } from '../../icons/index.js';
 import UploadIcon from '../../../../icons/svg/file-preview/import.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
@@ -24,26 +24,29 @@ export function PreviewPackImport({
 }) {
   const id = useId();
   const [file, setFile] = useState<File>();
-  const [invalid, setInvalid] = useState(false);
-  const dismissFormatError = useCallback(() => setInvalid(false), []);
+  const nextError = useRef(0);
+  const [formatError, setFormatError] = useState<string>();
+  const dismissFormatError = useCallback((noticeId: string) => {
+    setFormatError((current) => (current === noticeId ? undefined : current));
+  }, []);
   const notices = useMemo(
     () =>
-      invalid
+      formatError
         ? [
             {
-              id: 'pack-import-format',
+              id: formatError,
               type: 'error' as const,
               content: text.importInvalidFormat,
             },
           ]
         : [],
-    [invalid, text.importInvalidFormat],
+    [formatError, text.importInvalidFormat],
   );
   const mutation = usePreviewMutation(uri, requestOptions);
   async function changeFile(input: HTMLInputElement) {
     const picked = input.files?.[0];
     setFile(undefined);
-    dismissFormatError();
+    setFormatError(undefined);
     mutation.reset();
     if (!picked) return;
     const valid =
@@ -53,7 +56,7 @@ export function PreviewPackImport({
     if (valid) setFile(picked);
     else {
       input.value = '';
-      setInvalid(true);
+      setFormatError(`pack-import-format-${++nextError.current}`);
     }
   }
   return (

@@ -23,6 +23,8 @@ export default {
   importDrop: 'Click to choose or drop a file',
   importFormat: '.ovpack files supported',
   importInvalidFormat: 'Select a valid .ovpack file.',
+  importWriteRequired:
+    'OVPack import requires write access to the target directory.',
   configure: 'Compile configuration',
   configuration: 'Compilation configuration',
   configurationEmpty:
