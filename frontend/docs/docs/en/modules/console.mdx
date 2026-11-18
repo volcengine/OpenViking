@@ -310,7 +310,10 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 - Save a named configuration with `compile create`, then run it with `compile --compile-name <name>`. Repeat `--from` or separate source directory URIs with commas. Use `--instruction` for extra instructions and `--args` for model and scheduling options as a JSON object. `task status <task-id>` checks the returned task ID.
 - `task cancel` asks the server for cooperative cancellation, so a task may not stop immediately.
 - Imports, compiles and memory commits returning task IDs are tracked automatically. Task state is separate from submission results, and the terminal unlocks when submission returns.
-- The command set covers only native APIs that a browser can call; local configuration, login, local file upload or download and session management commands are not included.
+- `session` supports creation, listing, details, context, archives, message writes, commits, and configuration. Use `ov session add-messages <session-id> '<messages-json>'` for batches.
+- `ov get <uri> <local-path>` and `ov export <uri> <output.ovpack>` use browser downloads. The last segment of the output path becomes the filename.
+- `ov import <file.ovpack> <target-uri>` opens a file picker and accepts `--on-conflict` and `--vector-mode`. Hosts can reuse their file browser's import dialog through `commandOptions.choosePackFile`. The dialog accepts valid `.ovpack` archives.
+- Local `add-resource` sources and `write --from-file` use browser file selection. The host owns local configuration and sign-in. Authorized hosts can opt in to `backup` and `restore` with `commandOptions.allowAdminCommands`.
 
 ## Notes
 

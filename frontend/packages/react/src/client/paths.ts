@@ -39,6 +39,8 @@ export const OV_PATHS = {
   resourceTempUpload: '/api/v1/resources/temp_upload',
   packImport: '/api/v1/pack/import',
   packExport: '/api/v1/pack/export',
+  packBackup: '/api/v1/pack/backup',
+  packRestore: '/api/v1/pack/restore',
   experienceTrajectories: '/api/v1/agent-evolution/experiences/trajectories',
   experienceOutcomes: '/api/v1/agent-evolution/experiences/outcomes',
   /** 读取条目状态。Read an entry's status. */

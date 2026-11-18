@@ -12,9 +12,9 @@ import {
   type ConsoleRecord,
 } from './command-messages.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import type { ConsoleState } from './types.js';
+import type { ConsoleCommandOptions, ConsoleState } from './types.js';
 import { executeCommand } from './commands.js';
-import { tokenize, parseArguments } from './command-parser.js';
+import { clearRequested } from './command-parser.js';
 
 export function createConsoleController(
   client: OvClient,
@@ -50,19 +50,16 @@ export function createConsoleController(
       failedCommand: undefined,
     });
   };
-  async function execute(input = state.command, locale: Locale = 'en-US') {
+  async function execute(
+    input = state.command,
+    locale: Locale = 'en-US',
+    commandOptions?: ConsoleCommandOptions,
+  ) {
     const command = input.trim();
     if (!active || running || !command) return;
-    try {
-      const tokens = tokenize(command);
-      if (tokens[0]?.value === 'clear') {
-        parseArguments(tokens.slice(1), []);
-        clear();
-        update({ command: '' });
-        return;
-      }
-    } catch {
-      // executeCommand reports parsing errors through the same record lifecycle.
+    if (clearRequested(command)) {
+      clear();
+      return;
     }
     const controller = new AbortController();
     const signal = options.signal
@@ -126,6 +123,7 @@ export function createConsoleController(
           if (current() && !signal.aborted && trackTask)
             taskKeys = tasks.map((task) => trackTask(task, monitoring?.span));
         },
+        commandOptions,
       );
       if (!current() || signal.aborted) return;
       monitoring?.finish(content);
@@ -194,9 +192,9 @@ export function createConsoleController(
             ? conversationDraft(state.conversationDraft)
             : conversationDraft,
       }),
-    retry: (locale: Locale) =>
+    retry: (locale: Locale, commandOptions?: ConsoleCommandOptions) =>
       state.failedCommand
-        ? execute(state.failedCommand, locale)
+        ? execute(state.failedCommand, locale, commandOptions)
         : Promise.resolve(),
   };
 }

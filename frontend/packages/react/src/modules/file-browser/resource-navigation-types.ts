@@ -11,6 +11,11 @@ export interface FileBrowserOpenResourceOptions {
 }
 
 export interface FileBrowserHandle {
+  /** Open the OVPack import dialog at a URI and return the confirmed local file. */
+  choosePackFile: (
+    uri: string,
+    signal?: AbortSignal,
+  ) => Promise<File | undefined>;
   /**
    * Open a preview and optionally reveal its tree row. Returns false when the row
    * is missing, inaccessible, outside the root, or navigation was superseded.

@@ -6,13 +6,15 @@ import { mount, ok } from './helpers/console-dom.mjs';
 for (const outcome of ['success', 'error']) {
   test(`Console shows pending progress without an unavailable warning and unlocks after ${outcome}`, async () => {
     let finish;
+    let signal;
     let requests = 0;
     const host = await mount(
-      () => {
+      (_url, init) => {
         requests++;
+        signal = init.signal;
         return new Promise((resolve) => (finish = resolve));
       },
-      { modes: ['command'] },
+      { modes: ['command'], commandOptions: { allowAdminCommands: true } },
     );
     try {
       await host.execute('ov health');
@@ -35,7 +37,11 @@ for (const outcome of ['success', 'error']) {
       await key(host.input, 'Enter', { ctrlKey: true });
       assert.equal(requests, 1);
 
-      await host.render({ modes: ['command'], locale: 'zh-CN' });
+      await host.render({
+        modes: ['command'],
+        locale: 'zh-CN',
+        commandOptions: { allowAdminCommands: true },
+      });
       assert.equal(
         host.records[0]
           .querySelector('[role="img"]')
@@ -47,6 +53,7 @@ for (const outcome of ['success', 'error']) {
         null,
       );
       assert.equal(host.input.disabled, true);
+      assert.equal(signal.aborted, false);
       assert.equal(requests, 1);
       await act(() =>
         finish(
@@ -70,6 +77,14 @@ for (const outcome of ['success', 'error']) {
       assert.equal(requests, 2);
       await act(() => finish(ok({ status: 'healthy' })));
       assert.equal(host.records[1].dataset.status, 'success');
+      await host.render({
+        modes: ['command'],
+        commandOptions: { allowAdminCommands: false },
+      });
+      assert.equal(host.records.length, 2);
+      await host.execute('ov backup sample.ovpack');
+      assert.match(host.records[2].textContent, /unavailable/i);
+      assert.equal(requests, 2);
     } finally {
       await host.dispose();
     }

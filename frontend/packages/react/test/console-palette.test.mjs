@@ -17,13 +17,12 @@ test('slash palette uses the built-in group order and keeps cross-group commands
         '.ov-command-console__suggestion-group',
       ),
     ];
-    assert.deepEqual(
-      groups.map(
-        (group) =>
-          group.querySelector('.ov-command-console__suggestion-label')
-            .textContent,
-      ),
-      ['核心流程', '文件系统', '搜索与上下文', '配置与状态'],
+    const labels = host.container.querySelectorAll(
+      '.ov-command-console__suggestion-label',
+    );
+    assert.equal(
+      Array.from(labels, (label) => label.textContent).join(' / '),
+      '核心流程 / 文件系统 / 搜索与上下文 / 文件传输 / 会话 / 配置与状态',
     );
     const names = (group) =>
       [...group.querySelectorAll('.ov-command-console__suggestion-name')].map(
@@ -96,7 +95,14 @@ test('slash palette uses the built-in group order and keeps cross-group commands
           '.ov-command-console__help-section-label',
         ),
       ].map((label) => label.textContent),
-      ['核心流程', '文件系统', '搜索与上下文', '配置与状态'],
+      [
+        '核心流程',
+        '文件系统',
+        '搜索与上下文',
+        '文件传输',
+        '会话',
+        '配置与状态',
+      ],
     );
   } finally {
     await host.dispose();

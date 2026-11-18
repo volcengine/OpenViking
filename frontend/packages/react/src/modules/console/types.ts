@@ -78,10 +78,33 @@ export interface ConsoleCommandProps {
   onOpenUri?: (uri: string) => void;
 }
 
+export interface ConsoleCommandFiles {
+  pickFile(options: {
+    name: string;
+    accept?: string;
+    signal?: AbortSignal;
+  }): Promise<File | undefined>;
+  download(blob: Blob, filename: string): void | Promise<void>;
+}
+
+export interface ConsoleCommandOptions {
+  /** Administrator commands require explicit opt-in and server-side authorization. */
+  allowAdminCommands?: boolean;
+  /** The default uses the browser's file picker and downloads. */
+  files?: ConsoleCommandFiles;
+  /** The host can reuse its OVPack import dialog to confirm the local file. */
+  choosePackFile?: (
+    targetUri: string,
+    signal?: AbortSignal,
+  ) => Promise<File | undefined>;
+  onPackImported?: (uri: string) => void;
+}
+
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
   /** Task queries use native HTTP by default; hosts can adapt another backend. */
   taskService?: ConsoleTaskService;
+  commandOptions?: ConsoleCommandOptions;
   locale?: Locale;
   /** Enabled modes, in toolbar order. Omitted enables both; an empty list renders no panels. */
   modes?: readonly ConsoleMode[];
