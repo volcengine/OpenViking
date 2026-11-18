@@ -97,8 +97,12 @@ an empty override uses the configured image. Each bootstrap checks actual dpkg i
 skip apt, while incomplete images install the required packages. With no image
 variable, these jobs use stock `ubuntu:24.04` and install their required packages.
 With no `CI_UBUNTU20_IMAGE`, x86_64 wheels fall back to stock `ubuntu:20.04`.
-The first pull still downloads the image; subsequent jobs on the same host reuse
-Docker's cached layers. Rebuild and validate periodically for OS package updates,
+GitHub-hosted jobs start on fresh machines and pull the image for each job;
+there is no Docker layer cache shared between jobs. Self-hosted jobs on the same
+host can reuse Docker's cached layers after the first pull. On hosted runners,
+the image primarily fixes system package versions and aligns the environments;
+skipping apt alone does not establish an end-to-end speedup.
+Rebuild and validate periodically for OS package updates,
 then update the digest variable. Remove the variable to return to stock Ubuntu.
 The Ubuntu 20.04 Dockerfile can be built with the same local command below by
 substituting `ubuntu20-ci.Dockerfile` and `openviking-ci-ubuntu20`.
