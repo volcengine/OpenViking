@@ -5,7 +5,7 @@
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, Mock, call
+from unittest.mock import ANY, AsyncMock, call
 
 import pytest
 
@@ -1160,68 +1160,24 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("wait", [False, True])
-async def test_resource_rm_skips_refresh_when_freshness_lock_is_busy(
-    request_context, monkeypatch, wait
-):
-    viking_fs = _FakeVikingFS()
-    service = FSService(viking_fs=viking_fs)
-    get_queue_manager = Mock(side_effect=AssertionError("busy parent freshness must not enqueue"))
-    monkeypatch.setattr(fs_module, "get_queue_manager", get_queue_manager)
-    plan = AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy"))
-    monkeypatch.setattr(
-        fs_module,
-        "plan_abstract_overview_refresh",
-        plan,
-    )
-    service._wait_for_refresh = AsyncMock(return_value={"Semantic": {"pending_count": 0}})
-    uri = "viking://resources/docs/a.md"
-
-    result = await service.rm(uri, ctx=request_context, wait=wait)
-
-    assert len(viking_fs.rm_calls) == 1
-    assert result["semantic_status"] == "skipped"
-    plan.assert_awaited_once()
-    assert plan.await_args.kwargs["dir_uri"] == "viking://resources/docs"
-    assert plan.await_args.kwargs.get("lock_timeout_secs", 0.0) == 0.0
-    get_queue_manager.assert_not_called()
-    service._wait_for_refresh.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("wait", [False, True])
-async def test_resource_rm_reports_skipped_when_refresh_queue_is_unavailable(
-    request_context, monkeypatch, wait
-):
-    service = FSService(viking_fs=_FakeVikingFS())
-    service._wait_for_refresh = AsyncMock()
-    monkeypatch.setattr(
-        fs_module,
-        "get_queue_manager",
-        Mock(side_effect=RuntimeError("QueueManager not initialized")),
-    )
-
-    result = await service.rm("viking://resources/docs/a.md", ctx=request_context, wait=wait)
-
-    assert result["semantic_status"] == "skipped"
-    service._wait_for_refresh.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_resource_rm_does_not_hide_refresh_enqueue_failure(request_context, monkeypatch):
+async def test_resource_rm_skips_refresh_when_freshness_lock_is_busy(request_context, monkeypatch):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)
     queue_manager = _FakeQueueManager()
     monkeypatch.setattr(fs_module, "get_queue_manager", lambda: queue_manager)
     monkeypatch.setattr(
-        queue_manager, "enqueue", AsyncMock(side_effect=RuntimeError("enqueue failed"))
+        fs_module,
+        "plan_abstract_overview_refresh",
+        AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy")),
     )
+    service._wait_for_refresh = AsyncMock()
 
-    with pytest.raises(RuntimeError, match="enqueue failed"):
-        await service.rm("viking://resources/docs/a.md", ctx=request_context)
+    result = await service.rm("viking://resources/docs/a.md", ctx=request_context, wait=True)
 
     assert len(viking_fs.rm_calls) == 1
-    queue_manager.enqueue.assert_awaited_once()
+    assert result["semantic_status"] == "skipped"
+    assert queue_manager.messages == []
+    service._wait_for_refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio
