@@ -98,6 +98,7 @@ class TestLinkSatisfaction:
             "![nested [OpenViking] label](image.png)",
             "> ![nested [OpenViking]][demo]\n\n[demo]: image.png",
             "- ![OpenViking\r\n  illustration](image.png)",
+            "![example][demo]\n\n[demo]: first.png\n[demo]: OpenViking.png",
         ],
     )
     def test_commonmark_images_are_not_knowledge_links(self, content):
@@ -109,6 +110,11 @@ class TestLinkSatisfaction:
             self.source_uri,
             [{"match_text": "OpenViking", "to_uri": self.target_uri}],
         ) == (content, 0)
+        assert LinkRenderer.render_links_with_count(
+            content + "\n\nOpenViking",
+            self.source_uri,
+            [{"match_text": "OpenViking", "to_uri": self.target_uri}],
+        ) == (content + "\n\n[OpenViking](./tags.md)", 1)
 
     def test_unprotected_anchor_can_be_linked(self):
         assert LinkRenderer.can_render_link(

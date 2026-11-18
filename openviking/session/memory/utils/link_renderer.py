@@ -198,7 +198,8 @@ class LinkRenderer:
                 else:
                     spans.extend((positions[a], positions[b - 1] + 1) for a, b in protected)
 
-        for reference in environment.get("references", {}).values():
+        references = environment.get("references", {}).values()
+        for reference in [*references, *environment.get("duplicate_refs", [])]:
             spans.append(tuple(offsets[line] for line in reference["map"]))
 
         for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):
