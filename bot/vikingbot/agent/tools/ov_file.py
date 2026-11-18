@@ -757,8 +757,9 @@ class VikingGrepTool(OVFileTool):
         return (
             "Search Viking resources using a regex pattern (like grep). "
             "Returns matching lines and URIs, with at most limit matches per scope (default: 10). "
-            "If the limit is reached, more matches may exist; increase limit or narrow the "
-            "scope/pattern. Use openviking_multi_read for full content. "
+            "The backend limit applies before permission filtering, so fewer visible matches "
+            "can still be capped. If the limit is reached, more matches may exist; increase "
+            "limit or narrow the scope/pattern. Use openviking_multi_read for full content. "
             "Avoid duplicate calls with the same intent in the same turn."
         )
 
@@ -821,14 +822,13 @@ class VikingGrepTool(OVFileTool):
                     continue
                 if isinstance(result, dict):
                     scope_matches = result.get("matches", [])
+                    limit_reached = result.get("limit_reached", False)
                 else:
                     scope_matches = getattr(result, "matches", [])
+                    limit_reached = getattr(result, "limit_reached", False)
                 matches.extend(scope_matches)
-                if len(scope_matches) >= limit:
+                if limit_reached or len(scope_matches) >= limit:
                     capped_scopes.append(target_uri)
-
-            if not matches:
-                return f"No matches found for pattern: '{pattern}'"
 
             merged_results: dict[str, list[tuple[int, str]]] = {}
 
@@ -848,6 +848,8 @@ class VikingGrepTool(OVFileTool):
 
             result_lines = [
                 f"Found {len(matches)} match{'es' if len(matches) != 1 else ''} for pattern '{pattern}':"
+                if matches
+                else f"No matches found for pattern: '{pattern}'"
             ]
 
             for match_uri, uri_matches in merged_results.items():
@@ -859,7 +861,8 @@ class VikingGrepTool(OVFileTool):
 
             if capped_scopes:
                 result_lines.append(
-                    f"\nResult limit reached ({limit} matches per scope); more matches may exist. "
+                    f"\nResult limit reached ({limit} matches per scope, before permission filtering); "
+                    "more matches may exist. "
                     "Increase limit or narrow the scope/pattern. "
                     f"Capped scopes: {', '.join(capped_scopes)}"
                 )

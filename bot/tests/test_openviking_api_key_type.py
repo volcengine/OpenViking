@@ -1777,11 +1777,21 @@ async def test_search_memory_peer_ids_use_explicit_peer_uris(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "limit, expected_count, capped",
-    [(None, 10, True), (1, 1, True), (17, 17, True), (30, 17, False)],
+    "limit, expected_count, capped, backend_limit_reached",
+    [
+        (None, 10, True, None),
+        (1, 1, True, None),
+        (17, 17, True, None),
+        (30, 17, False, None),
+        (10, 1, True, True),
+        (10, 0, True, True),
+        (10, 1, False, False),
+        (10, 0, False, False),
+    ],
 )
+@pytest.mark.parametrize("as_object", [False, True])
 async def test_openviking_grep_keeps_explicit_resource_uri(
-    monkeypatch, limit, expected_count, capped
+    monkeypatch, limit, expected_count, capped, backend_limit_reached, as_object
 ):
     tool = VikingGrepTool()
     calls = []
@@ -1791,16 +1801,22 @@ async def test_openviking_grep_keeps_explicit_resource_uri(
 
         async def grep(self, uri, pattern, case_insensitive=False, node_limit=10, user_id=None):
             calls.append((uri, pattern, case_insensitive, node_limit, user_id))
-            return {
+            response = {
                 "matches": [
                     {
                         "uri": "viking://resources/doc.md",
                         "line": i + 1,
                         "content": f"hello admin scoped grep {i}",
                     }
-                    for i in range(min(node_limit, 17))
+                    for i in range(
+                        min(node_limit, 17) if backend_limit_reached is None else expected_count
+                    )
                 ]
             }
+
+            if backend_limit_reached is not None:
+                response["limit_reached"] = backend_limit_reached
+            return SimpleNamespace(**response) if as_object else response
 
     async def _fake_get_client(_tool_context):
         return _FakeClient()
@@ -1816,15 +1832,19 @@ async def test_openviking_grep_keeps_explicit_resource_uri(
     )
 
     assert calls == [("viking://resources/", "hello", True, limit or 10, None)]
-    assert (
-        f"Found {expected_count} match{'es' if expected_count != 1 else ''} for pattern 'hello':"
-        in result
-    )
+    if expected_count:
+        assert (
+            f"Found {expected_count} match{'es' if expected_count != 1 else ''} for pattern 'hello':"
+            in result
+        )
+    else:
+        assert "No matches found" in result
     assert ("more matches may exist" in result) is capped
     if capped:
         assert "Capped scopes: viking://resources/" in result
-    assert f"hello admin scoped grep {expected_count - 1}" in result
-    assert "viking://resources/doc.md" in result
+    if expected_count:
+        assert f"hello admin scoped grep {expected_count - 1}" in result
+        assert "viking://resources/doc.md" in result
 
 
 @pytest.mark.asyncio
