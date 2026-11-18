@@ -113,8 +113,10 @@ export function SessionHistory({
         locale,
         managed,
         onSelect,
-        onAction: (next) =>
-          setAction({ ...next, scopeKey, callback: actionCallback(next.kind) }),
+        onAction: (next) => {
+          setOpen(false);
+          setAction({ ...next, scopeKey, callback: actionCallback(next.kind) });
+        },
       })}
     </div>
   );
