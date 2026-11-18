@@ -640,7 +640,9 @@ class _GrepMixin:
             after_context: Number of lines to include after each match
 
         Returns:
-            Dict with matches, count, match_count, files_scanned
+            Dict with matches, count, match_count, files_scanned, limit_reached.
+            limit_reached indicates possible truncation before ACL filtering,
+            not a confirmed count of omitted or visible matches.
         """
         path = self._uri_to_path(uri, ctx=ctx)
 
@@ -670,6 +672,9 @@ class _GrepMixin:
             raise
 
         matches = result.get("matches", [])
+        # The backend applies node_limit before ACL filtering. Preserve only the
+        # cap signal, never the denied matches or their count.
+        limit_reached = bool(node_limit and len(matches) >= node_limit)
         results = []
         files_scanned_set = set()
         real_ctx = self._ctx_or_default(ctx)
@@ -731,6 +736,7 @@ class _GrepMixin:
             "count": len(results),
             "match_count": len(results),
             "files_scanned": files_scanned,
+            "limit_reached": limit_reached,
         }
 
     async def _grep_encrypted(

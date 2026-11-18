@@ -876,6 +876,8 @@ The `grep()` method performs regex pattern matching search in the file system, u
 
 Entries in `matches` include `tags` when `tags` filtering is used or `include_tags=true` is requested; files without retrieval tags then return an empty array (`[]`). Plain grep omits `tags` to avoid an unnecessary VectorDB read.
 
+Native filesystem grep applies `node_limit` before ACL filtering and returns a boolean `limit_reached`. When true, results may be incomplete even if `matches` contains fewer than `node_limit` entries or is empty. This flag does not confirm that more visible matches exist; increase `node_limit` or narrow the scope/pattern to check. Returned matches and their counts remain permission-filtered. Other grep implementations and older servers may omit this field; its absence does not guarantee completeness.
+
 #### 3. Usage Examples
 
 **HTTP API**
