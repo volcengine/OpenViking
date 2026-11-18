@@ -38,6 +38,7 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
@@ -520,14 +521,28 @@ class FSService:
         self._reject_storage_internal_target(uri)
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
         namespace_policy = namespace_policy_for_uri(directory_uri)
+        # Authorize both namespace modes before the occupied-target shortcut.
+        # VikingFS.mkdir rechecks permission after the Tree lock is acquired.
+        await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
         if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
-            await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
             if acl is not None and not namespace_policy.supports_acl:
                 raise InvalidArgumentError(f"ACL is not supported for namespace: {directory_uri}")
             if description is not None:
                 raise InvalidArgumentError(
                     f"directory descriptions are not supported for namespace: {directory_uri}"
                 )
+
+        # Reject occupied targets before acquiring a Tree lock, which may scan a
+        # large existing subtree. The backend mkdir still checks for races.
+        path = viking_fs._uri_to_path(directory_uri, ctx=ctx)
+        try:
+            await viking_fs._async_agfs.stat(path, bypass_cache=True)
+        except AGFSNotFoundError:
+            pass
+        else:
+            raise AGFSAlreadyExistsError(f"path already exists: {directory_uri}")
+
+        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
             async with self._hold_watch_scope(
                 [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
             ) as lease:
