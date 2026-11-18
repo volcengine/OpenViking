@@ -344,7 +344,7 @@ async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeli
 
 @pytest.mark.parametrize("fail_all", [False, True])
 async def test_failed_routes_keep_completed_drafts_through_finalization(
-    pipeline, monkeypatch, fail_all
+    pipeline, monkeypatch, agent_loop, fail_all
 ):
     from vikingbot.compile.ops import reduce as reduce_op
 
@@ -379,18 +379,34 @@ async def test_failed_routes_keep_completed_drafts_through_finalization(
     assert "Return exactly one decision" in pipeline.warnings[-1]
     assert not pipeline.failures
 
-    async def worker(system, data, model, *, stage, runtime):
-        root = f"__compile_staging__/drafts/{stage}/output"
-        content = "\n".join(
-            [
-                await runtime.files.sandbox.read_file(doc["workspace_path"])
-                for doc in data["documents"]
-            ]
-        )
-        await runtime.files.sandbox.write_file(f"{root}/{data['documents'][0]['path']}", content)
-        return root
+    loop, key, _ = agent_loop
+    current_path = None
 
-    pipeline.model.agent_runner = worker
+    async def chat(**kwargs):
+        nonlocal current_path
+        tools = [m["content"] for m in kwargs["messages"] if m["role"] == "tool"]
+        if not tools:
+            calls = [ToolCallRequest("assignment", "read_file", {"path": "assignment.json"}, 0)]
+        elif tools[-1].startswith("{"):
+            assignment = json.loads(tools[-1])
+            current_path = assignment["documents"][0]["path"]
+            calls = [
+                ToolCallRequest(str(i), "read_file", {"path": d["content_file"]}, i)
+                for i, d in enumerate(assignment["documents"])
+            ]
+        elif tools[-1].startswith("# Fact"):
+            content = "\n".join(t for t in tools if t.startswith("# Fact"))
+            calls = [
+                ToolCallRequest(
+                    "write", "write_file", {"path": current_path, "content": content}, 0
+                )
+            ]
+        else:
+            return LLMResponse(content="Done", finish_reason="stop")
+        return LLMResponse(content="", tool_calls=calls)
+
+    pipeline.model.provider.chat = AsyncMock(side_effect=chat)
+    pipeline.model.agent_runner = agent_runner(loop, key, None, pipeline.limits)
     outputs = await reduce_op.run(pipeline, nodes[2], groups)
     bundle = await finalize.run(pipeline, outputs)
     assert all(
