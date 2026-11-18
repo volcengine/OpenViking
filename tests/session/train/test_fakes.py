@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -215,6 +217,77 @@ def fake_request_context(account_id: str = "default", user_id: str = "u"):
         user=SimpleNamespace(account_id=account_id, user_id=user_id),
         account_id=account_id,
     )
+
+
+class LockingAGFS:
+    """Async AGFS fake implementing tree path locks with real mutual exclusion.
+
+    ``PolicySet.lock`` acquires tree locks through
+    ``viking_fs._async_agfs.pathlock_acquire_tree``; this fake enforces actual
+    exclusion between concurrent acquirers of the same path, honors the
+    ``timeout_secs`` deadline, and records every acquire/release plus the hold
+    interval of each lease so tests can assert which code ran while the lock
+    was held.
+
+    ``lock_budget_secs`` caps how long any single acquisition may wait for a
+    holder regardless of the requested timeout; exceeding it raises
+    ``TimeoutError``.  It exists to keep tests fast when simulating the
+    production 300s lock timeout.
+    """
+
+    def __init__(self, *, lock_budget_secs: float | None = None):
+        self.lock_budget_secs = lock_budget_secs
+        self._locks: dict[str, asyncio.Lock] = {}
+        self.acquire_calls: list[dict[str, Any]] = []
+        self.release_calls: list[dict[str, Any]] = []
+        self.holds: list[dict[str, float]] = []
+
+    def _lock_for(self, path: str) -> asyncio.Lock:
+        if path not in self._locks:
+            self._locks[path] = asyncio.Lock()
+        return self._locks[path]
+
+    def is_locked(self, path: str) -> bool:
+        lock = self._locks.get(path)
+        return lock is not None and lock.locked()
+
+    async def pathlock_acquire_tree(
+        self,
+        path: str,
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Any = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del owner_lease_ref, kwargs
+        self.acquire_calls.append({"path": path, "timeout_secs": timeout_secs})
+        deadline: float | None = None
+        if timeout_secs and timeout_secs > 0:
+            deadline = timeout_secs
+        if self.lock_budget_secs is not None:
+            deadline = min(deadline, self.lock_budget_secs) if deadline else self.lock_budget_secs
+        lock = self._lock_for(path)
+        try:
+            await asyncio.wait_for(lock.acquire(), deadline)
+        except asyncio.TimeoutError:
+            raise TimeoutError(
+                f"tree lock acquisition timed out after {timeout_secs}s: {path}"
+            ) from None
+        lease = {"path": path, "acquired_at": time.monotonic()}
+        return lease
+
+    async def pathlock_release(self, lease: dict[str, Any], **kwargs: Any) -> None:
+        del kwargs
+        release = dict(lease)
+        release["released_at"] = time.monotonic()
+        self.release_calls.append(release)
+        self.holds.append(
+            {
+                "path": release["path"],
+                "start": release["acquired_at"],
+                "end": release["released_at"],
+            }
+        )
+        self._lock_for(release["path"]).release()
 
 
 def _norm_path(path: str) -> str:
