@@ -143,7 +143,7 @@
 .ov-viking-bot__message-actions {
   margin-top: 10px;
 }
-.ov-viking-bot__message-action--commit.ov-button {
+.ov-viking-bot__message-action--pill.ov-button {
   height: 36px;
   gap: 4px;
   border: 0;
@@ -155,13 +155,13 @@
   font-size: 13px;
   font-weight: 400;
 }
-.ov-viking-bot__message-action--commit.ov-button:hover:not(:disabled) {
+.ov-viking-bot__message-action--pill.ov-button:hover:not(:disabled) {
   background: var(--ov-ui-color-bg-7, var(--ov-ui-bg-7-default));
 }
-.ov-viking-bot__message-action--commit.ov-button:disabled {
+.ov-viking-bot__message-action--pill.ov-button:disabled {
   opacity: 1;
 }
-.ov-viking-bot__message-action--commit.ov-button--loading {
+.ov-viking-bot__message-action--pill.ov-button--loading {
   cursor: wait;
 }
 .ov-viking-bot__activity {

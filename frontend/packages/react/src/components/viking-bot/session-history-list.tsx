@@ -10,8 +10,9 @@ export function SessionHistoryList(
   const visibleCurrentId = sessions.items.find(
     (session) => session.id === sessions.currentId,
   )?.id;
-  // The current row may arrive after opening. Its DOM geometry is available
-  // only after commit, so center it then, unless keyboard focus is in the list.
+  // Effect necessity: center the current row using committed browser geometry.
+  // It may arrive on a later page, after the opening event. Keep an existing
+  // keyboard focus target in view by leaving its scroll position alone.
   // A synchronous local scroll leaves no listeners or timers to clean up.
   useEffect(() => {
     const list = historyList.current;

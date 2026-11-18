@@ -14,6 +14,7 @@ import { SessionHistoryDialog } from './session-history-dialog.js';
 
 import { SessionHistoryList } from './session-history-list.js';
 import type { SessionHistoryAction } from './session-history-rows.js';
+import { useSessionHistoryPaging } from './use-session-history-paging.js';
 
 const popupClass = 'ov-viking-bot__popover ov-viking-bot__history-popover';
 
@@ -51,6 +52,8 @@ export function SessionHistory({
     }
   }
   const managed = Boolean(sessions.onRename || sessions.onRemove);
+  const paging = useSessionHistoryPaging(open, sessions);
+  const loading = sessions.isLoading || paging.loading;
   const changeOpen = (next: boolean) => {
     setOpen(next);
     if (next) sessions.onOpenHistory?.();
@@ -70,7 +73,11 @@ export function SessionHistory({
   const hasMore = sessions.hasMore && sessions.onLoadMore;
   const list = (
     <SessionHistoryList
-      sessions={sessions}
+      sessions={{
+        ...sessions,
+        isLoading: loading,
+        error: sessions.error ?? paging.error,
+      }}
       labels={labels}
       locale={locale}
       managed={managed}
@@ -98,10 +105,10 @@ export function SessionHistory({
                 <DropdownItem
                   className="ov-viking-bot__history-load-more"
                   closeOnClick={false}
-                  disabled={sessions.isLoading}
-                  onClick={sessions.onLoadMore}
+                  disabled={loading}
+                  onClick={paging.loadMore}
                 >
-                  {labels.loadMore}
+                  {paging.loading ? labels.loading : labels.loadMore}
                 </DropdownItem>
               ) : null}
             </Dropdown>
@@ -137,10 +144,10 @@ export function SessionHistory({
                     type="text"
                     size="small"
                     className="ov-viking-bot__history-load-more"
-                    disabled={sessions.isLoading}
-                    onClick={sessions.onLoadMore}
+                    disabled={loading}
+                    onClick={paging.loadMore}
                   >
-                    {labels.loadMore}
+                    {paging.loading ? labels.loading : labels.loadMore}
                   </Button>
                 ) : undefined
               }

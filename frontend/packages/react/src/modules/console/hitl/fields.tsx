@@ -14,6 +14,7 @@ import {
 } from './picker-fields.js';
 import { TargetField } from './target-field.js';
 import { checkDestination } from './directory-validation.js';
+import { overlapsSource, parseCompileUri, parseSourceUris } from './uris.js';
 
 function FieldError({
   code,
@@ -24,9 +25,14 @@ function FieldError({
     | 'nameInvalid'
     | 'targetNotDirectory'
     | 'targetReadOnly'
-    | 'targetCheckFailed';
+    | 'targetCheckFailed'
+    | 'targetOverlap';
 }) {
   return hitlLabels(useLocale())[code];
+}
+
+function SourceUriHint() {
+  return hitlLabels(useLocale()).sourceUriHint;
 }
 
 function validCompileName(name: string) {
@@ -39,31 +45,14 @@ function validCompileName(name: string) {
   );
 }
 
-function validUri(uri: string) {
-  if (!/^viking:\/\/[^\s?#\\]+$/.test(uri)) return false;
-  try {
-    const path = decodeURIComponent(uri.slice('viking://'.length));
-    const segments = path.replace(/\/$/, '').split('/');
-    return (
-      !Array.from(path).some((character) => {
-        const code = character.charCodeAt(0);
-        return code < 32 || code === 127 || character === '\\';
-      }) &&
-      segments.every(
-        (segment) => segment && segment !== '.' && segment !== '..',
-      )
-    );
-  } catch {
-    return false;
-  }
-}
-
 function cardFields(
   card: HitlCard,
   scope: CompilePickerScope,
   title: string,
   recommendations: readonly string[],
   suggested: readonly string[],
+  sources: readonly string[],
+  userId?: string,
 ): VikingBotInteractionFields | undefined {
   const fields = card.options?.fields;
   if (card.options?.createRequest || card.request.kind === 'schedule')
@@ -77,7 +66,7 @@ function cardFields(
     request.kind === 'text' &&
     ['compile_source', 'compile_name', 'compile_target'].includes(cardType);
   const render =
-    cardType === 'compile_source' && request.kind === 'text'
+    cardType === 'compile_source' && request.kind === 'text' && scope.client
       ? (field: VikingBotInteractionFieldContext<string>) => (
           <SourceField field={field} scope={scope} suggested={suggested} />
         )
@@ -89,7 +78,9 @@ function cardFields(
               recommendations={recommendations}
             />
           )
-        : cardType === 'compile_skill' && request.kind === 'choice'
+        : cardType === 'compile_skill' &&
+            request.kind === 'choice' &&
+            scope.client
           ? (field: VikingBotInteractionFieldContext<string>) => (
               <SkillField field={field} scope={scope} request={request} />
             )
@@ -105,26 +96,37 @@ function cardFields(
           }
         : {}),
       render,
+      ...(cardType === 'compile_source' && !scope.client
+        ? {
+            description: <SourceUriHint />,
+          }
+        : {}),
       ...fields?.value,
       validate: async (value, answer, context) => {
         if (required && !value.trim()) return <FieldError code="required" />;
         if (cardType === 'compile_name' && !validCompileName(value))
           return <FieldError code="nameInvalid" />;
-        if (
-          uri &&
-          value
-            .split(/\r?\n/)
-            .some((item) => item.trim() && !validUri(item.trim()))
-        )
+        if (cardType === 'compile_source' && !parseSourceUris(value)?.length)
           return <FieldError code="uriInvalid" />;
-        if (cardType === 'compile_target' && scope.client) {
-          const error = await checkDestination(
-            scope.client,
-            value,
-            scope.requestOptions,
-            context.signal,
-          );
-          if (error) return <FieldError code={error} />;
+        const singleUri =
+          cardType === 'compile_target' || cardType === 'compile_skill';
+        const path = singleUri ? parseCompileUri(value) : undefined;
+        if (singleUri && !path) return <FieldError code="uriInvalid" />;
+        if (cardType === 'compile_target' && path) {
+          if (overlapsSource(path, sources, userId))
+            return <FieldError code="targetOverlap" />;
+          if (scope.client) {
+            const checked = await checkDestination(
+              scope.client,
+              path,
+              scope.requestOptions,
+              context.signal,
+            );
+            if (checked && 'error' in checked)
+              return <FieldError code={checked.error} />;
+            if (checked && overlapsSource(checked.uri, sources, userId))
+              return <FieldError code="targetOverlap" />;
+          }
         }
         return fields?.value?.validate?.(value, answer, context);
       },
@@ -138,6 +140,8 @@ export function presentCard(
   scope: CompilePickerScope,
   recommendations: readonly string[],
   suggested: readonly string[],
+  sources: readonly string[],
+  userId?: string,
 ): Pick<VikingBotInteractionProps, 'request' | 'fields' | 'className'> {
   if (card.options?.createRequest)
     return { request: card.request, fields: card.options.fields };
@@ -151,7 +155,15 @@ export function presentCard(
     request.initialValue ??= recommendations[0];
   return {
     request,
-    fields: cardFields(card, scope, title, recommendations, suggested),
+    fields: cardFields(
+      card,
+      scope,
+      title,
+      recommendations,
+      suggested,
+      sources,
+      userId,
+    ),
     className: `ov-viking-bot__compile-card ov-viking-bot__compile-card--${card.cardType}`,
   };
 }

@@ -206,6 +206,12 @@ export interface VikingBotMessage {
     key: string;
     /** 动作文案。Action label. */
     label?: ReactNode;
+    /** 按钮样式，缺省为普通按钮。Button appearance, standard by default. */
+    appearance?: 'pill';
+    /** 按钮图标。Decorative button icon. */
+    icon?: ReactNode;
+    /** 显示加载图标并禁用按钮。Shows a spinner and disables the button. */
+    loading?: boolean;
     /** 动作状态。Action status. */
     status?: 'idle' | 'pending' | 'submitted' | 'success' | 'error';
     /** 不可用时的说明。Reason shown when unavailable. */

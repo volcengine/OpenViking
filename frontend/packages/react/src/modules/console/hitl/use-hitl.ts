@@ -1,4 +1,5 @@
-import { useOvClient } from '../../../client/provider.js';
+import { createOvClient } from '../../../client/client.js';
+import { useOvClient, useOvIdentity } from '../../../client/provider.js';
 import { sourceSuggestions } from './directory-validation.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
@@ -16,7 +17,11 @@ import { formatAnswers } from './answers.js';
 import { presentCard } from './fields.js';
 import type { CompilePickerScope } from './picker-fields.js';
 import { summarizeMessages } from './summary.js';
-import { clarificationFlow, outputDirectories } from './flow.js';
+import {
+  clarificationFlow,
+  confirmedSources,
+  outputDirectories,
+} from './flow.js';
 
 interface Draft {
   owner: object;
@@ -34,10 +39,21 @@ export function useHitl(
   enabled: boolean,
   locale: Locale,
   options?: ConsoleHitlOptions | false,
-  pickerScope: CompilePickerScope = {},
+  pickerScope: CompilePickerScope & { customChat?: boolean } = {},
 ) {
   const monitoring = useMonitoringBinding();
-  const client = useOvClient('local') ?? undefined;
+  const inheritedClient = useOvClient('local');
+  const [fallback] = useState(createOvClient);
+  const requestOptions = pickerScope.requestOptions;
+  const user = useOvIdentity(requestOptions).userId;
+  const userId = typeof user === 'string' ? user : undefined;
+  const hasConnection =
+    !pickerScope.customChat ||
+    requestOptions?.baseURL !== undefined ||
+    requestOptions?.apiKey !== undefined ||
+    requestOptions?.accountId !== undefined ||
+    requestOptions?.resourceId !== undefined;
+  const client = inheritedClient ?? (hasConnection ? fallback : undefined);
   const owner = useMemo(
     () => ({
       active: true,
@@ -72,19 +88,11 @@ export function useHitl(
   const same = draft?.owner === owner && draft.group.id === group?.id;
   const answers = same ? draft.answers : {};
   const turnUser = retry ? draft?.turnUser : lastUser;
-  const flow = group && clarificationFlow(group, answers, turnUser);
+  const flow = group && clarificationFlow(group, answers);
   const card = flow?.cards.find(({ id }) => !answers[id]);
   const recommendations =
     group && card
-      ? outputDirectories(
-          card,
-          group,
-          answers,
-          flow?.output,
-          typeof pickerScope.requestOptions?.userId === 'string'
-            ? pickerScope.requestOptions.userId
-            : undefined,
-        )
+      ? outputDirectories(card, group, answers, flow?.output, userId)
       : [];
   const current = useRef({ owner, key: '', raw });
   const key = JSON.stringify([lastUser?.id, group?.id, card?.id]);
@@ -114,6 +122,8 @@ export function useHitl(
             { ...pickerScope, client },
             recommendations,
             sourceSuggestions(card, turnUser),
+            confirmedSources(group, answers),
+            userId,
           ),
           ...(card.options?.createRequest
             ? { index: Object.keys(answers).length, total: group.cards.length }
@@ -132,7 +142,7 @@ export function useHitl(
             lock.current = true;
             const next = { ...answers, [card.id]: answer };
             try {
-              const nextFlow = clarificationFlow(group, next, turnUser);
+              const nextFlow = clarificationFlow(group, next);
               if (nextFlow.cards.some(({ id }) => !next[id])) {
                 setDraft({ owner, group, turnUser, answers: next });
                 return;

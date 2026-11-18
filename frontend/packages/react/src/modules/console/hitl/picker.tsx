@@ -1,7 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react';
 import { useOvClient } from '../../../client/provider.js';
 import { Button } from '../../../shared/primitives/button/button.js';
-import type { OvRequestOptions } from '../../../client/types.js';
+import type { OvClient, OvRequestOptions } from '../../../client/types.js';
 import {
   ContextPicker,
   type ContextPickerEntry,
@@ -12,6 +12,7 @@ import { hitlLabels } from './locales.js';
 import { SkillUpload } from './skill-upload.js';
 
 export interface PickerScope {
+  client?: OvClient;
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
 }
@@ -35,12 +36,13 @@ export function CompilePicker({
 }) {
   const locale = useLocale();
   const labels = hitlLabels(locale);
-  const client = useOvClient('local');
+  const uploadClient = useOvClient();
   const [uploading, setUploading] = useState(false);
   const [value, setValue] = useState(initial);
   const [query, setQuery] = useState('');
   const { references, expandDirectory } = useConversationReferences({
     ...scope,
+    directoryClient: scope.client,
     enabled: true,
   });
   const open = references?.onOpenChange;
@@ -63,10 +65,10 @@ export function CompilePicker({
         ? { ...row, selectable: false }
         : row,
     );
-  if (uploading && client)
+  if (uploading && uploadClient)
     return (
       <SkillUpload
-        client={client}
+        client={uploadClient}
         options={scope.requestOptions}
         triggerRef={triggerRef}
         onCancel={() => setUploading(false)}
@@ -109,7 +111,7 @@ export function CompilePicker({
       onConfirm={onConfirm}
       onOpenEntry={onOpenUri && ((entry) => onOpenUri(entry.uri))}
       slots={
-        !source && client
+        !source && uploadClient
           ? {
               footerStart: (
                 <Button type="outline" onClick={() => setUploading(true)}>

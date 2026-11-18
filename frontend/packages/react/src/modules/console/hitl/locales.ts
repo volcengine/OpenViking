@@ -9,6 +9,9 @@ const enUS = {
   weekly: (weekday: string, time: string) => `Every ${weekday} ${time}`,
   daily: (time: string) => `Daily ${time}`,
   directory: 'Directory',
+  sourceUriHint: 'Enter one Viking URI per line.',
+  targetOverlap:
+    'The output directory must be separate from every source directory.',
   targetNotDirectory:
     'This location already exists as a file. Choose a directory.',
   targetReadOnly:
@@ -18,7 +21,8 @@ const enUS = {
   uploadSkill: 'Upload skill',
   chooseSkillFile: 'Choose or drop a SKILL.md file',
   skillFileInvalid: 'Select one file named SKILL.md.',
-  skillUploadFailed: 'Could not upload the skill. Try again.',
+  skillFileUnreadable: 'Could not read SKILL.md. Choose the file again.',
+  skillUploadMissingPath: 'The upload did not return a Skill path.',
   back: 'Back',
   customDirectory: 'Enter a directory URI',
   removeDirectory: (uri: string) => `Remove ${uri}`,
@@ -41,6 +45,8 @@ const zhCN: typeof enUS = {
   weekly: (weekday, time) => `每${weekday} ${time}`,
   daily: (time) => `每日 ${time}`,
   directory: '目录',
+  sourceUriHint: '每行输入一个 Viking URI。',
+  targetOverlap: '输出目录不能与来源目录相同，也不能互相包含。',
   targetNotDirectory: '此路径已存在同名文件，请选择目录。',
   targetReadOnly: '此目录不可写，请选择其他位置。',
   targetCheckFailed: '无法确认输出目录，请重试。',
@@ -48,7 +54,8 @@ const zhCN: typeof enUS = {
   uploadSkill: '上传技能',
   chooseSkillFile: '点击或拖拽 SKILL.md 文件到此处上传',
   skillFileInvalid: '请选择一个名为 SKILL.md 的文件。',
-  skillUploadFailed: '上传技能失败，请重试。',
+  skillFileUnreadable: '无法读取 SKILL.md，请重新选择文件。',
+  skillUploadMissingPath: '上传结果缺少技能路径。',
   back: '返回',
   customDirectory: '输入目录 URI',
   removeDirectory: (uri) => `移除 ${uri}`,

@@ -10,8 +10,10 @@ import { readTaskReferences } from '../../../shared/task-tracking/read-reference
 import { isTaskTerminal } from '../../../shared/task-tracking/types.js';
 import { resolveConsoleLocale } from '../labels.js';
 import type { UseVikingBotChatOptions, VikingBotChatResult } from './types.js';
-
-const actionKey = 'commit-session';
+import {
+  memoryCommitAction,
+  memoryCommitActionKey,
+} from './memory-commit-action.js';
 
 type Submission = {
   messageId: string;
@@ -107,6 +109,7 @@ export function useMemoryCommit({
     sessionId &&
     !switching &&
     chat.status === 'idle' &&
+    chat.responseComplete !== false &&
     !chat.signal?.aborted
       ? latestCommitMessage(messages)
       : undefined;
@@ -184,11 +187,7 @@ export function useMemoryCommit({
             ...actions,
             {
               messageId,
-              action: {
-                key: actionKey,
-                label: copy[actionStatus],
-                status: actionStatus,
-              },
+              action: memoryCommitAction(copy[actionStatus], actionStatus),
             },
           ],
         };
@@ -198,7 +197,7 @@ export function useMemoryCommit({
   return {
     messages: projected,
     onMessageAction: (message: string, key: string) => {
-      if (key !== actionKey || !messageId) return false;
+      if (key !== memoryCommitActionKey || !messageId) return false;
       run(message);
       return true;
     },

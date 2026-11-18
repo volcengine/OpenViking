@@ -74,7 +74,7 @@ export function builtinRequest(
     return {
       kind: 'schedule',
       question,
-      initialValue: { mode: 'daily', time: '' },
+      initialValue: { mode: 'none' },
       timezone: 'Asia/Shanghai',
     };
   const initial = object(p.initial_value);

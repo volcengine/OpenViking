@@ -60,13 +60,15 @@ import '@openviking/react/modules/console/style.css';
 
 ```
 
-Console 在 `request_user_input` 工具成功且当前轮正常结束后展示问题，按问题组顺序收集答案。中断、截断、错误结果和不支持的协议保留普通工具展示。传入 `chatOptions.hitl={false}` 关闭自动交互；显式传入 `conversation.interaction` 时使用宿主的问题与回调。
+Console 在 `request_user_input` 工具成功且当前轮正常结束后展示问题，当输出目录依赖来源目录和配置名称时，先收集这两项。中断、截断、错误结果和不支持的协议保留普通工具展示。传入 `chatOptions.hitl={false}` 关闭自动交互；显式传入 `conversation.interaction` 时使用宿主的问题与回调。
+
+配置文件系统后，Console 使用选择器选取来源目录和技能，并在继续前检查输出目录。自定义对话服务未连接文件系统时，可以直接输入 URI。输出目录不能与来源目录相同或互相包含。已有明确答案或可以从技能识别产物类型时，Console 会跳过产物类型问题。只有工具明确提供已启用的计划，或用户主动启用，才会开启自动更新。
 
 历史消息不包含可确认的轮次终止状态，加载历史只恢复消息和答案摘要，不重新触发问题卡片。新一轮实时回复正常结束后仍可触发交互。
 
 最后一项提交后，Console 发送 `request_user_input_response` JSON 继续下一轮对话，包含 `schema_version: '1.0'`、`tool_call_id` 和按原顺序排列的 `answers: { card_type, title, value }[]`。用户气泡、复制和历史展示采用标签/值摘要；发送与存储保留协议原文，选项名称从对应问题中恢复。
 
-宿主通过 `chatOptions.hitl.cards[card_type]` 提供扩展。同一类型的多个问题可用 `configureCard(card)` 按 `card.id` 或 `card.payload` 分别配置。字段名与值类型见 [VikingBotInteractionFields](../components/viking-bot#vikingbotinteractionfields)。校验通过后才进入下一项，最后一项才调用对话服务。目录存在性、权限和业务规则由宿主校验器检查；自定义选择器的数据与请求由宿主提供。
+宿主通过 `chatOptions.hitl.cards[card_type]` 提供扩展。同一类型的多个问题可用 `configureCard(card)` 按 `card.id` 或 `card.payload` 分别配置。字段名与值类型见 [VikingBotInteractionFields](../components/viking-bot#vikingbotinteractionfields)。校验通过后才进入下一项，最后一项才调用对话服务。宿主可以添加校验，并为自定义选择器提供数据和请求。
 
 ### 提交会话
 

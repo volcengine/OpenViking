@@ -62,6 +62,8 @@ export async function mountHitl(
     answerEvents,
     locale = 'zh-CN',
     fetch,
+    requestOptions,
+    prompt = 'Create a wiki',
   } = {},
 ) {
   let props;
@@ -92,7 +94,7 @@ export async function mountHitl(
       {
         locale: language,
         scopeKey: scope,
-        chatOptions: { service, hitl },
+        chatOptions: { service, hitl, requestOptions },
         ...(controlled ? { conversation: { messages: [] } } : {}),
       },
       () => {},
@@ -118,9 +120,7 @@ export async function mountHitl(
     requests,
     saved,
     start: async () => {
-      await act(async () =>
-        props.onSend({ text: 'Create a wiki', attachments: [] }),
-      );
+      await act(async () => props.onSend({ text: prompt, attachments: [] }));
       await settle();
     },
     rerender: (values) => view.render(render(values)),

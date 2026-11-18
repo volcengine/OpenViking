@@ -61,9 +61,9 @@ test('a managed conversation waits for message writes before submitting to the p
   const lastAction = () => view.messages.at(-1)?.actions?.[0];
   const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
   try {
-    await act(() =>
-      view.onSend({ text: 'Please remember this.', attachments: [] }),
-    );
+    await act(async () => {
+      view.onSend({ text: 'Please remember this.', attachments: [] });
+    });
     await settle();
     const { messageId, action } = lastAction();
     assert.equal(action.status, 'idle');
@@ -76,7 +76,8 @@ test('a managed conversation waits for message writes before submitting to the p
     assert.deepEqual(requests, []);
     await act(async () => {
       savedAssistant();
-      await tick();
+      for (let attempt = 0; requests.length < 2 && attempt < 100; attempt++)
+        await tick();
     });
     assert.deepEqual(saved, ['user', 'assistant']);
     assert.equal(lastAction().action.status, 'submitted');
@@ -97,3 +98,82 @@ test('a managed conversation waits for message writes before submitting to the p
     await host.unmount();
   }
 });
+
+for (const stop of ['terminal event', 'stop button']) {
+  test(`hides the commit action after ${stop} and restores it for complete replies and history`, async () => {
+    let view;
+    let first = true;
+    const service = {
+      createSession: async () => ({ id: 'live', title: 'Live' }),
+      listSessions: async () => [],
+      loadMessages: async () => [
+        {
+          id: 'saved-answer',
+          role: 'assistant',
+          parts: [{ type: 'text', text: 'Saved answer.' }],
+        },
+      ],
+      async removeSession() {},
+      async commitSession() {
+        throw new Error('The action was not clicked');
+      },
+      async interrupt() {
+        return { interrupted: true };
+      },
+      async *stream(_input, signal) {
+        if (!first) {
+          yield { type: 'complete', text: 'Complete answer.' };
+          return;
+        }
+        first = false;
+        yield { type: 'text', text: 'Partial answer.', delta: true };
+        if (stop === 'terminal event') {
+          yield { type: 'interrupted' };
+          return;
+        }
+        await new Promise((_, reject) => {
+          if (signal.aborted) reject(signal.reason);
+          else
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            });
+        });
+      },
+    };
+    function Host() {
+      view = useConversation({ chatOptions: { service } }, () => {});
+      return null;
+    }
+    const host = await mount(createElement(Host));
+    const send = async (text) => {
+      await act(async () => view.onSend({ text, attachments: [] }));
+      await settle();
+    };
+    const actions = () =>
+      view.messages.flatMap((message) => message.actions ?? []);
+    try {
+      await send('First question');
+      if (stop === 'stop button') {
+        assert.equal(view.isSending, true);
+        await act(async () => view.onCancel());
+        await settle();
+      }
+      assert.equal(view.isSending, false);
+      assert.ok(
+        view.messages.some((message) =>
+          message.parts.some((part) => part.text === 'Partial answer.'),
+        ),
+      );
+      assert.equal(actions().length, 0);
+      await send('Next question');
+      assert.equal(actions().length, 1);
+      assert.equal(actions()[0].action.label, 'Commit session');
+      await act(async () => view.sessions.onSelect('saved'));
+      await settle();
+      assert.equal(actions().length, 1);
+      assert.equal(actions()[0].messageId, 'saved-answer');
+    } finally {
+      await host.unmount();
+    }
+  });
+}

@@ -140,7 +140,7 @@ export function createChatController(
     undelivered.length = 0;
     update({
       sessionId,
-      responseComplete: false,
+      responseComplete: undefined,
       messages: [],
       streaming: undefined,
       status: active && sessionId ? 'loading' : 'idle',

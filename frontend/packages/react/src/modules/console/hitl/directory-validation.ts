@@ -5,49 +5,55 @@ import type { OvClient, OvRequestOptions } from '../../../client/types.js';
 import type { VikingBotMessage } from '../../../components/viking-bot/model.js';
 import type { VikingBotInteractionFieldContext } from '../../../components/viking-bot/interaction/field-types.js';
 import type { HitlCard } from './types.js';
+import { object } from './json.js';
+import { parseCompileUri } from './uris.js';
 
-interface DirectoryStat {
-  uri?: string;
-  isDir?: boolean;
-  is_dir?: boolean;
-  access?: string;
+async function stat(client: OvClient, uri: string, options: OvRequestOptions) {
+  const result = object(
+    await client.request<unknown>({
+      method: 'GET',
+      path: OV_PATHS.fsStat,
+      query: { uri },
+      options,
+    }),
+  );
+  const isDirectory = result?.isDir ?? result?.is_dir;
+  if (typeof isDirectory !== 'boolean') return;
+  const canonical =
+    typeof result?.uri === 'string' ? parseCompileUri(result.uri) : undefined;
+  return {
+    uri: canonical ?? uri,
+    isDirectory,
+    access:
+      typeof result?.access === 'string' ? result.access.toLowerCase() : '',
+  };
 }
 
-function stat(client: OvClient, uri: string, options: OvRequestOptions) {
-  return client.request<DirectoryStat>({
-    method: 'GET',
-    path: OV_PATHS.fsStat,
-    query: { uri },
-    options,
-  });
-}
-
-function isDirectory(result: DirectoryStat) {
-  return result?.isDir === true || result?.is_dir === true;
-}
+type DestinationError =
+  'targetReadOnly' | 'targetNotDirectory' | 'targetCheckFailed';
 
 export async function checkDestination(
   client: OvClient,
   rawUri: string,
   options: OvRequestOptions | undefined,
   validationSignal: AbortSignal,
-) {
+): Promise<{ uri: string } | { error: DestinationError } | undefined> {
   const signal = options?.signal
     ? AbortSignal.any([validationSignal, options.signal])
     : validationSignal;
-  let uri = rawUri.trim().replace(/\/$/, '');
+  const candidate = parseCompileUri(rawUri);
+  if (!candidate) return { error: 'targetCheckFailed' };
+  let uri = candidate;
   while (true) {
-    if (/^viking:\/\/system(?:\/|$)/.test(uri)) return 'targetReadOnly';
+    if (/^viking:\/\/system(?:\/|$)/.test(uri))
+      return { error: 'targetReadOnly' };
     try {
       const result = await stat(client, uri, { ...options, signal });
-      if (!isDirectory(result)) return 'targetNotDirectory';
-      if (
-        ['denied', 'read', 'read-only', 'container'].includes(
-          result.access ?? '',
-        )
-      )
-        return 'targetReadOnly';
-      return;
+      if (!result) return { error: 'targetCheckFailed' };
+      if (!result.isDirectory) return { error: 'targetNotDirectory' };
+      if (['denied', 'read', 'read-only', 'container'].includes(result.access))
+        return { error: 'targetReadOnly' };
+      return { uri: result.uri + candidate.slice(uri.length) };
     } catch (error) {
       if (signal.aborted) return;
       if (isOvClientError(error)) {
@@ -56,7 +62,7 @@ export async function checkDestination(
           error.statusCode === 403 ||
           error.code === 'PERMISSION_DENIED'
         )
-          return 'targetReadOnly';
+          return { error: 'targetReadOnly' };
         const missing = error.statusCode === 404 || error.code === 'NOT_FOUND';
         const parent = uri.slice(0, uri.lastIndexOf('/'));
         if (
@@ -68,19 +74,19 @@ export async function checkDestination(
           continue;
         }
       }
-      return 'targetCheckFailed';
+      return { error: 'targetCheckFailed' };
     }
   }
 }
 
 export function sourceSuggestions(card: HitlCard, user?: VikingBotMessage) {
   if (card.cardType !== 'compile_source') return [];
-  const trim = (uri: string) => uri.replace(/\/$/, '');
+
   const references = [
     ...new Set(
       user?.parts.flatMap((part) =>
         part.type === 'context' && part.contextType === 'resource'
-          ? [trim(part.uri)]
+          ? [parseCompileUri(part.uri)].filter((uri) => uri !== undefined)
           : [],
       ),
     ),
@@ -88,7 +94,9 @@ export function sourceSuggestions(card: HitlCard, user?: VikingBotMessage) {
   const supplied = card.payload.suggested_values;
   if (!Array.isArray(supplied)) return references;
   const allowed = new Set(
-    supplied.filter((uri): uri is string => typeof uri === 'string').map(trim),
+    supplied
+      .filter((uri): uri is string => typeof uri === 'string')
+      .map(parseCompileUri),
   );
   return references.filter((uri) => allowed.has(uri));
 }
@@ -107,6 +115,8 @@ export function useSuggestedSources(
   const uris = JSON.stringify(suggested);
   const { baseURL, apiKey, accountId, resourceId, userId, signal } =
     options ?? {};
+  // Effect necessity: confirm suggested directories with the scoped filesystem.
+  // Cancel its reads when the clarification, scope, or suggestions change.
   useEffect(() => {
     const values = candidates.current;
     if (!client || !values.length || edited.current) return;
@@ -128,11 +138,11 @@ export function useSuggestedSources(
       const draft = current.current;
       if (combined.aborted || edited.current || draft.value || draft.disabled)
         return;
-      const paths = results.flatMap((result, index) =>
+      const paths = results.flatMap((result) =>
         result.status === 'fulfilled' &&
-        isDirectory(result.value) &&
-        !['denied', 'container'].includes(result.value.access ?? '')
-          ? [result.value.uri || values[index]!]
+        result.value?.isDirectory &&
+        !['denied', 'container'].includes(result.value.access)
+          ? [result.value.uri]
           : [],
       );
       if (paths.length) draft.onChange([...new Set(paths)].join('\n'));

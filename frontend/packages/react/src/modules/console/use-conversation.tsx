@@ -63,6 +63,7 @@ export function useConversation(
       },
       scopeKey: options.scopeKey,
       onOpenUri: conversation?.onOpenUri,
+      customChat: Boolean(chatOptions?.service),
     },
   );
   const uploads = useAttachmentUpload(

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
-import type { OvRequestOptions } from '../../client/types.js';
+import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
   VikingBotReference,
   VikingBotReferences,
@@ -22,16 +22,18 @@ export function useConversationReferences({
   requestOptions,
   scopeKey,
   selection,
+  directoryClient,
 }: {
   enabled: boolean;
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
   selection?: ConsoleChatOptions['referenceSelection'];
+  directoryClient?: OvClient;
 }) {
   const inheritedClient = useOvClient('local');
   const inheritedSignal = useOvSignal();
   const [fallback] = useState(createOvClient);
-  const client = inheritedClient ?? fallback;
+  const client = directoryClient ?? inheritedClient ?? fallback;
   const {
     baseURL,
     apiKey,
@@ -187,9 +189,7 @@ export function useConversationReferences({
     onChange: onSelectionChange ?? onChange,
     onOpenChange,
     onQueryChange: setQuery,
-    onExpand: (uri) => {
-      void expandDirectory(uri);
-    },
+    onExpand: (uri) => void expandDirectory(uri),
     onLoadMore: (uri) => tree.loadMore(uri),
     onRetry: (uri) => {
       if (!keyword) return tree.retry(uri ?? MENTION_ROOT);

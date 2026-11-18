@@ -1,4 +1,3 @@
-import type { OvClient } from '../../../client/types.js';
 import { useRef, useState } from 'react';
 import type { ContextPickerEntry } from '../../../components/context-picker/index.js';
 import type { VikingBotInteractionFieldContext } from '../../../components/viking-bot/interaction/field-types.js';
@@ -12,25 +11,24 @@ import { nameFromUri } from '../../../shared/directory-tree/rows.js';
 import { CompilePicker, type PickerScope } from './picker.js';
 import { hitlLabels } from './locales.js';
 import { useSuggestedSources } from './directory-validation.js';
+import { parseCompileUri, parseSourceUris } from './uris.js';
 
 export type CompilePickerScope = PickerScope & {
   onOpenUri?: (uri: string) => void;
-  client?: OvClient;
 };
 
 function entries(
   value: string,
   mode: 'source' | 'skill',
 ): ContextPickerEntry[] {
-  return value
-    .split('\n')
-    .filter(Boolean)
-    .map((uri) => ({
-      name: nameFromUri(uri),
-      uri,
-      type:
-        mode === 'skill' && uri.endsWith('/SKILL.md') ? 'file' : 'directory',
-    }));
+  const skill = mode === 'skill' ? parseCompileUri(value) : undefined;
+  const uris =
+    mode === 'source' ? (parseSourceUris(value) ?? []) : skill ? [skill] : [];
+  return uris.map((uri) => ({
+    name: nameFromUri(uri),
+    uri,
+    type: mode === 'skill' && uri.endsWith('/SKILL.md') ? 'file' : 'directory',
+  }));
 }
 
 export function SourceField({

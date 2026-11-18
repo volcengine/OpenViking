@@ -5,7 +5,11 @@ import type { ContextPickerEntry } from '../../../components/context-picker/inde
 import { useLocale } from '../../../shared/locale-context.js';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { Modal } from '../../../shared/primitives/modal/modal.js';
+import { useToast } from '../../../shared/primitives/toast/use-toast.js';
 import { hitlLabels } from './locales.js';
+import { parseCompileUri } from './uris.js';
+
+type SkillResult = { root_uri?: string; uri?: string };
 
 export function SkillUpload({
   client,
@@ -22,10 +26,12 @@ export function SkillUpload({
 }) {
   const locale = useLocale();
   const labels = hitlLabels(locale);
+  const [toast, feedback] = useToast({ locale });
   const upload = useRef<AbortController>(undefined);
   const [file, setFile] = useState<File>();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  // The file read and upload outlive the click handler. Closing the card or
+  // changing scope unmounts this dialog and must cancel its pending upload.
   useEffect(() => () => upload.current?.abort(), []);
   const choose = (items?: FileList | null) => {
     if (upload.current) return;
@@ -34,7 +40,10 @@ export function SkillUpload({
         ? items[0]
         : undefined;
     setFile(chosen);
-    setError(Boolean(items?.length && !chosen));
+    toast.clear();
+    if (items?.length && !chosen) {
+      toast.error({ content: labels.skillFileInvalid });
+    }
   };
   async function submit() {
     if (!file || upload.current) return;
@@ -44,23 +53,39 @@ export function SkillUpload({
       ? AbortSignal.any([controller.signal, options.signal])
       : controller.signal;
     setBusy(true);
-    setError(false);
+    toast.clear();
     try {
-      const data = await file.text();
-      signal.throwIfAborted();
-      const result = await client.request<{ root_uri?: string; uri?: string }>({
-        method: 'POST',
-        path: OV_PATHS.skills,
-        body: { data, wait: true },
-        options: { ...options, signal },
-      });
-      signal.throwIfAborted();
-      const root = (result.root_uri ?? result.uri)?.replace(/\/$/, '');
-      if (!root?.startsWith('viking://')) throw new Error();
+      let data: string;
+      try {
+        data = await file.text();
+      } catch {
+        if (!signal.aborted)
+          toast.error({ content: labels.skillFileUnreadable });
+        return;
+      }
+      if (signal.aborted) return;
+      let result: SkillResult;
+      try {
+        result = await client.request<SkillResult>({
+          method: 'POST',
+          path: OV_PATHS.skills,
+          body: { data, wait: true },
+          options: { ...options, signal },
+        });
+      } catch {
+        // The scoped client publishes the original request error once.
+        return;
+      }
+      if (signal.aborted) return;
+      const value = result?.root_uri ?? result?.uri;
+      const root =
+        typeof value === 'string' ? parseCompileUri(value) : undefined;
+      if (!root) {
+        toast.error({ content: labels.skillUploadMissingPath });
+        return;
+      }
       const uri = root.endsWith('/SKILL.md') ? root : root + '/SKILL.md';
       onUploaded({ uri, name: 'SKILL.md', type: 'file' });
-    } catch {
-      if (!signal.aborted) setError(true);
     } finally {
       upload.current = undefined;
       if (!signal.aborted) setBusy(false);
@@ -75,6 +100,7 @@ export function SkillUpload({
       onClose={busy ? undefined : onCancel}
       className="ov-viking-bot__compile-skill-upload"
     >
+      {feedback}
       <h2 className="ov-context-picker__title">{labels.uploadSkill}</h2>
       <div className="ov-context-picker__content">
         <label
@@ -93,11 +119,6 @@ export function SkillUpload({
             onChange={(event) => choose(event.currentTarget.files)}
           />
         </label>
-        {error ? (
-          <p role="alert" className="ov-context-picker__error">
-            {file ? labels.skillUploadFailed : labels.skillFileInvalid}
-          </p>
-        ) : null}
       </div>
       <div className="ov-viking-bot__create-directory-actions">
         <Button disabled={busy} onClick={onCancel}>

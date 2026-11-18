@@ -114,7 +114,7 @@ export interface UseVikingBotChatOptions extends VikingBotHookOptions {
 export interface VikingBotChatState {
   /** Draft ownership changes on every history load, even for the same session ID. */
   historyKey?: object;
-  /** A normal terminal event in the current stream permits HITL. */
+  /** Live reply outcome: true for completion, false while underway or stopped, and undefined for loaded history. */
   responseComplete?: boolean;
   sessionId?: string;
   messages: readonly VikingBotMessage[];
