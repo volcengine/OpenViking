@@ -65,6 +65,28 @@ bash run_full_eval.sh        # 完整流程
 bash run_full_eval.sh --skip-import  # 跳过导入，仅评测
 ```
 
+### 话题连续性与中期记忆
+
+唯一功能开关位于服务端和 VikingBot 使用的 `ov.conf` 根级配置中，默认关闭：
+
+```json
+{"memory": {"topic_continuity": {"enabled": false}}}
+```
+
+将 `enabled` 改为 `true` 后，同时启用话题分组、中期对话暂存、向量索引、转化清理与 VikingBot 中期召回。服务端需要重启以加载配置；单独运行的 Bot 应加载相同配置。无需再设置 `memory.midterm_memory` 或 `bot.ov_server.memory_recall_midterm_enabled`。
+
+长期提取始终使用原始 archive 消息。中期记录只是临时的对话证据；全部源消息已产出长期记忆后，会删除对应暂存记录和召回副本，未转化或失败的记录保留。
+
+`run_full_eval.sh` 默认使用 `complete`：等待长期提取完成再评测，适用于功能开启和关闭两种情况。启用功能后，可显式选择流式评测：
+
+```bash
+./run_full_eval.sh conv-26 --memory-readiness streaming
+```
+
+流式评测先等待全部目标 Session 的中期向量可检索，再统一释放长期提取并开始评测。暂停/释放是评测流程控制，不是第二个功能开关；普通 commit 自动继续执行，不会等待手工释放。
+
+话题判断只使用单独配置的 `query_planner`；未配置时按时间间隔和 `max_turns` 分组，不调用提取模型判断话题。大小、重叠和召回限额是调节参数，不是独立功能开关。
+
 ### 单题/批量测试
 
 `run_full_eval.sh` 通过位置参数支持单题测试和批量测试某个 sample：

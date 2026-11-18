@@ -76,6 +76,17 @@ class TestAddMessage:
         assert msg.peer_id == "web-visitor-alice"
         assert msg.to_dict()["peer_id"] == "web-visitor-alice"
 
+    async def test_add_message_preserves_structured_speaker(self, session: Session):
+        msg = session.add_message(
+            "user",
+            [TextPart("I booked the ticket.")],
+            peer_id="conv-26",
+            speaker="Caroline",
+        )
+
+        assert msg.speaker == "Caroline"
+        assert msg.to_dict()["speaker"] == "Caroline"
+
     async def test_add_message_rejects_peer_id_with_path_separator(self, session: Session):
         """Test direct session usage validates peer_id path safety."""
         with pytest.raises(InvalidArgumentError):

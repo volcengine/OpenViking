@@ -210,6 +210,7 @@ class Message(_RequiredMessage, total=False):
     parts: List[Any]
     created_at: str
     peer_id: str
+    speaker: str
     turn_id: str
     message_kind: Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
     source_message_ids: List[str]
@@ -219,6 +220,7 @@ class Message(_RequiredMessage, total=False):
 class AddMessageOptions(_ExtraOptions, total=False):
     created_at: str
     peer_id: str
+    speaker: str
     turn_id: str
     message_kind: Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
     source_message_ids: List[str]
@@ -237,6 +239,7 @@ class CommitSessionOptions(_ExtraOptions, total=False):
     min_raw_tail_steps: int
     event_tags: List[str]
     telemetry: Any
+    defer_long_term_extraction: bool
 
 
 class ExperienceTrajectoryOptions(TypedDict, total=False):

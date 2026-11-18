@@ -29,6 +29,7 @@ class Message:
         Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
     ] = None
     source_message_ids: Optional[List[str]] = None
+    speaker: Optional[str] = None
 
     @property
     def content(self) -> str:
@@ -88,6 +89,8 @@ class Message:
         }
         if self.peer_id is not None:
             data["peer_id"] = self.peer_id
+        if self.speaker is not None:
+            data["speaker"] = self.speaker
         if self.turn_id is not None:
             data["turn_id"] = self.turn_id
         if self.message_kind is not None:
@@ -190,6 +193,7 @@ class Message:
             role=data["role"],
             parts=parts,
             peer_id=peer_id,
+            speaker=data.get("speaker"),
             created_at=data.get("created_at"),
             turn_id=data.get("turn_id"),
             message_kind=data.get("message_kind"),

@@ -66,6 +66,7 @@ def test_build_session_messages_non_group_uses_sample_peer_and_prefixes_speaker(
     assert len(sessions) == 1
     messages = sessions[0]["messages"]
     assert [msg["peer_id"] for msg in messages] == ["conv-26", "conv-26"]
+    assert [msg["speaker"] for msg in messages] == ["Alice", "Bob"]
     assert messages[0]["text"] == "Alice: Hi Bob"
     assert messages[1]["text"] == "Bob: Hello Alice"
 
@@ -104,6 +105,7 @@ async def test_viking_ingest_uses_message_peer_id(monkeypatch):
                         "parts": parts,
                         "created_at": option_values.get("created_at"),
                         "peer_id": peer_id if peer_id is not None else option_values.get("peer_id"),
+                        "speaker": option_values.get("speaker"),
                     },
                 )
             )
@@ -129,7 +131,14 @@ async def test_viking_ingest_uses_message_peer_id(monkeypatch):
     monkeypatch.setattr(IMPORT_TO_OV.ov, "AsyncHTTPClient", lambda **kwargs: FakeClient(**kwargs))
 
     result = await IMPORT_TO_OV.viking_ingest(
-        messages=[{"role": "user", "text": "Alice: Hi Bob", "peer_id": "conv-26"}],
+        messages=[
+            {
+                "role": "user",
+                "text": "Alice: Hi Bob",
+                "peer_id": "conv-26",
+                "speaker": "Alice",
+            }
+        ],
         openviking_url="http://localhost:1933",
         session_time=None,
         user_id="",
@@ -142,6 +151,69 @@ async def test_viking_ingest_uses_message_peer_id(monkeypatch):
     add_calls = [entry for entry in calls if entry[0] == "add_message"]
     assert len(add_calls) == 1
     assert add_calls[0][1]["peer_id"] == "conv-26"
+    assert add_calls[0][1]["speaker"] == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_viking_ingest_can_return_at_midterm_ready(monkeypatch):
+    commit_options = {}
+
+    class FakeClient:
+        async def initialize(self):
+            return None
+
+        async def create_session(self, session_id=None, options=None):
+            return {"session_id": "sess-1"}
+
+        async def get_session(self, session_id, *, auto_create=False):
+            return {"commit_count": 0}
+
+        async def add_message(self, *args, **kwargs):
+            return None
+
+        async def commit_session(self, session_id, telemetry=False, **kwargs):
+            commit_options.update(kwargs)
+            return {"status": "accepted", "task_id": "task-1", "trace_id": "trace-1"}
+
+        async def get_task(self, task_id):
+            assert task_id == "task-1"
+            return {
+                "status": "running",
+                "stage": "midterm_ready",
+                "meta": {
+                    "midterm_memory_ready": {
+                        "ready": True,
+                        "staged_records": 1,
+                        "indexed_records": 1,
+                    }
+                },
+            }
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(IMPORT_TO_OV.ov, "AsyncHTTPClient", lambda **_kwargs: FakeClient())
+
+    result = await IMPORT_TO_OV.viking_ingest(
+        messages=[
+            {
+                "role": "user",
+                "text": "Alice: Hi Bob",
+                "peer_id": "conv-26",
+                "speaker": "Alice",
+            }
+        ],
+        openviking_url="http://localhost:1933",
+        api_key="user-key",
+        wait_until="midterm-ready",
+        defer_long_term_extraction=True,
+    )
+
+    assert result["wait_state"] == "midterm_ready"
+    assert result["background_processing"] is True
+    assert result["task_id"] == "task-1"
+    assert result["token_usage"]["total"] == 0
+    assert commit_options["defer_long_term_extraction"] is True
 
 
 @pytest.mark.asyncio

@@ -745,6 +745,9 @@ class MessageRange:
 
     @staticmethod
     def _speaker_for(message: Message) -> str:
+        speaker = getattr(message, "speaker", None)
+        if speaker:
+            return speaker
         peer_id = getattr(message, "peer_id", None)
         return f"{message.role} [peer={peer_id}]" if peer_id else message.role
 
