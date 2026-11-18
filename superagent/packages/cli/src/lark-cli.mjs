@@ -80,8 +80,10 @@ export class LarkCli {
 
   // Removes a previous owner login before a profile becomes bot-only. Run it
   // before config init: when the profile is being repointed to another app,
-  // its old app credentials are still available to revoke the user token.
-  // A profile that does not exist yet has nothing to clear.
+  // its old app credentials are still there for lark-cli to ask the platform
+  // to revoke the user token. Success means only that the local login is gone:
+  // lark-cli does not report whether the revoke went through. A profile that
+  // does not exist yet has nothing to clear.
   async logoutUser({ profile }) {
     const result = await this.run(['--profile', profile, 'auth', 'logout', '--json'], { timeoutMs: 30_000 });
     const body = parseJson(result.stdout);

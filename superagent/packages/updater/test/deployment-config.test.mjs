@@ -635,6 +635,13 @@ test('meeting notes are opt-in for one Feishu/Lark instance at most, and always 
   withManifest(broken, (manifestPath) => {
     assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.meetingNotes must be a boolean/);
   });
+  // Meeting notes are read as the owner, which a bot-only instance cannot.
+  const botOnly = validManifest();
+  Object.assign(botOnly.agents[1], { larkMessageAccess: 'bot', meetingNotes: true });
+  withManifest(botOnly, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }),
+      /agents\[1\]\.meetingNotes needs the owner's user access, which larkMessageAccess bot does not have/);
+  });
 });
 
 test('an instance names where its soul is kept and keeps natural writing unless it turns it off; an old role is ignored', () => {

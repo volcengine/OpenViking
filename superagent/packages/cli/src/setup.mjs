@@ -591,6 +591,10 @@ async function askLarkApp(ctx, state) {
   if (state.larkApp && state.larkApp.source !== 'create') {
     for (const text of existingAppNotes(state.larkApp.source, state.larkApp.access)) note(ctx, text);
   }
+  if (state.larkApp?.access === 'bot' && state.switches.meetingNotes) {
+    state.switches.meetingNotes = false;
+    note(ctx, t('仅机器人权限不能读取会议纪要，会议纪要入库随之关掉', 'A bot-only bot cannot read meeting notes, so they are switched off'));
+  }
 }
 
 // The primary IM is its own question, Feishu unless it is left out; with a
@@ -663,11 +667,18 @@ const switchDefault = (key, model) => (key === 'explicitSilence' && model === 'a
 // Switching one of these changes the model's policy: a new session.
 const POLICY_SWITCHES = new Set(['stagedReplies', 'naturalWriting', 'explicitSilence', 'meetingNotes']);
 
+// Whether the instance's Feishu/Lark bot has no user access: a new app as
+// chosen for it, the app kept as it is.
+const larkBotOnly = (state, current) => state.connectors.includes('lark')
+  && (state.larkApp ? state.larkApp.access : current?.larkMessageAccess) === 'bot';
+
 // A new personal assistant or AI colleague on Feishu/Lark stores the owner's
 // meeting notes, unless another instance here already does; a Q&A bot, which
-// serves other people, does not.
-function defaultMeetingNotes(state, agents) {
+// serves other people, does not, and neither does a bot-only one, since the
+// notes are read as the owner.
+function defaultMeetingNotes(state, agents, current) {
   return ['colleague', 'assistant'].includes(state.role) && state.connectors.includes('lark')
+    && !larkBotOnly(state, current)
     && !agents.some((agent) => agent.id !== state.id && agent.meetingNotes);
 }
 
@@ -675,6 +686,9 @@ function defaultMeetingNotes(state, agents) {
 function meetingNotesRefusal(ctx, state) {
   if (!state.connectors.includes('lark')) {
     return t('会议纪要来自飞书：先在「接入的 IM」里接上飞书', 'Meeting notes come from Feishu/Lark: connect it under Connected IMs first');
+  }
+  if (larkBotOnly(state, ctx.current)) {
+    return t('会议纪要要以你的身份读取：仅机器人权限下不能开', 'Meeting notes are read as you: a bot-only bot cannot store them');
   }
   const holder = (ctx.agents ?? []).find((agent) => agent.id !== state.id && agent.meetingNotes);
   return holder ? t(`会议纪要已经由 ${holder.displayName}（${holder.id}）入库：一台机器上只有一个实例能开，先修改 ${holder.id} 把它关掉`,
@@ -1104,8 +1118,8 @@ export async function connectLark({
   }
   if (scopes.user.length === 0) {
     // Skipping a new OAuth flow is not enough when setup reuses a profile:
-    // remove its old local login (and revoke the user token) while the old app
-    // credentials are still configured. Do not report bot-only if this fails.
+    // remove its saved login while the old app credentials are still
+    // configured. Do not report bot-only if this fails.
     const oldUserScopes = await larkCli.userScopes({ profile }).catch(() => null);
     await larkCli.logoutUser({ profile });
     await larkCli.configureProfile({ profile, ...app });
@@ -1113,9 +1127,15 @@ export async function connectLark({
     // at it, so clear once more on the selected app side as well.
     const selectedUserScopes = await larkCli.userScopes({ profile }).catch(() => null);
     await larkCli.logoutUser({ profile });
+    // A logout only promises the local login is gone (lark-cli asks the
+    // platform to revoke the token but does not say whether it did), so check
+    // that much here rather than take the logout's word for it.
+    if ((await larkCli.userScopes({ profile }))?.length) {
+      throw new Error(t(`${profile} 的用户登录没有删掉，没有按仅机器人权限接入；运行 lark-cli --profile ${profile} auth logout 后再试`,
+        `The user login of ${profile} is still there, so it was not connected as bot only; run lark-cli --profile ${profile} auth logout and try again`));
+    }
     if (oldUserScopes?.length || selectedUserScopes?.length) {
-      prompter.success(t(`已清除 ${profile} 原有的用户登录和 user token`,
-        `Removed the previous user login and user token from ${profile}`));
+      prompter.success(t(`已删除 ${profile} 本地保存的用户登录`, `Removed the saved user login from ${profile}`));
     }
     prompter.success(t('飞书已接好（仅机器人权限）', 'Feishu/Lark is connected (bot only)'));
     return { profile, ownerOpenId: app.ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null };
@@ -1906,8 +1926,7 @@ async function setupFlow({
     if (state.connectors.includes('lark')) agent.profile = current?.profile ?? `superagent-${state.id}`;
     else delete agent.profile;
     // A new app reads as chosen for it; the app kept reads as it did.
-    const access = state.larkApp ? state.larkApp.access : current?.larkMessageAccess;
-    if (state.connectors.includes('lark') && access === 'bot') agent.larkMessageAccess = 'bot';
+    if (larkBotOnly(state, current)) agent.larkMessageAccess = 'bot';
     else delete agent.larkMessageAccess;
     agent.ovConfig = state.ovConfig;
     // Retired OpenViking options: peers are gone, and remember is always on.
@@ -1954,7 +1973,7 @@ async function setupFlow({
     if (late) throw new Error(late);
   };
   const confirmNew = async () => {
-    state.switches.meetingNotes = defaultMeetingNotes(state, ctx.agents);
+    state.switches.meetingNotes = defaultMeetingNotes(state, ctx.agents, current);
     const addresses = mailPlan(state).added;
     const channels = ims(state).length > 1
       ? t(`${imList(ims(state))}，主渠道：${IM_LABELS[state.channel]}`, `${imList(ims(state))}; primary: ${IM_LABELS[state.channel]}`)

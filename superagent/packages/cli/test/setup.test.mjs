@@ -1469,14 +1469,14 @@ test('reconnecting a full-user profile as bot-only clears its old login before r
   await connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
     profile: 'superagent-asd', source: 'select', access: 'bot', register });
   assert.deepEqual(addons.scopes, scopes);
-  // The app may still carry old user scopes, but setup revokes and removes the
-  // reusable user token before writing the selected app to the profile.
+  // The app may still carry old user scopes, but setup removes the saved user
+  // login before writing the selected app to the profile.
   assert.deepEqual(larkCli.calls, [
     ['logout', 'superagent-asd'], ['profile', 'superagent-asd', 'cli_old'], ['logout', 'superagent-asd'],
   ]);
   assert.equal(login, null);
   assert.doesNotMatch(written(), /第 2 次扫码|等待授权/);
-  assert.match(written(), /已清除 superagent-asd 原有的用户登录和 user token/);
+  assert.match(written(), /已删除 superagent-asd 本地保存的用户登录/);
   assert.match(written(), /飞书已接好（仅机器人权限）/);
   assert.doesNotMatch(written(), /用于搜索和读历史/);
 });
@@ -1504,7 +1504,23 @@ test('a new bot-only profile also clears a user login inherited from the selecte
     ['logout', 'superagent-fresh'], ['profile', 'superagent-fresh', 'cli_old'], ['logout', 'superagent-fresh'],
   ]);
   assert.equal(sharedLogin, null);
-  assert.match(written(), /已清除 superagent-fresh 原有的用户登录和 user token/);
+  assert.match(written(), /已删除 superagent-fresh 本地保存的用户登录/);
+});
+
+test('bot-only is not reported while a user login is still there after the logout', async () => {
+  const scopes = larkScopes('bot');
+  const granted = scopes.tenant.map((scope) => ({ scope, token_types: ['tenant'] }));
+  const larkCli = {
+    ...fakeLarkCli(),
+    // lark-cli says the logout went through, yet the profile still has a user login.
+    userScopes: async () => larkScopes().user,
+    logoutUser: async ({ profile }) => { larkCli.calls.push(['logout', profile]); return true; },
+  };
+  const register = async () => ({ client_id: 'cli_old', client_secret: 's', user_info: { open_id: 'ou_owner' } });
+  const { prompter, written } = pipePrompter([]);
+  await assert.rejects(connectLark({ plan: { displayName: 'OpenViking SuperAgent' }, prompter, larkCli, fetchImpl: pickedApp(granted),
+    profile: 'superagent-asd', source: 'select', access: 'bot', register }), /superagent-asd 的用户登录没有删掉/);
+  assert.doesNotMatch(written(), /飞书已接好/);
 });
 
 test('connecting a picked app: another instance on it is a warning, what it lacks is named, and only its user scopes are asked for', async () => {
@@ -1790,6 +1806,35 @@ test('meeting notes: on for the first assistant or colleague on Feishu, off for 
   const qa = harness(t, ['', '3',    '',       '3',    '1', '',    '',          'y']);
   assert.equal(await setupCommand(qa.options), 0);
   assert.equal(qa.manifest().agents[0].meetingNotes, false);
+});
+
+test('meeting notes are read as the owner, so a bot-only Feishu/Lark bot never stores them', async (t) => {
+  // A new colleague is off by default when it is bot-only.
+  //                   name role workspace runtime IMs feishu access:bot-only confirm
+  const h = harness(t, ['', '',  '',       '3',    '1', '',    '2',             'y']);
+  recordLark(h);
+  assert.equal(await setupCommand(h.options), 0);
+  assert.equal(h.manifest().agents[0].larkMessageAccess, 'bot');
+  assert.equal(h.manifest().agents[0].meetingNotes, false);
+  assert.doesNotMatch(h.written(), /开着：[^\n]*会议纪要入库/);
+
+  // Switching them on is refused, and nothing changes.
+  //                          change asd  other  notes  done  discard
+  const refused = harness(t, ['2',        '10',  '4',   '5',  '12']);
+  const before = existing(refused, { larkMessageAccess: 'bot' });
+  assert.equal(await setupCommand(refused.options), 0);
+  assert.match(refused.written(), /会议纪要要以你的身份读取：仅机器人权限下不能开\n[\s\S]*4\) 会议纪要入库\s+关 · /);
+  assert.deepEqual(refused.manifest().agents, [before]);
+  assert.deepEqual(refused.calls, []);
+
+  // An instance that stores them and moves to a bot-only app switches them off.
+  //                        change asd  飞书应用  pick  bot-only  save  call it 小助手
+  const moved = harness(t, ['2',        '6',      '2',  '2',      '11', 'n']);
+  const was = existing(moved, { meetingNotes: true });
+  recordLark(moved, { name: '小助手' });
+  assert.equal(await setupCommand(moved.options), 0);
+  assert.match(moved.written(), /仅机器人权限不能读取会议纪要，会议纪要入库随之关掉/);
+  assert.deepEqual(moved.manifest().agents, [{ ...was, larkMessageAccess: 'bot', meetingNotes: false }]);
 });
 
 test('会议纪要入库 is one instance\'s: refused while another has it, switched on like any other setting', async (t) => {

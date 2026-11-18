@@ -123,8 +123,9 @@ const AGENT_FIELDS = Object.freeze([
 // The roles shipped with the release (packages/daemon/agent/roles/<name>.md),
 // which setup can seed the instance's soul in OpenViking with.
 const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
-// agents[].larkMessageAccess: `owner` reads with the owner's visibility,
-// `bot` only in the chats the bot has joined.
+// agents[].larkMessageAccess: `owner` adds the owner's user access to the
+// bot's; `bot` has no user access, only what is shared with the app and the
+// chats the bot has joined.
 const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
 // agents[].soulUri: where the instance's soul is kept (a viking:// address or an
 // absolute local file path), when not
@@ -330,9 +331,8 @@ function parseAgent(value, index, ignored) {
   if (!connectors.includes('lark') && value.profile !== undefined) {
     throw new Error(`${label}.profile is only used by the lark connector`);
   }
-  // Whose visibility Lark reads use: the owner's (search and history across
-  // their chats, the default) or only the bot's own chats. Chosen when the app
-  // is connected; the permissions it asks for follow it.
+  // Whether the bot also has the owner's user access (the default) or only its
+  // own. Chosen when the app is connected; the permissions it asks for follow it.
   if (!connectors.includes('lark') && value.larkMessageAccess !== undefined) {
     throw new Error(`${label}.larkMessageAccess is only used by the lark connector`);
   }
@@ -367,6 +367,10 @@ function parseAgent(value, index, ignored) {
   }
   if (value.meetingNotes && !connectors.includes('lark')) {
     throw new Error(`${label}.meetingNotes requires the lark connector`);
+  }
+  // Meeting notes are read as the owner; a bot-only instance has no user access.
+  if (value.meetingNotes && value.larkMessageAccess === 'bot') {
+    throw new Error(`${label}.meetingNotes needs the owner's user access, which larkMessageAccess bot does not have`);
   }
   const dshHomeMode = value.dshHomeMode ?? 'isolated';
   if (!['isolated', 'shared'].includes(dshHomeMode)) {
