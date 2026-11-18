@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { readRequestBody, withMockOpenViking, withPendingDir, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { extractCaptureTurns } from "./cc-transcript.mjs";
+import { countForeignSessionPrefix, countKnownUuidPrefix, hashUuid } from "./lib/fork-history.mjs";
 import { enqueue, listPending } from "./lib/pending-queue.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -46,6 +47,12 @@ function hookEnv(root, baseUrl) {
   return {
     HOME: root,
     TMPDIR: root,
+    // Windows Node reads TEMP/TMP for os.tmpdir() and USERPROFILE for
+    // os.homedir(), ignoring TMPDIR/HOME; setting all of them keeps the
+    // per-session capture state and the shared state dir inside `root`.
+    TEMP: root,
+    TMP: root,
+    USERPROFILE: root,
     OPENVIKING_AUTO_CAPTURE: "1",
     OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
     OPENVIKING_MEMORY_ENABLED: "1",
@@ -622,6 +629,276 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
     assert.deepEqual(texts(batches[0]), ["first task for the subagent", "first task done"]);
     assert.deepEqual(texts(batches[1]), ["follow-up from a background task"]);
     assert.equal(commits, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Forked-session inherited history (issue #6524)
+// ---------------------------------------------------------------------------
+
+/** A Claude Code transcript line: wrapped payload with the bookkeeping fields
+ * fork detection reads (uuid, sessionId) alongside the message itself. */
+function ccEntry(uuid, sessionId, role, text) {
+  return JSON.stringify({
+    type: role,
+    sessionId,
+    uuid,
+    parentUuid: null,
+    message: { role, content: text },
+  });
+}
+
+async function captureBatches(root, sessionId, transcriptPath, handler) {
+  const batches = [];
+  await withMockOpenViking(async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "GET" && url.pathname === "/health") {
+      writeJson(res, { status: "ok", result: { healthy: true } });
+      return;
+    }
+    if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+      const body = await readRequestBody(req);
+      batches.push({ path: url.pathname, messages: body.messages });
+      writeJson(res, { status: "ok", result: { added: body.messages.length } });
+      return;
+    }
+    if (handler) {
+      await handler(req, res, url);
+      return;
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/api/v1/sessions/")) {
+      writeJson(res, {
+        status: "ok",
+        result: { message_count: 2, pending_tokens: 10, commit_count: 0 },
+      });
+      return;
+    }
+    writeJson(res, { status: "error", error: { code: "NOT_FOUND" } }, 404);
+  }, async (baseUrl) => {
+    await runAutoCapture(
+      { session_id: sessionId, transcript_path: transcriptPath, cwd: root },
+      {
+        ...hookEnv(root, baseUrl),
+        // Keep the pending queue inside the test root so a developer's real
+        // queue can never leak entries into these assertions.
+        OPENVIKING_PENDING_DIR: join(root, "pending"),
+      },
+    );
+  });
+  return batches;
+}
+
+function batchTexts(batch) {
+  return batch.messages.flatMap(
+    (message) => message.parts.filter((part) => part.type === "text").map((part) => part.text),
+  );
+}
+
+test("fork prefix counters stop at the first contradictory entry", () => {
+  const stamped = [
+    { sessionId: "parent", uuid: "u1" },
+    { sessionId: "parent", uuid: "u2" },
+    { type: "summary" }, // bookkeeping line without ids: walked through
+    { sessionId: "parent", uuid: "u3" },
+    { sessionId: "child", uuid: "u4" }, // own entry ends the run
+    { sessionId: "parent", uuid: "u5" },
+  ];
+  assert.equal(countForeignSessionPrefix(stamped, "child"), 4);
+  assert.equal(countForeignSessionPrefix(stamped, "parent"), 0);
+  assert.equal(countForeignSessionPrefix([{ sessionId: "a" }, { sessionId: "b" }], "c"), 1);
+  assert.equal(countForeignSessionPrefix([null, { sessionId: "a" }], "c"), 0);
+
+  const known = new Set([hashUuid("u1"), hashUuid("u2"), hashUuid("u3")]);
+  assert.equal(countKnownUuidPrefix(stamped, known), 4);
+  assert.equal(countKnownUuidPrefix([], known), 0);
+  assert.equal(countKnownUuidPrefix([{ uuid: "u1" }, { uuid: "new" }], known), 1);
+});
+
+test("a forked session skips the inherited history and captures only its own turns", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-fork-"));
+  const parentLines = [
+    ccEntry("uuid-p1", "fork-parent", "user", "remember the parent first turn"),
+    ccEntry("uuid-p2", "fork-parent", "assistant", "parent first turn retained"),
+    ccEntry("uuid-p3", "fork-parent", "user", "remember the parent second turn"),
+    ccEntry("uuid-p4", "fork-parent", "assistant", "parent second turn retained"),
+  ];
+
+  try {
+    // The parent session captures its history and records its uuid hashes.
+    const parentPath = join(root, "parent.jsonl");
+    await writeFile(parentPath, parentLines.join("\n"));
+    const parentBatches = await captureBatches(root, "fork-parent", parentPath);
+    assert.equal(parentBatches.length, 1);
+    assert.equal(parentBatches[0].messages.length, 4);
+
+    // A side chat starts as a verbatim copy of the parent history plus one
+    // new turn; only that new turn may reach the fork's OV session.
+    const forkPath = join(root, "fork.jsonl");
+    const forkLines = [
+      ...parentLines,
+      ccEntry("uuid-c1", "fork-child", "user", "remember the side chat turn"),
+    ];
+    await writeFile(forkPath, forkLines.join("\n"));
+    const forkBatches = await captureBatches(root, "fork-child", forkPath);
+    assert.equal(forkBatches.length, 1, `expected one batch, got ${JSON.stringify(forkBatches)}`);
+    assert.deepEqual(batchTexts(forkBatches[0]), ["remember the side chat turn"]);
+
+    const state = JSON.parse(
+      await readFile(join(root, "openviking-cc-capture-state", "fork-child.json"), "utf-8"),
+    );
+    assert.equal(state.capturedTurnCount, 5);
+
+    // The next Stop in the same side chat keeps the cursor going.
+    await writeFile(forkPath, [
+      ...forkLines,
+      ccEntry("uuid-c2", "fork-child", "assistant", "side chat answer retained"),
+    ].join("\n"));
+    const again = await captureBatches(root, "fork-child", forkPath);
+    assert.equal(again.length, 1);
+    assert.deepEqual(batchTexts(again[0]), ["side chat answer retained"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a side chat is skipped by the foreign session stamp even without a uuid index", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-stamp-"));
+  const forkPath = join(root, "fork.jsonl");
+
+  try {
+    // No parent capture ran, so the shared uuid index knows nothing; the
+    // copied entries still carry the parent's sessionId field.
+    await writeFile(forkPath, [
+      ccEntry("uuid-s1", "stamp-parent", "user", "remember the copied first turn"),
+      ccEntry("uuid-s2", "stamp-parent", "assistant", "copied first turn retained"),
+      ccEntry("uuid-s3", "stamp-child", "user", "remember the side chat turn"),
+      ccEntry("uuid-s4", "stamp-child", "assistant", "side chat answer retained"),
+    ].join("\n"));
+
+    const batches = await captureBatches(root, "stamp-child", forkPath);
+    assert.equal(batches.length, 1, `expected one batch, got ${JSON.stringify(batches)}`);
+    assert.deepEqual(batchTexts(batches[0]), [
+      "remember the side chat turn",
+      "side chat answer retained",
+    ]);
+
+    const state = JSON.parse(
+      await readFile(join(root, "openviking-cc-capture-state", "stamp-child.json"), "utf-8"),
+    );
+    assert.equal(state.capturedTurnCount, 4);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an ordinary session captures its full history even when other sessions are indexed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-unrelated-"));
+
+  try {
+    const parentPath = join(root, "parent.jsonl");
+    await writeFile(parentPath, [
+      ccEntry("uuid-o1", "index-parent", "user", "remember the indexed parent turn"),
+      ccEntry("uuid-o2", "index-parent", "assistant", "indexed parent turn retained"),
+    ].join("\n"));
+    assert.equal((await captureBatches(root, "index-parent", parentPath))[0].messages.length, 2);
+
+    // A different session with its own uuids must not trip the detection.
+    const freshPath = join(root, "fresh.jsonl");
+    await writeFile(freshPath, [
+      ccEntry("uuid-n1", "fresh-session", "user", "remember the unrelated turn"),
+      ccEntry("uuid-n2", "fresh-session", "assistant", "unrelated turn retained"),
+    ].join("\n"));
+    const batches = await captureBatches(root, "fresh-session", freshPath);
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].messages.length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("after a rewind a fork re-captures its own turns but still skips the inherited prefix", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-rewind-fork-"));
+  const sessionId = "rewind-child";
+  const forkPath = join(root, "fork.jsonl");
+  const ownLines = [
+    ccEntry("uuid-rc1", sessionId, "user", "remember the rewind child turn"),
+    ccEntry("uuid-rc2", sessionId, "assistant", "rewind child turn retained"),
+  ];
+
+  try {
+    const parentPath = join(root, "parent.jsonl");
+    await writeFile(parentPath, [
+      ccEntry("uuid-rp1", "rewind-parent", "user", "remember the rewind parent turn"),
+      ccEntry("uuid-rp2", "rewind-parent", "assistant", "rewind parent turn retained"),
+    ].join("\n"));
+    await captureBatches(root, "rewind-parent", parentPath);
+
+    await writeFile(forkPath, [
+      ccEntry("uuid-rp1", "rewind-parent", "user", "remember the rewind parent turn"),
+      ccEntry("uuid-rp2", "rewind-parent", "assistant", "rewind parent turn retained"),
+      ...ownLines,
+    ].join("\n"));
+    const first = await captureBatches(root, sessionId, forkPath);
+    assert.deepEqual(batchTexts(first[0]), [
+      "remember the rewind child turn",
+      "rewind child turn retained",
+    ]);
+
+    // Simulate a capture the server lost: the reconciliation rewinds the
+    // cursor to zero, and the next Stop must re-capture the fork's own turns
+    // — its own uuid hashes stay out of the known set — without re-capturing
+    // the parent prefix.
+    const stateDir = join(root, ".openviking", "state");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      join(stateDir, "last-capture.json"),
+      JSON.stringify({
+        turns_captured: 0,
+        turns_queued: 0,
+        turns_failed: 2,
+        ov_session_id: `cc-${sessionId}`,
+        cc_session_id: sessionId,
+      }),
+    );
+
+    const batches = [];
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { healthy: true } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === `/api/v1/sessions/cc-${sessionId}`) {
+        writeJson(res, {
+          status: "ok",
+          result: { message_count: 0, total_message_count: null, commit_count: 0, pending_tokens: 0 },
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { added: batches.at(-1).messages.length } });
+        return;
+      }
+      writeJson(res, { status: "ok", result: {} });
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: sessionId, transcript_path: forkPath, cwd: root },
+        { ...hookEnv(root, baseUrl), OPENVIKING_PENDING_DIR: join(root, "pending") },
+      );
+    });
+
+    assert.equal(batches.length, 1, `expected one batch, got ${JSON.stringify(batches)}`);
+    assert.deepEqual(batchTexts(batches[0]), [
+      "remember the rewind child turn",
+      "rewind child turn retained",
+    ]);
+    const state = JSON.parse(
+      await readFile(join(root, "openviking-cc-capture-state", `${sessionId}.json`), "utf-8"),
+    );
+    assert.equal(state.capturedTurnCount, 4);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
