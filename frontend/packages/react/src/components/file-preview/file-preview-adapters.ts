@@ -61,6 +61,7 @@ export function createFilePreviewAdapterList({
     json({ defaultExpandDepth: 4 }),
     markdown({
       onLinkClick,
+      allowedLinkProtocols: onLinkClick ? ['viking'] : undefined,
       rendererProps: {
         // Parse raw HTML, then keep Ark's sanitizer in charge of tags and attributes.
         parsing: { enabledHtmlTags: true },

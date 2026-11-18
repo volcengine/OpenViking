@@ -2,7 +2,8 @@ import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters
 import { useCallback, useRef } from 'react';
 
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
-import type { FilePreviewFileTab } from './types.js';
+import type { FilePreviewDirectoryTab, FilePreviewFileTab } from './types.js';
+import { levelToFileTab } from './file-preview-source.js';
 
 /**
  * Markdown 正文里的链接点击处理。
@@ -23,16 +24,40 @@ import type { FilePreviewFileTab } from './types.js';
  * makes the base skip the default jump, so taking over without one kills the link.
  */
 export function useLinkClickHandler(
-  fileTab: FilePreviewFileTab | undefined,
+  tab: FilePreviewDirectoryTab | FilePreviewFileTab | undefined,
   actions: ReturnType<typeof useFilePreviewActions>,
+  levelKey?: string,
 ): MarkdownAdapterOptions['onLinkClick'] {
-  const latest = useRef({ fileTab, actions });
-  latest.current = { fileTab, actions };
-  return useCallback<NonNullable<MarkdownAdapterOptions['onLinkClick']>>(
-    (_event, link) => {
-      const target = latest.current.fileTab;
-      if (target) void latest.current.actions.openUri(target, link.url);
-    },
-    [],
-  );
+  const fileTab =
+    tab?.kind === 'directory'
+      ? levelToFileTab(tab, levelKey ?? tab.levels[0].key)
+      : tab;
+  const latest = useRef({
+    fileTab,
+    actions,
+    directory: tab?.kind === 'directory',
+  });
+  latest.current = { fileTab, actions, directory: tab?.kind === 'directory' };
+  const handler = useCallback<
+    NonNullable<MarkdownAdapterOptions['onLinkClick']>
+  >((event, link) => {
+    if (latest.current.directory && link.url.startsWith('#')) {
+      let id;
+      try {
+        id = decodeURIComponent(link.url.slice(1));
+      } catch {
+        return;
+      }
+      const body = (event.currentTarget as HTMLElement).closest(
+        '.ov-file-preview__body',
+      );
+      Array.from(body?.querySelectorAll('[id]') ?? [])
+        .find((node) => node.id === id || node.id === `user-content-${id}`)
+        ?.scrollIntoView({ block: 'start' });
+      return;
+    }
+    const target = latest.current.fileTab;
+    if (target) void latest.current.actions.openUri(target, link.url);
+  }, []);
+  return fileTab?.operations?.openUri ? handler : undefined;
 }
