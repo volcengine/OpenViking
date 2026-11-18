@@ -461,13 +461,18 @@ def test_linux_test_containers_bootstrap_and_cleanup(file, name):
     job = jobs(file)[name]
     steps = job["steps"]
     bootstrap = steps[0]
-    assert bootstrap["if"] == "runner.os == 'Linux'"
+    expected_condition = (
+        "matrix.os == 'ubuntu-24.04'"
+        if file in {"_test_lite.yml", "_test_full.yml"}
+        else "runner.os == 'Linux'"
+    )
+    assert bootstrap["if"] == expected_condition
     assert "Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt" in bootstrap["run"]
     assert "APT::Update::Error-Mode=any" in bootstrap["run"]
     assert "git ca-certificates curl python3 cmake build-essential" in bootstrap["run"]
     assert "ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro" in job["container"]["options"]
     cleanup = next(step for step in steps if step.get("uses") == "./.github/actions/linux-test-env")
-    assert cleanup["if"] == "runner.os == 'Linux'"
+    assert cleanup["if"] == expected_condition
     assert steps.index(cleanup) < next(
         index for index, step in enumerate(steps) if step.get("uses") == "actions/setup-python@v6"
     )
@@ -610,6 +615,61 @@ def test_effect_dependencies_do_not_build_project_before_native_toolchain():
     for step in steps:
         for command in re.findall(r"\buv run ([^\n]+)", step.get("run", "")):
             assert "--no-sync" in command or "--no-project" in command
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Workflow build step uses bash")
+@pytest.mark.parametrize(
+    "description,git_status,expected",
+    [
+        ("3b2de91", 0, "0.0.0.dev0"),
+        ("v0.8.7-12-g3b2de91", 0, "0.8.7.dev0"),
+        ("0.8.7", 0, "0.8.7.dev0"),
+        ("", 128, "0.0.0.dev0"),
+    ],
+)
+def test_effect_version_fallback_is_pep440_and_reaches_build(
+    tmp_path, description, git_status, expected
+):
+    from packaging.version import Version
+
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    git = commands / "git"
+    git.write_text(f"#!/bin/sh\nprintf '%s\\n' '{description}'\nexit {git_status}\n")
+    uv = commands / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" > "$BUILD_VERSION"\n'
+    )
+    git.chmod(0o755)
+    uv.chmod(0o755)
+    github_env = tmp_path / "github-env"
+    build_version = tmp_path / "build-version"
+    env = {
+        **environ,
+        "PATH": str(commands) + pathsep + environ["PATH"],
+        "GITHUB_ENV": str(github_env),
+        "BUILD_VERSION": str(build_version),
+    }
+    env.pop("SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING", None)
+    step = next(
+        step
+        for step in jobs("api_test_effect.yml")["effect-tests"]["steps"]
+        if step.get("name") == "Build C++ extensions"
+    )
+    subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]], env=env, check=True)
+    assert build_version.read_text().strip() == expected
+    assert github_env.read_text().strip() == (
+        f"SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING={expected}"
+    )
+    assert str(Version(expected)) == expected
+
+
+@pytest.mark.parametrize("file,name", [("_test_lite.yml", "test-lite"), ("_test_full.yml", "test")])
+def test_reusable_test_shell_supports_versioned_windows_runners(file, name):
+    shell = jobs(file)[name]["defaults"]["run"]["shell"]
+    assert "startsWith(matrix.os, 'windows-')" in shell
+    assert "'pwsh'" in shell and "'bash'" in shell
 
 
 @pytest.mark.parametrize("container", ["", "ubuntu:24.04"])

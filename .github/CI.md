@@ -85,7 +85,7 @@ immutable digest reference printed in the workflow summary:
 | Image | Repository variable | Consumers |
 | --- | --- | --- |
 | Ubuntu 20.04 amd64 | `CI_UBUNTU20_IMAGE` | Linux x86_64 wheels on hosted and self-hosted runners |
-| Ubuntu 24.04 amd64 | `CI_UBUNTU24_IMAGE` | API native producer, Linux API/database/cuVS, Full Test, API Effect Tests and CodeQL analysis on hosted and eligible self-hosted runners |
+| Ubuntu 24.04 amd64 | `CI_UBUNTU24_IMAGE` | API native producer and Linux API/database/cuVS on hosted and eligible self-hosted runners; Full Test, API Effect Tests and CodeQL analysis on hosted runners only |
 
 Another reachable public
 registry can also host the image; avoid mutable `latest` tags.

@@ -104,8 +104,9 @@ jobs:
         run: |
           export OV_SKIP_OV_BUILD=1
           if [ -z "$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" ]; then
-            PRETEND_VERSION=$(git describe --tags --always 2>/dev/null | sed -E 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1.dev0/' || echo "0.0.0.dev0")
-            echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$PRETEND_VERSION" >> $GITHUB_ENV
+            PRETEND_VERSION=$(git describe --tags --always 2>/dev/null | sed -nE 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1.dev0/p' || true)
+            export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="${PRETEND_VERSION:-0.0.0.dev0}"
+            echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" >> "$GITHUB_ENV"
           fi
           uv run --no-sync python setup.py build_ext --inplace
 

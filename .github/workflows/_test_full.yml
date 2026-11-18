@@ -33,7 +33,7 @@ jobs:
       options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
     defaults:
       run:
-        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
+        shell: ${{ startsWith(matrix.os, 'windows-') && 'pwsh' || 'bash' }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +42,7 @@ jobs:
 
     steps:
     - name: Bootstrap Ubuntu test container
-      if: runner.os == 'Linux'
+      if: matrix.os == 'ubuntu-24.04'
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
@@ -69,7 +69,7 @@ jobs:
       with:
         submodules: recursive
     - uses: ./.github/actions/linux-test-env
-      if: runner.os == 'Linux'
+      if: matrix.os == 'ubuntu-24.04'
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v6
