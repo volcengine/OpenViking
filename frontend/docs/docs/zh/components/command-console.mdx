@@ -182,11 +182,13 @@ import '@openviking/react/components/command-console/style.css';
 
 ### CommandConsoleWriteResultContent
 
-| 参数    | 说明                                                     | 类型                   | 默认值 |
-| ------- | -------------------------------------------------------- | ---------------------- | ------ |
-| variant | 结果类型，固定为 `'write-result'`                        | `'write-result'`       | 必填   |
-| lines   | 结果行，每行单独一块显示；字符串中的资源地址自动成为链接 | `readonly ReactNode[]` | 必填   |
-| title   | 标题，与命令名相同时不显示                               | `string`               | -      |
+| 参数    | 说明                                                      | 类型                                                         | 默认值 |
+| ------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------ |
+| variant | 结果类型，固定为 `'write-result'`                         | `'write-result'`                                             | 必填   |
+| lines   | 每行单独一块显示。使用显式 URI 行可保留资源路径中的空格。 | `readonly (ReactNode \| CommandConsoleWriteResultUriLine)[]` | 必填   |
+| title   | 标题，与命令名相同时不显示                                | `string`                                                     | -      |
+
+`CommandConsoleWriteResultUriLine` 包含字符串字段 `label` 和 `uri`。
 
 ### CommandConsoleCommandHelpContent
 

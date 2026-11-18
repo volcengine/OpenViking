@@ -281,6 +281,12 @@ export interface CommandConsoleStatusContent {
   title?: string;
 }
 
+/** 带完整资源目标的结果行。A result line with an explicit resource target. */
+export interface CommandConsoleWriteResultUriLine {
+  label: string;
+  uri: string;
+}
+
 /** 写入结果。A write result. */
 export interface CommandConsoleWriteResultContent {
   /**
@@ -289,10 +295,10 @@ export interface CommandConsoleWriteResultContent {
    */
   variant: 'write-result';
   /**
-   * 结果行，由宿主渲染。
-   * Result lines, rendered by the host.
+   * 结果行，可明确指定完整 URI。
+   * Result lines, optionally with an explicit URI.
    */
-  lines: readonly ReactNode[];
+  lines: readonly (ReactNode | CommandConsoleWriteResultUriLine)[];
   /**
    * 卡片标题。
    * Card title.

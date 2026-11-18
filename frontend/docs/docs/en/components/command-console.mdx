@@ -182,11 +182,13 @@ The union of execution results, distinguished by `variant`.
 
 ### CommandConsoleWriteResultContent
 
-| Property | Description                                                                      | Type                   | Default  |
-| -------- | -------------------------------------------------------------------------------- | ---------------------- | -------- |
-| variant  | Result type, always `'write-result'`                                             | `'write-result'`       | Required |
-| lines    | Result lines, each in its own block; resource addresses in a string become links | `readonly ReactNode[]` | Required |
-| title    | Title; hidden when it equals the command name                                    | `string`               | -        |
+| Property | Description                                                                                         | Type                                                         | Default  |
+| -------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------- |
+| variant  | Result type, always `'write-result'`                                                                | `'write-result'`                                             | Required |
+| lines    | Each line is shown in its own block. Use an explicit URI line to preserve spaces in resource paths. | `readonly (ReactNode \| CommandConsoleWriteResultUriLine)[]` | Required |
+| title    | Title; hidden when it equals the command name                                                       | `string`                                                     | -        |
+
+`CommandConsoleWriteResultUriLine` takes a `label` and a `uri`, both strings.
 
 ### CommandConsoleCommandHelpContent
 
