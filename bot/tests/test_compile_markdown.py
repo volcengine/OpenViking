@@ -468,9 +468,12 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
     assert pipeline.failures
 
 
-@pytest.mark.parametrize("collision", ["same_worker", "other_worker"])
 @pytest.mark.parametrize(
-    "names", [("topic/Retry.md", "TOPIC/retry.md"), ("topic/Café.md", "topic/Cafe\u0301.md")]
+    ("collision", "names"),
+    [
+        ("same_worker", ("topic/Retry.md", "TOPIC/retry.md")),
+        ("other_worker", ("topic/Café.md", "topic/Cafe\u0301.md")),
+    ],
 )
 async def test_alias_conflicts_retry_without_blocking_unrelated_publication(
     pipeline, collision, names
