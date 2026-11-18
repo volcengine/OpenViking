@@ -67,6 +67,12 @@ export async function runChat({
   let complete = false;
   let interrupted = false;
   let delivered = false;
+  const accept = () => {
+    if (delivered || signal.aborted || !current()) return;
+    delivered = true;
+    undelivered.length = 0;
+    onDelivered?.();
+  };
   let renderer = false;
   let stage:
     | import('../../../shared/monitoring/trace/span.js').MonitoringSpan
@@ -83,14 +89,11 @@ export async function runChat({
     for await (const event of service.stream(
       { sessionId, ...recoveredDraft },
       signal,
+      accept,
     )) {
       if (!current()) return false;
       // A stream event acknowledges delivery; creating a session does not.
-      if (!delivered) {
-        delivered = true;
-        undelivered.length = 0;
-        if (!signal.aborted) onDelivered?.();
-      }
+      accept();
       signal.throwIfAborted();
       if (
         !started &&

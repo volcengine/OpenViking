@@ -45,6 +45,8 @@ export interface VikingBotChatService {
   stream: (
     input: VikingBotChatInput,
     signal: AbortSignal,
+    /** Report acceptance of this input before any response events are available. */
+    onAccepted?: () => void,
   ) => AsyncIterable<VikingBotChatEvent>;
   createSession: (signal: AbortSignal) => Promise<VikingBotSession>;
   loadMessages: (

@@ -19,17 +19,12 @@ import type { ConsoleProps } from './types.js';
 
 /** Console owns chat requests and sessions. */
 export function useConversation(
-  {
-    conversation,
-    chatOptions,
-    scopeKey,
-    requestOptions,
-    locale,
-    modes,
-  }: ConsoleProps,
+  props: ConsoleProps,
   setDraft: (value: SetStateAction<string>) => void,
   managedDraft = '',
 ): Partial<VikingBotProps> & { feedback?: ReactNode } {
+  const { conversation, chatOptions, scopeKey, requestOptions, locale, modes } =
+    props;
   const conversationLocale = useLocale(conversation?.locale ?? locale);
   const feedbackLocale = useLocale(chatOptions?.locale ?? locale);
   const validation = useLocalDraftValidation(
@@ -52,6 +47,7 @@ export function useConversation(
     enabled: enabled && !conversation?.references,
     requestOptions: options.requestOptions,
     scopeKey: options.scopeKey,
+    selection: chatOptions?.referenceSelection,
   });
   const hitl = useHitl(
     chat,

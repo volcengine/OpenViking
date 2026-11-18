@@ -7,6 +7,7 @@ import type {
   VikingBotReference,
   VikingBotReferences,
 } from '../../components/viking-bot/index.js';
+import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import {
   mentionPattern,
@@ -20,10 +21,12 @@ export function useConversationReferences({
   enabled,
   requestOptions,
   scopeKey,
+  selection,
 }: {
   enabled: boolean;
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
+  selection?: ConsoleChatOptions['referenceSelection'];
 }) {
   const inheritedClient = useOvClient('local');
   const inheritedSignal = useOvSignal();
@@ -64,8 +67,13 @@ export function useConversationReferences({
     (items: readonly VikingBotReference[]) => setSelected({ scope, items }),
     [scope],
   );
+  const onSelectionChange = enabled ? selection?.onChange : undefined;
   const clearReferences = useCallback(
     (sent?: readonly VikingBotReference[]) => {
+      if (onSelectionChange) {
+        if (!sent) onSelectionChange([]);
+        return;
+      }
       setSelected((current) => {
         if (current?.scope !== scope) return current;
         if (!sent) return undefined;
@@ -75,7 +83,7 @@ export function useConversationReferences({
           : { scope, items };
       });
     },
-    [scope],
+    [scope, onSelectionChange],
   );
   const [openCount, setOpenCount] = useState(0);
   const onOpenChange = useCallback((open: boolean) => {
@@ -161,8 +169,10 @@ export function useConversationReferences({
             expanded: row.hasChildren ? !hidden?.has(row.uri) : undefined,
           }))
       : tree.rows,
-    selected: selected?.scope === scope ? selected.items : emptyReferences,
-    onChange,
+    selected:
+      selection?.selected ??
+      (selected?.scope === scope ? selected.items : emptyReferences),
+    onChange: onSelectionChange ?? onChange,
     onOpenChange,
     onQueryChange: setQuery,
     onExpand: (uri) => {
