@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -168,6 +169,31 @@ class _DirectoryCopyAGFS(_CopyAGFS):
             for item, content in self.files.items()
             if item != path and not item.startswith(prefix)
         }
+
+
+class _ConcurrentDirectoryCopyAGFS(_DirectoryCopyAGFS):
+    def __init__(self, file_count: int = 10):
+        super().__init__()
+        self.directories = {
+            "/local/acct/resources",
+            "/local/acct/resources/source",
+        }
+        self.files = {
+            f"/local/acct/resources/source/{index}.bin": bytes([index])
+            for index in range(file_count)
+        }
+        self.active_copies = 0
+        self.peak_copies = 0
+
+    async def cp(self, source, target, recursive=False, fs_ctx=None):
+        self.events.append(("cp", source, target, recursive, fs_ctx))
+        self.active_copies += 1
+        self.peak_copies = max(self.peak_copies, self.active_copies)
+        try:
+            await asyncio.sleep(0.01)
+            self.files[target] = self.files[source]
+        finally:
+            self.active_copies -= 1
 
 
 class _DirectoryMoveRollbackAGFS(_DirectoryCopyAGFS):
@@ -354,6 +380,26 @@ async def test_cp_directory_preserves_empty_hidden_and_binary_entries(monkeypatc
             "viking://resources/source/empty",
         ],
     )
+
+
+@pytest.mark.asyncio
+async def test_cp_directory_copies_files_with_fixed_bounded_concurrency(monkeypatch):
+    agfs = _ConcurrentDirectoryCopyAGFS(file_count=10)
+    fs = _viking_fs(monkeypatch, agfs)
+    monkeypatch.setattr(fs, "_copy_vector_store_uris", AsyncMock(), raising=False)
+
+    result = await fs.cp(
+        "viking://resources/source",
+        "viking://resources/target",
+        recursive=True,
+        ctx=_ctx(),
+    )
+
+    assert agfs.peak_copies == 8
+    assert result["files_created"] == 11
+    copy_events = [event for event in agfs.events if event[0] == "cp"]
+    assert len(copy_events) == 10
+    assert {event[4]["lease_ref"] for event in copy_events} == {"copy-operation"}
 
 
 @pytest.mark.asyncio

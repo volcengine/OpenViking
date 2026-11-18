@@ -11,6 +11,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
@@ -36,7 +37,6 @@ from openviking.storage.expr import And, Eq, PathScope, RawDSL
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
-    _ABSTRACT_WORKER_COUNT,
     LS_ALL_NODES,
     _ensure_non_empty_search_query,
     _is_directory_not_empty_error,
@@ -1013,73 +1013,93 @@ class _OpsMixin:
         transfer_source_uri = transfer_source_uri or old_uri
         transfer_target_uri = transfer_target_uri or new_uri
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
-        # Tree acquisition may already have created the target to hold its lock.
-        try:
-            stat = await self._async_agfs.stat(new_path)
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                raise
-            await self._async_agfs.mkdir(new_path, fs_ctx=fs_ctx)
-        else:
-            if not stat.get("isDir", False):
-                raise InvalidArgumentError(f"transfer target is not a directory: {new_uri}")
-        copied = 1
-        entries = await self._async_agfs.ls(old_path, fs_ctx=fs_ctx)
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name in (".", ".."):
-                continue
-            old_child = f"{old_path.rstrip('/')}/{name}"
-            new_child = f"{new_path.rstrip('/')}/{name}"
-            old_child_uri = f"{old_uri.rstrip('/')}/{name}"
-            new_child_uri = f"{new_uri.rstrip('/')}/{name}"
-            await self._ensure_copy_source_access(
-                old_child_uri,
-                recursive=bool(entry.get("isDir", False)),
-                ctx=ctx,
-            )
-            if entry.get("isDir", False):
-                copied += await self._copy_directory_under_tree_locks(
-                    old_child,
-                    new_child,
-                    old_uri=old_child_uri,
-                    new_uri=new_child_uri,
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                    transfer_source_uri=transfer_source_uri,
-                    transfer_target_uri=transfer_target_uri,
-                    copy_semantic_sidecars=copy_semantic_sidecars,
-                )
+        file_jobs: List[tuple[str, str, str, str, str]] = []
+        copied_directories = 0
+
+        async def collect_directory(
+            source_path: str,
+            target_path: str,
+            source_uri: str,
+            target_uri: str,
+        ) -> None:
+            nonlocal copied_directories
+            # Tree acquisition may already have created the target to hold its lock.
+            try:
+                stat = await self._async_agfs.stat(target_path)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                await self._async_agfs.mkdir(target_path, fs_ctx=fs_ctx)
             else:
-                if name in ABSTRACT_OVERVIEW_FILENAMES:
-                    if not copy_semantic_sidecars:
-                        continue
-                    raw = await self._async_agfs.cat(old_child, fs_ctx=fs_ctx)
-                    level = (
-                        ContextLevel.ABSTRACT if name == ".abstract.md" else ContextLevel.OVERVIEW
+                if not stat.get("isDir", False):
+                    raise InvalidArgumentError(
+                        f"transfer target is not a directory: {target_uri}"
                     )
-                    rewritten = rewrite_abstract_overview_for_transfer(
-                        raw,
-                        level=level,
-                        source_dir_uri=old_uri,
-                        target_dir_uri=new_uri,
-                        source_scope_uri=transfer_source_uri,
-                        target_scope_uri=transfer_target_uri,
-                    )
-                    await self._async_agfs.write(
-                        new_child,
-                        rewritten.encode("utf-8"),
-                        fs_ctx=fs_ctx,
-                    )
-                else:
-                    await self._async_agfs.cp(
+            copied_directories += 1
+
+            for entry in await self._async_agfs.ls(source_path, fs_ctx=fs_ctx):
+                name = entry.get("name", "")
+                if not name or name in (".", ".."):
+                    continue
+                old_child = f"{source_path.rstrip('/')}/{name}"
+                new_child = f"{target_path.rstrip('/')}/{name}"
+                old_child_uri = f"{source_uri.rstrip('/')}/{name}"
+                new_child_uri = f"{target_uri.rstrip('/')}/{name}"
+                is_dir = bool(entry.get("isDir", False))
+                await self._ensure_copy_source_access(
+                    old_child_uri,
+                    recursive=is_dir,
+                    ctx=ctx,
+                )
+                if is_dir:
+                    await collect_directory(
                         old_child,
                         new_child,
-                        recursive=False,
-                        fs_ctx=fs_ctx,
+                        old_child_uri,
+                        new_child_uri,
                     )
-                copied += 1
-        return copied
+                elif copy_semantic_sidecars or name not in ABSTRACT_OVERVIEW_FILENAMES:
+                    file_jobs.append(
+                        (old_child, new_child, source_uri, target_uri, name)
+                    )
+
+        async def copy_file(job: tuple[str, str, str, str, str]) -> int:
+            old_child, new_child, source_uri, target_uri, name = job
+            worker_fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
+            if name in ABSTRACT_OVERVIEW_FILENAMES:
+                raw = await self._async_agfs.cat(old_child, fs_ctx=worker_fs_ctx)
+                level = (
+                    ContextLevel.ABSTRACT if name == ".abstract.md" else ContextLevel.OVERVIEW
+                )
+                rewritten = rewrite_abstract_overview_for_transfer(
+                    raw,
+                    level=level,
+                    source_dir_uri=source_uri,
+                    target_dir_uri=target_uri,
+                    source_scope_uri=transfer_source_uri,
+                    target_scope_uri=transfer_target_uri,
+                )
+                await self._async_agfs.write(
+                    new_child,
+                    rewritten.encode("utf-8"),
+                    fs_ctx=worker_fs_ctx,
+                )
+            else:
+                await self._async_agfs.cp(
+                    old_child,
+                    new_child,
+                    recursive=False,
+                    fs_ctx=worker_fs_ctx,
+                )
+            return 1
+
+        await collect_directory(old_path, new_path, old_uri, new_uri)
+        copied_files = await bounded_map(
+            file_jobs,
+            copy_file,
+            concurrency=FILE_TASK_CONCURRENCY,
+        )
+        return copied_directories + sum(copied_files)
 
     async def _copy_dir_through_vikingfs(
         self,
@@ -1721,7 +1741,7 @@ class _OpsMixin:
         if not dir_jobs:
             return
 
-        worker_count = min(_ABSTRACT_WORKER_COUNT, len(dir_jobs))
+        worker_count = min(FILE_TASK_CONCURRENCY, len(dir_jobs))
 
         cursor = 0
         cursor_lock = asyncio.Lock()

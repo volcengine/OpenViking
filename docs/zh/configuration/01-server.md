@@ -476,10 +476,8 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | 同时消费的完整 AddResource 作业数，必须大于 `0`；修改后需重启服务 |
-| `file_operation_concurrency` | integer | `16` | 单个 AddResource 作业内文件级提交和 fallback 比较操作的最大并发数，必须大于 `0`；修改后需重启服务 |
-| `file_vectorization_concurrency` | integer | `8` | 当目录 AddResource 使用 `processing_mode="vectors_only"` 时，单个作业内并发读取、准备并入队的文件数，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
-`max_concurrent` 控制相互独立的 AddResource 作业并发，`file_operation_concurrency` 控制单个 AddResource 作业内文件提交和 fallback 比较操作的并发，`file_vectorization_concurrency` 控制单个 vectors-only 目录作业内的文件并发。
+`max_concurrent` 控制相互独立的 AddResource 作业并发。每个作业内的文件级工作使用内部固定的有界并发。
 
 ### `queue_workers.reindex`
 
@@ -544,14 +542,6 @@ SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](h
 | `poll_interval_ms` | integer | `30000` | 外部任务状态轮询间隔 |
 
 配置 `base_url` 后，OV 通过 `X-API-Key` 传递当前用户的 OV API Key；仅在配置 `gateway_token` 时发送 `X-Gateway-Token`。
-
-## Reindex 配置
-
-### `reindex`
-
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---:|---|
-| `file_vectorization_concurrency` | integer | `8` | 单个 resource/skill reindex 任务内并发读取、计算指纹和准备文件的数量，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
 ## HTTP 服务配置
 
