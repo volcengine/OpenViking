@@ -63,6 +63,7 @@ function MarkdownCode({ children }: ComponentPropsWithoutRef<'code'>) {
         <CommandConsoleUriText
           text={textOf(children)}
           mode="literal"
+          wholeUri
           onOpenUri={options.onOpenUri}
         />
       )}

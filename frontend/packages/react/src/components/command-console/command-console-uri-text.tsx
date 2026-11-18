@@ -13,6 +13,7 @@ export interface CommandConsoleUriTextProps {
   editor?: boolean;
   /** Every caller declares its content semantics; literal values retain filename punctuation. */
   mode: 'prose' | 'literal';
+  wholeUri?: boolean;
 }
 
 /** A validated native link; rejected targets remain plain text. */
@@ -50,20 +51,32 @@ export function CommandConsoleUriLink({
   );
 }
 
+// Quoted arguments and JSON string values supply an explicit URI boundary.
+const QUOTED_VIKING_URI_PATTERN = String.raw`"(?<double>viking:\/\/(?:\\.|[^"\\\r\n])+)"|'(?<single>viking:\/\/[^'\r\n]+)'|`;
+
 /** 把纯文本中的 URI 渲染成链接；宿主可通过回调接管打开。 */
 export function CommandConsoleUriText({
   text,
   onOpenUri,
   editor = false,
   mode,
+  wholeUri,
 }: CommandConsoleUriTextProps) {
+  if (wholeUri && /^viking:\/\//i.test(text)) {
+    return (
+      <CommandConsoleUriLink uri={text} onOpenUri={onOpenUri}>
+        {text}
+      </CommandConsoleUriLink>
+    );
+  }
   const parts: ReactNode[] = [];
   let cursor = 0;
   const pattern = new RegExp(
-    (mode === 'prose'
-      ? COMMAND_CONSOLE_PROSE_URI_PATTERN
-      : COMMAND_CONSOLE_URI_PATTERN
-    ).source,
+    QUOTED_VIKING_URI_PATTERN +
+      (mode === 'prose'
+        ? COMMAND_CONSOLE_PROSE_URI_PATTERN
+        : COMMAND_CONSOLE_URI_PATTERN
+      ).source,
     'gi',
   );
   const plain = (value: string, key: number) =>
@@ -76,11 +89,17 @@ export function CommandConsoleUriText({
     );
 
   for (const matched of text.matchAll(pattern)) {
-    const index = matched.index ?? 0;
-    const uri =
-      mode === 'prose'
+    const quoted = matched.groups?.double ?? matched.groups?.single;
+    const index = (matched.index ?? 0) + (quoted === undefined ? 0 : 1);
+    const display =
+      quoted ??
+      (mode === 'prose'
         ? matched[0].replace(/[.!?；;:：！？]+$/u, '')
-        : matched[0];
+        : matched[0]);
+    const uri =
+      matched.groups?.double === undefined
+        ? display
+        : display.replace(/\\(["\\])/g, '$1');
     if (index > cursor) parts.push(plain(text.slice(cursor, index), cursor));
     parts.push(
       <CommandConsoleUriLink
@@ -89,10 +108,10 @@ export function CommandConsoleUriText({
         onOpenUri={onOpenUri}
         editor={editor}
       >
-        {uri}
+        {display}
       </CommandConsoleUriLink>,
     );
-    cursor = index + uri.length;
+    cursor = index + display.length;
   }
 
   if (!parts.length) return <>{plain(text, 0)}</>;

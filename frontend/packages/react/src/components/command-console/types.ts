@@ -413,6 +413,8 @@ export interface CommandConsoleRecord {
  * Replaceable interface copy, following locale.
  */
 export interface CommandConsoleLabels {
+  /** Hint for entering a value that contains spaces. */
+  quoteArguments?: string;
   /** Cancelled task label. */
   cancelled?: string;
   /**

@@ -35,3 +35,50 @@ test('mkdir links to the complete path returned by the server', async () => {
     await host.dispose();
   }
 });
+
+test('quoted positional, flag and text arguments keep their spaces in native requests', async () => {
+  const source = 'viking://resources/source  folder';
+  const target = 'viking://resources/target folder';
+  const text = 'release  notes';
+  const requests = [];
+  const host = await mount(async (url, init) => {
+    requests.push(
+      init.body
+        ? JSON.parse(init.body)
+        : Object.fromEntries(new URL(url).searchParams),
+    );
+    return ok([]);
+  });
+  try {
+    await host.execute(`ov ls "${source}"`);
+    await host.execute(`ov cp "${source}" "${target}"`);
+    await host.execute(`ov grep --uri="${source}" "${text}"`);
+    await host.execute(`ov glob "${text}" -u "${source}"`);
+    await host.execute(`ov write "${source}/notes.md" --content "${text}"`);
+    await host.execute(`ov mkdir "${target}" --description "${text}"`);
+    await host.execute(
+      `ov compile create --compile-name alpha --from "${source}" --to "${target}" --skill "${source}/SKILL.md" --instruction "${text}"`,
+    );
+    assert.equal(requests.length, 7);
+    assert.equal(requests[0].uri, source);
+    assert.deepEqual(
+      [requests[1].from_uri, requests[1].to_uri],
+      [source, target],
+    );
+    assert.deepEqual([requests[2].uri, requests[2].pattern], [source, text]);
+    assert.deepEqual([requests[3].uri, requests[3].pattern], [source, text]);
+    assert.equal(requests[4].content, text);
+    assert.equal(requests[5].description, text);
+    assert.deepEqual(
+      [
+        requests[6].from,
+        requests[6].to,
+        requests[6].skill,
+        requests[6].instruction,
+      ],
+      [[source], target, source + '/SKILL.md', text],
+    );
+  } finally {
+    await host.dispose();
+  }
+});
