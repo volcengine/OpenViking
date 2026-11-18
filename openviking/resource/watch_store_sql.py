@@ -625,7 +625,7 @@ class SQLWatchStore(WatchStore):
         run_id: Optional[str] = None,
     ) -> Optional[WatchTask]:
         """Apply explicit fields. With *run_id*, only the occupying run may write."""
-        values = patch.normalized()
+        patch.normalized()
         c = self._tasks.c
         where = [self._scope, c.task_id == task_id, self._authority(authority)]
         where.append(c.deleted.is_(False) if run_id is None else c.current_run_id == run_id)

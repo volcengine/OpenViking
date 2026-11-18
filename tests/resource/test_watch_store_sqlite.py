@@ -186,3 +186,12 @@ def test_duplicate_detection_does_not_mask_other_constraint_errors():
     not_null = IntegrityError("", {}, sqlite3.IntegrityError("NOT NULL constraint failed: x.id"))
     assert SQLiteWatchStore._is_duplicate_error(duplicate)
     assert not SQLiteWatchStore._is_duplicate_error(not_null)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("values", [{"unknown": "value"}, {"path": ""}, {"watch_interval": 0}])
+async def test_invalid_patch_is_rejected_before_database_access(tmp_path, values):
+    store = make_store(tmp_path / "watch.db")
+    with pytest.raises(ValueError):
+        await store.patch_task("missing", WatchPatch(values))
+    assert not (tmp_path / "watch.db").exists()
