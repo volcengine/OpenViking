@@ -218,6 +218,20 @@ MCP tools to its output.
 
 OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction, session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
 
+### Optional recall compression (OpenCode v2)
+
+Set `plugin.opencode.recallCompress` to `"client"` and
+`plugin.opencode.recallCompressModel` to an explicit OpenCode
+`"provider/model"` to shorten retrieved memories before they go into the
+prompt. Set `"off"` to keep raw recall, the default. Existing server-compressed
+recall takes precedence.
+
+The plugin uses OpenCode's separate stateless generation API with the selected
+provider. That provider receives the query and retrieved fragments. Failed or
+timed out compression falls back to raw recall, with limits on wait, input,
+and accepted digest length. The API does not expose a provider-side output
+limit or report usage. The original chat transcript is unaffected.
+
 ## MCP Tools
 
 OpenCode sees the OpenViking MCP server as `openviking`, so tool names are namespaced with `openviking_`.

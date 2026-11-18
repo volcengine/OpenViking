@@ -3,8 +3,9 @@ import { isBypassed } from "./shared/session-model.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
-  async function buildRelevantMemories(input, parts) {
-    if (!isRecallEnabled(config)) return
+  let compressor = null
+  async function buildRelevantMemories(input, parts, { signal } = {}) {
+    if (signal?.aborted || !isRecallEnabled(config)) return
     const query = extractCurrentUserText(parts ?? [])
     if (!query) return
     if (query.length < config.minQueryLength) return
@@ -14,27 +15,36 @@ export function createMemoryRecall({ config, sessionManager }) {
       cwd: input.directory ?? input.cwd,
     })) return
 
-    const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
-    if (!health.ok) return
+    const compression = sessionID ? compressor?.forSession(sessionID, { signal }) : null
+    try {
+      const health = await fetchJSON(config, "/health", { signal: compression?.signal ?? signal }, { timeoutMs: 5000 })
+      if (!health.ok || compression?.signal.aborted) return
 
-    const block = await buildRecallBlock(
-      // 5s is this hook's own budget for a bare retrieval; when the request
-      // also spends a server fuse the helper hands down a longer deadline, and
-      // overriding it here would abort a request the server was still inside.
-      (path, init = {}, options = {}) =>
-        fetchJSON(config, path, init, { ...options, timeoutMs: options.timeoutMs ?? 5000 }),
-      config,
-      query,
-      {
-        actorPeerId: effectivePeerId(config),
-        legacyPeerId: config.effectivePeer?.legacyPeerId ?? "",
-        // The mapped OV session is what turns on server-side query expansion
-        // and the cross-turn dedup ledger.
-        sessionId: sessionID ? sessionManager.getMappedSessionId(sessionID) : "",
-        log: (stage, data) => log("DEBUG", "recall", stage, data),
-      },
-    )
-    return block || undefined
+      const block = await buildRecallBlock(
+        // 5s is this hook's own budget for a bare retrieval; when the request
+        // also spends a server fuse the helper hands down a longer deadline, and
+        // overriding it here would abort a request the server was still inside.
+        (path, init = {}, options = {}) =>
+          compression?.signal.aborted ? { ok: false } :
+            fetchJSON(config, path, { ...init, signal: compression?.signal ?? signal ?? init.signal }, { ...options, timeoutMs: options.timeoutMs ?? 5000 }),
+        config,
+        query,
+        {
+          actorPeerId: effectivePeerId(config),
+          legacyPeerId: config.effectivePeer?.legacyPeerId ?? "",
+          // The mapped OV session is what turns on server-side query expansion
+          // and the cross-turn dedup ledger.
+          sessionId: sessionID ? sessionManager.getMappedSessionId(sessionID) : "",
+          runCompressor: compression?.run,
+          localCompressorAvailable: Boolean(compression),
+          digestCachePath: compression ? compressor.cachePath(sessionID) : undefined,
+          log: (stage, data) => log("DEBUG", "recall", stage, data),
+        },
+      )
+      if (!compression?.signal.aborted) return block || undefined
+    } finally {
+      compression?.close()
+    }
   }
 
   async function injectRelevantMemories(input, output) {
@@ -47,7 +57,7 @@ export function createMemoryRecall({ config, sessionManager }) {
     }
   }
 
-  return { buildRelevantMemories, injectRelevantMemories }
+  return { buildRelevantMemories, injectRelevantMemories, setCompressor: (value) => { compressor = value } }
 }
 
 export function extractCurrentUserText(parts) {
