@@ -314,6 +314,8 @@ class RequestContext:
     # Trusted background workers may maintain derived content without replaying
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
+    # Set only by the server's Session receipt owner, never by auth headers.
+    session_receipt_scope: str | None = field(default=None, repr=False, compare=False)
     data_access: DataAccessScope | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:

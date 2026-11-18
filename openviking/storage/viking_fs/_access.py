@@ -684,6 +684,14 @@ class _AccessMixin:
         At other levels, uses the shared storage internal-name blacklist.
         """
         parts = [p for p in parent_path.strip("/").split("/") if p]
+        if (
+            len(parts) == 6
+            and parts[0] == "local"
+            and parts[2] == "user"
+            and parts[4] == "sessions"
+            and name == ".append_receipts"
+        ):
+            return False
         if len(parts) == 2 and parts[0] == "local":
             return name in VikingURI.LISTABLE_SCOPES
         return not is_storage_internal_name(name)
@@ -1027,6 +1035,10 @@ class _AccessMixin:
 
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
+        from openviking.session.append_receipts import receipt_access_allowed
+
+        if not receipt_access_allowed(uri, ctx):
+            return False
         parts = self._safe_uri_parts(uri)
         if is_system_uri(uri):
             return self._system_permission_allows(uri, ctx, AclAction.READ)

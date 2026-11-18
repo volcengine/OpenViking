@@ -1776,3 +1776,56 @@ results = client.search(query=query, session_id=session_id)
 - [Retrieval](06-retrieval.md) - Search with session
 - [Resources](02-resources.md) - Resource management
 - [Background Tasks](17-tasks.md) - track commit tasks
+
+## Replay-protected append (opt-in)
+
+`POST /api/v1/sessions/{session_id}/messages/append` accepts the same `messages`
+array as batch append and a required, nonblank `idempotency_key` (at most 128
+characters). Repeating the key with the same message body returns the original
+`added`, `message_count` and `pending_tokens`, even after later writes or commits.
+A different body with the same key returns `409`. Telemetry options do not change
+the message fingerprint. The account, authenticated user and Session scope the key.
+Do not sum replayed `added` values as new writes.
+
+```python
+result = await client.append_messages(
+    "conversation-1",
+    [{"role": "user", "content": "A synthetic question"}],
+    idempotency_key="client-operation-1",
+)
+```
+
+Python sync/async Session handles expose the same method. Reuse both the key and
+body after an uncertain response. Unsupported servers return `404`; the SDK never
+falls back to unprotected batch append. `/health` advertises
+`capabilities.session_append_idempotency = 1`. Existing append endpoints keep
+their legacy behavior and recover pending intents before their next write.
+
+Receipts last for the lifetime of the Session, including commits and compaction.
+Deleting/recreating a Session starts a new lifetime. Each Session supports at most
+10,000 unique operations; further new keys return `RESOURCE_EXHAUSTED`, while
+replay remains available. A pending journal stores the protected live prefix and
+append bytes, bounded to 16 MiB before publishing. This trades storage/write
+amplification for repair of truncated root writes; it is not a throughput claim.
+Started appends settle under the existing Session lock even if the caller cancels.
+This is replay protection for managed append, not an exactly-once guarantee for
+external privacy, telemetry or memory-extraction side effects.
+
+`.append_receipts` is server-managed and hidden from generic file operations.
+Recursive copies containing receipts are refused. OVPack export/backup currently
+refuses receipt-enabled Sessions rather than silently omitting their receipts;
+use a quiesced backend-level backup that preserves the journal and Session files
+as a unit. A receipt-unaware restore fails closed. Do not mix old and new server
+versions writing an opted-in Session. Out-of-band edits, key rotation during an
+uncertain Bot sync, and manual journal removal require operator reconciliation.
+Legacy Sessions incur a pending-journal existence check at the Session write lock;
+no receipts are created until this endpoint is used.
+
+VikingBot enables persist-before-send sync with
+`agents.session_append_idempotency: true` (default `false`). Its existing Session
+owner persists a frozen batch before RPC and saves the acknowledged local index
+afterward. Lost responses/restarts reuse the exact batch/key; a pending batch is
+resolved even if the option is later disabled. It binds the batch to the endpoint
+and credential context without persisting raw credentials. Local history reset,
+rotation or identity changes are refused while a batch is uncertain. The existing
+Session persistence callback and serialized Bot Session execution are required.

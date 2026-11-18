@@ -45,6 +45,7 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_work_index import bind_task_context
 from openviking.session import working_memory as wm
+from openviking.session.append_receipts import AppendReceiptStore, AppendResult, fingerprint
 from openviking.session.archive_store import (
     ArchiveStore,
     _ArchiveMessagesCorruptError,
@@ -333,6 +334,9 @@ class SessionMeta:
     """Session metadata persisted in .meta.json."""
 
     session_id: str = ""
+    append_receipt_version: int = 0
+    append_receipt_count: int = 0
+    append_receipt_id: str = ""
     created_at: str = ""
     updated_at: str = ""
     created_by_account_id: str = ""
@@ -421,6 +425,10 @@ class SessionMeta:
             data["total_message_count"] = self.total_message_count
         if self.event_search_tags is not None:
             data["event_search_tags"] = list(self.event_search_tags)
+        if self.append_receipt_version:
+            data["append_receipt_version"] = self.append_receipt_version
+            data["append_receipt_count"] = self.append_receipt_count
+            data["append_receipt_id"] = self.append_receipt_id
         return data
 
     @classmethod
@@ -438,6 +446,9 @@ class SessionMeta:
 
         return cls(
             session_id=data.get("session_id", ""),
+            append_receipt_version=data.get("append_receipt_version", 0),
+            append_receipt_count=data.get("append_receipt_count", 0),
+            append_receipt_id=data.get("append_receipt_id", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             created_by_account_id=data.get("created_by_account_id", "")
@@ -573,7 +584,13 @@ class Session:
     async def load(self) -> None:
         """Load session data once for readers of this instance."""
         if not self._loaded:
-            await self._reload()
+            try:
+                await self._reload()
+            except ValueError:
+                # A journal can repair a torn root JSONL before readers parse
+                # it. Unrelated corrupt state still fails the same strict read.
+                async with self._state_lock():
+                    await self._reload()
             await self._rebuild_pending_tokens()
             self._loaded = True
 
@@ -605,6 +622,17 @@ class Session:
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            if self._meta.append_receipt_version:
+                if (
+                    type(self._meta.append_receipt_version) is not int
+                    or self._meta.append_receipt_version != 1
+                ):
+                    from openviking_cli.exceptions import ConflictError
+
+                    raise ConflictError("Unsupported append receipt version")
+                await AppendReceiptStore(self._viking_fs, self.ctx, self._session_uri).verify_state(
+                    self._meta.append_receipt_id
+                )
             self._compression.compression_index = max(0, int(self._meta.commit_count))
             self._stats.compression_count = self._compression.compression_index
         except Exception as exc:
@@ -824,6 +852,9 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
+            from openviking.service.task_tracker_concurrency import run_to_completion
+
+            await run_to_completion(lambda: self._recover_pending_append_locked(session_lease))
             if not filenames:
                 # Phase 1 writes different child files, each with its own lock.
                 yield session_lease
@@ -965,6 +996,150 @@ class Session:
             last_message_at=self._meta.last_message_at,
             auto_commit_policy=copy.deepcopy(self._meta.auto_commit_policy),
         )
+
+    @asynccontextmanager
+    async def _append_journal_lock(self, owner_lease, *, root_files=False):
+        """Borrow the existing Session mutex; only the journal uses a tree lease."""
+        path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        requests = [{"path": path + "/.append_receipts", "kind": "tree"}]
+        if root_files:
+            requests.extend(
+                {"path": path + "/" + name, "kind": "exact"}
+                for name in ("messages.jsonl", ".meta.json")
+            )
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_batch(
+            requests,
+            timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
+            owner_lease_ref=owner_lease,
+        )
+        try:
+            yield lease
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+
+    async def _recover_pending_append_locked(self, session_lease):
+        store = AppendReceiptStore(self._viking_fs, self.ctx, self._session_uri)
+        if await store.read(store.pending_uri) is None:
+            return
+        async with self._append_journal_lock(session_lease, root_files=True) as lease:
+            store.lease_ref = lease
+            await store.recover(lambda intent: self._publish_pending_append(intent, lease))
+
+    async def _publish_pending_append(self, intent, lease):
+        from openviking_cli.exceptions import ConflictError
+
+        uri = f"{self._session_uri}/messages.jsonl"
+        try:
+            raw = (await self._viking_fs.read_file(uri, ctx=self.ctx)).encode("utf-8")
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
+            raw = b""
+        prefix = intent["prefix"].encode("utf-8")
+        expected = prefix + intent["append"].encode("utf-8")
+        if (
+            len(prefix) != intent["prefix_bytes"]
+            or hashlib.sha256(prefix).hexdigest() != intent["prefix_hash"]
+            or not expected.startswith(raw)
+        ):
+            raise ConflictError("Session changed outside its pending append; recovery is required")
+        if raw != expected:
+            await self._viking_fs.write_file(uri, expected, ctx=self.ctx, lease_ref=lease)
+        self._messages = self._parse_live_messages(expected.decode("utf-8"))
+        self._meta = SessionMeta.from_dict(intent["meta_after"])
+        await self._save_meta(lease_ref=lease)
+
+    async def add_messages_idempotent_async(
+        self, messages_spec, idempotency_key, *, request_hash=None
+    ) -> AppendResult:
+        """Persist one scoped append intent and replay its original completed result."""
+        from openviking.service.task_tracker_concurrency import run_to_completion
+        from openviking.session.append_receipts import MAX_RECEIPTS
+        from openviking_cli.exceptions import ConflictError, ResourceExhaustedError
+
+        if not self._viking_fs:
+            raise RuntimeError("Idempotent appends require durable session storage")
+        store = AppendReceiptStore(self._viking_fs, self.ctx, self._session_uri)
+        digest = store.key_digest(idempotency_key)
+        request_hash = request_hash or fingerprint(messages_spec)
+
+        snapshot = None
+        snapshot_error = None
+
+        async def append():
+            nonlocal snapshot, snapshot_error
+            async with self._state_lock("messages.jsonl", ".meta.json") as lease:
+                async with self._append_journal_lock(lease) as journal_lease:
+                    store.lease_ref = journal_lease
+                    raw = await self._reload() or ""
+                    previous = await store.completed(digest, request_hash)
+                    if previous is not None:
+                        return previous
+                    if type(
+                        self._meta.append_receipt_version
+                    ) is not int or self._meta.append_receipt_version not in (0, 1):
+                        raise ConflictError("Unsupported append receipt version")
+                    if (
+                        type(self._meta.append_receipt_count) is not int
+                        or self._meta.append_receipt_count < 0
+                    ):
+                        raise ConflictError("Invalid append receipt count")
+                    if self._meta.append_receipt_count >= MAX_RECEIPTS:
+                        raise ResourceExhaustedError("Session append receipt capacity reached")
+                    prepared = messages_spec
+                    if self._privacy_config_service is not None:
+                        prepared = await extract_and_store_session_privacy(
+                            self.session_id,
+                            messages_spec,
+                            self.ctx,
+                            self._privacy_config_service,
+                            self._privacy_sanitizer,
+                        )
+                    messages = []
+                    for group in self._build_message_groups(prepared):
+                        await self._tool_outputs.externalize_group(
+                            group, self._tool_output_externalization_config
+                        )
+                        messages.extend(group)
+                    await self._apply_appended_messages_to_state(messages)
+                    self._meta.append_receipt_id = await store.ensure_state()
+                    self._meta.append_receipt_version = 1
+                    self._meta.append_receipt_count += 1
+                    result = {
+                        "session_id": self.session_id,
+                        "added": len(messages),
+                        "message_count": len(self._messages),
+                        "pending_tokens": int(self._meta.pending_tokens or 0),
+                    }
+                    intent = {
+                        "key_digest": digest,
+                        "request_hash": request_hash,
+                        "prefix_bytes": len(raw.encode("utf-8")),
+                        "prefix_hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                        "prefix": raw,
+                        "append": "".join(m.to_jsonl() + "\n" for m in messages),
+                        "message_ids": [m.id for m in messages],
+                        "meta_after": self._meta.to_dict(),
+                        "result": result,
+                    }
+                    await store.begin(intent)
+                    await self._publish_pending_append(intent, lease)
+                    await store.finish(intent)
+                    self._loaded = True
+                    if self._expiry_reporter is not None:
+                        try:
+                            snapshot = self._build_expiry_snapshot_locked()
+                        except Exception as exc:
+                            snapshot_error = exc
+                    return AppendResult(result, False)
+
+        outcome = await run_to_completion(append)
+        if not outcome.replayed and self._expiry_reporter is not None:
+            if snapshot is not None:
+                await self._expiry_reporter.report_after_append(snapshot)
+            elif snapshot_error is not None:
+                self._expiry_reporter.record_report_failure("snapshot_build_failed", snapshot_error)
+        return outcome
 
     async def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""

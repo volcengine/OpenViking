@@ -1766,3 +1766,30 @@ results = client.search(query=query, session_id=session_id)
 - [检索](06-retrieval.md) - 结合会话进行搜索
 - [资源管理](02-resources.md) - 资源管理
 - [后台任务](17-tasks.md) - 跟踪 commit 任务
+
+## 可重放保护的追加（显式启用）
+
+新增 `POST /api/v1/sessions/{session_id}/messages/append`，接受批量接口的
+`messages` 和必填 `idempotency_key`（非空白，最多 128 个字符）。同一账户、
+认证用户和 Session 内，相同 key 与消息体返回原收据；不同消息体返回 `409`。
+Python 同步、异步客户端及 Session handle 提供 `append_messages`。旧服务器
+返回 `404`，不会自动降级为普通追加。`/health` 的
+`capabilities.session_append_idempotency = 1` 表示支持。
+
+收据保留到 Session 删除，commit/压缩不清除；每个 Session 最多 10,000 个新
+key，达到上限仍可重放旧 key。待完成日志保存受保护的完整活动前缀和追加内容，
+最多 16 MiB；通过额外存储和写入修复截断，未承诺性能收益。取消后的已开始操作
+仍在现有 Session 锁内结算。外部隐私提取、遥测和记忆提取并不因此具有严格一次
+执行保证。普通写接口保持原行为，并在写锁内先恢复未完成日志。
+
+服务端管理的 `.append_receipts` 不对普通文件操作开放；包含收据的递归复制会
+拒绝。当前 OVPack 导出/备份明确拒绝包含该能力的 Session，避免悄悄遗漏收据；
+请在静默窗口通过底层存储整体备份 Session 及日志。缺收据的恢复会明确失败。
+不可让旧、新版本服务同时写已启用的 Session；外部改文件或移除日志需人工协调。
+旧 Session 在写锁内会增加一次待完成日志存在性检查，使用新接口前不生成收据。
+
+VikingBot 配置 `agents.session_append_idempotency: true` 启用先持久化、再发送
+的同步，默认关闭。网络超时、取消、重启后重用原批次和 key，确认后才持久化
+对应本地游标。关闭开关仍须处理已存在的待完成批次；身份或历史变化、重置和
+旋转会明确拒绝。批次仅保存连接和凭据上下文的摘要，不保存原凭据；未确认期间
+换 key 需先协调原任务。调用依赖已有串行 Session owner 和持久化回调。

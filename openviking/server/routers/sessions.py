@@ -172,6 +172,19 @@ class BatchAddMessageRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+class AppendMessagesRequest(BatchAddMessageRequest):
+    """An explicit append path that old servers cannot silently treat as legacy."""
+
+    idempotency_key: str = Field(..., min_length=1, max_length=128, strict=True)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_operation_key(cls, value):
+        if not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
+
+
 class CreateSessionRequest(BaseModel):
     """Request model for creating a session."""
 
@@ -891,5 +904,53 @@ async def batch_add_messages(
         operation="session.batch_add_messages",
         telemetry=request.telemetry,
         fn=_batch_add,
+    )
+    return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
+
+
+@router.post("/{session_id}/messages/append")
+async def append_messages(
+    request: AppendMessagesRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    """Append one durable batch or return the original result for the same key/body."""
+    from openviking.session.append_receipts import fingerprint
+
+    service = get_service()
+
+    async def _append():
+        specs = [
+            {
+                "role": item.role,
+                "parts": _resolve_message_parts(item, _ctx),
+                "peer_id": item.peer_id,
+                "created_at": item.created_at,
+                "turn_id": item.turn_id,
+                "message_kind": item.message_kind,
+                "source_message_ids": item.source_message_ids,
+            }
+            for item in request.messages
+        ]
+        request_hash = fingerprint(
+            [item.model_dump(exclude={"telemetry"}) for item in request.messages]
+        )
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
+        outcome = await session.add_messages_idempotent_async(
+            specs, request.idempotency_key, request_hash=request_hash
+        )
+        if not outcome.replayed:
+            await service.sessions.maybe_schedule_auto_commit(
+                session_id,
+                _ctx,
+                reason_hint="message_write",
+                session=session,
+            )
+        return outcome.result
+
+    execution = await run_operation(
+        operation="session.append_messages",
+        telemetry=request.telemetry,
+        fn=_append,
     )
     return Response(status="ok", result=execution.result, telemetry=execution.telemetry)

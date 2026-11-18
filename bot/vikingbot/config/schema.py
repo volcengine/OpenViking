@@ -523,6 +523,10 @@ class AgentsConfig(BaseModel):
         description="Maximum number of background subagents running at once.",
     )
     session_context_enabled: bool = True
+    session_append_idempotency: bool = Field(
+        default=False,
+        description="Persist sync batches before sending; requires a receipt-aware OV server.",
+    )
     context_window_tokens: int = Field(
         default=128_000,
         gt=0,

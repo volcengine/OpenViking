@@ -86,6 +86,7 @@ class OpenVikingCompactHook(Hook):
         keep_recent_turn_count: int,
         min_raw_tail_steps: int,
         commit_message_threshold: int | None,
+        persist_session: Any = None,
     ) -> dict[str, Any]:
         state = get_openviking_state(session)
         session_id = get_openviking_session_id(
@@ -122,7 +123,19 @@ class OpenVikingCompactHook(Hook):
         )
         session_user_id = client.session_owner_user_id()
 
-        if messages_to_sync:
+        pending_present = "pending_append" in state
+        use_receipts = bool(
+            getattr(agents_config, "session_append_idempotency", False) or pending_present
+        )
+        if use_receipts and (messages_to_sync or pending_present):
+            from vikingbot.openviking_mount.append_sync import sync_pending_append
+
+            admin_append_result = await sync_pending_append(
+                session, client, session_id, session_user_id, persist_session
+            )
+            admin_session_state = await client.get_session(session_id, user_id=session_user_id)
+            pending_tokens = int(admin_session_state.get("pending_tokens", 0) or 0)
+        elif messages_to_sync:
             admin_append_result = await client.append_messages(
                 session_id=session_id,
                 messages=messages_to_sync,
@@ -139,6 +152,9 @@ class OpenVikingCompactHook(Hook):
         should_commit = (
             force_commit or pending_tokens >= token_threshold or reached_message_threshold
         )
+        # Never clear local turns which arrived after the captured sync batch.
+        if use_receipts and get_unsynced_messages(session):
+            should_commit = False
         if should_commit:
             admin_commit_result = await client.commit_session(
                 session_id=session_id,
@@ -255,6 +271,7 @@ class OpenVikingCompactHook(Hook):
                     keep_recent_turn_count=keep_recent_turn_count,
                     min_raw_tail_steps=min_raw_tail_steps,
                     commit_message_threshold=commit_message_threshold,
+                    persist_session=kwargs.get("persist_session"),
                 )
 
             admin_result = await client.commit(
