@@ -84,7 +84,7 @@ export function consoleCommands(
   const guides: Partial<Record<CommandSpec['name'], ConsoleCommandGuide>> =
     text.commandGuides;
   const descriptions: Record<string, string> = text.parameters;
-  const catalog = new Map(
+  const catalog = new Map<string, CommandConsoleCommandDefinition>(
     COMMAND_SPECS.filter(
       (spec) => !spec.admin || options?.allowAdminCommands,
     ).map((spec) => {
@@ -102,6 +102,7 @@ export function consoleCommands(
         {
           name: spec.name,
           inputText: `ov ${spec.name}`,
+          hiddenFromSuggestions: spec.name === 'compile create',
           description: guide?.description ?? text.commands[spec.name],
           summary: text.commands[spec.name],
           examples: guide?.examples ?? parameterExamples[spec.name],
@@ -141,6 +142,16 @@ export function consoleCommands(
       ] as const;
     }),
   );
+  const compile = catalog.get('compile');
+  const create = catalog.get('compile create');
+  if (compile && create) {
+    compile.parameterDetails = {
+      usage: create.usage,
+      options: create.options,
+      extra: text.compileArgsHelp,
+    };
+  }
+
   return Object.entries(COMMAND_GROUPS).flatMap(([group, names]) =>
     names.flatMap((name) => {
       const command = catalog.get(name);
@@ -163,7 +174,9 @@ export function createCommandHelp(
   locale: Locale,
   options?: ConsoleCommandOptions,
 ): CommandConsoleRecordContent {
-  const commands = consoleCommands(locale, options);
+  const commands = consoleCommands(locale, options).filter(
+    (command) => !command.hiddenFromSuggestions,
+  );
   return {
     variant: 'command-help',
     sections: consoleCommandGroups(locale)
