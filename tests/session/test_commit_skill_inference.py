@@ -116,6 +116,34 @@ async def test_session_skill_context_provider_prefetch_lists_existing_skills():
 
 
 @pytest.mark.asyncio
+async def test_session_skill_context_provider_read_resolves_home_alias():
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    viking_fs = MagicMock()
+    viking_fs.read_file = AsyncMock(
+        return_value="---\nname: code-review\ndescription: Review code carefully\n---\n\n- 先读文件\n"
+    )
+    provider = SessionSkillContextProvider(
+        messages=[],
+        latest_archive_overview="",
+        ctx=ctx,
+        viking_fs=viking_fs,
+    )
+
+    read_result = await provider.execute_tool(
+        SimpleNamespace(
+            name="read",
+            arguments={"uri": "viking://~/skills/code-review/SKILL.md"},
+        )
+    )
+
+    canonical_uri = "viking://user/alice/skills/code-review/SKILL.md"
+    viking_fs.read_file.assert_awaited_once_with(canonical_uri, ctx=ctx)
+    assert read_result["name"] == "code-review"
+    assert "先读文件" in read_result["content"]
+    assert list(provider.read_file_contents) == [canonical_uri]
+
+
+@pytest.mark.asyncio
 async def test_agent_trajectory_context_provider_without_session_skills_prefetches_history_only():
     provider = AgentTrajectoryContextProvider(
         messages=[
