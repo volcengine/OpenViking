@@ -13,7 +13,7 @@ from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, Effec
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _DEFAULT_GREP_FILE_CONCURRENCY, VikingFS
 from openviking.storage.viking_fs import _grep as grep_module
-from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.grep_config import GrepConfig
 
@@ -214,6 +214,36 @@ async def test_grep_fallback_finds_match_after_first_directory_page(monkeypatch)
         }
     ]
     assert result["files_scanned"] == 1001
+
+
+@pytest.mark.asyncio
+async def test_grep_skips_file_deleted_between_listing_and_read(monkeypatch):
+    viking_fs = VikingFS(agfs=_DummyAgfs())
+    monkeypatch.setattr(
+        viking_fs,
+        "read",
+        AsyncMock(side_effect=NotFoundError("viking://resources/gone.md", "file")),
+    )
+
+    matches, scanned = await viking_fs._grep_single_file(
+        "viking://resources/gone.md", re.compile("needle")
+    )
+
+    assert matches == []
+    assert scanned == 1
+
+
+@pytest.mark.asyncio
+async def test_grep_read_failure_is_not_reported_as_no_match(monkeypatch):
+    viking_fs = VikingFS(agfs=_DummyAgfs())
+    monkeypatch.setattr(
+        viking_fs,
+        "read",
+        AsyncMock(side_effect=OSError("storage unavailable")),
+    )
+
+    with pytest.raises(OSError, match="storage unavailable"):
+        await viking_fs._grep_single_file("viking://resources/report.md", re.compile("needle"))
 
 
 @pytest.mark.asyncio

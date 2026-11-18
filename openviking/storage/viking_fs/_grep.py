@@ -14,7 +14,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.expr import FilterExpr, PathScope, RawDSL
 from openviking.storage.scope_filter import build_scope_filter, merge_filters
 from openviking.storage.viking_fs._base import logger
-from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.utils.config.grep_config import GrepEngine
 
 _GREP_LS_PAGE_SIZE = 1000
@@ -944,9 +944,16 @@ class _GrepMixin:
                     if node_limit and len(matches) >= node_limit:
                         break
             return matches, 1
-        except Exception as e:
-            logger.debug(f"Failed to grep {entry_uri}: {e}")
+        except (NotFoundError, PermissionDeniedError) as e:
+            # The file can disappear or lose visibility between listing and
+            # reading; skipping it is the correct result.
+            logger.debug(f"Skipping unreadable file during grep {entry_uri}: {e}")
             return [], 1
+        except Exception:
+            # A failed read is not a file without matches. Swallowing it would
+            # report a partial scan as a complete one, so surface the fault.
+            logger.warning(f"Failed to grep {entry_uri}", exc_info=True)
+            raise
 
     @staticmethod
     def _build_grep_match(
