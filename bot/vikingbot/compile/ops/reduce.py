@@ -3,6 +3,8 @@
 from openviking.core.namespace import relative_uri_path
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, bounded_jobs
+from vikingbot.compile.renderer import validate_relative_file_path
+from vikingbot.compile.results import Document
 
 
 async def run(runtime, node, groups):
@@ -67,6 +69,31 @@ async def resolve_files(runtime, documents):
         path, items = item
         refs = sorted({ref for doc in items for ref in doc.source_refs})
         try:
+            # Documents here were selected only from naturally completed workers.
+            # Byte equality proves there is nothing for a collision worker to merge;
+            # differing facts, citations or line endings still take the normal path.
+            try:
+                valid_path = validate_relative_file_path(path).lower().endswith(".md")
+            except ValueError:
+                valid_path = False
+            if valid_path:
+                first = await runtime.files.sandbox.read_file_bytes(items[0].workspace_path)
+                try:
+                    nonempty = bool(first.decode("utf-8").strip())
+                except UnicodeDecodeError:
+                    nonempty = False
+                if nonempty:
+                    identical = True
+                    for document in items[1:]:
+                        if (
+                            await runtime.files.sandbox.read_file_bytes(document.workspace_path)
+                            != first
+                        ):
+                            identical = False
+                            break
+                    if identical:
+                        runtime.metrics["identical_collision_reuses"] += 1
+                        return [Document(path, items[0].workspace_path, refs)]
             for _ in range(MAX_JOB_ATTEMPTS):
                 outputs = await runtime.generate(
                     f"reduce_merge-{digest(path)[:24]}",
