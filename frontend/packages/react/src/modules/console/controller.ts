@@ -14,8 +14,9 @@ import type { ConsoleCommandOptions, ConsoleState } from './types.js';
 import { executeCommand } from './commands.js';
 import { clearRequested } from './command-parser.js';
 import {
+  appendCommandHistory,
+  clearCommandHistory,
   readCommandHistory,
-  writeCommandHistory,
 } from './command-history-storage.js';
 
 export function createConsoleController(
@@ -48,7 +49,7 @@ export function createConsoleController(
   const cancel = () => cancelRunning?.(true);
   const clear = () => {
     cancel();
-    if (commandHistoryKey) writeCommandHistory(commandHistoryKey, []);
+    if (commandHistoryKey) clearCommandHistory(commandHistoryKey);
     update({
       records: [],
       history: [],
@@ -75,8 +76,8 @@ export function createConsoleController(
     running = controller;
     const id = `command-${++sequence}`;
     const createdAtMs = Date.now();
-    const history = [...state.history, { id, command, createdAtMs }];
-    if (commandHistoryKey) writeCommandHistory(commandHistoryKey, history);
+    const entry = { id, command, createdAtMs };
+    if (commandHistoryKey) appendCommandHistory(commandHistoryKey, entry);
     const event = analytics?.begin(id);
     const monitoring = observeCommand(client, signal);
     const current = () => active && running === controller;
@@ -106,11 +107,8 @@ export function createConsoleController(
       isExecuting: true,
       error: undefined,
       failedCommand: undefined,
-      history,
-      records: [
-        ...state.records,
-        { id, command, status: 'pending', createdAtMs },
-      ],
+      history: [...state.history, entry],
+      records: [...state.records, { ...entry, status: 'pending' }],
     });
     signal.addEventListener('abort', onAbort, { once: true });
     try {

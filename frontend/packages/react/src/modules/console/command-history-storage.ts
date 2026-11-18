@@ -132,13 +132,24 @@ export function readCommandHistory(key: string): ConsoleHistoryEntry[] {
   }
 }
 
-export function writeCommandHistory(
-  key: string,
-  history: readonly ConsoleHistoryEntry[],
-) {
+export function appendCommandHistory(key: string, entry: StoredEntry) {
+  if (!isStoredEntry(entry)) return;
   try {
-    saveEntries(window.sessionStorage, prefix + key, toStoredEntries(history));
+    const storage = window.sessionStorage;
+    const storageKey = prefix + key;
+    // Multiple Consoles with the same key share the persisted list in this tab.
+    const entries = parseStoredEntries(storage.getItem(storageKey));
+    entries.push({ command: entry.command, createdAtMs: entry.createdAtMs });
+    saveEntries(storage, storageKey, entries.slice(-limit));
   } catch {
     // Terminal history remains available in memory when storage is unavailable.
+  }
+}
+
+export function clearCommandHistory(key: string) {
+  try {
+    window.sessionStorage.removeItem(prefix + key);
+  } catch {
+    // Clearing the current Console also works without session storage.
   }
 }
