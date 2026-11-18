@@ -237,6 +237,8 @@ import '@openviking/react/components/command-console/style.css';
 | quickStart  | 参数帮助中可代替示例的有序步骤，可附带文档链接。点击步骤里的命令会填入输入区                     | `{ documentation?: { label: string; href: string }; steps: readonly { description: string; command?: string }[] }` | -                |
 | skeleton    | 命令执行中显示的加载骨架，分别对应检索、资源预览、资源树、状态、写入结果和通用形态               | `'search' \| 'resource' \| 'tree' \| 'status' \| 'write' \| 'generic'`                                             | `'generic'`      |
 
+可选回调 `resolveUriArguments(text)` 接收命令前缀之后的文本。按文本顺序返回范围互不重叠的 `{ start, end, uri }`（UTF-16 偏移，左闭右开），输入和命令历史中的链接即可保留完整参数值。其他文本按 URI 逐项生成链接。
+
 ### CommandConsoleCommandParam
 
 | 参数         | 说明                                                              | 类型      | 默认值  |

@@ -2,16 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mount, record, click } from './helpers/command-console-dom.mjs';
 
-test('quoted input, JSON and structured results link the complete URI', async () => {
+test('JSON URI fields and structured results link the complete URI', async () => {
   const uri = 'viking://resources/dir with whitespace';
   const opened = [];
   const view = await mount({
-    value: `ov read "${uri}"`,
     records: [
-      {
-        ...record({ variant: 'text', text: JSON.stringify({ uri }) }),
-        command: `ov read "${uri}"`,
-      },
+      record({ variant: 'text', text: JSON.stringify({ uri }) }),
       {
         ...record({
           variant: 'status',
@@ -45,16 +41,14 @@ test('quoted input, JSON and structured results link the complete URI', async ()
   });
   try {
     const links = [
-      ...view.container.querySelectorAll(
-        '.ov-command-console__result-body a, .ov-command-console__input-mirror a, .ov-command-console__bubble-text a',
-      ),
+      ...view.container.querySelectorAll('.ov-command-console__result-body a'),
     ];
-    assert.equal(links.length, 8);
+    assert.equal(links.length, 6);
     for (const link of links) {
       assert.equal(link.getAttribute('href'), uri);
       await click(link);
     }
-    assert.deepEqual(opened, Array(8).fill(uri));
+    assert.deepEqual(opened, Array(6).fill(uri));
   } finally {
     await view.dispose();
   }

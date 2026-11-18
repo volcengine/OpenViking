@@ -1,7 +1,43 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { click } from './helpers/command-console-dom.mjs';
+import { click, type } from './helpers/command-console-dom.mjs';
 import { mount, ok } from './helpers/console-dom.mjs';
+
+test('write links the quoted destination and only the URI within quoted content', async () => {
+  const destination = 'viking://resources/output folder/out.md';
+  const uri = 'viking://resources/a.md';
+  const content = `${uri} -> /tmp/a.md`;
+  const command = `ov write "${destination}" --content "${content}"`;
+  const opened = [];
+  const host = await mount(
+    async (_url, init) => {
+      const body = JSON.parse(init.body);
+      assert.equal(body.uri, destination);
+      assert.equal(body.content, content);
+      return ok({ uri: destination });
+    },
+    { onOpenUri: (target) => opened.push(target) },
+  );
+  try {
+    async function checkLinks(selector) {
+      const region = host.container.querySelector(selector);
+      const links = [...region.querySelectorAll('a')];
+      assert.equal(region.textContent, command);
+      assert.deepEqual(
+        links.map((link) => link.getAttribute('href')),
+        [destination, uri],
+      );
+      for (const link of links) await click(link);
+    }
+    await type(host.input, command);
+    await checkLinks('.ov-command-console__input-mirror');
+    await host.execute(command);
+    await checkLinks('.ov-command-console__bubble-text');
+    assert.deepEqual(opened, [destination, uri, destination, uri]);
+  } finally {
+    await host.dispose();
+  }
+});
 
 test('mkdir links to the complete path returned by the server', async () => {
   const uri = 'viking://resources/中文 目录/a(1).';

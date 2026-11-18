@@ -237,6 +237,8 @@ The union of execution results, distinguished by `variant`.
 | quickStart  | Ordered steps and optional documentation link shown in the parameter help in place of the examples. A step's command fills the input when clicked            | `{ documentation?: { label: string; href: string }; steps: readonly { description: string; command?: string }[] }` | -                     |
 | skeleton    | Loading skeleton shown while the command runs, matching search, resource preview, resource tree, status, write result or a generic shape                     | `'search' \| 'resource' \| 'tree' \| 'status' \| 'write' \| 'generic'`                                             | `'generic'`           |
 
+The optional `resolveUriArguments(text)` callback receives the text after the command prefix. Return `{ start, end, uri }` entries in text order with non-overlapping ranges (UTF-16 offsets, end exclusive) to preserve complete parameter values in input and command history links. Other text uses token-based link detection.
+
 ### CommandConsoleCommandParam
 
 | Property     | Description                                                                                             | Type      | Default  |

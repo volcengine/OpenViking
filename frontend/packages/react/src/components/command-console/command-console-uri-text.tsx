@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { CommandConsoleCommandInputMatch } from './command-input.js';
 
 import {
   getCommandConsoleSafeHref,
@@ -11,8 +12,7 @@ export interface CommandConsoleUriTextProps {
   onOpenUri?: (uri: string) => void;
   /** 编辑镜像隐藏重复文字，但保留链接语义及输入框焦点。 */
   editor?: boolean;
-  /** Command arguments and formatted JSON URI fields have explicit value boundaries. */
-  mode: 'prose' | 'literal' | 'command' | 'json';
+  mode: 'prose' | 'literal' | 'json';
   wholeUri?: boolean;
 }
 
@@ -52,8 +52,6 @@ export function CommandConsoleUriLink({
 }
 
 const DOUBLE_QUOTED_URI = String.raw`"(?<double>viking:\/\/(?:\\.|[^"\\\r\n])+)"`;
-const QUOTED_COMMAND_URI =
-  DOUBLE_QUOTED_URI + String.raw`|'(?<single>viking:\/\/[^'\r\n]+)'|`;
 // The JSON formatter puts each object key on its own line.
 const JSON_URI_FIELD =
   String.raw`^(?<field>[ \t]*"(?:[^"\\]*_)?uri":[ \t]*)` +
@@ -77,12 +75,7 @@ export function CommandConsoleUriText({
   }
   const parts: ReactNode[] = [];
   let cursor = 0;
-  const quotedPattern =
-    mode === 'command'
-      ? QUOTED_COMMAND_URI
-      : mode === 'json'
-        ? JSON_URI_FIELD
-        : '';
+  const quotedPattern = mode === 'json' ? JSON_URI_FIELD : '';
   const pattern = new RegExp(
     quotedPattern +
       (mode === 'prose'
@@ -101,7 +94,7 @@ export function CommandConsoleUriText({
     );
 
   for (const matched of text.matchAll(pattern)) {
-    const quoted = matched.groups?.double ?? matched.groups?.single;
+    const quoted = matched.groups?.double;
     const index =
       matched.index +
       (quoted === undefined ? 0 : (matched.groups?.field?.length ?? 0) + 1);
@@ -111,11 +104,7 @@ export function CommandConsoleUriText({
         ? matched[0].replace(/[.!?；;:：！？]+$/u, '')
         : matched[0]);
     const uri =
-      matched.groups?.double === undefined
-        ? display
-        : mode === 'json'
-          ? (JSON.parse(`"${display}"`) as string)
-          : display.replace(/\\(["\\])/g, '$1');
+      quoted === undefined ? display : (JSON.parse(`"${quoted}"`) as string);
     if (index > cursor) parts.push(plain(text.slice(cursor, index), cursor));
     parts.push(
       <CommandConsoleUriLink
@@ -133,4 +122,50 @@ export function CommandConsoleUriText({
   if (!parts.length) return <>{plain(text, 0)}</>;
   if (cursor < text.length) parts.push(plain(text.slice(cursor), cursor));
   return <>{parts}</>;
+}
+
+export function CommandConsoleCommandArguments({
+  input,
+  editor,
+  onOpenUri,
+}: {
+  input: CommandConsoleCommandInputMatch;
+  editor?: boolean;
+  onOpenUri?: (uri: string) => void;
+}) {
+  const { rest, command } = input;
+  const ranges = command.resolveUriArguments?.(rest) ?? [];
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const { start, end, uri } of ranges) {
+    parts.push(
+      <CommandConsoleUriText
+        key={cursor}
+        text={rest.slice(cursor, start)}
+        mode="literal"
+        editor={editor}
+        onOpenUri={onOpenUri}
+      />,
+      <CommandConsoleUriLink
+        key={`uri-${start}`}
+        uri={uri}
+        editor={editor}
+        onOpenUri={onOpenUri}
+      >
+        {rest.slice(start, end)}
+      </CommandConsoleUriLink>,
+    );
+    cursor = end;
+  }
+  return (
+    <>
+      {parts}
+      <CommandConsoleUriText
+        text={rest.slice(cursor)}
+        mode="literal"
+        editor={editor}
+        onOpenUri={onOpenUri}
+      />
+    </>
+  );
 }
