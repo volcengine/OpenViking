@@ -4,6 +4,9 @@
 
 import io
 import random
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from PIL import Image
@@ -77,3 +80,43 @@ def test_small_original_is_kept_when_jpeg_would_be_larger(monkeypatch):
     monkeypatch.setattr("openviking.utils.image_input._COMPRESS_ABOVE_BYTES", 0)
     original = encoded(Image.new("RGB", (100, 100), "white"), format="PNG")
     assert compress_image_input(original, "image/png") == (original, "image/png")
+
+
+def test_compression_pixel_budget_is_checked_before_raster_decode(monkeypatch):
+    monkeypatch.setattr("openviking.utils.image_input._COMPRESS_ABOVE_BYTES", 0)
+    monkeypatch.setattr("openviking.utils.image_input.MAX_IMAGE_INPUT_DECODE_PIXELS", 100)
+    original = encoded(Image.new("RGB", (20, 20)), format="PNG")
+
+    def unexpected_load(*args, **kwargs):
+        raise AssertionError("Pixel budget must be checked before decoding")
+
+    monkeypatch.setattr("PIL.PngImagePlugin.PngImageFile.load", unexpected_load)
+    with pytest.raises(ValueError, match="pixel decode budget"):
+        compress_image_input(original, "image/png")
+
+
+def test_full_resolution_conversions_share_one_process_slot(monkeypatch):
+    from PIL import ImageOps
+
+    monkeypatch.setattr("openviking.utils.image_input._COMPRESS_ABOVE_BYTES", 0)
+    original = encoded(Image.new("RGB", (20, 20)), format="PNG")
+    transpose = ImageOps.exif_transpose
+    active = peak = 0
+    lock = threading.Lock()
+
+    def observed_transpose(image):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.01)
+            return transpose(image)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(ImageOps, "exif_transpose", observed_transpose)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda _: compress_image_input(original, "image/png"), range(2)))
+    assert peak == 1

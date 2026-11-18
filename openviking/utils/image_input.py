@@ -3,10 +3,16 @@
 """Smaller model-input renditions; original resources and their identities stay intact."""
 
 import io
+from threading import BoundedSemaphore
 
 # An optimization threshold, not a limit on which resources can be read.
 _COMPRESS_ABOVE_BYTES = 512 * 1024
 _JPEG_QUALITY = 85
+MAX_IMAGE_INPUT_DOWNLOAD_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_INPUT_DECODE_PIXELS = 24_000_000
+# Full-resolution conversion may hold several raster copies. Serialize it across
+# callers, including callers on different asyncio loops, without blocking a loop.
+_COMPRESSION_SLOTS = BoundedSemaphore(1)
 
 
 def compress_image_input(data: bytes, mime_type: str) -> tuple[bytes, str]:
@@ -17,10 +23,14 @@ def compress_image_input(data: bytes, mime_type: str) -> tuple[bytes, str]:
     """
     if len(data) <= _COMPRESS_ABOVE_BYTES:
         return data, mime_type
+    if len(data) > MAX_IMAGE_INPUT_DOWNLOAD_BYTES:
+        raise ValueError("Image exceeds the 10 MiB compression input budget")
 
     from PIL import Image, ImageOps
 
-    with Image.open(io.BytesIO(data)) as original:
+    with _COMPRESSION_SLOTS, Image.open(io.BytesIO(data)) as original:
+        if original.width * original.height > MAX_IMAGE_INPUT_DECODE_PIXELS:
+            raise ValueError("Image exceeds the 24 million pixel decode budget")
         if getattr(original, "is_animated", False):
             return data, mime_type
         # RGB conversion clips high-bit-depth intensities instead of scaling them.

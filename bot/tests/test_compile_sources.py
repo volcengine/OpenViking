@@ -363,9 +363,7 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
     if problem == "format":
         uri = URI.replace(".png", ".svg")
     else:
-        pipeline.client.stat.return_value = {
-            "size": MAX_MEDIA_FILE_BYTES + 1
-        }
+        pipeline.client.stat.return_value = {"size": MAX_MEDIA_FILE_BYTES + 1}
     with pytest.raises(CompileFailure) as caught:
         await read_source(pipeline.client, uri)
     assert caught.value.code == code
@@ -461,6 +459,28 @@ async def test_large_image_is_compressed_without_changing_source_identity(runtim
     assert result["sha256"] == content_hash(original)
     with Image.open(BytesIO(rendition)) as rendition_image:
         assert rendition_image.size == (1800, 1000)
+
+
+@pytest.mark.asyncio
+async def test_image_download_budget_and_inline_passthrough(runtime, monkeypatch):
+    from vikingbot.agent.tools import ov_file
+
+    pipeline, png = runtime
+    pipeline.client.stat.return_value = {"size": ov_file.MAX_IMAGE_INPUT_DOWNLOAD_BYTES + 1}
+    result = await VikingMultiReadTool._read_image(pipeline.client, URI)
+    assert not result["success"]
+    pipeline.client.download_bytes.assert_not_awaited()
+
+    pipeline.client.stat.return_value = {"size": len(png)}
+    pipeline.client.download_bytes.return_value = png
+
+    def unexpected_decode(*args):
+        raise AssertionError("Inline-sized images must not be decoded")
+
+    monkeypatch.setattr(ov_file, "compress_image_input", unexpected_decode)
+    result = await VikingMultiReadTool._read_image(pipeline.client, URI)
+    assert result["success"]
+    assert base64.b64decode(result["image"]["image_url"]["url"].split(",", 1)[1]) == png
 
 
 @pytest.mark.asyncio

@@ -14,10 +14,12 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 import httpx
 from loguru import logger
 
-from openviking.utils.image_input import compress_image_input
+from openviking.utils.image_input import (
+    MAX_IMAGE_INPUT_DOWNLOAD_BYTES,
+    compress_image_input,
+)
 from openviking.utils.media_limits import (
     MAX_INLINE_TOOL_RESULT_MEDIA_BYTES,
-    MAX_MEDIA_FILE_BYTES,
 )
 from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -1147,12 +1149,12 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        if size > MAX_MEDIA_FILE_BYTES:
+        if size > MAX_IMAGE_INPUT_DOWNLOAD_BYTES:
             return {
                 "uri": uri,
                 "content": (
-                    f"Image is {size} bytes; the resource file limit is "
-                    f"{MAX_MEDIA_FILE_BYTES} bytes."
+                    f"Image is {size} bytes; the model image download limit is "
+                    f"{MAX_IMAGE_INPUT_DOWNLOAD_BYTES} bytes."
                 ),
                 "success": False,
                 "media_kind": "image",
@@ -1173,9 +1175,9 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        model_data, mime_type = await asyncio.to_thread(
-            compress_image_input, data, image_format.mime_type
-        )
+        model_data, mime_type = data, image_format.mime_type
+        if len(data) > cls._MAX_INLINE_MEDIA_BYTES:
+            model_data, mime_type = await asyncio.to_thread(compress_image_input, data, mime_type)
         if len(model_data) > cls._MAX_INLINE_MEDIA_BYTES:
             return {
                 "uri": uri,
