@@ -50,11 +50,12 @@ def text_terms(text: str) -> set[str]:
     return terms
 
 
-def text_candidates(texts, stop):
+def text_candidates(texts, stop, *, indices=None):
     """Rank positive Markdown term overlap, retaining five candidates per draft in stable order."""
     terms = [text_terms(text) for text in texts]
     result = []
-    for index, row in enumerate(terms):
+    for index in range(len(terms)) if indices is None else indices:
+        row = terms[index]
         if stop.is_set():
             raise ValueError("Similarity calculation cancelled")
         scores = (
@@ -64,6 +65,22 @@ def text_candidates(texts, stop):
         )
         result.append([-i for _, i in heapq.nlargest(5, scores)])
     return result
+
+
+def routing_candidates(texts, vectors, stop):
+    """Rank successful vectors normally and use local text for the refused slots."""
+    semantic = [i for i, vector in enumerate(vectors) if vector is not None]
+    lexical = [i for i, vector in enumerate(vectors) if vector is None]
+    if not lexical:
+        return top_candidates(vectors, 5, stop)
+    candidates = [[] for _ in texts]
+    for index, peers in zip(
+        semantic, top_candidates([vectors[i] for i in semantic], 5, stop), strict=True
+    ):
+        candidates[index] = [semantic[peer] for peer in peers]
+    for index, peers in zip(lexical, text_candidates(texts, stop, indices=lexical), strict=True):
+        candidates[index] = peers
+    return candidates
 
 
 def top_candidates(
@@ -165,7 +182,7 @@ class Shuffle:
             texts, target_uri=self.r.target, expected_model=expected_model
         )
 
-    async def vectors(self, texts: list[str]) -> list[array]:
+    async def vectors(self, texts: list[str]) -> list[array | None]:
         """Return compact vectors in document order using bounded, model-scoped cached batches."""
         r = self.r
         metadata = await self.embeddings([])
@@ -197,6 +214,13 @@ class Shuffle:
                 raise ValueError("Embedding batch/model mismatch")
             r.metrics["embedding_batches"] += 1
             for text, vector in zip(batch, result["vectors"], strict=True):
+                if vector is None:
+                    if result.get("partial_reason") != "http_451":
+                        raise ValueError(
+                            "Missing embedding vector without a partial refusal reason"
+                        )
+                    vectors[text] = None
+                    continue
                 vectors[text] = array("f", vector)
                 await r.files.put(f"embeddings/{digest([self.model_id, text])}", vector)
 
@@ -324,14 +348,30 @@ class Shuffle:
         try:
             try:
                 vectors = await self.vectors(texts)
-                neighbours = await asyncio.to_thread(top_candidates, vectors, 5, stop)
-            except Exception:
+            except Exception as exc:
                 if asyncio.current_task().cancelling():
                     raise asyncio.CancelledError()
+                if not service_unavailable(exc):
+                    raise
+                if isinstance(exc, OpenVikingError):
+                    if (
+                        exc.code == "EMBEDDING_FAILED"
+                        or (exc.details or {}).get("upstream_status_code") == 451
+                    ):
+                        raise
                 neighbours = await asyncio.to_thread(text_candidates, texts, stop)
                 r.warnings.append(
                     "Routing uses Markdown text overlap; related content may remain unmerged."
                 )
+            else:
+                neighbours = await asyncio.to_thread(routing_candidates, texts, vectors, stop)
+                refused_count = sum(vector is None for vector in vectors)
+                if refused_count:
+                    r.metrics["embedding_451_fallback"] += refused_count
+                    r.warnings.append(
+                        "Some embedding requests returned HTTP 451. "
+                        "Routing uses local text overlap for those drafts."
+                    )
         finally:
             stop.set()
         links, targets = [], {}

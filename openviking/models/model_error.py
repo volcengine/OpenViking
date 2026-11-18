@@ -44,6 +44,13 @@ class ModelError(Exception):
         self.status_code = status_code
         self.code = code
 
+    @property
+    def request_kind(self) -> ModelErrorKind:
+        """Keep an HTTP refusal terminal for retry and credential selection."""
+        if self.status_code == 451:
+            return ModelErrorKind.CONTENT_SAFETY
+        return self.kind
+
 
 _CODE_KINDS = {
     # Authentication and authorization.
@@ -341,11 +348,13 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
 def model_error_kind(error: BaseException) -> ModelErrorKind | None:
     """Return the structured model kind carried by an exception chain."""
     for item in _exception_chain(error):
+        if isinstance(item, ModelError):
+            return item.request_kind
         kind = getattr(item, "kind", None)
         if isinstance(kind, ModelErrorKind):
             return kind
     converted = model_error_from_exception(error)
-    return converted.kind if converted is not None else None
+    return converted.request_kind if converted is not None else None
 
 
 F = TypeVar("F", bound=Callable[..., Any])

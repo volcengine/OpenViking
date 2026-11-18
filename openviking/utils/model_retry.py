@@ -440,7 +440,7 @@ def _retry_limit(
 ) -> int:
     model_error = model_error_from_exception(error)
     if model_error is not None:
-        if model_error.kind in {
+        if model_error.request_kind in {
             ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             ModelErrorKind.TRANSIENT_NETWORK_ERROR,
             ModelErrorKind.RATE_LIMIT_ERROR,
