@@ -585,6 +585,33 @@ def test_lite_explicit_image_override_takes_precedence():
     ) == ["producer-image"]
 
 
+def test_effect_dependencies_do_not_build_project_before_native_toolchain():
+    steps = jobs("api_test_effect.yml")["effect-tests"]["steps"]
+    sync = next(step for step in steps if step.get("name") == "Install dependencies using uv sync")
+    assert "--no-install-project" in sync["run"]
+    rust = next(step for step in steps if step.get("uses") == "dtolnay/rust-toolchain@v1")
+    build = next(step for step in steps if step.get("name") == "Build C++ extensions")
+    install = next(
+        step
+        for step in steps
+        if step.get("name") == "Verify native runtime and install Python entry points"
+    )
+    assert steps.index(sync) < steps.index(rust) < steps.index(build) < steps.index(install)
+    assert "touch openviking/bin/ov" not in build["run"]
+    assert "uv pip install --no-deps --no-build-isolation --editable ." in install["run"]
+    for flag in [
+        "OV_SKIP_CPP_BUILD",
+        "OV_SKIP_RAGFS_BUILD",
+        "OV_SKIP_OV_BUILD",
+        "OV_SKIP_STUDIO_BUILD",
+    ]:
+        assert install["env"][flag] == "1"
+    # A later implicit sync would build the project again outside the skip env.
+    for step in steps:
+        for command in re.findall(r"\buv run ([^\n]+)", step.get("run", "")):
+            assert "--no-sync" in command or "--no-project" in command
+
+
 @pytest.mark.parametrize("container", ["", "ubuntu:24.04"])
 def test_database_services_use_container_dns_or_host_loopback(container):
     job = jobs("api_test.yml")["database-tests"]
