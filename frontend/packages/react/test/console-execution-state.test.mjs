@@ -3,6 +3,8 @@ import test from 'node:test';
 import { act, key } from './helpers/command-console-dom.mjs';
 import { mount, ok } from './helpers/console-dom.mjs';
 
+const resultBody = '.ov-command-console__result-body';
+
 for (const outcome of ['success', 'error']) {
   test(`Console shows pending progress without an unavailable warning and unlocks after ${outcome}`, async () => {
     let finish;
@@ -72,7 +74,10 @@ for (const outcome of ['success', 'error']) {
       assert.equal(host.records[0].dataset.status, outcome);
       assert.equal(host.container.querySelector('[aria-busy="true"]'), null);
       if (outcome === 'error')
-        assert.match(host.records[0].textContent, /DENIED: No access/);
+        assert.equal(
+          host.records[0].querySelector(resultBody).textContent,
+          'No access',
+        );
       await host.execute('ov health');
       assert.equal(requests, 2);
       await act(() => finish(ok({ status: 'healthy' })));
@@ -90,3 +95,22 @@ for (const outcome of ['success', 'error']) {
     }
   });
 }
+
+test('Console shows the transport message when add-resource fails', async () => {
+  const host = await mount(
+    async () => {
+      throw new TypeError('NetworkError');
+    },
+    { modes: ['command'] },
+  );
+  try {
+    await host.execute(
+      'ov add-resource https://example.com/notes.md --wait=true',
+    );
+    const [record] = host.records;
+    assert.equal(record.dataset.status, 'error');
+    assert.equal(record.querySelector(resultBody).textContent, 'NetworkError');
+  } finally {
+    await host.dispose();
+  }
+});

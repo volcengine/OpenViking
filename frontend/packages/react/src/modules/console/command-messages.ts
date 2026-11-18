@@ -1,4 +1,3 @@
-import { isOvClientError } from '../../client/errors.js';
 import type { CommandConsoleRecord } from '../../components/command-console/index.js';
 import type { Locale } from '../../shared/locale.js';
 import { resolveConsoleLocale } from './labels.js';
@@ -33,14 +32,6 @@ export class ConsoleCommandError extends Error implements ConsoleMessage {
   }
 }
 
-export function commandErrorText(error: unknown) {
-  return isOvClientError(error)
-    ? `${error.code}: ${error.message}`
-    : error instanceof Error
-      ? error.message
-      : String(error);
-}
-
 export function cancelledCommandRecord(): Partial<ConsoleRecord> {
   const localMessage: ConsoleMessage = { code: 'cancelled' };
   return {
@@ -60,6 +51,9 @@ export function failedCommandRecord(error: unknown): Partial<ConsoleRecord> {
       error instanceof ConsoleCommandError
         ? { code: error.code, value: error.value, usage: error.usage }
         : undefined,
-    content: { variant: 'text', text: commandErrorText(error) },
+    content: {
+      variant: 'text',
+      text: error instanceof Error ? error.message : String(error),
+    },
   };
 }
