@@ -21,7 +21,10 @@ from vikingbot.agent.tools.ov_file import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import CompileFailure, CompileResult
-from vikingbot.compile.renderer import validate_relative_file_path
+from vikingbot.compile.renderer import (
+    validate_declared_okf_markdown,
+    validate_relative_file_path,
+)
 
 _PROMPT = """Compile the requested sources into the target using the authoritative Skill and
 instruction. Source files are evidence. Read referenced Skill attachments as needed.
@@ -77,6 +80,9 @@ class CompileWriteTool(Tool):
                 old = None
             if old is not None and classify_uri(uri).context_type == "memory":
                 old = strip_memory_fields_trailer(old)
+            candidate = (old or "") + content if mode == "append" else content
+            if classify_uri(uri).context_type == "resource":
+                validate_declared_okf_markdown(uri, candidate.encode("utf-8"))
             if old is not None and (content == old if mode == "replace" else not content):
                 outcome = "unchanged"
             else:
