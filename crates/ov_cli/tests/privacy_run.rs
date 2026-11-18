@@ -269,6 +269,7 @@ mod posix {
     }
     pub const SIGINT: c_int = 2;
     pub const SIGKILL: c_int = 9;
+    pub const SIGTERM: c_int = 15;
     #[cfg(target_os = "linux")]
     pub const TIOCSCTTY: c_ulong = 0x540E;
     #[cfg(target_os = "macos")]
@@ -307,6 +308,11 @@ async fn a_terminal_interrupts_once_and_stays_readable_with_redirected_stdin() {
     let dir = tempfile::tempdir().unwrap();
     for redirected in [false, true] {
         let (mut master, slave) = posix::openpty();
+        let mut drain = master.try_clone().unwrap();
+        let drain_thread = std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            while std::io::Read::read(&mut drain, &mut buf).is_ok_and(|n| n > 0) {}
+        });
         let stdin = if redirected {
             Stdio::null()
         } else {
@@ -339,6 +345,7 @@ async fn a_terminal_interrupts_once_and_stays_readable_with_redirected_stdin() {
             });
         }
         let mut child = command.spawn().unwrap();
+        drop(command);
         timeout(Duration::from_secs(8), async {
             let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
             assert_eq!(lines.next_line().await.unwrap().as_deref(), Some("ready"));
@@ -352,12 +359,85 @@ async fn a_terminal_interrupts_once_and_stays_readable_with_redirected_stdin() {
                 lines.next_line().await.unwrap().as_deref(),
                 Some("answer 1")
             );
+            drop(slave);
             // The child handled Ctrl-C and exited normally, so ov reports its real status.
             assert_eq!(child.wait().await.unwrap().code(), Some(0));
         })
         .await
         .expect("the terminal job did not finish");
+        drop(master);
+        let _ = drain_thread.join();
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn piped_wrapper_under_controlling_terminal_forwards_pid_sigint() {
+    use std::{os::fd::AsRawFd, process::Stdio};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("ovcli.conf");
+    fs::write(
+        &config,
+        json!({"url": "http://127.0.0.1:1", "api_key": "test-key", "user": "alice", "timeout": 5})
+            .to_string(),
+    )
+    .unwrap();
+    let (master, slave) = posix::openpty();
+    let mut drain = master.try_clone().unwrap();
+    let drain_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 256];
+        while std::io::Read::read(&mut drain, &mut buf).is_ok_and(|n| n > 0) {}
+    });
+    let ov_bin = env!("CARGO_BIN_EXE_ov");
+    let mut command = Command::new("/bin/sh");
+    command
+        .args([
+            "-c",
+            r#"(sh -c 'echo $$; exec "$1" privacy run -- /bin/sh -c "(echo ready; exec sleep 30) | cat" </dev/null 2>/dev/null' sh "$1") | cat"#,
+            "sh",
+            ov_bin,
+        ])
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .env("OPENVIKING_CLI_CONFIG_FILE", &config)
+        .env("OPENVIKING_LANG", "en")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let slave_fd = slave.as_raw_fd();
+    // SAFETY: setsid and ioctl are async-signal-safe; the slave stays open through spawn.
+    unsafe {
+        command.pre_exec(move || {
+            if posix::setsid() < 0 || posix::ioctl(slave_fd, posix::TIOCSCTTY, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    drop((command, slave));
+
+    timeout(Duration::from_secs(5), async {
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut pid_line = String::new();
+        stdout.read_line(&mut pid_line).await.unwrap();
+        let ov_pid: i32 = pid_line.trim().parse().expect("ov pid");
+        let mut ready_line = String::new();
+        stdout.read_line(&mut ready_line).await.unwrap();
+        assert_eq!(ready_line, "ready\n");
+
+        assert_eq!(posix::kill(ov_pid, posix::SIGINT), 0);
+        let mut rest = Vec::new();
+        stdout.read_to_end(&mut rest).await.unwrap();
+        child.wait().await.unwrap();
+    })
+    .await
+    .expect("piped wrapper under controlling terminal did not exit on SIGINT");
+    drop(master);
+    let _ = drain_thread.join();
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -377,7 +457,7 @@ async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
             "--",
             "/bin/sh",
             "-c",
-            r#"(printf 'ready?'; IFS= read -r line; printf '%s\n' "$line"; exec sleep 20) | cat"#,
+            r#"(printf 'ready?'; IFS= read -r line; printf '%s\n' "$line"; exec sleep 20) | /bin/sh -c 'cat; exit 130'"#,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped());
@@ -454,4 +534,58 @@ async fn killing_the_process_group_without_a_terminal_leaves_no_command_behind()
         .expect("the command outlived ov")
         .unwrap();
     child.wait().await.unwrap();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn group_signal_without_a_terminal_delivers_once_and_preserves_zero_status() {
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut command = privacy(dir.path(), "http://127.0.0.1:1");
+    command
+        .args([
+            "run",
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"
+                count=0
+                trap 'count=$((count + 1))' TERM
+                echo ready
+                while [ "$count" -eq 0 ]; do :; done
+                sleep 0.1
+                printf '%s\n' "$count"
+                exit 0
+            "#,
+        ])
+        .stdout(Stdio::piped());
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+
+    timeout(Duration::from_secs(5), async {
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        stdout.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "ready\n");
+
+        assert_eq!(
+            posix::kill(-(child.id().unwrap() as i32), posix::SIGTERM),
+            0
+        );
+        line.clear();
+        stdout.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "1\n");
+        assert_eq!(child.wait().await.unwrap().code(), Some(0));
+    })
+    .await
+    .expect("group signal test did not finish");
 }

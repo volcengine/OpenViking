@@ -119,7 +119,7 @@ fn spawn_child(command: &mut Command) -> Result<tokio::process::Child> {
 
 #[cfg(unix)]
 async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Result<i32> {
-    use std::io::Write;
+    use std::io::{IsTerminal, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
@@ -136,9 +136,13 @@ async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Resu
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
-    // With a terminal, the child stays in the shell's job so it can read the terminal and
-    // follow Ctrl-Z and fg. Without one, its own group lets ov signal the whole command.
-    let terminal = std::fs::File::open("/dev/tty").ok();
+    // With a terminal job, the child stays in the shell's group so it can read /dev/tty and
+    // follow Ctrl-Z and fg. Otherwise, its own group lets ov signal the whole command once.
+    let job = getpgrp() == std::process::id() as i32
+        || std::io::stdin().is_terminal()
+        || std::io::stdout().is_terminal()
+        || std::io::stderr().is_terminal();
+    let terminal = std::fs::File::open("/dev/tty").ok().filter(|_| job);
     if terminal.is_none() {
         command.process_group(0);
     }
@@ -146,7 +150,7 @@ async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Resu
     let pid = child.id().expect("just spawned") as i32;
     // A SIGKILL sent to ov's group cannot reach the command's own group, and ov cannot catch it.
     // This shell joins the command's group and ends it when ov exits without writing a newline.
-    let mut guard = if terminal.is_some() {
+    let guard = if terminal.is_some() {
         None
     } else {
         std::process::Command::new("/bin/sh")
@@ -170,8 +174,11 @@ async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Resu
                 if status.is_err() && terminal.is_none() {
                     kill(-pid, SIGKILL);
                 }
-                if let Some(stdin) = guard.as_mut().and_then(|guard| guard.stdin.as_mut()) {
-                    let _ = stdin.write_all(b"\n");
+                if let Some(mut guard) = guard {
+                    if let Some(mut stdin) = guard.stdin.take() {
+                        let _ = stdin.write_all(b"\n");
+                    }
+                    let _ = guard.wait();
                 }
                 return Ok(status?);
             }
