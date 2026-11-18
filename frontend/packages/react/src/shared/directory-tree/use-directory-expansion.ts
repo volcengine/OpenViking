@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import type { RefObject, SetStateAction } from 'react';
+import { normalizeResourceUri } from '../resource-uri.js';
 import type { DirectoryQueries } from './directory-queries.js';
-import { expandChain } from './fs-path.js';
+import { expansionPath } from './expansion-path.js';
 
 export function useDirectoryExpansion(
   session: DirectoryQueries | undefined,
@@ -18,9 +19,9 @@ export function useDirectoryExpansion(
     () =>
       new Set([
         rootUri,
-        ...(savedExpansion ?? []).filter(
-          (uri) => expandChain(rootUri, uri).at(-1) === uri,
-        ),
+        ...(savedExpansion ?? [])
+          .map(normalizeResourceUri)
+          .filter((uri) => expansionPath(rootUri, uri).length > 0),
       ]),
     [rootUri, savedExpansion],
   );

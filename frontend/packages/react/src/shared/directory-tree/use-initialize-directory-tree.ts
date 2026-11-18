@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { DirectoryQueries } from './directory-queries.js';
 import { expandChain } from './fs-path.js';
@@ -22,7 +22,10 @@ export function useInitializeDirectoryTree({
   const [initialized, setInitialized] = useState<{
     session: DirectoryQueries | undefined;
     uri?: string;
+    attempt: number;
+    expansionComplete: boolean;
   }>();
+  const [attempt, retryExpansion] = useReducer((count: number) => count + 1, 0);
   const initialLoad = useRef<Promise<void> | undefined>(undefined);
   // Synchronize the initial/default path with directory subscriptions after commit.
   // Navigation and identity can change without a click. Cleanup only invalidates
@@ -30,16 +33,27 @@ export function useInitializeDirectoryTree({
   useEffect(() => {
     if (!session) return;
     const controller = new AbortController();
+    let expansionComplete = savedExpansion === undefined;
     initialLoad.current = (async () => {
       const page = await session.load(rootUri, 0, controller.signal);
       if (savedExpansion) {
-        await restoreDirectoryExpansion(
+        expansionComplete = await restoreDirectoryExpansion(
           session.load,
           rootUri,
           page,
           savedExpansion,
           (uri) => expandedRef.current.has(uri),
           controller.signal,
+          (saved, listed) => {
+            if (saved === listed) return;
+            setExpanded((previous) => {
+              if (!previous.has(saved)) return previous;
+              const next = new Set(previous);
+              next.delete(saved);
+              next.add(listed);
+              return next;
+            });
+          },
         );
         return;
       }
@@ -54,15 +68,34 @@ export function useInitializeDirectoryTree({
       .catch(() => undefined)
       .finally(() => {
         if (!controller.signal.aborted)
-          setInitialized({ session, uri: initialPath });
+          setInitialized({
+            session,
+            uri: initialPath,
+            attempt,
+            expansionComplete,
+          });
       });
     return () => controller.abort();
-  }, [session, rootUri, initialPath, savedExpansion, expandedRef, setExpanded]);
+  }, [
+    session,
+    rootUri,
+    initialPath,
+    savedExpansion,
+    expandedRef,
+    setExpanded,
+    attempt,
+  ]);
+  const initializing =
+    !session ||
+    initialized?.session !== session ||
+    initialized.uri !== initialPath ||
+    initialized.attempt !== attempt;
+  const expansionComplete = !initializing && initialized.expansionComplete;
   return {
     initialLoad,
-    initializing:
-      !session ||
-      initialized?.session !== session ||
-      initialized?.uri !== initialPath,
+    initializing,
+    expansionComplete,
+    retryExpansion:
+      !initializing && !expansionComplete ? retryExpansion : undefined,
   };
 }

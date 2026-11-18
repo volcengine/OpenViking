@@ -65,14 +65,15 @@ export function useDirectoryTree({
     defaultExpandedUris,
   );
   const initialPath = hasSavedExpansion ? undefined : defaultExpandedUri;
-  const { initialLoad, initializing } = useInitializeDirectoryTree({
-    session,
-    rootUri,
-    initialPath,
-    savedExpansion: hasSavedExpansion ? initialExpanded : undefined,
-    expandedRef,
-    setExpanded,
-  });
+  const { initialLoad, initializing, expansionComplete, retryExpansion } =
+    useInitializeDirectoryTree({
+      session,
+      rootUri,
+      initialPath,
+      savedExpansion: hasSavedExpansion ? initialExpanded : undefined,
+      expandedRef,
+      setExpanded,
+    });
   const scope = useRequestScope(
     request?.client ?? null,
     request?.options,
@@ -118,15 +119,28 @@ export function useDirectoryTree({
         await fetchPage(uri, 1);
       },
       retry: async (uri: string) => {
-        if (activeSession.current) await fetchPage(uri, 0, undefined, true);
-        else retryScope();
+        const current = activeSession.current;
+        if (!current) return retryScope();
+        const page = await fetchPage(uri, 0, undefined, true);
+        if (page && !page.error && activeSession.current === current)
+          retryExpansion?.();
       },
       refresh: async () => {
-        if (activeSession.current) await activeSession.current.refresh();
-        else retryScope();
+        const current = activeSession.current;
+        if (!current) return retryScope();
+        await current.refresh();
+        if (activeSession.current === current) retryExpansion?.();
       },
     }),
-    [scope, rootUri, expandedRef, setExpanded, fetchPage, retryScope],
+    [
+      scope,
+      rootUri,
+      expandedRef,
+      setExpanded,
+      fetchPage,
+      retryScope,
+      retryExpansion,
+    ],
   );
   const rows = useMemo(
     () => flattenTree(rootUri, 0, dirs, expanded),
@@ -145,7 +159,7 @@ export function useDirectoryTree({
   const isReady = dirs[rootUri]?.ready ?? false;
   useReportExpansion(
     session,
-    isReady && !isInitializing && !dirs[rootUri]?.error,
+    isReady && expansionComplete && !dirs[rootUri]?.error,
     rows,
     onExpandedUrisChange,
   );

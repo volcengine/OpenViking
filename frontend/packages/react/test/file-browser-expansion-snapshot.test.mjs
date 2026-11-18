@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
+import { QueryClient } from '@tanstack/react-query';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import {
@@ -47,10 +48,10 @@ function listing({ path, uri, query }) {
   return ok([]);
 }
 
-function browser(fetch, props) {
+function browser(fetch, props, queryClient) {
   return h(
     OpenVikingProvider,
-    { fetch, baseURL: 'https://ov.test' },
+    { fetch, baseURL: 'https://ov.test', queryClient },
     h(FileBrowser, { rootUri: ROOT, dashboardKinds: [], ...props }),
   );
 }
@@ -152,5 +153,60 @@ test('an explicit empty snapshot overrides the single default expansion path', a
     );
   } finally {
     await view.unmount();
+  }
+});
+
+test('preserves a saved nested expansion when a later listing page fails', async () => {
+  const initial = [BETA, NESTED];
+  const snapshots = [];
+  let saved = initial;
+  const open = (fetch) =>
+    mount(
+      browser(
+        fetch,
+        {
+          defaultExpandedUris: saved,
+          onExpandedUrisChange: (next) => {
+            saved = [...next];
+            snapshots.push(saved);
+          },
+        },
+        new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+      ),
+    );
+  const isLaterBetaPage = ({ path, uri, query }) =>
+    path === listPath && uri === BETA && Number(query.offset) > 0;
+  let unavailable = true;
+  const failed = recordingFetch((call) =>
+    unavailable && isLaterBetaPage(call)
+      ? Promise.resolve(new Response('Listing failed', { status: 500 }))
+      : listing(call),
+  );
+  const view = await open(failed);
+  try {
+    assert.ok(failed.calls.some(isLaterBetaPage));
+    assert.equal(row(view, NESTED), null);
+    assert.deepEqual(saved, initial);
+    assert.deepEqual(snapshots, []);
+
+    unavailable = false;
+    await act(() =>
+      row(view, `${BETA}::error`).querySelector('button').click(),
+    );
+    await settle();
+    assert.equal(expanded(view, NESTED), 'true');
+    assert.deepEqual(snapshots.at(-1), initial);
+  } finally {
+    await view.unmount();
+  }
+
+  const recovered = recordingFetch(listing);
+  const reloaded = await open(recovered);
+  try {
+    assert.equal(expanded(reloaded, NESTED), 'true');
+    assert.ok(row(reloaded, NESTED_FILE));
+    assert.deepEqual(snapshots.at(-1), initial);
+  } finally {
+    await reloaded.unmount();
   }
 });
