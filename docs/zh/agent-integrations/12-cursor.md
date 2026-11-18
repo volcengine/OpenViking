@@ -39,7 +39,8 @@ curl -fsSL https://openviking.ai/install | bash
 - `beforeReadFile`：阻止把 `viking://` 虚拟路径当作本地文件读取，并提示改用 OpenViking MCP 工具；shell 命令不做检查。
 - `afterMCPExecution`：将 `openviking` MCP 服务的工具完成记录追加到本地工具日志，保留真实调用 ID、输入、输出和成功或失败状态；此时不向服务端写入消息，也不重写此前的结果。
 - `stop`：将新增对话与本地工具记录一起通过 `add message` 上报；成功后才推进捕获位置，达到原有消息阈值时执行 `session commit`。工具记录不额外增加该阈值的消息计数。
-- `preCompact` / `sessionEnd`：提交尚未处理的消息，触发记忆抽取。
+- `preCompact` / `sessionEnd`：提交尚未处理的消息，触发记忆抽取。压缩之后，下一次 `beforeSubmitPrompt` 还会追加一段简短说明，给出会话的 OpenViking id（`cu-<conversation id>`）以及用来查回之前确切细节的 `session_history` MCP 工具。
+- `preToolUse`：只匹配 `MCP:session_history`，Agent 没传 `session` 参数时补上当前会话。
 
 工具采集要求 `afterMCPExecution` 提供 `tool_use_id`、`mcp_server_name`、`tool_name`、`tool_input` 和 `result_json`。缺少身份或结果的事件会跳过，不会推断为成功。上传失败时保留本地记录，等待同一会话的后续采集重试；消息未传完整时不提交。
 

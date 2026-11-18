@@ -3159,7 +3159,7 @@ install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>...
   cp "$config/runtime-index.mjs" "$root/hosts/index.mjs" || { rm -rf "$bundle"; return 1; }
   for host_module in "$root"/hosts/*.mjs; do
     case "$(basename "$host_module")" in
-      index.mjs|incremental-turn-capture.mjs|"$host.mjs"|"$host-turns.mjs") ;;
+      index.mjs|incremental-turn-capture.mjs|history-session.mjs|"$host.mjs"|"$host-turns.mjs") ;;
       *) rm -f "$host_module" ;;
     esac
   done

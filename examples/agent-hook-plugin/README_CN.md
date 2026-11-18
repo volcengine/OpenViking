@@ -16,6 +16,7 @@ curl -fsSL https://openviking.ai/install | bash
 - **提交 prompt** — 搜索与 prompt 相关的记忆和 skill 并注入，按事件 id 与 500ms 窗口去重。
 - **工具调用前** — 拦截本地文件工具对 `viking://` 虚拟路径的访问，引导回 OpenViking MCP 工具。在 TRAE 上，带 `viking://` URI 的 shell 命令照常执行，并附加一条指向同一组工具的提示。
 - **Stop** — 捕获完成的回合并按宿主策略提交 OpenViking 会话。Kimi 还使用 PreCompact、SessionEnd 与同步 Interrupt 信号。
+- **压缩之后** — 追加一段简短的 `<openviking-context source="session-history">` 说明，给出会话的 OpenViking id，以及如何用服务端的 `session_history` MCP 工具查回确切细节。Qoder 在压缩或恢复后的 SessionStart 中返回，TRAE 在 PostCompact 中返回；Cursor、CodeBuddy 和 Kimi Code 在 PreCompact 记下压缩（CodeBuddy 也在压缩后的 SessionStart 记下，CodeBuddy 和 Kimi Code 也记下恢复），在下一次 prompt 时注入。恢复只给还没收到过说明的会话注入，因为恢复后的 transcript 里仍有之前那段说明。ZCode 没有压缩信号，Antigravity 没有 OpenViking MCP 服务，两者都不注入。模型没传 `session` 时，Cursor 的 `preToolUse` 与 Qoder 的 `PreToolUse` hook 会改写调用补上它，CodeBuddy 和 TRAE 由 MCP 代理从调用的 `_meta` 补上；Kimi Code 和 TRAE 的说明会要求模型自己传。设置 `OPENVIKING_SESSION_HISTORY_POINTER=0` 或 `sessionHistoryPointer: false` 关闭这段说明。
 
 ## 目录结构
 
@@ -29,7 +30,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## 各宿主差异
 
-- **Cursor** — 七个事件。`afterMCPExecution` 将 OpenViking 工具结果追加到本地 JSONL 日志，Stop 时与文本 transcript 一起上报；文本去重与工具上传位置分别管理，成功后推进捕获位置，失败由原记录重试。`capturedSinceCommit` 达到阈值才 commit，压缩前在消息完整上报后 commit。会话前缀 `cu-`。见 [Cursor 接入文档](../../docs/zh/agent-integrations/12-cursor.md)。
+- **Cursor** — 八个事件。`afterMCPExecution` 将 OpenViking 工具结果追加到本地 JSONL 日志，Stop 时与文本 transcript 一起上报；文本去重与工具上传位置分别管理，成功后推进捕获位置，失败由原记录重试。`capturedSinceCommit` 达到阈值才 commit，压缩前在消息完整上报后 commit。会话前缀 `cu-`。见 [Cursor 接入文档](../../docs/zh/agent-integrations/12-cursor.md)。
 - **TRAE / TRAE CN** — 采集直接读 Stop 事件的 `prompt`、`text_content`、`last_assistant_message`，不解析 transcript；每次带内容的 Stop 都 commit。会话前缀 `tr-` 与 `trcn-`。见 [TRAE 接入文档](../../docs/zh/agent-integrations/13-trae.md)。
 - **ZCode** — rollout 文件是权威增量对话源：稳定的 host `turnId` 用于去重，也让后续 Stop 能补回漏掉的回合，hook stdin 只是兜底。ZCode 不支持 `PreCompact` 与 `SessionEnd`，因此每次 Stop 都 commit 来补足这两个信号。它的输出 schema 是严格的，所以放行时不写任何内容。会话前缀 `zc-`。已验证的扩展面记录在 [DESIGN.md](./DESIGN.md)。
 - **Kimi Code** — `wire.jsonl` 是权威 transcript；UserPromptSubmit 输出原始上下文文本。Stop、PreCompact、SessionEnd 可后台写入，Interrupt 保持同步并共享 2 秒的 OpenViking 请求预算。安装脚本生成自包含原生插件，不修改旧的 `config.toml` 或 `mcp.json`。会话前缀 `kc-`。

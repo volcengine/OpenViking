@@ -4,7 +4,7 @@
 
 ## 安装
 
-前置条件：macOS 或 Linux、Node.js 18+，以及支持 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`Stop` Hook 的 TRAE/TRAE CN 版本。TraeCode CLI 2.0 直接使用兼容 Codex 的插件格式。安装过程中会引导配置 OpenViking 连接信息。
+前置条件：macOS 或 Linux、Node.js 18+，以及支持 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`Stop`、`PostCompact` Hook 的 TRAE/TRAE CN 版本。TraeCode CLI 2.0 直接使用兼容 Codex 的插件格式。安装过程中会引导配置 OpenViking 连接信息。
 
 安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）；远程自建服务请选择 **自定义 URL / 保持当前** 并填写其 URL。
 
@@ -41,6 +41,7 @@ TRAE 和 TRAE CN 使用安装后的 `hooks.json`，不需要审阅 hook，安装
 - `UserPromptSubmit`：根据当前问题召回并注入相关内容，召回范围包括你自己的 skill 和账号内共享在 `viking://agent/skills` 下的 skill。
 - `PreToolUse`：在 TRAE 和 TRAE CN 上，`Read`、`Glob`、`Grep` 的路径是 `viking://` URI 时拒绝调用，并提示改用 OpenViking MCP 工具；`Bash` 或 `RunCommand` 命令带 `viking://` URI 时照常执行，同时附加改用建议。TraeCode CLI 2.0 使用 Codex 插件，它不安装 URI guard。
 - TRAE/TRAE CN 的 `Stop` 捕获并提交本轮消息；TraeCode CLI 2.0 遵循 Codex 插件的捕获与生命周期提交策略。
+- TRAE/TRAE CN 的 `PostCompact` 在压缩后追加一段简短说明，给出会话的 OpenViking id 以及用来查回之前确切细节的 `session_history` MCP 工具；Agent 调用时把这个 id 作为 `session` 传入。
 - OpenViking MCP Server：透传服务端完整 MCP 工具集（21 个工具）：`find`、`search`、`read`、`download`、`list`、`tree`、`remember`、`write`、`edit`、`add_resource`、`add_skill`、`list_watches`、`cancel_watch`、`grep`、`glob`、`forget`、`health`、`list_users`、`list_groups`、`get_acl`、`set_acl`。其中 `search` 的 `mode="context"` 可返回组装后的上下文。
 skill 清单先列你自己的 skill，再列账号内共享的 skill，每条描述截到约 40 token。清单的预算 `skillCatalogTokenBudget`（默认 `1200` token）独立于画像预算；描述放不下时只列名称。把 `skillCatalog` 设为 `false` 或把预算设为 `0` 即可关闭，既可以写在 `~/.openviking/ovcli.conf` 的 `plugin` 段（见[插件配置](../configuration/02-client.md#插件配置)），也可以用环境变量 `OPENVIKING_SKILL_CATALOG` 和 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`。
 

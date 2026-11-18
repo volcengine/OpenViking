@@ -42,6 +42,15 @@ export const kimicode = {
   envelope(event, block) {
     return event === "user-prompt-submit" ? block || null : null;
   },
+  // Only UserPromptSubmit output reaches the model, and the MCP server cannot
+  // tell which session calls it.
+  historyPointer: {
+    sessionDefault: false,
+    defer: (event, input) => {
+      if (event === "pre-compact") return "compact";
+      return event === "session-start" && input.source === "resume" ? "resume" : "";
+    },
+  },
   guard(input = {}) {
     const decision = evaluateUriGuard(input.tool_name, input.tool_input || {}, {
       guarded: new Set(["read", "glob", "grep"]),

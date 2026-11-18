@@ -210,7 +210,7 @@ Debugging aid: `~/.qoder/logs/sessions/<cwd-slug>/<session_id>/segments/*.jsonl`
 
 1. Whether host-queued `isMeta` prompts (`peer`, `task-notification`, `bridge`) fire `UserPromptSubmit`, and whether `bridge` (remote-control) prompts carry `humanInput`.
 2. Auto-compaction (`trigger: "auto"`) and `SessionStart(clear)` / `SessionEnd(clear|resume)`; only manual `/compact` and `-c` were run.
-3. Whether `SessionStart(resume)` `additionalContext` reaches the model (it is not recorded in the transcript; `startup` and `compact` outputs are).
+3. ~~Whether `SessionStart(resume)` `additionalContext` reaches the model~~ — **verified on v1.1.91** (§12): the model quoted it after TUI `/resume` and after `-p -c`.
 4. `decision: "approve"`: undocumented here and untested; the adapter omits it.
 5. The permission-rule syntax that lets `mcp_call` to the plugin's server run headless, and the precedence between a plugin MCP server and a same-named user server.
 6. `async` / `asyncRewake` hooks: documented, unexercised; the detached writer is used instead.
@@ -241,3 +241,9 @@ Measured facts that shape the adapter and are not visible in the code:
 - Commit policy as on CodeBuddy: `Stop` commits every `commitTurnThreshold` captured turns; `PreCompact` (unless `autoCommitOnCompact` is off) and `SessionEnd` commit whatever is still uncommitted, including turns an earlier `Stop` sent.
 
 v1 scope matches the CodeBuddy adapter: no subagent capture (events and per-agent transcripts exist, §3/§8), no resume/compact archive injection, no keyword capture mode, no local recall compressor default.
+
+## 12. `session_history` (v1.1.91, npm latest on 2026-11-18)
+
+- **Fill.** A `PreToolUse` hook matching `mcp_call|mcp__openviking__session_history` sees the lazy call as `tool_input: {toolName, arguments}` with the conversation's `session_id`. Answering `hookSpecificOutput.updatedInput` with `arguments.session` added changes what the stdio MCP server receives (**verified**). Without a `permissionDecision` the TUI still asks `Allow MCP tool <server>/<tool>?` and the rewrite applies after approval; the model sees `[System] Tool input parameters were modified by a hook before execution.` in the result. It is right after `/clear` and `/resume`, and inside a subagent, whose `PreToolUse` carries the parent's `session_id` plus `agent_id`.
+- **Not used for the fill.** One `qodercli` process serves several conversations in turn (`/clear`, `/resume`) while its MCP server stays up; hooks and the MCP server are both direct children of it (no pid env of its own; a `CLAUDE_PID` seen in the env was inherited). v1.1.91 adds `_meta["com.qoder/request-context-v1"].requestSetId` to `tools/call`, equal to `UserPromptSubmit.request_set_id` on main-agent calls, but a subagent's call carries one no hook sees, and v1.1.88 sends only `progressToken`.
+- **Note.** `/compact` runs `PreCompact` → `PostCompact` → `SessionStart(compact)` with the same `session_id`; `SessionStart` `additionalContext` reached the model for `startup`, `clear`, `compact` and `resume`. The adapter adds the session-history note to `SessionStart(compact|resume)`, naming the `mcp_call` form; a resumed transcript keeps the notes it already carries (**verified**, `-p -c` after `-p -c '/compact'`), so a resume adds one only when the hook state records none sent.
