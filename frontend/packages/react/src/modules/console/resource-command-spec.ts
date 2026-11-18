@@ -120,7 +120,9 @@ export const RESOURCE_COMMAND_SPEC: CommandSpec = {
       throw new ConsoleCommandError('invalidArgument', '--to / --parent / -p');
     const remote =
       typeof path === 'string' &&
-      (body.add_type || /^[a-z][a-z\d+.-]*:\/\//i.test(path));
+      (body.add_type ||
+        path.startsWith('git@') ||
+        /^[a-z][a-z\d+.-]*:\/\//i.test(path));
     const source = remote
       ? { path }
       : {

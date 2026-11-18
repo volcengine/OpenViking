@@ -21,7 +21,6 @@ export function createConsoleController(
   options: OvRequestOptions = {},
   trackTask?: (task: TaskReference, origin?: MonitoringSpan) => string,
   analytics?: CommandAnalytics,
-  commandOptions?: ConsoleCommandOptions,
 ) {
   let state: Omit<ConsoleState, 'records'> & {
     records: readonly ConsoleRecord[];
@@ -51,7 +50,11 @@ export function createConsoleController(
       failedCommand: undefined,
     });
   };
-  async function execute(input = state.command, locale: Locale = 'en-US') {
+  async function execute(
+    input = state.command,
+    locale: Locale = 'en-US',
+    commandOptions?: ConsoleCommandOptions,
+  ) {
     const command = input.trim();
     if (!active || running || !command) return;
     if (clearRequested(command)) {
@@ -189,9 +192,9 @@ export function createConsoleController(
             ? conversationDraft(state.conversationDraft)
             : conversationDraft,
       }),
-    retry: (locale: Locale) =>
+    retry: (locale: Locale, commandOptions?: ConsoleCommandOptions) =>
       state.failedCommand
-        ? execute(state.failedCommand, locale)
+        ? execute(state.failedCommand, locale, commandOptions)
         : Promise.resolve(),
   };
 }

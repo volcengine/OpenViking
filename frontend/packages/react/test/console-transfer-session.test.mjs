@@ -7,7 +7,12 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
   const picked = [];
   const saved = [];
   const fixture = new File(['fixture'], 'sample.md');
-  const validPack = 'PK\x03\x04archive';
+  // A ZIP with one manifest entry and an archive comment.
+  const validPack = Buffer.from(
+    'UEsDBBQAAAAAAAAAIQBZX5KlJQAAACUAAAANAAAAbWFuaWZlc3QuanNvbnsicm9vdCI6eyJ1cmkiOiJ2aWtpbmc6Ly9yZXNvdXJjZXMifX1QSwECFAMUAAAAAAAAACEAWV+SpSUAAAAlAAAADQAAAAAAAAAAAAAAgAEAAAAAbWFuaWZlc3QuanNvblBLBQYAAAAAAQABADsAAABQAAAAFwBPcGVuVmlraW5nIHRlc3QgZml4dHVyZQ==',
+    'base64',
+  );
+  let exportBytes = validPack;
   let selectedPack = new File([validPack], 'sample.ovpack');
   const host = await mount(
     async (url, init) => {
@@ -18,7 +23,7 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
       if (pathname.endsWith('/temp_upload'))
         return ok({ temp_file_id: 'upload-1' });
       if (pathname.endsWith('/download')) return new Response('download bytes');
-      if (pathname.endsWith('/export')) return new Response(validPack);
+      if (pathname.endsWith('/export')) return new Response(exportBytes);
       return ok({});
     },
     {
@@ -32,7 +37,7 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
             return fixture;
           },
           async download(blob, name) {
-            saved.push([await blob.text(), name]);
+            saved.push([Buffer.from(await blob.arrayBuffer()), name]);
           },
         },
       },
@@ -52,6 +57,12 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
     assert.deepEqual(calls.at(-1).body, {
       to: 'viking://resources/qa',
       temp_file_id: 'upload-1',
+    });
+    const beforeGit = calls.length;
+    await host.execute('ov add-resource git@example.invalid:org/repo.git');
+    assert.equal(calls.length, beforeGit + 1);
+    assert.deepEqual(calls.at(-1).body, {
+      path: 'git@example.invalid:org/repo.git',
     });
     await host.execute(
       'ov import sample.ovpack viking://resources/qa --on-conflict skip --vector-mode recompute',
@@ -76,7 +87,7 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
       include_vectors: true,
     });
     assert.deepEqual(saved, [
-      ['download bytes', 'sample.md'],
+      [Buffer.from('download bytes'), 'sample.md'],
       [validPack, 'sample.ovpack'],
     ]);
 
@@ -89,6 +100,16 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
       assert.match(host.records.at(-1).textContent, /unavailable/i);
     }
     assert.equal(calls.length, count);
+
+    for (const truncated of [
+      validPack.subarray(0, 4),
+      validPack.subarray(0, -1),
+    ]) {
+      exportBytes = truncated;
+      await host.execute('ov export viking://resources/qa ./sample');
+      assert.equal(host.records.at(-1).dataset.status, 'error');
+    }
+    assert.equal(saved.length, 2);
   } finally {
     await host.dispose();
   }
@@ -123,6 +144,11 @@ test('Console uses the CLI session routes and argument mappings', async () => {
       pathname: '/api/v1/sessions/thread-id/config',
       body: { memory_extraction_config: { events: { tags: [] } } },
     });
+    const count = calls.length;
+    await host.execute('ov session config set thread-id');
+    assert.match(host.records.at(-1).textContent, /--no-auto-commit/);
+    assert.equal(host.records.at(-1).dataset.status, 'error');
+    assert.equal(calls.length, count);
     await host.execute(
       `ov session add-messages thread-id '[{"role":"user","content":"test"}]'`,
     );

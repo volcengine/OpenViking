@@ -62,7 +62,6 @@ export function useConsole({
       },
       tracking.track,
       analytics,
-      commandOptions,
     );
   }, [
     client,
@@ -75,7 +74,6 @@ export function useConsole({
     scopeKey,
     tracking.track,
     analytics,
-    commandOptions,
   ]);
   const commandEnabled = modes.includes('command');
   // Effect necessity: commands keep network requests alive after user events.
@@ -137,8 +135,9 @@ export function useConsole({
     },
     setCommand: controller.setCommand,
     setConversationDraft: controller.setConversationDraft,
-    execute: (command?: string) => controller.execute(command, locale),
-    retry: () => controller.retry(locale),
+    execute: (command?: string) =>
+      controller.execute(command, locale, commandOptions),
+    retry: () => controller.retry(locale, commandOptions),
     cancel: controller.cancel,
     clear: controller.clear,
   };

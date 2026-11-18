@@ -35,7 +35,7 @@ function sessionTags({ event_tags, no_event_tags }: ArgumentValues) {
   return typeof event_tags === 'string' ? event_tags.split(',') : undefined;
 }
 
-function sessionConfiguration(values: ArgumentValues) {
+function sessionConfiguration(values: ArgumentValues, required?: boolean) {
   const { auto_commit_policy, no_auto_commit } = values;
   if (no_auto_commit === true && auto_commit_policy !== undefined)
     throw new ConsoleCommandError(
@@ -43,10 +43,16 @@ function sessionConfiguration(values: ArgumentValues) {
       '--auto-commit-policy-json / --no-auto-commit',
     );
   const tags = sessionTags(values);
+  const policy = no_auto_commit === true ? null : auto_commit_policy;
+  if (required && tags === undefined && policy === undefined)
+    throw new ConsoleCommandError(
+      'missingArgument',
+      '--event-tags / --no-event-tags / --auto-commit-policy-json / --no-auto-commit',
+    );
   return {
     memory_extraction_config:
       tags === undefined ? undefined : { events: { tags } },
-    auto_commit_policy: no_auto_commit === true ? null : auto_commit_policy,
+    auto_commit_policy: policy,
   };
 }
 
@@ -192,7 +198,7 @@ export const SESSION_COMMAND_SPECS: readonly CommandSpec[] = [
     request: (values) => ({
       method: 'PATCH',
       path: `${OV_PATH_BUILDERS.session(values.session_id as string)}/config`,
-      body: sessionConfiguration(values),
+      body: sessionConfiguration(values, true),
     }),
   },
 ];

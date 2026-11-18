@@ -7,6 +7,7 @@ import type { FileBrowserHandle } from './types.js';
 import { supportsPack } from './preview-policy.js';
 
 interface PackSelection {
+  id: number;
   uri: string;
   finish: (file?: File) => void;
 }
@@ -19,16 +20,18 @@ export function usePackImportPicker(
 ) {
   const [selection, setSelection] = useState<PackSelection>();
   const active = useRef<PackSelection | undefined>(undefined);
+  const nextId = useRef(0);
   const choosePackFile = useCallback<FileBrowserHandle['choosePackFile']>(
     (uri, signal) => {
       signal?.throwIfAborted();
-      if (!canWrite || !supportsPack(uri))
+      if (!canWrite || (uri !== 'viking://' && !supportsPack(uri)))
         throw new Error(
           'OVPack import requires a supported resource directory.',
         );
       active.current?.finish();
       return new Promise<File | undefined>((resolve) => {
         const next: PackSelection = {
+          id: ++nextId.current,
           uri,
           finish(file) {
             signal?.removeEventListener('abort', abort);
@@ -63,7 +66,7 @@ export function usePackImportPicker(
     choosePackFile,
     dialog: selection ? (
       <FileBrowserNativeDialog
-        key={selection.uri}
+        key={selection.id}
         kind="importPack"
         uri={selection.uri}
         canWrite={canWrite}

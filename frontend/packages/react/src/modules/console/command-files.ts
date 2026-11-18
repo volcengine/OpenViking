@@ -1,4 +1,8 @@
-import { hasOvpackHeader, hasOvpackName } from '../../shared/ovpack-file.js';
+import {
+  hasCompleteOvpack,
+  hasOvpackHeader,
+  hasOvpackName,
+} from '../../shared/ovpack-file.js';
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvRequestSpec } from '../../client/types.js';
 import { ConsoleCommandError } from './command-messages.js';
@@ -104,7 +108,7 @@ export async function downloadCommandFile(
   const filename = name.endsWith(extension) ? name : name + extension;
   const blob = await execution.request<Blob>({ ...spec, responseType: 'blob' });
   execution.signal?.throwIfAborted();
-  if (extension === '.ovpack' && !(await hasOvpackHeader(blob)))
+  if (extension === '.ovpack' && !(await hasCompleteOvpack(blob)))
     throw new ConsoleCommandError('invalidOvpackDownload');
   execution.signal?.throwIfAborted();
   await execution.files.download(blob, filename);

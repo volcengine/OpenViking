@@ -1,10 +1,11 @@
-import { notificationError } from './helpers/feedback-dom.mjs';
+import { notificationError, toastContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   fixture,
   tree,
   mount,
+  click,
   target,
   openAction,
   workflow,
@@ -154,10 +155,7 @@ test('OVPack dialog rejects other extensions and invalid archive headers before 
       await act(async () =>
         input.dispatchEvent(new window.Event('change', { bubbles: true })),
       );
-      assert.match(
-        workflow().querySelector('[role="alert"]').textContent,
-        /valid .ovpack/,
-      );
+      assert.match(toastContent()?.textContent, /valid .ovpack/);
       assert.equal(button('Import', workflow()).disabled, true);
       await submit();
     }
@@ -167,6 +165,39 @@ test('OVPack dialog rejects other extensions and invalid archive headers before 
       ),
       false,
     );
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('Console pack picker opens at the root and starts each request with an empty selection', async () => {
+  const ref = { current: null };
+  const fetch = fixture(target, true);
+  const view = await mount(tree(fetch, target, { ref }));
+  try {
+    let first;
+    await act(() => {
+      first = ref.current.choosePackFile('viking://');
+    });
+    const input = workflow().querySelector('input[type="file"]');
+    Object.defineProperty(input, 'files', {
+      value: [new File(['PK\x03\x04archive'], 'resources.ovpack')],
+    });
+    await act(async () =>
+      input.dispatchEvent(new window.Event('change', { bubbles: true })),
+    );
+    assert.equal(button('Import', workflow()).disabled, false);
+
+    let second;
+    await act(() => {
+      second = ref.current.choosePackFile('viking://');
+    });
+    assert.equal(await first, undefined);
+    assert.notEqual(workflow().querySelector('input[type="file"]'), input);
+    assert.equal(button('Import', workflow()).disabled, true);
+    await click(button('Cancel', workflow()));
+    assert.equal(await second, undefined);
+    assert.equal(workflow(), null);
   } finally {
     await view.unmount();
   }

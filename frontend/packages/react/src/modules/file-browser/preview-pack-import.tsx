@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { DocumentIcon } from '../../icons/index.js';
 import UploadIcon from '../../../../icons/svg/file-preview/import.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
+import { useToast } from '../../shared/primitives/toast/use-toast.js';
 import { importPreviewPack } from './preview-native.js';
 import { PreviewMutationError } from './preview-query-state.js';
 import type { PreviewWorkflowProps } from './preview-workflow-types.js';
@@ -23,22 +24,25 @@ export function PreviewPackImport({
 }) {
   const id = useId();
   const [file, setFile] = useState<File>();
-  const [invalid, setInvalid] = useState(false);
+  const [toast, toastHolder] = useToast({ locale });
   const mutation = usePreviewMutation(uri, requestOptions);
   async function changeFile(input: HTMLInputElement) {
     const picked = input.files?.[0];
     setFile(undefined);
-    setInvalid(false);
+    toast.clear();
     mutation.reset();
     if (!picked) return;
     const valid =
       hasOvpackName(picked.name) &&
       (await hasOvpackHeader(picked).catch(() => false));
-    if (input.files?.[0] !== picked) return;
+    if (!input.isConnected || input.files?.[0] !== picked) return;
     if (valid) setFile(picked);
     else {
       input.value = '';
-      setInvalid(true);
+      toast.error({
+        id: 'pack-import-format',
+        content: text.importInvalidFormat,
+      });
     }
   }
   return (
@@ -83,7 +87,7 @@ export function PreviewPackImport({
           <span className="ov-pack-import__choose">{text.importChoose}</span>
         </label>
       </div>
-      {invalid ? <p role="alert">{text.importInvalidFormat}</p> : null}
+      {toastHolder}
       <PreviewMutationError
         error={mutation.error}
         title={text.failureTitle(text.importSubmit)}
