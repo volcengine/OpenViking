@@ -458,6 +458,9 @@ def create_app(
                 await stack.enter_async_context(gateway.router.lifespan_context(gateway))
             if service is not None:
                 await _initialize_runtime_state(app, service, config)
+            from openviking.server.transfer_token_backend import transfer_token_lifespan
+
+            await stack.enter_async_context(transfer_token_lifespan(config))
             if gateway is not None and config.get_effective_auth_mode() == "dev":
                 from openviking_gateway.app import seed_defaults
 

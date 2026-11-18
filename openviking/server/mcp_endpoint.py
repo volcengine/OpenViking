@@ -1375,7 +1375,7 @@ async def download(uri: str) -> str:
         if server_config is not None
         else _DEFAULT_UPLOAD_TTL_SECONDS
     )
-    token, expires_at = download_token_store.issue(
+    token, expires_at = await download_token_store.aissue(
         ctx.user.account_id,
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
@@ -2146,7 +2146,7 @@ async def add_resource(
         else _DEFAULT_UPLOAD_TTL_SECONDS
     )
 
-    token, expires_at = upload_token_store.issue(
+    token, expires_at = await upload_token_store.aissue(
         ctx.user.account_id,
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
@@ -2324,7 +2324,7 @@ async def add_skill(
         if server_config is not None
         else _DEFAULT_UPLOAD_TTL_SECONDS
     )
-    token, expires_at = upload_token_store.issue(
+    token, expires_at = await upload_token_store.aissue(
         ctx.user.account_id,
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,

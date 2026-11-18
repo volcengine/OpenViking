@@ -613,6 +613,63 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `upload_signed_ttl_seconds` | integer | `600` | Signed upload and download URL lifetime |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | Temporary upload storage |
 
+### Shared transfer tokens (opt-in)
+
+The MCP `download`, local-file `add_resource` and local-file `add_skill` tools mint
+single-use URLs. By default their tokens are kept in memory in the issuing worker,
+so a different worker or a restart cannot redeem them. To share this handshake,
+merge these settings into `ov.conf` on **every** worker:
+
+```json
+{
+  "service_name": "example-service",
+  "cache": {
+    "provider": "redis",
+    "params": {
+      "mode": "standalone",
+      "endpoints": ["redis://localhost:6379"],
+      "command_timeout_ms": 1000,
+      "password_env": "EXAMPLE_REDIS_PASSWORD"
+    }
+  },
+  "server": {
+    "transfer_tokens": {"backend": "redis", "key_prefix": "transfer-token"}
+  }
+}
+```
+
+`server.transfer_tokens.backend` defaults to `"memory"`. The optional `key_prefix`
+defaults to `"transfer-token"` and accepts 1–64 ASCII letters, digits, `_` or `-`.
+Keys use `ov:<normalized service_name>:<key_prefix>:v1:<purpose>:<token>`; upload and
+download purposes are separate. All workers in one deployment must share the
+same namespace, Redis database, credentials and identity/authorization backend.
+Use a separate namespace for a separate deployment. Credentials and TLS reuse
+the top-level Redis cache configuration; set the referenced password environment
+variable before startup (or omit it when authentication is not configured).
+
+This first adapter supports a **single-primary standalone Redis**, requires the
+optional Redis Python dependency (`pip install 'redis>=5.3.1,<7'`) and a positive
+`command_timeout_ms`, and fails startup for unsupported topologies. It does not
+claim durable single-use behavior through Redis failover or restore: resurrecting
+consumed records can resurrect tokens. Atomic mint, server-clock expiry and
+consume-and-burn use Redis commands; backend failures return unavailable and never
+fall back to process memory. An interrupted operation may already have committed,
+so consumption is not automatically retried. A consumed token stays burned when
+the subsequent file operation fails; request a new URL.
+
+Identity, actor scope, OAuth origin, ACL and ingest parameters remain bound at mint
+time. Existing API-key precedence and redemption-time user/role/access checks are
+unchanged. `upload_signed_ttl_seconds` still controls lifetime (default 600 seconds).
+Records are limited to 64 KiB. Uploaded **file payloads** remain a separate
+`server.temp_upload`/storage concern; enabling shared tokens does not make local
+files or other account state shared.
+
+Existing memory tokens are not migrated. Enable or disable this feature in a
+coordinated window after existing URLs expire; mixing old/memory and Redis workers
+under one load balancer is unsupported during that handshake window. Restart
+workers after changing these settings. Outstanding Redis records expire naturally;
+shutdown does not scan or delete the deployment's token namespace.
+
 ### Encryption and API Key Hashing
 
 File encryption and API key hashing are configured in the top-level `encryption` section, not under `server`:

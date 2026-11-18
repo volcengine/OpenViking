@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""In-memory store for short-lived upload tokens used by the MCP progressive upload flow.
+"""Short-lived upload tokens used by the MCP progressive upload flow.
 
 Issued by the MCP ``add_resource`` tool when a caller passes a local-file path; consumed by
 ``POST /api/v1/resources/temp_upload`` when the request carries a ``?token=`` instead of an
@@ -24,9 +24,8 @@ carry the resolved ``uri`` of one file and are consumed by ``GET /api/v1/content
 Keeping the two stores apart means an upload token can never be redeemed for a download, or
 the reverse.
 
-Single-worker only: tokens are lost on restart and not shared across uvicorn workers.
-Multi-worker deployments should rely on the shared-mode TempUploadStore for the actual
-file payload; only the brief upload-token handshake is process-local.
+By default tokens are process-local and lost on restart. An opt-in Redis transfer-token
+backend shares only this handshake; file payload storage remains a separate owner.
 """
 
 from __future__ import annotations
@@ -35,11 +34,14 @@ import secrets
 import string
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.identity import Role
 from openviking.storage.acl import AclSpec
+
+if TYPE_CHECKING:
+    from openviking.server.transfer_token_backend import RedisTransferTokens
 
 _TOKEN_ALPHABET = string.ascii_letters + string.digits  # base62
 _TOKEN_LENGTH = 10
@@ -96,11 +98,17 @@ class ConsumedUploadToken:
     uri: str = ""
 
 
-class UploadTokenStore:
-    def __init__(self) -> None:
-        self._store: dict[str, _TokenInfo] = {}
+def _new_token():
+    return "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
 
-    def issue(
+
+class UploadTokenStore:
+    def __init__(self, purpose="upload") -> None:
+        self._store: dict[str, _TokenInfo] = {}
+        self.purpose = purpose
+        self._backend: RedisTransferTokens | None = None
+
+    def _new_info(
         self,
         account_id: str,
         user_id: str,
@@ -122,15 +130,13 @@ class UploadTokenStore:
         acl: AclSpec | None = None,
         from_oauth: bool = False,
         uri: str = "",
-    ) -> Tuple[str, float]:
+    ) -> _TokenInfo:
         """Mint a fresh token bound to the caller identity and ingestion parameters.
 
         ``actor_peer_id`` is captured from the minting request's context so server-side
         auto-ingest keeps the caller's peer scope (reason-memory routing) — it is NOT taken
-        from the later upload request's headers, which could be spoofed. Returns
-        (token, expires_at).
+        from the later upload request's headers, which could be spoofed.
         """
-        self._purge_expired()
         expires_at = time.time() + max(1, ttl_seconds)
         info = _TokenInfo(
             account_id,
@@ -153,15 +159,40 @@ class UploadTokenStore:
             from_oauth,
             uri,
         )
+        return info
+
+    def issue(self, *args, **kwargs) -> Tuple[str, float]:
+        if self._backend is not None:
+            raise RuntimeError("Shared transfer tokens require aissue")
+        self._purge_expired()
+        info = self._new_info(*args, **kwargs)
         for _ in range(8):
-            token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
+            token = _new_token()
             if token not in self._store:
                 self._store[token] = info
-                return token, expires_at
+                return token, info.expires_at
         raise RuntimeError("upload_token_store: failed to mint a unique token after 8 attempts")
+
+    async def aissue(self, account_id, user_id, ttl_seconds, **kwargs):
+        if self._backend is None:
+            return self.issue(account_id, user_id, ttl_seconds, **kwargs)
+        info = self._new_info(account_id, user_id, ttl_seconds, **kwargs)
+        return await self._backend.issue(self.purpose, info, ttl_seconds)
+
+    async def aconsume(self, token):
+        if self._backend is None:
+            return self.consume(token)
+        if not token:
+            raise UploadTokenError("missing upload token")
+        info = await self._backend.consume(self.purpose, token)
+        if info is None:
+            raise UploadTokenError("unknown or already-consumed upload token")
+        return self._consumed(info)
 
     def consume(self, token: str) -> ConsumedUploadToken:
         """Pop the token and validate it. Returns the bound identity + business params."""
+        if self._backend is not None:
+            raise RuntimeError("Shared transfer tokens require aconsume")
         if not token:
             raise UploadTokenError("missing upload token")
         info = self._store.pop(token, None)
@@ -169,6 +200,10 @@ class UploadTokenStore:
             raise UploadTokenError("unknown or already-consumed upload token")
         if info.expires_at < time.time():
             raise UploadTokenError("upload token expired")
+        return self._consumed(info)
+
+    @staticmethod
+    def _consumed(info):
         return ConsumedUploadToken(
             account_id=info.account_id,
             user_id=info.user_id,
@@ -206,4 +241,4 @@ class UploadTokenStore:
 
 
 upload_token_store = UploadTokenStore()
-download_token_store = UploadTokenStore()
+download_token_store = UploadTokenStore("download")
