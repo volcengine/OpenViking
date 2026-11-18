@@ -415,6 +415,9 @@ jobs:
           cd tests/api_test
           uv pip install -r requirements.txt
 
+      - name: Run offline intent search regression
+        run: uv run --no-sync python -m pytest -q -o addopts='' tests/server/test_api_intent_search_offline.py
+
       - name: Create OpenViking config file (Unix)
         if: runner.os != 'Windows'
         id: create-config-unix
@@ -696,7 +699,8 @@ jobs:
           if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
             echo "Running serial tests (filesystem + resource operations)..."
             uv run --no-sync python -m pytest filesystem/ scenarios/resources_retrieval/ -v --tb=short \
-              --ignore=filesystem/slow/ --ignore=scenarios/resources_retrieval/slow/
+              --ignore=filesystem/slow/ --ignore=scenarios/resources_retrieval/slow/ \
+              --ignore=scenarios/resources_retrieval/test_intent_extended_search.py
             echo "Running full test suite with VLM/Embedding (parallel, excluding serial and slow tests)..."
             uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
               --ignore=scenarios/resources_retrieval_slow/ --ignore=filesystem/ --ignore=scenarios/resources_retrieval/ \
