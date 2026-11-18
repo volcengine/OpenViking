@@ -192,8 +192,8 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | --- | --- | --- | --- | --- |
 | 召回记忆 | `recall` | `true` | | 为每条新的用户消息检索记忆。 |
 | 会话开头提供用户画像 | `profile` | `true` | | 新对话开始时提供画像，独立于召回。 |
-| 会话开头提供 soul.md | `soul` | `true` | | 新对话开始时提供用户的 `memories/soul.md`，并告诉模型遵循它，独立于召回。 |
-| 开头内容预算 | `profile_max_tokens` | `4000` | 0–32,000 | soul、画像和目录的独立预算，soul 优先占用；0 表示全部省略。目录需要提供 OpenViking 的 `read` 工具（`openviking_read`）。 |
+| 会话开头提供 soul.md | `soul` | `true` | | 新对话开始时提供用户的 `memories/soul.md`，并告诉模型遵循它，独立于召回。全文提供，不占开头内容预算。 |
+| 开头内容预算 | `profile_max_tokens` | `4000` | 0–32,000 | 画像和目录的独立预算；0 表示省略。目录需要提供 OpenViking 的 `read` 工具（`openviking_read`）。 |
 | 显示召回摘要 | `show_recall` | `false` | | 在回复开头说明 OpenViking 补充了什么，或召回失败的原因。模型看不到。 |
 | 检索范围 | `context_types` | `memory`、`resource`、`skill` | 开启召回时至少一个（仅 Studio 校验） | 检索哪些内容：记忆、资源、技能。 |
 | 单条消息预算 | `max_tokens` | `1600` | 64–32,000 | 一条消息最多补充的 token 数。 |

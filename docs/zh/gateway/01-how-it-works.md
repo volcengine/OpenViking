@@ -47,7 +47,7 @@ Relevant memory from OpenViking. It is this user's own saved history (past conve
 
 新对话开始时，网关附上你的 soul 和 OpenViking 用户画像。soul 是你 OpenViking 账号里的 `memories/soul.md`，也就是你留给模型的长期指令（见[上下文类型](../concepts/02-context-types.md)）。网关会告诉模型遵循它，系统提示词或你在对话里另有要求时除外。模型能用 OpenViking 的 `read` 工具（`openviking_read`，见[OpenViking 工具](04-openviking-tools.md#choose-tools)）时，还附上记忆和技能目录，方便模型在自动召回之外继续查找。
 
-这部分有独立的 4,000 token 预算（**开头内容预算**），不占召回预算。soul 优先占用，只有它自己超出整份预算时才会被截断；剩下的预算里，技能目录最多占四分之一。
+画像和目录有独立的 4,000 token 预算（**开头内容预算**），技能目录最多占四分之一，不占召回预算。soul 全文附上，两份预算都不占，所以 soul 写得长，这段对话的每次请求都会相应变大。
 
 即使第一条消息没有召回到记忆，soul、画像和目录也会出现；某部分读取失败就省略它，对话照常继续。开头内容只读取一次，之后保持不变，所以修改 `soul.md` 会在新对话里生效。客户端压缩历史后也会生效，因为网关这时会重新读取 soul、画像和目录；网关自己压缩时则保留原来的开头。
 

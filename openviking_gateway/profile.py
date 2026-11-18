@@ -187,14 +187,6 @@ async def read_file(fetch, uri):
     return contained(result.strip()) if isinstance(result, str) else ""
 
 
-def framed(tag, uri, content, budget, shorten):
-    """``content`` in a ``<tag uri=…>`` element of at most ``budget`` tokens, or ""."""
-    opening = f'<{tag} uri="{html.escape(uri, quote=True)}">'
-    limit = max(0, budget - estimate_tokens(f"{opening}\n\n</{tag}>"))
-    content = content and shorten(content, limit)
-    return f"{opening}\n{content}\n</{tag}>" if content else ""
-
-
 async def ls_dir(fetch, uri):
     result = await fetch(
         "/api/v1/fs/ls",
@@ -223,9 +215,11 @@ async def ls_dir(fetch, uri):
 
 async def build_profile(viking, key, policy, tools):
     names = {tool["function"]["name"] for tool in tools}
-    catalog = "openviking_read" in names
+    # The budget covers the profile and the catalogs; the soul is added whole.
     budget = policy.profile_max_tokens
-    if not budget or not (policy.profile or policy.soul or catalog):
+    profiled = policy.profile and bool(budget)
+    catalog = "openviking_read" in names and bool(budget)
+    if not (policy.soul or profiled or catalog):
         return {"text": "", "reason": "disabled", "parts": []}
     if viking.unavailable_reason:
         # Like recall, skip the profile while OV is down instead of waiting for its timeout.
@@ -266,7 +260,7 @@ async def build_profile(viking, key, policy, tools):
         space = await resolve_user_space(fetch)
         root = f"viking://user/{space}/memories"
         paths, requests = [], []
-        for path, wanted in (("soul.md", policy.soul), ("profile.md", policy.profile)):
+        for path, wanted in (("soul.md", policy.soul), ("profile.md", profiled)):
             if wanted:
                 paths.append(path)
                 requests.append(read_file(fetch, root + "/" + path))
@@ -279,28 +273,26 @@ async def build_profile(viking, key, policy, tools):
 
     async def skills():
         if not catalog or budget < 4:
-            return []
-        return skill_groups(await fetch("/api/v1/skills", {"node_limit": 200}, {}))
+            return ""
+        result = await fetch("/api/v1/skills", {"node_limit": 200}, {})
+        return format_skill_catalog(skill_groups(result), budget // 4)
 
-    (root, values), groups = await asyncio.gather(memories(), skills())
-    # The soul is instructions, so it takes the budget first and is cut only past all of it.
-    soul_text = framed(
-        "agent-soul",
-        root + "/soul.md",
-        values.get("soul.md", ""),
-        budget,
-        lambda text, limit: truncate(text, limit, "\n... [soul truncated]"),
+    (root, values), skill_text = await asyncio.gather(memories(), skills())
+    soul = values.get("soul.md", "")
+    soul_text = (
+        f'<agent-soul uri="{html.escape(root + "/soul.md", quote=True)}">\n{soul}\n</agent-soul>'
+        if soul
+        else ""
     )
-    remaining = budget - estimate_tokens(soul_text) - bool(soul_text)
-    skill_text = format_skill_catalog(groups, remaining // 4)
-    remaining -= estimate_tokens(skill_text) + bool(skill_text)
-    profile_text = framed(
-        "user-profile",
-        root + "/profile.md",
-        values.get("profile.md", ""),
-        remaining // 2,
-        elide_profile,
-    )
+    remaining = budget - estimate_tokens(skill_text) - bool(skill_text)
+    profile = values.get("profile.md", "")
+    profile_text = ""
+    if profile:
+        opening = f'<user-profile uri="{html.escape(root + "/profile.md", quote=True)}">'
+        frame_cost = estimate_tokens(opening + "\n\n</user-profile>")
+        content = elide_profile(profile, max(0, remaining // 2 - frame_cost))
+        if content:
+            profile_text = f"{opening}\n{content}\n</user-profile>"
     remaining -= estimate_tokens(profile_text) + bool(profile_text)
     frame_cost = estimate_tokens("<available-memories>\n\n</available-memories>")
     listing_budget = max(0, remaining - frame_cost)

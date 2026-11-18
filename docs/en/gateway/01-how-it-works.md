@@ -47,7 +47,7 @@ To see in the reply what was added, turn on **Show recall summary** in the conte
 
 When a new conversation starts, the gateway adds your soul and your OpenViking user profile. The soul is `memories/soul.md` in your OpenViking account: the standing instructions you keep for the model (see [Context types](../concepts/02-context-types.md)). The gateway tells the model to follow it, except where the system prompt or you in the conversation say otherwise. When the model is offered the OpenViking `read` tool (`openviking_read`, see [OpenViking tools](04-openviking-tools.md#choose-tools)), the gateway also adds memory and skill catalogs, so the model can look beyond what recall found.
 
-This opening context has its own 4,000-token budget (**Opening context budget**), which does not count against the recall budget. The soul takes from it first and is cut only when it alone is larger than the budget. Of what is left, skills get at most a quarter.
+The profile and catalogs have their own 4,000-token budget (**Opening context budget**), at most a quarter of it for skills, and do not count against the recall budget. The soul is added whole and counts against neither budget, so a long soul makes every request of the conversation larger.
 
 The soul, profile and catalogs appear even if the first message recalls nothing. A part that fails to load is left out and the conversation goes on. The opening is read once and then stays the same, so an edit to `soul.md` takes effect in new conversations. It also takes effect after the client compacts its history, because the gateway then reads the soul, profile and catalogs again; the gateway's own compaction keeps the original opening.
 

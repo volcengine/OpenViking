@@ -45,8 +45,8 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 | Setting | Default | What it controls |
 | --- | --- | --- |
 | **User profile at conversation start** | On | Gives the model your OpenViking user profile when a conversation starts. |
-| **Soul at conversation start** | On | Gives the model your `soul.md`, the standing instructions you keep in OpenViking, when a conversation starts, and tells the model to follow it. |
-| **Opening context budget** | 4,000 tokens | The most the soul, the profile and the memory and skill catalogs may use at the start. |
+| **Soul at conversation start** | On | Gives the model your `soul.md`, the standing instructions you keep in OpenViking, when a conversation starts, and tells the model to follow it. The soul is added whole. |
+| **Opening context budget** | 4,000 tokens | The most the profile and the memory and skill catalogs may use at the start. The soul is not counted. |
 | **Show recall summary** | Off | Starts the reply with a one-line summary; see [Recall summary](#recall-summary). |
 | **Sources** | Memories, resources, skills | What recall searches. |
 | **Budget per message** | 1,600 tokens | The most memory added to one message. |
@@ -59,7 +59,7 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 
 How the settings work together:
 
-- **Opening context.** **User profile at conversation start** and **Soul at conversation start** work independently of recall and of each other. When the OpenViking `read` tool (`openviking_read`) is offered, memory and skill catalogs are added at the start as well. The soul takes from the **Opening context budget** first and is cut only when it alone is larger than the budget; skills get at most a quarter of what is left, and 0 leaves all of it out. This budget does not count against the recall budget; see [The opening context](01-how-it-works.md#the-opening-context).
+- **Opening context.** **User profile at conversation start** and **Soul at conversation start** work independently of recall and of each other. When the OpenViking `read` tool (`openviking_read`) is offered, memory and skill catalogs are added at the start as well. Skills get at most a quarter of the **Opening context budget**, and 0 leaves the profile and catalogs out. The soul is added whole and is not counted against the budget; only its own switch leaves it out. This budget does not count against the recall budget; see [The opening context](01-how-it-works.md#the-opening-context).
 - **What is added.** OpenViking selects and formats the recalled content within the budget. It may also return just a URI for the model to read later.
 - **Search query.** The query is the user message with client noise removed, cut to **Query length** characters. Messages shorter than 3 characters are not searched.
 - **Budgets.** Each message gets at most the smaller of **Budget per message** and what is left of **Budget per context window**. With less than 64 tokens left, the search is skipped. The budget per context window starts over whenever the conversation is compacted, by the gateway or by the client. These token counts are conservative estimates, not the provider's billing counts.

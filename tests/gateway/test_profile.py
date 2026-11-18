@@ -95,26 +95,25 @@ async def test_profile_and_skills_respect_full_token_budgets(budget, text, soul)
     result = await build_profile(
         viking, "key", Policy(profile_max_tokens=budget), tools("read", "list")
     )
-    assert estimate_tokens(result["text"]) <= budget
-    skills = re.search(r"<available-skills>.*?</available-skills>", result["text"], re.S)
+    # The soul is whole whatever the budget, and the budget holds for the rest.
+    whole = f'<agent-soul uri="viking://user/alice/memories/soul.md">\n{viking.soul.strip()}\n'
+    whole += "</agent-soul>"
+    assert result["text"].startswith(whole) == bool(soul)
+    rest = result["text"].removeprefix(whole).lstrip("\n")
+    assert "<agent-soul" not in rest and estimate_tokens(rest) <= budget
+    skills = re.search(r"<available-skills>.*?</available-skills>", rest, re.S)
     if skills:
         assert estimate_tokens(skills[0]) <= budget // 4
     if not budget:
-        assert not viking.profile_requests
-
-
-async def test_soul_is_whole_within_the_budget_and_cut_only_past_all_of_it():
-    viking = populated_viking()
-    viking.soul = "\n".join(f"Rule {i}: keep answers short." for i in range(100))
-    viking.profile = "profile line\n" * 2000
-    whole = await build_profile(viking, "key", Policy(profile_max_tokens=4000), tools("read"))
-    assert viking.soul in whole["text"] and "[soul truncated]" not in whole["text"]
-    assert whole["parts"] == ["soul", "profile", "memories", "skills"]
-    assert estimate_tokens(whole["text"]) <= 4000
-    cut = await build_profile(viking, "key", Policy(profile_max_tokens=200), tools("read"))
-    assert cut["text"].startswith('<agent-soul uri="viking://user/alice/memories/soul.md">\nRule 0')
-    assert cut["text"].endswith("\n... [soul truncated]\n</agent-soul>")
-    assert cut["parts"] == ["soul"] and estimate_tokens(cut["text"]) <= 200
+        assert not rest and result["parts"] == (["soul"] if soul else [])
+        uris = [
+            parse_qs(urlsplit(path).query).get("uri") for _, path, _, _ in viking.profile_requests
+        ]
+        assert uris == [None, ["viking://user"], ["viking://user/alice/memories/soul.md"]]
+        viking.profile_requests.clear()
+        policy = Policy(profile_max_tokens=0, soul=False)
+        off = await build_profile(viking, "key", policy, tools("read", "list"))
+        assert off["reason"] == "disabled" and not viking.profile_requests
 
 
 async def test_missing_soul_and_profile_files_are_not_failures():
