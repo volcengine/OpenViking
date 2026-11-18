@@ -600,6 +600,17 @@ describe('agent tools', () => {
     assert.deepEqual(await service.replyToEvent(chatEvent({ replyRoute: null }), 'x', 'p'), { ok: false, stage: 'no-target' });
   });
 
+  it('sends daemon runtime notices only to the owner without settling the input', async (t) => {
+    const { store, service, connectors, inbound } = setup(t);
+    const event = inbound({ messageId: 'om_runtimeFail123', chatId: 'oc_group12345678' });
+    assert.deepEqual(await service.notifyOwnerForEvent(event, 'runtime unavailable', 'runtime-failure'), { ok: true });
+    assert.deepEqual(await service.notifyOwnerForEvent(event, 'duplicate text', 'runtime-failure'), { ok: true });
+    assert.equal(connectors.calls.length, 1);
+    assert.equal(connectors.calls[0].input.user_id, OWNER.id);
+    assert.deepEqual(connectors.calls[0].input.content, { type: 'markdown', text: 'runtime unavailable' });
+    assert.equal(store.decisionFor(event.connectorInstance, event.eventId), null);
+  });
+
   it('does not reserve or invoke anything in dry-run mode', async (t) => {
     const { store, service, call, connectors, inbound } = setup(t);
     service.config.dryRun = true;
