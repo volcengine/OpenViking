@@ -58,6 +58,12 @@ test('Console shows the Compile guide and extended parameters in the selected lo
       );
       assert.match(hint.textContent, modelHelp);
       assert.doesNotMatch(hint.textContent, /doubao-2-1-lite/);
+      assert.match(
+        hint.textContent,
+        locale === 'zh-CN'
+          ? /有有效计划则为 true/
+          : /true if a valid schedule is present/,
+      );
       assert.match(hint.textContent, /00:00.{1,4}03:59/);
       await host.execute('ov help');
       assert.match(host.records.at(-1).textContent, help);

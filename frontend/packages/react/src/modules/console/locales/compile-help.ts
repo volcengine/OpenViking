@@ -56,9 +56,8 @@ export const compileHelp = {
         },
         {
           token: 'auto_update',
-          required: true,
           description:
-            '布尔值。true 启用定时自动执行，必须同时提供有效的 update_schedule；false 关闭自动执行并清空计划。',
+            '布尔值。true 启用定时自动执行，必须同时提供有效的 update_schedule；false 关闭自动执行并清空计划。省略时，有有效计划则为 true，否则为 false。',
         },
         {
           token: 'update_schedule',
@@ -133,9 +132,8 @@ export const compileHelp = {
         },
         {
           token: 'auto_update',
-          required: true,
           description:
-            'Boolean. Set to true with a valid update_schedule to enable scheduled runs. Set to false to disable scheduling and clear the plan.',
+            'Boolean. Set to true with a valid update_schedule to enable scheduled runs. Set to false to disable scheduling and clear the plan. When omitted, it is true if a valid schedule is present and false otherwise.',
         },
         {
           token: 'update_schedule',
