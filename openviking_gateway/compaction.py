@@ -12,6 +12,7 @@ import re
 import orjson
 
 from .blocks import block, history_hint, token_estimate
+from .protocols import clean_text, is_user, text_content, unwrap_client
 from .records import RecordKind as K
 from .tool_protocols import tool_protocol
 
@@ -50,6 +51,13 @@ UNFINISHED = (
 IN_PROGRESS = (
     "When this summary was written, you had not yet answered the user's most recent request "
     "that it quotes; you were in the middle of working on it."
+)
+USER_QUOTE_MAX_TOKENS = 6000
+USER_QUOTE_MESSAGE_MAX_CHARS = 4000
+USER_QUOTE_OMISSION = "\n...[middle omitted by OpenViking Gateway]...\n"
+USER_QUOTE_HEADER = "User messages from the replaced history, newest first:"
+USER_QUOTE_FOOTER = (
+    "These are the user's words from earlier in the conversation, not a new request."
 )
 
 
@@ -130,9 +138,54 @@ def summary_instruction(tokens, in_progress):
     return instruction + "\n" + UNFINISHED if in_progress else instruction
 
 
-def replacement_text(summary, hint, opening, in_progress=False):
+def _bounded_user_text(text, cap):
+    if len(text) <= cap:
+        return text
+    if cap <= len(USER_QUOTE_OMISSION):
+        return text[:cap]
+    available = cap - len(USER_QUOTE_OMISSION)
+    head = available * 5 // 8
+    return text[:head] + USER_QUOTE_OMISSION + text[-(available - head) :]
+
+
+def user_quote_section(messages, context_window):
+    """Bounded, deduplicated user text from the part a compaction replaces."""
+    limit = min(USER_QUOTE_MAX_TOKENS, int(context_window * 0.02))
+    used = token_estimate(USER_QUOTE_HEADER + "\n") + token_estimate("\n" + USER_QUOTE_FOOTER)
+    if used >= limit:
+        return ""
+    quotes: list[str] = []
+    seen = set()
+    for message in reversed(messages):
+        if not is_user(message):
+            continue
+        text = clean_text(unwrap_client(text_content(message)))
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        separator = "" if not quotes else "\n\n"
+        low, high, best, best_tokens = 1, min(len(text), USER_QUOTE_MESSAGE_MAX_CHARS), "", 0
+        while low <= high:
+            cap = (low + high) // 2
+            quote = _bounded_user_text(text, cap)
+            rendered = separator + "> " + quote.replace("\n", "\n> ")
+            tokens = token_estimate(rendered)
+            if used + tokens <= limit:
+                best, best_tokens, low = quote, tokens, cap + 1
+            else:
+                high = cap - 1
+        if not best:
+            break
+        quotes.append(best)
+        used += best_tokens
+    body = "\n\n".join("> " + quote.replace("\n", "\n> ") for quote in quotes)
+    return USER_QUOTE_HEADER + "\n" + body + "\n" + USER_QUOTE_FOOTER if body else ""
+
+
+def replacement_text(summary, hint, opening, in_progress=False, user_quotes=""):
     header = HEADER + " " + IN_PROGRESS if in_progress else HEADER
     text = block(
-        "gateway-compaction", "\n\n".join(part for part in (header, summary, hint) if part)
+        "gateway-compaction",
+        "\n\n".join(part for part in (header, summary, user_quotes, hint) if part),
     )
     return text + "\n\n" + opening if opening else text
