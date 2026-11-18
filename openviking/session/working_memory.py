@@ -332,18 +332,25 @@ def parse_required_checkpoint_summaries(
 # =====================================================================
 
 
+_WM_CANONICAL_HEADERS = frozenset(f"## {header}" for header in WM_SEVEN_SECTIONS)
+
+
 def parse_wm_sections(text: str) -> Dict[str, str]:
     """Parse an existing WM markdown into {header_line: body_text}.
 
-    Header comparison is case-sensitive on purpose: the update path only
-    uses this output to look up bodies by our own canonical headers.
+    Only the seven canonical headers are section boundaries. Section bodies are
+    free markdown per the update schema, so a body may legitimately contain
+    ``## `` subheadings; treating those as boundaries would drop everything
+    below them on the next merge, which only re-emits canonical sections.
+    Header comparison is case-sensitive on purpose: the update path only uses
+    this output to look up bodies by our own canonical headers.
     """
     sections: Dict[str, str] = {}
     current: Optional[str] = None
     buf: List[str] = []
     for line in (text or "").splitlines():
         stripped = line.strip()
-        if stripped.startswith("## "):
+        if stripped in _WM_CANONICAL_HEADERS:
             if current is not None:
                 sections[current] = "\n".join(buf).strip()
             current = stripped

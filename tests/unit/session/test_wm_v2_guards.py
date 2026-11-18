@@ -373,6 +373,21 @@ class TestMergeWmSections:
         for section in WM_SEVEN_SECTIONS:
             assert f"## {section}" in result
 
+    def test_body_subheading_survives_keep_round(self):
+        """A ``## `` subheading inside a section body must not become a section."""
+        old = _make_wm(current_state="- A")
+        ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        ops["Current State"] = {"op": "UPDATE", "content": "- A\n## Notes\n- C"}
+        first = wm.merge_wm_sections(old, ops)
+        assert "## Notes" in first
+
+        keep_ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
+        second = wm.merge_wm_sections(first, keep_ops)
+        assert "## Notes" in second
+        assert "- C" in second
+        parsed = wm.parse_wm_sections(second)
+        assert parsed["## Current State"] == "- A\n## Notes\n- C"
+
 
 # =======================================================================
 # _wm_recover_ops_from_raw
