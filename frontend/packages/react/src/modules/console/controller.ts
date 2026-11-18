@@ -114,7 +114,7 @@ export function createConsoleController(
         return;
       }
       let taskKeys: string[] = [];
-      const content = await executeCommand(
+      const { content, telemetry } = await executeCommand(
         command,
         monitoring?.client ?? client,
         { ...options, signal },
@@ -131,7 +131,7 @@ export function createConsoleController(
       update({
         records: state.records.map((record) =>
           record.id === id
-            ? { ...record, status: 'success', content, taskKeys }
+            ? { ...record, status: 'success', content, taskKeys, telemetry }
             : record,
         ),
       });

@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 
 import openviking.service.reindex_executor as reindex_mod
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
@@ -433,7 +434,37 @@ async def test_show_path_not_found_returns_404(client_with_resource):
         },
     )
     assert resp.status_code == 404
-    assert resp.json()["status"] == "error"
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["details"] == {
+        "type": "git_blob",
+        "resource": "viking://resources/does_not_exist.txt",
+        "reason": "path_not_found",
+    }
+
+
+async def test_show_missing_snapshot_object_does_not_report_missing_tree_path(
+    snapshot_router_client, monkeypatch
+):
+    from openviking.server.routers import snapshot
+
+    path = "viking://resources/tracked.txt"
+    show_mock = AsyncMock(side_effect=AGFSNotFoundError("object not found"))
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(show_blob_raw=show_mock)),
+    )
+
+    response = await snapshot_router_client.get(
+        "/api/v1/snapshot/show",
+        params={"target_ref": "b" * 40, "path": path},
+    )
+    assert response.status_code == 404
+    error = response.json()["error"]
+    assert error["code"] == "NOT_FOUND"
+    assert error["details"] == {"type": "git_blob", "resource": path}
 
 
 async def test_diff_returns_unified_diff_for_path(client_with_resource, service):

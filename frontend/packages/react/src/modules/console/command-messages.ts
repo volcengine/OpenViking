@@ -13,6 +13,7 @@ export interface ConsoleMessage {
 export type ConsoleRecord = CommandConsoleRecord & {
   localMessage?: ConsoleMessage;
   taskKeys?: readonly string[];
+  telemetry?: Record<string, unknown>;
 };
 
 export function formatConsoleMessage(message: ConsoleMessage, locale: Locale) {

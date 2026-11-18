@@ -102,6 +102,55 @@ test('standalone Console Hook localizes exposed generated errors without mutatin
   }
 });
 
+test('Console relocalizes existing session telemetry without repeating the command', async () => {
+  let state;
+  let calls = 0;
+  const telemetry = {
+    id: 'session-telemetry',
+    summary: { duration_ms: 7 },
+  };
+  const fetch = async () => {
+    calls++;
+    return Response.json({
+      status: 'ok',
+      result: { session_id: 'review' },
+      telemetry,
+    });
+  };
+  function Demo() {
+    state = useConsole();
+    return null;
+  }
+  const element = (locale) =>
+    h(
+      OpenVikingProvider,
+      { locale, baseURL: 'https://demo.invalid', fetch },
+      h(Demo),
+    );
+  const view = await mount(element('zh-CN'));
+  try {
+    await act(() => state.execute('ov session new --telemetry'));
+    const payload = JSON.stringify(telemetry, null, 2);
+    const original = state.records[0];
+    assert.deepEqual(original.content.lines, [
+      'Session id: review',
+      `遥测：${payload}`,
+    ]);
+    assert.equal(Object.hasOwn(original, 'telemetry'), false);
+
+    await view.render(element('en-US'));
+    assert.deepEqual(state.records[0].content.lines, [
+      'Session id: review',
+      `Telemetry: ${payload}`,
+    ]);
+    assert.equal(state.records[0].id, original.id);
+    assert.equal(calls, 1);
+    assert.equal(original.content.lines.at(-1), `遥测：${payload}`);
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('changing Hook locale keeps an active request and formats cancellation in the current language', async () => {
   let state, complete, pending, signal;
   let calls = 0;

@@ -55,11 +55,14 @@ export async function readHistoricalText(
       !('type' in error.details) ||
       error.details.type !== 'git_blob' ||
       !('resource' in error.details) ||
-      typeof error.details.resource !== 'string'
+      typeof error.details.resource !== 'string' ||
+      !('reason' in error.details) ||
+      error.details.reason !== 'path_not_found'
     ) {
       throw error;
     }
-    // A missing blob can also mean the path did not exist at this commit.
+    // A path-filtered log compares tree entries against each first parent.
+    // A matching commit changed this absent path without needing either blob.
     const [commit] = await client.request<{ oid: string; parents: string[] }[]>(
       {
         method: 'GET',
@@ -68,19 +71,7 @@ export async function readHistoricalText(
         options,
       },
     );
-    const parent = commit?.parents?.[0];
-    if (commit?.oid !== entry.snapshot || !parent) throw error;
-    // Native diff treats only a missing tree path as absent. A missing object
-    // for a tracked path still fails the comparison.
-    const diff = await client
-      .request<{ change_type: string }>({
-        method: 'GET',
-        path: OV_PATHS.snapshotDiff,
-        query: { path, from: parent, to: entry.snapshot },
-        options,
-      })
-      .catch(() => undefined);
-    if (diff?.change_type === 'deleted') return null;
+    if (commit?.oid === entry.snapshot && commit.parents?.[0]) return null;
     throw error;
   }
 }

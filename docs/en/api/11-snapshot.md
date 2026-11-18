@@ -299,6 +299,8 @@ Without `path`, the response is commit metadata JSON. With `path`, the response 
 
 The timestamp describes the requested snapshot, not the file's last modification or the run's completion time. Branches and tags are resolved once so the body and commit headers refer to the same snapshot. The commit headers also apply to `raw=false`; stripping memory fields only changes the body and its size.
 
+When the commit tree has no entry for the requested file path, the server returns HTTP 404 with `error.code: "NOT_FOUND"`, `error.details.type: "git_blob"`, and `error.details.reason: "path_not_found"`. A missing backing object has no `path_not_found` reason. Gateways can preserve this distinction by forwarding the error details.
+
 **CLI**
 
 ```bash

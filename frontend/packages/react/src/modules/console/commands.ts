@@ -22,7 +22,10 @@ export async function executeCommand(
   locale: Locale,
   onTasks?: (tasks: readonly TaskReference[]) => void,
   commandOptions?: ConsoleCommandOptions,
-): Promise<CommandConsoleRecordContent> {
+): Promise<{
+  content: CommandConsoleRecordContent;
+  telemetry?: Record<string, unknown>;
+}> {
   const tokens = tokenize(input);
   const spec = [...COMMAND_SPECS]
     .sort((a, b) => b.name.length - a.name.length)
@@ -50,7 +53,7 @@ export async function executeCommand(
     throw error;
   }
   if (!spec.request && !spec.execute)
-    return createCommandHelp(locale, commandOptions);
+    return { content: createCommandHelp(locale, commandOptions) };
   const execution: CommandExecution = {
     signal: options.signal,
     files: commandOptions?.files ?? browserCommandFiles,
@@ -78,5 +81,5 @@ export async function executeCommand(
     }
   }
   onTasks?.(readTaskReferences(spec.name, data));
-  return formatResult(spec.name, data, values, telemetry);
+  return { content: formatResult(spec.name, data, values), telemetry };
 }

@@ -128,11 +128,11 @@ export function nativePreviewDemoResponse(
     }
     case '/api/v1/snapshot/log': {
       const path = canonicalUri(url.searchParams.get('paths') ?? '');
-      if (
-        path === DEMO_WIKI_FILE &&
-        url.searchParams.get('branch') === deletedWikiVersion.oid
-      )
-        return ok([deletedWikiVersion]);
+      if (path === DEMO_WIKI_FILE) {
+        if (url.searchParams.get('branch') === deletedWikiVersion.oid)
+          return ok([deletedWikiVersion]);
+        return ok(demoWikiVersions);
+      }
       const history = (savedSnapshots.get(path) ?? []).map(({ info }) => info);
       return ok([...history, originalSnapshot]);
     }
@@ -159,7 +159,11 @@ export function nativePreviewDemoResponse(
             error: {
               code: 'NOT_FOUND',
               message: 'Snapshot file not found.',
-              details: { type: 'git_blob', resource: path },
+              details: {
+                type: 'git_blob',
+                resource: path,
+                reason: 'path_not_found',
+              },
             },
           },
           { status: 404 },

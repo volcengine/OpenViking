@@ -20,7 +20,6 @@ export function formatResult(
   name: string,
   data: unknown,
   values: ArgumentValues,
-  telemetry?: Record<string, unknown>,
 ): CommandConsoleRecordContent {
   if (['read', 'abstract', 'overview'].includes(name)) {
     const uri = values.uri as string;
@@ -91,7 +90,6 @@ export function formatResult(
       : data === null || data === undefined
         ? []
         : [text(data)];
-    if (telemetry) lines.push(`Telemetry: ${text(telemetry)}`);
     return { variant: 'write-result', lines };
   }
   if (name === 'search' && values.mode === 'context')

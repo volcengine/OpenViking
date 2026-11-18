@@ -303,6 +303,8 @@ curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=3f2a1b9c&path
 
 时间戳表示请求的快照提交时间，不是文件最后修改时间或 run 完成时间。分支和标签只解析一次，确保正文与 commit 响应头对应同一快照。`raw=false` 时也返回 commit 响应头，去除记忆字段仅影响正文及其字节数。
 
+如果提交树中没有请求的文件路径，服务端返回 HTTP 404，并设置 `error.code: "NOT_FOUND"`、`error.details.type: "git_blob"` 和 `error.details.reason: "path_not_found"`。底层存储对象缺失时不会返回 `path_not_found`。网关可通过透传错误详情保留这一区分。
+
 **CLI**
 
 ```bash
