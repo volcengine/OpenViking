@@ -160,7 +160,11 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
       await sessionManager.waitForBackground?.()
       // Cleanup ends every session this process was serving. Sessions with
       // nothing new since their last commit are left alone.
-      await sessionManager.flushAll({ commit: true, onlyIfUncommitted: true })
+      await sessionManager.flushAll({ commit: true, onlyIfUncommitted: true, includesSession: async (sessionID) => {
+        const result = await ctx.session?.get?.({ sessionID })
+        const location = (result?.data ?? result)?.location
+        return Boolean(ctx.location?.directory && location?.directory && sameLocation(location, ctx.location))
+      } })
     } catch (error) {
       logHookError("plugin.cleanup", error)
     }

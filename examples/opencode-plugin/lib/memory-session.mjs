@@ -303,7 +303,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     debouncedSaveState()
   }
 
-  async function flushAll({ commit = false, onlyIfUncommitted = false } = {}) {
+  async function flushAll({ commit = false, onlyIfUncommitted = false, includesSession } = {}) {
     if (saveTimer) {
       clearTimeout(saveTimer)
       saveTimer = null
@@ -313,6 +313,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     // See https://github.com/volcengine/OpenViking/issues/4490
     for (const sessionId of sessions.keys()) {
       try {
+        if (includesSession && !await includesSession(sessionId)) continue
         await flushSession(sessionId, { commit, onlyIfUncommitted, reason: "flushAll" })
       } catch (err) {
         console.warn(
