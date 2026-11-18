@@ -100,6 +100,7 @@ function FilePreviewBodyContent({
       <FilePreviewEditor
         draft={editing.draft}
         annotations={editing.annotations}
+        initialAnnotation={editing.initialAnnotation}
         readOnlySuffix={editing.readOnlySuffix}
         source={fileTab.source}
         text={text}
