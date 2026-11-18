@@ -298,3 +298,48 @@ def test_preset_directory_uris_cover_seeded_directories_only():
     } <= uris
     assert f"{user_root}/memories/preferences" not in uris
     assert "viking://resources/proj" not in uris
+
+
+@pytest.mark.asyncio
+async def test_account_workspace_failure_joins_started_index_enqueues_before_release():
+    fs = _FakeVikingFS()
+    db = _FakeVikingDB()
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._initialized = True
+    service._viking_fs = fs
+    service._directory_initializer = DirectoryInitializer(db, viking_fs=fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+    release = asyncio.Event()
+    sibling_started = asyncio.Event()
+    failure_delivered = asyncio.Event()
+    sibling_finished = asyncio.Event()
+    failure = OSError("synthetic queue write failed")
+
+    async def enqueue(message):
+        uri, level = message.context_data["uri"], message.context_data["level"]
+        if (uri, level) == ("viking://resources", 0):
+            await sibling_started.wait()
+            failure_delivered.set()
+            raise failure
+        if (uri, level) == ("viking://resources", 1):
+            sibling_started.set()
+            await release.wait()
+            sibling_finished.set()
+        db.embedding_messages.append(message)
+
+    db.enqueue_embedding_msg = enqueue
+    init = asyncio.create_task(service.initialize_account_workspace(ctx))
+    try:
+        await asyncio.wait_for(failure_delivered.wait(), timeout=3)
+        done, _ = await asyncio.wait({init}, timeout=0.1)
+        assert not done
+        fs._async_agfs.pathlock_release.assert_not_awaited()
+    finally:
+        release.set()
+        await asyncio.wait_for(sibling_finished.wait(), timeout=3)
+        with pytest.raises(OSError) as exc:
+            await init
+
+    assert exc.value is failure
+    fs._async_agfs.pathlock_release.assert_awaited_once()
+    assert len(db.embedding_messages) == len(db.get_calls[0][0]) - 1
