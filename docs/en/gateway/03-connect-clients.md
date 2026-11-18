@@ -319,7 +319,7 @@ Check every new client setup once, with a short conversation. This matters most 
 
 1. In the client, send two messages in one conversation (one chat, or one agent session). You should get normal replies.
 2. In Studio, open the **Requests** tab. Both requests should appear as **New message** with status 200.
-3. Expand both requests. They should show the same **Conversation**, and **Saving** should read **On**, which means saving is enabled and healthy. The first turn is saved once the second message arrives; to see it, look for a `gateway-…` session on Studio's **Sessions** page, signed in as the key's user (see [Confirm that memory works](02-quickstart.md#confirm-that-memory-works)).
+3. Expand both requests. They should show the same **Conversation**, and **Saving** should read **On**, which means saving is enabled and healthy. Each turn is saved as soon as its reply ends; to see the saved turns, look for a `gateway-…` session on Studio's **Sessions** page, signed in as the key's user (see [Confirm that memory works](02-quickstart.md#confirm-that-memory-works)).
 
 If something is off:
 
@@ -331,7 +331,7 @@ Every column and label of the log is explained in [Requests](10-overview-and-req
 
 ## How conversations are recognized {#how-conversations-are-recognized}
 
-A conversation is the series of requests the gateway treats as one chat: it keeps one context profile and one upstream, and is saved to an OpenViking session, or to a new one in some cases, for example when the client rewrites its history (see [Saving status](10-overview-and-requests.md#saving-status)). To decide which conversation a request belongs to, the gateway takes the first of these request headers that is present:
+A conversation is the series of requests the gateway treats as one chat: it keeps one context profile and one upstream, and is saved to one OpenViking session until someone [resyncs](10-overview-and-requests.md#resync-a-conversation) it (see [When conversations are saved](01-how-it-works.md#when-conversations-are-saved)). To decide which conversation a request belongs to, the gateway takes the first of these request headers that is present:
 
 1. `X-OpenViking-Session`
 2. `thread-id`

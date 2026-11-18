@@ -6,18 +6,7 @@ import { FileBrowserSearchRow } from './file-browser-search-row.js';
 import type { SearchHit } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
-/**
- * 结果区：计数行与列表，另有空态、加载骨架与失败三态。
- *
- * 计数行只在有结果时出现——没搜过的时候它没有可数的东西，画一条「检索到 0 条」
- * 反而像搜索失败了。
- *
- * The result area: the count line and the list, plus the empty, loading and failure
- * states.
- *
- * The count line only appears when there are results: before a search there is nothing
- * to count, and "0 results" reads as a failure.
- */
+/** Search results, with empty, loading, and error states. */
 export interface FileBrowserSearchResultsProps {
   open: boolean;
   listId: string;
@@ -128,9 +117,6 @@ export function FileBrowserSearchResults({
     <>
       {failure}
       {loading ? <p role="status">{text.searchLoading}</p> : null}
-      <div className="ov-file-browser-search__summary">
-        {text.searchResultCount(hits.length)}
-      </div>
       <ul
         ref={exposure}
         id={listId}

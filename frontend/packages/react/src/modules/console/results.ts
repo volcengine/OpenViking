@@ -78,19 +78,29 @@ export function formatResult(
         value !== null &&
         !hidden.has(key.replace(/_/g, '').toLowerCase()),
     );
-    const lines = rows.length
-      ? rows.slice(0, 12).map(([key, value]) => {
-          const label = (
-            key === 'status' && readTaskReferences(name, data).length
-              ? 'submission_status'
-              : key
-          ).replaceAll('_', ' ');
-          return `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}: ${text(value)}`;
-        })
-      : data === null || data === undefined
-        ? []
-        : [text(data)];
-    return { variant: 'write-result', lines };
+    return {
+      variant: 'write-result',
+      lines: rows.length
+        ? rows.slice(0, 12).map(([key, value]) => {
+            const label = (
+              key === 'status' && readTaskReferences(name, data).length
+                ? 'submission_status'
+                : key
+            ).replaceAll('_', ' ');
+            const title = `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}`;
+            if (
+              /(?:^|_)uri$/i.test(key) &&
+              typeof value === 'string' &&
+              /^viking:\/\//i.test(value)
+            ) {
+              return { label: title, uri: value };
+            }
+            return `${title}: ${text(value)}`;
+          })
+        : data === null || data === undefined
+          ? []
+          : [text(data)],
+    };
   }
   if (name === 'search' && values.mode === 'context')
     return {

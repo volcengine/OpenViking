@@ -28,6 +28,7 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -971,10 +972,13 @@ class ContentWriteCoordinator:
                     error = sys.exc_info()[1]
                     try:
                         await run_to_completion(lambda: self._batch_commit(lease_ref=lease))
-                    except BaseException:
+                    except BaseException as _log_error:
                         if error is None and write_error is None:
                             raise
-                        logger.exception("Failed to version partial batch writes")
+                        logger.error(
+                            "Failed to version partial batch writes error_type=%s",
+                            type(_log_error).__name__,
+                        )
         except BaseException:
             await lock_guard.close()
             raise
@@ -1483,9 +1487,13 @@ class ContentWriteCoordinator:
                 force_refresh=force_refresh,
             )
             action = decision.action
-        except LockAcquisitionError:
+        except LockAcquisitionError as _log_error:
             # Parent aggregation is best-effort; changed-file work must still run.
-            logger.info("Skipping busy parent semantic refresh: %s", root_uri)
+            logger.info(
+                "Skipping busy parent semantic refresh: %s error_type=%s",
+                safe_uri_for_log(str(root_uri)),
+                type(_log_error).__name__,
+            )
             action = FreshnessAction.NOOP
         aggregate_directory = action is FreshnessAction.REFRESH_NOW
         has_live_files = any(changes.get(kind) for kind in ("added", "modified"))
@@ -2674,7 +2682,7 @@ class ContentWriteCoordinator:
         try:
             records = await vector_store.get_l2_diff_records_by_uris(sorted(set(uris)), ctx=ctx)
         except Exception as exc:
-            logger.warning("Failed to load existing file abstracts: %s", exc)
+            logger.info("Failed to load existing file abstracts: %s", type(exc).__name__)
             return {}
         return {
             uri: str(record.get("abstract") or "")

@@ -30,7 +30,9 @@ from openviking.storage.vectordb.utils.path_safety import (
     safe_join_name,
 )
 from openviking.storage.vectordb.utils.validation import fix_fields_data, validate_name_str
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 _DENSE_REBUILD_MEMORY_RETRY_BASE_SECONDS = 1.0
 _DENSE_REBUILD_MEMORY_RETRY_MAX_SECONDS = 30.0
@@ -441,35 +443,45 @@ class LocalIndex(IIndex):
                 self._dense_rebuild_debounce_seconds = (
                     max(0, int(dense_search_config.get("auto_rebuild_debounce_ms", 500))) / 1000.0
                 )
-            except CuVSUnavailableError:
+            except CuVSUnavailableError as _log_error:
                 failed_dense_search = self.dense_search
                 self.dense_search = None
                 if failed_dense_search is not None:
                     try:
                         failed_dense_search.close()
-                    except Exception:
-                        logger.warning(
-                            "Failed to close unavailable cuVS dense search", exc_info=True
+                    except Exception as _log_error:
+                        logger.info(
+                            "Failed to close unavailable cuVS dense search error_type=%s",
+                            type(_log_error).__name__,
                         )
                 if not self._auto_cuvs:
                     raise
-                logger.info("cuVS auto mode unavailable; keeping native dense search")
+                logger.info(
+                    "cuVS auto mode unavailable; keeping native dense search error_type=%s",
+                    type(_log_error).__name__,
+                )
             except Exception:
                 failed_dense_search = self.dense_search
                 self.dense_search = None
                 if failed_dense_search is not None:
                     try:
                         failed_dense_search.close()
-                    except Exception:
-                        logger.warning("Failed to close partial cuVS dense search", exc_info=True)
+                    except Exception as _log_error:
+                        logger.info(
+                            "Failed to close partial cuVS dense search error_type=%s",
+                            type(_log_error).__name__,
+                        )
                 raise
             finally:
                 close_candidates = getattr(candidate_iterable, "close", None)
                 if callable(close_candidates):
                     try:
                         close_candidates()
-                    except Exception:
-                        logger.warning("Failed to close dense recovery iterator", exc_info=True)
+                    except Exception as _log_error:
+                        logger.info(
+                            "Failed to close dense recovery iterator error_type=%s",
+                            type(_log_error).__name__,
+                        )
         if not defer_dense_rebuild_start:
             self._start_dense_rebuild_worker()
 
@@ -733,7 +745,7 @@ class LocalIndex(IIndex):
                             _DENSE_REBUILD_MEMORY_RETRY_MAX_SECONDS,
                         )
                         self._dense_rebuild_memory_retry_not_before = time.monotonic() + retry_delay
-                logger.debug("cuVS background rebuild kept native search: %s", exc)
+                logger.info("cuVS background rebuild kept native search: %s", type(exc).__name__)
             except Exception as exc:
                 with self._dense_rebuild_state_lock:
                     if self._dense_rebuild_generation == rebuild_generation:
@@ -741,7 +753,7 @@ class LocalIndex(IIndex):
                         self._dense_rebuild_memory_blocked = False
                         self._dense_rebuild_memory_retry_attempts = 0
                         self._dense_rebuild_memory_retry_not_before = 0.0
-                logger.warning("cuVS background rebuild failed", exc_info=True)
+                logger.info("cuVS background rebuild failed")
             else:
                 if committed:
                     with self._dense_rebuild_state_lock:
@@ -939,9 +951,8 @@ class LocalIndex(IIndex):
                                         filters
                                     )
                                     logger.debug(
-                                        "cuVS auto mode selected native filtered search "
-                                        "(%d candidates)",
-                                        native_count,
+                                        "cuVS auto mode selected native filtered search (%s candidates)",
+                                        type(native_count).__name__,
                                     )
                                     return self._search_native(
                                         query_vector,
@@ -967,7 +978,9 @@ class LocalIndex(IIndex):
                                 cuvs_telemetry.route_reason = "native_memory_budget"
                             if not self._auto_cuvs:
                                 raise
-                            logger.debug("cuVS auto mode kept native dense search: %s", exc)
+                            logger.info(
+                                "cuVS auto mode kept native dense search: %s", type(exc).__name__
+                            )
                         except _CuVSBackgroundRebuildPending:
                             if cuvs_telemetry is not None:
                                 cuvs_telemetry.route_reason = "native_rebuild_pending"
@@ -975,13 +988,18 @@ class LocalIndex(IIndex):
                             if cuvs_telemetry is not None:
                                 cuvs_telemetry.route_reason = "native_filter_threshold"
                             native_filter_token = self.dense_search.native_filter_token(filters)
-                            logger.debug("cuVS auto mode selected native dense search: %s", exc)
+                            logger.debug(
+                                "cuVS auto mode selected native dense search: %s",
+                                type(exc).__name__,
+                            )
                         except UnsupportedCuVSFilterError as exc:
                             if cuvs_telemetry is not None:
                                 cuvs_telemetry.route_reason = "native_unsupported_filter"
                             if not self.dense_search.fallback_to_native:
                                 raise
-                            logger.debug("Falling back to native dense search: %s", exc)
+                            logger.info(
+                                "Falling back to native dense search: %s", type(exc).__name__
+                            )
                     elif not self.dense_search.fallback_to_native:
                         if cuvs_telemetry is not None:
                             cuvs_telemetry.route_reason = "unsupported_sparse_hybrid"
@@ -1143,7 +1161,7 @@ class LocalIndex(IIndex):
     def _record_cuvs_telemetry(telemetry: CuVSSearchTelemetry) -> None:
         payload = telemetry.as_dict()
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("cuVS search telemetry: %s", json.dumps(payload, sort_keys=True))
+            logger.debug("cuVS search telemetry recorded field_count=%d", len(payload))
         try:
             from openviking.telemetry import get_current_telemetry
 
@@ -1151,8 +1169,10 @@ class LocalIndex(IIndex):
             if not operation_telemetry.enabled:
                 return
             operation_telemetry.record_cuvs_search(payload)
-        except Exception:
-            logger.debug("Failed to record cuVS search telemetry", exc_info=True)
+        except Exception as _log_error:
+            logger.info(
+                "Failed to record cuVS search telemetry error_type=%s", type(_log_error).__name__
+            )
 
     def aggregate(
         self,
@@ -1172,12 +1192,14 @@ class LocalIndex(IIndex):
                 filters = self.field_type_converter.convert_filter_for_index(filters)
             req.dsl = json.dumps(filters)
 
-            logger.debug(f"aggregate DSL: {filters}")
+            logger.debug("Aggregation prepared has_filter=%s", bool(filters))
             search_result = self.engine_proxy.index_engine.search(req)
             extra_json = search_result.extra_json
-            logger.debug(f"aggregate extra_json: {extra_json}")
+            logger.debug(
+                "Aggregation response received length=%d", len(extra_json) if extra_json else 0
+            )
         except Exception as e:
-            logger.error(f"Aggregation operation failed: {e}")
+            logger.info("Aggregation operation failed: %s", type(e).__name__)
             return {}
 
         # Parse extra_json to get aggregation results
@@ -1185,12 +1207,12 @@ class LocalIndex(IIndex):
         if extra_json:
             try:
                 agg_data = json.loads(extra_json)
-                logger.debug(f"aggregate parsed agg_data: {agg_data}")
+                logger.debug("Aggregation response parsed result_type=%s", type(agg_data).__name__)
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse aggregation results: {e}")
+                logger.info("Failed to parse aggregation results: %s", type(e).__name__)
                 return {}
         else:
-            logger.warning("Aggregation results not available: extra_json is empty")
+            logger.info("Aggregation results not available: extra_json is empty")
             return {}
 
         return agg_data
@@ -1535,7 +1557,7 @@ class PersistentIndex(LocalIndex):
             if newest_version > 0:
                 self._clean_index([str(newest_version)])
         except Exception as e:
-            logger.error(f"Failed to clean index files during close: {e}")
+            logger.info("Failed to clean index files during close: %s", type(e).__name__)
 
         super().close()
 

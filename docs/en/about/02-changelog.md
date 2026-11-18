@@ -23,19 +23,20 @@ This changelog is automatically generated from [GitHub Releases](https://github.
     PVC, or several replicas sharing Redis. Until a release includes these features, set
     `image.tag` explicitly; see the [operations guide](../guides/22-gateway-operations.md#helm).
   - New opt-in settings: `storage` (Redis), `management_api`, `openviking_keys`, `tenancy`,
-    `default_upstreams` and `default_profile`, `request_log_sink`, `capture_concurrency` and `keep_alive_seconds`.
+    `default_upstreams` and `default_profile`, `request_log_sink` and `keep_alive_seconds`.
     SQLite remains the default storage.
   - New `X-OpenViking-Upstream-URL` request header picks one of the allowed upstreams by its
     Base URL; see [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header).
   - `session_ttl_days` is replaced by `session_ttl_seconds` (at least 3600), so sessions can
     expire in under a day. The old setting is ignored with a startup warning; set the new one
     when upgrading.
+  - `session_ttl_seconds` now defaults to one day (`86400`) instead of 30 days, and the Helm chart no longer sets it to seven days (upgrade action). A conversation idle for longer loses its gateway state: when it continues, the memory, tool results and summaries added earlier are not put back and its whole history is saved again into a new OpenViking session. Set `session_ttl_seconds` to keep a longer retention.
   - Behavior changes with no configuration change: standalone keep-alive rises from 5 to 75
     seconds; a gateway bound to a public address waits and retries at startup while
     OpenViking is unreachable or returns 5xx; idle SSE streams carry a comment heartbeat every
-    15 seconds; a request whose key OpenViking refuses with 402 or 403 is rejected instead of
-    forwarded; and an OpenViking 401 while saving, once `/health` also returns 401, pauses
-    saving with `gateway_key_revoked`.
+    15 seconds; and a request whose key OpenViking refuses with 402 or 403 is rejected instead of
+    forwarded.
+  - Saving conversations (upgrade action): the request that ends a turn writes it to OpenViking right after its reply, with no wait for the next message or for 10 quiet minutes; a reply that hands the turn to client tools saves nothing until the turn ends. Regenerated, edited and client-compacted histories go on in the same OpenViking session, which then keeps both versions. The gateway stores no conversation text for saving and does not retry writes: each finished turn gets one attempt, a failure shows as `capture_status: "failed"` with `capture_reason` on the request record, and the next finished turn writes what is missing. Request records gain `capture_messages` and `openviking_session`; the `retrying`, `paused` and `lost` statuses, `kind: capture` records and `capture_retry_at` are gone; `/overview` reports `capture_issues` as `{"failed": n}`; and the status line's `capture` keeps only `delivered` and `failed`. The gateway still commits by default, by the profile's `commit_tokens`, `keep_recent_messages` (now a plain message count, not rounded to whole turns) and `idle_seconds`; the idle wait is recorded with the conversation's saving state, so when the gateway process that saved the turn restarts or is replaced, any gateway process makes the commit within a minute or two of its due time. The new `openviking_auto_commit: true` leaves both commits to OpenViking's session auto-commit, whose idle commit needs `memory.session_auto_commit.enabled: true` on the server. `capture_concurrency` and `capture_delivery_records` are removed and ignored with a startup warning. On upgrade, a last turn that was queued but not yet written is written by the conversation's next turn, not in the background; during a rolling upgrade on shared storage, a replica of the earlier version forwards requests without memory for conversations a new replica has already handled, until it is replaced; going back to the earlier version needs fresh gateway storage.
   - Context profiles now select every OpenViking tool by default, including the ones that change data such as `forget` and `set_acl`; earlier releases left 8 of them unchecked. Saved profiles and ongoing conversations keep their tools. Accounts without a saved `default` profile, and management API requests that omit `disabled_tools`, now get every tool; set `default_profile.disabled_tools` or save a `default` profile to keep the old selection.
   - `X-OpenViking-Context` can only narrow tool access: `disabled_tools` adds to the profile's exclusions and `gateway_tools` cannot turn tools back on. Clients that sent `{"disabled_tools":[]}` or `{"gateway_tools":true}` to get tools the profile withholds no longer get them; change the profile instead.
 - **Volcengine KMS `key_file` (upgrade action)**: `encryption.volcengine_kms.key_file` now takes

@@ -1,5 +1,6 @@
 import { CommandConsoleCopyButton } from './command-console-copy-button.js';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
+import { isCommandConsoleJson } from './command-console-result-text.js';
 import { formatCommandConsoleJson } from './command-console-text.js';
 import { CommandConsoleUriText } from './command-console-uri-text.js';
 
@@ -27,7 +28,7 @@ export function CommandConsoleCodeBlock({
       <pre className="ov-command-console__code-content">
         <CommandConsoleUriText
           text={formatCommandConsoleJson(text)}
-          mode="literal"
+          mode={isCommandConsoleJson(text) ? 'json' : 'literal'}
           onOpenUri={onOpenUri}
         />
       </pre>

@@ -93,11 +93,24 @@ async def rerank_scores(
             [document for _, document in rerank_documents],
         )
     except Exception as e:
-        logger.warning("[Rerank] Rerank failed, fallback to vector scores: %s", e)
+        logger.info(
+            "rerank failed; using vector scores total=%d error_type=%s",
+            len(rerank_documents),
+            type(e).__name__,
+            extra={
+                "degraded": True,
+                "total": len(rerank_documents),
+                "error_type": type(e).__name__,
+            },
+        )
         return fallback
 
     if not scores or len(scores) != len(rerank_documents):
-        logger.warning("[Rerank] Invalid rerank result, fallback to vector scores")
+        logger.info(
+            "invalid rerank result; using vector scores total=%d",
+            len(rerank_documents),
+            extra={"degraded": True, "total": len(rerank_documents)},
+        )
         return fallback
 
     normalized_scores = list(fallback_scores)

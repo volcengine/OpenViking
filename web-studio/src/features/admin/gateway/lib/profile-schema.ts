@@ -23,6 +23,7 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   name: 'Default',
   recall: true,
   profile: true,
+  soul: true,
   profile_max_tokens: 4000,
   capture: true,
   context_types: ['memory', 'resource', 'skill'],

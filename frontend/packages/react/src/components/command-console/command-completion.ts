@@ -42,7 +42,10 @@ export function getCommandConsoleCommandQuery(
   const boundary = content.lastIndexOf(' ') + 1;
   const head = content.slice(0, boundary);
   const keyword = content.slice(boundary);
-  const entries = commands.flatMap((command) =>
+  const suggested = commands.filter(
+    (command) => !command.hiddenFromSuggestions,
+  );
+  const entries = suggested.flatMap((command) =>
     (slash
       ? [command.name, ...(command.aliases ?? [])]
       : [getCommandConsoleCommandInputText(command)]
@@ -76,7 +79,7 @@ export function getCommandConsoleCommandQuery(
     return {
       ...base,
       matches: !head
-        ? filterCommandConsoleCommands(keyword, commands)
+        ? filterCommandConsoleCommands(keyword, suggested)
         : matching.length
           ? definitions(matching)
           : filterCommandConsoleCommands(keyword, definitions(scoped)),

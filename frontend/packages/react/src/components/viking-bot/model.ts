@@ -261,6 +261,12 @@ export interface VikingBotLabels {
   toolOutput?: string;
   similarity?: string;
   sessionHistory?: string;
+  /** 会话操作菜单名称。 Accessible name of a session’s action menu. */
+  sessionActions?: string;
+  /** 重命名菜单项。 Rename menu item. */
+  renameSessionAction?: string;
+  /** 删除菜单项。 Delete menu item. */
+  removeSessionAction?: string;
   session?: string;
   locateSession?: string;
   emptySessions?: string;

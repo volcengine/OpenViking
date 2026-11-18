@@ -61,8 +61,11 @@ test('shared Console renames provider-backed sessions without a host rename call
   );
   try {
     await view.press('Session history');
-    assert.equal(row('Rename session “Second”'), undefined);
-    await click(row('Rename session “First”'));
+    await click(row('Session actions · Second'));
+    assert.equal(row('Rename'), undefined);
+    assert.ok(row('Delete'));
+    await click(row('Session actions · First'));
+    await click(row('Rename'));
     await type(dialog().querySelector('input[name="session-name"]'), 'Updated');
     await submit();
     assert.deepEqual(requests, [
@@ -108,11 +111,18 @@ test('session history can rename a session and delete the active session after c
     await key(view.button('Session history'), 'ArrowDown');
     assert.equal(document.activeElement === row('First'), true);
     await key(document.activeElement, 'ArrowDown');
-    assert.equal(
-      document.activeElement === row('Rename session “First”'),
-      true,
-    );
-    await click(document.activeElement);
+    const actions = row('Session actions · First');
+    assert.equal(document.activeElement, actions);
+    await click(actions);
+    await key(actions, 'ArrowDown');
+    assert.equal(document.activeElement, row('Rename'));
+    await key(document.activeElement, 'ArrowDown');
+    assert.equal(document.activeElement, row('Delete'));
+    await key(document.activeElement, 'Escape');
+    assert.equal(row('Delete'), undefined);
+    assert.equal(document.activeElement, actions);
+    await click(actions);
+    await click(row('Rename'));
     const name = dialog().querySelector('input[name="session-name"]');
     assert.equal(name.value, 'First');
     await type(name, ' ');
@@ -132,11 +142,13 @@ test('session history can rename a session and delete the active session after c
     );
 
     await view.press('Session history');
-    await click(row('Delete session “Updated”'));
+    await click(row('Session actions · Updated'));
+    await click(row('Delete'));
     await click(button('Cancel'));
     assert.deepEqual(calls, [['rename', 'first', 'Updated']]);
     await view.press('Session history');
-    await click(row('Delete session “Updated”'));
+    await click(row('Session actions · Updated'));
+    await click(row('Delete'));
     await submit();
     assert.deepEqual(calls, [
       ['rename', 'first', 'Updated'],

@@ -80,7 +80,6 @@ class Prepared:
     anonymous: bool = False
     capture: Document = field(default_factory=Document)
     observation: Document = field(default_factory=Document)
-    capture_target: str = ""
     tools_active: bool = False
     # Definitions and hidden history replay, but the tool loop refuses every gateway call.
     tools_closed: bool = False
@@ -137,8 +136,9 @@ class Budget:
 
 
 class MemoryKernel:
-    def __init__(self, store: KernelStore, viking):
+    def __init__(self, store: KernelStore, viking, auto_commit=False, management=None):
         self.store, self.viking = store, viking
+        self.capture = CapturePipeline(store.capture, viking, auto_commit, management)
 
     @staticmethod
     def degraded_body(body, protocol):
@@ -320,7 +320,6 @@ class MemoryKernel:
             capture_chain=body_chain,
             capture=capture,
             observation=observations.get(sid, Document()),
-            capture_target=capture.value.get("ov_session", ""),
             upstream=upstream,
             ancestors=ancestors,
             thinking=thinking,
@@ -342,7 +341,7 @@ class MemoryKernel:
         self.replay(prepared)
         self.configure_tools(prepared, policy, owner)
         if not disabled and policy.capture and kind == "user" and anchor >= 0:
-            await CapturePipeline(self.store.capture).confirm(prepared, credential, policy)
+            await self.capture.open(prepared)
         if kind in {"user", "continuation"}:
             prepared.context_window = window_size(prepared, policy)
             prepared.context_tokens = await self.measure(prepared)
@@ -627,11 +626,10 @@ class MemoryKernel:
             hint = history_hint(
                 credential["user_id"], lineage(request.capture.value), tools, policy.capture
             )
+            note = gateway_note(policy, tools, "soul" in profile["parts"])
             text = block(
                 "gateway-session-start",
-                "\n\n".join(
-                    part for part in (gateway_note(policy, tools), hint, profile["text"]) if part
-                ),
+                "\n\n".join(part for part in (note, hint, profile["text"]) if part),
             )
             return text, [*profile["parts"], *(["history"] if hint else [])]
 
@@ -788,17 +786,25 @@ class MemoryKernel:
         await self.update_observation(request, observe)
         if request.ancestors or request.thinking:
             await self.store.keep(request.scope, request.ancestors, request.thinking)
+
+    async def save(self, request, credential, response):
+        """Write the turn this reply ends to OpenViking; returns how many messages went.
+
+        A reply that hands the turn to client tools ends nothing: the continuation
+        that answers saves the whole turn.
+        """
         if (
             request.disabled
             or request.kind not in {"user", "continuation"}
             or not response.complete
             or not response.message
             or request.anchor < 0
+            or not Policy.model_validate(request.root["policy"]).capture
         ):
-            return
-        policy = Policy.model_validate(request.root["policy"])
-        if policy.capture:
-            await CapturePipeline(self.store.capture).stage(request, response, policy)
+            return 0
+        messages = [*request.messages, *response.output]
+        chain = reply_chain(request, response.output)
+        return await self.capture.save(request, credential, messages, chain)
 
     @staticmethod
     def assemble(request):
@@ -925,9 +931,9 @@ class MemoryKernel:
             await self.compaction_failed(request, "summary_failed")
             return
         anchor = request.capture_chain[cut]
-        if policy.capture and in_progress:
+        if in_progress:
             # First, so the hint names the session that receives the part being cut.
-            await CapturePipeline(self.store.capture).confirm_cut(request, anchor)
+            await self.capture.save_cut(request, credential, anchor)
         hint = cut_hint(request, credential["user_id"], policy)
         opening = opening_block(request.records, request.chain)
         text = replacement_text(summary, hint, opening, in_progress)

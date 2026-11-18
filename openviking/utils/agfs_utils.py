@@ -13,7 +13,7 @@ from threading import Thread
 from typing import Any, Callable, Dict
 from urllib.parse import urlsplit
 
-from openviking.observability.log_safety import DEFAULT_LOG_FORMAT
+from openviking.observability.log_safety import DEFAULT_LOG_FORMAT, safe_path_for_log
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.config_utils import (
     DEFAULT_SERVICE_NAME,
@@ -178,9 +178,7 @@ def _require_cache_instance(cache_config: Any, instance: str, consumer: str) -> 
     instances = _get_config_value(cache_config, "instances", {})
     configured = _get_config_value(instances, instance)
     if configured is None:
-        raise ValueError(
-            f"{consumer} references unknown cache instance '{instance}'"
-        )
+        raise ValueError(f"{consumer} references unknown cache instance '{instance}'")
     return configured
 
 
@@ -200,16 +198,20 @@ def _build_named_cache_config(
         if provider == "redis":
             from openviking_cli.utils.config.agfs_config import RedisCacheConfig
 
-            instance_config["redis"] = RedisCacheConfig.model_validate(params).model_dump(mode="json")
+            instance_config["redis"] = RedisCacheConfig.model_validate(params).model_dump(
+                mode="json"
+            )
         else:
             instance_config["dynamic"] = params
         instances[name] = instance_config
     cache_config = _disabled_cache_config(service_name)
-    cache_config.update({
-        "enabled": cachefs_enabled,
-        "runtime_enabled": runtime_enabled,
-        "instances": instances,
-    })
+    cache_config.update(
+        {
+            "enabled": cachefs_enabled,
+            "runtime_enabled": runtime_enabled,
+            "instances": instances,
+        }
+    )
     cache_config["cachefs"]["enabled"] = cachefs_enabled
     cache_config["cachefs"]["instance"] = cachefs_instance
     return cache_config
@@ -500,7 +502,7 @@ def _generate_plugin_config(
     backups_config = getattr(agfs_config, "backups", None)
     redirects_config = getattr(agfs_config, "redirects", None)
     if redirects_config is not None:
-        logger.warning("storage.agfs.redirects is deprecated and ignored")
+        logger.info("storage.agfs.redirects is deprecated and ignored")
 
     # Build primary backend plugin config
     primary_plugin_config: Dict[str, Any] = {}
@@ -706,8 +708,8 @@ def _serialize_backups_config(
     result["items"] = items
 
     if deprecated_fields:
-        logger.warning(
-            "Deprecated backups configuration fields are ignored: %s",
+        logger.info(
+            "deprecated backups configuration fields ignored fields=%s",
             ", ".join(dict.fromkeys(deprecated_fields)),
         )
     result["service_name"] = service_name
@@ -877,7 +879,7 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
         if plugin_name == "localfs" and "local_dir" in plugin_config.get("config", {}):
             local_dir = plugin_config["config"]["local_dir"]
             os.makedirs(local_dir, exist_ok=True)
-            logger.debug("[RAGFSUtils] Ensured localfs storage directory exists")
+            logger.debug("localfs storage directory ensured")
         for backup_item in plugin_config.get("config", {}).get("backups", {}).get("items", []):
             if backup_item.get("backend") != "localfs":
                 continue
@@ -896,10 +898,17 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
         try:
             cfg = plugin_config.get("config", {})
             logger.debug(
-                f"[RAGFSUtils] Mounting {plugin_name} at {mount_path} with config keys: {list(cfg.keys()) if isinstance(cfg, dict) else type(cfg)}"
+                "mounting storage plugin=%s path=%s config_fields=%d",
+                plugin_name,
+                safe_path_for_log(mount_path),
+                len(cfg) if isinstance(cfg, dict) else 0,
             )
             agfs.mount(plugin_name, mount_path, cfg)
-            logger.debug(f"[RAGFSUtils] Successfully mounted {plugin_name}")
+            logger.debug("storage plugin mounted plugin=%s", plugin_name)
         except Exception as e:
-            logger.error(f"[RAGFSUtils] Failed to mount {plugin_name}: {e}")
+            logger.debug(
+                "storage plugin mount failed plugin=%s error_type=%s",
+                plugin_name,
+                type(e).__name__,
+            )
             raise

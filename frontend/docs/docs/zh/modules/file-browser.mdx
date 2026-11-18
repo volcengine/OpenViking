@@ -278,8 +278,8 @@ import '@openviking/react/modules/file-browser/style.css';
 | searchIgnoreCase        | 忽略大小写                                                                                    | `string`                             | `'忽略大小写'`                           |
 | searchFilterUnsupported | 某个筛选在当前检索方式下不可用的原因                                                          | `string`                             | `'当前检索方式不支持此筛选'`             |
 | searchResultCount       | 检索结果数量，参数为条数                                                                      | `(count: number) => string`          | `'检索到 N 条结果'`                      |
-| searchVia               | 已弃用                                                                                        | `string`                             | `'向量检索方式'`                         |
-| searchSwitchMode        | 模式选择器的无障碍名称                                                                        | `string`                             | `'切换'`                                 |
+| searchVia               | 模式 chip 之后的检索方式说明                                                                  | `string`                             | `'向量检索方式'`                         |
+| searchSwitchMode        | 切换检索方式的入口                                                                            | `string`                             | `'切换'`                                 |
 | searchAdvancedLabel     | 高级筛选按钮的无障碍名称                                                                      | `string`                             | `'高级筛选'`                             |
 | previewMode             | 「预览 / 源码」切换里的「预览」                                                               | `string`                             | `'预览'`                                 |
 | sourceMode              | 「预览 / 源码」切换里的「源码」                                                               | `string`                             | `'源码'`                                 |
@@ -521,7 +521,7 @@ await browserRef.current?.openResource(directoryUri);
 
 - 左栏顶部的搜索框打开模块内置的搜索弹窗；`⌘K` 是真实快捷键，同一页面挂多个实例时只有最近交互过的那个响应。
 - 输入停顿 400ms 后自动请求，没有提交按钮。关闭弹窗会取消在途请求并清空输入与筛选。
-- 搜索框旁始终可以切换检索方式，切换时保留输入词和新模式支持的筛选。
+- 四种检索方式共用一套输入与结果列表。可随时在结果区顶部点「切换」。检索成功后会显示结果条数，包括 0 条。切换时保留输入词和新模式支持的筛选：
 
 | 方式     | 接口                    | 输入解释   | 可用筛选                     |
 | -------- | ----------------------- | ---------- | ---------------------------- |

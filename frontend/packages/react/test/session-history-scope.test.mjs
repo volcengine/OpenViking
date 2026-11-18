@@ -11,7 +11,7 @@ globalThis.HTMLIFrameElement = window.HTMLIFrameElement;
 const session = { id: 'fixture', title: 'Fixture' };
 const row = (name) =>
   [...document.querySelectorAll('[role="menuitem"]')].find(
-    (item) => item.getAttribute('aria-label') === name,
+    (item) => (item.getAttribute('aria-label') ?? item.textContent) === name,
   );
 const dialog = () => document.querySelector('[role="dialog"]');
 const submit = () =>
@@ -25,7 +25,8 @@ const submit = () =>
 
 const openDialog = async (history, action) => {
   await click(history);
-  await click(row(`${action} session “${session.title}”`));
+  await click(row(`Session actions · ${session.title}`));
+  await click(row(action));
   assert.ok(dialog());
 };
 
