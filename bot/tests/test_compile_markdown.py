@@ -303,7 +303,10 @@ async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeli
     async def chat(**kwargs):
         data = json.loads(kwargs["messages"][1]["content"])
         assert all("Retry limit: 7" in d["markdown"] for d in data["documents"])
-        assert all("scope" not in d and "routing_text" not in d for d in data["documents"])
+        assert all(
+            "scope" not in d and "routing_text" not in d and "path" not in d
+            for d in data["documents"]
+        )
         return LLMResponse(
             content=json.dumps(
                 {
@@ -334,8 +337,83 @@ async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeli
         )
 
     pipeline.model.ask = malicious
-    with pytest.raises(ValueError, match="supplied candidates"):
-        await Shuffle(pipeline).run(node, docs)
+    groups = await Shuffle(pipeline).run(node, docs)
+    assert [group.documents for group in groups] == [[docs[0]], [docs[1]]]
+    assert "Related documents must be supplied candidates" in pipeline.warnings[-1]
+
+
+@pytest.mark.parametrize("fail_all", [False, True])
+async def test_failed_routes_keep_completed_drafts_through_finalization(
+    pipeline, monkeypatch, agent_loop, fail_all
+):
+    from vikingbot.compile.ops import reduce as reduce_op
+
+    pipeline.contract = contract(True)
+    pipeline.limits = pipeline.limits.model_copy(update={"shuffle_batch_size": 1})
+    seeded = await pipeline.seed(sources(3))
+    docs = [
+        Document(f"{i}.md", f"drafts/{i}.md", [source.source_id]) for i, source in enumerate(seeded)
+    ]
+    for i, doc in enumerate(docs):
+        await pipeline.files.sandbox.write_file(doc.workspace_path, f"# Fact {i}\n")
+        pipeline.status[doc.source_refs[0]] = "prepared"
+    monkeypatch.setattr(Shuffle, "vectors", AsyncMock(return_value=[[1.0, 0.0]] * 3))
+
+    async def ask(stage, system, data, schema, validate, **kwargs):
+        item = data["assignments"][0]
+        if fail_all or item["document"] == docs[0].workspace_path:
+            raise ValueError("route: Return exactly one decision per assigned document")
+        response = RouteResponse(
+            decisions=[{"document": item["document"], "related": item["candidates"]}]
+        )
+        validate(response)
+        return response
+
+    pipeline.model.ask = ask
+    nodes = parse_plan(MERGE, pipeline.contract)
+    groups = await Shuffle(pipeline).run(nodes[1], docs)
+    expected = [[doc] for doc in docs] if fail_all else [[docs[0]], docs[1:]]
+    assert [group.documents for group in groups] == expected
+    assert all(not group.target_uris for group in groups)
+    assert "processed independently" in pipeline.warnings[-1]
+    assert "Return exactly one decision" in pipeline.warnings[-1]
+    assert not pipeline.failures
+
+    loop, key, _ = agent_loop
+    current_path = None
+
+    async def chat(**kwargs):
+        nonlocal current_path
+        tools = [m["content"] for m in kwargs["messages"] if m["role"] == "tool"]
+        if not tools:
+            calls = [ToolCallRequest("assignment", "read_file", {"path": "assignment.json"}, 0)]
+        elif tools[-1].startswith("{"):
+            assignment = json.loads(tools[-1])
+            current_path = assignment["documents"][0]["path"]
+            calls = [
+                ToolCallRequest(str(i), "read_file", {"path": d["content_file"]}, i)
+                for i, d in enumerate(assignment["documents"])
+            ]
+        elif tools[-1].startswith("# Fact"):
+            content = "\n".join(t for t in tools if t.startswith("# Fact"))
+            calls = [
+                ToolCallRequest(
+                    "write", "write_file", {"path": current_path, "content": content}, 0
+                )
+            ]
+        else:
+            return LLMResponse(content="Done", finish_reason="stop")
+        return LLMResponse(content="", tool_calls=calls)
+
+    pipeline.model.provider.chat = AsyncMock(side_effect=chat)
+    pipeline.model.agent_runner = agent_runner(loop, key, None, pipeline.limits)
+    outputs = await reduce_op.run(pipeline, nodes[2], groups)
+    bundle = await finalize.run(pipeline, outputs)
+    assert all(
+        f"# Fact {i}" in "\n".join(op["content"] for op in bundle.operations) for i in range(3)
+    )
+    await pipeline.write_coverage([op["uri"] for op in bundle.operations])
+    assert (await pipeline.files.get("coverage"))["counts"] == {"delivered": 3}
 
 
 async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline):
