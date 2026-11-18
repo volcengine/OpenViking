@@ -503,37 +503,39 @@ async fn killing_the_process_group_without_a_terminal_leaves_no_command_behind()
     use std::process::Stdio;
 
     let dir = tempfile::tempdir().unwrap();
-    let mut command = privacy(dir.path(), "http://127.0.0.1:1");
-    command
-        .args(["run", "--", "/bin/sh", "-c", "echo started; exec sleep 30"])
-        .stdout(Stdio::piped());
-    // Agent harnesses start commands without a terminal and SIGKILL their group on timeout.
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        command.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = command.spawn().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    let mut line = String::new();
-    stdout.read_line(&mut line).await.unwrap();
-    assert_eq!(line, "started\n");
+    for script in ["echo started; exec sleep 30", "sleep 30 & echo started"] {
+        let mut command = privacy(dir.path(), "http://127.0.0.1:1");
+        command
+            .args(["run", "--", "/bin/sh", "-c", script])
+            .stdout(Stdio::piped());
+        // Agent harnesses start commands without a terminal and SIGKILL their group on timeout.
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                if posix::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        stdout.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "started\n");
 
-    // setsid made ov the leader of its own group.
-    assert_eq!(
-        posix::kill(-(child.id().unwrap() as i32), posix::SIGKILL),
-        0
-    );
-    // The pipe closes only after every process holding it, sleep included, has exited.
-    timeout(Duration::from_secs(5), stdout.read_to_end(&mut Vec::new()))
-        .await
-        .expect("the command outlived ov")
-        .unwrap();
-    child.wait().await.unwrap();
+        // setsid made ov the leader of its own group.
+        assert_eq!(
+            posix::kill(-(child.id().unwrap() as i32), posix::SIGKILL),
+            0
+        );
+        // The pipe closes only after every process holding it, sleep included, has exited.
+        timeout(Duration::from_secs(5), stdout.read_to_end(&mut Vec::new()))
+            .await
+            .expect("the command outlived ov")
+            .unwrap();
+        child.wait().await.unwrap();
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

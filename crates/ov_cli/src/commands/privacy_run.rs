@@ -144,7 +144,10 @@ async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Resu
         || std::io::stderr().is_terminal();
     let terminal = std::fs::File::open("/dev/tty").ok().filter(|_| job);
     if terminal.is_none() {
-        command.process_group(0);
+        command
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
     }
     let mut child = spawn_child(command)?;
     let pid = child.id().expect("just spawned") as i32;
@@ -224,7 +227,7 @@ async fn relay_child_output(
     stderr: Option<tokio::process::ChildStderr>,
     masker: Option<&OutputMasker>,
 ) -> std::io::Result<()> {
-    if let (Some(stdout), Some(stderr), Some(masker)) = (stdout, stderr, masker) {
+    if let (Some(stdout), Some(stderr)) = (stdout, stderr) {
         tokio::try_join!(
             relay_output(stdout, tokio::io::stdout(), masker),
             relay_output(stderr, tokio::io::stderr(), masker),
@@ -355,7 +358,7 @@ fn replace_arg_references(arg: &OsStr, spans: &[ArgReference], values: &[String]
 async fn relay_output<R, W>(
     mut reader: R,
     mut writer: W,
-    masker: &OutputMasker,
+    masker: Option<&OutputMasker>,
 ) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -372,9 +375,13 @@ where
                 reader.read(&mut buffer).await?
             }
         };
-        writer
-            .write_all(&masker.mask(&mut pending, &buffer[..size], size == 0))
-            .await?;
+        if let Some(masker) = masker {
+            writer
+                .write_all(&masker.mask(&mut pending, &buffer[..size], size == 0))
+                .await?;
+        } else if size > 0 {
+            writer.write_all(&buffer[..size]).await?;
+        }
         if size == 0 {
             return writer.flush().await;
         }
