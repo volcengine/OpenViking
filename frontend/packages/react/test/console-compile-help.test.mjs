@@ -50,7 +50,7 @@ test('Console shows the Compile guide and extended parameters in the selected lo
           'update_schedule.minute',
         ],
       );
-      assert.match(hint.textContent, /00:00.{1,4}23:59/);
+      assert.match(hint.textContent, /00:00.{1,4}03:59/);
       await host.execute('ov help');
       assert.match(host.records.at(-1).textContent, help);
     } finally {

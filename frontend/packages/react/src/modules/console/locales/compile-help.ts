@@ -81,7 +81,7 @@ export const compileHelp = {
         {
           token: 'update_schedule.minute',
           description:
-            '执行分钟，0–59。只传 minute 时 hour 取 0；hour 和 minute 都省略时，在 00:00–23:59 内稳定分配时刻。',
+            '执行分钟，0–59。只传 minute 时 hour 取 0；hour 和 minute 都省略时，在 00:00–03:59 内稳定分配时刻。',
         },
       ],
     },
@@ -160,7 +160,7 @@ export const compileHelp = {
         {
           token: 'update_schedule.minute',
           description:
-            'Minute from 0 to 59. When only minute is provided, hour is 0. When both values are omitted, a time from 00:00 to 23:59 is assigned consistently.',
+            'Minute from 0 to 59. When only minute is provided, hour is 0. When both values are omitted, a time from 00:00 to 03:59 is assigned consistently.',
         },
       ],
     },
