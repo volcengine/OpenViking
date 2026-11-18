@@ -20,7 +20,7 @@ export const compileHelp = {
         steps: [
           {
             description:
-              '确认推理配置。确认 OpenViking 数据库已配置推理接入点；尚未配置时，先在方舟控制台创建并为数据库配置。',
+              '确认当前 Compile Runtime 使用的推理配置可用。内置 VikingBot Runtime 使用服务端 agent_loop 的 provider 和 model；Runtime 使用方舟接入点时，确认 OpenViking 数据库已完成配置，尚未配置则先在方舟控制台创建并关联。',
           },
           { description: '导入资料。使用 add-resource 导入需要编译的资料。' },
           {
@@ -95,7 +95,7 @@ export const compileHelp = {
         steps: [
           {
             description:
-              'Verify that the OpenViking database has an inference endpoint configured. Create and attach one in the Ark console if needed.',
+              "Verify the inference configuration used by the active Compile Runtime. The built-in VikingBot Runtime uses the server's agent_loop provider and model. If the Runtime uses an Ark endpoint, make sure it is configured for the OpenViking database; create and attach one in Ark if needed.",
           },
           { description: 'Import the material to compile with add-resource.' },
           {

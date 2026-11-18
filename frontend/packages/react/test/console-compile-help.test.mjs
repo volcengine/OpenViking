@@ -4,18 +4,20 @@ import { mount } from './helpers/console-dom.mjs';
 import { act, click, type } from './helpers/command-console-dom.mjs';
 
 test('Console shows the Compile guide and extended parameters in the selected locale', async () => {
-  for (const [locale, example, help, modelHelp] of [
+  for (const [locale, example, help, modelHelp, runtimeHelp] of [
     [
       'en-US',
       'ov find "What is the value of OpenViking?"',
       /Create and save a compile configuration/,
       /server Runtime configuration/,
+      /built-in VikingBot Runtime uses the server's agent_loop provider and model[\s\S]*If the Runtime uses an Ark endpoint/,
     ],
     [
       'zh-CN',
       'ov find "OpenViking 有什么价值？"',
       /创建并保存编译配置/,
       /服务端 Runtime 配置决定/,
+      /内置 VikingBot Runtime 使用服务端 agent_loop 的 provider 和 model[\s\S]*Runtime 使用方舟接入点时/,
     ],
   ]) {
     const host = await mount(
@@ -57,6 +59,7 @@ test('Console shows the Compile guide and extended parameters in the selected lo
         ],
       );
       assert.match(hint.textContent, modelHelp);
+      assert.match(hint.textContent, runtimeHelp);
       assert.doesNotMatch(hint.textContent, /doubao-2-1-lite/);
       assert.match(
         hint.textContent,
