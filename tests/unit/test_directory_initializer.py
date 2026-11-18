@@ -10,6 +10,7 @@ from openviking.core.namespace import (
     is_session_uri,
     may_include_hidden_actor_peers,
 )
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
@@ -39,6 +40,7 @@ class _FakeVikingFS:
         self.write_leases = []
         self.files = {}
         self._async_agfs = SimpleNamespace(
+            pathlock_acquire_exact=AsyncMock(return_value={"lease_ref": "policy-init"}),
             pathlock_acquire_tree=AsyncMock(return_value={"lease_ref": "agent-init"}),
             pathlock_release=AsyncMock(),
         )
@@ -73,24 +75,41 @@ class _FakeVikingFS:
 
 
 @pytest.mark.asyncio
-async def test_initialize_account_workspace_batches_preset_directories(monkeypatch):
+@pytest.mark.parametrize("preset_global_policy", [None, False], ids=["default", "disabled"])
+async def test_initialize_account_workspace_batches_preset_directories(
+    monkeypatch, preset_global_policy
+):
     vikingdb = _FakeVikingDB()
     viking_fs = _FakeVikingFS()
     viking_fs.contexts["viking://agent"] = {}
     viking_fs.contexts["viking://agent/tools"] = {"abstract": "Existing tool configuration"}
-    initializer = DirectoryInitializer(vikingdb, viking_fs=viking_fs)
+    defaults = (
+        None
+        if preset_global_policy is None
+        else UserConfigDefaults(preset_global_policy=preset_global_policy)
+    )
+    initializer = DirectoryInitializer(vikingdb, viking_fs=viking_fs, user_config_defaults=defaults)
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
-    memory_root = f"{canonical_user_root(ctx)}/memories"
+    user_root = canonical_user_root(ctx)
+    memory_root = f"{user_root}/memories"
     legacy_files = {f"{memory_root}/{name}.md": f"Old {name}" for name in ("soul", "identity")}
     viking_fs.files.update(legacy_files)
 
     account_count, user_count = await initializer.initialize_account_workspace(ctx)
-    assert viking_fs.files == legacy_files
+    seeded_files = {}
+    if preset_global_policy is None:
+        policy_uri = f"{user_root}/GLOBAL_POLICY.md"
+        policy_template = (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_text()
+        seeded_files[policy_uri] = policy_template
+    assert viking_fs.files == {**legacy_files, **seeded_files}
+    if preset_global_policy is None:
+        seeded_files[policy_uri] = f"{policy_template}\nCustom policy text\n"
+        viking_fs.files.update(seeded_files)
     viking_fs.files[f"{memory_root}/soul.md"] = "Custom agent instructions"
 
-    user_root = canonical_user_root(ctx)
     expected_user_uris = {
         user_root,
+        f"{memory_root}/experiences",
         *(f"{user_root}/{child.path}" for child in PRESET_DIRECTORIES["user"].children),
     }
     expected_agent_uris = {
@@ -104,6 +123,7 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     assert account_count == 6
     assert user_count == len(expected_user_uris)
     assert set(viking_fs.contexts) == expected_uris
+    assert f"{memory_root}/experiences" in viking_fs.contexts
     assert f"{user_root}/memories/preferences" not in viking_fs.contexts
     for uri in expected_agent_uris:
         assert viking_fs.contexts[uri]["abstract"]
@@ -124,6 +144,8 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
             assert message.context_data["parent_uri"] == (
                 None if uri == "viking://agent" else "viking://agent"
             )
+        if uri == f"{memory_root}/experiences":
+            assert message.context_data["parent_uri"] == memory_root
 
     malformed_abstract = "---\ndirectory: viking://resources/\n"
     viking_fs.contexts["viking://resources"]["abstract"] = malformed_abstract
@@ -133,6 +155,7 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     assert (second_account_count, second_user_count) == (0, 0)
     assert viking_fs.files == {
         **legacy_files,
+        **seeded_files,
         f"{memory_root}/soul.md": "Custom agent instructions",
     }
     assert viking_fs.contexts["viking://resources"]["abstract"] == malformed_abstract
@@ -173,17 +196,22 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
     user_root = canonical_user_root(ctx)
     expected_uris = {
         user_root,
+        f"{user_root}/memories/experiences",
         *(f"{user_root}/{child.path}" for child in PRESET_DIRECTORIES["user"].children),
     }
     assert count == len(expected_uris)
-    assert deletion_guard.await_count == len(expected_uris) + 1
-    assert prepare_parent.await_count == len(expected_uris) + 1
+    assert deletion_guard.await_count == len(expected_uris) + 2
+    assert prepare_parent.await_count == len(expected_uris) + 2
     root_path = agfs._resolve(viking_fs._uri_to_path(user_root, ctx=ctx))
     assert {str(path.relative_to(root_path)) for path in root_path.rglob("*.md")} == {
         f"{uri.removeprefix(user_root + '/')}/{filename}" if uri != user_root else filename
         for uri in expected_uris
         for filename in (".abstract.md", ".overview.md")
-    } | {"memories/soul.md"}
+    } | {"memories/soul.md", "GLOBAL_POLICY.md"}
+    assert (root_path / "memories/experiences").is_dir()
+    assert (root_path / "GLOBAL_POLICY.md").read_text() == (
+        SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md"
+    ).read_text()
     assert (root_path / "memories/soul.md").read_text() == (
         SYSTEM_ASSETS_DIR / "memory" / "soul.md"
     ).read_text()
@@ -205,6 +233,7 @@ async def test_system_assets_sync_only_for_account_initialization(monkeypatch):
     viking_fs = _FakeVikingFS()
     lease = {"lease_ref": "account-init"}
     agfs = SimpleNamespace(
+        pathlock_acquire_exact=AsyncMock(return_value=lease),
         pathlock_acquire_tree=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
     )
@@ -231,7 +260,7 @@ async def test_system_assets_sync_only_for_account_initialization(monkeypatch):
 
     viking_fs.contexts.clear()
     viking_fs.write_leases.clear()
-    user_count = 1 + len(PRESET_DIRECTORIES["user"].children)
+    user_count = len(PRESET_DIRECTORIES["user"].children) + 2  # User root and experience category.
     assert await service.initialize_account_workspace(ctx) == (6, user_count)
     agfs.pathlock_acquire_tree.assert_awaited_once_with("/local/acme", timeout_secs=10.0)
     agfs.pathlock_release.assert_awaited_once_with(lease)
@@ -292,6 +321,7 @@ def test_preset_directory_uris_cover_seeded_directories_only():
         "viking://agent/skills",
         user_root,
         f"{user_root}/memories",
+        f"{user_root}/memories/experiences",
         f"{user_root}/resources",
         f"{user_root}/privacy",
         f"{user_root}/peers",

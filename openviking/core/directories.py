@@ -266,11 +266,9 @@ class DirectoryInitializer:
     async def initialize_user_directories(
         self, ctx: RequestContext, *, lease_ref: Any = None
     ) -> int:
-        """Initialize the current user's root and first-level entry directories.
+        """Initialize the user's root, entry directories, and experience memory directory.
 
-        Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
-        are still created lazily when content is written. This keeps a new user
-        root discoverable without materializing the full empty taxonomy.
+        Other memory categories and individual sessions are created on demand.
         """
         if "user" not in PRESET_DIRECTORIES:
             return 0
@@ -346,11 +344,9 @@ class DirectoryInitializer:
     def _user_directory_targets(
         ctx: RequestContext,
     ) -> tuple[_DirectoryTarget, list[_DirectoryTarget]]:
+        """Select the user's entry directories and experience category for initialization."""
         # Preset initialization is a server-controlled write to the current
-        # user's own root and first-level directories. Actor-peer view must
-        # still protect peer subtrees during normal filesystem mutations, but
-        # it must not prevent a fresh user from creating the container that
-        # owns those subtrees in the first place.
+        # user's workspace without applying the actor peer's restricted view.
         initialization_ctx = replace(ctx, actor_peer_id=None)
         user_tree = PRESET_DIRECTORIES["user"]
         user_root_uri = canonical_user_root(initialization_ctx)
@@ -361,15 +357,24 @@ class DirectoryInitializer:
             scope="user",
             ctx=initialization_ctx,
         )
+        directories = []
+        for child in user_tree.children:
+            directories.append((user_root_uri, child))
+            if child.path == "memories":
+                directories.extend(
+                    (f"{user_root_uri}/{child.path}", category)
+                    for category in child.children
+                    if category.path == "experiences"
+                )
         children = [
             _DirectoryTarget(
-                uri=f"{user_root_uri}/{child.path}",
-                parent_uri=user_root_uri,
+                uri=f"{parent_uri}/{child.path}",
+                parent_uri=parent_uri,
                 definition=child,
                 scope="user",
                 ctx=initialization_ctx,
             )
-            for child in user_tree.children
+            for parent_uri, child in directories
         ]
         return root, children
 

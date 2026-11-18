@@ -242,7 +242,7 @@ class UserConfigDefaults(UserConfig):
     """Deployment defaults for users without persisted overrides."""
 
     preset_global_policy: bool = Field(
-        default=False,
+        default=True,
         description="Create the packaged GLOBAL_POLICY.md during user initialization.",
     )
     auto_commit_policy: Optional[Dict[str, Any]] = None
