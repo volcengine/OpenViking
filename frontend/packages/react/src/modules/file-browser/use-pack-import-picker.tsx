@@ -24,7 +24,8 @@ export function usePackImportPicker(
   const choosePackFile = useCallback<FileBrowserHandle['choosePackFile']>(
     (uri, signal) => {
       signal?.throwIfAborted();
-      if (!canWrite || (uri !== 'viking://' && !supportsPack(uri)))
+      const target = /^viking:\/{2,}$/.test(uri) ? 'viking://' : uri;
+      if (!canWrite || (target !== 'viking://' && !supportsPack(target)))
         throw new Error(
           'OVPack import requires a supported resource directory.',
         );
@@ -32,7 +33,7 @@ export function usePackImportPicker(
       return new Promise<File | undefined>((resolve) => {
         const next: PackSelection = {
           id: ++nextId.current,
-          uri,
+          uri: target,
           finish(file) {
             signal?.removeEventListener('abort', abort);
             if (active.current === next) {

@@ -159,12 +159,12 @@ test('OVPack dialog rejects other extensions and invalid archive headers before 
       assert.equal(button('Import', workflow()).disabled, true);
       await submit();
     }
-    assert.equal(
-      fetch.calls.some((call) =>
-        /(?:temp_upload|pack\/import)$/.test(call.path),
-      ),
-      false,
+    await view.render(tree(fetch, target, { locale: 'zh-CN' }));
+    assert.match(toastContent()?.textContent, /请选择有效的 \.ovpack 文件/);
+    const uploads = fetch.calls.filter(({ path }) =>
+      /(?:temp_upload|pack\/import)$/.test(path),
     );
+    assert.equal(uploads.length, 0);
   } finally {
     await view.unmount();
   }
@@ -190,10 +190,11 @@ test('Console pack picker opens at the root and starts each request with an empt
 
     let second;
     await act(() => {
-      second = ref.current.choosePackFile('viking://');
+      second = ref.current.choosePackFile('viking:///');
     });
     assert.equal(await first, undefined);
-    assert.notEqual(workflow().querySelector('input[type="file"]'), input);
+    const uri = workflow().querySelector('.ov-file-browser-workflow__uri');
+    assert.equal(uri.textContent, 'viking://');
     assert.equal(button('Import', workflow()).disabled, true);
     await click(button('Cancel', workflow()));
     assert.equal(await second, undefined);

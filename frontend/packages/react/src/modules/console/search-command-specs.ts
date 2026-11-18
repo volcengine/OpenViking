@@ -116,15 +116,10 @@ const query: Argument = { name: 'query', optional: true, rest: true };
 function retrievalRequest(name: 'find' | 'search', values: ArgumentValues) {
   const { context_type, tags, ...body } = values;
   const query = typeof body.query === 'string' ? body.query.trim() : '';
-  if (
-    !query &&
-    !body.image_url &&
-    !body.filter &&
-    !body.since &&
-    !body.until &&
-    !context_type &&
-    !tags
-  )
+  const acceptsFilterOnly = name === 'find' || body.mode === 'context';
+  const filter =
+    body.filter || body.since || body.until || context_type || tags;
+  if (!query && !body.image_url && !(acceptsFilterOnly && filter))
     throw new ConsoleCommandError('missingArgument', 'query / --image');
 
   if (body.mode === 'context') {

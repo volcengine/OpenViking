@@ -55,10 +55,10 @@ test('find and search pass Volc retrieval options to the native data plane', asy
       path: '/gateway/api/v1/search/find',
       body: { tags: ['external_id=123'] },
     });
-    await host.execute('ov search --context-type resource');
+    await host.execute('ov search notes --context-type resource');
     assert.deepEqual(calls.at(-1), {
       path: '/gateway/api/v1/search/search',
-      body: { context_type: ['resource'] },
+      body: { query: 'notes', context_type: ['resource'] },
     });
 
     for (const input of [
@@ -70,6 +70,8 @@ test('find and search pass Volc retrieval options to the native data plane', asy
       'ov find notes --events-time-decay-protection 5w',
       'ov search notes --mode invalid',
       'ov search notes --node-limit 0',
+      'ov search --context-type resource',
+      'ov search --mode list --tags external_id=123',
       'ov search notes --mode context -u viking://resources',
       'ov search notes --mode context -L 2',
     ]) {
@@ -77,6 +79,47 @@ test('find and search pass Volc retrieval options to the native data plane', asy
       assert.equal(host.records.at(-1).dataset.status, 'error', input);
     }
     assert.equal(calls.length, 5);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('find and ranked search display requested content and fall back to the abstract', async () => {
+  const bodies = [];
+  const host = await mount(async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return ok({
+      resources: [
+        {
+          uri: 'viking://resources/notes.md',
+          abstract: 'Notes abstract',
+          content: 'First line\nSecond line',
+        },
+        { uri: 'viking://resources/other.md', abstract: 'Other abstract' },
+      ],
+    });
+  });
+  try {
+    for (const command of [
+      'ov find notes --read-content',
+      'ov search notes --mode list --read-content',
+    ]) {
+      await host.execute(command);
+      assert.equal(bodies.at(-1).read_content, true);
+      const record = host.records.at(-1);
+      assert.equal(
+        record.querySelector('.ov-command-console__search-content').textContent,
+        'First line\nSecond line',
+      );
+      assert.equal(
+        record.querySelector('.ov-command-console__search-preview').textContent,
+        'Other abstract',
+      );
+      assert.doesNotMatch(record.textContent, /Notes abstract/);
+    }
+    await host.execute('ov find notes');
+    assert.match(host.records.at(-1).textContent, /Notes abstract/);
+    assert.doesNotMatch(host.records.at(-1).textContent, /Second line/);
   } finally {
     await host.dispose();
   }

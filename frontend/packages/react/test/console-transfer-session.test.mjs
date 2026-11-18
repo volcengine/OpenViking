@@ -101,15 +101,33 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
     }
     assert.equal(calls.length, count);
 
+    const endOffset = validPack.lastIndexOf(Buffer.from('PK\x05\x06'));
+    const directoryOffset = validPack.readUInt32LE(endOffset + 16);
+    const wrongDirectorySignature = Buffer.from(validPack);
+    wrongDirectorySignature.writeUInt32LE(0, directoryOffset);
     for (const truncated of [
       validPack.subarray(0, 4),
       validPack.subarray(0, -1),
+      Buffer.concat([
+        validPack.subarray(0, directoryOffset),
+        validPack.subarray(endOffset),
+      ]),
+      wrongDirectorySignature,
     ]) {
       exportBytes = truncated;
       await host.execute('ov export viking://resources/qa ./sample');
       assert.equal(host.records.at(-1).dataset.status, 'error');
     }
     assert.equal(saved.length, 2);
+
+    // The classic end record defers the directory size and offset to ZIP64.
+    const zip64Pack = Buffer.from(
+      'UEsDBC0AAAAAAAAAIQBZX5Kl//////////8NABQAbWFuaWZlc3QuanNvbgEAEAAlAAAAAAAAACUAAAAAAAAAeyJyb290Ijp7InVyaSI6InZpa2luZzovL3Jlc291cmNlcyJ9fVBLAQItAy0AAAAAAAAAIQBZX5Kl//////////8NABQAAAAAAAAAAACAAQAAAABtYW5pZmVzdC5qc29uAQAQACUAAAAAAAAAJQAAAAAAAABQSwYGLAAAAAAAAAAtAC0AAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAATwAAAAAAAABkAAAAAAAAAFBLBgcAAAAAswAAAAAAAAABAAAAUEsFBgAAAAABAAEA//////////8AAA==',
+      'base64',
+    );
+    exportBytes = zip64Pack;
+    await host.execute('ov export viking://resources/qa ./large');
+    assert.deepEqual(saved.at(-1), [zip64Pack, 'large.ovpack']);
   } finally {
     await host.dispose();
   }

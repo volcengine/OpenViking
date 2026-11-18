@@ -1,9 +1,9 @@
 import { hasOvpackHeader, hasOvpackName } from '../../shared/ovpack-file.js';
-import { useId, useState } from 'react';
+import { useCallback, useId, useMemo, useState } from 'react';
 import { DocumentIcon } from '../../icons/index.js';
 import UploadIcon from '../../../../icons/svg/file-preview/import.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
-import { useToast } from '../../shared/primitives/toast/use-toast.js';
+import { Toast } from '../../shared/primitives/toast/toast.js';
 import { importPreviewPack } from './preview-native.js';
 import { PreviewMutationError } from './preview-query-state.js';
 import type { PreviewWorkflowProps } from './preview-workflow-types.js';
@@ -24,12 +24,26 @@ export function PreviewPackImport({
 }) {
   const id = useId();
   const [file, setFile] = useState<File>();
-  const [toast, toastHolder] = useToast({ locale });
+  const [invalid, setInvalid] = useState(false);
+  const dismissFormatError = useCallback(() => setInvalid(false), []);
+  const notices = useMemo(
+    () =>
+      invalid
+        ? [
+            {
+              id: 'pack-import-format',
+              type: 'error' as const,
+              content: text.importInvalidFormat,
+            },
+          ]
+        : [],
+    [invalid, text.importInvalidFormat],
+  );
   const mutation = usePreviewMutation(uri, requestOptions);
   async function changeFile(input: HTMLInputElement) {
     const picked = input.files?.[0];
     setFile(undefined);
-    toast.clear();
+    dismissFormatError();
     mutation.reset();
     if (!picked) return;
     const valid =
@@ -39,10 +53,7 @@ export function PreviewPackImport({
     if (valid) setFile(picked);
     else {
       input.value = '';
-      toast.error({
-        id: 'pack-import-format',
-        content: text.importInvalidFormat,
-      });
+      setInvalid(true);
     }
   }
   return (
@@ -87,7 +98,7 @@ export function PreviewPackImport({
           <span className="ov-pack-import__choose">{text.importChoose}</span>
         </label>
       </div>
-      {toastHolder}
+      <Toast locale={locale} notices={notices} onRemove={dismissFormatError} />
       <PreviewMutationError
         error={mutation.error}
         title={text.failureTitle(text.importSubmit)}

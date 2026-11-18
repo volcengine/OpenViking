@@ -20,19 +20,56 @@ export async function hasCompleteOvpack(file: Blob) {
     return false;
 
   // ZIP and ZIP64 both end with this record, followed by an optional comment.
-  const tail = new DataView(
-    await file
-      .slice(Math.max(0, file.size - endRecordSize - 0xffff))
-      .arrayBuffer(),
-  );
+  const tailStart = Math.max(0, file.size - endRecordSize - 0xffff);
+  const tail = new DataView(await file.slice(tailStart).arrayBuffer());
   for (let offset = tail.byteLength - endRecordSize; offset >= 0; offset--) {
     if (
       tail.getUint32(offset, true) === 0x06054b50 &&
       tail.getUint16(offset + 10, true) > 0 &&
       offset + endRecordSize + tail.getUint16(offset + 20, true) ===
         tail.byteLength
-    )
-      return true;
+    ) {
+      const endOffset = tailStart + offset;
+      const size = tail.getUint32(offset + 12, true);
+      const start = tail.getUint32(offset + 16, true);
+      const directory =
+        size === 0xffffffff || start === 0xffffffff
+          ? await readZip64Directory(file, endOffset)
+          : { size: BigInt(size), start: BigInt(start), endOffset };
+      if (
+        !directory ||
+        directory.start < 30n ||
+        directory.size < 46n ||
+        directory.start + directory.size > BigInt(directory.endOffset)
+      )
+        continue;
+      const position = Number(directory.start);
+      const header = new DataView(
+        await file.slice(position, position + 4).arrayBuffer(),
+      );
+      if (header.getUint32(0, true) === 0x02014b50) return true;
+    }
   }
   return false;
+}
+
+async function readZip64Directory(file: Blob, endOffset: number) {
+  const locatorOffset = endOffset - 20;
+  if (locatorOffset < 0) return;
+  const locator = new DataView(
+    await file.slice(locatorOffset, endOffset).arrayBuffer(),
+  );
+  if (locator.getUint32(0, true) !== 0x07064b50) return;
+  const recordOffset = locator.getBigUint64(8, true);
+  if (recordOffset + 56n > BigInt(locatorOffset)) return;
+  const position = Number(recordOffset);
+  const record = new DataView(
+    await file.slice(position, position + 56).arrayBuffer(),
+  );
+  if (record.getUint32(0, true) !== 0x06064b50) return;
+  return {
+    size: record.getBigUint64(40, true),
+    start: record.getBigUint64(48, true),
+    endOffset: position,
+  };
 }
