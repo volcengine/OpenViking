@@ -99,7 +99,8 @@ const messages: typeof enUS = {
         '按搜索词在当前上下文中做语义检索，返回匹配的资源、记忆或技能。',
       examples: ['ov find "OpenViking 有什么价值？"'],
     },
-    compile: compileHelp['zh-CN'].guide,
+    'compile create': compileHelp['zh-CN'].createGuide,
+    compile: compileHelp['zh-CN'].runGuide,
   },
   compileArgsHelp: compileHelp['zh-CN'].args,
   parameters: {
@@ -116,7 +117,7 @@ const messages: typeof enUS = {
     'session-id': '要写入并提交的会话 ID',
     limit: '最多返回的条目数量',
     'compile-name':
-      '汉字、ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符。纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符',
+      '汉字、ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符。纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符。同一用户内不可重名，不支持改名',
     from: '已存在的来源目录 URI，可重复传入 --from，或用英文逗号分隔多个 URI',
     'compile-from':
       '至少一个已存在且可读的来源目录。可重复传入 --from，或用英文逗号分隔多个 URI，重复项自动去重。',
