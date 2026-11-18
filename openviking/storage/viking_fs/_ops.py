@@ -1475,7 +1475,9 @@ class _OpsMixin:
         try:
             backend = await vector_store.get_account_backend(ctx.account_id)
         except Exception:
-            logger.debug("glob engine=auto: backend lookup failed, falling back to fs", exc_info=True)
+            logger.debug(
+                "glob engine=auto: backend lookup failed, falling back to fs", exc_info=True
+            )
             return False
         if getattr(backend, "enable_path_glob", False) is not True:
             return False
@@ -1594,6 +1596,10 @@ class _OpsMixin:
         root_uri: str,
         ctx: RequestContext,
     ) -> bool:
+        from openviking.session.append_receipts import receipt_access_allowed
+
+        if not receipt_access_allowed(entry_uri, ctx):
+            return False
         try:
             entry_parts = self._safe_uri_parts(entry_uri)
             root_parts = self._safe_uri_parts(root_uri)
@@ -2627,6 +2633,13 @@ class _OpsMixin:
     def _filter_ls_entries(path: str, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Return entries visible at the given storage path."""
         parts = [p for p in path.strip("/").split("/") if p]
+        if (
+            len(parts) == 6
+            and parts[0] == "local"
+            and parts[2] == "user"
+            and parts[4] == "sessions"
+        ):
+            entries = [e for e in entries if e.get("name") != ".append_receipts"]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
         return [e for e in entries if not is_storage_internal_name(str(e.get("name", "")))]

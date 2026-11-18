@@ -232,6 +232,11 @@ class Session:
     async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return await self._client.batch_add_messages(self.session_id, messages)
 
+    async def append_messages(
+        self, messages: list[Message], idempotency_key: str
+    ) -> Dict[str, Any]:
+        return await self._client.append_messages(self.session_id, messages, idempotency_key)
+
     async def commit(
         self,
         keep_recent_count: int = 0,
@@ -281,6 +286,9 @@ class SyncSession:
 
     def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
         return self._client.batch_add_messages(self.session_id, messages)
+
+    def append_messages(self, messages: list[Message], idempotency_key: str) -> Dict[str, Any]:
+        return self._client.append_messages(self.session_id, messages, idempotency_key)
 
     def commit(
         self,
@@ -812,6 +820,38 @@ class AsyncHTTPClient:
             "POST",
             f"/api/v1/sessions/{session_path}/messages/batch",
             json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def append_messages(
+        self,
+        session_id: str,
+        messages: list[Message],
+        idempotency_key: str,
+        options: Optional[BatchAddMessagesOptions] = None,
+    ) -> Dict[str, Any]:
+        """Append with durable replay protection; unsupported servers fail closed.
+
+        Reuse the same key and message body after an uncertain response. Keys are
+        retained for the Session lifetime. This never falls back to legacy batch.
+        """
+        if (
+            not isinstance(idempotency_key, str)
+            or not idempotency_key.strip()
+            or len(idempotency_key) > 128
+        ):
+            raise ValueError("idempotency_key must be nonblank and at most 128 characters")
+        session_path = self._path_segment(session_id)
+        payload = self._build_options_payload(
+            options,
+            BatchAddMessagesOptions,
+            fixed={
+                "messages": [self._normalize_message_payload(message) for message in messages],
+                "idempotency_key": idempotency_key,
+            },
+        )
+        response = await self._request(
+            "POST", f"/api/v1/sessions/{session_path}/messages/append", json=payload
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -2843,6 +2883,17 @@ class SyncHTTPClient:
         options: Optional[BatchAddMessagesOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(self._async_client.batch_add_messages(session_id, messages, options))
+
+    def append_messages(
+        self,
+        session_id: str,
+        messages: list[Message],
+        idempotency_key: str,
+        options: Optional[BatchAddMessagesOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.append_messages(session_id, messages, idempotency_key, options)
+        )
 
     def add_skill(
         self,

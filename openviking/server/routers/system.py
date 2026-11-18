@@ -51,6 +51,7 @@ async def health_check(request: Request):
     from openviking import __version__
 
     result = {"status": "ok", "healthy": True, "version": __version__}
+    result.setdefault("capabilities", {})["session_append_idempotency"] = 1
 
     try:
         config = getattr(request.app.state, "config", None)

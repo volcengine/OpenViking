@@ -62,6 +62,8 @@ def get_openviking_session_id(
     default_session_id: str | None = None,
 ) -> str:
     state = get_openviking_state(session)
+    if rotate and "pending_append" in state:
+        raise RuntimeError("Resolve pending OpenViking append before rotating the Session")
     current_session_id = str(state.get("session_id") or "").strip()
     if (
         current_session_id
@@ -86,8 +88,10 @@ def get_openviking_session_id(
 
 
 def reset_openviking_state(session: Session, *, rotate_session_id: bool = False) -> None:
-    session_id = get_openviking_session_id(session, rotate=rotate_session_id)
     previous_state = get_openviking_state(session)
+    if "pending_append" in previous_state:
+        raise RuntimeError("Resolve pending OpenViking append before resetting local history")
+    session_id = get_openviking_session_id(session, rotate=rotate_session_id)
     state = {
         "session_id": session_id,
         "last_synced_local_index": -1,

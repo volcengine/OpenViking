@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import re
 import uuid
@@ -1283,12 +1284,38 @@ class VikingClient:
             token_budget=token_budget,
         )
 
+    async def session_append_identity(self, user_id: Optional[str] = None) -> str:
+        """Bind pending sync to the actual endpoint and credential context.
+
+        Only a digest is persisted. Credential rotation requires reconciliation
+        of an uncertain pending batch rather than silently rebinding it.
+        """
+        client = await self._session_client_for_user(user_id)
+        fields = [
+            getattr(client, name, None)
+            for name in (
+                "_url",
+                "_account",
+                "_user_id",
+                "_api_key",
+                "_actor_peer_id",
+                "_gateway_token",
+                "_auth_mode",
+                "_ldap_username",
+                "_ldap_password",
+                "_oidc_token",
+                "_extra_headers",
+            )
+        ]
+        return hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
+
     async def append_messages(
         self,
         session_id: str,
         messages: list[dict[str, Any]],
         default_user_peer_id: Optional[str] = None,
         session_user_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         await self.ensure_session(session_id, user_id=session_user_id)
         batch = self._normalize_session_messages(
@@ -1302,10 +1329,15 @@ class VikingClient:
         total_added = 0
         message_count = 0
         for start in range(0, len(batch), 100):
-            result = await client.batch_add_messages(
-                session_id=session_id,
-                messages=batch[start : start + 100],
-            )
+            chunk = batch[start : start + 100]
+            if idempotency_key is None:
+                result = await client.batch_add_messages(session_id=session_id, messages=chunk)
+            else:
+                # Chunk boundaries and keys remain fixed across a lost reply.
+                key = hashlib.sha256(f"{idempotency_key}:{start}".encode()).hexdigest()
+                result = await client.append_messages(
+                    session_id=session_id, messages=chunk, idempotency_key=key
+                )
             total_added += int(result.get("added", 0) or 0)
             message_count = int(result.get("message_count", message_count) or 0)
         return {"session_id": session_id, "added": total_added, "message_count": message_count}

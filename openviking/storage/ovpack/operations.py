@@ -418,6 +418,21 @@ async def _backup_entries(viking_fs, ctx: RequestContext) -> list[dict[str, Any]
     return entries
 
 
+async def _validate_session_receipt_export(viking_fs, root_uri, entries, ctx):
+    """Do not create a seemingly restorable archive missing private receipts."""
+    for entry in entries:
+        uri = entry.get("uri") or join_uri(root_uri, entry.get("rel_path", ""))
+        if entry.get("isDir") or leaf_name(uri) != ".meta.json" or not is_session_uri(uri):
+            continue
+        data = await viking_fs.read_file_bytes(uri, ctx=ctx)
+        meta = json.loads(data)
+        if meta.get("append_receipt_version"):
+            raise InvalidArgumentError(
+                "OVPack does not yet preserve Session append receipts; "
+                "use a quiesced backend-level backup for receipt-enabled Sessions"
+            )
+
+
 async def _write_ovpack_archive(
     viking_fs,
     root_uri: str,
@@ -431,6 +446,7 @@ async def _write_ovpack_archive(
     vector_store,
     vector_config_resolver,
 ) -> str:
+    await _validate_session_receipt_export(viking_fs, root_uri, entries, ctx)
     ensure_dir_exists(to)
     manifest_entries = manifest_entries_by_path(manifest)
     manifest_file_entries = {

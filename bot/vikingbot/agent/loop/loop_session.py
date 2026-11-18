@@ -672,6 +672,7 @@ class LoopSessionMixin:
         kwargs: dict[str, Any] = {
             "session": session,
             "force_commit": force_commit,
+            "persist_session": self.sessions.save,
         }
         if keep_recent_turn_count is not None:
             kwargs["keep_recent_turn_count"] = keep_recent_turn_count
