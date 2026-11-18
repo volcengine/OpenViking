@@ -14,6 +14,7 @@ import json
 from typing import Any, Dict, Iterable, Optional, Set
 
 from openviking.server.identity import RequestContext
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,32 +22,43 @@ logger = get_logger(__name__)
 LEDGER_FILENAME = ".recall_log.json"
 LEDGER_VERSION = 1
 MAX_LEDGER_URIS = 500
+_WRITE_LOCK_TIMEOUT_SECONDS = 1.0
+
+
+def _as_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _record_turn(record: Any) -> Optional[int]:
-    """Turn a stored record was written at, or ``None`` when it is unusable.
-
-    The ledger is a file on disk: a half-written or hand-edited record must
-    degrade to "no dedup for that URI", never fail the request that reads it.
-    """
-    if not isinstance(record, dict):
-        return None
-    try:
-        return int(record.get("turn", 0))
-    except (TypeError, ValueError):
-        return None
+    return _as_int(record.get("turn", 0)) if isinstance(record, dict) else None
 
 
-def _resolve_turn(session: Any) -> int:
-    """Monotonic message counter used as the turn clock."""
+async def _resolve_clock(
+    session: Any, session_uri: str, viking_fs: Any, ctx: RequestContext
+) -> tuple[int, Optional[int]]:
+    """Use cumulative messages when available, or the legacy archive and live count."""
     meta = getattr(session, "meta", None)
-    total = getattr(meta, "total_message_count", None) if meta is not None else None
+    total = _as_int(getattr(meta, "total_message_count", None))
     live = len(getattr(session, "messages", None) or [])
+    if total is not None:
+        return max(total, live), None
+
+    # Session loads live messages and metadata separately. For legacy sessions,
+    # read the count and generation together so a rotation cannot mix them.
     try:
-        total_int = int(total) if total is not None else 0
-    except (TypeError, ValueError):
-        total_int = 0
-    return max(total_int, live)
+        persisted = json.loads(await viking_fs.read_file(f"{session_uri}/.meta.json", ctx=ctx))
+    except (NotFoundError, FileNotFoundError):
+        return live, _as_int(getattr(meta, "commit_count", 0)) or 0
+    count = _as_int(persisted.get("message_count"))
+    return count if count is not None else live, _as_int(persisted.get("commit_count")) or 0
+
+
+def _stored_entries(data: Dict[str, Any]) -> Dict[str, Any]:
+    entries = data.get("entries")
+    return entries if isinstance(entries, dict) else {}
 
 
 class RecallLedger:
@@ -60,6 +72,7 @@ class RecallLedger:
         session_uri: str,
         turn: int,
         dedup_turns: int,
+        archive_generation: Optional[int] = None,
         data: Optional[Dict[str, Any]] = None,
         status: str = "ok",
     ) -> None:
@@ -67,6 +80,7 @@ class RecallLedger:
         self._ctx = ctx
         self._uri = f"{session_uri.rstrip('/')}/{LEDGER_FILENAME}"
         self._turn = turn
+        self._archive_generation = archive_generation
         self._dedup_turns = max(0, int(dedup_turns))
         self._data = data or {}
         self.status = status
@@ -83,23 +97,26 @@ class RecallLedger:
         """Load the ledger, or return ``None`` when dedup cannot apply."""
         if dedup_turns <= 0 or session is None:
             return None
-        session_uri = str(getattr(session, "uri", "") or "")
+        session_uri = str(getattr(session, "uri", "") or "").rstrip("/")
         viking_fs = getattr(service, "viking_fs", None)
         if not session_uri or viking_fs is None:
             return None
 
+        try:
+            turn, archive_generation = await _resolve_clock(session, session_uri, viking_fs, ctx)
+        except Exception as exc:
+            logger.debug("Recall ledger clock unavailable (%s); skipping dedup", exc)
+            return None
         ledger = cls(
             service=service,
             ctx=ctx,
             session_uri=session_uri,
-            turn=_resolve_turn(session),
+            turn=turn,
             dedup_turns=dedup_turns,
+            archive_generation=archive_generation,
         )
         try:
-            raw = await viking_fs.read_file(ledger._uri, ctx=ctx)
-            parsed = json.loads(raw) if raw else {}
-            if isinstance(parsed, dict):
-                ledger._data = parsed
+            ledger._data = await ledger._read(viking_fs)
             ledger.status = "ok"
         except Exception as exc:
             logger.debug("Recall ledger unreadable (%s); starting empty", exc)
@@ -111,14 +128,21 @@ class RecallLedger:
     def turn(self) -> int:
         return self._turn
 
-    def _entries(self) -> Dict[str, Any]:
-        entries = self._data.get("entries")
-        return entries if isinstance(entries, dict) else {}
+    async def _read(self, viking_fs: Any) -> Dict[str, Any]:
+        raw = await viking_fs.read_file(self._uri, ctx=self._ctx)
+        parsed = json.loads(raw) if raw else {}
+        return parsed if isinstance(parsed, dict) else {}
 
     def cooled_uris(self) -> Set[str]:
         """URIs served within the last ``dedup_turns`` turns."""
+        generation = _as_int(self._data.get("archive_generation"))
+        if self._archive_generation is not None and generation not in (
+            None,
+            self._archive_generation,
+        ):
+            return set()
         cooled: Set[str] = set()
-        for uri, record in self._entries().items():
+        for uri, record in _stored_entries(self._data).items():
             served_turn = _record_turn(record)
             if served_turn is None or served_turn > self._turn:
                 # Archive rotation reset the clock; treat the record as expired.
@@ -137,12 +161,54 @@ class RecallLedger:
         viking_fs = getattr(self._service, "viking_fs", None)
         if viking_fs is None:
             return
-        stored = dict(self._entries())
+        try:
+            agfs = viking_fs._async_agfs
+            path = viking_fs._uri_to_path(self._uri, ctx=self._ctx)
+            fs_ctx = {"account_id": self._ctx.account_id}
+            lease = await agfs.pathlock_acquire_exact(
+                path, timeout_secs=_WRITE_LOCK_TIMEOUT_SECONDS, fs_ctx=fs_ctx
+            )
+            try:
+                try:
+                    latest = await self._read(viking_fs)
+                except (NotFoundError, FileNotFoundError, json.JSONDecodeError):
+                    latest = {}
+                payload = self._merge(latest, entries)
+                if payload is not None:
+                    await viking_fs.write_file(
+                        uri=self._uri,
+                        content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                        ctx=self._ctx,
+                        lease_ref=lease,
+                    )
+            finally:
+                await agfs.pathlock_release(lease, fs_ctx=fs_ctx)
+        except Exception as exc:
+            logger.debug("Recall ledger write failed (%s); dedup stays best-effort", exc)
+            self.status = "write_failed"
+
+    def _merge(self, latest: Dict[str, Any], entries: Iterable[Any]) -> Optional[Dict[str, Any]]:
+        generation = _as_int(latest.get("archive_generation"))
+        if self._archive_generation is not None and generation is not None:
+            if generation > self._archive_generation:
+                return None
+            if generation < self._archive_generation:
+                latest = {}
+        newest_turn = self._turn
+        # An untagged legacy ledger can contain records from before a rotation.
+        if self._archive_generation is None or generation is not None:
+            newest_turn = max(newest_turn, _as_int(latest.get("updated_turn")) or 0)
+
+        stored = dict(_stored_entries(latest))
         for entry in entries:
             uri = str(getattr(entry, "uri", "") or "")
-            if not uri:
+            detail = getattr(entry, "detail", "")
+            if not uri or detail == "uri":
                 continue
-            stored[uri] = {"turn": self._turn, "detail": getattr(entry, "detail", "")}
+            previous_turn = _record_turn(stored.get(uri))
+            if previous_turn is not None and self._turn < previous_turn <= newest_turn:
+                continue
+            stored[uri] = {"turn": self._turn, "detail": detail}
 
         keep_from = self._turn - (self._dedup_turns * 4)
         turns = {uri: _record_turn(record) for uri, record in stored.items()}
@@ -151,23 +217,17 @@ class RecallLedger:
         pruned = {
             uri: record
             for uri, record in stored.items()
-            if turns[uri] is not None and keep_from <= turns[uri] <= self._turn
+            if (served_turn := turns[uri]) is not None and keep_from <= served_turn <= newest_turn
         }
         if len(pruned) > MAX_LEDGER_URIS:
             ordered = sorted(pruned.items(), key=lambda item: turns[item[0]] or 0, reverse=True)
             pruned = dict(ordered[:MAX_LEDGER_URIS])
 
-        payload = {
+        payload: Dict[str, Any] = {
             "version": LEDGER_VERSION,
-            "updated_turn": self._turn,
+            "updated_turn": newest_turn,
             "entries": pruned,
         }
-        try:
-            await viking_fs.write_file(
-                uri=self._uri,
-                content=json.dumps(payload, ensure_ascii=False),
-                ctx=self._ctx,
-            )
-        except Exception as exc:
-            logger.debug("Recall ledger write failed (%s); dedup stays best-effort", exc)
-            self.status = "write_failed"
+        if self._archive_generation is not None:
+            payload["archive_generation"] = self._archive_generation
+        return payload
