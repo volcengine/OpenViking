@@ -89,8 +89,13 @@ export const TRANSFER_COMMAND_SPECS: readonly CommandSpec[] = [
         body: { ...body, temp_file_id },
       });
       execution.signal?.throwIfAborted();
-      if (name === 'import' && result?.uri)
-        execution.onPackImported?.(result.uri);
+      if (name === 'import' && result?.uri) {
+        try {
+          execution.onPackImported?.(result.uri);
+        } catch {
+          /* A host notification cannot undo a successful import. */
+        }
+      }
       return result;
     },
   })),

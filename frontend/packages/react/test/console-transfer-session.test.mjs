@@ -6,6 +6,8 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
   const calls = [];
   const picked = [];
   const saved = [];
+  const imported = [];
+  const importedUri = 'viking://resources/qa/sample';
   const fixture = new File(['fixture'], 'sample.md');
   // A ZIP with a manifest, a resource and an archive comment.
   const validPack = Buffer.from(
@@ -24,6 +26,7 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
         return ok({ temp_file_id: 'upload-1' });
       if (pathname.endsWith('/download')) return new Response('download bytes');
       if (pathname.endsWith('/export')) return new Response(exportBytes);
+      if (pathname.endsWith('/pack/import')) return ok({ uri: importedUri });
       return ok({});
     },
     {
@@ -31,6 +34,10 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
         async choosePackFile(uri) {
           picked.push(uri);
           return selectedPack;
+        },
+        onPackImported(uri) {
+          imported.push(uri);
+          throw new Error('Host navigation failed');
         },
         files: {
           async pickFile() {
@@ -74,6 +81,8 @@ test('Console converts browser files and OV CLI outputs to native transfers', as
       vector_mode: 'recompute',
       temp_file_id: 'upload-1',
     });
+    assert.deepEqual(imported, [importedUri]);
+    assert.equal(host.records.at(-1).dataset.status, 'success');
     await host.execute('ov get viking://resources/test.md ./sample.md');
     assert.equal(
       new URLSearchParams(calls.at(-1).search).get('uri'),
