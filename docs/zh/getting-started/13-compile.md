@@ -57,6 +57,10 @@ ov task status <cmp_task_id>
 
 直接传入 `ov compile --from … --to … --skill …` 的写法已弃用，仍可执行一次性全量编译。
 
+资源 Markdown 可在 frontmatter 中声明检索标签，例如
+`tags: [topic, role=canonical, type=guide]`。Compile 以追加方式发布有效的显式
+`k=v` 标签，保留其他已有标签。普通主题标签仍是文档元数据；缺少或空的声明不会清除检索标签。
+
 ## 打开正文
 
 ```bash
