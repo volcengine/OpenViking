@@ -267,7 +267,7 @@ def _enable_viking_fs_recorder(viking_fs) -> None:
 
     global _instance
     _instance = RecordingVikingFS(viking_fs)
-    logger.info("[VikingFS] IO Recorder enabled")
+    logger.info("IO Recorder enabled")
 
 
 def enable_viking_fs_recorder() -> None:

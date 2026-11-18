@@ -21,6 +21,12 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
 from openviking.connector.auth import is_external_feishu_auth, restore_feishu_request
 from openviking.connector.delegate import ConnectorDelegate
 from openviking.observability.http_error_context import sanitize_public_http_error
+from openviking.observability.log_safety import (
+    safe_log_fields,
+    safe_path_for_log,
+    safe_uri_for_log,
+    short_hash,
+)
 from openviking.resource.git_watch_auth import (
     git_http_auth_config_from_state,
     is_git_http_auth_state,
@@ -223,15 +229,19 @@ class WatchManager:
             if created:
                 try:
                     await run_to_completion(lambda: self._withdraw(task, initial_run_id))
-                except BaseException:
-                    logger.exception("[WatchManager] Failed to withdraw Watch %s", task.task_id)
+                except BaseException as _log_error:
+                    logger.info(
+                        "Failed to withdraw Watch %s error_type=%s",
+                        short_hash(str(task.task_id)),
+                        type(_log_error).__name__,
+                    )
             raise
-        logger.info(
-            "[WatchManager] Created task %s for path %s by user %s/%s",
-            task.task_id,
-            path,
-            account_id,
-            user_id,
+        logger.debug(
+            "Watch created source=%s",
+            safe_uri_for_log(path),
+            extra=safe_log_fields(
+                {"task_id": task.task_id, "account_id": account_id, "user_id": user_id}
+            ),
         )
         return task
 
@@ -761,10 +771,10 @@ class WatchManager:
                 timeout=self.DEFAULT_GIT_PROBE_TIMEOUT,
             )
         except Exception as exc:
-            logger.warning(
-                "[WatchManager] Git probe failed for %s: %s; falling back to refresh",
-                task.path,
-                self._public_error(str(exc)),
+            logger.info(
+                "Git probe failed for %s: %s; falling back to refresh",
+                safe_path_for_log(str(task.path)),
+                type(exc).__name__,
             )
             return None
         if probed is None:
