@@ -67,3 +67,30 @@ test("enforces additionalProperties and required fields without adding defaults"
   tool.prepareArguments(args);
   assert.deepEqual(args, { value: 1 });
 });
+
+test("session_history defaults session to the current OV session, read at call time", async () => {
+  const calls = [];
+  let current = "pi-first";
+  const definitions = new Map();
+  registerMcpTools({ registerTool: (tool) => definitions.set(tool.name, tool) }, {
+    state: { tools: [{ name: "session_history", inputSchema: { type: "object" } }, { name: "find", inputSchema: { type: "object" } }] },
+    callTool: async (...args) => { calls.push(args); return { content: [] }; },
+  }, () => current);
+  const history = definitions.get("openviking_session_history");
+  await history.execute("1", { action: "overview" });
+  await history.execute("2", { action: "overview", session: "  " });
+  current = "pi-second";
+  await history.execute("3", { action: "search", query: "x", session: null });
+  await history.execute("4", { action: "overview", session: "pi-other" });
+  await definitions.get("openviking_find").execute("5", { query: "x" });
+  current = null;
+  await history.execute("6", { action: "overview" });
+  assert.deepEqual(calls.map(([name, args]) => [name, args.session]), [
+    ["session_history", "pi-first"],
+    ["session_history", "pi-first"],
+    ["session_history", "pi-second"],
+    ["session_history", "pi-other"],
+    ["find", undefined],
+    ["session_history", undefined],
+  ]);
+});
