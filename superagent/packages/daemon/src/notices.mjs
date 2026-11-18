@@ -9,14 +9,19 @@ import { classifyModelError, resolveRuntimeModelTarget } from './runtime-catalog
 // attempted within this window (prevents switch churn if the user moves back).
 export const MODEL_FALLBACK_COOLDOWN_MS = 5 * 60 * 1_000;
 
-function recoverableRuntimeFailure(error, modelError) {
+function classifyRuntimeFailure(error, modelError) {
   const message = String(error?.message ?? error ?? '');
-  if (/\b(?:cancelled|canceled|abort|permission denied|unauthorized|forbidden|invalid api key|tool (?:error|failed)|business error)\b/i.test(message)) return false;
+  if (/\b(?:cancelled|canceled|abort|permission denied|unauthorized|forbidden|invalid api key|tool (?:error|failed)|business error)\b/i.test(message)) {
+    return { blocked: true, recoverable: false };
+  }
   const classified = modelError || classifyModelError(error);
-  if (['no-permission', 'effort'].includes(classified.kind)) return false;
-  if ([400, 401, 403, 404, 422].includes(classified.status)) return false;
-  return classified.retryable
+  if (['no-permission', 'effort'].includes(classified.kind)
+    || [400, 401, 403, 404, 422].includes(classified.status)) {
+    return { blocked: true, recoverable: false };
+  }
+  const recoverable = classified.retryable
     || /\b(?:timeout|timed out|rate[_ ]limit(?:ed)?|quota exceeded|too many requests|you(?:'|’)ve hit your (?:\d+[- ]hour|weekly) limit|(?:\d+[- ]hour|weekly|usage) limit(?: reached| exceeded)?|overloaded|temporarily unavailable|service unavailable|network|connection (?:lost|reset|refused)|ECONNRESET|ETIMEDOUT|bad gateway|upstream|empty (?:stream|response)|3083)\b|空流/i.test(message);
+  return { blocked: false, recoverable };
 }
 
 function affectedInput(event) {
@@ -89,7 +94,7 @@ export class FailurePolicy {
     } catch (error) {
       this.logger.warn('model_fallback_failed', { error: safeError(error) });
     }
-    if (recoverableRuntimeFailure(info.error, info.modelError)) {
+    if (classifyRuntimeFailure(info.error, info.modelError).recoverable) {
       await this.notifyRuntimeFailure(info);
       return false;
     }
@@ -163,8 +168,10 @@ export class FailurePolicy {
     // Transports also report sanitized strings. Only recognizable model/network
     // outages may activate a configurable route; tools, cancellation and denied
     // credentials must not be retried through a different runtime.
+    const failure = classifyRuntimeFailure(error, modelError);
+    if (failure.blocked) return false;
     const legacyClaude = !this.config.primaryRuntime && !this.config.initialModel && primaryRuntime === 'claude';
-    if (!legacyClaude && !recoverableRuntimeFailure(error, modelError)) return false;
+    if (!legacyClaude && !failure.recoverable) return false;
     if (this.fallbackInProgress) return false;
     const now = this.clock();
     if (now - this.lastFallbackAtMs < MODEL_FALLBACK_COOLDOWN_MS) return false;

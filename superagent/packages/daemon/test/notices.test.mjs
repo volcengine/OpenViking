@@ -135,6 +135,22 @@ describe('automatic claude fallback', () => {
     assert.equal(ownerNotices.length, 1);
     assert.match(ownerNotices[0].text, /5-hour limit/);
   });
+
+  it('does not fallback legacy Claude for explicitly non-retryable failures', async () => {
+    const failures = [
+      { error: Object.assign(new Error('Unauthorized'), { status: 401 }) },
+      { error: 'cancelled' },
+      { error: 'tool failed' },
+      { error: 'business error' },
+      { error: Object.assign(new Error('bad request'), { status: 400 }) },
+      { error: 'unsupported effort', modelError: { kind: 'effort', status: 0, retryable: false } },
+    ];
+    for (const failure of failures) {
+      const { policy, calls } = makeFallbackPolicy();
+      assert.equal(await policy.onTurnFailed({ inboundSeqs: [1], ...failure }), false);
+      assert.equal(calls.length, 0);
+    }
+  });
 });
 
 describe('configurable runtime fallback', () => {
