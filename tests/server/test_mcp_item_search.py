@@ -29,19 +29,20 @@ async def test_mcp_skill_find_forwards_explicit_filter(request_context, monkeypa
 
 def test_mcp_find_and_search_keep_legacy_positional_arguments():
     find_arguments = list(inspect.signature(endpoint.find).parameters)
-    assert find_arguments[:9] == [
+    assert find_arguments[:10] == [
         "query",
         "target_uri",
         "limit",
         "min_score",
         "level",
         "context_type",
+        "tags",
         "read_content",
         "events_time_decay_protection",
         "search_as_item",
     ]
     search_arguments = list(inspect.signature(endpoint.search).parameters)
-    assert search_arguments[8:11] == ["mode", "query_expansion", "max_tokens"]
+    assert search_arguments[9:12] == ["mode", "query_expansion", "max_tokens"]
     assert search_arguments[-1] == "filter"
 
 
@@ -113,7 +114,10 @@ async def test_mcp_search_only_loads_a_session_for_ordinary_search(
         assert search.await_args.kwargs["session"] is session
 
 
-async def test_mcp_find_forwards_item_filter_without_legacy_threshold(request_context, monkeypatch):
+@pytest.mark.parametrize("tags", [None, ["team=search"]])
+async def test_mcp_find_forwards_item_filter_without_legacy_threshold(
+    request_context, monkeypatch, tags
+):
     item = {
         "item_uuid": "uuid-a",
         "uri": "viking://resources/A",
@@ -132,6 +136,7 @@ async def test_mcp_find_forwards_item_filter_without_legacy_threshold(request_co
     try:
         result = await endpoint.find(
             query="",
+            tags=tags,
             filter={"op": "must", "field": "item_attrs", "conds": ["asset_id=V1"]},
             search_as_item=SearchAsItemOptions(aggregation="sum"),
         )
@@ -141,11 +146,17 @@ async def test_mcp_find_forwards_item_filter_without_legacy_threshold(request_co
     assert '"item_attrs": {"asset_id": "V1"}' in result
     assert '"candidate_members_count": 1' in result
     assert '"items"' not in result
-    assert find.await_args.kwargs["filter"] == {
+    expected_filter = {
         "op": "must",
         "field": "item_attrs",
         "conds": ["asset_id=V1"],
     }
+    if tags:
+        expected_filter = {
+            "op": "and",
+            "conds": [expected_filter, {"op": "must", "field": "search_tags", "conds": tags}],
+        }
+    assert find.await_args.kwargs["filter"] == expected_filter
     assert find.await_args.kwargs["score_threshold"] is None
     assert find.await_args.kwargs["search_as_item"].aggregation == "sum"
 
@@ -187,7 +198,6 @@ async def test_mcp_item_skill_keeps_root_and_existing_output_without_summary_rea
                     "score": 0.9,
                     "item_uuid": "uuid-skill",
                     "item_attrs": {},
-                    "item_extra_info": {},
                 }
             ]
         }
@@ -197,6 +207,7 @@ async def test_mcp_item_skill_keeps_root_and_existing_output_without_summary_rea
     assert f"- [skill score 0.9] {root}" in rendered
     assert "/SKILL.md" not in rendered
     assert '"item_uuid": "uuid-skill"' in rendered
+    assert "item_extra_info" not in rendered
     service.fs.abstract.assert_not_awaited()
 
 

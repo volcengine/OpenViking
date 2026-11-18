@@ -104,6 +104,7 @@ class CollectionAdapter(ABC):
     # Remote glob can use this adapter's random-search post-processing path.
     # Used when enable_path_glob is unspecified in VectorDB configuration.
     enable_path_glob: bool = False
+    supports_partition_scope: bool = False
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
     # Only derived fields may be shortened silently. An oversized abstract is
@@ -450,22 +451,28 @@ class CollectionAdapter(ABC):
             coll.upsert_data(normalized)
         return ids
 
-    def get(self, ids: list[str]) -> list[Dict[str, Any]]:
+    def get(self, ids: list[str], *, partition_by: str | None = None) -> list[Dict[str, Any]]:
         if not ids:
             return []
         coll = self.get_collection()
         batch_size = self._DATA_BATCH_SIZE
 
         if not batch_size or len(ids) <= batch_size:
-            return self._fetch_and_normalize(coll, ids)
+            return self._fetch_and_normalize(coll, ids, partition_by=partition_by)
 
         records: list[Dict[str, Any]] = []
         for i in range(0, len(ids), batch_size):
-            records.extend(self._fetch_and_normalize(coll, ids[i : i + batch_size]))
+            records.extend(
+                self._fetch_and_normalize(coll, ids[i : i + batch_size], partition_by=partition_by)
+            )
         return records
 
-    def _fetch_and_normalize(self, coll: Collection, ids: list[str]) -> list[Dict[str, Any]]:
-        result = coll.fetch_data(ids)
+    def _fetch_and_normalize(
+        self, coll: Collection, ids: list[str], *, partition_by: str | None = None
+    ) -> list[Dict[str, Any]]:
+        result = coll.fetch_data(
+            ids, **({"partition_by": partition_by} if partition_by is not None else {})
+        )
         records: list[Dict[str, Any]] = []
         if isinstance(result, FetchDataInCollectionResult):
             for item in result.items:
@@ -485,13 +492,7 @@ class CollectionAdapter(ABC):
         """Translate URI encoding only; Catalog semantics belong to the backend."""
         request = dict(request)
         collection = self.get_collection()
-        if request.get("preserve_item_root"):
-            capabilities = collection.catalog_execute({"op": "capabilities", "scope": request["scope"]})
-            if not capabilities.get("enabled"):
-                return {}
-            if not capabilities.get("preserve_item_root"):
-                raise ValueError("Catalog engine upgrade required to preserve the Item root")
-        for field in ("uri",):
+        for field in ("uri", "from_uri", "to_uri"):
             if field in request:
                 request[field] = self._encode_uri_field_value(request[field])
         if "uris" in request:
@@ -680,13 +681,17 @@ class CollectionAdapter(ABC):
         *,
         ids: Optional[list[str]] = None,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        partition_by: str | None = None,
     ) -> int:
         """Submit IDs for deletion in batches, without waiting for index visibility."""
         coll = self.get_collection()
         batch_size = self._DATA_BATCH_SIZE or 100
         if ids is not None:
             for start in range(0, len(ids), batch_size):
-                coll.delete_data(ids[start : start + batch_size])
+                coll.delete_data(
+                    ids[start : start + batch_size],
+                    **({"partition_by": partition_by} if partition_by is not None else {}),
+                )
             return len(ids)
         if filter is None:
             return 0
@@ -711,7 +716,10 @@ class CollectionAdapter(ABC):
 
             pending_ids.seek(0)
             for batch in pending_ids:
-                coll.delete_data(json.loads(batch))
+                coll.delete_data(
+                    json.loads(batch),
+                    **({"partition_by": partition_by} if partition_by is not None else {}),
+                )
             return offset
 
     @staticmethod

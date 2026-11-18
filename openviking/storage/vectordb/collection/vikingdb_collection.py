@@ -13,6 +13,11 @@ from openviking.storage.vectordb.collection.result import (
     SearchResult,
     parse_remote_search_result,
 )
+from openviking.storage.vectordb.collection.vikingdb_catalog import (
+    CATALOG_LEVEL,
+    VikingDBCatalog,
+    catalog_mode,
+)
 from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
     VikingDBClient,
@@ -35,12 +40,18 @@ class VikingDBCollection(ICollection):
         host: str,
         headers: Optional[Dict[str, str]] = None,
         meta_data: Optional[Dict[str, Any]] = None,
+        index_name: str = "default",
     ):
         super().__init__()
         self.client = VikingDBClient(host, headers)
         self.meta_data = meta_data if meta_data is not None else {}
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
+        self.catalog_index_name = index_name
+        self._catalog = VikingDBCatalog(self)
+        self._has_catalog_metadata = catalog_mode(self.meta_data) is not None and any(
+            f.get("FieldName") == "level" for f in self.meta_data.get("Fields", [])
+        )
 
     @staticmethod
     def _build_response_error(response: Any, action: str) -> VikingDBException:
@@ -115,7 +126,28 @@ class VikingDBCollection(ICollection):
                 raise self._build_response_error(response, action)
             return {}
 
-    def _data_post(self, path: str, data: Dict[str, Any]):
+    def _data_post(self, path: str, data: Dict[str, Any], *, include_catalog: bool = False):
+        if getattr(self, "meta_data", {}).get("PartitionBy") == "account_id":
+            if path.startswith("/api/vikingdb/data/search/") or path.endswith("/agg"):
+                from .vikingdb_item_search import _partition_values
+
+                scopes = _partition_values(data.get("filter"))
+                if len(scopes) != 1 or data.get("partition_by", next(iter(scopes))) not in scopes:
+                    raise ValueError("VikingDB partitioned queries require one account_id scope")
+                data = {**data, "partition_by": scopes.pop()}
+            elif ("ids" in data or path.endswith("/update")) and not data.get("partition_by"):
+                raise ValueError("VikingDB partitioned point operations require partition_by")
+        if (
+            not include_catalog
+            and getattr(self, "_has_catalog_metadata", False)
+            and (path.startswith("/api/vikingdb/data/search/") or path == "/api/vikingdb/data/agg")
+        ):
+            hidden = {"op": "must_not", "field": "level", "conds": [CATALOG_LEVEL]}
+            condition = data.get("filter")
+            data = {
+                **data,
+                "filter": {"op": "and", "conds": [condition, hidden]} if condition else hidden,
+            }
         response = self.client.do_req("POST", path, req_body=data)
         if response.status_code != 200:
             raise self._build_response_error(response, path)
@@ -171,6 +203,9 @@ class VikingDBCollection(ICollection):
     def close(self):
         pass
 
+    def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        return self._catalog.execute(request)
+
     def drop(self):
         raise NotImplementedError("collection should be managed manually")
 
@@ -221,7 +256,7 @@ class VikingDBCollection(ICollection):
         }
         return self._data_post(path, data)
 
-    def update_data(self, data_list: List[Dict[str, Any]]):
+    def update_data(self, data_list: List[Dict[str, Any]], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/update"
         data = {
             "project": self.project_name,
@@ -229,9 +264,13 @@ class VikingDBCollection(ICollection):
             "data": data_list,
             "ignore_unknown_fields": True,
         }
+        if partition_by is not None and self.meta_data.get("PartitionBy") == "account_id":
+            data["partition_by"] = partition_by
         return self._data_post(path, data)
 
-    def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
+    def fetch_data(
+        self, primary_keys: List[Any], *, partition_by: str | None = None
+    ) -> FetchDataInCollectionResult:
         path = "/api/vikingdb/data/fetch_in_collection"
         data = {
             "project": self.project_name,
@@ -239,16 +278,20 @@ class VikingDBCollection(ICollection):
             "ids": primary_keys,
             "ignore_unknown_fields": True,
         }
+        if partition_by is not None and self.meta_data.get("PartitionBy") == "account_id":
+            data["partition_by"] = partition_by
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/delete"
         data = {
             "project": self.project_name,
             "collection_name": self.collection_name,
             "ids": primary_keys,
         }
+        if partition_by is not None and self.meta_data.get("PartitionBy") == "account_id":
+            data["partition_by"] = partition_by
         return self._data_post(path, data)
 
     def delete_all_data(self):
@@ -278,6 +321,44 @@ class VikingDBCollection(ICollection):
 
     def _parse_search_result(self, data: Dict[str, Any]) -> SearchResult:
         return parse_remote_search_result(data)
+
+    def search_item_groups(
+        self,
+        index_name: str,
+        *,
+        dense_vector: Optional[List[float]] = None,
+        sparse_vector: Optional[Dict[str, float]] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        from .vikingdb_item_search import (
+            _has_item_attrs,
+            build_item_group_request,
+            parse_item_group_result,
+        )
+
+        request = build_item_group_request(
+            self.meta_data,
+            project=self.project_name,
+            collection_name=self.collection_name,
+            index_name=index_name,
+            dense_vector=dense_vector,
+            sparse_vector=sparse_vector,
+            filters=filters,
+            max_groups=max_groups,
+            aggregation=aggregation,
+            filter_only=filter_only,
+        )
+        if _has_item_attrs(filters):
+            compiled = self._catalog.compile_item_filter(request["partition_by"], filters)
+            if compiled is False:
+                return {"groups": []}
+            request["filter"] = compiled
+        result = self._data_post("/api/vikingdb/data/search/vector", request)
+        return parse_item_group_result(result, score_threshold=score_threshold)
 
     def search_by_vector(
         self,
