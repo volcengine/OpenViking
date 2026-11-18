@@ -40,6 +40,12 @@ export function contextRequestTimeoutMs(
 
 export function normalizeContextEntry(entry?: unknown): NormalizedContextEntry;
 
+export function resolveRecallScoreThreshold(
+  scoreThreshold: number,
+  serverVersion?: string,
+  configured?: boolean,
+): number;
+
 export type RecallFetchJSON = (
   path: string,
   init?: RequestInit,

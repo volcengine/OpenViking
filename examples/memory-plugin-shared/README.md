@@ -121,6 +121,11 @@ For deployments where one bot serves multiple real people, such as zouk,
 vikingbot, or AstrBot, configure an explicit actor peer and use the isolation
 mode so one person's memories are not recalled into another person's session.
 
+The Codex and Claude Code auto-recall hooks default to a score threshold of
+`0.675` on OpenViking servers `0.4.22` and later. Earlier servers and health
+responses without a recognized version use `0.35`. An explicitly configured
+`recall.score_threshold` or `OPENVIKING_SCORE_THRESHOLD` takes precedence.
+
 ## Skill Catalog
 
 `lib/profile-inject.mjs` ends the session-start block with `<available-skills>`, built from one `GET /api/v1/skills?node_limit=200`, which caps each root rather than the merged list: the user's own skills first, then the ones shared under `viking://agent/skills` (a shared skill whose name the user also owns is left out), each description cut to about 40 tokens. Nothing trims the list again on this side; the token budget decides what fits. Callers turn it on by passing their resolved config as `buildProfileBlock()`'s fourth argument, and claude-code, codex, cursor, trae, trae-cn, zcode, opencode, dsh and pi all do, so they build it the same way; openclaw and hermes inject no profile, and `pi-experimental-context-management` calls `buildProfileBlock()` without that argument.

@@ -16,7 +16,7 @@ import { writeJsonState } from "./lib/state.mjs";
 import { createHostCompressor } from "./lib/host-compressor.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
-import { buildRecallBlockDetailed } from "./shared/recall-core.mjs";
+import { buildRecallBlockDetailed, resolveRecallScoreThreshold } from "./shared/recall-core.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 
 if (!isPluginEnabled()) {
@@ -123,7 +123,13 @@ runHookStage({
   // The OV session id is what unlocks server-side query expansion and the
   // cross-turn dedup ledger; it must match the id auto-capture writes to.
   const ovSessionId = sessionId && sessionId !== "unknown" ? deriveOvSessionId(sessionId) : "";
-  const recalled = await recall(cfg, userPrompt, effectivePeer, ovSessionId);
+  const recallCfg = {
+    ...cfg,
+    scoreThreshold: resolveRecallScoreThreshold(
+      cfg.scoreThreshold, health.result?.version, cfg.scoreThresholdConfigured,
+    ),
+  };
+  const recalled = await recall(recallCfg, userPrompt, effectivePeer, ovSessionId);
   if (!recalled.block) {
     log("skip", { reason: recalled.stage });
     writeRecallState({ count: 0, reason: recalled.stage, cc_session_id: sessionId });

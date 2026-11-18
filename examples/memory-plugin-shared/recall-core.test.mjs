@@ -13,6 +13,7 @@ import {
   isContextFaceLegacy,
   postRecall,
   readPeerScopeDowngrade,
+  resolveRecallScoreThreshold,
 } from "./lib/recall-core.mjs";
 
 async function tempPath(name) {
@@ -69,6 +70,16 @@ test("coding-agent fallback recall explicitly uses the 0.35 threshold", () => {
   const body = buildRecallEndpointBody({});
 
   assert.equal(body.min_score, 0.35);
+});
+
+test("auto-recall defaults follow the cosine scale introduced in server 0.4.22", () => {
+  for (const version of [undefined, "", "unknown", "0.4.21", "0.4.22.dev1", "0.4.22-rc.1"]) {
+    assert.equal(resolveRecallScoreThreshold(0.35, version), 0.35, version);
+  }
+  for (const version of ["0.4.22", "v0.4.22+build.1", "0.5.4.dev46", "1.0.0"]) {
+    assert.equal(resolveRecallScoreThreshold(0.35, version), 0.675, version);
+    assert.equal(resolveRecallScoreThreshold(0.15, version), 0.575, version);
+  }
 });
 
 test("buildRecallBlock injects context assembled by the server", async () => {

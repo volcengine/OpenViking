@@ -402,8 +402,8 @@ export class OpenVikingClient {
     }
   }
 
-  async healthCheck(requestTimeoutMs?: number, actorPeerId?: string): Promise<void> {
-    await this.request<{ status: string }>(
+  async healthCheck(requestTimeoutMs?: number, actorPeerId?: string): Promise<{ status: string; version?: string }> {
+    return this.request<{ status: string; version?: string }>(
       "/health",
       {},
       requestTimeoutMs,

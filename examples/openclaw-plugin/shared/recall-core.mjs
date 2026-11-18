@@ -93,6 +93,20 @@ function codingQuotas(limit) {
   return scaleQuotas(limit, CODING_QUOTA_WEIGHTS);
 }
 
+export function resolveRecallScoreThreshold(scoreThreshold, serverVersion, configured = false) {
+  if (configured) return scoreThreshold;
+  const version = /^v?(\d+)\.(\d+)\.(\d+)([.-]?(?:a|b|rc|dev|post)\d+|-[\da-z][\da-z.-]*)?(?:\+[\da-z][\da-z.-]*)?$/i
+    .exec(String(serverVersion ?? "").trim());
+  if (!version) return scoreThreshold;
+
+  const [, major, minor, patch, suffix] = version;
+  const stableAtBoundary = !suffix || /^\.?post\d+$/i.test(suffix);
+  // v0.4.22 maps raw cosine scores to (cosine + 1) / 2.
+  const rescalesCosine = Number(major) > 0 || Number(minor) > 4
+    || (Number(minor) === 4 && (Number(patch) > 22 || (Number(patch) === 22 && stableAtBoundary)));
+  return rescalesCosine ? (scoreThreshold + 1) / 2 : scoreThreshold;
+}
+
 export function buildRecallEndpointBody(cfg = {}) {
   const limit = Math.max(Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT), 1);
   const body = {

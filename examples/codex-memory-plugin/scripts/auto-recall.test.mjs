@@ -69,6 +69,40 @@ function runAutoRecall(input, env) {
   });
 }
 
+test("auto-recall converts only the default threshold on newer servers", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-recall-threshold-"));
+  const thresholds = [];
+  let version = "0.4.21";
+  try {
+    await withMockOpenViking(async (req, res) => {
+      if (req.url === "/health") return writeJson(res, { status: "ok", version });
+      if (req.url === "/api/v1/search/search") {
+        thresholds.push((await readRequestBody(req)).score_threshold);
+        return writeJson(res, { status: "ok", result: { rendered: "" } });
+      }
+      writeStatusJson(res, 404, { status: "error" });
+    }, async (baseUrl) => {
+      const env = {
+        OPENVIKING_HOME: stateDir,
+        OPENVIKING_CREDENTIAL_SOURCE: "env",
+        OPENVIKING_CONFIG_FILE: join(stateDir, "missing.conf"),
+        OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-cli.conf"),
+        OPENVIKING_CODEX_STATE_DIR: stateDir,
+        OPENVIKING_RECALL_COMPRESS: "off",
+        OPENVIKING_URL: baseUrl,
+      };
+      const input = { prompt: "recall the project conventions", cwd: stateDir };
+      await runAutoRecall(input, env);
+      version = "0.4.22";
+      await runAutoRecall(input, env);
+      await runAutoRecall(input, { ...env, OPENVIKING_SCORE_THRESHOLD: "0.35" });
+    });
+    assert.deepEqual(thresholds, [0.35, 0.675, 0.35]);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 async function withFakeCodex(output, fn, { exitCode = 0 } = {}) {
   const binDir = await mkdtemp(join(tmpdir(), "ov-fake-codex-"));
   const executable = join(binDir, "codex");

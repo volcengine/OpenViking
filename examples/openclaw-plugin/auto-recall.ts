@@ -1,5 +1,5 @@
 import type { FindResultItem, OpenVikingClient, SearchContextEntry } from "./client.js";
-import type { MemoryOpenVikingConfig } from "./config.js";
+import { RECALL_SCORE_THRESHOLD_CONFIGURED, type ParsedMemoryOpenVikingConfig } from "./config.js";
 import type { EffectiveQueryConfig } from "./query-config.js";
 import { toJsonLog } from "./memory-ranking.js";
 import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
@@ -12,7 +12,7 @@ import {
   type RecallTraceResult,
 } from "./recall-trace.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
-import { selectRecallContent } from "./shared/recall-core.mjs";
+import { resolveRecallScoreThreshold, selectRecallContent } from "./shared/recall-core.mjs";
 import { estimateTextTokens } from "./token-estimator.js";
 
 const RECALL_QUERY_MAX_CHARS = 4_000;
@@ -317,7 +317,7 @@ export function shouldRecallAgentExperience(input: {
 }
 
 export async function buildAutoRecallContext(params: {
-  cfg: Required<MemoryOpenVikingConfig>;
+  cfg: ParsedMemoryOpenVikingConfig;
   queryConfig?: EffectiveQueryConfig;
   client: OpenVikingClient;
   agentId: string;
@@ -349,7 +349,15 @@ export async function buildAutoRecallContext(params: {
 
   return withTimeout(
     (async () => {
-      const scoreThreshold = queryConfig?.scoreThreshold ?? cfg.recallScoreThreshold;
+      const thresholdSource = queryConfig?.sources?.scoreThreshold;
+      const thresholdConfigured = cfg[RECALL_SCORE_THRESHOLD_CONFIGURED] || (
+        queryConfig?.scoreThreshold !== undefined && thresholdSource !== "static" && thresholdSource !== "default"
+      );
+      const scoreThreshold = resolveRecallScoreThreshold(
+        queryConfig?.scoreThreshold ?? cfg.recallScoreThreshold,
+        precheck.serverVersion,
+        thresholdConfigured,
+      );
       const recallLimit = queryConfig?.recallLimit ?? cfg.recallLimit;
       const maxInjectedChars = queryConfig?.maxInjectedChars ?? cfg.recallMaxInjectedChars;
       const recallPreferAbstract = queryConfig?.recallPreferAbstract ?? cfg.recallPreferAbstract;

@@ -8,6 +8,7 @@ import {
 import { buildAutoRecallContext } from "../../auto-recall.js";
 import type { FindResultItem } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
+import { RuntimeQueryConfigStore } from "../../query-config.js";
 import { RecallTraceMemoryStore } from "../../recall-trace.js";
 
 function makeMemory(overrides?: Partial<FindResultItem>): FindResultItem {
@@ -267,6 +268,32 @@ describe("buildAutoRecallContext trace", () => {
       ...overrides,
     });
   }
+
+  it.each(["static", "request"] as const)("preserves an explicitly configured %s recall threshold", async (source) => {
+    const cfg = makeCfg(source === "static" ? { recallScoreThreshold: 0.15 } : {});
+    const store = new RuntimeQueryConfigStore({ staticConfig: cfg });
+    const queryConfig = await store.getEffective(
+      { peerId: "agent-1" },
+      source === "request" ? { scoreThreshold: 0 } : undefined,
+    );
+    const client = {
+      healthCheck: vi.fn().mockResolvedValue({ version: "0.4.22" }),
+      searchContext: vi.fn().mockResolvedValue({ entries: [] }),
+    };
+
+    await buildAutoRecallContext({
+      cfg,
+      queryConfig,
+      client: client as any,
+      agentId: "agent-1",
+      queryText: "where are the project docs?",
+      logger: { info: vi.fn() },
+    });
+
+    expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
+      scoreThreshold: source === "static" ? 0.15 : 0,
+    });
+  });
 
   it("records auto-recall trace without changing the generated context block", async () => {
     const cfg = makeCfg({ recallTargetTypes: ["user"] });
