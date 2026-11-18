@@ -69,11 +69,12 @@ function loadedSkill(event, directory) {
   if (typeof path !== "string" || basename(path) !== "SKILL.md" ||
       !resolve(directory || ".", path).split(/[\\/]/).includes("skills")) return ""
   const output = event.result?.output
-  if (output?.type !== "text-page" || output.offset !== 1 || typeof output.content !== "string") return ""
+  const startsAtFrontmatter = output?.type === "file" ? output.encoding === "utf8" :
+    output?.type === "text-page" && output.offset === 1
+  if (!startsAtFrontmatter || typeof output.content !== "string") return ""
   const frontmatter = output.content.slice(0, 4096).match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
   const field = frontmatter?.[1].match(/^name:[ \t]*(?:"([^"]+)"|'([^']+)'|([^ \t\r\n#]+))[ \t]*(?:#.*)?$/m)
   return skillName(field?.[1] ?? field?.[2] ?? field?.[3])
-
 }
 
 function skillName(value) {

@@ -62,6 +62,20 @@ test("explicit native SKILL.md reads deduplicate canonical names with skill load
   assert.equal(hook.calls.length, 9)
 })
 
+test("native unpaged UTF-8 reads are supported; binary content and later pages are ignored", async () => {
+  const hook = fixture()
+  const text = "---\nname: deploy\n---\n# Steps"
+  const read = { ...event(), tool: "read", input: { path: ".opencode/skills/deploy/SKILL.md" },
+    result: { content: "Numbered native output", output: { type: "file", encoding: "utf8", content: text } } }
+  for (const output of [{ type: "file", encoding: "base64", content: text }, { type: "text-page", offset: 10, content: text }]) {
+    await hook.after({ ...read, result: { ...read.result, output } })
+  }
+  assert.equal(hook.calls.length, 0)
+  await hook.after(read)
+  assert.match(read.result.content, /skill-experience/)
+  assert.equal(hook.calls.length, 3)
+})
+
 test("off, disabled, bypassed, failed, unrelated and generic Experience calls never retrieve", async () => {
   for (const cfg of [{ skillExperience: false }, { enabled: false }, { bypassSession: true }, { bypassSessionPatterns: ["/project"] }, { bypassSessionPatterns: ["s"] }]) {
     const hook = fixture(cfg)
