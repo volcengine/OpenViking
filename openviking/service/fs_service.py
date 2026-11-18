@@ -817,7 +817,6 @@ class FSService:
         force_refresh: bool = False,
     ) -> FreshnessAction:
         semantic_config = get_openviking_config().semantic
-        freshness_lock_busy = False
         try:
             decision = await plan_abstract_overview_refresh(
                 viking_fs=self._viking_fs,
@@ -827,14 +826,19 @@ class FSService:
                 overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
                 refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
                 force_refresh=force_refresh,
+                lock_timeout_secs=1.0,
             )
         except LockAcquisitionError:
-            # Content deletion already succeeded. Rebuild through the normal
-            # coalesced refresh queue when the parent counter is busy.
-            freshness_lock_busy = True
-        else:
-            if decision.action is not FreshnessAction.REFRESH_NOW:
-                return decision.action
+            # Content deletion already succeeded. Parent freshness bookkeeping
+            # is best effort, as in automatic upward semantic propagation.
+            logger.info(
+                "Skipping best-effort delete parent freshness update because sidecars are busy",
+                extra={"uri": safe_uri_for_log(root_uri), "degraded": True},
+            )
+            return FreshnessAction.NOOP
+
+        if decision.action is not FreshnessAction.REFRESH_NOW:
+            return decision.action
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
@@ -867,12 +871,7 @@ class FSService:
             generation_trigger="content_delete",
         )
         await semantic_queue.enqueue(msg)
-        if freshness_lock_busy:
-            logger.info(
-                "Delete parent refresh enqueued after freshness lock contention",
-                extra={"uri": safe_uri_for_log(root_uri), "degraded": True},
-            )
-        return FreshnessAction.REFRESH_NOW
+        return decision.action
 
     async def _enqueue_copy_refresh(
         self,

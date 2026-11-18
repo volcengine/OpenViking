@@ -1161,17 +1161,18 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wait", [False, True])
-async def test_resource_rm_queues_refresh_when_freshness_lock_is_busy(
+async def test_resource_rm_skips_refresh_when_freshness_lock_is_busy(
     request_context, monkeypatch, wait
 ):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)
-    queue_manager = _FakeQueueManager()
-    monkeypatch.setattr(fs_module, "get_queue_manager", lambda: queue_manager)
+    get_queue_manager = Mock(side_effect=AssertionError("busy parent freshness must not enqueue"))
+    monkeypatch.setattr(fs_module, "get_queue_manager", get_queue_manager)
+    plan = AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy"))
     monkeypatch.setattr(
         fs_module,
         "plan_abstract_overview_refresh",
-        AsyncMock(side_effect=LockAcquisitionError("lock acquire timed out after 0ms")),
+        plan,
     )
     service._wait_for_refresh = AsyncMock(return_value={"Semantic": {"pending_count": 0}})
     uri = "viking://resources/docs/a.md"
@@ -1179,13 +1180,12 @@ async def test_resource_rm_queues_refresh_when_freshness_lock_is_busy(
     result = await service.rm(uri, ctx=request_context, wait=wait)
 
     assert len(viking_fs.rm_calls) == 1
-    assert result["semantic_status"] == ("complete" if wait else "queued")
-    assert len(queue_manager.messages) == 1
-    msg = queue_manager.messages[0]
-    assert msg.uri == "viking://resources/docs"
-    assert msg.changes == {"deleted": [uri]}
-    assert msg.coalesce_key
-    assert service._wait_for_refresh.await_count == int(wait)
+    assert result["semantic_status"] == "skipped"
+    plan.assert_awaited_once()
+    assert plan.await_args.kwargs["dir_uri"] == "viking://resources/docs"
+    assert plan.await_args.kwargs["lock_timeout_secs"] == 1.0
+    get_queue_manager.assert_not_called()
+    service._wait_for_refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1213,11 +1213,6 @@ async def test_resource_rm_does_not_hide_refresh_enqueue_failure(request_context
     service = FSService(viking_fs=viking_fs)
     queue_manager = _FakeQueueManager()
     monkeypatch.setattr(fs_module, "get_queue_manager", lambda: queue_manager)
-    monkeypatch.setattr(
-        fs_module,
-        "plan_abstract_overview_refresh",
-        AsyncMock(side_effect=LockAcquisitionError("busy")),
-    )
     monkeypatch.setattr(
         queue_manager, "enqueue", AsyncMock(side_effect=RuntimeError("enqueue failed"))
     )
