@@ -1,7 +1,7 @@
 import type { ComponentPropsWithoutRef, RefObject } from 'react';
 
 import FilterIcon from '../../../../icons/svg/file-browser/search-filter.svg?react';
-import type { SearchMode } from './search-types.js';
+import type { SearchFilters, SearchMode } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
 /**
@@ -28,6 +28,7 @@ export interface FileBrowserSearchHeaderProps {
   text: ResolvedLabels;
   inputRef: RefObject<HTMLInputElement | null>;
   advancedOpen: boolean;
+  filters: SearchFilters;
   inputProps: Pick<
     ComponentPropsWithoutRef<'input'>,
     | 'onKeyDown'
@@ -49,10 +50,17 @@ export function FileBrowserSearchHeader({
   text,
   inputRef,
   advancedOpen,
+  filters,
   inputProps,
   onChange,
   onToggleAdvanced,
 }: FileBrowserSearchHeaderProps) {
+  const filterCount =
+    filters.scopes.length +
+    filters.levels.length +
+    Number(Boolean(filters.since)) +
+    Number(Boolean(filters.until)) +
+    Number(filters.caseInsensitive);
   return (
     <div className="ov-file-browser-search__header">
       <input
@@ -68,11 +76,19 @@ export function FileBrowserSearchHeader({
       <button
         type="button"
         className="ov-file-browser-search__advanced-toggle"
-        aria-label={text.searchAdvancedLabel}
+        aria-label={`${text.searchAdvancedLabel}${filterCount ? ` (${filterCount})` : ''}`}
         aria-expanded={advancedOpen}
         onClick={onToggleAdvanced}
       >
         <FilterIcon width={28} height={28} aria-hidden="true" />
+        {filterCount > 0 ? (
+          <span
+            className="ov-file-browser-search__filter-count"
+            aria-hidden="true"
+          >
+            {filterCount}
+          </span>
+        ) : null}
       </button>
     </div>
   );

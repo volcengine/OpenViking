@@ -18,9 +18,11 @@ test('search dates cannot be reversed using the calendar or keyboard', async () 
   const picker = (input) => input.closest('.ov-date-picker');
   const day = (input, number) =>
     Array.from(
-      picker(input).querySelectorAll(
-        '.ov-date-picker__cell:not(.ov-date-picker__cell--outside)',
-      ),
+      document
+        .getElementById(input.getAttribute('aria-controls'))
+        .querySelectorAll(
+          '.ov-date-picker__cell:not(.ov-date-picker__cell--outside)',
+        ),
     ).find((button) => button.textContent === String(number));
   const now = new Date();
   const date = (day) =>
@@ -58,6 +60,24 @@ test('search dates cannot be reversed using the calendar or keyboard', async () 
     await enterDate(start, date(15));
 
     await act(async () => end.focus());
+    const popup = document.getElementById(end.getAttribute('aria-controls'));
+    assert.equal(picker(end).contains(popup), false);
+    assert.equal(
+      popup.closest('.ov-date-picker__overlay').parentNode === document.body,
+      true,
+    );
+    const title = () =>
+      popup.querySelector('.ov-date-picker__title').textContent;
+    const originalTitle = title();
+    await click(popup.querySelector('[aria-label="Previous year"]'));
+    assert.match(title(), new RegExp(String(now.getFullYear() - 1)));
+    assert.equal(end.value, '');
+    await click(popup.querySelector('[aria-label="Next year"]'));
+    assert.equal(title(), originalTitle);
+    await click(popup.querySelector('[aria-label="Previous month"]'));
+    assert.notEqual(title(), originalTitle);
+    await click(popup.querySelector('[aria-label="Next month"]'));
+    assert.equal(title(), originalTitle);
     assert.equal(day(end, 14).disabled, true);
     assert.equal(day(end, 15).disabled, false);
     await click(day(end, 14));
@@ -73,9 +93,19 @@ test('search dates cannot be reversed using the calendar or keyboard', async () 
     assert.equal(start.value, date(15));
 
     await click(picker(end).querySelector('.ov-date-picker__clear'));
+    assert.equal(end.getAttribute('aria-controls'), null);
     await enterDate(start, date(16));
     assert.equal(start.value, date(16));
     assert.equal(end.value, '');
+    const calendar = picker(start).querySelector('.ov-date-picker__calendar');
+    await click(start);
+    assert.notEqual(start.getAttribute('aria-controls'), null);
+    await click(calendar);
+    assert.equal(start.getAttribute('aria-controls'), null);
+    await click(calendar);
+    assert.notEqual(start.getAttribute('aria-controls'), null);
+    await click(calendar);
+    assert.equal(start.getAttribute('aria-controls'), null);
   } finally {
     await view.unmount();
   }
