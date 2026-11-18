@@ -1570,11 +1570,54 @@ const workspace = {
       title: '今日检索次数',
     },
     todayTokens: {
-      description: '展示今日实时 Token 用量，每天零点刷新。',
+      description:
+        '今日已观测的已知 Token 小计，采集为尽力模式；启用流程观测后可查看未知用量与覆盖情况。',
       embeddingInput: 'Embedding 输入 Token',
       title: '今日 Token 用量',
       vlmInput: 'VLM 输入 Token',
       vlmOutput: 'VLM 输出 Token',
+    },
+    performance: {
+      qualityValue:
+        '报告 {{actual}} · 估算 {{estimated}} · 未确认 {{unverified}}',
+      retentionLimited: '请求时间范围早于保留的观测，汇总只包含现有数据。',
+      range: '范围',
+      hours: '{{count}} 小时',
+      all: '全部',
+      success: '成功',
+      failed: '失败',
+      cancelled: '已取消',
+      apply: '应用筛选',
+      spanValue:
+        '{{kind}}：累计观测 span 时长 {{value}} 秒，{{unknown}} 项无时长（计入重叠）。',
+
+      title: '流程观测',
+      description:
+        '最近 24 小时保留的模型事件和执行阶段。选择流程查看同一观测快照。',
+      input_tokens: '输入 Token',
+      output_tokens: '输出 Token',
+      cached_tokens: '缓存输入子集',
+      reasoning_tokens: '推理输出子集',
+      tokenValue: '已观测 {{value}} · 未知 {{unknown}} 项',
+      cacheCoverage:
+        '缓存命中率 {{value}}，覆盖 {{count}} 项事件；{{unverified}} 项来源未经确认，{{unknown}} 项用量未知，{{incomplete}} 项报告不完整。',
+      durationNote:
+        '阶段、任务和模型调用可能重叠；时长之和不是墙钟耗时或关键路径。',
+      stage: '阶段／操作',
+      status: '状态',
+      model: '模型',
+      seconds: '已观测秒数',
+      unknown: '未知',
+      loading: '正在加载观测…',
+      next: '下一页',
+      refresh: '刷新快照',
+      disabled: '服务器未启用或不支持流程统计。',
+      coverage:
+        '这是尽力采集的观测，并非完整账单；仍可能有未观测生产者或物理调用。',
+      truncated: '快照仅包含 20,000 项观测，汇总前请缩小时间范围。',
+      collector:
+        '用户 {{user}}，生产者生命周期内投递：接收 {{accepted}}、持久化 {{persisted}}、丢弃 {{dropped}}、失败 {{failed}}、待处理 {{pending}}、不确定 {{uncertain}}。',
+      empty: '此范围内没有保留的流程观测。',
     },
     tokenTrend: {
       description:

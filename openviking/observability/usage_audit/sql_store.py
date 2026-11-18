@@ -43,10 +43,14 @@ class SQLUsageAuditStore:
     def __init__(
         self,
         *,
+        performance_enabled: bool = False,
+        performance_retention_days: int = 14,
         usage_retention_days: int = 14,
         audit_retention_days: int = 7,
         audit_retention_per_account: int = 1000,
     ) -> None:
+        self._performance_enabled = bool(performance_enabled)
+        self._performance_retention_days = max(1, int(performance_retention_days))
         self._usage_retention_days = int(usage_retention_days)
         self._audit_retention_days = int(audit_retention_days)
         self._audit_retention_per_account = int(audit_retention_per_account)
@@ -110,11 +114,18 @@ class SQLUsageAuditStore:
             "usage_retrieval_hourly",
             "usage_context_write_bucket",
             "request_audit",
+            "performance_events",
+            "performance_receipts",
+            "performance_collection",
         )
         predicate = "account_id = ?" + (" AND user_id = ?" if user_id is not None else "")
         params = (account_id, user_id) if user_id is not None else (account_id,)
         self._begin_write({account_id})
         try:
+            if user_id is None:
+                self._conn.execute(
+                    "DELETE FROM performance_watermark WHERE account_id=?", (account_id,)
+                )
             deleted = {
                 table: self._conn.execute(
                     f"DELETE FROM {table} WHERE {predicate}",
@@ -131,18 +142,39 @@ class SQLUsageAuditStore:
     async def record_batch(self, events: Sequence[ObservabilityEvent]) -> None:
         if not events:
             return
-        projection = project_events(events)
         async with self._lock:
-            await self._run_sync(self._record_projection_sync, projection)
+            await self._run_sync(self._record_projection_sync, events)
 
-    def _record_projection_sync(self, projection: UsageAuditProjection) -> None:
+    def _record_projection_sync(self, events: Sequence[ObservabilityEvent]) -> None:
+        from .performance_store import claim
+
         assert self._conn is not None
+        projection = project_events(events)
         updated_at = datetime.now(UTC).isoformat()
         conn = self._conn
         self._begin_write(
-            set(self._usage_max_dates(projection)) | projection.touched_audit_accounts
+            set(self._usage_max_dates(projection))
+            | projection.touched_audit_accounts
+            | {str(event.account_id or "__unknown__") for event in events}
         )
         try:
+            if self._performance_enabled:
+                accepted = claim(
+                    self._conn,
+                    events,
+                    retention_days=self._performance_retention_days,
+                    now=datetime.now(UTC),
+                    acceptance_days=(
+                        max(
+                            self._performance_retention_days,
+                            self._usage_retention_days,
+                            self._audit_retention_days,
+                        )
+                        if self._usage_retention_days and self._audit_retention_days
+                        else None
+                    ),
+                )
+                projection = project_events(accepted)
             self._write_token_rows(conn, projection.token_rows, updated_at)
             self._write_retrieval_rows(conn, projection.retrieval_rows, updated_at)
             self._write_context_rows(conn, projection.context_rows, updated_at)
@@ -153,6 +185,34 @@ class SQLUsageAuditStore:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+    async def record_collection_state(self, rows):
+        if not self._performance_enabled or not rows:
+            return
+        async with self._lock:
+            await self._run_sync(self._record_collection_state_sync, rows)
+
+    def _record_collection_state_sync(self, rows):
+        from .performance_store import write_collection
+
+        self._begin_write({row["account_id"] for row in rows})
+        try:
+            write_collection(self._conn, rows)
+            self._conn.execute("COMMIT")
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
+
+    async def query_performance(self, **kwargs):
+        if not self._performance_enabled:
+            return {"enabled": False}
+        async with self._lock:
+            return await self._run_sync(self._query_performance_sync, kwargs)
+
+    def _query_performance_sync(self, kwargs):
+        from .performance_store import query
+
+        return query(self._conn, retention_days=self._performance_retention_days, **kwargs)
 
     @staticmethod
     def _write_token_rows(conn, rows: dict[tuple, int], updated_at: str) -> None:

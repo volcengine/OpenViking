@@ -82,7 +82,7 @@ Observability Event Bus
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用 Usage/Audit |
-| `backend` | `"sqlite"` | 当前仅支持 SQLite |
+| `backend` | `"sqlite"` | 可选 SQLite 或 PostgreSQL，共用同一投影／查询契约 |
 | `sqlite_path` | `null` | SQLite 文件路径；为空时使用当前 OpenViking workspace 下的 `_system/usage_audit/usage_audit.sqlite3` |
 | `queue_size` | `10000` | 后台写入队列大小 |
 | `batch_size` | `500` | 单次批量写入的最大事件数 |
@@ -94,8 +94,8 @@ Observability Event Bus
 | `timezone` | `"local"` | Console 请求未传 `timezone` 时的兜底查询时区；写入始终按 UTC 保存。`"local"` 表示 server 进程所在机器/容器的本地时区 |
 | `inventory_ttl_seconds` | `10.0` | 上下文当前数据量查询缓存时间 |
 
-本地版使用 SQLite 没问题。分布式生产环境如果多实例同时提供 Console，建议后续增加共享
-store backend，而不是让多个实例各写各的本地 SQLite。
+本地版可使用 SQLite。多实例 Console 应显式选择共享 PostgreSQL backend；各实例独立
+SQLite 文件不会自动合并，切换 backend 也不会自动迁移历史。
 
 ## 数据口径
 
@@ -427,3 +427,11 @@ Console BFF 查询的是账号级聚合和审计明细，当前只允许 `ROOT` 
 ### 生产多实例怎么部署？
 
 当前实现只有 SQLite backend，更适合单机本地版。多实例生产环境需要共享 store backend，避免每个实例只持有自己的局部统计。后续扩展时应实现 `UsageAuditStore` 协议，而不是改 Console BFF。
+
+## 可选流程观测与共享统计
+
+`performance_enabled=false` 保持原观测采集方式。显式开启后，复用同一 writer、
+SQLite／可选 PostgreSQL 事务与授权 Console owner，提供幂等观测投影、未知用量、
+流程列表／详情、阶段和缓存覆盖，以及按主体隔离的生产者丢失诊断。详细契约、
+多实例 Bot 启动、保留期与账单边界见 [流程观测](../../../docs/zh/api/24-workflow-observations.md)
+和 [英文说明](../../../docs/en/api/24-workflow-observations.md)。

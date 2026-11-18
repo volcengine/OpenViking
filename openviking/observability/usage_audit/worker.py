@@ -35,6 +35,9 @@ class UsageAuditWorker:
         self._task: asyncio.Task | None = None
         self._current_batch: list[ObservabilityEvent] | None = None
         self._closed = False
+        from .collection_health import CollectionHealth
+
+        self._health = CollectionHealth() if getattr(store, "_performance_enabled", False) else None
         self.dropped_count = 0
         self._persistence_failure_reported = False
 
@@ -51,6 +54,8 @@ class UsageAuditWorker:
         """Try to enqueue one event without blocking the caller."""
         if self._closed or self._queue is None or self._loop is None:
             self.dropped_count += 1
+            if self._health is not None:
+                self._health.add([event], "dropped")
             return
 
         try:
@@ -68,11 +73,17 @@ class UsageAuditWorker:
         queue = self._queue
         if self._closed or queue is None:
             self.dropped_count += 1
+            if self._health is not None:
+                self._health.add([event], "dropped")
             return
         try:
             queue.put_nowait(event)
+            if self._health is not None:
+                self._health.add([event], "accepted")
         except asyncio.QueueFull:
             self.dropped_count += 1
+            if self._health is not None:
+                self._health.add([event], "dropped")
 
     async def _run(self) -> None:
         while not self._closed:
@@ -116,7 +127,15 @@ class UsageAuditWorker:
             return
         try:
             await self._store.record_batch(batch)
+            if self._health is not None:
+                self._health.add(batch, "persisted")
+        except asyncio.CancelledError:
+            if self._health is not None:
+                self._health.add(batch, "uncertain")
+            raise
         except Exception as exc:  # noqa: BLE001
+            if self._health is not None:
+                self._health.add(batch, "failed")
             level = logging.INFO if self._persistence_failure_reported else logging.ERROR
             self._persistence_failure_reported = True
             logger.log(
@@ -126,6 +145,18 @@ class UsageAuditWorker:
                 type(exc).__name__,
                 extra={"total": len(batch), "error_type": type(exc).__name__},
             )
+
+        await self._persist_collection_state()
+
+    async def _persist_collection_state(self, *, clean=False):
+        if self._health is None:
+            return
+        try:
+            await self._store.record_collection_state(self._health.snapshot(clean=clean))
+        except Exception:
+            # A disconnected writer cannot durably describe its own loss.
+            # Readers always retain the unobserved-producers uncertainty.
+            pass
 
     async def flush(self) -> None:
         """Wait until every event already accepted by this worker is handled."""
@@ -169,3 +200,5 @@ class UsageAuditWorker:
                 await asyncio.wait_for(self._flush(remaining), timeout=timeout_seconds)
             except asyncio.TimeoutError:
                 logger.info("Usage/Audit shutdown flush timed out")
+
+        await self._persist_collection_state(clean=not self._current_batch)

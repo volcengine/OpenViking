@@ -342,6 +342,8 @@ class UsageAuditConfig(BaseModel):
     """Product usage and audit projection configuration."""
 
     enabled: bool = True
+    performance_enabled: bool = False
+    performance_retention_days: int = Field(14, ge=1, le=366)
     backend: Literal["sqlite", "postgres"] = "sqlite"
     sqlite_path: Optional[str] = None
     postgres: Optional[UsageAuditPostgresConfig] = None

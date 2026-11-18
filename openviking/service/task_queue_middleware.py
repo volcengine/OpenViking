@@ -3,6 +3,7 @@
 """Bridge QueueFS lifecycle events to Store-authoritative Task Work."""
 
 import asyncio
+import json
 from typing import TYPE_CHECKING
 
 from openviking.service.task_store import (
@@ -155,6 +156,32 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
             # Keep the admission result even if cancellation arrives during its commit.
             await run_to_completion(start)
             assert started is not None
+            from openviking.observability.performance import is_performance_enabled
+
+            if is_performance_enabled() and (
+                started.is_applied
+                or started.code
+                in (StoreOperationCode.ALREADY_CANCELLED, StoreOperationCode.ALREADY_TERMINAL)
+            ):
+                # This result proves the durable Task's principal. Only an
+                # applied admission also proves the delivery's open Work.
+                payload = ctx.message.get("data", ctx.message)
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except (ValueError, TypeError):
+                        payload = None
+                sources = payload.get("source_task_ids") if isinstance(payload, dict) else None
+                shared = not isinstance(payload, dict) or bool(payload.get("allocations"))
+                if sources is not None and sources != [metadata.task_id]:
+                    shared = True
+                if not shared:
+                    ctx.observation = {
+                        "account_id": metadata.account_id,
+                        "user_id": metadata.user_id,
+                        "task_id": metadata.task_id,
+                        "work_id": metadata.work_id if started.is_applied else "",
+                    }
             if not started.is_applied:
                 if started.code in (
                     StoreOperationCode.ALREADY_CANCELLED,

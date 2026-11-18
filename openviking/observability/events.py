@@ -30,6 +30,15 @@ class ObservabilityEvent:
     request_id: str | None = None
     account_id: str | None = None
     user_id: str | None = None
+    event_id: str = ""
+
+    def __post_init__(self):
+        from uuid import uuid4
+
+        identifier = self.event_id or self.payload.get("event_id") or "evt_" + uuid4().hex
+        if not isinstance(identifier, str) or not identifier or len(identifier) > 256:
+            raise ValueError("Invalid observability event ID")
+        object.__setattr__(self, "event_id", identifier)
 
 
 class ObservabilitySubscriber(Protocol):
@@ -141,7 +150,11 @@ def build_event(event_name: str, payload: dict[str, Any] | None = None) -> Obser
         tasks = get_observability_context().extra.get("metric_tasks", {})
         if tasks:
             normalized_payload["metric_tasks"] = list(tasks.values())
+    from openviking.observability.performance import stage_fields
+
     metadata = _metadata_from_context(normalized_payload)
+    for key, value in stage_fields({**normalized_payload, **metadata}).items():
+        normalized_payload.setdefault(key, value)
     return ObservabilityEvent(
         event_name=str(event_name),
         payload=normalized_payload,

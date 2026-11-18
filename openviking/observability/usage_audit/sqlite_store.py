@@ -41,11 +41,18 @@ class SQLiteUsageAuditStore(SQLUsageAuditStore):
         # remain incompatible and use the reset path.
         self._migrate_legacy_sync(conn)
         conn.executescript(SQLITE_SCHEMA)
+        from .performance_store import initialize
+
+        initialize(conn)
         conn.execute(
             "INSERT OR REPLACE INTO _schema_meta (key, value) VALUES (?, ?)",
             ("version", str(SCHEMA_VERSION)),
         )
         self._conn = conn
+
+    def _begin_write(self, accounts: set[str]) -> None:
+        # Claim/read/insert must share the write lock across SQLite instances.
+        self._conn.execute("BEGIN IMMEDIATE" if self._performance_enabled else "BEGIN")
 
     @staticmethod
     def _migrate_legacy_sync(conn: sqlite3.Connection) -> None:

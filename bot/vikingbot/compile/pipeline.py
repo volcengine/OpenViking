@@ -10,6 +10,7 @@ from typing import Any
 from loguru import logger
 
 from openviking.core.namespace import classify_uri
+from openviking.observability.performance import performance_stage, timed_stage
 from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
 from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.models import COMPILE_DRAFT_ROOT, CompileFailure, has_directory_plan, utc_now
@@ -80,6 +81,7 @@ class Pipeline:
             )
         return text
 
+    @timed_stage("compile.generate")
     async def generate(self, stage, instructions, data, source_refs):
         """Run one file worker and collect only its completed Markdown output directory."""
         if self.model.agent_runner is None:
@@ -127,6 +129,7 @@ class Pipeline:
             raise ValueError(f"{stage}: worker completed without Markdown files")
         return documents
 
+    @timed_stage("compile.pipeline")
     async def run(self, batches) -> RenderedBundle:
         """Prepare inputs, validate a plan, execute selected stages, and retain honest diagnostics."""
         complete = False
@@ -167,27 +170,28 @@ class Pipeline:
                 )
                 node = nodes[position]
                 inputs = data.pop(node.source)
-                if node.op == "map":
-                    outputs = await map_op.run(self, node, inputs)
-                elif node.op == "shuffle":
-                    outputs = await Shuffle(self).run(node, inputs)
-                elif node.op == "reduce":
-                    outputs = await reduce_op.run(self, node, inputs)
-                else:
-                    inputs = await reduce_op.resolve_files(self, inputs)
-                    if self.failures and not inputs:
-                        raise ValueError("No completed Markdown outputs remain")
-                    if self.failures:
-                        self.warnings.append(
-                            "Partial output; unfinished jobs: " + self.failures[0][:500]
+                with performance_stage("compile." + node.op):
+                    if node.op == "map":
+                        outputs = await map_op.run(self, node, inputs)
+                    elif node.op == "shuffle":
+                        outputs = await Shuffle(self).run(node, inputs)
+                    elif node.op == "reduce":
+                        outputs = await reduce_op.run(self, node, inputs)
+                    else:
+                        inputs = await reduce_op.resolve_files(self, inputs)
+                        if self.failures and not inputs:
+                            raise ValueError("No completed Markdown outputs remain")
+                        if self.failures:
+                            self.warnings.append(
+                                "Partial output; unfinished jobs: " + self.failures[0][:500]
+                            )
+                        self.artifacts = inputs
+                        result = await finalize_op.run(self, inputs)
+                        self.noop = (
+                            not inputs and not self.failures and has_directory_plan(self.changes)
                         )
-                    self.artifacts = inputs
-                    result = await finalize_op.run(self, inputs)
-                    self.noop = (
-                        not inputs and not self.failures and has_directory_plan(self.changes)
-                    )
-                    complete = not self.failures
-                    return result
+                        complete = not self.failures
+                        return result
                 data[node.name] = outputs
                 await self.files.put(f"stages/{node.name}", [asdict(item) for item in outputs])
                 position += 1

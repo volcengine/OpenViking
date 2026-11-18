@@ -54,6 +54,34 @@ class UsageAuditQueryService:
         tz = self._resolve_tz(timezone_name)
         return datetime.now(tz).date().isoformat()
 
+    async def performance(self, ctx, *, start, end, user_id=None, **kwargs):
+        from datetime import timedelta, timezone
+
+        from openviking_cli.exceptions import PermissionDeniedError
+
+        try:
+            first, last = datetime.fromisoformat(start), datetime.fromisoformat(end)
+            if (
+                first.tzinfo is None
+                or last.tzinfo is None
+                or not timedelta(0) < last - first <= timedelta(days=31)
+            ):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise InvalidArgumentError(
+                "Performance range requires aware ISO times, at most 31 days"
+            ) from None
+        scoped_user = self._usage_user_id(ctx)
+        if scoped_user is not None and user_id is not None and scoped_user != user_id:
+            raise PermissionDeniedError("Cannot query another user's observations")
+        return await self._store.query_performance(
+            account_id=ctx.account_id,
+            user_id=scoped_user if scoped_user is not None else user_id,
+            start=first.astimezone(timezone.utc).isoformat(),
+            end=last.astimezone(timezone.utc).isoformat(),
+            **kwargs,
+        )
+
     async def dashboard_summary(
         self, ctx: RequestContext, *, timezone_name: str | None = None
     ) -> dict[str, Any]:

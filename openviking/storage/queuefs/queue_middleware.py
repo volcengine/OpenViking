@@ -41,6 +41,9 @@ class ProcessContext:
     queue: str
     message: Message
     cancel: Callable[[], Awaitable[ProcessResult]]
+    # Filled only by an ownership middleware after store-authoritative admission.
+    # The transport must not infer this scope from arbitrary handler payloads.
+    observation: Optional[Dict[str, str]] = None
 
 
 @dataclass

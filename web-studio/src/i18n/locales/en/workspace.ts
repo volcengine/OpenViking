@@ -1644,11 +1644,56 @@ const workspace = {
     },
     todayTokens: {
       description:
-        'Shows real-time token consumption today. Resets at midnight.',
+        'Known token totals observed today. Collection is best effort; workflow observations show unknown usage and coverage when enabled.',
       embeddingInput: 'Embedding input tokens',
       title: 'Tokens Today',
       vlmInput: 'VLM input tokens',
       vlmOutput: 'VLM output tokens',
+    },
+    performance: {
+      qualityValue:
+        'Reported {{actual}} · Estimated {{estimated}} · Unverified {{unverified}}',
+      retentionLimited:
+        'The requested time range extends before retained observations.',
+      range: 'Range',
+      hours: '{{count}} hours',
+      all: 'All',
+      success: 'Success',
+      failed: 'Failed',
+      cancelled: 'Cancelled',
+      apply: 'Apply filters',
+      spanValue:
+        '{{kind}}: {{value}} observed span-seconds, {{unknown}} untimed observations (overlap counted).',
+
+      title: 'Workflow observations',
+      description:
+        'Retained model events and stages over the last 24 hours. Select a workflow to inspect the same observation snapshot.',
+      input_tokens: 'Input tokens',
+      output_tokens: 'Output tokens',
+      cached_tokens: 'Cached input subset',
+      reasoning_tokens: 'Reasoning output subset',
+      tokenValue: '{{value}} observed · {{unknown}} unknown',
+      cacheCoverage:
+        'Cache hit rate {{value}} across {{count}} covered events; {{unverified}} events have unverified provenance {{unknown}} have unknown usage and {{incomplete}} have incomplete reports.',
+      durationNote:
+        'Stage, task and model spans overlap. Their sum is not wall-clock latency or a critical path.',
+      stage: 'Stage / operation',
+      status: 'Status',
+      model: 'Model',
+      seconds: 'Observed seconds',
+      unknown: 'Unknown',
+      loading: 'Loading observations…',
+      next: 'Next page',
+      refresh: 'Refresh snapshot',
+      disabled:
+        'Workflow statistics are disabled or unsupported by this server.',
+      coverage:
+        'Best-effort observations, not a complete bill. Unobserved producers and missing physical calls remain possible.',
+      truncated:
+        'This snapshot is limited to 20,000 observations. Narrow the time range before drawing totals.',
+      collector:
+        'User {{user}}, producer lifetime deliveries: {{accepted}} accepted, {{persisted}} persisted, {{dropped}} dropped, {{failed}} failed, {{pending}} pending, {{uncertain}} uncertain.',
+      empty: 'No retained workflow observations in this range.',
     },
     tokenTrend: {
       description:

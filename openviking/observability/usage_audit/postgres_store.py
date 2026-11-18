@@ -120,6 +120,9 @@ class PostgresUsageAuditStore(SQLUsageAuditStore):
                 for statement in ddl.split(";"):
                     if statement.strip():
                         conn.execute(statement)
+                from .performance_store import initialize
+
+                initialize(conn, postgres=True)
                 conn.execute(
                     "INSERT INTO _schema_meta (key, value) VALUES ('version', %s) "
                     "ON CONFLICT (key) DO NOTHING",
@@ -133,6 +136,13 @@ class PostgresUsageAuditStore(SQLUsageAuditStore):
     def _begin_write(self, accounts: set[str]) -> None:
         super()._begin_write(accounts)
         try:
+            # Initialization owns this same key exclusively before touching DDL.
+            # Acquire the shared schema lease before any projection table lock,
+            # then the account locks. This prevents startup/write lock inversion.
+            self._conn.execute(
+                "SELECT pg_advisory_xact_lock_shared(hashtextextended(?, 0))",
+                (f"ov-usage-schema:{self._schema}",),
+            )
             # Serialize only an account's flush/purge transactions. This keeps
             # the per-account retention cap correct under concurrent writers.
             for account in sorted(accounts):

@@ -304,17 +304,29 @@ class NamedQueue:
         try:
             result = self._validate_result(await self._run_middleware("process", ctx, process))
         except asyncio.CancelledError:
-            self._publish_duration(data, process_started, "exception")
+            self._publish_duration(
+                data, process_started, "exception", ctx.observation, status="cancelled"
+            )
             raise
         except Exception as exc:
             self._record_error(str(exc), data)
-            self._publish_duration(data, process_started, "exception")
+            self._publish_duration(
+                data, process_started, "exception", ctx.observation, status="failed"
+            )
             raise
         self._record_result(result, data)
-        self._publish_duration(data, process_started, result.outcome.value)
+        self._publish_duration(data, process_started, result.outcome.value, ctx.observation)
         return result
 
-    def _publish_duration(self, data: Dict[str, Any], process_started: float, outcome: str) -> None:
+    def _publish_duration(
+        self,
+        data: Dict[str, Any],
+        process_started: float,
+        outcome: str,
+        observation: Optional[Dict[str, str]] = None,
+        *,
+        status: Optional[str] = None,
+    ) -> None:
         """Publish best-effort processing and end-to-end timings for one delivery."""
         from openviking.observability.events import try_publish_event
 
@@ -323,11 +335,18 @@ class NamedQueue:
             "outcome": str(outcome),
             "process_duration_seconds": max(0.0, time.perf_counter() - process_started),
         }
+        if observation is not None:
+            payload.update(observation)
+            payload.update(stage="queue." + self.name, status=status or outcome)
         enqueued_at = self._extract_enqueued_at(data)
         if enqueued_at is not None:
             end_to_end = time.time() - enqueued_at
             if end_to_end >= 0:
                 payload["end_to_end_duration_seconds"] = end_to_end
+                # Only comparable clocks can prove a nonnegative pre-processing
+                # wait. Keep unknown on missing timestamps or wall-clock rollback.
+                if observation is not None and end_to_end >= payload["process_duration_seconds"]:
+                    payload["queue_seconds"] = end_to_end - payload["process_duration_seconds"]
         try_publish_event("queue.processed", payload)
 
     @staticmethod
