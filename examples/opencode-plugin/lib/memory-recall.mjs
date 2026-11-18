@@ -4,8 +4,8 @@ import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
   let compressor = null
-  async function buildRelevantMemories(input, parts) {
-    if (!isRecallEnabled(config)) return
+  async function buildRelevantMemories(input, parts, { signal } = {}) {
+    if (signal?.aborted || !isRecallEnabled(config)) return
     const query = extractCurrentUserText(parts ?? [])
     if (!query) return
     if (query.length < config.minQueryLength) return
@@ -15,9 +15,9 @@ export function createMemoryRecall({ config, sessionManager }) {
       cwd: input.directory ?? input.cwd,
     })) return
 
-    const compression = sessionID ? compressor?.forSession(sessionID) : null
+    const compression = sessionID ? compressor?.forSession(sessionID, { signal }) : null
     try {
-      const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
+      const health = await fetchJSON(config, "/health", { signal: compression?.signal ?? signal }, { timeoutMs: 5000 })
       if (!health.ok || compression?.signal.aborted) return
 
       const block = await buildRecallBlock(
@@ -26,7 +26,7 @@ export function createMemoryRecall({ config, sessionManager }) {
         // overriding it here would abort a request the server was still inside.
         (path, init = {}, options = {}) =>
           compression?.signal.aborted ? { ok: false } :
-            fetchJSON(config, path, init, { ...options, timeoutMs: options.timeoutMs ?? 5000 }),
+            fetchJSON(config, path, { ...init, signal: compression?.signal ?? signal ?? init.signal }, { ...options, timeoutMs: options.timeoutMs ?? 5000 }),
         config,
         query,
         {

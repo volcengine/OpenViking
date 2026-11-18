@@ -22,7 +22,7 @@ export function createV2Compressor(ctx, config, { signal, dataDir = config.dataD
     cachePath(sessionID) {
       return dataDir ? join(dataDir, `recall-digest-${createHash("sha256").update(JSON.stringify([...scope, sessionID])).digest("hex")}.json`) : undefined
     },
-    forSession(sessionID) {
+    forSession(sessionID, { signal: caller } = {}) {
       // Reserve before retrieval, so interruption also fences calls which have
       // not reached generation. Release the reservation when retrieval exits.
       const controller = new AbortController()
@@ -32,6 +32,8 @@ export function createV2Compressor(ctx, config, { signal, dataDir = config.dataD
       const abort = () => controller.abort()
       if (signal?.aborted) abort()
       else signal?.addEventListener("abort", abort, { once: true })
+      if (caller?.aborted) abort()
+      else caller?.addEventListener("abort", abort, { once: true })
       const run = async (prompt) => {
         if (controller.signal.aborted || typeof prompt !== "string" || prompt.length > maxPromptChars) return null
         const generation = new AbortController()
@@ -64,6 +66,7 @@ export function createV2Compressor(ctx, config, { signal, dataDir = config.dataD
         signal: controller.signal,
         close() {
           signal?.removeEventListener("abort", abort)
+          caller?.removeEventListener("abort", abort)
           controllers.delete(controller)
           if (!controllers.size) active.delete(sessionID)
         },
