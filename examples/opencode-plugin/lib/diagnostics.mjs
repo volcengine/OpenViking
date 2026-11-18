@@ -24,7 +24,8 @@ export async function diagnoseOpenCode({ ctx, config, pluginRoot = "", offline =
   }
   const [plugins, servers, skills] = await Promise.all([inventory(ctx?.plugin), inventory(ctx?.mcp), inventory(ctx?.skill)])
   report.section("OpenCode installation")
-  const instances = plugins.data?.filter((p) => p.id === "openviking" || p.source?.target?.includes("@openviking/opencode-plugin") || /openviking/i.test(p.source?.path || ""))
+  const instances = plugins.data?.filter(({ id, source }) =>
+    id === "openviking" || /^@openviking\/opencode-plugin(?:@.+)?$/.test(source?.target ?? ""))
   const installation = { state: plugins.state, hostVersion: ctx?.app?.version ?? null,
     instances: instances?.map((p) => ({ id: p.id, source: p.source.type, version: p.source.version ?? null, state: p.state.status })),
     ...(plugins.error ? { error: plugins.error } : {}) }

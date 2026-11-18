@@ -19,6 +19,23 @@ test("connected MCP with missing native skills is a failure, without capture or 
   assert.doesNotMatch(JSON.stringify(result), /secret-fixture-key/)
 })
 
+test("Doctor matches plugin identity without counting unrelated parent paths", async () => {
+  const local = { id: "openviking", source: { type: "local", path: "/plugins/openviking/index.mjs" }, state: { status: "active" } }
+  const companion = { id: "mee-toolkit", source: { type: "local", path: "/state/openviking-parity/toolkit/index.mjs" }, state: { status: "active" } }
+  const lookalike = { id: "lookalike", source: { type: "package", target: "@openviking/opencode-plugin-helper" }, state: { status: "active" } }
+  const duplicate = { id: "openviking-package", source: { type: "package", target: "@openviking/opencode-plugin@0.5.29" }, state: { status: "active" } }
+  const plugins = [local, companion, lookalike]
+  const inventory = { ...ctx, plugin: { list: async () => ({ data: plugins }) } }
+  const diagnose = () => diagnoseOpenCode({ ctx: inventory, config, offline: true })
+  const initial = (await diagnose()).installation
+  assert.equal(initial.state, "ok")
+  assert.deepEqual(initial.instances.map(({ id }) => id), ["openviking"])
+  plugins.push(duplicate)
+  const withDuplicate = (await diagnose()).installation
+  assert.equal(withDuplicate.state, "error")
+  assert.deepEqual(withDuplicate.instances.map(({ id }) => id), ["openviking", "openviking-package"])
+})
+
 test("disabled, unsupported and failed native inventories remain distinct", async () => {
   const disabled = await diagnoseOpenCode({ ctx, config: { ...config, mcp: { enabled: false }, autoCapture: false }, offline: true })
   assert.equal(disabled.mcp.state, "disabled")
