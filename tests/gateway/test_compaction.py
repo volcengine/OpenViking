@@ -560,17 +560,38 @@ def test_summary_text_returns_text_only(protocol):
     assert tool_protocol(protocol).summary_text(response) == "Summary text"
 
 
-async def test_new_openviking_sessions_turn_off_working_memory():
+@pytest.mark.parametrize("version", ["0.4.23", "0.5.0", "0.5.4"])
+async def test_gateway_disables_working_memory_without_replacing_user_policy(version):
     client = VikingClient(None, "http://unused", "0.4.16")
     bodies = []
 
     async def request(method, path, key, body=None, timeout=30):
+        if path == "/health":
+            return {
+                "version": version,
+                "role": "user",
+                "account_id": "tenant",
+                "user_id": "alice",
+            }
         bodies.append(body)
         return {}
 
     client.request = request
     await client.create_session("key", "session")
-    assert bodies[0]["memory_policy"] == {"working_memory": {"enabled": False}}
+    await client.create_session("key", "session", ["events"])
+    await client.create_session("key", "session", [])
+    await client.commit("key", "session", keep=2)
+    if version == "0.4.23":
+        assert bodies[0]["memory_policy"] == {"working_memory": {"enabled": False}}
+        assert bodies[1]["memory_policy"]["working_memory"] == {"enabled": False}
+        assert bodies[3] == {"keep_recent_count": 2}
+    else:
+        # An absent session policy lets OpenViking resolve the user's policy.
+        assert "memory_policy" not in bodies[0]
+        assert bodies[1]["memory_policy"] == {"memory_types": ["events"]}
+        assert bodies[3] == {"keep_recent_count": 2, "enable_working_memory": False}
+    assert bodies[1]["memory_policy"]["memory_types"] == ["events"]
+    assert bodies[2]["memory_policy"]["memory_types"] == []
 
 
 async def test_proxy_sends_the_summary_with_vendor_alias_and_headers(running_gateway):
@@ -685,3 +706,31 @@ async def test_a_cut_that_moves_capture_to_a_new_session_names_it_first(
     )
     summary_block = cut.body["messages"][0]["content"].split("</openviking-context>")[0]
     assert summary_block.endswith("\n\n" + hint + "\n")
+
+
+@pytest.mark.parametrize(("configured", "total"), [(0, 600), (2.5, 2.5)])
+async def test_summary_call_is_limited_by_summary_timeout(configured, total):
+    from types import SimpleNamespace
+
+    import aiohttp
+
+    from openviking_gateway import proxy
+
+    timeouts = []
+
+    def post(url, *, timeout, **kwargs):
+        timeouts.append(timeout.total)
+        raise aiohttp.ClientConnectionError()
+
+    request = proxy.ProxyRequest.__new__(proxy.ProxyRequest)
+    request.app = SimpleNamespace(state=SimpleNamespace(http=SimpleNamespace(post=post)))
+    request.config = SimpleNamespace(
+        upstream_timeout_seconds=600, summary_timeout_seconds=configured
+    )
+    request.request = SimpleNamespace(headers={}, url=SimpleNamespace(query=""))
+    request.path, request.model, request.store = "/v1/chat/completions", "model", None
+    request.record = proxy.RequestRecord(None, None)
+    upstream = {"id": "chat", "protocol": "chat", "base_url": "http://u/v1", "api_key": "k"}
+    with pytest.raises(SummaryError, match="summary_unavailable"):
+        await request.summarize(SimpleNamespace(upstream=upstream), {"model": "model"})
+    assert timeouts == [total]

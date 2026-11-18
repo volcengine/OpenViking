@@ -856,7 +856,7 @@ async def test_revoked_capture_is_idle_until_ttl_expires(running_gateway):
             ).fetchone()[0]
             == touched
         )
-    await app.state.store.expire(time.time() + app.state.config.session_ttl_days * 86400)
+    await app.state.store.expire(time.time() + app.state.config.session_ttl_seconds)
     assert not (await app.state.store.capture.get(scope, session)).value
 
 

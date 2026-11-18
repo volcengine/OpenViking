@@ -14,7 +14,7 @@ existingSecret: ""
 config:
   openviking_url: http://openviking:1933
   # Seven-day retention for sessions and Responses state.
-  session_ttl_days: 7
+  session_ttl_seconds: 604800
   response_ttl_seconds: 604800
   storage:
     kernel: sqlite

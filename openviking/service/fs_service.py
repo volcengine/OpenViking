@@ -7,16 +7,20 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 """
 
 import asyncio
+import hashlib
+import time
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
+from openviking.concurrency import bounded_map
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     canonical_session_root,
     classify_uri,
+    content_owner_context_for_uri,
     context_type_for_uri,
     is_session_uri,
     uri_leaf_name,
@@ -26,22 +30,35 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
+from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.observability.log_safety import safe_uri_for_log
+from openviking.privacy.restore import PrivacyRestorer
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
-from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.resource.watch_storage import is_watch_task_control_uri
+from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
+from openviking.service.task_work_index import (
+    bind_task_context,
+    detach_task_context,
+    get_enqueued_work_ids,
+    get_task_context,
+)
 from openviking.session.memory.account_templates import (
     validate_account_memory_template_transfer,
 )
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.abstract_overview import (
+    AbstractOverviewFormatError,
+    body_for_preview,
     is_abstract_overview_uri,
     mark_abstract_overview_pending,
     plan_abstract_overview_refresh,
@@ -49,12 +66,17 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
-from openviking.storage.expr import And, Eq, In, Or
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.index_action import FieldPatch
 from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.manual_conflicts import conflict_tags_from_content
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
-from openviking.storage.vector_ids import is_vector_record_id
+from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
@@ -63,10 +85,12 @@ from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
+    ConflictError,
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
     NotInitializedError,
+    OpenVikingError,
     PermissionDeniedError,
     ResourceExhaustedError,
 )
@@ -74,6 +98,13 @@ from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+_COMPILE_TARGET_LOCK_OWNER_PREFIX = "compile-target-"
+
+_DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS = 60.0
+_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS = 3.0
+
+WATCH_BUSY_WAIT_SECONDS = 10.0
+WATCH_BUSY_POLL_SECONDS = 0.5
 
 
 @dataclass
@@ -100,7 +131,6 @@ def _visible_grep_content(content: str, uri: str) -> str:
 
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
-    from openviking.resource.watch_scheduler import WatchScheduler
     from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
     from openviking.storage import VikingDBManager
 
@@ -114,9 +144,8 @@ class FSService:
         vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
-        watch_scheduler: Optional["WatchScheduler"] = None,
-        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
+        watch_manager: Optional["WatchManager"] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
@@ -125,10 +154,7 @@ class FSService:
             PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
         )
         self._resource_memory_link_service = resource_memory_link_service
-        self._watch_scheduler = watch_scheduler
-        self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
-        # Installed by OpenVikingService; records Compile output versions after writes.
-        self.compile_versions: Optional[Any] = None
+        self._watch_manager = watch_manager
 
     def set_dependencies(
         self,
@@ -136,9 +162,8 @@ class FSService:
         vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
-        watch_scheduler: Optional["WatchScheduler"] = None,
-        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
+        watch_manager: Optional["WatchManager"] = None,
     ) -> None:
         """Set service dependencies (for deferred initialization)."""
         self._viking_fs = viking_fs
@@ -148,9 +173,7 @@ class FSService:
             PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
         )
         self._resource_memory_link_service = resource_memory_link_service
-        self._watch_scheduler = watch_scheduler
-        if uri_mutation_coordinator is not None:
-            self._uri_mutation_coordinator = uri_mutation_coordinator
+        self._watch_manager = watch_manager
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -170,9 +193,53 @@ class FSService:
         return await viking_fs.resolve_uri(uri_or_id, ctx=ctx)
 
     def _get_watch_manager(self) -> Optional["WatchManager"]:
-        if not self._watch_scheduler:
-            return None
-        return self._watch_scheduler.watch_manager
+        return self._watch_manager
+
+    @asynccontextmanager
+    async def _hold_watch_scope(
+        self,
+        requests: List[Dict[str, str]],
+        uris: List[str],
+        ctx: RequestContext,
+    ):
+        """Hold *requests* while no Watch run occupies *uris*, waiting a bounded time.
+
+        Watch runs start occupying their target only under its Tree lock, so a
+        clear occupancy check under this lease stays valid until it is released.
+        """
+        viking_fs = self._ensure_initialized()
+        agfs = viking_fs._async_agfs
+        manager = self._get_watch_manager()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + WATCH_BUSY_WAIT_SECONDS
+        while True:
+            try:
+                lease = await agfs.pathlock_acquire_batch(
+                    requests, timeout_secs=max(0.0, deadline - loop.time())
+                )
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError("Resource is being processed", uri=uris[0]) from exc
+            try:
+                busy = manager is not None and await manager.has_running_overlap(
+                    ctx.account_id, uris
+                )
+            except BaseException:
+                await run_to_completion(partial(agfs.pathlock_release, lease))
+                raise
+            if not busy:
+                break
+            await run_to_completion(partial(agfs.pathlock_release, lease))
+            if loop.time() >= deadline:
+                raise ResourceBusyError(
+                    "A Watch run is in progress for this resource",
+                    uri=uris[0],
+                    conflict_type="watch_running",
+                )
+            await asyncio.sleep(min(WATCH_BUSY_POLL_SECONDS, max(0.0, deadline - loop.time())))
+        try:
+            yield lease
+        finally:
+            await run_to_completion(lambda: agfs.pathlock_release(lease))
 
     async def _attach_and_filter_tags(
         self,
@@ -187,7 +254,11 @@ class FSService:
         tags_by_uri: Dict[str, List[str]] = {}
         if self._vikingdb:
             uris = list(
-                dict.fromkeys(str(entry.get("uri") or "") for entry in entries if entry.get("uri"))
+                dict.fromkeys(
+                    str(entry["uri"])
+                    for entry in entries
+                    if entry.get("uri") and entry.get("access") != "container"
+                )
             )
             if uris:
                 records = await VikingDBManagerProxy(self._vikingdb, ctx).filter(
@@ -201,6 +272,8 @@ class FSService:
                 for record in records:
                     records_by_uri.setdefault(str(record.get("uri") or ""), []).append(record)
                 for entry in entries:
+                    if entry.get("access") == "container":
+                        continue
                     uri = str(entry.get("uri") or "")
                     levels = {0, 1} if entry.get("isDir", False) else {2}
                     found: List[str] = []
@@ -216,6 +289,17 @@ class FSService:
                     tags_by_uri[uri] = found
         result_entries: List[Dict[str, Any]] = []
         for entry in entries:
+            if entry.get("access") == "container":
+                # Navigation does not grant access to indexed tags or tag matching.
+                if not normalized_tags:
+                    result_entries.append(
+                        {
+                            key: value
+                            for key, value in entry.items()
+                            if key not in {"tags", "search_tags"}
+                        }
+                    )
+                continue
             entry_tags = tags_by_uri.get(str(entry.get("uri") or ""), [])
             if normalized_tags and not set(normalized_tags).issubset(entry_tags):
                 continue
@@ -437,53 +521,45 @@ class FSService:
         self._reject_storage_internal_target(uri)
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
         namespace_policy = namespace_policy_for_uri(directory_uri)
+        # Authorize both namespace modes before the occupied-target shortcut.
+        # VikingFS.mkdir rechecks permission after the Tree lock is acquired.
+        await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
         if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
-            await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
             if acl is not None and not namespace_policy.supports_acl:
                 raise InvalidArgumentError(f"ACL is not supported for namespace: {directory_uri}")
             if description is not None:
                 raise InvalidArgumentError(
                     f"directory descriptions are not supported for namespace: {directory_uri}"
                 )
-            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
-                await viking_fs.mkdir(uri, ctx=ctx)
+
+        # Reject occupied targets before acquiring a Tree lock, which may scan a
+        # large existing subtree. The backend mkdir still checks for races.
+        path = viking_fs._uri_to_path(directory_uri, ctx=ctx)
+        try:
+            await viking_fs._async_agfs.stat(path, bypass_cache=True)
+        except AGFSNotFoundError:
+            pass
+        else:
+            raise AGFSAlreadyExistsError(f"path already exists: {directory_uri}")
+
+        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            async with self._hold_watch_scope(
+                [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+            ) as lease:
+                await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
                 return
 
-        versions = self.compile_versions
-        managed = versions is not None and await versions.owning_target(
-            ctx.account_id, directory_uri
-        )
-
         async def create():
-            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
+            async with self._hold_watch_scope(
+                [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+            ) as lease:
                 acl_update = (
                     await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
                     if acl is not None
                     else None
                 )
-                lease = None
-                if managed:
-                    await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
-                    parent = VikingURI(directory_uri).parent.uri
-                    while not await viking_fs.exists(parent, ctx=ctx):
-                        parent = VikingURI(parent).parent.uri
-                    lease = await viking_fs._async_agfs.pathlock_acquire_tree(
-                        viking_fs._uri_to_path(parent, ctx=ctx)
-                    )
-                try:
-                    await viking_fs.mkdir(uri, ctx=ctx, **({"lease_ref": lease} if lease else {}))
-                    if managed:
-                        await versions.record_effects(
-                            [{"uri": directory_uri, "kind": "directory"}], ctx
-                        )
-                    else:
-                        lease = await viking_fs._async_agfs.pathlock_acquire_exact(
-                            viking_fs._uri_to_path(abstract_uri, ctx=ctx)
-                        )
-                    await initialize(acl_update, lease)
-                finally:
-                    if lease is not None:
-                        await viking_fs._async_agfs.pathlock_release(lease)
+                await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
+                await initialize(acl_update, lease)
 
         async def initialize(acl_update, lease):
             abstract = self._normalize_directory_description(description)
@@ -522,12 +598,12 @@ class FSService:
                 include_overview=False,
             )
 
-        if managed:
-            await run_to_completion(
-                lambda: versions.record_operation([directory_uri], ctx, "mkdir", {}, create)
-            )
-        else:
-            await create()
+        await create()
+
+    def _tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
+        """Lock the target subtree, including when the target does not exist."""
+        viking_fs = self._ensure_initialized()
+        return {"path": viking_fs._uri_to_path(uri, ctx=ctx), "kind": "tree"}
 
     @staticmethod
     def _normalize_directory_description(description: Optional[str]) -> Optional[str]:
@@ -574,11 +650,13 @@ class FSService:
         recursive: bool = False,
         wait: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Remove resource."""
+        """Remove content and refresh derived data without changing Compile metadata."""
         viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.MANAGE)
+        delete_ctx = replace(ctx, bypass_acl=True)
         namespace_policy = namespace_policy_for_uri(uri)
         if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
-            result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx, no_vector=True)
+            result = await viking_fs.rm(uri, recursive=recursive, ctx=delete_ctx, no_vector=True)
             if isinstance(result, dict):
                 result["semantic_status"] = "skipped"
                 result["vector_status"] = "skipped"
@@ -588,35 +666,22 @@ class FSService:
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        if self.compile_versions is not None:
-            async with self.compile_versions.before_remove(uri, ctx) as lease:
-
-                async def remove():
-                    result = await viking_fs.rm(
-                        uri,
-                        recursive=recursive,
-                        ctx=ctx,
-                        **({"lease_ref": lease} if lease is not None else {}),
-                    )
-                    await self.compile_versions.record_effects(
-                        [{"uri": uri, "kind": "deleted"}], ctx
-                    )
-                    await self.compile_versions.after_remove(uri, ctx)
-                    return result
-
-                async def record_remove():
-                    return await self.compile_versions.record_operation(
-                        [uri], ctx, "rm", {"recursive": recursive}, remove, recursive=True
-                    )
-
-                result = (
-                    await run_to_completion(record_remove)
-                    if lease is not None
-                    else await record_remove()
+        parent_uri = VikingURI(uri).parent
+        if parent_uri is not None and await viking_fs.exists(parent_uri.uri, ctx=ctx):
+            async with self._hold_watch_scope(
+                [self._tree_lock_request(uri, ctx)], [uri], ctx
+            ) as watch_lease:
+                result = await viking_fs.rm(
+                    uri, recursive=recursive, ctx=delete_ctx, lease_ref=watch_lease
+                )
+                await self._sync_watch_after_rm(
+                    uri, account_id=ctx.account_id, context_type=context_type
                 )
         else:
-            result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
-        await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
+            result = await viking_fs.rm(uri, recursive=recursive, ctx=delete_ctx)
+            await self._sync_watch_after_rm(
+                uri, account_id=ctx.account_id, context_type=context_type
+            )
         # A refresh on a parent that no longer exists would lock its sidecar
         # paths and thereby recreate the deleted directory. Nothing to
         # summarize there; skip it.
@@ -653,7 +718,11 @@ class FSService:
                     directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )
-            if refresh_parent_uri and wait and refresh_action is not FreshnessAction.MARK_PENDING:
+            if (
+                refresh_parent_uri
+                and wait
+                and refresh_action not in (FreshnessAction.NOOP, FreshnessAction.MARK_PENDING)
+            ):
                 queue_status = await self._wait_for_refresh()
         finally:
             pass
@@ -661,11 +730,14 @@ class FSService:
             result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
             result["semantic_root_uri"] = refresh_parent_uri
-            result["semantic_status"] = (
-                "deferred"
-                if refresh_action is FreshnessAction.MARK_PENDING
-                else self._semantic_refresh_status(wait=wait, queue_status=queue_status)
-            )
+            if refresh_action is FreshnessAction.NOOP:
+                result["semantic_status"] = "skipped"
+            elif refresh_action is FreshnessAction.MARK_PENDING:
+                result["semantic_status"] = "deferred"
+            else:
+                result["semantic_status"] = self._semantic_refresh_status(
+                    wait=wait, queue_status=queue_status
+                )
             if queue_status is not None:
                 result["queue_status"] = queue_status
         return result
@@ -760,22 +832,35 @@ class FSService:
         force_refresh: bool = False,
     ) -> FreshnessAction:
         semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
-            viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=1,
-            ctx=ctx,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-            force_refresh=force_refresh,
-        )
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=self._viking_fs,
+                dir_uri=root_uri,
+                changed_entries=1,
+                ctx=ctx,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                force_refresh=force_refresh,
+            )
+        except LockAcquisitionError:
+            # Content deletion already succeeded. Parent freshness bookkeeping
+            # is best effort, as in content writes.
+            logger.info(
+                "Skipping best-effort delete parent freshness update because sidecars are busy",
+                extra={"uri": safe_uri_for_log(root_uri), "degraded": True},
+            )
+            return FreshnessAction.NOOP
+
         if decision.action is not FreshnessAction.REFRESH_NOW:
             return decision.action
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping delete refresh: %s", exc)
-            return decision.action
+            logger.info(
+                "QueueManager not available; skipping delete refresh",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
+            return FreshnessAction.NOOP
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
         msg = SemanticMsg(
@@ -822,7 +907,10 @@ class FSService:
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping copy refresh: %s", exc)
+            logger.info(
+                "QueueManager not available; skipping copy refresh",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             return "skipped"
 
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -871,7 +959,10 @@ class FSService:
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
-            logger.warning("QueueManager not available, skipping transfer rebuild: %s", exc)
+            logger.info(
+                "QueueManager not available; skipping transfer rebuild",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             return "skipped"
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
@@ -950,42 +1041,22 @@ class FSService:
         recursive: bool,
         ctx: RequestContext,
     ) -> Dict[str, Any]:
-        """Commit copy and enqueue its parent refresh as one cancellation-safe unit."""
+        """Copy and refresh as one cancellation-safe unit."""
         viking_fs = self._ensure_initialized()
         source_policy = namespace_policy_for_uri(from_uri)
         target_policy = namespace_policy_for_uri(to_uri)
         source_indexed = source_policy.processing_mode is NamespaceProcessingMode.INDEXED
         target_indexed = target_policy.processing_mode is NamespaceProcessingMode.INDEXED
 
-        async def copy() -> Dict[str, Any]:
-            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [from_uri, to_uri]):
-                async with self._record_transfer(
-                    from_uri, to_uri, ctx, recursive=recursive
-                ) as lease:
-                    options = {"lease_ref": lease} if lease is not None else {}
-                    if not (source_indexed and target_indexed):
-                        options.update(
-                            maintain_vectors=False,
-                            copy_semantic_sidecars=False,
-                        )
-                    return await viking_fs.cp(
-                        from_uri,
-                        to_uri,
-                        recursive=recursive,
-                        ctx=ctx,
-                        **options,
-                    )
-
-        if self.compile_versions is None:
-            transfer_result = await copy()
-        else:
-            transfer_result = await self.compile_versions.record_operation(
-                [to_uri],
-                ctx,
-                "cp",
-                {"from": from_uri, "to": to_uri, "recursive": recursive},
-                copy,
-                recursive=True,
+        async with self._transfer_scope(from_uri, to_uri, ctx, recursive=recursive) as lease:
+            options: Dict[str, Any] = {"lease_ref": lease}
+            if not (source_indexed and target_indexed):
+                options.update(
+                    maintain_vectors=False,
+                    copy_semantic_sidecars=False,
+                )
+            transfer_result = await viking_fs.cp(
+                from_uri, to_uri, recursive=recursive, ctx=ctx, **options
             )
 
         result = dict(transfer_result or {})
@@ -997,9 +1068,7 @@ class FSService:
             target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
             target_is_dir = bool(target_stat.get("isDir"))
             rebuild_root_uri = (
-                to_uri
-                if target_is_dir
-                else self._semantic_refresh_parent_uri(to_uri, context_type)
+                to_uri if target_is_dir else self._semantic_refresh_parent_uri(to_uri, context_type)
             )
             if not rebuild_root_uri:
                 result["semantic_status"] = "skipped"
@@ -1015,10 +1084,13 @@ class FSService:
                     ctx=ctx,
                 )
             except Exception as exc:
-                logger.warning(
-                    "Copy committed but semantic rebuild failed for %s: %s",
-                    to_uri,
-                    exc,
+                logger.info(
+                    "Copy committed with failed semantic rebuild",
+                    extra={
+                        "target_id": safe_uri_for_log(to_uri),
+                        "error_type": type(exc).__name__,
+                        "degraded": True,
+                    },
                 )
                 result["semantic_status"] = "failed"
                 result["semantic_error"] = str(exc)
@@ -1041,10 +1113,13 @@ class FSService:
                 ctx=ctx,
             )
         except Exception as exc:
-            logger.warning(
-                "Copy committed but parent semantic refresh failed for %s: %s",
-                to_uri,
-                exc,
+            logger.info(
+                "Copy committed with failed parent semantic refresh",
+                extra={
+                    "target_id": safe_uri_for_log(to_uri),
+                    "error_type": type(exc).__name__,
+                    "degraded": True,
+                },
             )
             result["semantic_status"] = "failed"
             result["semantic_error"] = str(exc)
@@ -1069,8 +1144,11 @@ class FSService:
         *,
         ctx: RequestContext,
     ) -> None:
-        """Commit move/watch state and enqueue all affected parent refreshes."""
+        """Move content and Watch state, migrate exact-target Compile settings, and refresh parents."""
         viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
+        await viking_fs._ensure_destination_access(to_uri, ctx)
+        move_ctx = replace(ctx, bypass_acl=True)
         watch_manager = self._get_watch_manager()
         use_watch_transaction = (
             watch_manager is not None
@@ -1095,48 +1173,59 @@ class FSService:
             vector_mode = "none"
 
         async def move() -> None:
-            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [from_uri, to_uri]):
+            async with self._transfer_scope(from_uri, to_uri, ctx, move=True) as lease:
+                watch_move_result = None
                 if use_watch_transaction:
-                    await watch_manager.validate_target_prefix_rewrite_internal(
-                        from_uri, to_uri, account_id=ctx.account_id
+                    watch_move_result = await watch_manager.move(
+                        account_id=ctx.account_id,
+                        from_uri=from_uri,
+                        to_uri=to_uri,
                     )
-                async with self._record_transfer(from_uri, to_uri, ctx, move=True) as lease:
-                    options = {"lease_ref": lease} if lease is not None else {}
-                    if vector_mode != "transfer":
-                        options.update(
-                            vector_mode=vector_mode,
-                            copy_semantic_sidecars=False,
-                        )
+                options: Dict[str, Any] = {"lease_ref": lease}
+                if vector_mode != "transfer":
+                    options.update(
+                        vector_mode=vector_mode,
+                        copy_semantic_sidecars=False,
+                    )
+                try:
                     await viking_fs.mv(
                         from_uri,
                         to_uri,
-                        ctx=ctx,
+                        ctx=move_ctx,
                         **options,
                     )
-                    if use_watch_transaction:
-                        try:
-                            await watch_manager.rewrite_target_prefix_internal(
-                                from_uri, to_uri, account_id=ctx.account_id
+                except BaseException as move_error:
+                    if watch_move_result is None or not watch_move_result.task_ids:
+                        raise
+                    try:
+                        rollback = await run_to_completion(
+                            partial(
+                                watch_manager.move,
+                                account_id=watch_move_result.account_id,
+                                from_uri=watch_move_result.to_uri,
+                                to_uri=watch_move_result.from_uri,
+                                task_ids=watch_move_result.task_ids,
                             )
-                        except Exception as commit_error:
-                            try:
-                                await viking_fs.mv(to_uri, from_uri, ctx=ctx, **options)
-                            except Exception as rollback_error:
-                                logger.exception("Move rollback failed: %s -> %s", to_uri, from_uri)
-                                raise rollback_error from commit_error
-                            raise
+                        )
+                        if set(rollback.task_ids) != set(watch_move_result.task_ids):
+                            raise RuntimeError(
+                                "Watch move rollback did not restore every moved task"
+                            )
+                    except BaseException as rollback_error:
+                        logger.error(
+                            "Watch move rollback failed after filesystem move failure filesystem_error_type=%s",
+                            type(move_error).__name__,
+                            extra={
+                                "account_id": watch_move_result.account_id,
+                                "target_id": safe_uri_for_log(watch_move_result.to_uri),
+                                "total": len(watch_move_result.task_ids),
+                                "error_type": type(rollback_error).__name__,
+                            },
+                        )
+                        raise rollback_error from move_error
+                    raise
 
-        if self.compile_versions is None:
-            await move()
-        else:
-            await self.compile_versions.record_operation(
-                [from_uri, to_uri],
-                ctx,
-                "mv",
-                {"from": from_uri, "to": to_uri},
-                move,
-                recursive=True,
-            )
+        await move()
         rebuild_target = not source_indexed and target_indexed
         if rebuild_target:
             await self._refresh_move_parents(
@@ -1149,9 +1238,7 @@ class FSService:
             target_is_dir = bool(target_stat.get("isDir"))
             context_type = context_type_for_uri(to_uri)
             rebuild_root_uri = (
-                to_uri
-                if target_is_dir
-                else self._semantic_refresh_parent_uri(to_uri, context_type)
+                to_uri if target_is_dir else self._semantic_refresh_parent_uri(to_uri, context_type)
             )
             if rebuild_root_uri:
                 try:
@@ -1163,16 +1250,19 @@ class FSService:
                         ctx=ctx,
                     )
                 except Exception as exc:
-                    logger.warning(
-                        "Move committed but semantic rebuild failed for %s: %s",
-                        to_uri,
-                        exc,
+                    logger.info(
+                        "Move committed with failed semantic rebuild",
+                        extra={
+                            "target_id": safe_uri_for_log(to_uri),
+                            "error_type": type(exc).__name__,
+                            "degraded": True,
+                        },
                     )
         else:
             await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
 
     @asynccontextmanager
-    async def _record_transfer(
+    async def _transfer_scope(
         self,
         from_uri: str,
         to_uri: str,
@@ -1181,56 +1271,29 @@ class FSService:
         move: bool = False,
         recursive: bool = True,
     ):
-        """Hold managed transfer scopes through their final snapshot registration.
+        """Hold both transfer scopes, free of Watch runs, through Watch migration.
 
-        The yielded lease extends the native transfer's existing locking. Once
-        native transfer is attempted, its final directory state forms an ordinary
-        rollback baseline even on failure. Service-level guards run before locking.
+        The yielded lease extends the native transfer's own locking and covers
+        Compile target migration on move. Service-level guards run before locking.
         """
-        versions = self.compile_versions
-        if versions is None:
-            yield None
-            return
         viking_fs = self._ensure_initialized()
-        manager = self._get_watch_manager()
-        watched_uris = (
-            [
-                task.to_uri
-                for task in await manager.get_all_tasks(ctx.account_id, ctx.user.user_id, "root")
-                if task.account_id == ctx.account_id and task.to_uri
-            ]
-            if manager is not None
-            else []
-        )
-        if not await versions.guard_transfer(from_uri, to_uri, ctx, watched_uris=watched_uris):
-            yield None
-            return
-        if move:
-            await versions.before_move(from_uri.rstrip("/"), to_uri.rstrip("/"), ctx)
-            await viking_fs._ensure_access(from_uri, ctx, action=AclAction.WRITE)
-        else:
-            await viking_fs._ensure_copy_source_access(from_uri, recursive=recursive, ctx=ctx)
-        await viking_fs._ensure_access(to_uri, ctx, action=AclAction.WRITE)
         source_path = viking_fs._uri_to_path(from_uri, ctx=ctx)
         target_path = viking_fs._uri_to_path(to_uri, ctx=ctx)
         viking_fs._validate_transfer_paths(source_path, target_path)
         is_dir = (await viking_fs.stat(from_uri, ctx=ctx, skip_count=True)).get("isDir", False)
+        operation = "mv" if move else "cp"
         if is_dir and not recursive:
             raise InvalidArgumentError(f"Cannot copy directory without --recursive: {from_uri}")
-        if move and is_dir:
-            await viking_fs._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
         if not is_dir and to_uri.rstrip("/") != to_uri:
             raise InvalidArgumentError(
-                f"Transfer destination for a file must include the target file name: {to_uri}"
+                f"{operation} destination for a file must include the target file name: {to_uri}"
             )
-        await viking_fs._ensure_transfer_parent_directory(
-            target_path, to_uri, operation="mv" if move else "cp"
-        )
+        # Validate before acquiring the same source and target scopes as the
+        # native transfer, without extending a missing target to its parent.
+        await viking_fs._ensure_transfer_parent_directory(target_path, to_uri, operation=operation)
         await viking_fs._ensure_transfer_target_type(target_path, to_uri, is_dir=is_dir)
         if is_dir:
-            if not await viking_fs.exists(to_uri, ctx=ctx):
-                target_path = viking_fs._transfer_parent_path(target_path)
-            roots = sorted({source_path, target_path}, key=len)
+            roots = sorted({source_path, target_path}, key=lambda path: (len(path), path))
             requests = [
                 {"path": path, "kind": "tree"}
                 for path in roots
@@ -1238,18 +1301,8 @@ class FSService:
             ]
         else:
             requests = [{"path": path, "kind": "exact"} for path in (source_path, target_path)]
-        lease = await viking_fs._async_agfs.pathlock_acquire_batch(requests)
-        try:
+        async with self._hold_watch_scope(requests, [from_uri, to_uri], ctx) as lease:
             yield lease
-        finally:
-            try:
-                await run_to_completion(
-                    lambda: versions.register_transfer(
-                        from_uri, to_uri, ctx, lease_ref=lease, move=move
-                    )
-                )
-            finally:
-                await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _finish_transfer_after_caller_cancel(
         self,
@@ -1273,11 +1326,11 @@ class FSService:
                 transaction_task.result()
             except asyncio.CancelledError:
                 pass
-            except Exception:
+            except Exception as exc:
                 logger.error(
                     "Filesystem %s transaction failed while caller was cancelled",
                     operation,
-                    exc_info=True,
+                    extra={"error_type": type(exc).__name__},
                 )
             raise
 
@@ -1304,6 +1357,7 @@ class FSService:
         if target_parent_uri and refresh_target:
             refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
 
+        failed_refreshes = 0
         for parent_uri, changed_uri, change_kind, context_type in refreshes:
             try:
                 await self._enqueue_copy_refresh(
@@ -1315,12 +1369,21 @@ class FSService:
                     ctx=ctx,
                 )
             except Exception as exc:
-                logger.warning(
-                    "Move committed but %s parent semantic refresh failed for %s: %s",
+                failed_refreshes += 1
+                logger.debug(
+                    "Move parent semantic refresh failed change=%s",
                     change_kind,
-                    parent_uri,
-                    exc,
+                    extra={
+                        "target_id": safe_uri_for_log(parent_uri),
+                        "error_type": type(exc).__name__,
+                    },
                 )
+
+        if failed_refreshes:
+            logger.info(
+                "Move committed with incomplete parent semantic refresh",
+                extra={"total": len(refreshes), "failed": failed_refreshes, "degraded": True},
+            )
 
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":
@@ -1333,9 +1396,8 @@ class FSService:
         deactivated = await watch_manager.deactivate_tasks_under_uri_internal(uri, account_id)
         if deactivated:
             logger.info(
-                "Deactivated %d watch task(s) after deleting %s",
-                len(deactivated),
-                uri,
+                "Watch tasks deactivated after resource deletion",
+                extra={"total": len(deactivated), "target_id": safe_uri_for_log(uri)},
             )
 
     async def tree(
@@ -1445,6 +1507,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
+        uri = await self._resolve_uri(uri, ctx)
         namespace_policy = namespace_policy_for_uri(uri)
         kwargs = {
             "ctx": ctx,
@@ -1461,24 +1524,78 @@ class FSService:
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
-    async def _read_content(self, uri: str, ctx: RequestContext) -> tuple[str, str]:
+    async def ensure_remove_access(self, uri: str, ctx: RequestContext) -> None:
+        """Validate the namespace and ACL checks used when removing a file."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.MANAGE)
+
+    async def can_read_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+    ) -> Dict[str, bool]:
+        """Return caller-specific read visibility for each URI."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
+
+    async def get_tags_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+        *,
+        check_access: bool = True,
+    ) -> Dict[str, List[str]]:
+        """Return vector-backed retrieval tags for each URI."""
+        unique_uris = list(dict.fromkeys(uris))
+        if not unique_uris:
+            return {}
+        if check_access:
+            access = await self.can_read_many(unique_uris, ctx)
+            unique_uris = [uri for uri in unique_uris if access.get(uri, False)]
+        entries = [{"uri": uri, "isDir": False} for uri in unique_uris]
+        tagged_entries = await self._attach_and_filter_tags(
+            entries,
+            ctx,
+            tags=None,
+            include_tags=True,
+        )
+        return {str(entry["uri"]): list(entry.get("tags") or []) for entry in tagged_entries}
+
+    async def _read_content(
+        self, uri: str, ctx: RequestContext, *, max_bytes: int | None = None
+    ) -> tuple[str, str]:
         """Resolve the URI and read stored content without Privacy restoration."""
         viking_fs = self._ensure_initialized()
         resolved_uri = await self._resolve_uri(uri, ctx)
+        reader = (
+            viking_fs.read_file
+            if max_bytes is None
+            else partial(viking_fs.read_file_bytes, max_bytes=max_bytes)
+        )
         try:
-            content = await viking_fs.read_file(resolved_uri, ctx=ctx)
+            content = await reader(resolved_uri, ctx=ctx)
         except NotFoundError:
             if "%20" not in resolved_uri:
                 raise
             legacy_uri = validate_safe_viking_uri_path(resolved_uri.replace("%20", " "))
-            content = await viking_fs.read_file(legacy_uri, ctx=ctx)
+            content = await reader(legacy_uri, ctx=ctx)
             resolved_uri = legacy_uri
+        if max_bytes is not None:
+            content = viking_fs._decode_bytes(content)
         return resolved_uri, content
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
-        """Read file content, restoring Privacy references for Skills and Sessions."""
+        """Read file content, restoring the owner's Privacy references when enabled."""
+        uri = await self._resolve_uri(uri, ctx)
+        ctx = self._ensure_initialized().authorize_read(ctx, [uri])
         resolved_uri, content = await self._read_content(uri, ctx)
-        if self._privacy_config_service is not None:
+        scope = PrivacySanitizer.scope_from_uri(resolved_uri, ctx)
+        if (
+            self._privacy_config_service is not None
+            and ctx.data_access is None
+            and scope is not None
+            and (await self._privacy_config_service.get_settings(ctx)).restore
+        ):
             skill_name = get_skill_name_from_uri(resolved_uri)
             session_id = get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
             if skill_name is not None:
@@ -1496,6 +1613,11 @@ class FSService:
                     session_id=session_id,
                     jsonl=resolved_uri.endswith("/messages.jsonl"),
                 )
+            else:
+                restorer = PrivacyRestorer(
+                    self._privacy_config_service, ctx, category=scope[0], target_key=scope[1]
+                )
+                content = await restorer.restore_content(content, uri=resolved_uri)
 
         if offset == 0 and limit == -1:
             return content
@@ -1516,43 +1638,54 @@ class FSService:
         # Resolve id to URI before classify_uri / visible_content which expect
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
-        if self._privacy_sanitizer is not None:
-            stat = await self._ensure_initialized().stat(
-                resolved_uri,
-                ctx=ctx,
-                skip_count=True,
-            )
-            size = stat.get("size") if isinstance(stat, dict) else None
-            if isinstance(size, int) and size > self._privacy_sanitizer.max_content_bytes:
-                raise ResourceExhaustedError(
-                    "File exceeds the Privacy visible-read size limit",
-                    details={
-                        "uri": resolved_uri,
-                        "reason": "privacy_visible_read_limit_exceeded",
-                        "size_bytes": size,
-                        "max_bytes": self._privacy_sanitizer.max_content_bytes,
-                    },
-                )
-        resolved_uri, content = await self._read_content(resolved_uri, ctx)
-        if classify_uri(resolved_uri).is_memory:
-            content = visible_content(content, uri=resolved_uri)
-        if self._privacy_sanitizer is not None:
-            content = (
-                await self._privacy_sanitizer.sanitize(
-                    content,
-                    ctx=ctx,
-                    uri=resolved_uri,
-                    prefer_credentials=(
-                        get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
-                        is not None
-                    ),
-                )
-            ).content
+        ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
+        settings = (
+            await self._privacy_sanitizer.settings_for_uri(resolved_uri, ctx)
+            if self._privacy_sanitizer is not None and ctx.data_access is None
+            else None
+        )
+        max_bytes = (
+            self._privacy_sanitizer.max_content_bytes
+            if self._privacy_sanitizer is not None and settings is not None
+            else None
+        )
+        try:
+            resolved_uri, content = await self._read_content(resolved_uri, ctx, max_bytes=max_bytes)
+        except ResourceExhaustedError as exc:
+            if not exc.details or exc.details.get("reason") != "read_limit_exceeded":
+                raise
+            raise ResourceExhaustedError(
+                "File exceeds the Privacy visible-read size limit",
+                details={**exc.details, "reason": "privacy_visible_read_limit_exceeded"},
+            ) from exc
+        content = await self._make_content_visible(resolved_uri, content, ctx, settings=settings)
         if offset == 0 and limit == -1:
             return content
         lines = content.splitlines(keepends=True)
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
+
+    async def _make_content_visible(
+        self,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        *,
+        settings: ResolvedPrivacyConfig | None = None,
+    ) -> str:
+        """Hide memory metadata and sanitize private values in already-read text."""
+        if classify_uri(uri).is_memory:
+            content = visible_content(content, uri=uri)
+        if self._privacy_sanitizer is not None and settings is not None:
+            content = (
+                await self._privacy_sanitizer.sanitize(
+                    content,
+                    ctx=ctx,
+                    uri=uri,
+                    settings=settings,
+                )
+            ).content
+        return content
 
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""
@@ -1694,22 +1827,15 @@ class FSService:
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
-        edit_source: Literal["manual", "agent", "compile"] = "agent",
-        record_version: bool = True,
         commit_content: Optional[Callable[..., Awaitable[Any]]] = None,
+        resolve_conflicts: bool = False,
+        use_snapshot: bool = False,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
-        """Write content and refresh it after persisting managed output versions.
-
-        Internal restores supply ``commit_content`` to record their own version.
-        """
+        """Write content with optional snapshots; restores supply their own commit callback."""
         viking_fs = self._ensure_initialized()
-        if commit_content is None and self.compile_versions is not None:
-            commit_content = partial(
-                self.compile_versions.record_write,
-                ctx=ctx,
-                edit_source=edit_source,
-                record_version=record_version and edit_source != "compile",
-            )
+        if commit_content is None and use_snapshot:
+            commit_content = partial(self._snapshot_write, ctx=ctx)
         coordinator = ContentWriteCoordinator(
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
@@ -1727,12 +1853,10 @@ class FSService:
             tags=tags,
             tag_mode=tag_mode,
             acl=acl,
+            resolve_conflicts=resolve_conflicts,
+            defer_processing=defer_processing,
         )
-        if self.compile_versions is None or edit_source == "compile":
-            return await write()
-        return await self.compile_versions.record_operation(
-            [uri], ctx, f"{edit_source}_revise", {"mode": mode}, write
-        )
+        return await write()
 
     async def batch_write(
         self,
@@ -1744,29 +1868,34 @@ class FSService:
         skip_conflicts: bool = False,
         defer_processing: bool = False,
         processing_mode: str = "semantic_and_vectors",
-        edit_source: Literal["manual", "agent", "compile"] = "agent",
+        use_snapshot: bool = False,
     ) -> Dict[str, Any]:
-        """Apply multiple file writes and aggregate downstream refresh."""
+        """Write files, refresh indexes, and optionally snapshot successful writes once."""
         viking_fs = self._ensure_initialized()
+        snapshot_paths: set[str] = set()
+
+        async def collect_snapshot(uris, *, lease_ref, write):
+            """Collect successful paths under the content lease."""
+            result = await write()
+            snapshot_paths.update(uris)
+            return result
+
+        async def commit_snapshot(*, lease_ref):
+            """Commit collected paths before releasing the lease."""
+            if snapshot_paths:
+                await viking_fs.commit(
+                    message="content batch write",
+                    paths=sorted(snapshot_paths),
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                )
+
         coordinator = ContentWriteCoordinator(
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
             privacy_sanitizer=self._privacy_sanitizer,
-            commit_batch=(
-                partial(self.compile_versions.finish_batch, ctx=ctx, edit_source=edit_source)
-                if self.compile_versions is not None and edit_source != "compile"
-                else None
-            ),
-            commit_content=(
-                partial(
-                    self.compile_versions.record_write,
-                    ctx=ctx,
-                    edit_source=edit_source,
-                    record_version=False,
-                )
-                if self.compile_versions is not None
-                else None
-            ),
+            commit_batch=commit_snapshot if use_snapshot else None,
+            commit_content=collect_snapshot if use_snapshot else None,
         )
         write = partial(
             coordinator.batch_write,
@@ -1778,15 +1907,37 @@ class FSService:
             defer_processing=defer_processing,
             processing_mode=processing_mode,
         )
-        if self.compile_versions is None or edit_source == "compile":
-            return await write()
-        return await self.compile_versions.record_operation(
-            [operation["uri"] for operation in operations],
-            ctx,
-            f"{edit_source}_revise",
-            {"batch": True},
-            write,
+        return await write()
+
+    async def _directory_has_compile_tag(self, uri: str, ctx: RequestContext) -> bool:
+        """Test visible directory nodes for the output tag without requiring a unique index record."""
+        store = self._ensure_initialized()._get_vector_store()
+        if store is None:
+            raise NotInitializedError("Vector store")
+        records, _ = await store.scroll(
+            filter=And(
+                [Eq("uri", uri), In("level", [0, 1]), Eq("search_tags", "compile_target=true")]
+            ),
+            limit=1,
+            output_fields=["uri"],
+            ctx=ctx,
         )
+        return bool(records)
+
+    async def _snapshot_write(
+        self,
+        uris: List[str],
+        *,
+        ctx: RequestContext,
+        lease_ref: Any,
+        write: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Write and snapshot under the lease; commit errors propagate after writing."""
+        result = await write()
+        await self._ensure_initialized().commit(
+            message="content write", paths=uris, ctx=ctx, lease_ref=lease_ref
+        )
+        return result
 
     async def set_tags(
         self,
@@ -1809,6 +1960,604 @@ class FSService:
             recursive=recursive,
             ctx=ctx,
         )
+
+    async def batch_set_tags(
+        self,
+        uris: list[str],
+        tags: list[str],
+        mode: str,
+        recursive: bool,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """规范化并去重目标，复用单 URI 写入，按输入顺序汇总成功和失败项。"""
+        if not 1 <= len(uris) <= 50:
+            raise InvalidArgumentError("uris must contain between 1 and 50 items")
+        targets: dict[str, Exception | None] = {}
+        for uri in uris:
+            try:
+                uri = validate_safe_viking_uri_path(
+                    validate_request_viking_uri(resolve_path_variables(uri), ctx)
+                )
+                targets.setdefault(uri, None)
+            except Exception as exc:
+                targets.setdefault(uri, exc)
+
+        async def update(uri: str) -> tuple[bool, Dict[str, Any]]:
+            try:
+                if targets[uri] is not None:
+                    raise targets[uri]
+                result = await self.set_tags(
+                    uri=uri,
+                    tags=tags,
+                    mode=mode,
+                    recursive=recursive,
+                    ctx=ctx,
+                )
+                return True, result
+            except Exception as exc:
+                error = map_exception(exc, resource=uri)
+                if error is None:
+                    logger.debug(
+                        "Batch tag update failed",
+                        extra={
+                            "target_id": safe_uri_for_log(uri),
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    error = OpenVikingError("Tag update failed", code="INTERNAL")
+                return False, {
+                    "uri": uri,
+                    "error": {"code": error.code, "message": error.message},
+                }
+
+        results = await bounded_map(targets, update, concurrency=8)
+        unexpected_failures = sum(
+            not success and result["error"]["code"] == "INTERNAL" for success, result in results
+        )
+        if unexpected_failures:
+            logger.error(
+                "Batch tag update encountered internal failures",
+                extra={"total": len(results), "failed": unexpected_failures},
+            )
+        return {
+            "items": [result for success, result in results if success],
+            "failed": [result for success, result in results if not success],
+        }
+
+    async def attrs(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """读取单 URI 的标签及记忆属性，复用现有 stat/read 权限检查。"""
+        stat_result = await self.stat(uri, ctx=ctx, skip_count=True)
+        namespace_policy = namespace_policy_for_uri(uri)
+        tags = (
+            await self._tags_attr(uri, ctx, is_dir=stat_result.get("isDir", False))
+            if namespace_policy.supports_tags
+            else []
+        )
+        result = {
+            "uri": uri,
+            "context_type": context_type_for_uri(uri),
+            "attrs": {"tags": tags},
+        }
+        if result["context_type"] == "memory" and not stat_result.get("isDir", False):
+            result["attrs"]["memory"] = self._clean_memory_attrs(await self.read(uri, ctx=ctx))
+        return result
+
+    @staticmethod
+    def _clean_memory_attrs(raw: str) -> Dict[str, Any]:
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        mf = MemoryFileUtils.read(raw)
+        attrs: Dict[str, Any] = mf.to_metadata()
+        attrs.pop("content", None)
+        return attrs
+
+    async def _tags_attr(self, uri: str, ctx: RequestContext, *, is_dir: bool) -> list[str]:
+        if not self._vikingdb:
+            return []
+
+        # Tags are written per level (see ContentWriteCoordinator.set_tags): a
+        # directory carries them on its L0/L1 summary records, while a file carries
+        # them on its L2 content record. Mirror that here so the exact node's tags
+        # are read back instead of unrelated records. Eq("uri", ...) compiles to an
+        # exact path match (-d=0), avoiding prefix/subtree matches over the path field.
+        levels = [0, 1] if is_dir else [2]
+        records = await VikingDBManagerProxy(self._vikingdb, ctx).filter(
+            filter=And([Eq("uri", uri), In("level", levels)]),
+            limit=10,
+            output_fields=["level", "search_tags"],
+        )
+        records = sorted(records, key=lambda item: item.get("level", 99))
+        tags: list[str] = []
+        for record in records:
+            for tag in normalize_search_tags(record.get("search_tags"), discard_invalid=True):
+                if tag not in tags:
+                    tags.append(tag)
+        return tags
+
+    async def _directory_index_records(self, uri: str, ctx: RequestContext) -> List[Dict[str, Any]]:
+        """Read L0/L1 records and tags; propagate store errors."""
+        store = self._ensure_initialized()._get_vector_store()
+        if store is None:
+            raise NotInitializedError("Vector store")
+        records, cursor = await store.scroll(
+            filter=And([Eq("uri", uri), In("level", [0, 1])]),
+            limit=3,
+            output_fields=["id", "uri", "level", "search_tags"],
+            ctx=ctx,
+        )
+        if cursor is not None or len({record["level"] for record in records}) != len(records):
+            raise OpenVikingError(
+                f"Duplicate directory index records: {uri}", code="FAILED_PRECONDITION"
+            )
+        return records
+
+    async def _wait_for_directory_index(
+        self, uri: str, ctx: RequestContext, expected_levels: set[int]
+    ) -> set[int]:
+        """Return visible levels once expected_levels are searchable; raise on timeout or read error."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS
+        while True:
+            indexed = {record["level"] for record in await self._directory_index_records(uri, ctx)}
+            if expected_levels <= indexed:
+                return indexed
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise OpenVikingError(
+                    f"Directory index is not readable: {uri}",
+                    code="PROCESSING_ERROR",
+                    details={
+                        "expected_levels": sorted(expected_levels),
+                        "actual_levels": sorted(indexed),
+                    },
+                )
+            await asyncio.sleep(min(_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS, remaining))
+
+    async def ensure_directory_index(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        fallback_abstract: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Preserve summaries; create fallback L0 only when both are absent.
+        Return readable levels with wait=True, otherwise queued work; invalid summaries fail.
+        """
+        return await self._ensure_directory_index(uri, ctx, fallback_abstract, wait=wait)
+
+    async def _ensure_directory_index(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        fallback_abstract: str,
+        wait: bool = True,
+        *,
+        require_abstract: bool = False,
+    ) -> Dict[str, Any]:
+        """Index required summaries, rechecking missing content/indexes under the parent lock.
+        Complete indexes return without a Task; busy locks or invalid summaries raise.
+        ``require_abstract`` ensures Compile's L0 and marks its bookkeeping Task internal.
+        """
+        viking_fs = self._ensure_initialized()
+        uri = validate_safe_viking_uri_path(uri)
+        self._reject_storage_internal_target(uri)
+        if (
+            namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY
+            or context_type_for_uri(uri) not in {"resource", "memory", "skill"}
+            or is_session_uri(uri)
+        ):
+            raise InvalidArgumentError(f"directory indexing is not supported for namespace: {uri}")
+        if not isinstance(fallback_abstract, str) or not fallback_abstract.strip():
+            raise InvalidArgumentError("fallback_abstract must not be empty")
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        if not (await viking_fs.stat(uri, ctx=ctx, skip_count=True)).get("isDir"):
+            raise InvalidArgumentError(f"directory index target must be a directory: {uri}")
+
+        async def read_summaries() -> Dict[int, str]:
+            """Read and validate existing sidecars by level."""
+            summaries: Dict[int, str] = {}
+            names = [".abstract.md"] if require_abstract else [".abstract.md", ".overview.md"]
+            for level, name in enumerate(names):
+                try:
+                    raw = await viking_fs.read_file(f"{uri}/{name}", ctx=ctx)
+                except Exception as exc:
+                    if is_not_found_error(exc):
+                        continue
+                    raise
+                try:
+                    body = body_for_preview(raw)
+                except AbstractOverviewFormatError as exc:
+                    raise InvalidArgumentError(
+                        f"Invalid directory summary {uri}/{name}: {exc}"
+                    ) from exc
+                if not body.strip():
+                    raise InvalidArgumentError(f"Directory summary is empty: {uri}/{name}")
+                summaries[level] = raw
+            return summaries
+
+        summaries = await read_summaries()
+        records = await self._directory_index_records(uri, ctx)
+        indexed = {record["level"] for record in records}
+        required = {0} if require_abstract else set(summaries)
+        if required and required <= summaries.keys() & indexed:
+            return {
+                "uri": uri,
+                "created_abstract": False,
+                "indexed_levels": sorted(required),
+                "vector_status": "complete",
+            }
+
+        async def execute() -> Dict[str, Any]:
+            context = get_task_context()
+            assert context is not None
+            with bind_task_context(
+                context.task_id, context.account_id, context.user_id, enqueued_work=[]
+            ):
+                guard = PathLockGuard(viking_fs._async_agfs)
+                try:
+                    # Lock the parent to avoid recreating a deleted target.
+                    parent_uri = VikingURI(uri).parent.uri
+                    try:
+                        lease = await guard.acquire(
+                            lambda: viking_fs._async_agfs.pathlock_acquire_tree(
+                                viking_fs._uri_to_path(parent_uri, ctx=ctx)
+                            )
+                        )
+                    except LockAcquisitionError as exc:
+                        raise ResourceBusyError(
+                            f"Directory is being processed: {uri}", uri=uri
+                        ) from exc
+                    stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+                    if not stat.get("isDir"):
+                        raise InvalidArgumentError(
+                            f"directory index target must be a directory: {uri}"
+                        )
+                    await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+                    summaries = await read_summaries()
+                    created_abstract = 0 not in summaries if require_abstract else not summaries
+                    if created_abstract:
+                        summaries[0] = render_abstract_overview(
+                            ContextLevel.ABSTRACT,
+                            uri,
+                            fallback_abstract,
+                            {
+                                "generated_by": {
+                                    "component": "FSService",
+                                    "trigger": "ensure_directory_index",
+                                }
+                            },
+                        )
+                        await viking_fs.write_file(
+                            f"{uri}/.abstract.md", summaries[0], ctx=ctx, lease_ref=lease
+                        )
+                    records = await self._directory_index_records(uri, ctx)
+                    indexed = {record["level"] for record in records}
+                    required = {0} if require_abstract else set(summaries)
+                    missing = required - indexed
+                    if created_abstract:
+                        missing.add(0)
+                        indexed.discard(0)
+                    if missing:
+                        enqueued = await vectorize_directory_meta(
+                            uri=uri,
+                            abstract=summaries.get(0, ""),
+                            overview=summaries.get(1, ""),
+                            context_type=context_type_for_uri(uri),
+                            ctx=content_owner_context_for_uri(uri, ctx),
+                            include_abstract=0 in missing,
+                            include_overview=1 in missing,
+                            scalar_overrides={
+                                record["level"]: {"_record_id": record["id"]}
+                                for record in records
+                                if record["level"] in missing
+                            },
+                        )
+                        if enqueued != missing:
+                            raise OpenVikingError(
+                                f"Failed to enqueue directory index: {uri}", code="PROCESSING_ERROR"
+                            )
+                    if missing and wait:
+                        queue_status = await self._wait_for_refresh()
+                        if (queue_status.get("Embedding") or {}).get("error_count", 0):
+                            raise OpenVikingError(
+                                f"Directory index processing failed: {uri}", code="PROCESSING_ERROR"
+                            )
+                        indexed = await self._wait_for_directory_index(uri, ctx, required)
+                    result = {
+                        "uri": uri,
+                        "created_abstract": created_abstract,
+                        "indexed_levels": sorted(required & indexed),
+                        "vector_status": "queued" if missing and not wait else "complete",
+                    }
+                    if missing and not wait:
+                        queue_manager = get_queue_manager()
+                        handoff = await guard.to_handoff()
+                        msg = ContentWriteMsg(
+                            task_id=context.task_id,
+                            operation="ensure_directory_index",
+                            resource_id=uri,
+                            result=result,
+                            refresh={
+                                "kind": "none",
+                                "uri": parent_uri,
+                                "indexed_levels": sorted(summaries),
+                            },
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                            role=str(ctx.role),
+                            group_ids=list(ctx.group_ids),
+                            actor_peer_id=ctx.actor_peer_id,
+                            bypass_acl=ctx.bypass_acl,
+                            lock_handoff=handoff,
+                        )
+                        await guard.handoff_and_dispatch(
+                            handoff,
+                            lambda: queue_manager.enqueue(
+                                queue_manager.CONTENT_WRITE, msg.to_dict()
+                            ),
+                        )
+                    return result
+                finally:
+                    try:
+                        work_ids = get_enqueued_work_ids("Embedding")
+                        if guard.lease is not None and work_ids:
+                            await run_to_completion(
+                                lambda: get_task_tracker().wait_for_work(context.task_id, work_ids)
+                            )
+                    finally:
+                        await guard.close()
+
+        result, _ = await run_tracked_operation(
+            "ensure_directory_index",
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            operation=execute,
+            resource_id=uri,
+            meta={"internal": True} if require_abstract else None,
+            wait=wait,
+        )
+        return result
+
+    async def _validate_compile_target_nesting(self, uri: str, ctx: RequestContext) -> None:
+        """Reject tagged ancestors or descendants of canonical ``uri`` visible to ``ctx``.
+
+        The target itself is reusable. This read-only check propagates index errors.
+        """
+        namespace = classify_uri(uri)
+        boundary = (namespace.content_index or 0) + 1
+        parts = list(namespace.parts[:-1])
+        while len(parts) >= boundary:
+            parent = "viking://" + "/".join(parts)
+            if await self._directory_has_compile_tag(parent, ctx):
+                raise InvalidArgumentError(
+                    "Parent directory is already a Compile target. Choose another directory."
+                )
+            parts.pop()
+        store = self._ensure_initialized()._get_vector_store()
+        if store is None:
+            raise NotInitializedError("Vector store")
+        records, _ = await store.scroll(
+            filter=And(
+                [
+                    PathScope("uri", uri, depth=-1),
+                    RawDSL({"op": "must_not", "field": "uri", "conds": [uri], "para": "-d=0"}),
+                    In("level", [0, 1]),
+                    Eq("search_tags", "compile_target=true"),
+                ]
+            ),
+            limit=1,
+            output_fields=["uri"],
+            ctx=ctx,
+        )
+        if records:
+            raise InvalidArgumentError(
+                "Child directory is already a Compile target. Choose another directory."
+            )
+
+    def _compile_target_lock_scope(
+        self, uri: str, ctx: RequestContext
+    ) -> tuple[list[dict[str, str]], str]:
+        """Derive the exclusive virtual scope and shared owner for one canonical target."""
+        account_root = f"/local/{ctx.account_id}/"
+        target = (
+            self._ensure_initialized()
+            ._uri_to_path(validate_safe_viking_uri_path(uri), ctx=ctx)
+            .removeprefix(account_root)
+        )
+        # Account-root initialization must not overlap the virtual admission lease.
+        path = f"/local/_system/compile_locks/{ctx.account_id}/{target}"
+        owner = _COMPILE_TARGET_LOCK_OWNER_PREFIX + hashlib.sha256(path.encode()).hexdigest()
+        return [{"path": path, "kind": "tree"}], owner
+
+    async def ensure_compile_target(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Validate/materialize the target and durably enqueue independent tagging.
+
+        A Compile-only tree lease excludes nested targets until tags are visible.
+        The canonical target determines the owner, allowing independent holders
+        for the same target. Lock contention waits at most one second; indexing
+        belongs to the worker. The admission lease covers no actual output files.
+        """
+        viking_fs = self._ensure_initialized()
+        uri = validate_safe_viking_uri_path(uri)
+        self._reject_storage_internal_target(uri)
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        requests, owner = self._compile_target_lock_scope(uri, ctx)
+        guard = PathLockGuard(viking_fs._async_agfs)
+        try:
+            try:
+                # Only this trusted target-derived owner may share this exact virtual scope.
+                await guard.acquire(
+                    lambda: viking_fs._async_agfs.pathlock_reacquire_batch(
+                        requests, owner, timeout_secs=1.0
+                    )
+                )
+            except LockAcquisitionError as exc:
+                # Identical targets share an owner; distinct Compile owners conflict only across a subtree.
+                if (
+                    exc.conflicting_owner
+                    and exc.conflicting_owner.startswith(_COMPILE_TARGET_LOCK_OWNER_PREFIX)
+                    and exc.conflicting_owner != owner
+                ):
+                    logger.info("Compile target rejected: parent/child directory lock conflict")
+                raise ResourceBusyError(
+                    "Compile target is busy or its parent/child is already a Compile target. "
+                    "Choose another directory or retry later.",
+                    uri=uri,
+                    conflict_type="compile_target_busy",
+                ) from exc
+            await self._validate_compile_target_nesting(uri, ctx)
+            try:
+                stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                async with self._hold_watch_scope(
+                    [self._tree_lock_request(uri, ctx)], [uri], ctx
+                ) as lease:
+                    try:
+                        stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+                    except Exception as exc:
+                        if not is_not_found_error(exc):
+                            raise
+                        await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
+                        stat = {"isDir": True}
+            if not stat.get("isDir"):
+                raise InvalidArgumentError(f"Compile target must be a directory: {uri}")
+            return await self._enqueue_compile_target_tag(uri, ctx, guard)
+        finally:
+            await guard.close()
+
+    async def _enqueue_compile_target_tag(
+        self, uri: str, ctx: RequestContext, guard: PathLockGuard
+    ) -> Dict[str, Any]:
+        """Persist a separate internal Task/Work; failed admission fails the request."""
+        handoff = await guard.to_handoff()
+
+        async def enqueue() -> Dict[str, Any]:
+            manager = get_queue_manager()
+            await manager.enqueue(
+                manager.COMPILE_TARGET_TAG,
+                {
+                    "uri": uri,
+                    "account_id": ctx.account_id,
+                    "user_id": ctx.user.user_id,
+                    "role": str(ctx.role),
+                    "group_ids": list(ctx.group_ids),
+                    "actor_peer_id": ctx.actor_peer_id,
+                    "bypass_acl": ctx.bypass_acl,
+                    "target_lock": handoff,
+                },
+            )
+            return {"directory_count": 1}
+
+        async def dispatch() -> Dict[str, Any]:
+            with detach_task_context():
+                result, _ = await run_tracked_operation(
+                    "compile_target_tag",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    operation=enqueue,
+                    resource_id=uri,
+                    meta={"internal": True},
+                    wait=False,
+                )
+            return result
+
+        return await guard.handoff_and_dispatch(handoff, dispatch)
+
+    async def finalize_compile_directories(
+        self, uri: str, ctx: RequestContext, *, progress: Dict[str, Any]
+    ) -> bool:
+        """Attempt tagging once; return True when visible or the target is gone.
+
+        QueueFS persists the last embedding enqueue time (Unix seconds) in progress.
+        Missing summaries use a short lease; embedding and index checks retain no lease.
+        Storage/permission errors propagate for retry, without touching Compile state.
+        """
+        viking_fs = self._ensure_initialized()
+        uri = validate_safe_viking_uri_path(uri)
+        self._reject_storage_internal_target(uri)
+        try:
+            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return True
+            raise
+        if not stat.get("isDir"):
+            return True
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        agfs = viking_fs._async_agfs
+        lease = await agfs.pathlock_acquire_tree(
+            viking_fs._uri_to_path(uri, ctx=ctx), timeout_secs=1
+        )
+        summaries = {}
+        try:
+            try:
+                stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    return True
+                raise
+            if not stat.get("isDir"):
+                return True
+            for level, name in enumerate((".abstract.md", ".overview.md")):
+                try:
+                    raw = await viking_fs.read_file(f"{uri}/{name}", ctx=ctx)
+                except Exception as exc:
+                    if not is_not_found_error(exc):
+                        raise
+                    if level == 1:
+                        continue
+                    raw = render_abstract_overview(
+                        ContextLevel.ABSTRACT, uri, "This is the compile generated folder"
+                    )
+                    await viking_fs.write_file(f"{uri}/{name}", raw, ctx=ctx, lease_ref=lease)
+                if not body_for_preview(raw).strip():
+                    raise InvalidArgumentError(f"Directory summary is empty: {uri}/{name}")
+                summaries[level] = raw
+        finally:
+            await run_to_completion(lambda: agfs.pathlock_release(lease))
+
+        records = await self._directory_index_records(uri, ctx)
+        store = viking_fs._get_vector_store()
+        ids = {vector_record_id(ctx.account_id, uri, level) for level in summaries}
+        ids.update(record["id"] for record in records)
+        existing = await store.get_strict(list(ids), ctx=ctx)
+        indexed = {record["level"] for record in existing}
+        expected = set(summaries) | indexed
+        missing = set(summaries) - indexed
+        if missing and time.time() - progress.get("last_index_enqueue", 0) >= 300:
+            # Failed embeddings must not fail this retryable Task or its Compile caller.
+            with detach_task_context():
+                queued = await vectorize_directory_meta(
+                    uri=uri,
+                    abstract=summaries[0],
+                    overview=summaries.get(1, ""),
+                    context_type=context_type_for_uri(uri),
+                    ctx=content_owner_context_for_uri(uri, ctx),
+                    include_abstract=0 in missing,
+                    include_overview=1 in missing,
+                    field_patches={
+                        level: FieldPatch(
+                            {"search_tags": ["compile_target=true"]}, {"search_tags": "append"}
+                        )
+                        for level in missing
+                    },
+                )
+            if queued != missing:
+                raise OpenVikingError(
+                    "Failed to enqueue Compile target index", code="PROCESSING_ERROR"
+                )
+            progress["last_index_enqueue"] = time.time()
+        if any(
+            "compile_target=true" not in (record.get("search_tags") or []) for record in records
+        ):
+            await self.set_tags(
+                uri, ["compile_target=true"], mode="append", recursive=False, ctx=ctx
+            )
+            return False
+        tagged = {record["level"] for record in records}
+        return not missing and expected <= tagged
 
     async def get_acl(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         return await self._ensure_initialized().get_acl(uri, ctx=ctx)
@@ -1868,8 +2617,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Forward to VikingFS.restore. See viking_fs.restore for semantics."""
         viking_fs = self._ensure_initialized()
-        restore = partial(
-            viking_fs.restore,
+        return await viking_fs.restore(
             project_dir=project_dir,
             source_commit=source_commit,
             branch=branch,
@@ -1878,28 +2626,108 @@ class FSService:
             author_name=author_name,
             author_email=author_email,
             ctx=ctx,
-            record_restore=(
-                partial(self.compile_versions.record_restored, ctx=ctx)
-                if self.compile_versions is not None and not dry_run
-                else None
-            ),
         )
-        if self.compile_versions is None or dry_run:
-            return await restore()
-        return await self.compile_versions.record_operation(
-            [
-                viking_fs._tree_path_to_uri(
-                    viking_fs._uri_to_tree_path(project_dir, ctx=ctx)
-                ).rstrip("/")
-                if project_dir
-                else "viking://"
-            ],
+
+    async def file_versions(
+        self, uri: str, ctx: RequestContext, *, limit: int, before: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Page native commits changing a file, excluding an optional snapshot cursor."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.READ)
+        history = await viking_fs.log(
+            branch=before or "main", paths=[uri], limit=limit + 1 + bool(before), ctx=ctx
+        )
+        if before:
+            if not history or history[0]["oid"] != before:
+                raise InvalidArgumentError(
+                    "before_snapshot must identify a commit changing this file"
+                )
+            history = history[1:]
+        page = history[:limit]
+        return {
+            "uri": uri,
+            "versions": page,
+            "next_before_snapshot": page[-1]["oid"] if len(history) > limit else None,
+        }
+
+    async def restore_file_version(
+        self,
+        uri: str,
+        restore_commit_id: str,
+        current_commit_id: Optional[str],
+        ctx: RequestContext,
+        *,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Restore and snapshot content; a supplied commit also rejects uncommitted edits."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+
+        async def check_current_commit():
+            if current_commit_id is None:
+                return
+            history = await viking_fs.log(paths=[uri], limit=1, ctx=ctx)
+            current = history[0]["oid"] if history else None
+            if current != current_commit_id:
+                raise ConflictError(
+                    f"Current file commit is {current}, not {current_commit_id}",
+                    resource="VERSION_CONFLICT",
+                )
+            if await viking_fs.read_file_bytes(uri, ctx=ctx) != await viking_fs.show(
+                current_commit_id, path=uri, ctx=ctx
+            ):
+                raise ConflictError("File has uncommitted changes", resource="VERSION_CONFLICT")
+
+        await check_current_commit()
+        try:
+            content = await viking_fs.show(restore_commit_id, path=uri, ctx=ctx)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise NotFoundError(f"{restore_commit_id}:{uri}", "snapshot file") from exc
+            raise
+        try:
+            content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        conflict_tags = None
+        if (
+            isinstance(content, str)
+            and namespace_policy_for_uri(uri).supports_tags
+            and uri.lower().endswith(".md")
+            and not is_abstract_overview_uri(uri)
+        ):
+            conflict_tags = conflict_tags_from_content(content)
+        if dry_run:
+            return {"uri": uri, "snapshot_id": current_commit_id, "result": "dry_run"}
+        result = {}
+
+        async def commit_restore(uris, *, lease_ref, write):
+            await check_current_commit()
+            written = await write()
+            snapshot = await viking_fs.commit(
+                message=f"restore {uri} to {restore_commit_id}",
+                paths=uris,
+                ctx=ctx,
+                lease_ref=lease_ref,
+            )
+            result.update(uri=uri, snapshot_id=snapshot["commit_oid"], result=snapshot["result"])
+            return written
+
+        if isinstance(content, str) and classify_uri(uri).is_memory:
+            from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
+
+            content = strip_memory_fields_trailer(content)
+        await self.write(
+            uri,
+            content,
             ctx,
-            "restore",
-            {"source_commit": source_commit, "branch": branch},
-            restore,
-            recursive=True,
+            mode="replace",
+            commit_content=commit_restore,
+            use_snapshot=True,
+            tags=conflict_tags,
+            tag_mode="append",
         )
+        return result
 
     async def show(
         self,
@@ -1919,7 +2747,7 @@ class FSService:
         *,
         path: str,
     ) -> Dict[str, Any]:
-        """Forward to VikingFS.show_blob_raw. Returns ``{"oid", "size", "bytes"}``."""
+        """Return an authorized blob with its resolved commit ID and committer Unix seconds."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.show_blob_raw(target_ref, path=path, ctx=ctx)
 
@@ -1988,11 +2816,12 @@ class FSService:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Forward to VikingFS.log. Walks parents[0] up to limit commits."""
+        """Forward to VikingFS.log. Walks parents[0] up to limit commits, skipping offset."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.log(branch=branch, limit=limit, paths=paths, ctx=ctx)
+        return await viking_fs.log(branch=branch, limit=limit, offset=offset, paths=paths, ctx=ctx)
 
     async def get_gitignore(self, *, ctx: RequestContext) -> str:
         """Forward to VikingFS.get_gitignore. Returns the account .ovgitignore

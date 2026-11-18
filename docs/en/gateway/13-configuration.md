@@ -28,6 +28,7 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `host` | Standalone | `127.0.0.1` | | Listen address |
 | `port` | Standalone | `1935` | 1–65,535 | Listen port |
 | `workers` | Standalone | `1` | 1–64 | Worker processes |
+| `log_path` | Standalone | empty | File path | Write the application log as JSON lines to this rotating file (256 MiB, four old files) instead of text on stderr; needs `workers: 1`. See [Monitoring](../guides/22-gateway-operations.md#monitoring) |
 | `keep_alive_seconds` | Standalone | `75` | More than 0 | Seconds to keep an idle HTTP connection open between requests; set it above the load balancer's backend idle timeout |
 | `public_url` | Both | empty | HTTP(S) URL, without `/gateway` | The external address clients use; the gateway appends `/gateway` itself. When empty, an embedded gateway uses the server's public address; with neither, setup guides use the request's origin, and MCP file uploads and downloads do not work unless `mcp_file_links` is `direct`. See [Public address](../guides/22-gateway-operations.md#public-address) |
 | `mcp_file_links` | Both | `proxy` | `proxy`, `direct` | How links from the MCP upload and download tools reach the client. `proxy` rewrites them to `public_url` plus `/gateway/uploads` or `/gateway/downloads` and needs `public_url`. `direct` passes OpenViking's links through unchanged and needs the server's `OPENVIKING_PUBLIC_BASE_URL` (or `server.public_base_url`) to be reachable by the client |
@@ -41,14 +42,25 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `default_upstreams` | Both | `{}` | Object mapping stable IDs to [upstream settings](#upstream-settings) | Upstreams for OpenViking keys when the account stores none; see [Deployment default upstreams](07-upstreams.md#deployment-default-upstreams) |
 | `default_profile` | Both | Built-in profile defaults | [Context profile settings](#context-profile-settings) | Used when the account has no profile with the ID `default`; also the initial profile seeded in embedded dev mode |
 | `min_server_version` | Both | `0.4.16` | Version string | Lowest OpenViking Server version a standalone gateway accepts |
-| `session_ttl_days` | Both | `30` | 1 or more | Days of inactivity before a conversation expires; also the fixed lifetime of cached OpenViking keys and their user records |
+| `session_ttl_seconds` | Both | `2592000` (30 days) | 3600 or more | Seconds of inactivity before a conversation expires; also the fixed lifetime of cached OpenViking keys and their user records. |
 | `response_ttl_seconds` | Both | `2592000` (30 days) | 60 or more | Seconds to remember which upstream created a Responses response |
-| `request_log_sink` | Both | `store` | `store`, `stdout` | Write request and background saving logs to storage or one flushed JSON line per record on stdout; see [Monitoring](../guides/22-gateway-operations.md#monitoring) |
-| `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs in storage; stdout retention is managed by the log collector |
+| `request_log_sink` | Both | `store` | `store`, `stdout`, `file` | Write request and background saving logs to storage, as one flushed JSON line per record on stdout, or as the same lines to `request_log_path` from a background thread; see [Monitoring](../guides/22-gateway-operations.md#monitoring). The `file` sink needs one worker process: `workers: 1` standalone, one server worker embedded |
+| `request_log_path` | Both | empty | File path | File for the `file` sink; required with it |
+| `request_log_max_bytes` | Both | `268435456` (256 MiB) | 1,048,576 or more | Size at which the `file` sink rotates its file; four old files are kept |
+| `snapshot_interval_seconds` | Both | `0` | 0 or more | Seconds between [status lines](../guides/22-gateway-operations.md#status-line) with this process's counters. `0` writes none |
+| `trusted_host_headers` | Both | `false` | `true`, `false` | Record `X-OpenViking-Resource-Id` and `X-OpenViking-Request-Source` from a service in front of the gateway as `resource_id` and `request_source`; see [Host integration contract](../guides/22-gateway-operations.md#host-integration-contract). Turn it on only when clients cannot reach the gateway directly; see [Headers from a host](11-security-and-data.md#headers-from-a-host) |
+| `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs in storage; stdout and file retention is managed by the log collector |
 | `max_body_bytes` | Both | `33554432` (32 MiB) | 1,024 or more | Size limit for requests and uploads, in bytes |
-| `upstream_timeout_seconds` | Both | `600` | More than 0 | Timeout for provider requests |
+| `upstream_timeout_seconds` | Both | `600` | More than 0 | Seconds the gateway waits on the provider: for a reply to start (connecting, sending the request, receiving the headers), and then for each further part of the reply. A reply that keeps arriving is not cut off, however long it runs. When the wait runs out the client gets 504 `upstream_timeout`, or an error event at the end of a stream that has started |
+| `prepare_timeout_seconds` | Both | `0` | 0 or more | Seconds the gateway may spend adding memory to a request (session lookup, recall, profile, tools) before it forwards the request without memory, flagged `prepare_timeout`. A compaction summary call does not count. `0` means no limit |
+| `summary_timeout_seconds` | Both | `0` | 0 or more | Total seconds for one compaction summary call; see [How the summary is written](05-long-conversations.md#how-the-summary-is-written). `0` means `upstream_timeout_seconds` |
+| `openviking_budget_seconds` | Both | `0` | 0 or more | One deadline per request, counted from its arrival, for the key check, recall, the profile and the tool list; see [OpenViking is degraded](12-troubleshooting.md#openviking-is-degraded). `0` keeps each call's own timeout |
+| `openviking_breaker_failures` | Both | `0` | 0 or more | Consecutive unanswered OpenViking calls for one account after which its requests skip OpenViking for `openviking_breaker_seconds`; then one trial call decides. `0` turns this off |
+| `openviking_breaker_seconds` | Both | `30` | More than 0 | How long an account's OpenViking calls are skipped before a trial call |
 | `health_interval_seconds` | Both | `60` | 1 or more | Seconds between OpenViking status checks |
 | `capture_concurrency` | Both | `1` | 1 or more | Concurrent conversation deliveries per process; shutdown stops new claims and gives in-flight deliveries up to 100 seconds to finish |
+| `max_inflight_requests` | Both | `0` | 0 or more | Model requests one process serves at once; a request above it gets HTTP 503 `gateway_overloaded`. `0` sets no limit; see [Scaling](../guides/22-gateway-operations.md#scaling) |
+| `capture_delivery_records` | Both | `false` | `true`, `false` | Write a [saving record](../api/25-gateway.md#capture-records) for every delivery, commit and failed attempt, not only for status changes. With the `store` sink these rows share each account's stored record history with requests (Redis keeps the latest 10,000 rows per account), so the Requests page and Overview cover a shorter period; meant for the `stdout` and `file` sinks |
 | `client_rules` | Both | `{}` (packaged rules only) | See [Client rules](#client-rules) | Text added to or removed from what the gateway recognizes as housekeeping requests and client-inserted messages |
 
 For example, a standalone `gateway.conf` can route OpenViking keys before any account is configured:
@@ -89,7 +101,7 @@ The default is local SQLite, with no external service. `storage.kernel` and `sto
       "command_timeout_ms": 5000
     }
   },
-  "session_ttl_days": 7
+  "session_ttl_seconds": 604800
 }
 ```
 
@@ -134,7 +146,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `tenancy` | `key` requires `management_api: false`; it has no effect when `openviking_keys` is off |
 | `client_rules` | Every added pattern must be a valid Python regular expression; added tag names start with an ASCII letter and use only ASCII letters, digits, `_`, `.`, `:` and `-` |
 | Unknown fields | Fail validation |
-| Removed fields | Ignored, with a startup warning: `encryption_key_env`, and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
+| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
 
 ## Client rules {#client-rules}
 
@@ -162,7 +174,7 @@ In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrappe
 | `auxiliary_patterns` | Regular expressions, ignoring case | Each is matched separately against the Messages `system` field, the Responses `instructions` and the latest user message. A match makes the request **Housekeeping**. System and developer messages inside Chat Completions `messages` or Responses `input` are not checked, so for those clients match text in the user message. |
 | `noise_patterns` | Regular expressions, case-sensitive | Ignored when the gateway reads the conversation: left out of request classification, the memory search and saved messages and tool results, but still sent to the model unchanged. A user message left empty is not a new user message, so the request continues the turn. |
 | `noise_tags` | Tag names | `<tag …>…</tag>` blocks, in any letter case, handled the same way as `noise_patterns`. |
-| `plugin_tags` | Tag names | `<tag` in the system prompt or a client message marks an OpenViking memory plugin in the client. For the rest of that conversation the gateway only forwards requests: no memory, no OpenViking tools, nothing saved (see [When both are in use](../guides/15-gateway.md#when-both-are-in-use)). Add only a tag the plugin itself writes. |
+| `plugin_tags` | Tag names | A complete `<tag>…</tag>` block outside code, in the system prompt or a client message, marks an OpenViking memory plugin in the client. For the rest of that conversation the gateway only forwards requests: no memory, no OpenViking tools, nothing saved (see [When both are in use](../guides/15-gateway.md#when-both-are-in-use)). Add only a tag the plugin itself writes. |
 
 - **`add` appends to the packaged list and `remove` takes entries out of it.** Write a removal exactly as it appears in `client-rules.json`. A removal that matches nothing, for example after an upgrade changed the entry, is ignored with a startup warning. The packaged list cannot be replaced as a whole, so entries added in later releases keep working.
 - **Match text only the client writes.** Use a full sentence from the client's own prompt rather than a short phrase. A user message that matches makes its whole turn housekeeping, so none of it is searched for or saved; a pattern that also matches the main conversation's system prompt does this to every request. Anchor a noise pattern to the whole message (`"\\A…\\Z"` in JSON) so it never cuts text out of a real message.
@@ -188,6 +200,7 @@ Explained in [Recall memory](08-context-profiles.md#recall-memory).
 | Relevance threshold | `score_threshold` | `0.35` | 0–1 | Lowest relevance score accepted. |
 | Time limit | `recall_timeout` | `2` (seconds) | More than 0, up to 30 | How long a search may take before the message goes on without memory. |
 | Query length | `query_max_chars` | `8000` | 3–32,000 | Characters of the message used as the search query. |
+| Peer scope | `recall_peer_scope` | `all` | `all`, `actor` | `all`: the request's peer comes first, and other peers' memories can still be recalled. `actor`: recall and OpenViking tools reach only the user's own memories and the request's peer's; see [Recall only the current peer](03-connect-clients.md#peer-scope). |
 | Limit by category | `quotas` | `{}` (off) | Keys: `events`, `entities`, `preferences`, `experiences`, `resources`, `skills`; when set, at least one above 0 (checked by Studio only) | Most entries per category; only categories above 0 are searched. |
 
 The management API saves `context_types` and the `quotas` keys without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.
@@ -202,6 +215,9 @@ Explained in [Save conversations](08-context-profiles.md#save-conversations).
 | Save the latest reply after | `idle_seconds` | `600` (seconds) | 1 or more | Quiet time before the last turn is saved and the session committed. |
 | Commit after | `commit_tokens` | `20000` | 1 or more | Tokens waiting in the session that trigger a commit. |
 | Keep recent messages | `keep_recent_messages` | `10` | 0–1,000 | Messages left in the session after a commit. |
+| (API only) | `capture_memory_types` | `null` (inherit the user's policy on Server 0.5.0+) | Memory type names, such as `preferences` or `events`; `[]` extracts none | Memory types OpenViking extracts from saved conversations. An explicit list sets a session policy. |
+
+The management API saves `capture_memory_types` without checking the names. OpenViking rejects a name it does not know, or a type it has disabled, when the gateway creates the conversation's OpenViking session: nothing from the conversation is saved, and saving shows **Retrying**, then **Paused**, with the reason `openviking_http_400`. A corrected profile reaches only conversations that start afterwards. `cases` and `trajectories` are extracted only together with `experiences`: listing `experiences` adds both, and without it they are dropped, so a list of only those two extracts nothing.
 
 ### Long conversations {#profile-long-conversations}
 
@@ -224,7 +240,7 @@ Explained in [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04
 | Studio label | API name | Default | Range | Meaning |
 | --- | --- | --- | --- | --- |
 | OpenViking tools | `gateway_tools` | `true` | | Offer OpenViking tools for Chat Completions, full-history Responses and Anthropic Messages. |
-| Tools (unchecked boxes) | `disabled_tools` | The 8 tools that change data | OpenViking tool names, without `openviking_` | Tools new conversations do not get; every other available tool is offered, including ones added later. |
+| Tools (unchecked boxes) | `disabled_tools` | `[]` (none) | OpenViking tool names, without `openviking_` | Tools new conversations do not get; every other available tool is offered, including ones added later. |
 | Show tool calls | `show_tool_calls` | `true` | | Add a one-line notice to the reply for each OpenViking tool call. |
 | Rounds per request | `tool_max_rounds` | `null` (no limit) | 1 or more | Tool rounds after which further OpenViking calls are refused. |
 | Time limit per call | `tool_timeout_seconds` | `30` (seconds) | More than 0, up to 120 | A slower call returns an error to the model. |
@@ -232,7 +248,7 @@ Explained in [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04
 | Total time | `tool_total_seconds` | `null` (no limit) | More than 0 | Seconds after which a request still using tools fails. |
 | Token budget | `tool_total_tokens` | `null` (no limit) | 1,024 or more | Estimated tokens tool calls and results may add to one request before further OpenViking calls are refused. |
 
-API requests that omit `disabled_tools` get the default list; an empty list with `gateway_tools` on offers every available tool.
+API requests that omit `disabled_tools` get an empty list, so with `gateway_tools` on every available tool is offered.
 
 ## Upstream settings {#upstream-settings}
 

@@ -60,31 +60,94 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 
 ### 日志记录 {#log-records}
 
-日志只记元数据，不含消息内容。发往模型服务商的请求结束时写一条记录；对话的保存状态变化时也写一条（`kind` 为 `capture`）。网关在请求到达服务商之前就拒绝的，不记日志。除 `time` 外，字段都是可选的，不适用时省略。
+日志只记元数据，不含消息内容、密钥和错误信息。发往模型路由的每个请求（`.../models` 除外）无论怎样结束都恰好写一条记录：正常回复、被网关拒绝、服务商失败、流式回复中途断开，或者客户端提前离开。对话的保存状态变化时也写一条（`kind` 为 `capture`）。使用默认的 `request_log_sink: store` 时，密钥确认之前就失败的请求没有账户，不会保存；`stdout` 和 `file` 输出会照常写出，`account` 和 `user_id` 为 `null`。字段不适用时省略。
 
 | 字段 | 含义 |
 | --- | --- |
 | `time` | 记录写入时间，Unix 时间戳（秒） |
-| `request_id` | 网关为请求分配的 ID |
+| `event`、`schema` | 请求记录为 `request` 和 `2` |
+| `request_id` | 网关为请求分配的 ID；模型路由的错误响应体里也带有它 |
+| `received_at`、`method`、`endpoint` | 网关收到请求的时间（Unix 时间戳，秒）、HTTP 方法，以及 `messages`、`count_tokens`、`chat`、`responses`、`responses_item` 或 `other` |
 | `kind` | `user`、`continuation`、`auxiliary`、`subagent`、`count`、`passthrough` 或 `capture`，见[请求日志](../gateway/10-overview-and-requests.md#requests) |
-| `model` | 客户端发送的模型名 |
-| `status` | 服务商返回的 HTTP 状态码 |
-| `upstream_id`、`credential_id` | 处理请求的上游，以及发出请求的网关密钥 |
+| `model`、`stream` | 客户端发送的模型名，以及是否要求流式回复 |
+| `status` | 客户端收到的 HTTP 状态码：网关转发的是服务商的状态码，网关自身的错误是网关的状态码，客户端在收到任何响应前离开时为 `499` |
+| `upstream_attempted`、`upstream_status` | 网关是否向服务商发出了请求（包括压缩摘要请求），以及服务商应答时的 HTTP 状态码 |
+| `error_reason`、`error_origin`、`error_class` | 任何失败（包括已返回 `200` 后中断的流）的[原因](#model-route-errors)、来源（`gateway`、`openviking`、`upstream` 或 `client`）和大类（`api_key_invalid`、`quota_or_order`、`openviking_unavailable`、`config_error`、`gateway_internal`、`timeout`、`model_error` 或 `client_cancelled`）。网关原样转发的服务商错误为 `upstream_error` |
+| `upstream_error_code` | 服务商错误响应体或其流中错误事件的 `code`（没有时取 `type`），仅当它是简短标识符时记录；从不记录错误信息 |
+| `stream_error`、`client_disconnected` | 已开始的响应体没有正常结束的原因（`upstream_timeout`、`upstream_disconnected`、服务商发送了错误事件时为 `upstream_event`、`client_disconnected`、某个 `tool_*` 原因或 `internal_error`）；客户端离开时后者为 `true` |
+| `upstream_id`、`credential_id`、`openviking_account` | 处理请求的上游、发出请求的网关密钥，以及密钥背后的 OpenViking 账户 |
 | `session`、`protocol` | 对话及其协议，[重置保存](#gateway-keys)时要用 |
+| `peer` | 请求的 [Peer](../gateway/03-connect-clients.md#peer)，来自 `X-OpenViking-Actor-Peer` 或密钥的默认 Peer |
 | `degradation` | 异常代码，见[降级请求的异常](../gateway/12-troubleshooting.md#issues-on-degraded-requests) |
+| `degradations` | 请求的全部异常，按发生顺序。还可能含 `recall_failed`：记忆检索没有得到 OpenViking 的应答（原因见 `recall_reason`），它不会写入 `degradation`；以及 `prepare_timeout`：补充记忆超过了 `prepare_timeout_seconds` |
+| `revocation_reason` | 出现 `revocation_check_unavailable` 时，OpenViking 无法确认密钥的原因 |
+| `session_source` | 对话是怎样确定的：`header`（`X-OpenViking-Session`）、`reply_match`（历史延续了某个对话的回复）或 `new` |
 | `recall_reason`、`recall_count`、`recall_ms` | 记忆检索的结果代码、补充的条数和检索耗时，见[没有补充记忆](../gateway/12-troubleshooting.md#no-memory-is-added) |
 | `replay_hits` | 原样放回记忆的历史消息数 |
-| `capture_status`、`capture_reason`、`capture_retry_at` | 保存状态（`active`、`disabled`、`retrying` 或 `paused`）、原因，以及下次重试时间（Unix 时间戳，秒），见[保存状态](../gateway/10-overview-and-requests.md#saving-status) |
+| `capture_status`、`capture_reason`、`capture_retry_at` | 保存状态（`active`、`disabled`、`retrying`、`paused`，[保存记录](#capture-records)中还可能是 `lost`）、原因，以及下次重试时间（Unix 时间戳，秒），见[保存状态](../gateway/10-overview-and-requests.md#saving-status) |
 | `tool_skip_reason` | 请求没有拿到 OpenViking 工具的原因，见[什么时候不提供工具](../gateway/04-openviking-tools.md#when-tools-are-not-offered) |
 | `tool_stop_reason` | 工具 Token 预算用完、后续调用被拒绝时为 `token_budget`，见[上限](../gateway/04-openviking-tools.md#limits) |
 | `compaction_failed` | 压缩失败的原因（`still_over_threshold` 时摘要已保留），见[长对话超出上下文长度](../gateway/12-troubleshooting.md#long-conversations-hit-the-context-limit) |
 | `context_tokens`、`context_window` | 估算的上下文大小，以及用来比较的上下文窗口 |
 | `input_tokens`、`output_tokens`、`cached_tokens`、`cache_write_tokens` | 本次请求所有服务商调用（含 OpenViking 工具轮次）的 token 用量合计。`input_tokens` 已包含缓存命中和缓存写入的 token。 |
 | `duration_ms` | 从把请求发给服务商到回复结束的耗时 |
+| `read_ms`、`auth_ms`、`route_ms`、`prepare_ms` | 读取请求体、检查密钥（含向 OpenViking 确认）、选择上游、准备记忆（含检索和压缩）的耗时 |
+| `added_ms`、`upstream_ttfb_ms`、`first_chunk_ms`、`total_ms` | 从收到请求到开始请求服务商、从开始请求到收到服务商响应头、从收到请求到第一段流式数据送达客户端、从收到请求到写入记录的耗时 |
+| `compaction_ms` | 压缩耗时，压缩失败时也记录 |
+| `bookkeeping_failed` | 回复发出后失败的步骤：`completed`（保存这一轮）、`responses`（记住 Responses ID）或 `capture_status` |
 
 以 `first_upstream_` 和 `hidden_upstream_` 开头的字段把 token 用量拆成首次服务商调用和 OpenViking 工具轮次两部分，首次调用缓存命中率按前者计算。
 
 `/overview` 由这些记录汇总而来。除用量和缓存数据外，还返回 `degradations`（异常代码 → 次数）、`capture_issues`（正在重试或已暂停保存的对话数）、`cache_alerts`、`openviking`（OpenViking 的 `status`，降级时另有 `reason`）和 `log_retention_days`。
+
+### 保存记录 {#capture-records}
+
+`kind` 和 `event` 为 `capture` 的记录描述保存，而不是请求。它包含 `session`、`protocol`、`credential_id`、`capture_status` 和 `capture_reason`（见[保存状态](../gateway/10-overview-and-requests.md#saving-status)）。对话的保存状态变化时写一条；一轮已完成的对话没能排入保存队列时，也写一条 `capture_status: lost`、`capture_reason: stage_failed` 的记录。设置 `capture_delivery_records: true` 后，每次保存（`delivered`）、每次提交（`committed`）和每次失败的尝试也各写一条。
+
+| 字段 | 含义 |
+| --- | --- |
+| `attempts` | 到目前为止连续失败的次数，出现在失败记录中 |
+| `turns`、`messages` | 这次保存写入的轮数和消息数，随 `delivered` 出现 |
+| `lag_ms` | 被保存的轮次中最早的一轮排入队列到这次保存的时间，随 `delivered` 出现。作为最新回复先排入队列的回复，会在下一个请求确认它时重新排入 |
+| `request_id` | 排入第一轮被保存内容的请求，随 `delivered` 出现（已知时）。OpenViking 收到的每一轮写入都带有该轮请求的 `X-Request-ID` |
+| `openviking_session` | 写入的 OpenViking 会话，随 `delivered` 和 `committed` 出现 |
+
+### 状态行 {#status-line}
+
+`snapshot_interval_seconds` 大于零时，每个网关进程按这个间隔写一行 JSON；写到哪里见[状态行](../guides/22-gateway-operations.md#status-line)。使用 `store` 输出时，由 `openviking_gateway.snapshot` logger 以 INFO 级别输出，宿主没有配置日志 handler 时写到 stderr。计数覆盖同一进程距上一行的这段时间。状态行从不包含账户、用户、会话、模型或请求 ID。
+
+```json
+{"event": "snapshot", "schema": 1, "time": 1794787200.0, "interval_s": 60.0,
+ "uptime_s": 8640.2, "version": "0.5.6",
+ "inflight_requests": 12, "inflight_streams": 9,
+ "requests": 480, "errors": {"upstream_timeout": 2, "store_unavailable": 1},
+ "degradations": {"recall_failed": 4},
+ "stream_errors": {"client_disconnected": 3},
+ "rejected_overload": 0,
+ "records_unlogged": 0, "records_failed": 0, "records_dropped": 0,
+ "store_errors": 1,
+ "openviking": {"state": "ok", "reason": "", "open_circuits": 0},
+ "capture": {"delivered": 18, "failed": 0, "due": 3, "scheduled": 41,
+             "oldest_due_age_s": 12.5, "workers": 4}}
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `time`、`interval_s`、`uptime_s`、`version` | 写入时间（epoch 秒）、距上一行的秒数、进程已运行的秒数，以及安装的 OpenViking 版本 |
+| `inflight_requests`、`inflight_streams` | 写入时从收到到响应结束之间的模型请求数，以及其中正在流式回复的请求数 |
+| `requests` | 这段时间写出的请求记录数 |
+| `errors`、`degradations`、`stream_errors` | 这些记录按 `error_reason`、按 `degradations` 的每一项、按 `stream_error` 的计数 |
+| `rejected_overload` | 进程达到 `max_inflight_requests` 而以 `gateway_overloaded` 拒绝的请求 |
+| `records_unlogged` | 因请求没有账户而未被 `store` 输出保存的记录 |
+| `records_failed`、`records_dropped` | 输出写入失败的记录，以及 `file` 输出因队列已满而丢弃的记录 |
+| `store_errors` | 因状态存储出错而失败或失去记忆的请求（`store_unavailable`，或异常 `memory_store_failure`） |
+| `openviking.state`、`openviking.reason` | 网关最近一次 OpenViking 状态检查的结果：`ok`、`degraded` 或 `starting`，降级时附原因 |
+| `openviking.open_circuits` | 因持续无响应、调用正被跳过的 OpenViking 账号数；见[OpenViking 异常](../gateway/12-troubleshooting.md#openviking-is-degraded) |
+| `capture.delivered` | 本区间内本进程把待保存轮次写入 OpenViking 的对话数 |
+| `capture.failed` | 本区间内本进程失败的保存尝试次数。`capture.delivered` 和 `capture.failed` 按进程统计，可以跨进程相加 |
+| `capture.due`、`capture.scheduled` | 现在该保存的对话数，以及有任何待保存安排的对话数。读不到存储时与 `oldest_due_age_s` 一起省略。它们描述的是共享存储，从任意一个进程读取即可（使用 Redis 时把它们相加，积压会按副本数重复计算） |
+| `capture.oldest_due_age_s` | 已到期且带有计划时间的保存中，最早那条已等待的秒数；没有时为 `0`。与 `capture.due` 一样描述共享存储。保存在重试期间，它和 `capture.due` 都不会增长，因为重试被安排在之后的时间；判断保存是否卡住，看 `capture.failed` 与 `capture.delivered` 的对比 |
+| `capture.workers` | 本进程仍在运行的保存 worker 数；可以跨进程相加 |
 
 ## 上游和上下文配置 {#upstreams-and-context-profiles}
 
@@ -190,6 +253,7 @@ Anthropic 测试同时在 `x-api-key` 和 `Authorization: Bearer` 中发送密�
 | `models` | 否 | 允许的模型名（客户端发送的名称，包括别名）；空列表表示不限。 |
 | `user_id` | 否 | 密钥归属的 OpenViking 用户，默认是调用方自己。root 不是账号里的用户，必须指定用户（或提供 `openviking_key`）。user 只能填自己。 |
 | `openviking_key` | 否 | 该用户的 OpenViking API 密钥。通常不用填，见下文。 |
+| `default_peer_id` | 否 | 请求没带 `X-OpenViking-Actor-Peer` 请求头时使用的 Peer，见[按 Peer 区分记忆](../gateway/03-connect-clients.md#peer)。规则与消息的 `peer_id` 相同；空白表示不设置。 |
 
 网关需要拿到目标用户的 OpenViking API 密钥，之后以这个用户的身份检索和保存记忆：
 
@@ -219,7 +283,7 @@ curl -X POST "$SERVER_URL/gateway/admin/keys?account_id=team" \
 }
 ```
 
-立即保存响应中的 `key`，网关只保留它的哈希。`GET` 返回同样的字段，但没有 `key`。网关密钥不能修改，没有对应的 `PUT`；要换上下文配置、上游、模型或用户，就签发新密钥，再吊销旧的。
+立即保存响应中的 `key`，网关只保留它的哈希。`GET` 返回同样的字段，但没有 `key`。网关密钥不能修改，没有对应的 `PUT`；要换上下文配置、上游、模型、默认 Peer 或用户，就签发新密钥，再吊销旧的。
 
 用户的 OpenViking API 密钥重新生成或用户被删除后，绑定它的网关密钥会失效并被删除，用户数据保留，见[网关密钥](../gateway/09-gateway-keys.md#gateway-keys)。
 
@@ -255,9 +319,52 @@ curl -X POST "$SERVER_URL/gateway/admin/keys?account_id=team" \
 | 422 | `invalid_configuration` | 请求体或 Base URL 不合法。错误信息不会回显提交的凭证。 |
 | 403 | `vlm_import_forbidden` | 调用方没有导入权限，以 `/access` 的 `can_import_vlm` 为准。 |
 | 404 | `vlm_import_unavailable` | 独立网关读不到服务端的模型配置，请手动添加上游。 |
-| 503 | `openviking_unavailable`、`openviking_unreachable` | 网关连不上 OpenViking。检查 OpenViking 是否运行；独立网关还要检查 `openviking_url`（`gateway.conf` 或 `OPENVIKING_GATEWAY_OPENVIKING_URL`）。 |
+| 503 | `openviking_unavailable`、`openviking_unreachable`、`openviking_timeout` | 网关连不上 OpenViking，或它没有及时应答。检查 OpenViking 是否运行；独立网关还要检查 `openviking_url`（`gateway.conf` 或 `OPENVIKING_GATEWAY_OPENVIKING_URL`）。 |
 | 503 | `openviking_version_mismatch` | 仅独立网关：OpenViking Server 低于要求的版本，响应中的 `required_version` 给出最低版本。 |
 
-OpenViking 返回的其他 HTTP 错误记为 `openviking_http_<status>`；网关自身的通用 HTTP 错误记为 `gateway_http_<status>`，例如对不支持的方法返回 405 `gateway_http_405`。
+OpenViking 返回的其他 HTTP 错误记为 `openviking_http_<status>`；网关自身的通用 HTTP 错误记为 `gateway_http_<status>`，例如对不支持的方法返回 405 `gateway_http_405`。这些名称适用于管理 API、`/uploads` 和 `/downloads`；模型路由使用下面的原因。
+
+### 模型路由的错误 {#model-route-errors}
+
+网关在模型路由（`/gateway/v1/*`、`/gateway/api/v3/*`、`/gateway/api/compatible/v1/*`）上产生的错误，响应体为 `{"reason": "...", "detail": "...", "request_id": "..."}`；`openviking_version_mismatch` 另有 `required_version`。服务商自己的错误原样转发，状态码和响应体都不变。请求记录的 `error_reason` 记同样的原因。
+
+| 状态码 | 原因 | 来源 | 含义 |
+| --- | --- | --- | --- |
+| 401 | `gateway_key_invalid` | gateway | 网关密钥缺失、错误或已吊销。 |
+| 401 | `openviking_key_invalid` | openviking | OpenViking 拒绝了客户端发送的 OpenViking API 密钥，或网关密钥背后的 OpenViking 密钥。 |
+| 401 | `openviking_identity_missing` | openviking | OpenViking 没有返回这把密钥的身份。 |
+| 402 | `openviking_not_ordered` | openviking | 这把密钥未订购 OpenViking 服务。 |
+| 403 | `openviking_forbidden` | openviking | OpenViking 拒绝了这把密钥。 |
+| 403 | `root_key_not_allowed`、`trusted_mode_unsupported` | openviking | root 密钥不能用于网关密钥；网关不支持 trusted 认证。 |
+| 429 | `openviking_rate_limited` | openviking | OpenViking 对密钥检查限流。 |
+| 503 | `openviking_unavailable` | openviking | 网关首次检查一把密钥时，OpenViking 无法访问或出错。 |
+| 503 | `openviking_timeout` | openviking | OpenViking 没有及时应答这次检查。 |
+| 503 | `openviking_version_mismatch` | openviking | OpenViking Server 版本低于网关要求。 |
+| 不定 | `openviking_error` | openviking | 这次检查中 OpenViking 的其他错误，状态码与 OpenViking 相同。 |
+| 403 | `oauth_credential_unsupported` | gateway | 客户端或上游使用了 Claude 订阅令牌。 |
+| 413 | `body_too_large` | gateway | 请求体超过 `max_body_bytes`。 |
+| 415 | `compressed_body_unsupported` | gateway | 限定了模型的密钥收到了经过压缩编码的请求体。 |
+| 400 | `model_missing` | gateway | 限定了模型的密钥收到的请求体没有写明模型。 |
+| 403 | `model_not_allowed` | gateway | 模型不在密钥允许的范围内。 |
+| 400、403 | `context_override_invalid`、`context_override_not_allowed` | gateway | `X-OpenViking-Context` 无效，或密钥的上下文配置不接受它。 |
+| 400 | `peer_invalid` | gateway | `X-OpenViking-Actor-Peer` 不是合法的 Peer ID。 |
+| 403 | `policy_unavailable` | gateway | 密钥绑定的上下文配置已不存在。 |
+| 403 | `upstream_url_not_allowed` | gateway | `X-OpenViking-Upstream-URL` 不是密钥绑定的任何上游。 |
+| 404 | `no_matching_upstream` | gateway | 密钥绑定的已启用上游中，没有一个提供这个协议和模型。 |
+| 404 | `upstream_endpoint_mismatch` | gateway | 上游是另一路径的完整请求地址。 |
+| 404、403 | `response_unknown`、`response_upstream_disallowed` | gateway | 查询的 Responses 响应不属于这把密钥，或它的上游已不再允许使用。 |
+| 401 | `upstream_key_missing` | gateway | 上游没有保存 API Key，请求也没有在 `X-OpenViking-Upstream-Key` 中携带。 |
+| 403 | `coding_plan_disabled` | gateway | 上游是不允许通过网关使用的 Coding Plan 密钥。 |
+| 503 | `store_unavailable` | gateway | 网关的状态存储出错。响应带 `Retry-After: 1`。 |
+| 503 | `gateway_overloaded` | gateway | 进程正在处理的模型请求已达 `max_inflight_requests`。请求没有发给服务商。响应带 `Retry-After: 1`。 |
+| 500 | `internal_error` | gateway | 网关意外出错。错误详情是通用文本，调用栈在网关日志里。 |
+| 504 | `upstream_timeout` | upstream | 服务商没有在 `upstream_timeout_seconds` 内开始回复，或者非流式回复中途这么久没有数据。 |
+| 502 | `upstream_unreachable` | upstream | 网关连不上服务商（DNS、连接被拒绝、TLS）。 |
+| 502 | `upstream_disconnected` | upstream | 服务商在回复完成前关闭了连接。 |
+| 502 | `tool_upstream_invalid`、`tool_upstream_incomplete`、`tool_upstream_stream_error`、`tool_call_invalid` | upstream | OpenViking 工具轮次中，服务商的回复无法使用、不完整或是错误，或者模型调用了不允许的工具。 |
+| 502 | `tool_loop_limit` | gateway | OpenViking 工具轮次达到上限。 |
+| 504 | `tool_loop_timeout` | gateway | OpenViking 工具轮次超时。 |
+
+对 Responses 路由发起的 WebSocket 请求仍然收到空的 426，记录里写 `websocket_unsupported`。模型路由上出现 `gateway_http_<status>` 原因，表示网关还没有归类的错误。
 
 模型客户端收到的 401 不属于管理 API。原因可能是网关密钥缺失、错误或已吊销，也可能是它绑定的 OpenViking 密钥已经失效，排查方法见[客户端收到网关返回的错误](../gateway/12-troubleshooting.md#clients-get-an-error-from-the-gateway)。

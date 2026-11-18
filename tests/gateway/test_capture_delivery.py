@@ -1,6 +1,7 @@
 """Delivery at gateway cuts, session lineage and the history search hint."""
 
 import asyncio
+import time
 
 import pytest
 from conftest import MCP_TOOLS, make_due, mcp_tool, update_capture
@@ -549,4 +550,245 @@ async def test_delivery_401_keeps_key_when_health_accepts_it(setup_kernel, crede
     state = await chat.state(first)
     assert state["error"]["reason"] == "openviking_http_401"
     assert state["error"]["retry_at"] is not None
+    worker.management.close()
+
+
+def capture_rows(logs):
+    return [
+        (row["capture_status"], row["capture_reason"], row.get("attempts"))
+        for row in reversed(logs)
+        if row["kind"] == "capture"
+    ]
+
+
+async def stage_failures(app, monkeypatch, failures):
+    """Make queueing a finished turn fail ``failures`` times; retries wait no time."""
+    from openviking_gateway import proxy
+
+    monkeypatch.setattr(proxy, "STAGE_RETRY_SECONDS", (0, 0, 0))
+    kernel, calls = app.state.kernel, []
+    original = kernel.completed
+
+    async def completed(*args):
+        calls.append(args)
+        if len(calls) <= failures:
+            raise RuntimeError("store is down")
+        return await original(*args)
+
+    monkeypatch.setattr(kernel, "completed", completed)
+    return calls
+
+
+async def remember(client, issued):
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer " + issued["key"], "X-OpenViking-Session": "stage"},
+        json={"model": "model", "messages": [{"role": "user", "content": "Remember this"}]},
+    )
+    assert response.status_code == 200, response.text
+
+
+async def test_failed_stage_is_retried_and_then_queued(running_gateway, monkeypatch):
+    app, client, _, issued, _, writes = running_gateway
+    calls = await stage_failures(app, monkeypatch, 2)
+    await remember(client, issued)
+    await asyncio.gather(*app.state.background)
+    assert len(calls) == 3 and not app.state.background
+    logs = await app.state.management.logs("tenant")
+    assert [log["bookkeeping_failed"] for log in logs] == [["completed"]]
+    await make_due(app.state.store)
+    assert await app.state.worker.once()
+    assert "Remember this" in str(writes)
+
+
+async def test_stage_that_never_succeeds_writes_a_lost_record(running_gateway, monkeypatch, caplog):
+    app, client, _, issued, _, writes = running_gateway
+    calls = await stage_failures(app, monkeypatch, 4)
+    await remember(client, issued)
+    await asyncio.gather(*app.state.background)
+    assert len(calls) == 4
+    logs = await app.state.management.logs("tenant")
+    lost = next(log for log in logs if log["kind"] == "capture")
+    assert {k: lost[k] for k in ("event", "capture_status", "capture_reason", "protocol")} == {
+        "event": "capture",
+        "capture_status": "lost",
+        "capture_reason": "stage_failed",
+        "protocol": "chat",
+    }
+    assert lost["credential_id"] == issued["id"]
+    messages = [r.getMessage() for r in caplog.records if r.name == "openviking_gateway.proxy"]
+    assert "OpenViking Gateway lost a finished turn: it could not be queued for saving" in messages
+    # Retries name the error's type only.
+    retries = [m for m in messages if "could not queue a finished turn" in m]
+    assert len(retries) == 3 and all(m.endswith(": RuntimeError") for m in retries)
+    assert "store is down" not in str(logs)
+    await make_due(app.state.store)
+    await app.state.worker.once()
+    assert "Remember this" not in str(writes)
+
+
+async def test_staging_retries_are_bounded(running_gateway, monkeypatch):
+    from openviking_gateway import proxy
+
+    app, client, _, issued, _, _ = running_gateway
+    monkeypatch.setattr(proxy, "STAGE_RETRY_LIMIT", 1)
+    calls = await stage_failures(app, monkeypatch, 4)
+    pending = asyncio.create_task(asyncio.Event().wait())
+    app.state.background.add(pending)
+    try:
+        await remember(client, issued)
+        assert app.state.background == {pending}
+        assert len(calls) == 1
+        logs = await app.state.management.logs("tenant")
+        assert [row[:2] for row in capture_rows(logs)] == [("lost", "stage_failed")]
+    finally:
+        app.state.background.discard(pending)
+        pending.cancel()
+
+
+async def test_missing_openviking_key_record_retries_and_resumes_after_reregistration(
+    setup_kernel, credential, policy
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    credential = {**credential, "source": "openviking"}
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply([answer("Saved once the key is back")])
+    await worker.management.delete("tenant", "keys", credential["id"])
+    for attempt in (1, 2):
+        await make_due(store)
+        assert await worker.once()
+        error = (await chat.state(first))["error"]
+        assert error["reason"] == "gateway_key_missing" and error["attempts"] == attempt
+        assert error["retry_at"] >= time.time() + 299
+    assert not viking.writes
+    # Only the first attempt is recorded.
+    logs = await worker.management.logs("tenant")
+    assert capture_rows(logs) == [("retrying", "gateway_key_missing", 1)]
+    # Another request of the user writes the key record again.
+    await worker.management.save("tenant", "keys", credential["id"], credential)
+    await make_due(store)
+    assert await worker.once()
+    state = await chat.state(first)
+    assert viking.writes and not state["pending"] and not state["error"]
+    worker.management.close()
+
+
+async def test_missing_key_stops_retrying_after_the_session_ttl(setup_kernel, credential, policy):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    credential = {**credential, "source": "openviking"}
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    worker.session_ttl = 3600
+    first = await chat.reply([answer("Never saved")])
+    await worker.management.delete("tenant", "keys", credential["id"])
+    await make_due(store)
+    assert await worker.once()
+    error = (await chat.state(first))["error"]
+    await update_capture(store, first, error={**error, "since": time.time() - 3601, "retry_at": 0})
+    assert await worker.once()
+    error = (await chat.state(first))["error"]
+    assert error["reason"] == "gateway_key_revoked" and error["retry_at"] is None
+    assert not await worker.once()
+    # A new request of the user resumes saving, as for a revoked key.
+    await worker.management.save("tenant", "keys", credential["id"], credential)
+    await chat.say("Back again")
+    assert not (await chat.state(first))["error"]
+    worker.management.close()
+
+
+@pytest.mark.parametrize("status,delay", [(402, 3600), (429, 60)])
+async def test_quota_errors_back_off_longer(setup_kernel, credential, policy, status, delay):
+    from openviking_gateway.client import VikingError
+
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply([answer("Over quota")])
+    await make_due(store)
+
+    async def refused(*args):
+        raise VikingError(f"openviking_http_{status}", status)
+
+    viking.write = refused
+    assert await worker.once()
+    error = (await chat.state(first))["error"]
+    assert error["reason"] == f"openviking_http_{status}" and error["attempts"] == 1
+    assert delay - 1 <= error["retry_at"] - time.time() <= delay
+    worker.management.close()
+
+
+async def test_delivery_and_commit_records_when_enabled(setup_kernel, credential, policy):
+    from openviking_gateway.client import CALL, CallContext, VikingError
+
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    worker.records = True
+    bound = CALL.set(CallContext(request_id="request-1"))
+    try:
+        first = await chat.reply([answer("Recorded delivery")])
+    finally:
+        CALL.reset(bound)
+    original = viking.write
+
+    async def unavailable(*args):
+        raise VikingError("openviking_unavailable")
+
+    viking.write = unavailable
+    for _ in range(2):
+        await make_due(store)
+        assert await worker.once()
+    viking.write = original
+    await make_due(store)
+    assert await worker.once()
+    logs = await worker.management.logs("tenant")
+    assert capture_rows(logs) == [
+        ("retrying", "openviking_unavailable", 1),
+        ("retrying", "openviking_unavailable", 2),
+        ("active", "delivered", None),
+        ("active", "delivery_recovered", None),
+        ("active", "committed", None),
+    ]
+    rows = {row["capture_reason"]: row for row in logs}
+    target = (await chat.state(first))["ov_session"]
+    delivered = rows["delivered"]
+    assert delivered["event"] == "capture" and delivered["request_id"] == "request-1"
+    assert delivered["turns"] == 2 and delivered["messages"] == 4
+    assert delivered["lag_ms"] > 0 and delivered["openviking_session"] == target
+    assert rows["committed"]["openviking_session"] == target
+    assert viking.commits
+    worker.management.close()
+
+
+async def test_no_delivery_records_by_default(setup_kernel, credential, policy):
+    from openviking_gateway.client import VikingError
+
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    await chat.reply([answer("Not recorded")])
+    original = viking.write
+
+    async def unavailable(*args):
+        raise VikingError("openviking_unavailable")
+
+    viking.write = unavailable
+    for _ in range(2):
+        await make_due(store)
+        assert await worker.once()
+    viking.write = original
+    await make_due(store)
+    assert await worker.once()
+    assert viking.writes and viking.commits
+    logs = await worker.management.logs("tenant")
+    assert capture_rows(logs) == [
+        ("retrying", "openviking_unavailable", 1),
+        ("active", "delivery_recovered", None),
+    ]
     worker.management.close()

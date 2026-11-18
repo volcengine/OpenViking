@@ -13,7 +13,7 @@ pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
 pytest.importorskip("langchain_openviking")
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, ChatMessage, HumanMessage
 
 from langchain_openviking import (
     InMemoryOpenVikingClient,
@@ -1486,7 +1486,8 @@ async def test_async_history_does_not_create_session_on_non_not_found_error():
 
 
 @pytest.mark.asyncio
-async def test_async_middleware_injects_and_captures_context():
+@pytest.mark.parametrize("generic_user", [False, True])
+async def test_async_middleware_injects_and_captures_context(generic_user):
     backing = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "Async middleware prefers teal."}
     )
@@ -1501,12 +1502,18 @@ async def test_async_middleware_injects_and_captures_context():
     class Request:
         state: dict[str, Any] = {}
         runtime = None
-        messages = [HumanMessage(content="What teal preference?")]
+        messages = [
+            ChatMessage(role="user", id="async-user-1", content="What teal preference?")
+            if generic_user
+            else HumanMessage(id="async-user-1", content="What teal preference?")
+        ]
         system_message = None
 
         def override(self, **overrides: Any) -> Request:
             request = Request()
+            request.messages = overrides.get("messages", self.messages)
             request.system_message = overrides.get("system_message", self.system_message)
+            request.state = self.state
             return request
 
     async def handler(request: Any) -> AIMessage:
@@ -1514,25 +1521,32 @@ async def test_async_middleware_injects_and_captures_context():
         return AIMessage(content="teal")
 
     await middleware.awrap_model_call(Request(), handler)
+    recall_update = await middleware.aafter_model({}, runtime=None)
+    assert recall_update is not None
     await middleware.aafter_agent(
         {
+            **recall_update,
             "messages": [
                 HumanMessage(content="What color?"),
                 AIMessage(content="teal"),
-            ]
+            ],
         },
         runtime=None,
     )
 
-    assert "Async middleware prefers teal." in (captured_request["request"].system_message.content)
+    assert captured_request["request"].system_message is None
+    assert "Async middleware prefers teal." in captured_request["request"].messages[0].content
     assistant_parts = backing.sessions["async-middleware"][1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
 
 
 @pytest.mark.asyncio
-async def test_async_middleware_clears_pending_context_when_model_call_is_cancelled():
+@pytest.mark.parametrize("has_context", [False, True])
+async def test_async_middleware_clears_pending_context_when_model_call_is_cancelled(has_context):
     backing = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "Cancelled context must not be reused."}
+        if has_context
+        else {}
     )
     client = AsyncInMemoryOpenVikingClient(backing)
     middleware = OpenVikingContextMiddleware(
@@ -1545,12 +1559,14 @@ async def test_async_middleware_clears_pending_context_when_model_call_is_cancel
     class Request:
         state: dict[str, Any] = {}
         runtime = None
-        messages = [HumanMessage(content="Find the cancelled context.")]
+        messages = [HumanMessage(id="async-cancelled-user", content="Find the cancelled context.")]
         system_message = None
 
         def override(self, **overrides: Any) -> Request:
             request = Request()
+            request.messages = overrides.get("messages", self.messages)
             request.system_message = overrides.get("system_message", self.system_message)
+            request.state = self.state
             return request
 
     async def handler(_request: Any) -> AIMessage:
@@ -1566,3 +1582,5 @@ async def test_async_middleware_clears_pending_context_when_model_call_is_cancel
         await model_call
 
     assert middleware._pending_context_parts == {}
+    assert middleware._pending_recall_blocks == {}
+    assert await middleware.aafter_model({"messages": Request.messages}, runtime=None) is None

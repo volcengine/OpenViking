@@ -146,7 +146,7 @@ Enable Argon2id one-way hashing to stop storing recoverable API key values:
 
 | Provider | Use Case | Pros | Cons |
 |----------|----------|------|------|
-| **Local** | Dev environments, single-node | Simple, no external services | Requires local file permissions and separate key backups |
+| **Local** | Dev environments, single-node | Simple, no external services | Requires local secret permissions and separate key backups |
 | **Vault** | Production, multi-cloud | Enterprise-grade KMS, version control | Requires deploying and maintaining Vault |
 | **Volcengine KMS** | Volcengine cloud | Cloud-native KMS service | Volcengine-only |
 
@@ -190,6 +190,35 @@ ov system crypto init-key -f ~/.openviking/master.key
   }
 }
 ```
+
+### Inline Root Key
+
+For simple, controlled deployments, the Local provider can read the same 32-byte root key
+directly from `ov.conf` instead of a separate file:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "root_key": "<64-character hexadecimal root key>"
+    }
+  }
+}
+```
+
+The value is 32 bytes encoded as exactly 64 hexadecimal characters. You can generate one with
+`openssl rand -hex 32`, or reuse the contents of an existing `master.key` when moving between the
+two Local configurations.
+
+- Do not configure `root_key` and `key_file` together. If both are omitted, the Local provider
+  continues to use `~/.openviking/master.key`.
+- An inline key is never generated automatically. Losing or changing it makes existing encrypted
+  data unreadable.
+- Treat `ov.conf` as a key file: restrict it to the service user, back it up securely, and never
+  commit it to version control.
+- Prefer Vault or KMS when production deployments need centralized secret management.
 
 ---
 

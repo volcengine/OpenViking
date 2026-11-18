@@ -581,7 +581,7 @@ describe("plugin module seams", () => {
     const readFactory = registerTool.mock.calls[0]?.[0];
     const readTool = readFactory({ sessionId: "session-1" });
     const result = await readTool.execute("call-1", {
-      tool_output_ref: "viking://session/ov-session-1/tool-results/tr_1",
+      tool_output_ref: "viking://user/default/sessions/ov-session-1/tool-results/tr_1",
     });
 
     expect(readToolResult).toHaveBeenCalledWith(
@@ -599,7 +599,7 @@ describe("plugin module seams", () => {
     const grepSessionArchives = vi.fn().mockResolvedValue({
       count: 1,
       matches: [{
-        uri: "viking://session/ov-session-1/history/archive_001#L12",
+        uri: "viking://user/default/sessions/ov-session-1/history/archive_001#L12",
         line: 12,
         content: "important command output",
       }],

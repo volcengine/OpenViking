@@ -255,6 +255,7 @@ class SessionService:
             memory_policy_provider=lambda: self._get_user_memory_policy(ctx),
             usage_reporter=self._usage_reporter,
             vlm_resolver=self._vlm_resolver,
+            runtime_config_manager=self._runtime_config_manager,
             expiry_reporter=self._session_expiry_adapter,
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,
@@ -294,10 +295,6 @@ class SessionService:
         """
         self._record_lifecycle_metric("create", "attempt")
         try:
-            if session_id:
-                existing = self.session(ctx, session_id)
-                if await existing.exists():
-                    raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
@@ -320,7 +317,9 @@ class SessionService:
                     event_tags,
                     discard_invalid=True,
                 )
-            await session.ensure_exists()
+            created = await session.ensure_exists()
+            if session_id and not created:
+                raise AlreadyExistsError(f"Session '{session_id}' already exists")
             self._record_lifecycle_metric("create", "ok")
             return session
         except Exception:
@@ -417,6 +416,25 @@ class SessionService:
         self._record_lifecycle_metric("delete", "ok")
         return True
 
+    async def retry_archive(
+        self,
+        session_id: str,
+        archive_id: str,
+        ctx: RequestContext,
+        *,
+        expected_messages_sha256: str,
+        allow_ownerless_ready: bool = False,
+        allow_cancelled_failure: bool = False,
+    ) -> Dict[str, Any]:
+        """Submit one hash-bound, server-verified archive recovery."""
+        session = await self.get(session_id, ctx)
+        return await session.retry_archive(
+            archive_id,
+            expected_messages_sha256=expected_messages_sha256,
+            allow_ownerless_ready=allow_ownerless_ready,
+            allow_cancelled_failure=allow_cancelled_failure,
+        )
+
     async def commit(
         self,
         session_id: str,
@@ -428,6 +446,10 @@ class SessionService:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
     ) -> Dict[str, Any]:
@@ -451,6 +473,10 @@ class SessionService:
             keep_recent_turn_count=keep_recent_turn_count,
             retained_message_token_budget=retained_message_token_budget,
             min_raw_tail_steps=min_raw_tail_steps,
+            session_window_context=session_window_context,
+            summary_token_ratio=summary_token_ratio,
+            retained_token_ratio=retained_token_ratio,
+            reasoning_effort=reasoning_effort,
             event_tags=event_tags,
             reset_context=reset_context,
         )
@@ -466,6 +492,10 @@ class SessionService:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
     ) -> Dict[str, Any]:
@@ -492,6 +522,10 @@ class SessionService:
             "keep_recent_turn_count": keep_recent_turn_count,
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
+            "session_window_context": session_window_context,
+            "summary_token_ratio": summary_token_ratio,
+            "retained_token_ratio": retained_token_ratio,
+            "reasoning_effort": reasoning_effort,
         }
         commit_kwargs.update(
             {key: value for key, value in optional_retention.items() if value is not None}

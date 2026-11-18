@@ -271,29 +271,17 @@ class LocalCollection(ICollection):
     def get_meta_data(self):
         return self.meta.get_meta_data()
 
-    def _close_unlocked(self) -> None:
-        self._delete_scheduler_job()
-
-        # Shutdown scheduler
-        if self.scheduler:
-            self.scheduler.shutdown(wait=False)
-            self.scheduler = None
-
-        self.store_mgr = None
-
-        # Close all indexes
-        def close_index(name, index):
-            try:
-                index.close()
-            except Exception as e:
-                logger.warning(f"Failed to close index {name}: {e}")
-
-        self.indexes.iterate(close_index)
-        self.indexes.clear()
-
     def close(self):
         with self._index_mutation_barrier.exclusive_mutation():
-            self._close_unlocked()
+            self._persist_all_indexes()
+            self._delete_scheduler_job()
+            if self.scheduler:
+                self.scheduler.shutdown(wait=False)
+                self.scheduler = None
+            for name, index in self.indexes.get_all().items():
+                index.close()
+                self.indexes.remove(name)
+            self.store_mgr = None
 
     def begin_bulk_ingest(self) -> None:
         """Defer optional derived-index rebuilds until the outer scope exits."""
@@ -1480,12 +1468,6 @@ class PersistCollection(LocalCollection):
         Iterates through all indexes. If they are PersistentIndex type, calls their persist() method.
         """
         self.flush_all_indexes()
-
-    def close(self):
-        """Close the collection and release resources."""
-        with self._index_mutation_barrier.exclusive_mutation():
-            self.flush_all_indexes()
-            self._close_unlocked()
 
     def flush_all_indexes(self):
         """Manually trigger persistence of all indexes.

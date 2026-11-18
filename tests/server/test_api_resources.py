@@ -171,11 +171,7 @@ async def test_add_resource_with_wait(
         "reason": "test resource",
         "wait": True,
     }
-    rejected = await client.post("/api/v1/resources", json={**payload, "timeout": 1.0})
-    assert rejected.status_code == 400
-    assert rejected.json()["error"]["code"] == "INVALID_ARGUMENT"
-
-    resp = await client.post("/api/v1/resources", json=payload)
+    resp = await client.post("/api/v1/resources", json={**payload, "timeout": 0.0})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -427,14 +423,12 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
 ):
     async def fake_add_resource(**kwargs):
         telemetry = get_current_telemetry()
-        telemetry.set("resource.request.duration_ms", 152.3)
-        telemetry.set("resource.process.duration_ms", 101.7)
-        telemetry.set("resource.parse.duration_ms", 38.1)
-        telemetry.set("resource.parse.warnings_count", 1)
-        telemetry.set("resource.finalize.duration_ms", 22.4)
-        telemetry.set("resource.summarize.duration_ms", 31.8)
-        telemetry.set("resource.wait.duration_ms", 46.9)
-        telemetry.set("resource.watch.duration_ms", 0.8)
+        telemetry.set("resource.total.duration_ms", 152.3)
+        telemetry.set("resource.source_execute.duration_ms", 101.7)
+        telemetry.set("resource.parse_artifact.duration_ms", 38.1)
+        telemetry.set("resource.content_commit.duration_ms", 22.4)
+        telemetry.set("resource.derived_enqueue.duration_ms", 31.8)
+        telemetry.set("queue.semantic.queue_wait.duration_ms", 46.9)
         telemetry.set("resource.flags.wait", True)
         telemetry.set("resource.flags.build_index", True)
         telemetry.set("resource.flags.summarize", False)
@@ -461,9 +455,12 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     assert resp.status_code == 200
     body = resp.json()
     resource = body["telemetry"]["summary"]["resource"]
-    assert resource["request"]["duration_ms"] == 152.3
-    assert resource["process"]["parse"] == {"duration_ms": 38.1, "warnings_count": 1}
-    assert resource["wait"]["duration_ms"] == 46.9
+    assert resource["total"]["duration_ms"] == 152.3
+    assert resource["source_execute"]["duration_ms"] == 101.7
+    assert resource["parse_artifact"]["duration_ms"] == 38.1
+    assert resource["content_commit"]["duration_ms"] == 22.4
+    assert resource["derived_enqueue"]["duration_ms"] == 31.8
+    assert resource["semantic"]["queue_wait"]["duration_ms"] == 46.9
     assert resource["flags"] == {
         "wait": True,
         "build_index": True,
@@ -1050,7 +1047,7 @@ async def test_temp_upload_with_watch_and_tags_is_rejected_without_watch_source(
 
     assert resp.status_code == 400, resp.text
     assert "uploaded content" in resp.text
-    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
+    task = await service.watch_manager.get_task_by_uri(
         to_uri=target_uri,
         account_id="default",
         user_id="test_user",

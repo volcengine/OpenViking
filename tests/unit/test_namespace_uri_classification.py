@@ -59,6 +59,29 @@ def test_system_namespace_detection_uses_scope_segment():
     assert not classify_uri("viking://resources/system").is_system
 
 
+@pytest.mark.parametrize("segment", ["example-skills", "global"])
+def test_system_compile_skill_namespaces(segment):
+    root = f"viking://system/compile/{segment}"
+    assert classify_uri(root).is_system
+    assert classify_uri(root).is_skill_namespace
+    assert not classify_uri(root).is_skill_root
+    assert classify_uri(f"{root}/demo").is_skill_root
+    assert classify_uri(f"{root}/demo/SKILL.md").is_skill
+    assert not classify_uri(f"{root}/demo/references").is_skill_root
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://system/global/demo",
+        "viking://system/compile/global-other/demo",
+        "viking://resources/system/compile/global/demo",
+    ],
+)
+def test_system_compile_skill_detection_requires_exact_path_segments(uri):
+    assert not classify_uri(uri).is_skill
+
+
 def test_peer_content_target_uri_rejects_invalid_peer_id():
     ctx = RequestContext(
         user=UserIdentifier(account_id="acct", user_id="support_bot"),
@@ -143,21 +166,10 @@ def test_session_uri_helpers_use_user_namespace():
     # hint pointing at the '~' home alias.
     with pytest.raises(NamespaceShapeError, match=re.escape("viking://~/sessions/s1")):
         resolve_request_uri("viking://user/sessions/s1", ctx)
-    assert (
-        resolve_request_uri("viking://session/s1", ctx)
-        == "viking://user/alice/sessions/s1"
-    )
-    assert (
-        resolve_request_uri(
-            "viking://session/s1/history/archive_001/messages.jsonl", ctx
-        )
-        == "viking://user/alice/sessions/s1/history/archive_001/messages.jsonl"
-    )
     assert is_session_uri("viking://user/alice/sessions/s1")
     assert not is_session_uri("viking://user/sessions/s1")
-    assert is_session_uri("viking://session/s1")
     roots = visible_roots(ctx)
-    assert "viking://session" not in roots
+    assert "viking://user/alice" in roots
     assert "viking://agent" in roots
 
 

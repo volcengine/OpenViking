@@ -76,6 +76,8 @@ class SchemaModelGenerator:
         self,
         schemas: List[MemoryTypeSchema],
         template_context: Optional[Dict[str, Any]] = None,
+        *,
+        consolidation: bool = False,
         # include_decision_reasoning: bool = True,
     ):
         if hasattr(schemas, "list_all"):
@@ -84,6 +86,7 @@ class SchemaModelGenerator:
         else:
             self._all_schemas = list(schemas)
         self.schemas = list(schemas)
+        self.consolidation = consolidation
         self._template_context = dict(template_context or {})
         # self._include_decision_reasoning = include_decision_reasoning
         self._model_cache: Dict[str, Type[BaseModel]] = {}
@@ -147,9 +150,11 @@ class SchemaModelGenerator:
 
         page_id_json_schema = {"type": "integer"}
         page_id_description = "Temporary page_id for identifying the target memory item."
-        if memory_type.memory_type == "events" and memory_type.operation_mode == "add_only":
+        if memory_type.operation_mode == "add_only":
             page_id_json_schema["minimum"] = 100
-            page_id_description = "Unique page_id for this new event; it MUST be at least 100."
+            page_id_description = (
+                "Unique page_id for this new memory item; it MUST be at least 100."
+            )
 
         field_definitions["page_id"] = (
             Annotated[int, WithJsonSchema(page_id_json_schema)],
@@ -202,7 +207,7 @@ class SchemaModelGenerator:
             if not isinstance(data, dict):
                 return data
             try:
-                is_new = int(data.get("page_id")) >= 100
+                is_new = memory_type.operation_mode == "add_only" or int(data.get("page_id")) >= 100
             except (TypeError, ValueError):
                 return data
             missing = [name for name in required_on_create if data.get(name) is None]
@@ -314,11 +319,10 @@ class SchemaModelGenerator:
                 ),
             )
 
-        # Only expose delete_ids when at least one schema supports deletion.
-        # add_only schemas (e.g. trajectories) never delete existing records,
-        # so excluding this field prevents the LLM from hallucinating fake deletes.
+        # Session extraction keeps its add-only contract; consolidation may delete
+        # existing records even when every selected type is add_only.
         has_deletable_schema = any(mt.operation_mode != "add_only" for mt in enabled_memory_types)
-        if has_deletable_schema:
+        if has_deletable_schema or self.consolidation:
             field_definitions["delete_ids"] = (
                 List[DeleteId],
                 Field(

@@ -299,12 +299,14 @@ class ExpiryRuntime:
             shard_count=config.shard_count,
             reporting_enabled=roles.report,
             metrics=self._metrics,
+            on_report=self._start_consumer,
         )
         self._leases = ShardLeaseCoordinator(self._store, config, self._metrics)
         self._shard_runner = ShardRunner(self._leases, config, self._metrics)
         self._publisher: ExpiryPublisher | None = None
         self._consumers: dict[str, ExpiryConsumer] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._role_loop: asyncio.AbstractEventLoop | None = None
         self._stop = asyncio.Event()
         self._storage_started = False
         self._storage_closed = False
@@ -382,6 +384,7 @@ class ExpiryRuntime:
         if self._state.accepting_calls:
             return
         bindings = self._registry.freeze()
+        self._role_loop = asyncio.get_running_loop()
         self._stop.clear()
         if self._roles.publish:
             self._publisher = ExpiryPublisher(
@@ -390,20 +393,26 @@ class ExpiryRuntime:
             self._spawn_role("publisher", self._publisher.run(self._stop))
         if self._roles.consume:
             for item_type, binding in bindings.items():
-                consumer = ExpiryConsumer(
-                    self._store,
-                    self._shard_runner,
-                    item_type,
-                    binding,
-                    self._config,
-                    self._metrics,
-                )
-                self._consumers[item_type] = consumer
-                self._spawn_role(
-                    f"callback:{item_type}",
-                    consumer.run(self._stop),
-                )
+                if not binding.options.lazy_start or self._store.consumer_enabled(item_type):
+                    self._start_consumer(item_type)
         self._state.accepting_calls = True
+
+    def _start_consumer(self, item_type: str) -> None:
+        # Reports can arrive from QueueManager loops; roles belong to startup's loop.
+        if self._role_loop is not None and asyncio.get_running_loop() is not self._role_loop:
+            self._role_loop.call_soon_threadsafe(self._start_consumer, item_type)
+            return
+        name = f"callback:{item_type}"
+        if not self._roles.consume or self._stop.is_set() or name in self._tasks:
+            return
+        binding = self._registry.get(item_type)
+        if binding is None:
+            return
+        consumer = ExpiryConsumer(
+            self._store, self._shard_runner, item_type, binding, self._config, self._metrics
+        )
+        self._consumers[item_type] = consumer
+        self._spawn_role(name, consumer.run(self._stop))
 
     async def wait(self) -> None:
         if not self._tasks:
@@ -413,8 +422,10 @@ class ExpiryRuntime:
         for task in done:
             await task
 
-    async def stop_roles(self) -> None:
-        self._state.accepting_calls = False
+    async def stop_roles(self, *, keep_reporting: bool = False) -> None:
+        # A producer drain may still need durable reports after callbacks stop.
+        if not keep_reporting:
+            self._state.accepting_calls = False
         self._stop.set()
         tasks = set(self._tasks.values())
         if tasks:

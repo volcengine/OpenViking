@@ -94,22 +94,53 @@ class UpdateSkillOptions(AddSkillOptions, total=False):
 
 
 class WriteOptions(_ExtraOptions, total=False):
-    edit_source: Literal["manual", "agent", "compile"]
+    use_snapshot: bool
     acl: Dict[str, Any]
     telemetry: Any
     processing_mode: ProcessingMode
     tags: List[str]
     tag_mode: Literal["replace", "append", "clear"]
+    resolve_conflicts: bool
+    defer_processing: bool
+
+
+class _BatchWriteOperationOptional(TypedDict, total=False):
+    content: str
+    content_base64: str
+    mode: Literal["replace", "append", "create", "upsert"]
+    expected_sha256: str
+    if_absent: bool
+    resolve_conflicts: bool
+    tags: List[str]
+    tag_mode: Literal["replace", "append", "clear"]
+    acl: Dict[str, Any]
+
+
+class BatchWriteOperation(_BatchWriteOperationOptional):
+    uri: str
 
 
 class BatchWriteOptions(_ExtraOptions, total=False):
-    edit_source: Literal["manual", "agent", "compile"]
+    use_snapshot: bool
     telemetry: Any
     processing_mode: ProcessingMode
     # Return target-state conflicts without overwriting them or blocking compatible writes.
     skip_conflicts: bool
     # Save content without scheduling semantic or vector work.
     defer_processing: bool
+
+
+class _RequiredMCPToolMount(TypedDict):
+    tool_uri: str
+    node_uri: str
+    title: str
+
+
+class MCPToolMount(_RequiredMCPToolMount, total=False):
+    description: str
+    timeout_seconds: int
+    arguments: Mapping[str, Any]
+    tags: List[str]
 
 
 class CompileOptions(_ExtraOptions, total=False):

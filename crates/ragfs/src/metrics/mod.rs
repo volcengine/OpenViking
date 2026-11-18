@@ -69,6 +69,18 @@ pub(crate) fn operation_metrics(plugin: &str, stats: &FilesystemStats) -> Vec<Ra
                 1.0,
             ));
         }
+        for (error_kind, count) in &stats.error_counts {
+            metrics.push(RagfsMetric::counter(
+                "ragfs_operation_errors_total",
+                &[
+                    ("plugin", plugin),
+                    ("operation", operation.as_str()),
+                    ("error_kind", error_kind),
+                ],
+                *count,
+                1.0,
+            ));
+        }
         if stats.count == 0 {
             continue;
         }
@@ -95,10 +107,8 @@ pub(crate) fn operation_metrics(plugin: &str, stats: &FilesystemStats) -> Vec<Ra
 pub(crate) fn cache_metrics(stats: crate::cache::CacheMetricsSnapshot) -> Vec<RagfsMetric> {
     let mut metrics = Vec::new();
     for (kind, result, count) in [
-        ("file", "hit", stats.file_hits),
-        ("file", "miss", stats.file_misses),
-        ("directory", "hit", stats.read_dir_hits),
-        ("directory", "miss", stats.read_dir_misses),
+        ("query", "hit", stats.query_hits),
+        ("query", "miss", stats.query_misses),
     ] {
         metrics.push(RagfsMetric::counter(
             "ragfs_cache_requests_total", &[("kind", kind), ("result", result)], count, 1.0,
@@ -108,31 +118,50 @@ pub(crate) fn cache_metrics(stats: crate::cache::CacheMetricsSnapshot) -> Vec<Ra
         ("ragfs_cache_backend_fallbacks_total", stats.backend_fallbacks),
         ("ragfs_cache_invalidations_total", stats.invalidations),
         ("ragfs_cache_errors_total", stats.errors),
-        ("ragfs_cache_policy_bypasses_total", stats.policy_bypasses),
     ] {
         metrics.push(RagfsMetric::counter(name, &[], count, 1.0));
     }
     for (name, label, value, count, scale) in [
+        ("ragfs_cache_operations_total", "operation", "get", stats.gets, 1.0),
         ("ragfs_cache_operations_total", "operation", "put", stats.puts, 1.0),
         ("ragfs_cache_operations_total", "operation", "delete", stats.deletes, 1.0),
-        ("ragfs_cache_bytes_total", "source", "backend", stats.backend_bytes, 1.0),
-        ("ragfs_cache_bytes_total", "source", "cache", stats.cache_bytes, 1.0),
         ("ragfs_cache_operation_duration_seconds_total", "operation", "get", stats.get_latency_ns, 1e-9),
         ("ragfs_cache_operation_duration_seconds_total", "operation", "put", stats.put_latency_ns, 1e-9),
         ("ragfs_cache_operation_duration_seconds_total", "operation", "delete", stats.delete_latency_ns, 1e-9),
-        ("ragfs_cache_inflight_events_total", "event", "leader", stats.inflight_leaders, 1.0),
-        ("ragfs_cache_inflight_events_total", "event", "follower", stats.inflight_followers, 1.0),
-        ("ragfs_cache_inflight_events_total", "event", "backend_saved", stats.inflight_backend_saved, 1.0),
     ] {
         metrics.push(RagfsMetric::counter(name, &[(label, value)], count, scale));
     }
     metrics
 }
 
-/// Convert the single lock manager's snapshot into unlabeled metric records.
+/// Convert the single lock manager's snapshot into bounded metric records.
 pub(crate) fn lock_metrics(stats: LockMetrics) -> Vec<RagfsMetric> {
     let mut metrics = Vec::new();
     let scan = stats.descendant_scan.snapshot().into_iter().next();
+    if let Some(acquire) = &stats.redis_acquire {
+        metrics.push(RagfsMetric::counter(
+            "lock_redis_slow_acquisitions_total",
+            &[],
+            stats.redis_slow_acquisitions,
+            1.0,
+        ));
+        for point in acquire.snapshot() {
+            metrics.push(RagfsMetric {
+                name: "lock_redis_acquire_duration_seconds".into(),
+                labels: point
+                    .attributes()
+                    .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+                    .collect(),
+                value: RagfsMetricValue::Histogram {
+                    bucket_bounds: point.bounds().map(|bound| bound as u64).collect(),
+                    bucket_counts: point.bucket_counts().collect(),
+                    count: point.count(),
+                    sum: point.sum(),
+                    scale: 1e-9,
+                },
+            });
+        }
+    }
     for (name, value) in [
         ("lock_active", stats.active_lock_count),
         ("lock_waiting", stats.waiting_lock_count),

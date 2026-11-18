@@ -32,7 +32,7 @@ Snapshots use the current ACL at operation time. ACLs are not stored in snapshot
 |-----------|---------------------|
 | `show(path=...)` / `diff` / `log` | `read` |
 | `diff_paths` | `read` on requested directories and every changed file; any denied descendant rejects the whole query without exposing its URI |
-| `commit` | `write`; directories recursively check every current descendant and fail as a whole if any node is denied |
+| `commit` | `read`; directories recursively check every current descendant and fail as a whole if any node is denied |
 | `restore` overwriting a file | `write` on the file |
 | `restore` creating a file | `write` on the parent directory |
 | `restore` deleting a file | `write` on the file |
@@ -62,7 +62,7 @@ Partial commits preserve the previous snapshot outside the requested scope. Afte
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | message | str | Yes | - | Commit message |
-| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. USER/ADMIN callers must provide this field; `null` account-wide snapshots are reserved for local ROOT mode. An empty list `[]` is forwarded as an explicit empty path set (no-op). A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
+| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. USER/ADMIN callers must provide this field; `null` account-wide snapshots are reserved for local ROOT mode. An empty list `[]` selects no files. A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
 | branch | str | No | `main` | Branch to advance |
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |
@@ -121,7 +121,7 @@ When a new snapshot is created:
 }
 ```
 
-`changed` is the number of paths added/updated/removed in this commit; `ignored` is the number of candidate paths skipped by the account `.ovgitignore` rules (built-in system pruning is not counted). When the workspace is unchanged relative to the last commit, the result is `noop` and `commit_oid` is the current HEAD (`noop` also returns `ignored` but has no `changed`):
+`changed` is the number of paths added/updated/removed in this commit; `ignored` is the number of candidate paths skipped by the account `.ovgitignore` rules (built-in system pruning is not counted). The first commit on a branch creates a valid snapshot even when no files are selected or all selected files are excluded; it returns `created` with `changed=0`. Empty directories themselves are not recorded. When the workspace is unchanged relative to the last commit, the result is `noop` and `commit_oid` is the current HEAD (`noop` also returns `ignored` but has no `changed`):
 
 ```json
 {
@@ -146,17 +146,29 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 |-----------|------|----------|---------|-------------|
 | branch | str | No | `main` | Branch to walk |
 | limit | int | No | 20 | Max commits to return. The HTTP endpoint accepts values from 1 to 500 |
+| offset | int | No | 0 | Number of matching commits to skip; must be a non-negative integer. For pages of 10, use `offset=10` for the second page |
 | paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; USER/ADMIN callers must provide it, while local ROOT mode may omit it for account-wide history. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
 
-Filtering happens before the result limit is applied, so `limit=10` with `paths=[X]` returns up to 10 commits related to X rather than filtering only the 10 newest commits.
+Path filtering and commit de-duplication happen before `offset` and `limit` are applied. With `paths=[X]`, `offset=10`, and `limit=10`, the result contains matches 11–20 for X. Unrelated commits do not advance the offset; a commit touching multiple requested paths counts once. Once traversal reaches the end of history, an offset beyond the matching commits returns an empty list.
 
-To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
+When `paths` is provided, the server can use the optional path history index
+configured by `git.snapshot.log` in `ov.conf`. The index is derived from
+snapshot commits and does not change the response format:
+
+- With a current index, the server queries matching commits directly.
+- With an index behind HEAD, the server scans the newer commits and combines their matches with indexed history. This tail scan has no 1,000-commit cap.
+- When no usable index is available, the legacy filtered scan still inspects at most 1,000 candidate commits, including unrelated commits and matches skipped by `offset`. If the requested page is incomplete and older uninspected history remains, it returns `INVALID_ARGUMENT` without partial results.
+
+Without `paths`, queries are not subject to the 1,000-commit scan limit above.
+
+For pages of 10, omit `offset` for the first page and use `offset=10` for the next page, as shown below. Each request starts from the current branch HEAD; new commits between requests can shift page boundaries.
 
 **Python SDK (HTTP)**
 
 ```python
 history = client.snapshot.log(
     limit=10,
+    offset=10,
     paths=["viking://resources/a.md", "viking://resources/docs"],
 )
 for commit in history:
@@ -167,23 +179,24 @@ for commit in history:
 
 ```typescript
 console.log(
-  await client.gitLog("main", 20, [
+  await client.gitLog("main", 10, [
     "viking://resources/a.md",
     "viking://resources/docs",
-  ]),
+  ], 10),
 );
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/snapshot/log?branch={branch}&limit={limit}&paths={uri1}&paths={uri2}
+GET /api/v1/snapshot/log?branch={branch}&limit={limit}&offset={offset}&paths={uri1}&paths={uri2}
 ```
 
 ```bash
 curl --get "http://localhost:1933/api/v1/snapshot/log" \
   --data-urlencode "branch=main" \
   --data-urlencode "limit=10" \
+  --data-urlencode "offset=10" \
   --data-urlencode "paths=viking://resources/a.md" \
   --data-urlencode "paths=viking://resources/docs" \
   -H "X-API-Key: your-key"
@@ -192,7 +205,7 @@ curl --get "http://localhost:1933/api/v1/snapshot/log" \
 **CLI**
 
 ```bash
-ov snapshot log --limit 10 \
+ov snapshot log --limit 10 --offset 10 \
   --paths viking://resources/a.md,viking://resources/docs \
   -o json
 ```
@@ -277,10 +290,14 @@ curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=3f2a1b9c&path
   -H "X-API-Key: your-key"
 ```
 
-Without `path`, the response is commit metadata JSON. With `path`, the response is a raw byte stream (`Content-Type: application/octet-stream`) plus two headers:
+Without `path`, the response is commit metadata JSON. With `path`, the response is a raw byte stream (`Content-Type: application/octet-stream`) with these headers:
 
 - `X-Snapshot-Oid`: the blob object's OID
-- `X-Snapshot-Size`: the blob size in bytes
+- `X-Snapshot-Size`: the returned body size in bytes
+- `X-Snapshot-Commit-Oid`: the full commit OID resolved from `target_ref`, distinct from the blob OID
+- `X-Snapshot-Time-Seconds`: the resolved commit's `committer.time_seconds`, an integer Unix timestamp in seconds
+
+The timestamp describes the requested snapshot, not the file's last modification or the run's completion time. Branches and tags are resolved once so the body and commit headers refer to the same snapshot. The commit headers also apply to `raw=false`; stripping memory fields only changes the body and its size.
 
 **CLI**
 
@@ -582,19 +599,36 @@ With `dry_run=true`, only the planned diff is returned and nothing is written. D
 
 ---
 
-### Single-file version restore (HTTP API)
+### Single-file version restore
 
-`POST /api/v1/snapshot/restore` also restores historical content of a Compile output file. This mode requires the following three fields and cannot be combined with `project_dir` or `source_commit`:
+`POST /api/v1/snapshot/restore` restores historical content at any permitted file path. No Compile configuration or output ownership is required. This mode accepts the following fields and cannot be combined with `project_dir` or `source_commit`:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| path | str | `viking://` URI of the Compile output file |
-| restore_version | str | Historical version supplying the restored content, such as `v1` |
-| current_version | str | Current version that must match before writing, such as `v2`; a mismatch returns `409 CONFLICT` with `error.details.resource: "VERSION_CONFLICT"` |
+| path | str | File URI, also used as the historical snapshot path |
+| restore_commit_id | str | Source commit ID, 40 lowercase hexadecimal characters |
+| current_commit_id | str | Optional. Omit to restore unconditionally, or pass the last commit observed for this file on `main`. A mismatch returns `409 CONFLICT` with resource `VERSION_CONFLICT` |
+| dry_run | bool | Optional; checks the request without changing content or creating a snapshot |
 
-Call `GET /api/v1/snapshot/versions?uri=<file URI>` to obtain `current_version` and the version history before submitting a restore:
+```bash
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md --current-commit-id <current_commit_id>
+```
 
-The response's `total` counts all retained, queryable versions before applying `limit` or `before_version`; use `next_before_version` to load older versions.
+`GET /api/v1/snapshot/versions?uri=<file URI>&limit=20` returns native Git history, newest first:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/wiki/entity/project.md",
+    "versions": [{"oid": "54c71fb7bf134b71a9b7ed604c21f5b412345678", "message": "content write"}],
+    "next_before_snapshot": null
+  }
+}
+```
+
+Each history entry is native commit metadata, including its `oid`; no separate version index, UUID or version number is maintained. `limit` is 1–100, default 20. Pass `next_before_snapshot` as `before_snapshot` to continue after that commit; null marks the end. History does not depend on a Compile run or configuration.
 
 ```bash
 curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
@@ -602,14 +636,14 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "viking://resources/wiki/entity/project.md",
-    "restore_version": "v1",
-    "current_version": "v2"
+    "restore_commit_id": "0334d9abe4ac4f25a3e59d0b401bb01c12345678",
+    "current_commit_id": "54c71fb7bf134b71a9b7ed604c21f5b412345678"
   }'
 ```
 
-When v1 differs from the current content, restoring creates v3 with v1's content and preserves the history of v1 and v2. The response contains `version_id: "v3"` and `meta.restored_from: "v1"`. Identical content returns `result: "noop"` and `meta.restored_from: null` without creating a version.
+The response contains `uri`, `snapshot_id`, and `result` (`created`, `noop`, or `dry_run`). Changed content produces a forward snapshot and normal index maintenance. Identical content may return the existing snapshot as `noop`. Dry runs do not write content or create a snapshot. The dry-run `snapshot_id` is null when `current_commit_id` is omitted.
 
-Only the specified file is restored; related Wiki pages and index content retain their current content. A running Compile on the target returns `409 CONFLICT` with `error.details.resource: "COMPILE_RUNNING"`. This mode does not provide a `dry_run` preview; directory restore preview options do not apply to single-file restore.
+When `current_commit_id` is supplied, the last file commit is checked before reading historical content and again under the content write lock. Uncommitted edits also return `409`; omit `current_commit_id` to restore unconditionally. Stale requests return `409`; missing history or paths return `404`. ACL checks and index maintenance still apply. Restore uses the same path and does not follow renames. Neither file nor directory restore writes Compile state or run history; directory restore already produces its own forward commit.
 
 ---
 

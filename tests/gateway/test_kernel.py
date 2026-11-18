@@ -14,7 +14,7 @@ from openviking_gateway.capture import CaptureWorker, capture_messages
 from openviking_gateway.capture_store import Document
 from openviking_gateway.client import VikingError
 from openviking_gateway.config import ClientRules
-from openviking_gateway.kernel import token_estimate
+from openviking_gateway.kernel import Budget, token_estimate
 from openviking_gateway.models import Policy
 from openviking_gateway.protocols import (
     AUXILIARY,
@@ -422,6 +422,14 @@ def test_plugin_detection_distinguishes_gateway_sources(source, plugin):
         },
         {},
     )
+
+
+def test_plugin_detection_finds_hook_context_mid_line():
+    text = (
+        "<system-reminder>\nUserPromptSubmit hook additional context: <openviking-context>\n"
+        "Use `ov find`:\n```sh\nov find deploy\n```\n</openviking-context>\n</system-reminder>"
+    )
+    assert plugin_present({"messages": [{"role": "user", "content": text}]}, {})
 
 
 async def test_scope_fork_and_policy_snapshot(setup_kernel, credential, policy):
@@ -1409,3 +1417,81 @@ def test_tool_input_whitespace_is_significant():
     after = copy.deepcopy(before)
     after[0]["content"][0]["input"]["content"] = "a"
     assert prefix_chain(before) != prefix_chain(after)
+
+
+async def enhance(kernel, body, credential, policy, budget=None, summarize=None):
+    return await kernel.enhance(
+        body,
+        "chat",
+        {"x-openviking-session": "limited"},
+        credential,
+        {"id": "upstream"},
+        policy,
+        summarize=summarize,
+        budget=budget,
+    )
+
+
+async def test_preparation_past_its_limit_forwards_without_memory(
+    setup_kernel, credential, policy, monkeypatch
+):
+    kernel = setup_kernel[0]
+
+    async def slow_recall(*args):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(kernel, "recall", slow_recall)
+    body = {"model": "m", "messages": [{"role": "user", "content": "How do I deploy?"}]}
+    started = time.monotonic()
+    forwarded, prepared, metrics = await enhance(
+        kernel, body, credential, policy, budget=Budget(0.05)
+    )
+    assert time.monotonic() - started < 1
+    assert prepared is None and forwarded == body
+    assert metrics["degradation"] == "prepare_timeout"
+    assert metrics["degradations"] == ["prepare_timeout"]
+
+
+async def test_summary_time_does_not_count_against_the_limit(setup_kernel, credential, policy):
+    from test_compaction import Summarizer, answered
+
+    kernel = setup_kernel[0]
+    policy.update(context_window=1024, recall=False)
+    messages = [{"role": "user", "content": "How do I deploy?"}]
+    reply = {"role": "assistant", "content": "Use the blue cluster."}
+    first = await prepare(
+        kernel, {"model": "m", "messages": messages}, credential, policy, session="limited"
+    )
+    await answered(kernel, first, credential, reply)
+    summarizer = Summarizer("chat")
+
+    async def slow_summary(prepared, body):
+        await asyncio.sleep(0.3)
+        return await summarizer(prepared, body)
+
+    messages = [*messages, reply, {"role": "user", "content": "What next?"}]
+    _, prepared, metrics = await enhance(
+        kernel,
+        {"model": "m", "messages": messages},
+        credential,
+        policy,
+        budget=Budget(0.2),
+        summarize=slow_summary,
+    )
+    assert prepared is not None and "degradation" not in metrics
+    assert metrics["compaction_applied"] and len(summarizer.requests) == 1
+
+
+async def test_no_limit_by_default(setup_kernel, credential, policy, monkeypatch):
+    kernel = setup_kernel[0]
+    recall = kernel.recall
+
+    async def slow_recall(*args):
+        await asyncio.sleep(0.2)
+        await recall(*args)
+
+    monkeypatch.setattr(kernel, "recall", slow_recall)
+    assert Budget(0).deadline is None
+    body = {"model": "m", "messages": [{"role": "user", "content": "How do I deploy?"}]}
+    _, prepared, metrics = await enhance(kernel, body, credential, policy)
+    assert prepared is not None and "degradation" not in metrics

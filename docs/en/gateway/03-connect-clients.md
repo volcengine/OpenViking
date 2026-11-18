@@ -36,13 +36,38 @@ Without the header, every request fails with 401 `Upstream API key is missing`. 
 
 ## Override profile settings {#override-profile-settings}
 
-A client can change the settings of its key's context profile for a new conversation with an `X-OpenViking-Context` header. Its value is a JSON object of the fields to change, for example `{"recall":false}` to skip recall, or `{"disabled_tools":[]}` to offer every OpenViking tool, including the ones that change data. The profile must have **Let clients override settings** on, which is the default; what the header may contain and the errors it can get are in [Let clients override settings](08-context-profiles.md#client-overrides). How each client sends it is in [Add a header to a client](#add-a-header).
+A client can change the settings of its key's context profile for a new conversation with an `X-OpenViking-Context` header. Its value is a JSON object of the fields to change, for example `{"recall":false}` to skip recall, or `{"disabled_tools":["forget","set_acl"]}` to withhold those two tools; the header can only withhold more tools than the profile does, never offer ones it withholds. The profile must have **Let clients override settings** on, which is the default; what the header may contain and the errors it can get are in [Let clients override settings](08-context-profiles.md#client-overrides). How each client sends it is in [Add a header to a client](#add-a-header).
 
 A conversation keeps the settings it started with, so a changed header takes effect in the next new conversation, for example with a new `X-OpenViking-Session` value. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
 
+## Tell memory apart by peer {#peer}
+
+When one key serves several counterparts, such as a bot that talks to many people as one OpenViking user, the client can name the counterpart of each request with an `X-OpenViking-Actor-Peer` header, for example `X-OpenViking-Actor-Peer: review-agent`. The value is an OpenViking [Peer](../getting-started/20-peers.md) ID, and the header has the same name as in OpenViking's own API and SDKs. With a peer, the gateway:
+
+- recalls with that peer: recall adds that peer's memories to the user's own. By default, other peers' memories can still be recalled with a small score penalty, and OpenViking tools are not narrowed by the peer; [Recall only the current peer](#peer-scope) changes both;
+- saves the request's user message with that `peer_id`, so OpenViking can extract memories about the peer when it commits the session. Assistant replies are saved without a peer.
+
+The peer belongs to each request, not to the conversation, and conversations are [recognized](#how-conversations-are-recognized) the same way with or without one. One conversation, such as a group chat a bot takes part in, can hold user messages from several peers: each message keeps the peer of the request that first sent it to the gateway, even after the client edits or drops earlier messages, and each request recalls with its own peer.
+
+A request without the header uses the key's [default peer](09-gateway-keys.md#default-peer), if the key has one; with neither, nothing changes. A blank header also falls back to the default. The value must be one path segment of letters, digits, `_`, `.` and `-`, with at most one `@`. Any other value gets 400 `peer_invalid` before the request reaches the provider. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
+
+### Recall only the current peer {#peer-scope}
+
+When recall for one counterpart should not bring up another's memories, set **Peer scope** in the context profile's [Recall memory](08-context-profiles.md#recall-memory) section (under **Advanced settings**) to **Current peer only** (`recall_peer_scope: "actor"`). The default is **All peers, current peer first** (`all`), described above. With **Current peer only**:
+
+- recall returns only the user's own memories and the request's peer's;
+- OpenViking tools the gateway runs for the model carry the request's peer, so they do not find or read other peers' memories either;
+- a request with no peer, neither from the header nor from the key's default, has nothing to narrow to, so it recalls and runs tools as with the default.
+
+To use it for one conversation without changing the profile, send `X-OpenViking-Context: {"recall_peer_scope":"actor"}` (see [Override profile settings](#override-profile-settings)); with **Let clients override settings** off, clients cannot change it.
+
+Like every profile setting, it is fixed when a conversation starts, while the peer still comes from each request. It narrows what each request recalls, not what a conversation already holds: memory recalled for one peer stays in the history that later requests from other peers send, and the conversations saved to the user's OpenViking sessions hold every peer's messages, which OpenViking tools such as `openviking_grep` and `openviking_read` can still read.
+
+So even with **Current peer only**, a peer is not an access boundary: whoever holds the key can name any peer, or none. Give people who need their own memory their own key; see [One key per person](09-gateway-keys.md#one-key-per-person).
+
 ## Add a header to a client {#add-a-header}
 
-The two headers above go on every request. To add one:
+The headers above go on every request. To add one:
 
 | Client | How to add a header |
 | --- | --- |
@@ -142,6 +167,8 @@ SDKs for the other two APIs work the same way, as long as the upstream uses the 
 - Point the Anthropic SDK at `https://ov.example.com/gateway`.
 - For the Responses API, use `https://ov.example.com/gateway/v1`, send the full history in every request and set `store: false`. Other Responses requests are forwarded without memory.
 
+If the provider stops sending in the middle of a streamed reply (nothing for `upstream_timeout_seconds`, or a dropped connection), the stream still ends in a way the SDK understands: the gateway adds one error event of the API in use and closes the stream normally. The OpenAI Chat Completions and Anthropic SDKs raise their API error, with the reason (such as `upstream_timeout`) at the start of the message; the Responses API receives `response.failed`. The HTTP status is already 200 by then. Only when the provider stops in the middle of an event, or after the reply's last event, is the connection cut as before.
+
 Next, [check the connection](#check-the-connection).
 
 ## Open WebUI {#open-webui}
@@ -238,7 +265,7 @@ Next, [check the connection](#check-the-connection).
 
 ## DSH {#dsh}
 
-[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`) builds on pi's model layer and takes the same `api` and base URL values: `https://ov.example.com/gateway/v1`, or `https://ov.example.com/gateway` for Anthropic Messages. Add a provider to the profile configuration. `dsh web` uses the `web` profile, so the file is `~/.dsh/profiles/web/cordis.patch.yml`:
+[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`) builds on pi's model layer and takes the same `api` and base URL values: `https://ov.example.com/gateway/v1`, or `https://ov.example.com/gateway` for Anthropic Messages. Add a provider to the profile configuration. `dsh web` uses the `web` profile, so the file is `~/.dsh/profiles/web/cordis.patch.yml`; the DeepSeek Harness Desktop app uses `~/.dsh/profiles/desktop/cordis.patch.yml`:
 
 ```yaml
 - id: llm-pi-ai
@@ -257,6 +284,7 @@ If the file already has an `llm-pi-ai` entry, add `openviking` under its `provid
 Export the gateway key as `OPENVIKING_GATEWAY_KEY`, the variable `apiKeyEnv` names, then start `dsh web` and pick `<model>` under the `openviking` provider in the model picker.
 
 - You can also add the provider in the Web UI under Settings → Models → Add model provider → Custom model API, which writes the same file.
+- Desktop does not see variables exported in a terminal. On macOS, export `OPENVIKING_GATEWAY_KEY` in your shell startup file (`~/.zprofile` or `~/.zshrc`); on Windows, set it with `setx`. Then quit Desktop with ⌘Q or from the tray and reopen it. If Desktop's recovery dialog runs, it moves `cordis.patch.yml` aside to a `.bak-<timestamp>` file, so add the provider again.
 - A DSH provider speaks one protocol. To use the gateway over several, declare one provider per protocol.
 - Unless DSH sends one of the session headers, the gateway matches its conversations by their history (see [How conversations are recognized](#how-conversations-are-recognized)).
 - If the [OpenViking plugin for DSH](../agent-integrations/17-dsh.md) is installed in the same profile, the gateway steps aside for those conversations. Use one or the other.
@@ -295,7 +323,7 @@ Check every new client setup once, with a short conversation. This matters most 
 
 If something is off:
 
-- **No requests appear.** Only requests that reach a model provider are logged; the client received the gateway's error directly. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
+- **No requests appear.** The default `store` sink keeps no record of a request that failed before its key was confirmed (for example 401, 402 or 403); every other request appears, gateway errors included, with its error reason. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
 - **The two requests have different conversations.** The client sends no session header and the history did not match; see [How conversations are recognized](#how-conversations-are-recognized).
 - **Memory stays empty.** That is expected on a brand-new account. To prove that memory works end to end, follow [Confirm that memory works](02-quickstart.md#confirm-that-memory-works).
 

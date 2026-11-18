@@ -149,7 +149,6 @@ class ExperienceGradientEstimator:
             ctx=context.request_context,
             context_provider=provider,
             isolation_handler=isolation_handler,
-            thinking=True,
         )
         operations, _ = await orchestrator.run()
         return operations
@@ -224,6 +223,7 @@ def _operations_to_gradients(
                     "rubric_passed": analysis.evaluation.passed,
                     "supersedes": fields.get("supersedes"),
                     "training_category": _trajectory_training_category(trajectory, analysis),
+                    "case_uris": list(trajectory.metadata.get("case_uris", [])),
                 },
             )
         )

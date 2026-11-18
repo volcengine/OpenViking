@@ -9,9 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.resource.watch_storage import (
-    WATCH_TASK_STORAGE_BAK_URI,
-    WATCH_TASK_STORAGE_TMP_URI,
-    WATCH_TASK_STORAGE_URI,
+    WATCH_TASK_CONTROL_URIS,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
@@ -45,11 +43,7 @@ class _NoWriteVikingFS:
 
 @pytest.mark.parametrize(
     "uri",
-    [
-        WATCH_TASK_STORAGE_URI,
-        WATCH_TASK_STORAGE_BAK_URI,
-        WATCH_TASK_STORAGE_TMP_URI,
-    ],
+    sorted(WATCH_TASK_CONTROL_URIS),
 )
 @pytest.mark.asyncio
 async def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_ctx, uri):
@@ -69,23 +63,13 @@ async def test_hidden_listing_filters_watch_task_control_files_for_non_root(
     async def ls_entries(path, **_kwargs):
         return [
             {
-                "name": ".watch_tasks.json",
+                "name": uri.rsplit("/", 1)[-1],
                 "isDir": False,
                 "size": 10,
                 "modTime": "2026-01-01T00:00:00+00:00",
-            },
-            {
-                "name": ".watch_tasks.json.bak",
-                "isDir": False,
-                "size": 10,
-                "modTime": "2026-01-01T00:00:00+00:00",
-            },
-            {
-                "name": ".watch_tasks.json.tmp",
-                "isDir": False,
-                "size": 10,
-                "modTime": "2026-01-01T00:00:00+00:00",
-            },
+            }
+            for uri in WATCH_TASK_CONTROL_URIS
+        ] + [
             {
                 "name": "public.txt",
                 "isDir": False,
@@ -105,12 +89,7 @@ async def test_hidden_listing_filters_watch_task_control_files_for_non_root(
         ctx=root_ctx,
     )
     root_uris = {entry["uri"] for entry in root_entries}
-    assert root_uris >= {
-        WATCH_TASK_STORAGE_URI,
-        WATCH_TASK_STORAGE_BAK_URI,
-        WATCH_TASK_STORAGE_TMP_URI,
-        "viking://resources/public.txt",
-    }
+    assert root_uris >= WATCH_TASK_CONTROL_URIS | {"viking://resources/public.txt"}
 
     user_entries = await bare_viking_fs._ls_original(
         "viking://resources",
@@ -119,18 +98,12 @@ async def test_hidden_listing_filters_watch_task_control_files_for_non_root(
     )
     user_uris = {entry["uri"] for entry in user_entries}
     assert "viking://resources/public.txt" in user_uris
-    assert WATCH_TASK_STORAGE_URI not in user_uris
-    assert WATCH_TASK_STORAGE_BAK_URI not in user_uris
-    assert WATCH_TASK_STORAGE_TMP_URI not in user_uris
+    assert user_uris.isdisjoint(WATCH_TASK_CONTROL_URIS)
 
 
 @pytest.mark.parametrize(
     "uri",
-    [
-        WATCH_TASK_STORAGE_URI,
-        WATCH_TASK_STORAGE_BAK_URI,
-        WATCH_TASK_STORAGE_TMP_URI,
-    ],
+    sorted(WATCH_TASK_CONTROL_URIS),
 )
 async def test_content_write_rejects_watch_task_control_files(user_ctx, uri):
     coordinator = ContentWriteCoordinator(_NoWriteVikingFS())
@@ -189,11 +162,7 @@ def test_storage_name_policy_allows_user_directories(name):
 
 @pytest.mark.parametrize(
     "uri",
-    [
-        "viking://resources//.watch_tasks.json",
-        "viking://resources//.watch_tasks.json.bak",
-        "viking://resources///.watch_tasks.json.tmp/",
-    ],
+    [uri.replace("resources/", "resources///") + "/" for uri in sorted(WATCH_TASK_CONTROL_URIS)],
 )
 async def test_redundant_separator_aliases_cannot_bypass_watch_task_acl(
     bare_viking_fs, user_ctx, uri

@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import type { ComponentType } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, render, screen } from '@testing-library/react'
+import type { ComponentType } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { Route } from './route'
+import { Route } from '#/routes/settings/route'
 
 const {
   probe,
@@ -35,8 +35,8 @@ const {
   config: { url: 'http://localhost:1933', selection: 'auto' },
   healthState: { value: null as null | Record<string, unknown> },
 }))
-vi.mock('#/lib/admin', () => ({ probeStudioConnection: probe }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/shared/api/admin', () => ({ probeStudioConnection: probe }))
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
       ...Object.assign(connectionState, {
@@ -60,7 +60,7 @@ vi.mock('react-i18next', () => ({
     i18n: { resolvedLanguage: 'en' },
   }),
 }))
-vi.mock('#/hooks/use-studio-service', () => ({
+vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({
     provider: serviceState.provider,
     ready: serviceState.ready,
@@ -69,12 +69,17 @@ vi.mock('#/hooks/use-studio-service', () => ({
     health: { refetch: vi.fn() },
   }),
 }))
-vi.mock('./-components/connection-profiles', () => ({
+vi.mock('#/features/connection/components/connection-profiles', () => ({
   ConnectionProfilesList: () => <span data-testid="connection-profiles" />,
 }))
-vi.mock('./-components/server-configuration', () => ({
-  ServerConfigurationEditor: () => <span data-testid="configuration-editor" />,
-}))
+vi.mock(
+  '#/features/admin/server-configuration/components/server-configuration',
+  () => ({
+    ServerConfigurationEditor: () => (
+      <span data-testid="configuration-editor" />
+    ),
+  }),
+)
 afterEach(() => {
   cleanup()
   healthState.value = null
@@ -82,7 +87,7 @@ afterEach(() => {
   reconnect.mockClear()
 })
 
-it('unmounts the configuration editor and resets the active tab when switching to a hosted connection', async () => {
+it('keeps service configuration out of connection settings for both providers', async () => {
   Object.assign(serviceState, {
     provider: 'opensource',
     ready: true,
@@ -101,17 +106,13 @@ it('unmounts the configuration editor and resets the active tab when switching t
     </QueryClientProvider>
   )
   const view = render(content())
-  fireEvent.click(screen.getByRole('tab', { name: 'tabs.configuration' }))
-  expect(await screen.findByTestId('configuration-editor')).toBeTruthy()
+  expect(screen.queryByRole('tab', { name: 'tabs.configuration' })).toBeNull()
+  expect(screen.getByTestId('connection-profiles')).toBeTruthy()
   serviceState.provider = 'volcengine'
   view.rerender(content())
   expect(screen.queryByRole('tab', { name: 'tabs.configuration' })).toBeNull()
   expect(screen.queryByTestId('configuration-editor')).toBeNull()
-  expect(
-    screen
-      .getByRole('tab', { name: 'tabs.connection' })
-      .getAttribute('aria-selected'),
-  ).toBe('true')
+  expect(screen.getByTestId('connection-profiles')).toBeTruthy()
   client.clear()
   Object.assign(serviceState, { provider: 'opensource', role: 'user', key: '' })
 })

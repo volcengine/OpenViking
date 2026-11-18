@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from .api import (
     SUPPORTED_ITEM_TYPES,
@@ -38,6 +39,7 @@ class _ExpirySchedulerFacade:
         shard_count: int,
         reporting_enabled: bool,
         metrics: ExpiryMetrics,
+        on_report: Callable[[str], None] | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -45,6 +47,7 @@ class _ExpirySchedulerFacade:
         self._metrics = metrics
         self._shard_count = shard_count
         self._reporting_enabled = reporting_enabled
+        self._on_report = on_report
 
     async def report(self, task: ExpiryRegistration) -> ExpiryRegistrationResult:
         self._require_ready()
@@ -53,14 +56,19 @@ class _ExpirySchedulerFacade:
         validate_report(task)
         self._ensure_supported_type(task.identity.item_type)
         try:
+            binding = self._registry.get(task.identity.item_type)
+            if binding is not None and binding.options.lazy_start:
+                # Persist activation before the source write can become durable.
+                await self._store.enable_consumer(task.identity.item_type)
             item_id = encode_item_id(task.identity)
             shard_id = shard_for(item_id, self._shard_count)
             result = await self._store.upsert_resource(shard_id, item_id, task)
-            binding = self._registry.get(task.identity.item_type)
             if binding is None or binding.options.metadata_enabled:
                 await self._store.ensure_metadata(item_id, task)
         except StoreOperationError as exc:
             raise self._business_error(exc) from exc
+        if binding is not None and binding.options.lazy_start and self._on_report is not None:
+            self._on_report(task.identity.item_type)
         self._metrics.count("timer_report", item_type=task.identity.item_type, outcome="written")
         return result
 

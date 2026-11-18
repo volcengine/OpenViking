@@ -12,6 +12,38 @@ from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
 
+@pytest.mark.parametrize(
+    ("mode", "configured_provider", "expected"),
+    [("logical_path", "filesystem", "tree"), ("lock_path", "postgres", None)],
+)
+def test_missing_snapshot_target_uses_runtime_handle_mode(
+    monkeypatch, mode, configured_provider, expected
+):
+    config = Mock()
+    config.storage.agfs.pathlock.provider = configured_provider
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config", lambda: config
+    )
+    client = Mock()
+    client.pathlock_handle_mode.return_value = mode
+    assert VikingFS(agfs=client)._snapshot_missing_target_lock_kind() == expected
+    client.pathlock_handle_mode.assert_called_once_with()
+
+
+def test_missing_snapshot_target_rejects_unknown_handle_mode():
+    client = Mock()
+    client.pathlock_handle_mode.return_value = "unknown"
+    with pytest.raises(ValueError, match="Unknown PathLock handle mode"):
+        VikingFS(agfs=client)._snapshot_missing_target_lock_kind()
+
+
+def test_missing_snapshot_target_propagates_capability_query_failure():
+    client = Mock()
+    client.pathlock_handle_mode.side_effect = RuntimeError("binding failure")
+    with pytest.raises(RuntimeError, match="binding failure"):
+        VikingFS(agfs=client)._snapshot_missing_target_lock_kind()
+
+
 @pytest.mark.asyncio
 async def test_fallback_rebuild_detaches_all_operations(monkeypatch):
     ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.ROOT)

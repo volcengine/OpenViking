@@ -85,7 +85,7 @@ OpenViking 也能以插件形式接入 Agent，例如 Claude Code、Codex、Curs
 | 模型登录方式 | 需要服务商的 API Key，由网关保管，或[由客户端各自发送](../gateway/03-connect-clients.md#bring-your-own-provider-key)。客户端不能用订阅账号登录，可以改用[订阅反代上游](../gateway/07-upstreams.md#custom-upstreams)。Codex 可以通过 [CLIProxyAPI](../gateway/03-connect-clients.md#codex-chatgpt-subscription) 使用 ChatGPT 订阅；其他订阅服务请自行确认其使用条款。 | 不经手模型调用，Agent 原来怎么登录就怎么登录，订阅也可以。 |
 | 召回 | 每条新的用户消息召回一次，结果附加在这条消息末尾；检索默认最多等 2 秒。默认检索记忆、资源和技能。 | 在 Agent 的提问事件里进行。多数插件会带上会话 ID，让服务端结合对话扩展查询；自动召回不含资源。 |
 | 保存 | 晚一轮保存已完成的轮次，连同客户端自己的工具调用和结果。子 Agent 请求和杂项请求不保存。 | 跟随 Agent 的事件，通常在每轮结束时。子 Agent 各不相同：Claude Code、OpenCode 和 DSH 存成单独的会话，Codex 并入主会话，Hermes 不保存。 |
-| OpenViking 工具 | 由网关在回复过程中执行，不支持工具或 MCP 的客户端也能用。默认只开放只读工具。调用[不经过客户端的权限确认](../gateway/04-openviking-tools.md#risks-and-controls)，每次调用显示一行提示。 | 由 Agent 当作自己的工具执行，调用和结果出现在对话记录里，遵循 Agent 的工具权限设置。 |
+| OpenViking 工具 | 由网关在回复过程中执行，不支持工具或 MCP 的客户端也能用。默认开放全部工具。调用[不经过客户端的权限确认](../gateway/04-openviking-tools.md#risks-and-controls)，每次调用显示一行提示。 | 由 Agent 当作自己的工具执行，调用和结果出现在对话记录里，遵循 Agent 的工具权限设置。 |
 | 提示词缓存 | 在后续请求里把每个记忆块逐字节原样放回，缓存前缀保持不变。**概览**页显示缓存命中率。 | 因插件而异。基于 hook 的插件把记忆块交给 Agent，由 Agent 保存在自己的历史里；pi 和 OpenCode v2 也会让之前的召回保持不变；OpenClaw 每轮在系统提示词里重建召回内容。 |
 | 长对话 | 接近模型上下文窗口时由网关压缩，任何客户端都适用，包括从不压缩的应用。[实验性的 Agent 自管上下文窗口](../gateway/05-long-conversations.md#experimental-agent-managed-context-windows)让模型自己决定何时开启新窗口。 | 由 Agent 自己压缩，多数插件会先提交已捕获的内容。pi 和 OpenClaw 可以用 OpenViking 的摘要替换 Agent 的摘要。 |
 | 按项目区分记忆 | 看不到工作目录。要按项目隔离，就给每个项目一个绑定不同 OpenViking 用户的网关密钥。 | 基于共享插件代码的插件会自动给记忆标上当前代码仓库。 |

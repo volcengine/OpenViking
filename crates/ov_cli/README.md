@@ -40,13 +40,17 @@ ov config
 
 `ov config` can add, edit, delete, validate, and switch saved configs. It writes the active client config to `~/.openviking/ovcli.conf`. Saved named configs are stored as `~/.openviking/ovcli.conf.<name>`, and `ov config switch <name>` copies the selected saved config to the active config path.
 
-Recent CLI versions require a saved display language before most commands run in non-interactive shells:
+Before most commands run in non-interactive shells, select a display language by saving it:
 
 ```bash
 ov language en
 # or
 ov language zh-CN
 ```
+
+Alternatively, set `OPENVIKING_LANG=en` or `OPENVIKING_LANG=zh-CN` in the command environment.
+A recognized value satisfies first-run language setup without writing a settings file.
+An existing saved language still takes precedence.
 
 For scripts and agents, prefer deterministic config commands and pass secrets through stdin or existing environment variables:
 
@@ -145,7 +149,7 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `cp` - Copy a file, or copy a directory recursively with `-r`.
 - `mv` - Move or rename a resource.
 - `stat` - Show resource metadata.
-- `attrs` - Get logical extended attributes.
+- `attrs` - Get logical extended attributes or update tags for one or multiple URIs.
 - `get` - Download a file to a local path.
 
 ```bash
@@ -249,7 +253,6 @@ Use `--sudo` for commands that require the configured `root_api_key`.
 - `admin set-role` - Change a user's role. ROOT only.
 - `admin regenerate-key` - Rotate a user's API key.
 - `admin set-account-settings` - Update allowlisted account settings.
-- `admin migrate` - Migrate legacy agent/session data. ROOT only.
 - `system` - Administrative system utility commands.
 - `reindex` - Rebuild semantic and vector artifacts for a URI.
 
@@ -297,6 +300,10 @@ ov write viking://resources/docs/api.md --content "# API" \
 ov ls viking://resources/docs --tags team=search,env=prod --fields tags
 ov grep "TODO" --uri viking://resources/docs --tags team=search,env=prod
 ov glob "**/*.md" --uri viking://resources/docs --tags team=search,env=prod
+
+# Save now without indexing, then explicitly process it later
+ov write viking://resources/docs/draft.md --content "# Draft" --defer-processing
+ov reindex viking://resources/docs/draft.md --wait
 
 # Temporarily override identity from CLI flags
 ov --account acme --user alice ls viking://

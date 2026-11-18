@@ -282,6 +282,11 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_lock_descendant_scans_total` | Counter | 无 | 已完成的后代锁扫描次数 |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | 无 | 后代锁扫描累计耗时 |
 | `openviking_lock_descendant_scan_duration_seconds` | Histogram | `bucket_schema` | 已完成后代锁扫描的耗时分布，可计算平均、P95 和 P99 |
+| `openviking_lock_redis_acquire_duration_seconds` | Histogram | `kind, result, bucket_schema` | Redis 获取往返耗时，包含响应解码；batch 包含 Tree 时 `kind=tree`，否则为 `exact`；`result` 为 `ok`、`conflict`、`invalid_token`、`invalid_request`、`invalid_response` 或 `error` |
+| `openviking_lock_redis_slow_acquisitions_total` | Counter | 无 | Redis 获取往返超过 10ms 的累计次数，包含失败请求 |
+
+Redis 获取指标统计已返回的脚本调用，不包含本地校验、manager 冲突等待，
+以及响应前被取消的调用。scope、owner 和服务名保留在慢日志中，不作为指标标签。
 
 队列耗时指标中的 `outcome` 可取 `success`、`failed`、`requeued`、`cancelled`、`exception`。其中 `failed` 表示 handler 返回了可确认的失败结果，`exception` 表示处理过程抛出异常，当前消息不会 ACK。
 
@@ -308,15 +313,12 @@ RAGFS 通过一次原生 `metrics()` 调用读取文件系统、Cache、multi-ba
 |--------|------|----------|------|
 | `openviking_ragfs_operation_results_total` | Counter | `plugin, operation, status` | 操作成功和失败次数 |
 | `openviking_ragfs_operation_duration_seconds` | Histogram | `plugin, operation` | 操作耗时分布 |
-| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | 文件和目录缓存命中、未命中次数 |
+| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | 查询缓存命中、未命中次数；`kind="query"` |
 | `openviking_ragfs_cache_backend_fallbacks_total` | Counter | 无 | 缓存未命中后的后端读取次数 |
-| `openviking_ragfs_cache_operations_total` | Counter | `operation` | 缓存 put/delete 尝试次数 |
+| `openviking_ragfs_cache_operations_total` | Counter | `operation` | 缓存 get/put/delete 尝试次数 |
 | `openviking_ragfs_cache_invalidations_total` | Counter | 无 | 已完成的缓存失效次数 |
-| `openviking_ragfs_cache_errors_total` | Counter | 无 | 旁路模式下忽略的缓存错误数 |
-| `openviking_ragfs_cache_policy_bypasses_total` | Counter | 无 | 绕过缓存的读取次数 |
-| `openviking_ragfs_cache_bytes_total` | Counter | `source` | 来自后端和缓存的字节数 |
+| `openviking_ragfs_cache_errors_total` | Counter | 无 | provider 或缓存数据错误数 |
 | `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | get/put/delete 累计耗时 |
-| `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved 次数 |
 | `openviking_ragfs_multiwrite_background_tasks` | Gauge | 无 | 每个 mount 的活跃 flush runtime，值为 `0` 或 `1` |
 | `openviking_ragfs_multiwrite_pending_events` | Gauge | 无 | 已提交且正在排队、执行中或重试中的事件数 |
 | `openviking_ragfs_multiwrite_errors_total` | Counter | `worker` | `flush`、`checkpoint`、`catch_up`、`gc` 的最终失败次数 |

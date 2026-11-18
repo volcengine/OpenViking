@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Typ
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
+from openviking.storage.queuefs.message_keys import encode_enqueue, validate_message_keys
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
 from openviking.storage.queuefs.queue_middleware import (
     AckContext,
@@ -122,7 +123,7 @@ class NamedQueue:
             # Keep the existing processed count: settled non-error deliveries,
             # including cancellations and successful re-enqueues.
             self._processed += 1
-            if result.outcome is ProcessOutcome.REQUEUED:
+            if result.outcome in (ProcessOutcome.REQUEUED, ProcessOutcome.RETRY):
                 self._requeue_count += 1
 
     def _record_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
@@ -172,16 +173,28 @@ class NamedQueue:
                 pass
             self._initialized = True
 
-    async def enqueue(self, data: Union[str, Dict[str, Any]]) -> EnqueueReceipt:
+    async def enqueue(
+        self,
+        data: Union[str, Dict[str, Any]],
+        *,
+        group_key: Optional[str] = None,
+        serial_key: Optional[str] = None,
+    ) -> EnqueueReceipt:
         """Send message to queue (enqueue)."""
+        validate_message_keys(group_key, serial_key)
         await self._ensure_initialized()
-        ctx = EnqueueContext(self.name, data)
+        ctx = EnqueueContext(self.name, data, group_key=group_key, serial_key=serial_key)
         message_id = await self._run_middleware("enqueue", ctx, self._enqueue)
         return EnqueueReceipt(message_id, ctx.work_id)
 
     async def _enqueue(self, ctx: EnqueueContext) -> str:
         data = json.dumps(ctx.payload) if isinstance(ctx.payload, dict) else ctx.payload
-        msg_id = await self._async_agfs.write(f"{self.path}/enqueue", data.encode("utf-8"))
+        payload = data.encode("utf-8")
+        if ctx.group_key is not None or ctx.serial_key is not None:
+            msg_id, frame = encode_enqueue(payload, ctx.group_key, ctx.serial_key)
+            await self._async_agfs.write(f"{self.path}/enqueue_ext", frame)
+        else:
+            msg_id = await self._async_agfs.write(f"{self.path}/enqueue", payload)
         ctx.committed = True
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
@@ -206,6 +219,18 @@ class NamedQueue:
         await self._async_agfs.write(f"{self.path}/ack", ctx.message_id.encode("utf-8"))
         ctx.committed = True
 
+    async def retry(self, msg_id: str) -> None:
+        """Return the original delivery to pending after its Work is persisted."""
+        if msg_id:
+            await self._async_agfs.write(f"{self.path}/retry", msg_id.encode("utf-8"))
+
+    async def settle_dequeued(self, message: Dict[str, Any], result: ProcessResult) -> None:
+        msg_id = message.get("id", "")
+        if result.outcome is ProcessOutcome.RETRY:
+            await self.retry(msg_id)
+        else:
+            await self.ack(msg_id, message)
+
     async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
         """Read and remove one message from the AGFS queue; return parsed dict or None.
 
@@ -225,12 +250,12 @@ class NamedQueue:
         return json.loads(raw.decode("utf-8"))
 
     async def dequeue(self) -> Optional[Dict[str, Any]]:
-        """Dequeue a message, process it, then ack to confirm deletion.
+        """Dequeue and process a message, then ACK or retry its original delivery.
 
         Flow (at-least-once delivery):
           1. Read from /dequeue  → backend marks message as 'processing' (not deleted yet)
           2. Call on_dequeue()   → actual processing
-          3. Call ack()          → backend deletes the message permanently
+          3. Settle the result   → ACK deletes it; RETRY returns it to pending
 
         If the process crashes between steps 1 and 3, the backend's RecoverStale
         on the next startup resets the message back to 'pending' for retry.
@@ -240,15 +265,14 @@ class NamedQueue:
             data = await self._read_queue_message()
             if data is None:
                 return None
-            msg_id = data.get("id", "") if isinstance(data, dict) else ""
             raw_data = data
             if self._dequeue_handler:
                 result = await self.process_dequeued(raw_data)
                 data = result.value
-            # Ack unconditionally after handler returns (success or handled error).
-            # If on_dequeue raises, the exception propagates and ack is skipped —
-            # the message will be recovered on next startup.
-            await self.ack(msg_id, raw_data)
+            else:
+                result = ProcessResult.success(data)
+            # Middleware persists Work before either native retry or final ACK.
+            await self.settle_dequeued(raw_data, result)
             return data
         except Exception as e:
             logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")

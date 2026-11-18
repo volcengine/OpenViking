@@ -154,15 +154,11 @@ class OpenAIRerankClient(RerankBase):
 
             results = self._extract_results(result)
             if not results:
-                logger.warning(f"[OpenAIRerankClient] Unexpected response format: {result}")
-                return None
-
-            if len(results) != len(documents):
-                logger.warning(
-                    "[OpenAIRerankClient] Sparse rerank results: expected=%s actual=%s",
-                    len(documents),
-                    len(results),
+                logger.info(
+                    "rerank results missing; using vector scores degraded=true",
+                    extra={"degraded": True},
                 )
+                return None
 
             # Results may be sparse or out of order. Missing documents keep a
             # zero score while returned scores map back to their input indexes.
@@ -172,17 +168,32 @@ class OpenAIRerankClient(RerankBase):
             for item in results:
                 idx = item.get("index")
                 if idx is None or not (0 <= idx < len(documents)):
-                    logger.warning(
-                        "[OpenAIRerankClient] Out-of-bounds or missing index in result: %s", item
+                    logger.info(
+                        "rerank index invalid; using vector scores degraded=true",
+                        extra={"degraded": True},
                     )
                     return None
                 scores[idx] = item.get("relevance_score", item.get("relevance_scores", 0.0))
 
-            logger.debug(f"[OpenAIRerankClient] Reranked {len(documents)} documents")
+            if len(results) != len(documents):
+                logger.info(
+                    "rerank result count mismatch; using zero scores for missing items total=%d returned=%d degraded=true",
+                    len(documents),
+                    len(results),
+                    extra={"total": len(documents), "degraded": True},
+                )
+
+            logger.debug(
+                "rerank completed total=%d", len(documents), extra={"total": len(documents)}
+            )
             return scores
 
         except Exception as e:
-            logger.error(f"[OpenAIRerankClient] Rerank failed: {e}")
+            logger.info(
+                "rerank failed; using vector scores error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
             return None
 
     @classmethod

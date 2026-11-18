@@ -1,8 +1,8 @@
 """Ownership, restart and installer regressions through the external package."""
 
-import hashlib
 import importlib
 import os
+import socket
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -25,12 +25,24 @@ def servers(modules, monkeypatch):
     home, _provider, _module, ql, lifecycle, _packages = modules
     monkeypatch.setattr(ql, "_pm_available", lambda: False)
     available = ql.find_available_port
-    first_port = 20000 + int(hashlib.sha256(str(home).encode()).hexdigest()[:8], 16) % 40000
-    monkeypatch.setattr(
-        ql,
-        "find_available_port",
-        lambda **kwargs: available(first_port=first_port, attempts=20, **kwargs),
-    )
+    allocated_ports = set()
+
+    def find_test_port(*, preferred_endpoint=None):
+        preferred = ql._endpoint_port(preferred_endpoint)
+        if preferred in allocated_ports:
+            port = available(
+                preferred_endpoint=preferred_endpoint, first_port=preferred, attempts=1
+            )
+            if port is not None:
+                return port
+        # Let the OS avoid occupied and reserved ranges, including Windows exclusions.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
+            candidate.bind(("127.0.0.1", 0))
+            port = candidate.getsockname()[1]
+        allocated_ports.add(port)
+        return port
+
+    monkeypatch.setattr(ql, "find_available_port", find_test_port)
     children = []
 
     def spawn(endpoint, config, hermes_home, command):

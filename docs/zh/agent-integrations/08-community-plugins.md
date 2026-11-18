@@ -40,6 +40,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md)。
 
+安装完成后，在 ZCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+
 ## Kimi Code 记忆集成
 
 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
@@ -72,41 +74,40 @@ curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harnes
 已验证的宿主契约和版本见
 [`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md)。
 
-## CodeBuddy Code 记忆集成
+安装完成后，在 Kimi Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+
+## Antigravity 记忆集成
 
 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
 
-CodeBuddy Code 集成是 `agent-hook-plugin` 的宿主适配器：复用共享的 OpenViking hook 运行时，只新增 CodeBuddy 特有的事件映射、transcript 解码、输出信封与提交策略：
+Antigravity 集成同时服务 Antigravity 桌面 app 与 `agy` CLI，两者从 `~/.gemini/config/plugins/` 加载同一批插件：
 
-- **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
-- **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。宿主自动生成的续写轮次会被跳过，因此宿主自己产生的轮次不会触发检索。
-- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
-- **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 捕获到新消息时提交。
+- **SessionStart** 注入用户画像。
+- **PreInvocation** 在每轮的第一次模型调用时召回相关记忆。Antigravity 在每次模型调用前都会运行这个 Hook，工具循环中的后续调用会跳过召回。
+- **Stop** 在后台进程中采集对话 transcript 里已完成的步骤，然后 commit OpenViking 会话。
 
-插件 manifest 还把 OpenViking MCP 服务以 stdio 代理的形式暴露出来，走同一份解析后的配置，并附带 `openviking-memory`、`openviking-skills`、`ov-experience-memory` 三个 skill。hook 与 MCP 读取同一份凭据，不会在服务端、账号或用户上各说各话。与其他社区适配器一致，v1 不支持子代理采集：宿主会触发 `SubagentStart`/`SubagentStop`，但共享 dispatcher 目前还没有子代理阶段。
+Antigravity 的 `hooks.json` 格式与 Claude Code 不同：顶层 key 是 Hook 名，上下文以 `injectSteps` 系统消息返回，因此不能直接复用 Claude Code 的 `hooks.json`。
 
 ### 安装
 
-前置条件：CodeBuddy Code、Node.js 18+，以及正在运行的 OpenViking 服务。
+前置条件：Node.js 18+、运行中的 OpenViking 服务，以及 Antigravity app 或 `agy`。
 
 ```bash
-curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness codebuddy
-# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
 ```
 
-安装器在 `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/` 下组装自包含插件（共享 hook 运行时与各适配器同目录），将其注册为名为 `openviking` 的本地 marketplace，并通过 CodeBuddy CLI 完成安装。只移除本集成：
+安装脚本把插件写到 `~/.gemini/config/plugins/openviking-memory`，运行时写到 `~/.openviking/agent-integrations/antigravity`。如果同名目录已存在且不是 OpenViking 写入的，安装脚本会保留它并停止。连接配置与其他集成一样读取 `~/.openviking/ovcli.conf`。安装脚本不添加 MCP 服务；如果希望 Agent 主动检索记忆，另外在 `~/.gemini/config/mcp_config.json` 中添加 OpenViking MCP 服务。
+
+重启 Antigravity app 或开启新的 `agy` 会话后，确认：
+
+- `~/.gemini/antigravity-cli/log/` 下的 `agy` 日志出现 `loaded 1 named hooks`；
+- 一轮对话结束后，`~/.openviking/hook-state/antigravity/<conversation-id>.json` 记录了 `lastStep`。
+
+卸载：
 
 ```bash
-curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness codebuddy
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
 ```
-
-插件从 `~/.openviking/ovcli.conf` 读取连接信息；`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.codebuddy` 下（见[插件配置](../configuration/02-client.md#插件配置)）。安装后新建会话生效（运行中的会话可用 `/reload-plugins`），并用 `codebuddy plugin list` 确认 `openviking-memory@openviking` 已启用。
-
-### 宿主演决定的行为
-
-`UserPromptSubmit` 与 `SessionEnd` **只在交互式 TUI 触发**——headless 运行（`-p`、`--input-format stream-json`）不会触发它们，因此 headless 会话只在 `Stop` 捕获，永远不发收尾提交。`SessionStart` 不带 `cwd`，且同一会话内可能投递两次，因此该 hook 是幂等的，并以进程工作目录兜底。hook 超时会被杀，但其子进程不会，这正是提交能在 hook 进程返回后由分离的 worker 完成的原因。
-
-经过实测的宿主契约、transcript 格式以及本适配器 v1 的范围，记录在 [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md)。
 
 ## AstrBot 插件
 

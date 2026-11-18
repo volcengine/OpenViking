@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
+import {
+  OvClientError,
+  normalizeOvClientError,
+} from '#/shared/api/ov-client/errors'
 import { afterEach, describe, expect, it } from 'vitest'
-import i18n from './index'
 import { formatDateTime, formatNumber } from './format'
-import { OvClientError, normalizeOvClientError } from '#/lib/ov-client/errors'
+import i18n from './index'
 
 afterEach(async () => {
   await i18n.changeLanguage('en')

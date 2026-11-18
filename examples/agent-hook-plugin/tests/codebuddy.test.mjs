@@ -49,7 +49,7 @@ test("a file tool pointed at a viking:// URI is denied with a usable reason", ()
   assert.equal(out.hookSpecificOutput.permissionDecision, "deny");
   const reason = out.hookSpecificOutput.permissionDecisionReason;
   assert.match(reason, /MCP read/);
-  assert.match(reason, /read\(uris=/);
+  assert.match(reason, /read\(uri=/);
 });
 
 test("a write to a skill URI is redirected to add_skill", () => {
@@ -135,6 +135,10 @@ test("both injection events answer the Claude Code envelope, write-path events s
 test("the commit policy commits at session end and on compact, else by turn count", () => {
   assert.equal(shouldCommitCodebuddyCapture("session-end", {}, 0, 1), true);
   assert.equal(shouldCommitCodebuddyCapture("session-end", {}, 0, 0), false);
+  // Turns a Stop already sent are still uncommitted at session end.
+  assert.equal(shouldCommitCodebuddyCapture("session-end", {}, 3, 0), true);
+  assert.equal(shouldCommitCodebuddyCapture("pre-compact", {}, 3, 0), true);
+  assert.equal(shouldCommitCodebuddyCapture("stop", { commitTurnThreshold: 8 }, 3, 0), false);
   assert.equal(shouldCommitCodebuddyCapture("pre-compact", {}, 0, 1), true);
   assert.equal(shouldCommitCodebuddyCapture("pre-compact", { autoCommitOnCompact: false }, 0, 1), false);
   assert.equal(shouldCommitCodebuddyCapture("stop", { commitTurnThreshold: 2 }, 1, 1), true);
@@ -284,6 +288,39 @@ test("a second Stop on the same session sends nothing — the cursor is idempote
       }
     });
     assert.equal(seen.batches.length, 1, "re-delivery must not re-send the same turns");
+  } finally {
+    await rmSync(box.files.dir, { recursive: true, force: true });
+    restoreEnv();
+  }
+});
+
+test("SessionEnd commits turns a Stop already sent below the commit threshold", async () => {
+  const restoreEnv = scrubOpenVikingEnv();
+  const box = await sandbox();
+  const seen = { batches: [], commit: 0 };
+  try {
+    await withMockOpenViking(healthyMock(seen), async (url) => {
+      const files = await writeCredentialFiles("ov-cb-capture-url-", {
+        ovcli: { url, api_key: "k" },
+        ov: {},
+      });
+      try {
+        const env = { ...files.env, ...box.env };
+        const input = stopPayload(box.transcript, box.files.dir);
+        const run = async (event) =>
+          expectExit(await runHookScript(HOOK, { argv: [event, "codebuddy"], input, cwd: box.files.dir, env }), 0);
+        await run("stop");
+        assert.equal(seen.batches.length, 1);
+        assert.equal(seen.commit, 0, "Stop stays below the commit threshold");
+        await run("session-end");
+        assert.equal(seen.batches.length, 1, "SessionEnd has nothing new to send");
+        assert.equal(seen.commit, 1, "SessionEnd commits what Stop already sent");
+        await run("session-end");
+        assert.equal(seen.commit, 1, "nothing is left to commit");
+      } finally {
+        await rmSync(files.dir, { recursive: true, force: true });
+      }
+    });
   } finally {
     await rmSync(box.files.dir, { recursive: true, force: true });
     restoreEnv();

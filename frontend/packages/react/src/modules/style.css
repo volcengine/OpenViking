@@ -1,0 +1,4 @@
+@import '../theme.css';
+@import './file-browser/style.css';
+@import './console/style.css';
+@import './scope-cascade/style.css';

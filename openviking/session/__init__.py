@@ -20,6 +20,7 @@ def create_session_compressor(
     memory_version: Optional[str] = None,
     skill_processor=None,
     vlm_resolver: Optional["VLMResolver"] = None,
+    runtime_config_manager=None,
 ) -> "SessionCompressorV3":
     """
     Create the session compressor.
@@ -43,6 +44,7 @@ def create_session_compressor(
         vikingdb=vikingdb,
         skill_processor=skill_processor,
         vlm_resolver=vlm_resolver,
+        runtime_config_manager=runtime_config_manager,
     )
 
 

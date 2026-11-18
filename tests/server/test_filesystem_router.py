@@ -17,7 +17,7 @@ from openviking.core.namespace_policy import (
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import filesystem
-from openviking.service.fs_service import ListingPage
+from openviking.service.fs_service import FSService, ListingPage
 from openviking.storage.queuefs.queue_manager import get_queue_manager
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import InvalidURIError
@@ -260,13 +260,13 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
                 }
             ]
 
+    fs = FSService(vikingdb=FakeVectorManager())
+    monkeypatch.setattr(fs, "stat", fake_stat)
+    monkeypatch.setattr(fs, "read", fake_read)
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(
-            fs=SimpleNamespace(stat=fake_stat, read=fake_read),
-            vikingdb_manager=FakeVectorManager(),
-        ),
+        lambda: SimpleNamespace(fs=fs),
     )
 
     response = await filesystem.attrs(
@@ -290,13 +290,12 @@ async def test_system_attrs_returns_empty_tags_without_querying_vector_store(mon
     uri = "viking://system/memory/memory_templates/custom/demo.md"
     stat = AsyncMock(return_value={"isDir": False})
     vector_filter = AsyncMock(side_effect=AssertionError("system attrs must not query vectors"))
+    fs = FSService(vikingdb=SimpleNamespace(filter=vector_filter))
+    monkeypatch.setattr(fs, "stat", stat)
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(
-            fs=SimpleNamespace(stat=stat),
-            vikingdb_manager=SimpleNamespace(filter=vector_filter),
-        ),
+        lambda: SimpleNamespace(fs=fs),
     )
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 
@@ -412,7 +411,7 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
     resolved_uri = "viking://user/alice/resources/notes.md"
     seen = {}
 
-    async def fake_stat(uri, ctx=None, include_lock_status=False):
+    async def fake_stat(uri, ctx=None, include_lock_status=False, skip_count=False):
         seen.update(uri=uri, ctx=ctx, include_lock_status=include_lock_status)
         return {
             "uri": resolved_uri,
@@ -425,10 +424,14 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
             "id": record_id,
         }
 
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=fake_stat,
+    )
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(stat=fake_stat)),
+        lambda: SimpleNamespace(fs=FSService(viking_fs=viking_fs)),
     )
 
     app = FastAPI()
@@ -442,7 +445,8 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["result"]["uri"] == resolved_uri
-    assert seen["uri"] == record_id
+    assert seen["uri"] == resolved_uri
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=seen["ctx"])
     assert seen["include_lock_status"] is True
 
 
@@ -504,10 +508,13 @@ async def test_service_startup_syncs_builtin_assets_and_custom_directory(service
     ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
     profile_uri = f"{SYSTEM_MEMORY_BUILTIN_ROOT}/profile.yaml"
 
-    assert await service.viking_fs.read_file_bytes(
-        profile_uri,
-        ctx=ctx,
-    ) == (builtin_memory_templates_dir() / "profile.yaml").read_bytes()
+    assert (
+        await service.viking_fs.read_file_bytes(
+            profile_uri,
+            ctx=ctx,
+        )
+        == (builtin_memory_templates_dir() / "profile.yaml").read_bytes()
+    )
     assert (
         await service.viking_fs.stat(
             SYSTEM_MEMORY_CUSTOM_ROOT,

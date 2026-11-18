@@ -245,12 +245,13 @@ class ProjectGroup:
         Args:
             project_name: Project name
         """
-        project = self.projects.remove(project_name)
+        project = self.projects.get(project_name)
         if project:
             # Close project and delete all collections
             for collection_name in list(project.list_collections()):
                 project.drop_collection(collection_name)
             project.close()
+            self.projects.remove(project_name)
             logger.info(f"Deleted project: {project_name}")
 
     def drop_project(self, project_name: str):

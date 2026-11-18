@@ -44,6 +44,9 @@ FAILED_REASONS = {
     "openviking_http_401": "OpenViking rejected the key (401)",
     "openviking_version_mismatch": "OpenViking version mismatch",
     "recall_timeout": "OpenViking timed out",
+    "openviking_timeout": "OpenViking timed out",
+    "openviking_circuit_open": "OpenViking is not answering; skipped",
+    "openviking_budget_exhausted": "OpenViking time budget used up",
 }
 NAMES_SHOWN = 3
 

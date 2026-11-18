@@ -22,7 +22,7 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 - On OpenCode v2, reads the structured session context at execution boundaries so tool calls and results are captured too.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
-- Ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills, which tell the agent when to use which OpenViking tool. They are added to OpenCode's skill paths together with the MCP server, and left out in hook-only mode.
+- Ships the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills, which tell the agent when to use which OpenViking tool. They are added to OpenCode's skill paths together with the MCP server, and left out in hook-only mode.
 - Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`. Shell commands that carry a `viking://` URI still run, with a notice appended to their output.
 
 ## Files
@@ -223,6 +223,7 @@ OpenCode v2 has no plugin toast API. Service availability and other non-fatal no
 OpenCode sees the OpenViking MCP server as `openviking`, so tool names are namespaced with `openviking_`.
 
 - `openviking_search`: deep semantic retrieval across memories, resources, and skills; use `mode="context"` for balanced, injection-ready context.
+- `openviking_rule_search`: pass `task_context` to check compiled Rules before a constrained action or response. Requires a server advertising `rule_search`; returns complete Rules with their conditions and exceptions.
 - `openviking_find`: fast semantic retrieval.
 - `openviking_remember`: store important facts or decisions for memory extraction.
 - `openviking_read`: read one or more `viking://` files.

@@ -748,6 +748,9 @@ async def test_batch_policy_trainer_trains_from_rollout_batch():
 
 @pytest.mark.asyncio
 async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_source_trajectory():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
     from openviking.session.train import (
         PolicyPlanItem,
         StreamingPolicyTrainer,
@@ -820,10 +823,15 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
     class PassthroughUpdater:
         async def apply(self, plan, policy_set, context, *, transaction_handle=None):
             del context, transaction_handle
+            failed_uri = f"{policy_set.root_uri}/case_a.md"
+            error = f"{failed_uri}: write failed"
             return PolicyApplyResult(
                 updated_policy_set=policy_set,
-                written_uris=[item.target_uri for item in plan.items if item.target_uri],
-                errors=[],
+                written_uris=[
+                    item.target_uri for item in plan.items if item.target_uri != failed_uri
+                ],
+                errors=[error],
+                metadata={"errors_by_uri": {failed_uri: [error]}},
             )
 
     def make_case(name: str) -> Case:
@@ -835,8 +843,13 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
             rubric=case.rubric,
         )
 
+    policy_set = _policy_set()
+    policy_set.viking_fs._async_agfs = SimpleNamespace(
+        pathlock_acquire_tree=AsyncMock(return_value="lease"),
+        pathlock_release=AsyncMock(),
+    )
     trainer = StreamingPolicyTrainer(
-        policy_set=_policy_set(),
+        policy_set=policy_set,
         rollout_analyzer=CaseAwareAnalyzer(),
         gradient_estimator=NewExpEstimator(),
         policy_optimizer=LinkingOptimizer(),
@@ -868,8 +881,12 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
     assert {item.target_name for item in first.batch_result.plan.items} == {"case_a", "case_b"}
     assert [item.target_name for item in first.plan.items] == ["case_a"]
     assert [item.target_name for item in second.plan.items] == ["case_b"]
-    assert first.apply_result.written_uris == ["viking://user/u/memories/experiences/case_a.md"]
+    assert first.apply_result.written_uris == []
+    assert first.apply_result.errors == [
+        "viking://user/u/memories/experiences/case_a.md: write failed"
+    ]
     assert second.apply_result.written_uris == ["viking://user/u/memories/experiences/case_b.md"]
+    assert second.apply_result.errors == []
 
     assert await trainer.close() is None
 

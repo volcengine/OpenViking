@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
-import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
 
 from openviking.models.model_error import model_error_kind
 from openviking.utils.exceptions import AllCredentialsFailedError
@@ -22,6 +21,17 @@ from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
+
+ToolResultMediaMode = Literal["native", "user_message"]
+
+
+def _common_tool_result_media_mode(backends: List["VLMBase"]) -> ToolResultMediaMode | None:
+    """Use tool images only for all-native chains; otherwise use user images."""
+    modes = []
+    for backend in backends:
+        capability = getattr(backend, "tool_result_media_mode", None)
+        modes.append(capability() if callable(capability) else None)
+    return "native" if modes and all(mode == "native" for mode in modes) else "user_message"
 
 
 class UnsupportedMediaInputError(RuntimeError):
@@ -66,11 +76,12 @@ class VLMBase(ABC):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.cost_bearer = config.get("cost_bearer")
         self.provider = config.get("provider", "openai")
         self.model = config.get("model")
         self.api_key = config.get("api_key")
         self.api_base = config.get("api_base")
-        self.temperature = config.get("temperature", 0.0)
+        self.temperature = config.get("temperature")
         self.max_retries = config.get("max_retries", 3)
         self.timeout = config.get("timeout", 600.0)
         self.max_tokens = config.get("max_tokens")
@@ -113,6 +124,7 @@ class VLMBase(ABC):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously
 
@@ -178,6 +190,10 @@ class VLMBase(ABC):
             str if no tools provided, VLMResponse if tools provided
         """
         pass
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        """Declare image transport, independently of a model's vision capability."""
+        return None
 
     def supports_media(
         self,
@@ -256,14 +272,11 @@ class VLMBase(ABC):
             )
         except Exception as e:
             # Telemetry must never break model inference.
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "vlm.update_token_usage telemetry emit failed provider=%s model_name=%s err=%s: %s",
-                    provider,
-                    model_name,
-                    type(e).__name__,
-                    e,
-                )
+            logger.info(
+                "vlm telemetry unavailable; continuing without observation error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
 
         # Record the VLM call in Prometheus metrics (if enabled).
         try:
@@ -281,17 +294,15 @@ class VLMBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
+                cost_bearer=self.cost_bearer,
             )
         except Exception as e:
             # Metrics must never break model inference.
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "vlm.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
-                    provider,
-                    model_name,
-                    type(e).__name__,
-                    e,
-                )
+            logger.info(
+                "vlm metrics unavailable; continuing without observation error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
 
     def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
         """Record one failed provider request attempt without token usage."""
@@ -307,17 +318,15 @@ class VLMBase(ABC):
                 prompt_tokens=0,
                 completion_tokens=0,
                 error_code=extract_metric_error_code(error),
+                cost_bearer=self.cost_bearer,
                 account_id=root_context.account_id if root_context is not None else None,
             )
         except Exception as metrics_error:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "vlm failed-call metrics emit failed provider=%s model_name=%s err=%s: %s",
-                    self.provider,
-                    self.model,
-                    type(metrics_error).__name__,
-                    metrics_error,
-                )
+            logger.info(
+                "vlm metrics unavailable; continuing without observation error_type=%s degraded=true",
+                type(metrics_error).__name__,
+                extra={"error_type": type(metrics_error).__name__, "degraded": True},
+            )
 
     @property
     def token_tracker(self):
@@ -455,11 +464,14 @@ class FailoverVLM(VLMBase):
 
         self.primary = primary
         self.backup = backup
-        self._logger = logging.getLogger(__name__)
+        self._logger = get_logger(__name__)
         self._switcher = PrimaryBackupSwitcher(
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return _common_tool_result_media_mode([self.primary, self.backup])
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
@@ -502,7 +514,6 @@ class FailoverVLM(VLMBase):
         except Exception as e:
             _annotate_vlm_error(e, self.backup)
             last_error = e
-            self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
 
     async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
@@ -546,7 +557,6 @@ class FailoverVLM(VLMBase):
         except Exception as e:
             _annotate_vlm_error(e, self.backup)
             last_error = e
-            self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
 
     async def stream_with_failover(
@@ -585,7 +595,6 @@ class FailoverVLM(VLMBase):
         except Exception as exc:
             _annotate_vlm_error(exc, self.backup)
             last_error = exc
-            self._logger.error(f"Backup VLM also failed with error: {exc}")
             raise last_error
 
     def get_completion(
@@ -614,6 +623,7 @@ class FailoverVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with failover support."""
         return await self._get_completion_with_failover_async(
@@ -624,6 +634,7 @@ class FailoverVLM(VLMBase):
             tool_choice=tool_choice,
             messages=messages,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def get_vision_completion(
@@ -769,9 +780,7 @@ class FailoverVLM(VLMBase):
         backup_tracker = self.backup.token_tracker
         if primary_tracker is backup_tracker:
             return primary_tracker.to_dict()
-        merged_tracker = TokenUsageTracker.merge(
-            primary_tracker, backup_tracker
-        )
+        merged_tracker = TokenUsageTracker.merge(primary_tracker, backup_tracker)
         return merged_tracker.to_dict()
 
     def reset_token_usage(self) -> None:
@@ -830,21 +839,22 @@ class MultiCredentialVLM(VLMBase):
             "temperature": first.temperature,
             "max_retries": first.max_retries,
             "timeout": first.timeout,
-            "max_tokens": (
-                min(configured_token_limits) if configured_token_limits else None
-            ),
+            "max_tokens": (min(configured_token_limits) if configured_token_limits else None),
             "thinking": first.thinking,
         }
         super().__init__(config)
 
         self._vlm_instances = vlm_instances
         self._credential_ids = credential_ids
-        self._logger = logging.getLogger(__name__)
+        self._logger = get_logger(__name__)
         self._switcher = OrderedCredentialSwitcher(
             n=len(vlm_instances),
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
         )
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return _common_tool_result_media_mode(self._vlm_instances)
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with multi-credential failover support.
@@ -892,10 +902,13 @@ class MultiCredentialVLM(VLMBase):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
 
-                self._logger.warning(
-                    "Credential %s failed with %s, trying next credential",
-                    credential_id,
+                self._logger.info(
+                    "vlm credential attempt failed credential_index=%d attempt=%d/%d error_code=%s",
+                    idx,
+                    offset + 1,
+                    n,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -940,10 +953,13 @@ class MultiCredentialVLM(VLMBase):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
 
-                self._logger.warning(
-                    "Credential %s failed with %s, trying next credential",
-                    credential_id,
+                self._logger.info(
+                    "vlm credential attempt failed credential_index=%d attempt=%d/%d error_code=%s",
+                    idx,
+                    offset + 1,
+                    n,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -983,10 +999,13 @@ class MultiCredentialVLM(VLMBase):
                 if self._switcher.is_fail_fast(kind):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
-                self._logger.warning(
-                    "Credential %s failed with %s, trying next credential",
-                    credential_id,
+                self._logger.info(
+                    "vlm credential attempt failed credential_index=%d attempt=%d/%d error_code=%s",
+                    idx,
+                    offset + 1,
+                    n,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -1017,6 +1036,7 @@ class MultiCredentialVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with multi-credential failover support."""
         return await self._get_completion_with_failover_async(
@@ -1027,6 +1047,7 @@ class MultiCredentialVLM(VLMBase):
             tool_choice=tool_choice,
             messages=messages,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def get_vision_completion(
@@ -1131,10 +1152,11 @@ class MultiCredentialVLM(VLMBase):
                 if self._switcher.is_fail_fast(kind):
                     raise
                 errors.append((credential_id, kind, error, idx))
-                self._logger.warning(
-                    "Credential %s failed media understanding with %s, trying next credential",
-                    credential_id,
+                self._logger.info(
+                    "media credential attempt failed credential_index=%d error_code=%s",
+                    idx,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         if attempted:

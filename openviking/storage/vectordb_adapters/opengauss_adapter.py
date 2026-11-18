@@ -13,11 +13,17 @@ Driver: any psycopg2-compatible driver.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
 from openviking.storage.expr import FilterExpr, Or
 from openviking.storage.vectordb.collection.collection import Collection
-from openviking.storage.vectordb_adapters.base import CollectionAdapter
+from openviking.storage.vectordb_adapters.base import (
+    VIKINGDB_STRING_FIELD_BYTE_LIMIT,
+    VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
+    CollectionAdapter,
+)
+from openviking_cli.exceptions import UnimplementedError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import (
     OpenGaussConfig,
@@ -28,7 +34,6 @@ from .opengauss.catalog import (
     _create_collection_table,
     _ensure_meta_table,
     _load_collection_meta,
-    _save_collection_meta,
     _validate_distributed_environment,
 )
 from .opengauss.collection import (
@@ -53,6 +58,40 @@ from .opengauss.sql import (
 logger = get_logger(__name__)
 
 
+def _save_collection_meta(conn, name: str, meta: Dict[str, Any], distributed: bool = False):
+    """Merge collection metadata under a row lock."""
+    _ensure_meta_table(conn, distributed=distributed)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f'SELECT meta_json FROM "{_META_TABLE}" WHERE table_name = %s FOR UPDATE',
+            (name,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            merged = dict(meta)
+            cursor.execute(
+                f'INSERT INTO "{_META_TABLE}" (table_name, meta_json) VALUES (%s, %s)',
+                (name, json.dumps(merged)),
+            )
+        else:
+            merged = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+            merged.update(meta)
+            cursor.execute(
+                f'UPDATE "{_META_TABLE}" SET meta_json = %s WHERE table_name = %s',
+                (json.dumps(merged), name),
+            )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Collection metadata write did not affect exactly one row")
+        conn.commit()
+        return merged
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+
+
 class OpenGaussCollectionAdapter(CollectionAdapter):
     """OpenViking CollectionAdapter backed by openGauss DataVec.
 
@@ -68,7 +107,6 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
     """
 
     mode = "opengauss"
-    USE_CONTENT_FIELD = False
 
     def __init__(
         self,
@@ -100,6 +138,10 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
         self._maintenance_work_mem_mb = validated_config.maintenance_work_mem_mb
         self._connection_pool_min_size = validated_config.connection_pool_min_size
         self._connection_pool_max_size = validated_config.connection_pool_max_size
+        self._retrieval_config = {
+            "candidate_limit": validated_config.candidate_limit,
+        }
+        self._sparse_weight = 0.0
         self._pool = None
         self._conn = None
         self._connect()
@@ -144,12 +186,52 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
     def from_config(cls, config: VectorDBBackendConfig) -> "OpenGaussCollectionAdapter":
         if config.opengauss is None:
             raise ValueError("VectorDB opengauss backend requires 'opengauss' config")
-        return cls(
+        adapter = cls(
             collection_name=config.name or "context",
             config=config.opengauss,
             index_name=config.index_name or "default",
             distance_metric=config.distance_metric,
         )
+        adapter._sparse_weight = config.sparse_weight
+        return adapter
+
+    def probe_capabilities(self) -> Dict[str, Any]:
+        from .opengauss.capabilities import probe_fulltext_capabilities
+
+        return probe_fulltext_capabilities(self._conn)
+
+    USE_CONTENT_FIELD = True
+    _STRING_FIELD_BYTE_LIMIT = VIKINGDB_STRING_FIELD_BYTE_LIMIT
+    _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
+
+    def query(self, *, advance: Optional[Dict[str, Any]] = None, **kwargs):
+        from .opengauss.retrieval import _parse_time_decay, _validate_search_parameters
+
+        limit, offset = kwargs.get("limit", 10), kwargs.get("offset", 0)
+        _validate_search_parameters(limit, offset, kwargs.get("output_fields"))
+        _parse_time_decay(advance)
+        if advance is not None:
+            if self._distributed:
+                raise UnimplementedError("SPQ advanced ranking has not been certified")
+            if limit and not (kwargs.get("query_vector") or kwargs.get("sparse_query_vector")):
+                raise ValueError("openGauss advanced ranking requires a vector query")
+        if limit == 0:
+            self.get_collection().search_by_vector(
+                index_name=self._index_name,
+                dense_vector=kwargs.get("query_vector"),
+                sparse_vector=kwargs.get("sparse_query_vector"),
+                limit=limit,
+                offset=offset,
+                filters=self._compile_filter(kwargs.get("filter")),
+                output_fields=kwargs.get("output_fields"),
+                advance=advance,
+            )
+            return []
+        return super().query(advance=advance, **kwargs)
+
+    def _configure_retrieval(self, collection: OpenGaussCollection) -> None:
+        collection._retrieval_config = dict(getattr(self, "_retrieval_config", {}))
+        collection._sparse_weight = getattr(self, "_sparse_weight", 0.0)
 
     def _compile_filter(self, expr: FilterExpr | Dict[str, Any] | None) -> Dict[str, Any]:
         compiled = super()._compile_filter(expr)
@@ -203,11 +285,10 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
         dim = meta.get("_dim", 0)
         distance = (self._distance_metric or "cosine").lower()
         if meta.get("_distance") != distance:
-            meta["_distance"] = distance
-            _save_collection_meta(
+            meta = _save_collection_meta(
                 self._conn,
                 self._collection_name,
-                meta,
+                {"_distance": distance},
                 distributed=self._distributed,
             )
         og_coll = OpenGaussCollection(
@@ -219,10 +300,15 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             distributed=self._distributed,
         )
         og_coll._maintenance_work_mem_mb = self._maintenance_work_mem_mb
+        self._configure_retrieval(og_coll)
         self._collection = Collection(og_coll)
 
-        # Auto-create vector index if missing
-        self._ensure_vector_index_exists(og_coll, distance)
+        if "content" not in og_coll._get_all_columns():
+            logger.warning(
+                "openGauss collection %s has no content column; keyword search is unavailable. "
+                "Existing schema is unchanged; grep engine=auto keeps the filesystem fallback.",
+                self._collection_name,
+            )
 
     def create_collection(
         self,
@@ -247,6 +333,7 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
                 f"openGauss table {name!r} exists without collection metadata; "
                 "refusing to adopt an unverified orphan table"
             )
+        self._initializing_collection = None
         try:
             return super().create_collection(
                 name,
@@ -256,8 +343,9 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
                 index_name=index_name,
             )
         except Exception:
-            partial_collection = self._collection
-            self._collection = None
+            partial_collection = self._initializing_collection
+            if self._collection is partial_collection:
+                self._collection = None
             if partial_collection is not None:
                 try:
                     partial_collection.drop()
@@ -267,6 +355,15 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
                         name,
                     )
             raise
+        finally:
+            self._initializing_collection = None
+
+    def drop_collection(self) -> bool:
+        if not self.collection_exists():
+            return False
+        self.get_collection().drop()
+        self._collection = None
+        return True
 
     def delete(
         self,
@@ -328,10 +425,14 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
                 f"WHERE id IN ("
                 f'SELECT id FROM "{self._collection_name}" '
                 f"WHERE {where_fragment} ORDER BY id LIMIT %s"
-                f")",
+                f") RETURNING id",
                 where_params + [limit],
             )
             deleted_count = cursor.rowcount
+            deleted_ids = [row[0] for row in cursor.fetchall()]
+            raw = collection._Collection__collection
+            if raw._has_sparse_column_on_cursor(cursor):
+                raw._delete_sparse_postings_on_cursor(cursor, deleted_ids)
             self._conn.commit()
             return deleted_count
         except Exception:
@@ -370,8 +471,13 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
         requested_meta = self._build_default_index_meta(
             index_name=self._index_name,
             distance=distance,
-            use_sparse=False,
-            sparse_weight=0.0,
+            use_sparse=bool(
+                (
+                    og_coll._indexes.get(self._index_name)
+                    or og_coll._pending_indexes.get(self._index_name, {})
+                ).get("SparseIndex")
+            ),
+            sparse_weight=getattr(self, "_sparse_weight", 0.0),
             scalar_index_fields=self._existing_scalar_index_fields(og_coll),
         )
         normalized_meta = og_coll._normalized_index_meta(self._index_name, requested_meta)
@@ -403,10 +509,8 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
         sparse_weight: float,
         scalar_index_fields: list[str],
     ) -> Dict[str, Any]:
-        if use_sparse:
-            raise NotImplementedError(
-                "openGauss backend does not support sparse or hybrid vector indexes"
-            )
+        if use_sparse and self._distributed:
+            raise NotImplementedError("SPQ sparse indexes have not been certified")
         index_meta: Dict[str, Any] = {
             "IndexName": index_name,
             "VectorIndex": {
@@ -419,6 +523,8 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             "maintenance_work_mem_mb": self._maintenance_work_mem_mb,
             "parallel_workers": self._parallel_workers,
         }
+        if use_sparse:
+            index_meta["SparseIndex"] = {"implementation": "postings", "weight": sparse_weight}
         return index_meta
 
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
@@ -460,12 +566,25 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
                 shard_count=self._shard_count,
                 on_table_created=mark_table_created,
             )
-            _save_collection_meta(
+            meta = _save_collection_meta(
                 self._conn,
                 self._collection_name,
                 meta,
                 distributed=self._distributed,
             )
+            og_coll = OpenGaussCollection(
+                self._conn,
+                self._collection_name,
+                meta,
+                dim,
+                distance,
+                distributed=self._distributed,
+            )
+            og_coll._maintenance_work_mem_mb = self._maintenance_work_mem_mb
+            self._configure_retrieval(og_coll)
+            wrapped = Collection(og_coll)
+            self._initializing_collection = wrapped
+            return wrapped
         except Exception:
             if not table_created:
                 raise
@@ -492,17 +611,6 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
                     cursor.close()
             finally:
                 raise
-
-        og_coll = OpenGaussCollection(
-            self._conn,
-            self._collection_name,
-            meta,
-            dim,
-            distance,
-            distributed=self._distributed,
-        )
-        og_coll._maintenance_work_mem_mb = self._maintenance_work_mem_mb
-        return Collection(og_coll)
 
     def begin_bulk_ingest(self) -> None:
         self.get_collection().begin_bulk_ingest()

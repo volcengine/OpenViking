@@ -21,9 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 65
     env:
-      OV_TEST_KIND_KUBECONFIG: ${{ runner.temp }}/kubeconfig
       OV_TEST_GATEWAY_IMAGE: ghcr.io/volcengine/openviking:main
     steps:
+      - name: Set kubeconfig path
+        run: echo "OV_TEST_KIND_KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}

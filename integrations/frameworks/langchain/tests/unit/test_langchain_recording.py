@@ -812,7 +812,13 @@ def test_middleware_keeps_context_pending_until_empty_assistant_arrives():
     assert any(part["type"] == "context" for part in stored[1]["parts"])
 
 
-def test_middleware_retries_failed_commit_without_duplicate_writes():
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_middleware_retries_failed_commit_without_duplicate_writes(asynchronous):
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langgraph.checkpoint.memory import InMemorySaver
+
     class FailFirstCommitClient(TrackingOpenVikingClient):
         def commit_session(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
             self.commit_calls.append(session_id)
@@ -821,29 +827,54 @@ def test_middleware_retries_failed_commit_without_duplicate_writes():
             return InMemoryOpenVikingClient.commit_session(self, session_id, **kwargs)
 
     client = FailFirstCommitClient()
-    middleware = OpenVikingContextMiddleware(
-        client=client,
-        session_id_resolver=lambda _state, _runtime: "middleware-commit-retry",
-        commit_on_after_agent=True,
-    )
-    state = {
-        "messages": [
-            HumanMessage(content="Remember this middleware turn."),
-            AIMessage(content="Remembered."),
-        ]
-    }
+    client.records["viking://~/memories/profile.md"] = "Remember azure deployment preferences."
+    checkpointer = InMemorySaver()
+    config = {"configurable": {"thread_id": "middleware-commit-retry"}}
 
+    def build_agent():
+        return create_agent(
+            FakeListChatModel(responses=["Remembered."]),
+            middleware=[
+                OpenVikingContextMiddleware(
+                    client=client,
+                    target_uri="viking://~/memories",
+                    session_id_resolver=lambda _state, _runtime: "middleware-commit-retry",
+                    commit_on_after_agent=True,
+                )
+            ],
+            checkpointer=checkpointer,
+        )
+
+    async def run(agent, text):
+        payload = {"messages": [("user", text)]} if text else None
+        return (
+            await agent.ainvoke(payload, config) if asynchronous else agent.invoke(payload, config)
+        )
+
+    agent = build_agent()
     with pytest.raises(OpenVikingPartialWriteError, match="commit failed"):
-        middleware.after_agent(state, runtime=None)
-    middleware.after_agent(state, runtime=None)
+        await run(agent, "Remember this middleware turn.")
+    await run(agent, None)
 
-    assert client.batch_sizes == [2]
+    assert client.batch_sizes == [1, 1]
     assert client.commit_calls == [
         "middleware-commit-retry",
         "middleware-commit-retry",
     ]
     assert client.sessions["middleware-commit-retry"] == []
     assert len(client.archives["middleware-commit-retry"][0]["messages"]) == 2
+    assert not agent.get_state(config).values.get("openviking_pending_context")
+
+    # Persist acknowledged progress even when recovery only retries the commit.
+    await run(build_agent(), "Remember another middleware turn.")
+    archived = [
+        message
+        for archive in client.archives["middleware-commit-retry"]
+        for message in archive["messages"]
+    ]
+    assert client.batch_sizes == [1, 1, 1, 1]
+    assert len(archived) == 4
+    assert sum(part["type"] == "context" for message in archived for part in message["parts"]) == 2
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

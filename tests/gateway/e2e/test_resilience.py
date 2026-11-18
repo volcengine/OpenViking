@@ -19,7 +19,7 @@ from .harness import (
     wait_for,
     written_messages,
 )
-from .sdk_probe import probe
+from .sdk_probe import probe, stall_probe
 
 
 def stream_body(model="mock-long", messages=None):
@@ -73,11 +73,23 @@ def test_02_default_grace_finishes_stream_and_other_pod_delivers(harness):
     )
     assert len(snapshot["libraries"]["library-a"]["sessions"]) == 1
     writes = [r for r in snapshot["requests"] if r["path"].endswith("/messages/batch")]
-    assert all(r["source_pod"] != victim_ip for r in writes), writes
     ids = [
         source for r in writes for m in r["body"]["messages"] for source in m["source_message_ids"]
     ]
     assert len(ids) == len(set(ids)) == 4
+    # The next request confirms the first turn, so the victim may deliver it
+    # immediately. Only the final, idle-delayed tail must survive on another Pod.
+    tail_ids = {
+        source
+        for message in written_messages(snapshot)[-2:]
+        for source in message["source_message_ids"]
+    }
+    tail_writes = [
+        r
+        for r in writes
+        if any(tail_ids.intersection(m["source_message_ids"]) for m in r["body"]["messages"])
+    ]
+    assert tail_writes and all(r["source_pod"] != victim_ip for r in tail_writes), tail_writes
 
 
 @pytest.mark.standalone
@@ -252,9 +264,10 @@ def test_05_eviction_keeps_permanent_state_and_recovers_credentials(harness):
     _, capture = session_keys(harness, "credential-rebuild")
     for key in credential_keys(harness, "key-a"):
         harness.redis("DEL", key)
+    # OpenViking never rejected the key, so delivery keeps retrying until a request returns.
     wait_for(
         lambda: (
-            (document(harness, capture).get("error") or {}).get("reason") == "gateway_key_revoked"
+            (document(harness, capture).get("error") or {}).get("reason") == "gateway_key_missing"
         ),
         timeout=40,
     )
@@ -294,7 +307,7 @@ def stop_redis(harness, aof):
 
 
 def outage_requests(harness, pod):
-    counts = {"degraded": 0, "authentication_500": 0}
+    counts = {"degraded": 0, "store_unavailable_503": 0}
     for number in range(5):
         response = harness.request(
             pod,
@@ -308,10 +321,11 @@ def outage_requests(harness, pod):
         if response.status_code == 200:
             counts["degraded"] += 1
         else:
-            assert response.status_code == 500 and response.headers["content-type"].startswith(
-                "text/plain"
-            ), response.text
-            counts["authentication_500"] += 1
+            assert response.status_code == 503, response.text
+            assert response.headers["content-type"] == "application/json", response.text
+            assert response.json()["reason"] == "store_unavailable", response.text
+            assert response.headers["retry-after"], response.text
+            counts["store_unavailable_503"] += 1
     (harness.directory / "redis-outage.json").write_text(json.dumps(counts))
     if counts["degraded"]:
         assert "memory_store_failure" in harness.logs()
@@ -423,3 +437,20 @@ def test_11_sse_heartbeats_preserve_actual_client_parsers(harness):
     assert encoded["encoding"] == "gzip"
     assert not any(line.startswith(":") for line in encoded["lines"])
     assert "data: [DONE]" in encoded["lines"]
+    # A provider that stops mid-stream: every SDK gets an error instead of a hang or a
+    # truncated reply, and one that never answers gets a JSON 504.
+    harness.redeploy({"upstream_timeout_seconds": 5})
+    try:
+        pod = harness.pods()[0]
+        stalled = asyncio.run(stall_probe(harness.url(pod) + "/gateway", "key-a"))
+        (harness.directory / "sdk-stall-probe.json").write_text(json.dumps(stalled, indent=2))
+        assert stalled["passed"], stalled
+        hung = harness.request(
+            pod,
+            "POST",
+            CHAT,
+            json={"model": "mock-hang", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+        assert hung.status_code == 504 and hung.json()["reason"] == "upstream_timeout"
+    finally:
+        harness.redeploy({"upstream_timeout_seconds": 600})

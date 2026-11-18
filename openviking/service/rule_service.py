@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from openviking.core.namespace import classify_uri
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.models.vlm.llm import parse_json_from_response
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
 from openviking.server.identity import RequestContext
 from openviking.server.resource_ingest import (
@@ -337,6 +338,27 @@ class RuleMutation(BaseModel):
     reason_code: str = Field(default="", max_length=128)
     reason: str = Field(default="", max_length=2_000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_misplaced_new_scenario(cls, value: Any) -> Any:
+        """Accept a scenario nested in a compiler's NEW record before strict validation."""
+        if not isinstance(value, dict) or value.get("scenario") is not None:
+            return value
+
+        operation = value.get("operation")
+        record = value.get("record")
+        if (
+            not isinstance(operation, str)
+            or operation.strip().upper() != "NEW"
+            or not isinstance(record, dict)
+            or "scenario" not in record
+        ):
+            return value
+
+        normalized_record = record.copy()
+        scenario = normalized_record.pop("scenario")
+        return {**value, "record": normalized_record, "scenario": scenario}
+
     @model_validator(mode="after")
     def _validate_operation(self) -> "RuleMutation":
         self.operation = self.operation.strip().upper()
@@ -403,6 +425,14 @@ class StoredScenario(BaseModel):
     content: str
 
 
+class _RuleScores(list[float]):
+    """Probabilities with exception vetoes preserved through threshold selection."""
+
+    def __init__(self, probabilities: list[float], vetoed_indices: frozenset[int]):
+        super().__init__(probabilities)
+        self.vetoed_indices = vetoed_indices
+
+
 @dataclass(frozen=True)
 class _RelevantRules:
     scenarios: list[StoredScenario]
@@ -423,7 +453,10 @@ Application protocol:
    For a non-empty applies_when, topic similarity alone does not establish applicability.
 3. Do not infer facts that are absent.
 4. Before acting or answering, validate the planned action or answer against every
-   returned Rule. Returned Rules are mandatory when their applicability conditions hold."""
+   returned Rule. Returned Rules are mandatory when their applicability conditions hold.
+5. When quoting a Rule, copy an unchanged contiguous excerpt from the returned text.
+   Preserve its punctuation and qualifiers. Do not combine or rewrite Constraint and
+   Summary text into a quotation."""
 
 
 def _render_rule_block(rule: StoredRule) -> str:
@@ -612,7 +645,10 @@ class RuleService:
         except asyncio.CancelledError:
             return
         except Exception as exc:  # noqa: BLE001 - task failures must be persisted
-            logger.exception("Rule compile task %s failed", task_id)
+            logger.error(
+                "Rule compile task failed",
+                extra={"task_id": task_id, "error_type": type(exc).__name__},
+            )
             await tracker.fail(
                 task_id,
                 f"RULE_COMPILE_FAILED: {exc}",
@@ -999,20 +1035,27 @@ class RuleService:
         reference_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         cutoff = reference_time - timedelta(days=retention_days)
         eligible: list[StoredRule] = []
+        invalid_timestamps = 0
         for rule in rules:
             if rule.status != "archived":
                 continue
             archived_at = _parse_timestamp(rule.archived_at or "")
             if archived_at is None:
-                logger.warning(
-                    "Skipping archived rule with invalid archived_at: %s",
-                    rule.uri,
+                invalid_timestamps += 1
+                logger.debug(
+                    "Archived rule skipped because archived_at is invalid",
+                    extra={"target_id": safe_uri_for_log(rule.uri)},
                 )
                 continue
             if archived_at <= cutoff:
                 eligible.append(rule)
 
         if not eligible:
+            if invalid_timestamps:
+                logger.info(
+                    "Archived rule cleanup skipped invalid timestamps",
+                    extra={"total": len(rules), "skipped": invalid_timestamps},
+                )
             return {"scanned": len(rules), "deleted": [], "failed": []}
 
         failures: list[dict[str, str]] = []
@@ -1021,10 +1064,21 @@ class RuleService:
             try:
                 await fs.rm(rule.uri, ctx, wait=True)
             except Exception as exc:  # noqa: BLE001 - continue cleanup for independent rules
-                logger.warning("Failed to clean up archived rule: %s", rule.uri)
+                logger.debug(
+                    "Archived rule cleanup failed",
+                    extra={
+                        "target_id": safe_uri_for_log(rule.uri),
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 failures.append({"uri": rule.uri, "error": str(exc)})
             else:
                 deleted.append(rule.uri)
+        if invalid_timestamps or failures:
+            logger.info(
+                "Archived rule cleanup completed with skipped or failed entries",
+                extra={"total": len(rules), "skipped": invalid_timestamps, "failed": len(failures)},
+            )
         return {
             "scanned": len(rules),
             "deleted": deleted,
@@ -1092,11 +1146,12 @@ class RuleService:
             rules,
             rule_probability_threshold=rule_probability_threshold,
         )
+        vetoed_indices = scores.vetoed_indices if isinstance(scores, _RuleScores) else frozenset()
         selected = sorted(
             (
                 (rule, score)
-                for rule, score in zip(rules, scores, strict=True)
-                if score >= rule_probability_threshold
+                for index, (rule, score) in enumerate(zip(rules, scores, strict=True))
+                if index not in vetoed_indices and score >= rule_probability_threshold
             ),
             key=lambda item: item[1],
             reverse=True,
@@ -1348,7 +1403,10 @@ class RuleService:
         try:
             client = ScenarioJevClient.from_config(config)
         except Exception as exc:  # noqa: BLE001 - an unavailable judge must pass
-            logger.warning("Jev Scenario filter unavailable: %s", exc)
+            logger.info(
+                "Jev Scenario filter unavailable; passing recalled candidates",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             client = None
         if client is None:
             base_report.update(
@@ -1381,7 +1439,10 @@ class RuleService:
                         [_render_scenario_for_judge(scenario) for scenario in batch],
                     )
                 except Exception as exc:  # noqa: BLE001 - uncertainty must pass
-                    logger.warning("Jev Scenario filter failed: %s", exc)
+                    logger.debug(
+                        "Jev Scenario judgment failed",
+                        extra={"error_type": type(exc).__name__},
+                    )
                     scores = None
                 if not isinstance(scores, (list, tuple)) or len(scores) != len(batch):
                     warnings.append(
@@ -1437,7 +1498,10 @@ class RuleService:
             try:
                 client.close()
             except Exception as exc:  # noqa: BLE001 - closing must not change filter decisions
-                logger.warning("Failed to close Jev Scenario filter: %s", exc)
+                logger.info(
+                    "Jev Scenario filter close failed; keeping filter decisions",
+                    extra={"error_type": type(exc).__name__},
+                )
 
         report = {
             "backend": "jev_noul",
@@ -1448,6 +1512,10 @@ class RuleService:
             "decisions": decisions,
         }
         if warnings:
+            logger.info(
+                "Jev Scenario judgments unavailable; passing uncertain batches",
+                extra={"total": len(scenarios), "failed": len(warnings), "degraded": True},
+            )
             report["warning"] = " ".join(warnings)
         return passed, report
 
@@ -1524,8 +1592,11 @@ class RuleService:
                 "Rule search cannot guarantee complete validation because a recalled Scenario "
                 "contains an unreadable Rule: " + "; ".join(failures)
             )
-        for failure in failures:
-            logger.warning("Ignoring unreadable rule document: %s", failure)
+        if failures:
+            logger.info(
+                "Unreadable rule documents ignored",
+                extra={"total": len(loaded), "skipped": len(failures)},
+            )
         return [rule for rule in loaded if isinstance(rule, StoredRule)]
 
     async def _default_vlm(self, ctx: RequestContext) -> Any:
@@ -1563,7 +1634,10 @@ class RuleService:
                 if isinstance(loaded, dict):
                     model_info = {str(key): value for key, value in loaded.items()}
             except Exception as exc:  # noqa: BLE001 - unknown/custom models use fallback
-                logger.debug("No context metadata for rule compiler model %s: %s", model, exc)
+                logger.info(
+                    "Rule compiler model metadata unavailable; using configured or default context window",
+                    extra={"error_type": type(exc).__name__, "degraded": True},
+                )
 
         context_window = (
             configured_window
@@ -1845,6 +1919,8 @@ meaning are more important than brevity.
   and descriptions broad enough to retrieve the RULE record but narrow enough to avoid
   unrelated tasks.
 - A Scenario guides first-stage retrieval.
+- Put `scenario` alongside `record` on the mutation, never inside `record`;
+  use only the RuleRecord fields shown in the JSON shape below.
 - Only NEW may include a non-null `scenario`. Every other operation must set `scenario` to null.
 - UPDATE and REPLACE return complete final records, never deltas. Do not add schema
   fields. Return JSON only, with no Markdown or commentary.
@@ -2192,14 +2268,23 @@ existing_rules:
         ):
             raise ValueError("Rule Jev returned invalid probabilities")
 
-        return [
-            0.0
+        vetoed_indices = frozenset(
+            index
+            for index, (rule, score) in enumerate(zip(inputs, scores, strict=True))
             if rule.exception
+            # A zero probability is evidence that the exception does not apply,
+            # including when the caller selects a zero retrieval threshold.
+            and score.exception > 0.0
             and score.exception >= exception_veto_threshold
             and (not rule.applies_when or score.exception > score.applies_when)
-            else score.applies_when
-            for rule, score in zip(inputs, scores, strict=True)
-        ]
+        )
+        return _RuleScores(
+            [
+                0.0 if index in vetoed_indices else score.applies_when
+                for index, score in enumerate(scores)
+            ],
+            vetoed_indices,
+        )
 
     async def _score_rules(
         self,
@@ -2218,7 +2303,10 @@ existing_rules:
                     exception_veto_threshold=rule_probability_threshold,
                 )
             except Exception as exc:  # noqa: BLE001 - an unavailable judge must pass
-                logger.warning("Jev rule matcher unavailable: %s", exc)
+                logger.info(
+                    "Jev rule matcher unavailable; passing candidate rules",
+                    extra={"error_type": type(exc).__name__, "degraded": True},
+                )
             else:
                 return scores, "jev_noul", None
 

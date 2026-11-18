@@ -5,13 +5,14 @@ import logging
 
 import pytest
 
-from openviking.server.routers.search import _resolve_search_filter
+from openviking.server.routers.search import resolve_search_filter
 from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
     build_search_tags_filter,
     merge_search_tags,
     normalize_search_tag,
     normalize_search_tags,
+    preserve_memory_type_tag,
 )
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -94,22 +95,45 @@ def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
     assert "also-bad" in warnings[0].message
 
 
-def test_merge_search_tags_discards_invalid_existing_tags(caplog):
+def test_merge_search_tags_applies_ordered_patches_and_discards_invalid_tags(caplog):
     tags_module.logger.addHandler(caplog.handler)
     try:
         with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
-            result = merge_search_tags(["bad-existing", "team=old"], ["owner=alice"])
+            result = merge_search_tags(
+                ["bad-existing", "team=old", "score=0.1"],
+                [
+                    "score+=0.2",
+                    "score+=0.2",
+                    "score-=1",
+                    "count+=2",
+                    "count=0",
+                    "count+=1",
+                    "owner=alice",
+                ],
+            )
     finally:
         tags_module.logger.removeHandler(caplog.handler)
 
-    assert result == ["team=old", "owner=alice"]
+    assert result == ["team=old", "score=-0.5", "count=1", "owner=alice"]
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert warnings[0].invalid_tags == ["bad-existing"]
 
+    with pytest.raises(InvalidArgumentError):
+        merge_search_tags(result, ["owner+=1"])
+    with pytest.raises(InvalidArgumentError):
+        merge_search_tags(result, ["count+=NaN"])
+
+
+def test_preserve_memory_type_tag_does_not_reapply_tag_operations():
+    assert preserve_memory_type_tag(
+        ["memory_type=profile", "c++=cpp", "used_count=3"],
+        ["memory_type=other", "c++=cpp", "used_count=4"],
+    ) == ["memory_type=profile", "c++=cpp", "used_count=4"]
+
 
 def test_find_tags_filter_requires_all_tags():
-    result = _resolve_search_filter(
+    result = resolve_search_filter(
         request_filter=None,
         context_type=None,
         since=None,
@@ -130,7 +154,7 @@ def test_find_tags_filter_requires_all_tags():
 def test_find_tags_filter_ands_all_tags_with_existing_filter():
     existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
 
-    result = _resolve_search_filter(
+    result = resolve_search_filter(
         request_filter=existing_filter,
         context_type=None,
         since=None,

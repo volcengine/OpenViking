@@ -580,6 +580,68 @@ async def test_search_passes_all_loaded_rules_at_threshold_one_when_jev_is_missi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("threshold", [0.0, 0.65, 1.0])
+@pytest.mark.parametrize("unconditional", [False, True])
+async def test_search_exception_veto_survives_zero_threshold(monkeypatch, threshold, unconditional):
+    service = RuleService()
+    service.set_dependencies(
+        fs=SimpleNamespace(),
+        resources=SimpleNamespace(),
+        search=SimpleNamespace(),
+        vlm_resolver=None,
+        rules_config=RulesConfig(
+            jev_rule_matcher=JevConfig(provider="typesafe", api_key="key"),
+        ),
+    )
+    scenario = StoredScenario(
+        schema=SCENARIO_SCHEMA,
+        scenario_id="file-operations",
+        name="Files",
+        description="File constraints.",
+        uri="viking://user/alice/memories/rules/file-operations/abstract.md",
+        content="",
+    )
+    rules = [
+        _stored_rule("vetoed"),
+        _stored_rule("ordinary-zero"),
+        _stored_rule("applicable"),
+    ]
+    if unconditional:
+        for rule in rules:
+            rule.record.applies_when = ""
+    client = SimpleNamespace(
+        judge_rules=lambda task, inputs: [
+            RuleJevScore(applies_when=0.2, exception=1.0),
+            RuleJevScore(applies_when=1.0 if unconditional else 0.0, exception=0.0),
+            RuleJevScore(applies_when=1.0, exception=0.0),
+        ],
+        close=lambda: None,
+    )
+    monkeypatch.setattr(
+        "openviking.service.rule_service.RuleJevClient",
+        SimpleNamespace(from_config=lambda config: client),
+    )
+    monkeypatch.setattr(service, "_recall_scenarios", AsyncMock(return_value=[scenario]))
+    monkeypatch.setattr(service, "_load_rules_for_scenarios", AsyncMock(return_value=rules))
+    monkeypatch.setattr(
+        service,
+        "_filter_unrelated_scenarios_with_jev",
+        AsyncMock(return_value=([scenario], None)),
+    )
+    result = await service.search_rules(
+        RuleSearchRequest(task_context="confirmed deletion", rule_probability_threshold=threshold),
+        ctx=_ctx(),
+    )
+    returned = {rule["atomic_id"] for rule in result["rules"]}
+    assert "vetoed" not in returned
+    assert returned == (
+        {"ordinary-zero", "applicable"} if threshold == 0 or unconditional else {"applicable"}
+    )
+    assert result["judge"] == "jev_noul"
+    assert result["delivery"]["complete"] is True
+
+
+@pytest.mark.asyncio
 async def test_jev_rule_client_initialization_failure_passes_rules(monkeypatch):
     service = RuleService()
     service._rules_config = RulesConfig(
@@ -804,7 +866,9 @@ async def test_compile_keeps_result_and_detaches_write_task_context(monkeypatch)
     monkeypatch.setattr(
         service,
         "_collect_sources",
-        AsyncMock(return_value=("confirm before deleting files", ["viking://user/alice/resources/rules"])),
+        AsyncMock(
+            return_value=("confirm before deleting files", ["viking://user/alice/resources/rules"])
+        ),
     )
     monkeypatch.setattr(service, "_compiler_vlm", AsyncMock(return_value=SimpleNamespace()))
     monkeypatch.setattr(service, "_compiler_prompt_token_limit", lambda _: 8_000)
@@ -1060,6 +1124,7 @@ async def test_archive_is_idempotent():
     )
     assert unchanged["_rules"][0].archived_at == archived_at
     assert unchanged["written_uris"] == []
+
 
 @pytest.mark.asyncio
 async def test_cleanup_removes_only_rules_archived_for_full_retention_period():
@@ -2126,6 +2191,61 @@ async def test_compile_plan_repairs_semantically_invalid_response():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "expected_model_calls"),
+    [
+        pytest.param({}, 1, id="nested-only"),
+        pytest.param({"scenario": None}, 1, id="null-placeholder"),
+        pytest.param(
+            {"scenario": {"name": "Deployments", "description": "Rules for deployment."}},
+            2,
+            id="conflicting",
+        ),
+        pytest.param({"operation": "UPDATE", "target_ids": ["existing"]}, 2, id="non-new"),
+    ],
+)
+async def test_compile_plan_recovers_only_unambiguous_new_scenario_placement(
+    overrides, expected_model_calls
+):
+    source_text = "Ask for confirmation before deleting files."
+    record = _record().model_dump(exclude={"applies_when", "exception"})
+    scenario = {"name": "File operations", "description": "Rules for editing files."}
+    mutation = {
+        "operation": "NEW",
+        "record": record,
+        "scenario": scenario,
+        "evidence_spans": [source_text],
+    }
+    first = {**mutation, "record": {**record, "scenario": scenario}}
+    del first["scenario"]
+    first.update(overrides)
+    compiler = SimpleNamespace(
+        get_completion_async=AsyncMock(
+            side_effect=[
+                json.dumps({"mutations": [first]}),
+                json.dumps({"mutations": [mutation]}),
+            ]
+        )
+    )
+
+    plan = await RuleService()._build_compile_plan(
+        instruction="",
+        source_text=source_text,
+        scenarios=[],
+        rules=[],
+        ctx=_ctx(),
+        vlm=compiler,
+    )
+
+    assert plan.mutations[0].scenario == RuleScenarioRef.model_validate(scenario)
+    assert plan.mutations[0].record == RuleRecord.model_validate(record)
+    assert compiler.get_completion_async.await_count == expected_model_calls
+    if expected_model_calls == 2:
+        repair_prompt = compiler.get_completion_async.await_args_list[1].kwargs["prompt"]
+        assert "mutations.0.record.scenario" in repair_prompt
+
+
+@pytest.mark.asyncio
 async def test_compile_plan_rejects_oversized_prompt_without_trimming_state():
     service = RuleService()
     compiler = SimpleNamespace(get_completion_async=AsyncMock())
@@ -2684,7 +2804,6 @@ async def test_recall_reports_corrupt_scenario_instead_of_silently_omitting_it()
 @pytest.mark.asyncio
 async def test_scenario_layout_batch_write_and_directory_read_with_real_fs(service, monkeypatch):
     # Exercise actual file writes and reads without downstream semantic refresh.
-    service.fs.compile_versions = None
     async_agfs = service.viking_fs._async_agfs
 
     async def to_handoff(lease):

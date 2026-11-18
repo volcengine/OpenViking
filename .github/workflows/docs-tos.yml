@@ -5,6 +5,8 @@ on:
     branches: [ main ]
     paths:
       - 'docs/**'
+      - 'frontend/**'
+      - '.github/actions/build-ui/**'
       - '.github/workflows/docs-tos.yml'
       # The deploy also publishes the plugin downloads under /dl.
       - 'examples/.claude-plugin/**'
@@ -21,12 +23,21 @@ on:
 permissions:
   contents: read
 
+# A newer push to main cancels the deploy still running for an older one.
+# A manual run only queues behind a running deploy; it never cancels one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
 env:
   DOCS_BASE: /
+  # Parallel uploads to TOS: the AWS CLI transfer pool and the xargs fan-out.
+  TOS_UPLOAD_CONCURRENCY: 32
 
 jobs:
   deploy:
     name: Build and Upload Docs to TOS
+    if: github.repository == 'volcengine/OpenViking'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -49,6 +60,14 @@ jobs:
         env:
           VITE_COUNTER_URL: ${{ vars.VITE_COUNTER_URL }}
           VITE_DOCS_SEARCH_URL: ${{ vars.VITE_DOCS_SEARCH_URL }}
+
+      - name: Build UI
+        uses: ./.github/actions/build-ui
+
+      - name: Include UI docs in site
+        run: |
+          mkdir -p docs/.vitepress/dist/ui
+          cp -a frontend/docs/doc_build/. docs/.vitepress/dist/ui/
 
       - name: Build plugin downloads
         run: bash .github/scripts/build-plugin-downloads.sh docs/.vitepress/dist/dl https://docs.openviking.net/dl
@@ -83,6 +102,7 @@ jobs:
         run: |
           python -m pip install --upgrade awscli
           aws configure set default.s3.addressing_style virtual
+          aws configure set default.s3.max_concurrent_requests "${TOS_UPLOAD_CONCURRENCY}"
 
       - name: Upload docs dist to TOS
         id: upload_tos
@@ -123,28 +143,88 @@ jobs:
             --cache-control "${STATIC_CACHE_CONTROL}" \
             --only-show-errors
 
+          # UI assets may be nested outside the main site's assets directory.
+          # Publish every non-HTML UI resource first. Revalidate their stable
+          # URLs rather than assuming every file has a content hash.
+          aws s3 cp "${DIST_DIR}/ui" "s3://${TOS_BUCKET}/ui/" \
+            --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+            --recursive \
+            --exclude "*.html" \
+            --cache-control "${HTML_CACHE_CONTROL}" \
+            --only-show-errors
+
           aws s3 cp "${DIST_DIR}" "s3://${TOS_BUCKET}/" \
             --endpoint-url "https://${TOS_S3_ENDPOINT}" \
             --recursive \
             --exclude ".git/*" \
             --exclude "assets/*" \
             --exclude "dl/*" \
+            --exclude "ui/*" \
             --cache-control "${HTML_CACHE_CONTROL}" \
             --only-show-errors
 
-          while IFS= read -r -d '' html_file; do
-            rel_path="${html_file#${DIST_DIR}/}"
-            case "${rel_path}" in
-              index.html|404.html) continue ;;
-            esac
+          aws s3 cp "${DIST_DIR}/ui" "s3://${TOS_BUCKET}/ui/" \
+            --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+            --recursive \
+            --exclude "*" \
+            --include "*.html" \
+            --cache-control "${HTML_CACHE_CONTROL}" \
+            --only-show-errors
 
-            clean_path="${rel_path%.html}"
-            aws s3 cp "${html_file}" "s3://${TOS_BUCKET}/${clean_path}" \
+          # The recursive copies above fan out through the AWS CLI's own transfer
+          # pool (s3.max_concurrent_requests). The per-object copies below start
+          # one aws process per file, so run them through xargs with the same
+          # fan-out. xargs exits non-zero when any copy fails and pipefail passes
+          # that on, so a failed upload still fails this step.
+          export DIST_DIR TOS_BUCKET TOS_S3_ENDPOINT HTML_CACHE_CONTROL NO_CACHE_CONTROL
+
+          upload_html_alias() {
+            aws s3 cp "$1" "s3://${TOS_BUCKET}/$2" \
               --endpoint-url "https://${TOS_S3_ENDPOINT}" \
               --content-type "text/html; charset=utf-8" \
               --cache-control "${HTML_CACHE_CONTROL}" \
               --only-show-errors
-          done < <(find "${DIST_DIR}" -type f -name "*.html" -print0)
+          }
+
+          upload_site_html_alias() {
+            local rel_path="${1#${DIST_DIR}/}"
+            case "${rel_path}" in
+              # UI uses its own generated routes; don't create main-site
+              # clean-URL aliases (especially an object at /ui).
+              index.html|404.html|ui/*) return 0 ;;
+            esac
+
+            upload_html_alias "$1" "${rel_path%.html}"
+          }
+
+          upload_ui_html_alias() {
+            local rel_path="${1#${DIST_DIR}/}"
+            case "${rel_path}" in
+              ui/index.html|ui/404.html|*/index.html) return 0 ;;
+            esac
+
+            upload_html_alias "$1" "${rel_path%.html}"
+          }
+
+          upload_agent_file() {
+            aws s3 cp "$1" "s3://${TOS_BUCKET}/agents/${1#${DIST_DIR}/agents/}" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+              --content-type "$2" \
+              --content-disposition "inline" \
+              --cache-control "${NO_CACHE_CONTROL}" \
+              --only-show-errors
+          }
+
+          export -f upload_html_alias upload_site_html_alias upload_ui_html_alias upload_agent_file
+
+          find "${DIST_DIR}" -type f -name "*.html" -print0 |
+            xargs -0 -r -n 1 -P "${TOS_UPLOAD_CONCURRENCY}" bash -c 'upload_site_html_alias "$1"' _
+
+          # Rspress may emit leaf.html for extensionless links. Keep those
+          # aliases inside /ui; directory index pages retain their index route.
+          # Never create an object at /ui that could shadow the site's prefix.
+          find "${DIST_DIR}/ui" -type f -name "*.html" -print0 |
+            xargs -0 -r -n 1 -P "${TOS_UPLOAD_CONCURRENCY}" bash -c 'upload_ui_html_alias "$1"' _
 
           if [ -d "${DIST_DIR}/agents" ]; then
             aws s3 cp "${DIST_DIR}/agents" "s3://${TOS_BUCKET}/agents/" \
@@ -153,25 +233,13 @@ jobs:
               --cache-control "${NO_CACHE_CONTROL}" \
               --only-show-errors
 
-            while IFS= read -r -d '' json_file; do
-              rel_path="${json_file#${DIST_DIR}/agents/}"
-              aws s3 cp "${json_file}" "s3://${TOS_BUCKET}/agents/${rel_path}" \
-                --endpoint-url "https://${TOS_S3_ENDPOINT}" \
-                --content-type "application/json; charset=utf-8" \
-                --content-disposition "inline" \
-                --cache-control "${NO_CACHE_CONTROL}" \
-                --only-show-errors
-            done < <(find "${DIST_DIR}/agents" -type f -name "*.json" -print0)
+            find "${DIST_DIR}/agents" -type f -name "*.json" -print0 |
+              xargs -0 -r -n 1 -P "${TOS_UPLOAD_CONCURRENCY}" \
+                bash -c 'upload_agent_file "$1" "application/json; charset=utf-8"' _
 
-            while IFS= read -r -d '' markdown_file; do
-              rel_path="${markdown_file#${DIST_DIR}/agents/}"
-              aws s3 cp "${markdown_file}" "s3://${TOS_BUCKET}/agents/${rel_path}" \
-                --endpoint-url "https://${TOS_S3_ENDPOINT}" \
-                --content-type "text/markdown; charset=utf-8" \
-                --content-disposition "inline" \
-                --cache-control "${NO_CACHE_CONTROL}" \
-                --only-show-errors
-            done < <(find "${DIST_DIR}/agents" -type f -name "*.md" -print0)
+            find "${DIST_DIR}/agents" -type f -name "*.md" -print0 |
+              xargs -0 -r -n 1 -P "${TOS_UPLOAD_CONCURRENCY}" \
+                bash -c 'upload_agent_file "$1" "text/markdown; charset=utf-8"' _
           fi
 
       - name: Upload plugin downloads to TOS
@@ -208,6 +276,7 @@ jobs:
 
           upload memory-plugin-shared/install.sh "text/plain; charset=utf-8"
           upload memory-plugin-shared/bootstrap.sh "text/plain; charset=utf-8"
+          upload memory-plugin-shared/import-history.mjs "text/javascript; charset=utf-8"
           upload releases/latest/memory-plugin-marketplace.zip application/zip
           # The manifest and the refs go up after the files they point to.
           for zip in "${DL_DIR}"/plugins/claude/*.zip; do

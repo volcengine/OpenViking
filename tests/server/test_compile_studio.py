@@ -4,14 +4,13 @@ import asyncio
 import json
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.service.compile_targets import CompileLifecycle, new_operation
 from openviking.service.external_task_service import ExternalTaskService
-from openviking.service.task_domain import TaskPatch
+from openviking.service.task_domain import TaskPatch, WorkState
 from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker
@@ -20,62 +19,506 @@ from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
 
-def test_compile_accepts_builtin_example_skill():
-    from openviking.service.compile_service import CompileRequest, CompileService
+def test_local_compile_uses_configured_poll_interval():
+    from openviking.service.compile_service import CompileService
     from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
-    service = CompileService(CompileApiConfig(), ExternalTaskService(), SimpleNamespace())
-    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-    request = CompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://system/compile/example-skills/llm-wiki/SKILL.md",
-        }
+    config = CompileApiConfig(poll_interval_ms=250)
+    service = CompileService(config, ExternalTaskService(), SimpleNamespace())
+    service.configure_local_backend("http://localhost:1", "")
+
+    assert service.poll_interval_seconds == 0.25
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "wait_at",
+    [
+        "admission",
+        "finalization",
+        "recovered_finalization",
+        "start_finalization",
+        "finalization_error",
+    ],
+)
+async def test_external_busy_preserves_delivery_and_provider_wait(monkeypatch, tmp_path, wait_at):
+    import ragfs_python
+
+    import openviking.service.external_task_service as module
+    from openviking.service.external_task_service import ExternalTaskSnapshot
+    from openviking.service.task_work_index import extract_task_metadata
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.queue_manager import QueueManager
+
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    transport.mount(
+        "queuefs", "/queue", {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
     )
+    manager = QueueManager(transport)
+    service = ExternalTaskService()
+    completed = ExternalTaskSnapshot(status="completed", result={"ok": True})
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=0.001,
+        poll_max_attempts=1,
+        submit=AsyncMock(return_value="remote"),
+        get=AsyncMock(return_value=completed),
+        on_start=AsyncMock(
+            side_effect=["busy"] * 3 + [None] if wait_at == "admission" else None,
+            return_value=completed if wait_at == "start_finalization" else None,
+        ),
+        on_finish=AsyncMock(
+            side_effect=(
+                [ConnectionError("local finalization unavailable")] * 3
+                if wait_at == "finalization_error"
+                else [ExternalTaskSnapshot(status="running", stage="committing")] * 3
+            )
+            + [completed]
+            if wait_at != "admission"
+            else lambda task, snapshot: snapshot
+        ),
+        on_cancel=AsyncMock(),
+        submission_meta=lambda _: {},
+    )
+    service.register(provider)
+    queue = manager.get_queue(
+        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role(Role.USER))
+    owner = {"account_id": "acme", "user_id": "alice"}
+    try:
+        task = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        [original] = await queue.snapshot()
+        metadata = extract_task_metadata(original)
+        assert metadata is not None
 
-    normalized = service._normalize_request_uris(request, ctx)
+        async def wait(delay):
+            assert (
+                await tracker.get_work_state(task.task_id, metadata.work_id, **owner)
+                is WorkState.RUNNING
+            )
+            assert (await queue.get_status()).in_progress == 1
+            assert original in await queue.snapshot()
 
-    assert normalized.skill == "viking://system/compile/example-skills/llm-wiki"
+        sleep = AsyncMock(side_effect=wait)
+        monkeypatch.setattr(
+            module, "asyncio", SimpleNamespace(sleep=sleep, CancelledError=asyncio.CancelledError)
+        )
+        provider.poll_interval_seconds = 30.0
+        if wait_at == "recovered_finalization":
+            await tracker.start(task.task_id, **owner)
+            await tracker.patch_task(
+                task.task_id,
+                TaskPatch(
+                    auth={
+                        "external_terminal_snapshot": {
+                            "status": "completed",
+                            "result": {"ok": True},
+                        }
+                    }
+                ),
+                **owner,
+            )
+        waiting = await service.create(
+            "compile", resource_id=None, payload={"to": "target"}, ctx=ctx
+        )
+        requeues = (
+            3
+            if wait_at == "admission"
+            else int(wait_at in {"start_finalization", "finalization_error"})
+        )
+        for _ in range(requeues):
+            await queue.dequeue()
+            current = await tracker.get(task.task_id, **owner)
+            assert current is not None
+            assert current.status not in {TaskStatus.FAILED, TaskStatus.COMPLETED}
+            assert (await queue.get_status()).pending == 2
+            assert original in await queue.snapshot()
+            assert await tracker.has_work(task.task_id, **owner)
+            assert (
+                await tracker.get_work_state(task.task_id, metadata.work_id, **owner)
+                is WorkState.PENDING
+            )
+        await queue.dequeue()
+        current = await tracker.get(task.task_id, **owner)
+        assert current is not None and current.status is TaskStatus.COMPLETED
+        next_message = await queue.dequeue_raw()
+        assert next_message is not None and next_message["id"] != original["id"]
+        waiting_task = await tracker.get(waiting.task_id, **owner)
+        assert waiting_task is not None and waiting_task.status is TaskStatus.PENDING
+        if wait_at in {"recovered_finalization", "start_finalization"}:
+            provider.submit.assert_not_awaited()
+            provider.get.assert_not_awaited()
+        else:
+            provider.submit.assert_awaited_once()
+            provider.get.assert_awaited_once()
+        expected_delays = {
+            "admission": [],
+            "finalization": [30.0] * 3,
+            "recovered_finalization": [30.0] * 3,
+            "start_finalization": [30.0] * 3,
+            "finalization_error": [0.2, 0.4, 30.0],
+        }
+        assert [call.args[0] for call in sleep.await_args_list] == expected_delays[wait_at]
+        provider.on_cancel.assert_not_awaited()
+    finally:
+        transport.close()
+
+
+@pytest.mark.asyncio
+async def test_external_cancel_during_finalization_keeps_work_running_until_cleanup(
+    monkeypatch, tmp_path
+):
+    import ragfs_python
+
+    import openviking.service.external_task_service as module
+    from openviking.service.external_task_service import (
+        ExternalTaskCancellation,
+        ExternalTaskSnapshot,
+    )
+    from openviking.service.task_work_index import extract_task_metadata
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.queue_manager import QueueManager
+
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    transport.mount(
+        "queuefs", "/queue", {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
+    )
+    manager = QueueManager(transport)
+    service = ExternalTaskService()
+    finalization_waiting = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_allowed = asyncio.Event()
+
+    async def wait(delay):
+        assert delay == 30.0
+        finalization_waiting.set()
+        await asyncio.Event().wait()
+
+    async def finish(task, snapshot):
+        if snapshot.status == "cancelled":
+            cleanup_started.set()
+            await cleanup_allowed.wait()
+            return snapshot
+        return ExternalTaskSnapshot(status="running", stage="committing")
+
+    monkeypatch.setattr(
+        module, "asyncio", SimpleNamespace(sleep=wait, CancelledError=asyncio.CancelledError)
+    )
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=30.0,
+        poll_max_attempts=1,
+        submit=AsyncMock(return_value="remote"),
+        get=AsyncMock(return_value=ExternalTaskSnapshot(status="completed", result={"ok": True})),
+        on_start=AsyncMock(return_value=None),
+        on_finish=AsyncMock(side_effect=finish),
+        on_cancel=AsyncMock(
+            return_value=ExternalTaskCancellation(
+                external_task_id="remote", snapshot=ExternalTaskSnapshot(status="cancelled")
+            )
+        ),
+        submission_meta=lambda _: {},
+    )
+    service.register(provider)
+    queue = manager.get_queue(
+        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    worker = None
+    try:
+        task = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        [original] = await queue.snapshot()
+        metadata = extract_task_metadata(original)
+        assert metadata is not None
+        waiting = await service.create(
+            "compile", resource_id=None, payload={"to": "target"}, ctx=ctx
+        )
+        worker = asyncio.create_task(queue.dequeue())
+        await asyncio.wait_for(finalization_waiting.wait(), timeout=2)
+        assert not worker.done()
+        assert (await tracker.get(task.task_id, **owner)).status is TaskStatus.RUNNING
+        await tracker.cancel(task.task_id, **owner)
+        await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+        assert (await tracker.get(task.task_id, **owner)).status is TaskStatus.CANCELLING
+        assert (
+            await tracker.get_work_state(task.task_id, metadata.work_id, **owner)
+            is WorkState.RUNNING
+        )
+        assert await tracker.has_work(task.task_id, **owner)
+        assert original in await queue.snapshot()
+        assert await queue.dequeue_raw() is None
+        assert (await tracker.get(waiting.task_id, **owner)).status is TaskStatus.PENDING
+        cleanup_allowed.set()
+        await asyncio.wait_for(worker, timeout=2)
+        assert (await tracker.get(task.task_id, **owner)).status is TaskStatus.CANCELLED
+        assert (
+            await tracker.get_work_state(task.task_id, metadata.work_id, **owner)
+            is WorkState.CANCELLED
+        )
+        assert not await tracker.has_work(task.task_id, **owner)
+        successor = await queue.dequeue_raw()
+        assert successor is not None and successor["id"] != original["id"]
+        provider.submit.assert_awaited_once()
+        provider.get.assert_awaited_once()
+        provider.on_cancel.assert_awaited_once()
+    finally:
+        if worker is not None:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        transport.close()
+
+
+@pytest.mark.asyncio
+async def test_external_interrupted_cancellation_cleanup_preserves_delivery(monkeypatch, tmp_path):
+    import ragfs_python
+
+    from openviking.service.external_task_service import (
+        ExternalTaskCancellation,
+        ExternalTaskSnapshot,
+    )
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.queue_manager import QueueManager
+
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    transport.mount(
+        "queuefs", "/queue", {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
+    )
+    manager = QueueManager(transport)
+    service = ExternalTaskService()
+    executing = asyncio.Event()
+    cleanup_polling = asyncio.Event()
+    polls = 0
+
+    async def poll(*args, **kwargs):
+        nonlocal polls
+        polls += 1
+        (executing if polls == 1 else cleanup_polling).set()
+        await asyncio.Event().wait()
+
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=0.001,
+        poll_max_attempts=1,
+        submit=AsyncMock(),
+        get=poll,
+        on_start=AsyncMock(return_value=None),
+        on_finish=AsyncMock(side_effect=lambda task, snapshot: snapshot),
+        on_cancel=AsyncMock(
+            return_value=ExternalTaskCancellation(
+                external_task_id="remote", snapshot=ExternalTaskSnapshot(status="running")
+            )
+        ),
+        submission_meta=lambda _: {},
+    )
+    service.register(provider)
+    queue = manager.get_queue(
+        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role(Role.USER))
+    try:
+        task = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        await tracker.patch_task(
+            task.task_id, TaskPatch(auth={"external_task_id": "remote"}), **owner
+        )
+        [original] = await queue.snapshot()
+        worker = asyncio.create_task(queue.dequeue())
+        await asyncio.wait_for(executing.wait(), timeout=2)
+        await tracker.cancel(task.task_id, **owner)
+        await asyncio.wait_for(cleanup_polling.wait(), timeout=2)
+        worker.cancel()
+        await asyncio.wait_for(worker, timeout=2)
+        assert await queue.snapshot() == [original]
+        assert (await queue.get_status()).in_progress == 1
+        assert await tracker.has_work(task.task_id, **owner)
+        provider.on_finish.assert_not_awaited()
+    finally:
+        transport.close()
 
 
 @pytest.mark.parametrize(
-    "skill",
+    "skill,valid",
     [
-        "viking://system/compile/example-skills",
-        "viking://system/compile/example-skills/llm-wiki/references",
-        "viking://system/memory/memory_templates/builtin",
+        ("viking://system/compile/example-skills/llm-wiki/SKILL.md", True),
+        ("viking://system/compile/example-skills", False),
+        ("viking://system/compile/example-skills/llm-wiki/references", False),
+        ("viking://system/compile/global/llm-wiki", True),
+        ("viking://system/compile/global/llm-wiki/SKILL.md", True),
+        ("viking://system/compile/global", False),
+        ("viking://system/compile/global/llm-wiki/references", False),
+        ("viking://system/compile/global-other/llm-wiki", False),
+        ("viking://system/memory/memory_templates/builtin", False),
     ],
 )
-def test_compile_rejects_other_system_directories(skill):
+def test_compile_builtin_skill_uri(skill, valid):
+    """Compile accepts system Skill roots and rejects other system directories."""
     from openviking.service.compile_service import CompileRequest, CompileService
     from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
     service = CompileService(CompileApiConfig(), ExternalTaskService(), SimpleNamespace())
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
     request = CompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": skill,
-        }
+        {"from": ["viking://resources/source"], "to": "viking://resources/wiki", "skill": skill}
     )
+    if valid:
+        assert service._normalize_request_uris(request, ctx).skill == skill.removesuffix(
+            "/SKILL.md"
+        )
+    else:
+        with pytest.raises(InvalidArgumentError, match="The input skill is not"):
+            service._normalize_request_uris(request, ctx)
 
-    with pytest.raises(InvalidArgumentError, match="skill must resolve"):
-        service._normalize_request_uris(request, ctx)
 
-
-def test_compile_builtin_skill_namespace_is_source_only():
+@pytest.mark.parametrize(
+    "target",
+    [
+        "viking://system",
+        "viking://system/compile",
+        "viking://system/compile/example-skills",
+        "viking://system/compile/global",
+        "viking://system/resources/wiki",
+    ],
+)
+def test_compile_rejects_system_target(target):
     from openviking.service.compile_service import CompileService
 
     CompileService._validate_target("viking://user/alice/skills")
     CompileService._validate_target("viking://agent/skills")
 
-    with pytest.raises(InvalidArgumentError, match="supported skills namespace"):
-        CompileService._validate_target("viking://system/compile/example-skills")
+    with pytest.raises(InvalidArgumentError, match="system namespace"):
+        CompileService._validate_target(target)
 
 
-@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source",
+    [
+        "viking://system/compile/example-skills/llm-wiki",
+        "viking://system/compile/global/llm-wiki",
+        "viking://system/memory/memory_templates/custom/qa/input",
+    ],
+)
+def test_compile_rejects_system_source(source):
+    from openviking.service.compile_service import CompileRequest, CompileService
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+
+    service = CompileService(CompileApiConfig(), ExternalTaskService(), SimpleNamespace())
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+    request = CompileRequest.model_validate(
+        {
+            "from": [source],
+            "to": "viking://resources/wiki",
+            "skill": "viking://system/compile/example-skills/llm-wiki",
+        }
+    )
+
+    with pytest.raises(InvalidArgumentError, match="Compile source.*system namespace"):
+        service._normalize_request_uris(request, ctx)
+
+
+async def test_compile_api_rejects_system_target_without_creating_task(service, app, client):
+    from openviking.server.auth import get_request_context
+    from openviking.service.task_tracker import get_task_tracker
+
+    ctx = RequestContext(user=service.user, role=Role.USER, api_key="test-compile-key")
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    tracker = get_task_tracker()
+    before = {
+        task.task_id for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+    }
+
+    response = await client.post(
+        "/api/v1/compile",
+        json={
+            "from": ["viking://resources/source"],
+            "to": "viking://system/compile-output",
+            "skill": "viking://system/compile/example-skills/llm-wiki",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "system namespace" in response.text
+    after = {
+        task.task_id for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+    }
+    assert after == before
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "viking://system/compile/example-skills/llm-wiki",
+        "viking://system/memory/memory_templates/custom/qa/input",
+    ],
+)
+async def test_compile_api_rejects_system_source_without_creating_task(
+    source, service, app, client
+):
+    from openviking.server.auth import get_request_context
+    from openviking.service.task_tracker import get_task_tracker
+
+    ctx = RequestContext(user=service.user, role=Role.ADMIN, api_key="test-compile-key")
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    tracker = get_task_tracker()
+    before = {
+        task.task_id for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+    }
+
+    response = await client.post(
+        "/api/v1/compile",
+        json={
+            "from": [source],
+            "to": "viking://resources/wiki",
+            "skill": "viking://system/compile/example-skills/llm-wiki",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "Compile source must not be in the system namespace" in response.text
+    after = {
+        task.task_id for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+    }
+    assert after == before
+
+
+@pytest.mark.parametrize("mode", ["memory", "recovery"])
+async def test_compile_bypasses_admission_for_memory_and_submission_recovery(mode):
+    from openviking.service.compile_service import CompileRequest, CompileService
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+
+    result = object()
+    tasks = SimpleNamespace(recover_submission=AsyncMock(return_value=result), create=AsyncMock())
+    fs = SimpleNamespace(ensure_compile_target=AsyncMock())
+    service = CompileService(CompileApiConfig(), tasks, fs)
+    service._memory_runner = SimpleNamespace(create=AsyncMock(return_value=result))
+    request = CompileRequest(to="viking://~/memories/experiences", skill="memory")
+    if mode == "recovery":
+        request.skill = "viking://system/compile/example-skills/llm-wiki"
+        request.from_ = ["viking://resources/source"]
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    assert await service.create(request, connection={}, ctx=ctx, idempotency_key="retry") is result
+    tasks.create.assert_not_awaited()
+    fs.ensure_compile_target.assert_not_awaited()
+
+
 async def test_page_reads_past_200_and_isolates_owner():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
@@ -122,39 +565,58 @@ def test_cursor_is_bound_to_identity_and_filters():
         decode_cursor("broken", scope)
 
 
-@pytest.mark.asyncio
-async def test_concurrent_submission_retry_and_restart(monkeypatch):
+@pytest.mark.parametrize(
+    ("stage", "auth", "waiting_config"),
+    [
+        ("polling", {"external_task_id": "submitted"}, {}),
+        ("queued", {"compile_execution": {"phase": "planning"}}, {"compile_name": "wiki-other"}),
+    ],
+)
+async def test_concurrent_submission_retry_and_restart(monkeypatch, stage, auth, waiting_config):
     import ragfs_python
 
     import openviking.service.external_task_service as module
+    from openviking.service.compile_service import CompileService
     from openviking.service.external_task_service import ExternalTaskSnapshot
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
     from openviking.storage.queuefs.queue_manager import QueueManager
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
+    # Recovery must not depend on a global tracker left by another test.
+    monkeypatch.setattr("openviking.service.task_tracker._instance", None)
     monkeypatch.setattr(module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.external_task_processor.get_task_tracker", lambda: tracker
+    )
     transport = ragfs_python.RAGFSBindingClient()
     transport.mount("queuefs", "/queue", {"backend": "memory"})
     manager = QueueManager(transport)
     manager.get_queue(manager.EXTERNAL_TASK, allow_create=True)
-    monkeypatch.setattr(module, "get_queue_manager", lambda: manager)
-    provider = SimpleNamespace(
-        task_type="compile",
-        task_id_prefix="cmp_",
-        serialization_key=lambda payload: payload["to"],
-        poll_interval_seconds=0.001,
-        poll_max_attempts=1,
-        submit=AsyncMock(return_value="external-task"),
-        get=AsyncMock(return_value=ExternalTaskSnapshot(status="completed", result={"done": True})),
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+
     service = ExternalTaskService()
+    provider = CompileService(
+        CompileApiConfig(base_url="http://runtime"), service, SimpleNamespace()
+    )
+    provider.submit = AsyncMock(return_value="external-task")
+    provider.get = AsyncMock(
+        return_value=ExternalTaskSnapshot(status="completed", result={"done": True})
+    )
+    provider.on_start = AsyncMock(return_value=None)
+    provider.on_finish = AsyncMock(side_effect=lambda task, snapshot: snapshot)
     service.register(provider)
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
     params = {
         "resource_id": None,
-        "payload": {"from": ["viking://resources/a"], "to": "viking://resources/b"},
+        "payload": {
+            "from": ["viking://resources/a"],
+            "to": "viking://resources/b",
+            "compile": {"compile_name": "wiki"},
+        },
         "connection": {},
         "ctx": ctx,
         "idempotency_key": "test-submission-123",
@@ -168,15 +630,17 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         with pytest.raises(ConflictError):
             await service.create("compile", **{**params, "payload": {"to": "different"}})
         other = RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER)
-        waiting = await service.create("compile", **{**params, "ctx": other})
+        waiting_payload = {**params["payload"], "compile": waiting_config}
+        waiting = await service.create(
+            "compile", **{**params, "ctx": other, "payload": waiting_payload}
+        )
         assert waiting.task_id != again.task_id
 
         owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
-        await tracker.start(again.task_id, stage="polling", **owner)
-        await tracker.patch_task(
-            again.task_id,
-            TaskPatch(auth={"external_task_id": "submitted"}),
-            **owner,
+        await tracker.start(again.task_id, stage=stage, **owner)
+        await tracker.patch_task(again.task_id, TaskPatch(auth=auth), **owner)
+        await tracker.start(
+            waiting.task_id, stage="queued", account_id=other.account_id, user_id="bob"
         )
         tracker = TaskTracker(PersistentTaskStore(agfs))
         service = ExternalTaskService()
@@ -187,9 +651,20 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         await service.restore_tasks(recovered)
 
         assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        provider.on_start.side_effect = ["busy", None, None]
+        assert not await service.execute(again.task_id, **owner)
+        assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        queue = manager.get_queue(manager.EXTERNAL_TASK)
+        queue.set_dequeue_handler(ExternalTaskProcessor(service))
+        message = await queue.dequeue_raw()
+        assert json.loads(message["data"])["task_id"] == again.task_id
+        # Other users cannot dequeue the same target while its original ID is unacked.
+        assert await queue.dequeue_raw() is None
         provider.submit.assert_not_awaited()
-        assert await service.execute(again.task_id, ctx.account_id, ctx.user.user_id)
-        assert await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        await queue.process_dequeued(message)
+        await queue.ack(message["id"], message)
+        for _ in range(len(await queue.snapshot())):
+            await queue.dequeue()
         assert (await tracker.get(waiting.task_id, account_id="acme", user_id="bob")).result == {
             "done": True
         }
@@ -198,490 +673,96 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
-    service, app, client, monkeypatch, tmp_path
-):
-    """One target keeps its history, ordinary edits and live permissions across runs."""
-    import base64
-    from datetime import datetime, timedelta
+@pytest.mark.parametrize("save_failures", [2, 3])
+async def test_external_outcome_save_does_not_repeat_provider(monkeypatch, tmp_path, save_failures):
+    import ragfs_python
 
-    import openviking.service.external_task_service as external
-    from openviking.server.auth import get_request_context
-    from openviking.server.identity import ResolvedIdentity
-    from openviking.service.compile_scheduler import (
-        TZ,
-        CompileScheduler,
-        build_credential_encryptor,
-    )
-    from openviking.service.compile_service import CompileSessionAccepted, CompileSessionStatus
-    from openviking.service.task_tracker import get_task_tracker
-    from openviking.storage.acl import AclMode
-    from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
+    from openviking.service.external_task_service import ExternalTaskSnapshot
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.queue_manager import QueueManager
 
-    ctx = RequestContext(
-        user=service.user, role=Role.USER, group_ids=("engineering",), api_key="test-compile-key"
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(PersistentTaskStore(agfs))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    queue_config = {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
+    transport.mount("queuefs", "/queue", queue_config)
+    manager = QueueManager(transport)
+    service = ExternalTaskService()
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=0.001,
+        poll_max_attempts=1,
+        submit=AsyncMock(return_value="remote"),
+        get=AsyncMock(return_value=ExternalTaskSnapshot(status="completed", result={"ok": True})),
+        on_start=AsyncMock(return_value=None),
+        on_finish=AsyncMock(side_effect=lambda task, snapshot: snapshot),
+        on_cancel=AsyncMock(),
+        submission_meta=lambda _: {},
     )
-    admin = RequestContext(user=service.user, role=Role.ADMIN)
-    app.dependency_overrides[get_request_context] = lambda: ctx
-    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
-    source, target = "viking://resources/source", "viking://resources/wiki"
-    skill = f"viking://user/{ctx.user.user_id}/skills/wiki"
-    page, picture = f"{target}/page.md", f"{target}/diagram.png"
-    png = b"\x89PNG\r\n\x1a\noriginal"
-    for uri, content in {
-        f"{source}/a.md": "source",
-        f"{skill}/SKILL.md": "Build a wiki",
-        f"{target}/old.md": "keep renamed",
-        f"{target}/discard.md": "remove",
-        "viking://resources/inbox/note.md": "keep imported",
-        "viking://resources/inbox/copy.md": "keep copied",
-        picture: png,
-    }.items():
-        await service.viking_fs.write_file(uri, content, ctx=admin)
-    await service.runtime_config_manager.patch_account(ctx.account_id, {"acl": {"enabled": True}})
-    await service.vikingdb_manager.upsert(
-        {
-            "id": "compile-source",
-            "uri": source,
-            "account_id": ctx.account_id,
-            "context_type": "resource",
-            "level": 0,
-            "vector": [0.1] * service.vikingdb_manager.vector_dim,
-        },
-        ctx=admin,
+    service.register(provider)
+    queue = manager.get_queue(
+        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
     )
-    await service.fs.set_acl(
-        source,
-        [{"principal": "group:engineering", "level": "read"}],
-        ctx=admin,
-        acl_mode=AclMode.RESTRICTED,
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    complete = tracker.complete
+    saves = 0
 
-    # Drive the real task provider explicitly; generation and derived refresh are external work.
-    monkeypatch.setattr(external, "get_queue_manager", lambda: SimpleNamespace(enqueue=AsyncMock()))
-    monkeypatch.setattr(service, "reindex", AsyncMock(return_value={"status": "accepted"}))
-    monkeypatch.setattr(service.fs, "_enqueue_copy_refresh", AsyncMock(return_value="queued"))
-    monkeypatch.setattr(service.fs, "_enqueue_delete_refresh", AsyncMock(return_value="skipped"))
-    monkeypatch.setattr("openviking.service.fs_service.vectorize_directory_meta", AsyncMock())
-    monkeypatch.setattr(service.viking_fs, "_schedule_restore_reindex_for_paths", AsyncMock())
-    service.compile.configure_local_backend("http://localhost:1", "")
-    calls = []
-    runtime_status = "completed"
+    async def save(*args, **kwargs):
+        nonlocal saves
+        saves += 1
+        if saves <= save_failures:
+            raise OSError("store unavailable")
+        return await complete(*args, **kwargs)
 
-    async def generate(payload, **kwargs):
-        calls.append(payload["payload"])
-        operations = [{"uri": page, "content": "generated"}]
-        if runtime_status == "failed":
-            operations.append({"uri": f"{target}/partial.md", "content": "unfinished"})
-        await service.fs.batch_write(
-            root_uri=target,
-            operations=operations,
-            ctx=ctx,
-            defer_processing=True,
-            edit_source="compile",
-        )
-        if runtime_status == "failed":
-            await service.fs.mv("viking://resources/inbox/note.md", f"{target}/imported.md", ctx)
-            await service.fs.cp(
-                "viking://resources/inbox/copy.md", f"{target}/copied.md", recursive=False, ctx=ctx
+    monkeypatch.setattr(tracker, "complete", save)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    try:
+        first = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        [original] = await queue.snapshot()
+        await queue.dequeue()
+        provider.submit.assert_awaited_once()
+        provider.get.assert_awaited_once()
+        provider.on_finish.assert_awaited_once()
+        provider.on_cancel.assert_not_awaited()
+        if save_failures == 3:
+            assert (await queue.get_status()).in_progress == 1
+            assert await queue.snapshot() == [original]
+            assert await tracker.has_work(first.task_id, account_id="acme", user_id="alice")
+            waiting = await service.create(
+                "compile", resource_id=None, payload={"to": "target"}, ctx=ctx
             )
-            await service.fs.mv(f"{target}/old.md", f"{target}/renamed.md", ctx)
-            await service.fs.rm(f"{target}/discard.md", ctx, wait=True)
-            await service.fs.batch_write(
-                root_uri=target,
-                operations=[{"uri": page, "content": "ordinary edit"}],
-                ctx=ctx,
-                defer_processing=True,
-            )
-        return CompileSessionAccepted(session_id="runtime-task")
+            assert await queue.dequeue_raw() is None
 
-    runtime = SimpleNamespace(
-        create=generate,
-        get=AsyncMock(
-            side_effect=lambda *a, **kw: CompileSessionStatus(
-                status=runtime_status,
-                stage=runtime_status,
-                error="generation failed" if runtime_status == "failed" else None,
-            )
-        ),
-    )
-    monkeypatch.setattr(service.compile, "_client", lambda: runtime)
-    tracker = get_task_tracker()
-
-    async def submit(payload, key):
-        response = await client.post(
-            "/api/v1/compile",
-            json=payload,
-            headers={"Idempotency-Key": key, "X-Request-ID": "original-request-id"},
-        )
-        assert response.status_code == 202, response.text
-        task_id = response.json()["result"]["task_id"]
-        await service.compile._tasks.execute(task_id, **owner)
-        return task_id
-
-    payload = {
-        "from": [source],
-        "to": target,
-        "skill": skill,
-        "args": {"api_key": "private-runtime-key"},
-    }
-    accepted = await client.post(
-        "/api/v1/compile",
-        json=payload,
-        headers={"Idempotency-Key": "compile-initial-key", "X-Request-ID": "original-request-id"},
-    )
-    assert accepted.status_code == 202, accepted.text
-    first = accepted.json()["result"]["task_id"]
-    retry = await client.post(
-        "/api/v1/compile",
-        json=payload,
-        headers={"Idempotency-Key": "compile-initial-key", "X-Request-ID": "retry-request-id"},
-    )
-    assert retry.json()["result"]["task_id"] == first
-    assert "private-runtime-key" not in retry.text and "submission_hash" not in retry.text
-    auth = await tracker.get_task_auth(first, **owner)
-    assert auth["openviking_connection"]["request_id"] == "original-request-id"
-    await service.compile._tasks.execute(first, **owner)
-    assert (await tracker.get(first, **owner)).status == "completed"
-    assert await service.fs.read(page, ctx) == "generated"
-
-    # Interrupted finalization reuses durable checkpoints without publishing another version.
-    store = service.compile.lifecycle.store
-    initial_state = await store.get_by_to(ctx.account_id, target)
-    assert initial_state["auto_update"] is False and initial_state["update_schedule"] is None
-    target_id = initial_state["id"]
-    with monkeypatch.context() as patch:
-        summary = (await store.list_summaries(ctx.account_id))[0]
-        summaries = [{**summary, "id": f"target_{i}"} for i in (1, 0)]
-        patch.setattr(store, "list_summaries", AsyncMock(return_value=summaries))
-        p = (await client.get("/api/v1/compile/configs?limit=1")).json()["result"]
-        assert [item["target_id"] for item in p["targets"]] == ["target_0"]
-        assert p["next_cursor"] == "target_0"
-        p = (await client.get("/api/v1/compile/configs?limit=1&cursor=target_0")).json()["result"]
-        assert [item["target_id"] for item in p["targets"]] == ["target_1"]
-        assert p["next_cursor"] is None
-    operation = await store.get_operation(ctx.account_id, target_id, first)
-    checkpoint = dict(operation["meta"])
-    assert checkpoint["snapshot_committed"] and checkpoint["target_head"]
-    assert checkpoint["reindex_task_id"]
-    versions_before_resume = await store.list_version_indexes(ctx.account_id, target_id)
-    operation.update(status="committing", finished_at=None)
-    await store.put_operation(ctx.account_id, target_id, operation)
-    resumed_lifecycle = CompileLifecycle(store, service.viking_fs)
-    task = await tracker.get(first, **owner)
-    reindex_requests = service.reindex.await_count
-    with monkeypatch.context() as patch:
-        patch.setattr(resumed_lifecycle, "_commit", AsyncMock())
-        patch.setattr(resumed_lifecycle.versions, "record_compile", AsyncMock())
-        resumed = await resumed_lifecycle.on_start(task)
-        assert resumed.status == "completed"
-        await resumed_lifecycle.on_finish(task, resumed)
-        resumed_lifecycle._commit.assert_not_awaited()
-        resumed_lifecycle.versions.record_compile.assert_not_awaited()
-    operation = await store.get_operation(ctx.account_id, target_id, first)
-    assert operation["status"] == "completed" and operation["finished_at"] is not None
-    assert operation["meta"] == checkpoint
-    assert service.reindex.await_count == reindex_requests + 1
-    assert service.reindex.call_args.kwargs["task_id"] == checkpoint["reindex_task_id"]
-    assert await store.list_version_indexes(ctx.account_id, target_id) == versions_before_resume
-
-    recovery = await client.get("/api/v1/compile/submissions/compile-initial-key")
-    assert recovery.json()["result"]["task_id"] == first
-    assert isinstance((await client.get("/api/v1/tasks")).json()["result"], list)
-    paged = await client.get(
-        "/api/v1/tasks", params={"pagination": "cursor", "task_type": "compile"}
-    )
-    assert paged.json()["result"]["items"][0]["task_id"] == first
-    conflict = await client.post(
-        "/api/v1/compile",
-        json={**payload, "instruction": "changed"},
-        headers={"Idempotency-Key": "compile-initial-key"},
-    )
-    assert conflict.status_code == 409
-
-    queued = await client.post(
-        "/api/v1/compile", json=payload, headers={"Idempotency-Key": "compile-cancel-key"}
-    )
-    cancelled_id = queued.json()["result"]["task_id"]
-    stopped = await client.post(f"/api/v1/tasks/{cancelled_id}/cancel")
-    assert stopped.status_code == 200 and stopped.json()["result"]["status"] == "cancelled"
-    cancelled_retry = await client.post(
-        "/api/v1/compile", json=payload, headers={"Idempotency-Key": "compile-cancel-key"}
-    )
-    assert cancelled_retry.json()["result"]["task_id"] == cancelled_id
-
-    unchanged = await submit(payload, "compile-unchanged-key")
-    assert (await tracker.get(unchanged, **owner)).status == "completed" and len(calls) == 1
-    payload = {**payload, "instruction": "Change the title"}
-    await submit(payload, "compile-instruction-key")
-    assert len(calls) == 2 and calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
-    assert calls[-1]["args"]["changes"]["full_dirs"] == [source]
-    assert calls[-1]["args"]["changes"]["diff_dirs"] == []
-    await service.viking_fs.write_file(f"{source}/a.md", "new source", ctx=admin)
-    await submit(payload, "compile-source-update-key")
-    changes = calls[-1]["args"]["changes"]
-    assert changes["execution"]["mode"] == "incremental"
-    assert changes["diff_dirs"] == [source] and changes["full_dirs"] == []
-    assert "scopes" not in changes
-
-    progress = (await store.get_by_to(ctx.account_id, target))["progress"]
-    extra = "viking://resources/extra-source"
-    await service.viking_fs.write_file(f"{extra}/a.md", "extra", ctx=admin)
-    runtime_status = "failed"
-    failed = await submit(
-        {**payload, "from": [source, extra], "instruction": "Regenerate"}, "compile-failure-key"
-    )
-    assert (await tracker.get(failed, **owner)).status == "failed"
-    assert (await store.get_by_to(ctx.account_id, target))["progress"] == progress
-    assert await service.fs.read(page, ctx) == "ordinary edit"
-    assert await service.fs.read(f"{target}/imported.md", ctx) == "keep imported"
-    assert await service.fs.read(f"{target}/copied.md", ctx) == "keep copied"
-    assert await service.fs.read(f"{target}/renamed.md", ctx) == "keep renamed"
-    for uri in (f"{target}/old.md", f"{target}/discard.md", f"{target}/partial.md"):
-        assert not await service.viking_fs.exists(uri, ctx=ctx)
-    history = (await client.get("/api/v1/compile/operations", params={"to": target})).json()[
-        "result"
-    ]
-    public_fields = {
-        "operation_id",
-        "operation_type",
-        "actor",
-        "status",
-        "created_at",
-        "started_at",
-        "finished_at",
-        "error",
-        "params",
-        "result",
-        "conflicts_num",
-        "meta",
-    }
-    assert all(set(op) == public_fields for op in history["operations"])
-    failed_operation = next(
-        op for op in history["operations"] if op["meta"].get("task_id") == failed
-    )
-    assert failed_operation["status"] == "failed"
-    assert failed_operation["params"]["from"] == [source, extra]
-    assert failed_operation["params"]["to"] == target
-    assert failed_operation["params"]["skill"] == skill
-    assert set(failed_operation["meta"]) == {
-        "task_id",
-        "trigger",
-        "execution",
-        "skill_snapshot",
-        "base",
-        "head",
-        "changes",
-        "reindex_task_id",
-    }
-    assert set(failed_operation["meta"]["changes"]) == {"added", "modified", "deleted"}
-    target_id = (await store.get_by_to(ctx.account_id, target))["id"]
-    stored_operation = await store.get_operation(ctx.account_id, target_id, failed)
-    assert set(stored_operation) == public_fields
-    assert set(stored_operation["meta"]) - set(failed_operation["meta"]) == {
-        "target_deleted_at",
-        "target_base",
-        "target_head",
-        "snapshot_committed",
-        "content_changed",
-        "changed_roots",
-        "diff_dirs",
-        "full_dirs",
-        "rollback_head",
-    }
-    ordinary_operation = next(
-        op for op in history["operations"] if op["operation_type"] == "agent_revise"
-    )
-    assert ordinary_operation["meta"] == {}
-    assert ordinary_operation["params"] == {"batch": True, "uris": [page]}
-    assert ordinary_operation["result"] == {"created": [], "updated": [page], "unchanged": []}
-    assert ordinary_operation["conflicts_num"] == 0
-    cancelled_operation = next(
-        op for op in history["operations"] if op["operation_id"] == cancelled_id
-    )
-    assert {"execution", "skill_snapshot"}.isdisjoint(cancelled_operation["meta"])
-
-    # Binary version restore is guarded by the version the caller last observed.
-    await service.fs.batch_write(
-        root_uri=target,
-        operations=[
-            {"uri": picture, "content_base64": base64.b64encode(png + b" edited").decode()}
-        ],
-        ctx=ctx,
-        defer_processing=True,
-    )
-    state = await store.get_by_to(ctx.account_id, target)
-    target_id = state["id"]
-    indexes = await store.list_version_indexes(ctx.account_id, target_id)
-    assert tracker.compile_history_cleanup == store.delete_expired
-    assert await store.delete_expired(now=time.time() + 604801, limit=256) > 0
-    assert await store.get(ctx.account_id, target_id) == state
-    assert await store.list_version_indexes(ctx.account_id, target_id) == indexes
-    assert await tracker.get(first, **owner) is not None
-    versions = (await client.get("/api/v1/snapshot/versions", params={"uri": picture})).json()[
-        "result"
-    ]
-    restore = {
-        "path": picture,
-        "restore_version": versions["versions"][-1]["version_id"],
-        "current_version": versions["current_version"],
-    }
-    restored = await client.post("/api/v1/snapshot/restore", json=restore)
-    assert restored.status_code == 200, restored.text
-    assert restored.json()["result"]["meta"]["restored_from"] == restore["restore_version"]
-    await service.resources.wait_processed()
-    assert await service.fs.read_file_bytes(picture, ctx) == png
-    assert (await client.post("/api/v1/snapshot/restore", json=restore)).status_code == 409
-
-    # Scheduled submissions reuse the target but resolve current group permissions on each trigger.
-    scheduler = CompileScheduler(
-        service.compile, service.compile.lifecycle.store, service.viking_fs
-    )
-    scheduler.credential_encryptor = build_credential_encryptor(service._config.encryption)
-    scheduler.credential_encryptor.provider.key_file = tmp_path / "compile-key"
-    groups = AsyncMock(return_value=ctx.group_ids)
-    scheduler.set_identity_resolver(
-        AsyncMock(return_value=ResolvedIdentity(role=Role.USER, **owner)), groups
-    )
-    service.compile.lifecycle.save_credential = scheduler.save_credential
-    settings = {
-        "from": [source],
-        "to": target,
-        "skill": skill,
-        "auto_update": True,
-        "update_schedule": {"frequency": "daily"},
-    }
-    configured = await client.post("/api/v1/compile/config/update", json=settings)
-    assert configured.status_code == 200, configured.text
-    assert configured.json()["result"]["update_schedule"] == {
-        "frequency": "daily",
-        "hour": 0,
-        "minute": 0,
-    }
-    target_id = configured.json()["result"]["target_id"]
-    now = datetime.now(TZ) + timedelta(days=1)
-    runtime_status = "completed"
-    assert await scheduler.trigger_if_due(ctx.account_id, target_id, now) == "submitted"
-    operations = await service.compile.list_operations(target, ctx, limit=20, cursor=None)
-    scheduled = next(
-        op["meta"]["task_id"]
-        for op in operations["operations"]
-        if op["meta"].get("trigger") == "scheduled"
-    )
-    await service.compile._tasks.execute(scheduled, **owner)
-    assert (await tracker.get(scheduled, **owner)).status == "completed"
-    assert await scheduler.trigger_if_due(ctx.account_id, target_id, now) == "not_due"
-
-    # Disabling clears a supplied rule; null and omitted rules are valid only while disabled.
-    for rule in ({"update_schedule": {"frequency": "daily"}}, {"update_schedule": None}, {}):
-        disabled = await client.post(
-            "/api/v1/compile/config/update",
-            json={key: value for key, value in settings.items() if key != "update_schedule"}
-            | {"auto_update": False}
-            | rule,
-        )
-        assert disabled.status_code == 200, disabled.text
-        config = disabled.json()["result"]
-        assert config["auto_update"] is False
-        assert config["update_schedule"] is None and config["next_run_at"] is None
-    for rule in ({}, {"update_schedule": None}):
-        rejected = await client.post(
-            "/api/v1/compile/config/update",
-            json={key: value for key, value in settings.items() if key != "update_schedule"} | rule,
-        )
-        assert rejected.status_code == 400, rejected.text
-        rejected = await client.post(
-            "/api/v1/compile", json={**payload, "args": {"auto_update": True, **rule}}
-        )
-        assert rejected.status_code == 400, rejected.text
-    await submit(
-        {**payload, "args": {"auto_update": False, "update_schedule": None}},
-        "compile-disable-schedule-key",
-    )
-    assert (await store.get(ctx.account_id, target_id))["update_schedule"] is None
-    configured = await client.post("/api/v1/compile/config/update", json=settings)
-    assert configured.status_code == 200, configured.text
-    groups.return_value = ()
-    with pytest.raises(PermissionDeniedError):
-        await scheduler.trigger_if_due(ctx.account_id, target_id, now + timedelta(days=1))
-
-    # Submission recovery remains available after inputs disappear or the backend is disabled.
-    with monkeypatch.context() as patch:
-        patch.setattr(service.fs, "stat", AsyncMock(side_effect=NotFoundError(source)))
-        patch.setattr(service.compile, "_local_endpoint", None)
-        recovered = await client.post(
-            "/api/v1/compile",
-            json={**payload, "instruction": None},
-            headers={"Idempotency-Key": "compile-initial-key"},
-        )
-        assert recovered.status_code == 202, recovered.text
-        assert recovered.json()["result"]["task_id"] == first
-    ctx = RequestContext(user=UserIdentifier(owner["account_id"], "bob"), role=Role.USER)
-    assert (await client.get("/api/v1/tasks", params={"pagination": "cursor"})).json()["result"][
-        "items"
-    ] == []
+            # Restart preserves the original delivery and retries its saved outcome.
+            tracker = TaskTracker(PersistentTaskStore(agfs))
+            monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+            service = ExternalTaskService()
+            service.register(provider)
+            queue.set_dequeue_handler(ExternalTaskProcessor(service))
+            transport.unmount("/queue")
+            transport.mount("queuefs", "/queue", queue_config)
+            await manager.prepare_task_tracking(tracker)
+            recovered = await queue.dequeue_raw()
+            assert recovered["id"] == original["id"]
+            await queue.process_dequeued(recovered)
+            await queue.ack(recovered["id"], recovered)
+            provider.submit.assert_awaited_once()
+            provider.get.assert_awaited_once()
+            await queue.dequeue()
+            assert (
+                await tracker.get(waiting.task_id, account_id="acme", user_id="alice")
+            ).status is TaskStatus.COMPLETED
+        assert (
+            await tracker.get(first.task_id, account_id="acme", user_id="alice")
+        ).status is TaskStatus.COMPLETED
+        assert (await queue.get_status()).is_complete
+    finally:
+        transport.close()
 
 
-@pytest.mark.asyncio
-async def test_disabled_schedule_clears_legacy_state_and_lifecycle_changes(service, monkeypatch):
-    """Disabled rules stay null across legacy reads, delayed triggers and target reuse."""
-    from datetime import datetime
-
-    import openviking.service.compile_scheduler as scheduling
-
-    store = service.compile.lifecycle.store
-    account = service.user.account_id
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    target = "viking://resources/scheduled"
-    target_id = await store.register(account, target)
-    path = store._record_path(account, target_id)
-    schedule = {"frequency": "daily", "hour": 0, "minute": 0}
-    legacy = await store.get(account, target_id)
-    legacy["update_schedule"] = schedule
-    await store.write_json(path, legacy)
-    await store._sync_summary(account, legacy)
-    assert (await store.get(account, target_id))["update_schedule"] is None
-    assert (await store.list_summaries(account))[0]["update_schedule"] is None
-    assert (await store.read_json(path))["update_schedule"] == schedule
-    async with store.edit(account, target_id):
-        pass
-    assert (await store.read_json(path))["update_schedule"] is None
-    summaries = await store.read_json(store._targets_path(account))
-    assert summaries["targets"][0]["update_schedule"] is None
-
-    scheduler = scheduling.CompileScheduler(service.compile, store, service.viking_fs)
-    now = datetime(2026, 10, 22, 12, tzinfo=scheduling.TZ)
-    with monkeypatch.context() as patch:
-        slot = Mock(wraps=scheduling.current_slot)
-        patch.setattr(scheduling, "current_slot", slot)
-        await scheduler.scan_once(now)
-        assert await scheduler.trigger_if_due(account, target_id, now) == "not_due"
-        slot.assert_not_called()
-
-    async with store.edit(account, target_id) as record:
-        record.update(
-            initialized=True,
-            auto_update=True,
-            update_schedule=schedule,
-            auto_update_enabled_at="2026-10-20T00:00:00+08:00",
-        )
-    assert await scheduler.trigger_if_due(account, target_id, now) == "disabled"
-    invalid = await store.get(account, target_id)
-    assert invalid["auto_update"] is False and invalid["update_schedule"] is None
-    assert (await store.list_summaries(account))[0]["update_schedule"] is None
-
-    async with store.edit(account, target_id) as record:
-        record.update(auto_update=True, update_schedule=schedule)
-    await service.compile.lifecycle.versions.after_remove(target, ctx)
-    deleted = await store.get(account, target_id)
-    assert deleted["status"] == "deleted" and deleted["update_schedule"] is None
-    assert await store.register(account, target) == target_id
-    reused = await store.get(account, target_id)
-    assert reused["status"] == "active" and reused["auto_update"] is False
-    assert reused["update_schedule"] is None
-
-
-@pytest.mark.asyncio
 async def test_cursor_prunes_cold_expired_records_without_loading_cache():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
@@ -724,7 +805,6 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
     }
 
 
-@pytest.mark.asyncio
 async def test_cursor_cleanup_rechecks_task_updated_after_scan():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
@@ -756,45 +836,3 @@ async def test_cursor_cleanup_rechecks_task_updated_after_scan():
     )
     assert [record.task_id for record in page] == [task.task_id]
     assert await store.get_task(task.task_id, **owner) is not None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failed_dir", ["operation_outputs", "operations"])
-async def test_compile_history_retention_and_retry(service, monkeypatch, failed_dir):
-    store = service.compile.lifecycle.store
-    account = service.user.account_id
-    target = await store.register(account, "viking://resources/history")
-    now = time.time()
-    for operation_id, status, finished_at in (
-        ("expired", "completed", now - 604801),
-        ("boundary", "failed", now - 604800),
-        ("missing", "cancelled", None),
-        ("running", "running", now - 604801),
-    ):
-        operation = new_operation(operation_id, "restore", {}, "user", status=status)
-        operation["finished_at"] = finished_at
-        await store.merge_outputs(account, target, operation_id, [])
-        await store.put_operation(account, target, operation)
-    async with store.edit(account, target) as record:
-        record["active_task_id"] = "running-task"
-    assert await store.delete_expired(now=now, limit=256) == 0
-    async with store.edit(account, target) as record:
-        record["active_task_id"] = None
-    remove = store.remove
-
-    async def fail_remove(path, **kwargs):
-        if path.endswith(f"/{failed_dir}/expired.json"):
-            raise OSError("history deletion failed")
-        await remove(path, **kwargs)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(store, "remove", fail_remove)
-        assert await store.delete_expired(now=now, limit=256) == 0
-    assert await store.get_operation(account, target, "expired") is not None
-    for _ in range(4):
-        await store.delete_expired(now=now, limit=2)
-    assert await store.get_operation(account, target, "expired") is None
-    assert await store.get_outputs(account, target, "expired") is None
-    for operation_id in ("boundary", "missing", "running"):
-        assert await store.get_operation(account, target, operation_id) is not None
-        assert await store.get_outputs(account, target, operation_id) is not None

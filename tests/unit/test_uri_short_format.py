@@ -90,7 +90,6 @@ class TestVikingURIExplicitFormat:
         [
             ("viking://resources", "resources"),
             ("viking://user", "user"),
-            ("viking://session/abc123", "session"),
             ("viking://queue", "queue"),
             ("viking://temp", "temp"),
         ],

@@ -3,15 +3,11 @@ import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import {
   applyIncrementalCaptureResult,
   buildIncrementalCapturePlan,
+  shouldCommitCapture,
 } from "./incremental-turn-capture.mjs";
 import { buildCodebuddyTurns, cleanCodebuddyText } from "./codebuddy-turns.mjs";
 
-export function shouldCommitCodebuddyCapture(event, cfg = {}, previous = 0, captured = 0) {
-  if (captured <= 0) return false;
-  if (event === "session-end") return true;
-  if (event === "pre-compact") return cfg.autoCommitOnCompact !== false;
-  return Number(previous || 0) + captured >= Number(cfg.commitTurnThreshold || Infinity);
-}
+export { shouldCommitCapture as shouldCommitCodebuddyCapture };
 
 export const codebuddy = {
   prefix: "cb-",
@@ -76,14 +72,21 @@ export const codebuddy = {
       return null;
     }
     const plan = buildIncrementalCapturePlan(transcript.turns, state, ctx.cfg);
-    if (plan.toSend.length === 0) return null;
-
-    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
-    const next = applyIncrementalCaptureResult(state, plan, result, cleanCodebuddyText);
+    let next;
+    if (plan.toSend.length > 0) {
+      const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
+      next = applyIncrementalCaptureResult(state, plan, result, cleanCodebuddyText);
+    } else if (shouldCommitCapture(event, ctx.cfg, state.capturedSinceCommit, 0)) {
+      // Nothing new to send, but turns sent earlier are still uncommitted; a
+      // session end or compaction may be their last chance.
+      next = { ...state, captured: 0 };
+    } else {
+      return null;
+    }
     let capturedSinceCommit = Number(state.capturedSinceCommit || 0) + next.captured;
-    if (shouldCommitCodebuddyCapture(event, ctx.cfg, state.capturedSinceCommit, next.captured)) {
+    if (shouldCommitCapture(event, ctx.cfg, state.capturedSinceCommit, next.captured)) {
       const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
-      if (committed.ok) capturedSinceCommit = 0;
+      if (committed.ok || committed.pendingQueued) capturedSinceCommit = 0;
     }
     const { captured, ...persisted } = next;
     return { ...persisted, capturedSinceCommit };

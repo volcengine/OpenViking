@@ -18,8 +18,8 @@ from openviking.core.identifiers import (
     validate_identifier_part,
     validate_user_id,
 )
-from openviking.server.api_keys import APIKeyManager
 from openviking.server.account_stores.file import validate_file_account_id
+from openviking.server.api_keys import APIKeyManager
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
@@ -170,7 +170,15 @@ class TrustedAuthPlugin(AuthPlugin):
         # parameters such as ``account_id`` identify the managed resource, so
         # they must not be mistaken for a partial caller identity.
         is_admin_path = _is_trusted_admin_path(request.url.path)
-        if is_admin_path:
+        # A key-only health probe reports control-plane identity. Probes with
+        # tenant identity keep reporting the asserted/resolved data-plane role.
+        is_control_probe = (
+            request.url.path == "/health"
+            and not effective_account_id
+            and not effective_user_id
+            and asserted_role is None
+        )
+        if is_admin_path or is_control_probe:
             return ResolvedIdentity(
                 role=Role.ROOT,
                 account_id=effective_account_id or "trusted",
@@ -217,10 +225,12 @@ class TrustedAuthPlugin(AuthPlugin):
     def validate_config(self, config) -> None:
         if config.root_api_key and config.root_api_key.strip():
             return
-        logger.error(
+        print(
             "Cannot start OpenViking: trusted mode requires a non-empty server.root_api_key, "
             "including on localhost. Set server.root_api_key in the server's ov.conf and "
-            "restart. Configure clients and Web Studio to use the same key."
+            "restart. Configure clients and Web Studio to use the same key.",
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 
@@ -271,10 +281,9 @@ class TrustedAuthPlugin(AuthPlugin):
             if manager is None or await manager.get_account(account_id) is None:
                 raise
         if self._pending_count + self._in_flight_count >= self._pending_max_size:
-            logger.warning(
-                "Trusted identity registration queue is full; dropping %s/%s",
-                account_id,
-                user_id,
+            logger.info(
+                "Trusted identity registration queue is full; skipping identity",
+                extra={"queue_depth": self._pending_count + self._in_flight_count},
             )
             return
         self._pending.setdefault(account_id, set()).add(user_id)
@@ -302,7 +311,10 @@ class TrustedAuthPlugin(AuthPlugin):
             self._pending_count += self._in_flight_count
             if not isinstance(exc, Exception):
                 raise
-            logger.warning("Trusted identity batch registration failed; will retry", exc_info=True)
+            logger.info(
+                "Trusted identity batch registration failed; will retry",
+                extra={"error_type": type(exc).__name__, "total": self._in_flight_count},
+            )
         finally:
             self._in_flight = {}
             self._in_flight_count = 0

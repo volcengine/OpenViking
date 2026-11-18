@@ -25,8 +25,7 @@ async def test_create_keeps_working_when_lifecycle_metrics_fail(monkeypatch: pyt
     service = SessionService()
     ctx = _make_ctx()
     session = Mock()
-    session.exists = AsyncMock(return_value=False)
-    session.ensure_exists = AsyncMock()
+    session.ensure_exists = AsyncMock(return_value=True)
     debug = Mock()
 
     def _boom(*_args, **_kwargs):
@@ -39,7 +38,6 @@ async def test_create_keeps_working_when_lifecycle_metrics_fail(monkeypatch: pyt
     result = await service.create(ctx, "sess-1")
 
     assert result is session
-    session.exists.assert_awaited_once()
     session.ensure_exists.assert_awaited_once()
     assert debug.call_count == 2
 
@@ -87,7 +85,7 @@ async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
 
 
 @pytest.mark.asyncio
-async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility():
+async def test_sessions_uses_canonical_scope():
     service = SessionService(viking_fs=Mock())
     ctx = _make_ctx()
 
@@ -97,11 +95,6 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
         return [
             {"name": "duplicate", "isDir": True, "modTime": "2026-07-13T01:00:00Z"},
             {"name": "new-session", "isDir": True, "modTime": "2026-07-13T02:00:00Z"},
-            {
-                "name": "legacy-session",
-                "isDir": True,
-                "modTime": "2026-07-12T01:00:00Z",
-            },
         ]
 
     service._viking_fs.ls = AsyncMock(side_effect=_ls)
@@ -120,12 +113,6 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
             "uri": "viking://user/alice/sessions/new-session",
             "is_dir": True,
             "mod_time": "2026-07-13T02:00:00Z",
-        },
-        {
-            "session_id": "legacy-session",
-            "uri": "viking://user/alice/sessions/legacy-session",
-            "is_dir": True,
-            "mod_time": "2026-07-12T01:00:00Z",
         },
     ]
     service._viking_fs.ls.assert_awaited_once()

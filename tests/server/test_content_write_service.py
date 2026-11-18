@@ -23,20 +23,38 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-async def test_write_updates_memory_file_and_parent_overview(service):
+async def test_write_updates_memory_file_and_parent_overview(service, monkeypatch):
+    from openviking.observability.events import get_event_bus
+    from openviking.observability.reporting import runtime
+
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/preferences"
     memory_uri = f"{memory_dir}/theme.md"
 
     await service.viking_fs.write_file(memory_uri, "Original preference", ctx=ctx)
 
-    result = await service.fs.write(
-        memory_uri,
-        content="Updated preference",
-        ctx=ctx,
-        mode="replace",
-        wait=True,
-    )
+    monkeypatch.setattr(runtime, "_reporter", object())
+    events = []
+    bus = get_event_bus()
+    bus.register("content-write-reporting", events.append)
+    try:
+        result = await service.fs.write(
+            memory_uri,
+            content="Updated preference",
+            ctx=ctx,
+            mode="replace",
+            wait=True,
+        )
+    finally:
+        bus.unregister("content-write-reporting")
+
+    writes = [
+        e for e in events if e.event_name == "file_mutation" and e.payload["uri"] == memory_uri
+    ]
+    assert len(writes) == 1
+    assert writes[0].payload["task_id"] == result["task_id"]
+    assert writes[0].payload["memory_type"] == "preferences"
+    assert writes[0].payload["change_type"] == "modified"
 
     assert result["context_type"] == "memory"
     assert result["semantic_status"] == "skipped"
@@ -692,7 +710,6 @@ async def test_write_lock_storage_error_is_not_mapped_to_resource_busy(file_uri)
         )
 
 
-
 class _AnyDirVikingFS:
     """Stats the given file uri as a file and every other uri as a directory."""
 
@@ -740,7 +757,6 @@ async def test_resource_write_anchors_nested_file_to_direct_parent(
 
     assert write_anchor == parent_uri
     assert set_tags_anchor == project_root
-
 
 
 @pytest.mark.asyncio

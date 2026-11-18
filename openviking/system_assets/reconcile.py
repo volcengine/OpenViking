@@ -3,12 +3,19 @@
 """Reconcile packaged system assets across all active accounts."""
 
 import asyncio
+import json
 from collections.abc import Collection
-from typing import Protocol
+from typing import Any, Protocol
 
+from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
+from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.server.account_stores.models import AccountSummary
 from openviking.server.identity import RequestContext, Role
-from openviking.system_assets.sync import SystemAssetSynchronizer
+from openviking.system_assets.sync import (
+    SYSTEM_ASSET_MANIFEST_PATH,
+    SystemAssetSynchronizer,
+    system_asset_sync_lock,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -23,6 +30,7 @@ class SystemAssetReconciler:
         self,
         synchronizer: SystemAssetSynchronizer,
         account_lister: AccountLister,
+        agfs: AsyncAGFSClient,
         *,
         user_id: str,
         skip_account_ids: Collection[str] | None = None,
@@ -35,12 +43,26 @@ class SystemAssetReconciler:
             raise ValueError("max_concurrency must be positive")
         self._synchronizer = synchronizer
         self._account_lister = account_lister
+        self._agfs = agfs
         self._user_id = user_id
         self._skip_account_ids = frozenset(skip_account_ids or ())
         self._page_size = page_size
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def sync_all(self) -> int:
+    async def sync_if_changed(self) -> int:
+        manifest = self._synchronizer.manifest
+        digest = self._synchronizer.manifest_digest
+        if await self._read_manifest_digest() == digest:
+            return 0
+
+        async with system_asset_sync_lock(self._agfs) as lease:
+            if await self._read_manifest_digest() == digest:
+                return 0
+            synced_accounts = await self._sync_all()
+            await self._write_manifest(manifest, lease)
+            return synced_accounts
+
+    async def _sync_all(self) -> int:
         synced_accounts = 0
         page = 1
         while True:
@@ -81,14 +103,51 @@ class SystemAssetReconciler:
             page += 1
         return synced_accounts
 
+    async def _read_manifest_digest(self) -> str | None:
+        fs_ctx = fs_ctx_from_agfs_path(SYSTEM_ASSET_MANIFEST_PATH)
+        fs_ctx["bypass_cache"] = "true"
+        try:
+            result = await self._agfs.read(SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
+        except (AGFSNotFoundError, FileNotFoundError):
+            return None
+
+        raw = result if isinstance(result, bytes) else getattr(result, "content", result)
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        digest = payload.get("sha256") if isinstance(payload, dict) else None
+        return digest if isinstance(digest, str) else None
+
+    async def _write_manifest(self, manifest: bytes, lease: Any) -> None:
+        fs_ctx = _lease_fs_ctx(SYSTEM_ASSET_MANIFEST_PATH, lease)
+        await self._agfs.ensure_parent_dirs(SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
+        await self._agfs.write(
+            SYSTEM_ASSET_MANIFEST_PATH,
+            manifest,
+            fs_ctx=fs_ctx,
+            auto_pathlock=False,
+        )
+
     async def _sync_account(self, account: AccountSummary) -> int:
         account_id = account.get("account_id")
         if not account_id:
             raise ValueError("account summary is missing account_id")
+        ctx = RequestContext(
+            user=UserIdentifier(account_id, self._user_id),
+            role=Role(Role.ROOT),
+        )
         async with self._semaphore:
-            return await self._synchronizer.sync(
-                RequestContext(
-                    user=UserIdentifier(account_id, self._user_id),
-                    role=Role(Role.ROOT),
-                )
-            )
+            return await self._synchronizer.sync_under_lock(ctx)
+
+
+def _lease_fs_ctx(path: str, lease: Any) -> dict[str, str]:
+    fs_ctx = fs_ctx_from_agfs_path(path)
+    lease_ref = getattr(lease, "lease_ref", None) or getattr(lease, "id", None)
+    if isinstance(lease, dict):
+        lease_ref = lease.get("lease_ref", lease_ref)
+    if isinstance(lease_ref, str) and lease_ref:
+        fs_ctx["lease_ref"] = lease_ref
+    return fs_ctx

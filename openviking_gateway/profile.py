@@ -5,12 +5,13 @@
 import asyncio
 import html
 import re
+import time
 from urllib.parse import urlencode
 
 import async_timeout
 
 from .blocks import neutralize
-from .client import VikingError
+from .client import CALL, VikingError
 
 SKILL_USAGE = (
     "  OpenViking skills (stored in OpenViking, not local files). Before following one, "
@@ -214,12 +215,20 @@ async def build_profile(viking, key, policy, tools):
     budget = policy.profile_max_tokens
     if not budget or not (policy.profile or catalog):
         return {"text": "", "reason": "disabled", "parts": []}
-    deadline = asyncio.get_running_loop().time() + policy.recall_timeout
+    if viking.unavailable_reason:
+        # Like recall, skip the profile while OV is down instead of waiting for its timeout.
+        return {"text": "", "reason": viking.unavailable_reason, "parts": []}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + policy.recall_timeout
+    if (call := CALL.get()) and call.deadline is not None:
+        deadline = min(deadline, loop.time() + call.deadline - time.monotonic())
     failures = []
 
     async def fetch(path, params, default):
         try:
-            async with async_timeout.timeout_at(deadline):
+            # The call's own timeout fires first, so the circuit counts it as unanswered;
+            # this timer only backstops the whole fetch.
+            async with async_timeout.timeout_at(deadline + 0.05):
                 result = await viking.request(
                     "GET",
                     path + ("?" + urlencode(params) if params else ""),

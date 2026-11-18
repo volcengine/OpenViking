@@ -10,7 +10,10 @@ from typing import Protocol
 
 SESSION_ITEM_TYPE = "session"
 COMPILE_TARGET_ITEM_TYPE = "compile_target"
-SUPPORTED_ITEM_TYPES: frozenset[str] = frozenset({SESSION_ITEM_TYPE, COMPILE_TARGET_ITEM_TYPE})
+TTL_ITEM_TYPE = "ttl"
+SUPPORTED_ITEM_TYPES: frozenset[str] = frozenset(
+    {SESSION_ITEM_TYPE, COMPILE_TARGET_ITEM_TYPE, TTL_ITEM_TYPE}
+)
 
 
 class ExpiryMode(str, Enum):
@@ -65,8 +68,10 @@ class CallbackResult:
 @dataclass(frozen=True)
 class HandlerOptions:
     concurrency: int = 4
-    max_attempts: int = 3
+    # None retains a failed claim for retry after the processing timeout.
+    max_attempts: int | None = 3
     metadata_enabled: bool = True
+    lazy_start: bool = False
 
 
 class ExpiryHandler(Protocol):

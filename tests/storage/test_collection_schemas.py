@@ -13,7 +13,7 @@ import pytest
 import requests
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
-from openviking.models.model_error import ModelError, ModelErrorKind
+from openviking.models.model_error import ModelError, ModelErrorKind, brief_for
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import (
@@ -935,6 +935,15 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
     assert vikingdb.enqueued == []  # terminal: not re-enqueued
     (await handler.breaker()).check()  # breaker not tripped (would raise if open)
 
+    # The failing resource carries a structured per-resource error: exact uri
+    # plus the actionable, kind-specific brief.
+    assert len(result.errors) == 1
+    detail = result.errors[0]
+    assert isinstance(detail, dict)
+    assert detail["uri"] == "viking://resources/sample"
+    assert detail["err_brief"] == brief_for(ModelErrorKind.AUTHENTICATION_ERROR.value)
+    assert detail["message"] == result.error
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_query", [True, False])
@@ -1360,6 +1369,13 @@ def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
         "DefaultValue": "none",
     }
     assert "acl_mode" in schema["ScalarIndex"]
+    for name in ("acl_direct_grants", "acl_inherited_grants"):
+        assert next(field for field in schema["Fields"] if field["FieldName"] == name) == {
+            "FieldName": name,
+            "FieldType": "list<string>",
+            "DefaultValue": ["none"],
+        }
+        assert name in schema["ScalarIndex"]
     assert "acl_enabled" not in field_names
     assert "acl_enabled" not in schema["ScalarIndex"]
     assert "parent_uri" not in field_names
@@ -3062,7 +3078,7 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
 async def test_update_search_tags_with_levels_queries_directory_uri_only():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     directory_uri = "viking://resources/demo/doc.md"
-    calls = {"filter": [], "get": [], "upsert": []}
+    calls = {"filter": [], "get": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3080,10 +3096,10 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
             {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
         ]
 
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True)
 
     async def _fake_get(ids, *, ctx):
         calls["get"].append((list(ids), ctx.account_id))
@@ -3094,7 +3110,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 
     backend.filter = _fake_filter
     backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         directory_uri,
@@ -3109,17 +3125,13 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
     assert calls["get"] == [(["dir-l0", "dir-l1"], ctx.account_id)]
     assert calls["filter"][0]["limit"] == 2
     assert "id" in calls["filter"][0]["output_fields"]
-    assert calls["upsert"] == [
+    assert calls["update"] == [
         {
             "id": "dir-l0",
-            "uri": directory_uri,
-            "level": 0,
             "search_tags": ["old=0", "team=search"],
         },
         {
             "id": "dir-l1",
-            "uri": directory_uri,
-            "level": 1,
             "search_tags": ["old=1", "team=search"],
         },
     ]
@@ -3128,7 +3140,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 @pytest.mark.asyncio
 async def test_update_search_tags_with_levels_skips_records_without_id_and_private_helper_is_removed():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    calls = {"filter": [], "get": [], "upsert": []}
+    calls = {"filter": [], "get": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3146,10 +3158,10 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
         ]
 
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True)
 
     async def _fake_get(ids, *, ctx):
         calls["get"].append((list(ids), ctx.account_id))
@@ -3165,7 +3177,7 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
 
     backend.filter = _fake_filter
     backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         "viking://resources/demo/doc.md",
@@ -3192,7 +3204,9 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             "search_tags": ["team=search"],
         },
     ]
-    assert calls["upsert"] == updated
+    assert calls["update"] == [
+        {"id": record["id"], "search_tags": record["search_tags"]} for record in updated
+    ]
 
 
 @pytest.mark.asyncio

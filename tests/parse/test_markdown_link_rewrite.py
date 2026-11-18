@@ -7,9 +7,37 @@ from unittest.mock import patch
 
 import pytest
 
+from openviking.parse.output import LocalParseOutputStore
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.markdown import MarkdownParser, _RewriteContext
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "other_content",
+    ["", "[example](./linked.md#section\ncontinued)", "[example](./linked.md?query\ncontinued)"],
+)
+async def test_parse_rewrites_rendered_links_and_preserves_examples(tmp_path, other_content):
+    (tmp_path / "linked.md").write_text("# Linked\n", encoding="utf-8")
+    code = f"```markdown\n[example](./linked.md)\n```\n\n`[inline](./linked.md)`\n\n{other_content}"
+    source = tmp_path / "guide.md"
+    source.write_text(f"# Guide\n\n{code}\n\n[Open `linked.md`](./linked.md)", encoding="utf-8")
+    output = tmp_path / "parsed"
+
+    await MarkdownParser().parse(
+        source,
+        split_content=False,
+        enable_link_rewrite=True,
+        link_rewrite_root=str(tmp_path),
+        parse_output_store=LocalParseOutputStore(str(output)),
+    )
+
+    [document] = list(output.rglob("*.md"))
+    assert (
+        document.read_text(encoding="utf-8")
+        == f"# Guide\n\n{code}\n\n[Open `linked.md`](../linked/)"
+    )
 
 
 class TestRewriteRelativeLinks:
@@ -789,9 +817,9 @@ class TestRewriteImageUris:
                     self.pending_failure = None
                     raise OSError("transient storage failure")
 
-            async def ls(self, uri, **kw):
+            async def ls(self, uri, *args, **kw):
                 self.fail_once("ls", uri)
-                return await super().ls(uri, **kw)
+                return await super().ls(uri, *args, **kw)
 
             async def read_file(self, uri, **kw):
                 self.fail_once("read_file", uri)
