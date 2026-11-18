@@ -718,7 +718,11 @@ class FSService:
                     directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )
-            if refresh_parent_uri and wait and refresh_action is not FreshnessAction.MARK_PENDING:
+            if (
+                refresh_parent_uri
+                and wait
+                and refresh_action not in (FreshnessAction.NOOP, FreshnessAction.MARK_PENDING)
+            ):
                 queue_status = await self._wait_for_refresh()
         finally:
             pass
@@ -726,11 +730,14 @@ class FSService:
             result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
             result["semantic_root_uri"] = refresh_parent_uri
-            result["semantic_status"] = (
-                "deferred"
-                if refresh_action is FreshnessAction.MARK_PENDING
-                else self._semantic_refresh_status(wait=wait, queue_status=queue_status)
-            )
+            if refresh_action is FreshnessAction.NOOP:
+                result["semantic_status"] = "skipped"
+            elif refresh_action is FreshnessAction.MARK_PENDING:
+                result["semantic_status"] = "deferred"
+            else:
+                result["semantic_status"] = self._semantic_refresh_status(
+                    wait=wait, queue_status=queue_status
+                )
             if queue_status is not None:
                 result["queue_status"] = queue_status
         return result
@@ -825,15 +832,25 @@ class FSService:
         force_refresh: bool = False,
     ) -> FreshnessAction:
         semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
-            viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=1,
-            ctx=ctx,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-            force_refresh=force_refresh,
-        )
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=self._viking_fs,
+                dir_uri=root_uri,
+                changed_entries=1,
+                ctx=ctx,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                force_refresh=force_refresh,
+            )
+        except LockAcquisitionError:
+            # Content deletion already succeeded. Parent freshness bookkeeping
+            # is best effort, as in content writes.
+            logger.info(
+                "Skipping best-effort delete parent freshness update because sidecars are busy",
+                extra={"uri": safe_uri_for_log(root_uri), "degraded": True},
+            )
+            return FreshnessAction.NOOP
+
         if decision.action is not FreshnessAction.REFRESH_NOW:
             return decision.action
         try:
@@ -843,7 +860,7 @@ class FSService:
                 "QueueManager not available; skipping delete refresh",
                 extra={"error_type": type(exc).__name__, "degraded": True},
             )
-            return decision.action
+            return FreshnessAction.NOOP
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
         msg = SemanticMsg(
