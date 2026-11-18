@@ -97,7 +97,9 @@ class CodexSource(JsonlLogSource):
                     if obj.get("type") != "session_meta":
                         continue
                     payload = obj.get("payload")
-                    return payload if isinstance(payload, dict) else {}
+                    if not isinstance(payload, dict):
+                        continue
+                    return payload
         except OSError:
             pass
         return {}

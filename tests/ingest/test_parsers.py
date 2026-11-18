@@ -190,6 +190,7 @@ def test_codex_discovery_skips_unreadable_leading_records(tmp_path):
 
     (day / "rollout-a.jsonl").write_text(
         "[]\n"
+        '{"type":"session_meta","payload":42}\n'
         '{"type":"session_meta","payload":{"id":"recovered","model_provider":"openai"}}\n'
         '{"type":"response_item","payload":{"type":"message","role":"assistant",'
         '"content":[{"type":"output_text","text":"hello"}]}}\n'
