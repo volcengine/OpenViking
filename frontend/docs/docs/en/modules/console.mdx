@@ -108,7 +108,7 @@ When host content fails to render, the block shows the default fallback: an illu
 | quickCommands    | Shortcuts `{ name, value }` in the command-mode empty state; clicking one fills `value` into the input without running it, and an empty array hides the empty state. See [CommandConsole](../components/command-console) for the type | `readonly CommandConsoleQuickCommand[]` | Five defaults: `add-resource`, `add-skill`, `add-memory`, `find`, `compile` |
 | scopeKey         | Isolation key for identities resolved by functions; when it changes, the records and drafts are cleared and in-flight requests are aborted                                                                                            | `string`                                | -                                                                           |
 | command          | Command-mode overrides, see `ConsoleCommandProps` below                                                                                                                                                                               | `ConsoleCommandProps`                   | -                                                                           |
-| commandOptions   | File selection, downloads and administrator command options                                                                                                                                                                           | `ConsoleCommandOptions`                 | Browser file handling; administrator commands disabled                      |
+| commandOptions   | [File selection, downloads and administrator command options](#consolecommandoptions)                                                                                                                                                 | `ConsoleCommandOptions`                 | Browser file handling, with administrator commands disabled                 |
 | onOpenUri        | Called when a resource link is clicked, with its URI; each mode prefers its own `conversation.onOpenUri` or `command.onOpenUri`                                                                                                       | `(uri: string) => void`                 | -                                                                           |
 | slots            | Inserts your own content into the panel, see `ConsoleSlots` below                                                                                                                                                                     | `ConsoleSlots`                          | -                                                                           |
 | labels           | Overrides interface text, see `ConsoleLabels` below                                                                                                                                                                                   | `ConsoleLabels`                         | -                                                                           |
@@ -252,6 +252,24 @@ Adapt other backends through a stable `taskService`; `chatOptions.taskService` c
 | Property  | Description                                                                                            | Type                    | Default |
 | --------- | ------------------------------------------------------------------------------------------------------ | ----------------------- | ------- |
 | onOpenUri | Called when a resource link is clicked in command mode; falls back to `Console.onOpenUri` when omitted | `(uri: string) => void` | -       |
+
+### ConsoleCommandOptions
+
+| Property             | Description                                                                                                            | Type                                                                      | Default                                    |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------ |
+| `allowAdminCommands` | Show `ov backup` and `ov restore` in the command list and enable their execution. The server still checks permissions. | `boolean`                                                                 | `false`                                    |
+| `files`              | Choose local files and save downloads.                                                                                 | [ConsoleCommandFiles](#consolecommandfiles)                               | Browser file picker and downloads          |
+| `choosePackFile`     | Choose a local archive for `ov import` given the target URI. Return `undefined` to cancel.                             | `(targetUri: string, signal?: AbortSignal) => Promise<File \| undefined>` | `files.pickFile` with the `.ovpack` filter |
+| `onPackImported`     | Called with the URI returned by a successful `ov import`.                                                              | `(uri: string) => void`                                                   | -                                          |
+
+### ConsoleCommandFiles
+
+Provide both methods when supplying a custom `files` adapter.
+
+| Method     | Description                                                                                                                                                                      | Type                                                                                               | Default  |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------- |
+| `pickFile` | Choose one file. `name` is the name entered in the command, `accept` is the file filter, and `signal` lets the host cancel the picker. Return `undefined` when the user cancels. | `(options: { name: string; accept?: string; signal?: AbortSignal }) => Promise<File \| undefined>` | Required |
+| `download` | Save the returned blob under the supplied filename.                                                                                                                              | `(blob: Blob, filename: string) => void \| Promise<void>`                                          | Required |
 
 ### ConsoleSlots
 

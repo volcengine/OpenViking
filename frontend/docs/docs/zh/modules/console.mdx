@@ -108,7 +108,7 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 | quickCommands    | 命令模式空态里的快捷入口 `{ name, value }`，点击后把 `value` 填入输入框，不自动执行；传入空数组时不显示空态，类型见 [CommandConsole](../components/command-console) | `readonly CommandConsoleQuickCommand[]` | `add-resource`、`add-skill`、`add-memory`、`find`、`compile` 五条 |
 | scopeKey         | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                | -                                                                 |
 | command          | 命令模式的覆盖项，类型见下方 `ConsoleCommandProps`                                                                                                                  | `ConsoleCommandProps`                   | -                                                                 |
-| commandOptions   | 文件选择、下载与管理员命令配置                                                                                                                                      | `ConsoleCommandOptions`                 | 使用浏览器处理文件；关闭管理员命令                                |
+| commandOptions   | [文件选择、下载与管理员命令配置](#consolecommandoptions)                                                                                                            | `ConsoleCommandOptions`                 | 使用浏览器处理文件，管理员命令关闭                                |
 | onOpenUri        | 点击资源链接时触发，参数为资源 URI；两种模式各自以 `conversation.onOpenUri`、`command.onOpenUri` 为准                                                               | `(uri: string) => void`                 | -                                                                 |
 | slots            | 在面板中插入宿主内容，类型见下方 `ConsoleSlots`                                                                                                                     | `ConsoleSlots`                          | -                                                                 |
 | labels           | 覆盖界面文案，类型见下方 `ConsoleLabels`                                                                                                                            | `ConsoleLabels`                         | -                                                                 |
@@ -252,6 +252,24 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 | 参数      | 说明                                                         | 类型                    | 默认值 |
 | --------- | ------------------------------------------------------------ | ----------------------- | ------ |
 | onOpenUri | 命令模式下点击资源链接时触发；省略时使用 `Console.onOpenUri` | `(uri: string) => void` | -      |
+
+### ConsoleCommandOptions
+
+| 参数                 | 说明                                                                         | 类型                                                                      | 默认值                               |
+| -------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------ |
+| `allowAdminCommands` | 在命令列表显示并启用 `ov backup` 和 `ov restore`。服务端仍会校验权限。       | `boolean`                                                                 | `false`                              |
+| `files`              | 选择本地文件和保存下载内容。                                                 | [ConsoleCommandFiles](#consolecommandfiles)                               | 使用浏览器选择文件和下载             |
+| `choosePackFile`     | 为 `ov import` 选择本地归档包，回调接收目标 URI。返回 `undefined` 取消导入。 | `(targetUri: string, signal?: AbortSignal) => Promise<File \| undefined>` | 通过 `files.pickFile` 筛选 `.ovpack` |
+| `onPackImported`     | `ov import` 成功并返回 URI 后，以该 URI 调用。                               | `(uri: string) => void`                                                   | -                                    |
+
+### ConsoleCommandFiles
+
+自定义 `files` 适配器时需要同时提供这两个方法。
+
+| 方法       | 说明                                                                                                                    | 类型                                                                                               | 默认值 |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| `pickFile` | 选择单个文件。`name` 是命令中输入的文件名，`accept` 是文件筛选条件，`signal` 用于取消选择。用户取消时返回 `undefined`。 | `(options: { name: string; accept?: string; signal?: AbortSignal }) => Promise<File \| undefined>` | 必填   |
+| `download` | 将返回的 Blob 以给定的文件名保存。                                                                                      | `(blob: Blob, filename: string) => void \| Promise<void>`                                          | 必填   |
 
 ### ConsoleSlots
 
