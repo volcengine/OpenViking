@@ -16,6 +16,7 @@ from typing import Generator
 
 import httpx
 import pytest
+from model_query_retry import retry_model_query
 
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 
@@ -440,6 +441,11 @@ def ov(args, timeout=120):
         "stdout": stdout,
         "stderr": result.stderr.strip(),
     }
+
+
+def ov_model_query(args, timeout=180):
+    """Retry model TPM/RPM limits only for read-only find/search tests."""
+    return retry_model_query(lambda: ov(args, timeout=timeout))
 
 
 def _is_retryable_api_error(result: dict) -> bool:
