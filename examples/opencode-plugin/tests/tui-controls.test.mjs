@@ -6,7 +6,7 @@ import { registerV2Controls } from "../lib/v2-controls.mjs"
 
 function fixture(methods = {}) {
   const calls = [], dialogs = [], slots = [], layers = []
-  let close, sessionID = "current", confirmed = true
+  let close, sessionID = "current", confirmed = true, choice
   const report = { connection: { state: "error" }, installation: { state: "ok" }, mcp: { state: "disabled" },
     skills: { state: "disabled" }, capture: { state: "disabled" }, text: "Doctor: disconnected", effective: { apiKey: "must-not-render" } }
   const rpc = Object.fromEntries(["status", "doctor", "commit", "recall"].map((action) => [action, async (input, options) => {
@@ -19,26 +19,24 @@ function fixture(methods = {}) {
       slot: (slot) => { slots.push(slot); return () => slots.splice(slots.indexOf(slot), 1) },
       dialog: { set: () => {}, show: (render, onClose) => { close?.(); dialogs.push(render()); close = onClose },
         clear: () => { close?.(); close = undefined }, confirm: async () => typeof confirmed === "function" ? confirmed() : confirmed,
-        select: async () => "status" } } }
-  const start = () => startTuiControls(context, { renderDialog: (title, text) => ({ title, text }), renderStatus: () => "status", updateStatus: () => {} })
-  const run = (input) => layers.at(-1).commands[0].run(input)
+        select: async () => { context.ui.dialog.clear(); return choice } } } }
+  const start = () => startTuiControls(context, { renderDialog: (title, text) => ({ title, text }) })
+  const run = (input) => { choice = input; return layers.at(-1).commands[0].run() }
   return { context, calls, dialogs, slots, layers, run, start,
     session: (id) => { sessionID = id }, confirm: (value) => { confirmed = value }, dismiss: () => context.ui.dialog.clear() }
 }
 
 test("TUI reads are native dialogs, disconnected/disabled states stay visible without configuration output", async () => {
   const f = fixture(); const stop = f.start()
-  assert.deepEqual(f.layers[0].commands[0].slash, { name: "ov", arguments: true })
-  await f.run("status")
-  assert.match(f.dialogs.at(-1).text, /Connection: error/)
-  assert.match(f.dialogs.at(-1).text, /MCP: disabled/)
-  assert.doesNotMatch(JSON.stringify(f.dialogs), /must-not-render/)
+  assert.deepEqual(f.layers[0].commands[0].slash, { name: "ov" })
+  assert.equal(f.layers[0].mode, "global")
+  assert.match(f.layers[0].commands[0].title, /\/ov/)
   await f.run("doctor")
   assert.equal(f.dialogs.at(-1).text, "Doctor: disconnected")
-  assert.deepEqual(f.calls.map((c) => c.action), ["status", "doctor"])
+  assert.doesNotMatch(JSON.stringify(f.dialogs), /must-not-render/)
+  assert.deepEqual(f.calls.map((c) => c.action), ["doctor"])
   assert.deepEqual(f.calls[0].options.location, f.context.location)
   stop(); assert.equal(f.slots.length, 0)
-  assert.ok(f.calls[0].options.signal.aborted)
 })
 
 test("commit needs explicit confirmation, stays on current session, and only reports acceptance", async () => {
@@ -46,11 +44,12 @@ test("commit needs explicit confirmation, stays on current session, and only rep
   await f.run("commit"); assert.equal(f.calls.length, 0)
   f.confirm(() => { f.session("changed"); return true })
   await f.run("commit"); assert.equal(f.calls.length, 0)
+  f.dismiss()
   f.confirm(true)
   await f.run("commit")
   assert.deepEqual(f.calls[0].input, { sessionID: "changed" })
   assert.match(f.dialogs.at(-1).text, /accepted.*completion has not been verified/s)
-  f.session(null); await f.run("commit"); await f.run("recall")
+  f.dismiss(); f.session(null); await f.run("commit"); f.dismiss(); await f.run("recall")
   assert.equal(f.calls.length, 1)
 })
 
@@ -59,20 +58,21 @@ test("reload/disable abort requests, remove slot, and never resurrect dismissed 
   const f = fixture({ doctor: () => new Promise((done) => { resolve = done }) })
   const stop = f.start(); const pending = f.run("doctor")
   await Promise.resolve(); f.dismiss()
+  assert.equal(f.calls[0].options.signal.aborted, true)
   resolve({ text: "late", connection: { state: "ok" }, capture: { state: "ok" } })
   await pending; assert.equal(f.dialogs.length, 1)
   stop()
   await f.run("status"); assert.equal(f.calls.length, 1)
   // The real host disposes its keymap scope on reload; a new setup gets one layer.
   f.layers.length = 0; const stopAgain = f.start()
-  assert.equal(f.layers.length, 1); assert.equal(f.slots.length, 1); stopAgain()
+  assert.equal(f.layers.length, 1); assert.equal(f.slots.length, 0); stopAgain()
   assert.equal(f.slots.length, 0)
 })
 
 test("disabling while commit confirmation is open prevents a late confirmation from writing", async () => {
   const f = fixture(); let confirm
   f.confirm(() => new Promise((resolve) => { confirm = resolve }))
-  const stop = f.start(); const pending = f.run("commit")
+  const stop = f.start(); const pending = f.run("commit"); await Promise.resolve()
   stop(); confirm(true); await pending
   assert.equal(f.calls.length, 0)
 })
@@ -98,12 +98,12 @@ test("recall inspector reads exact persisted context with turn/source and explic
   assert.deepEqual(view.turns[0].sources, ["viking://user/fixture/memories/test.md"])
   const f = fixture({ recall: () => view }); f.start(); await f.run("recall")
   assert.match(f.dialogs.at(-1).text, /Turn: turn-1/)
-  assert.match(f.dialogs.at(-1).text, /Pending: unavailable/)
   assert.match(f.dialogs.at(-1).text, /latest unsaved turn may be absent/)
   assert.equal((await inspectV2Recall({}, {}, "current")).state, "unavailable")
   assert.equal((await inspectV2Recall({ storage: { get: async () => ({ version: 2 }) } }, {}, "current")).state, "error")
   const bounded = await inspectV2Recall({ storage: { get: async () => ({ version: 1, entries: Array.from({ length: 40 }, (_, i) => [`turn-${i}`, "x".repeat(15000)]) }) } }, {}, "current")
-  assert.equal(bounded.turns.length, 10)
+  assert.equal(bounded.turns[0].messageID, "turn-39")
+  assert.ok(bounded.turns.every(({ text }) => text.length > 0))
   assert.ok(bounded.turns.reduce((n, t) => n + t.text.length, 0) <= 60000)
 })
 

@@ -8,14 +8,17 @@ import { assessProbes, createReport, describeApiKey, probeOpenViking } from "./s
 export const BUNDLED_SKILLS = ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search"]
 
 // Select fields rather than serializing effective config, skill bodies or transcripts.
-export async function diagnoseOpenCode({ ctx, config, pluginRoot = "", offline = false, timeoutMs = 5000 }) {
+export async function diagnoseOpenCode({ ctx, config, pluginRoot = "", offline = false, timeoutMs = 5000, signal }) {
+  const deadline = AbortSignal.timeout(timeoutMs)
+  const bounded = signal ? AbortSignal.any([signal, deadline]) : deadline
+  bounded.throwIfAborted()
   const report = createReport()
   const extraHeaders = config.extraHeaders ?? parseExtraHeaders(process.env.OPENVIKING_EXTRA_HEADERS)
   const redact = (text) => sanitizeDiagnosticText(config, text)
   const inventory = async (domain) => {
     if (!domain?.list) return { state: "unsupported" }
     try {
-      const { data } = await domain.list()
+      const { data } = await domain.list(undefined, { signal: bounded })
       if (!Array.isArray(data)) throw new Error("Unexpected OpenCode inventory response")
       return { state: "ok", data }
     } catch (error) {
@@ -23,8 +26,10 @@ export async function diagnoseOpenCode({ ctx, config, pluginRoot = "", offline =
     }
   }
   const [plugins, servers, skills] = await Promise.all([inventory(ctx?.plugin), inventory(ctx?.mcp), inventory(ctx?.skill)])
+  bounded.throwIfAborted()
   report.section("OpenCode installation")
-  const instances = plugins.data?.filter((p) => p.id === "openviking" || p.source?.target?.includes("@openviking/opencode-plugin") || /openviking/i.test(p.source?.path || ""))
+  const instances = plugins.data?.filter(({ id, source }) =>
+    id === "openviking" || /^@openviking\/opencode-plugin(?:@.+)?$/.test(source?.target ?? ""))
   const installation = { state: plugins.state, hostVersion: ctx?.app?.version ?? null,
     instances: instances?.map((p) => ({ id: p.id, source: p.source.type, version: p.source.version ?? null, state: p.state.status })),
     ...(plugins.error ? { error: plugins.error } : {}) }
@@ -53,14 +58,15 @@ export async function diagnoseOpenCode({ ctx, config, pluginRoot = "", offline =
   let connection = { state: offline ? "disabled" : "ok" }
   if (!offline) {
     const conn = { baseUrl: config.baseUrl, apiKey: config.apiKey, account: config.sendIdentityHeaders ? config.accountId : "", user: config.sendIdentityHeaders ? config.userId : "", peerId: config.effectivePeer?.peerId || config.peerId, userAgent: config.userAgent }
-    const probes = await probeOpenViking({ ...conn, extraHeaders }, { timeoutMs, mcp: mcp.state !== "disabled" })
+    const probes = await probeOpenViking({ ...conn, extraHeaders }, { timeoutMs, mcp: mcp.state !== "disabled", signal: bounded })
     const summary = assessProbes(report, probes, conn, describeApiKey(config.apiKey))
     connection = { state: summary.authOk ? "ok" : "error", reachable: summary.reachable, authOk: summary.authOk, version: summary.version,
       mcpHttpStatus: probes.mcp?.status ?? null }
   } else report.info("Network probes disabled (--offline)")
 
   report.section("Capture activity")
-  const capture = await inspectCapture(config, pluginRoot)
+  const capture = await inspectCapture(config, pluginRoot, bounded)
+  bounded.throwIfAborted()
   report[capture.state === "error" ? "fail" : "info"](`Capture: ${capture.state}`, capture.error)
   let endpoint
   try { const url = new URL(config.baseUrl); url.username = ""; url.password = ""; url.search = ""; url.hash = ""; endpoint = url.href } catch { endpoint = "(invalid URL)" }
@@ -94,10 +100,10 @@ export function sanitizeDiagnosticText(config, text) {
     })
 }
 
-async function inspectCapture(config, pluginRoot) {
+async function inspectCapture(config, pluginRoot, signal) {
   if (!isCaptureEnabled(config)) return { state: "disabled" }
   try {
-    const data = JSON.parse(await readFile(join(resolveDataDir(pluginRoot, config), "openviking-session-state.json"), "utf8"))
+    const data = JSON.parse(await readFile(join(resolveDataDir(pluginRoot, config), "openviking-session-state.json"), { encoding: "utf8", signal }))
     const sessions = Object.values(data.sessions || {})
     return { state: "ok", sessions: sessions.length,
       pendingMessages: sessions.reduce((n, s) => n + (s.messages || []).filter(([, m]) => !m.captured).length, 0),

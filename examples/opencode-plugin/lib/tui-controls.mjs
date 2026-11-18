@@ -1,6 +1,6 @@
 import { OPENVIKING_CONTROLS } from "./controls-contract.mjs"
 
-const ACTIONS = ["status", "doctor", "recall", "commit"]
+const ACTIONS = { doctor: "Doctor", recall: "View saved recall", commit: "Commit current session…" }
 const COMMIT_MESSAGES = {
   accepted: "Commit accepted. Memory extraction completion has not been verified.",
   disabled: "Capture is disabled for this session. Nothing was committed.",
@@ -16,24 +16,10 @@ export function displayText(value) {
   return String(value ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "")
 }
 
-export function statusText(report) {
-  return [
-    `Connection: ${report.connection.state}`,
-    `Plugin: ${report.installation.state}; MCP: ${report.mcp.state}; skills: ${report.skills.state}`,
-    `Capture: ${report.capture.state} (persisted activity across this location)`,
-    `Pending messages: ${report.capture.pendingMessages ?? "unavailable"}`,
-    `Last accepted commit: ${report.capture.lastCommitAcceptedAt ? new Date(report.capture.lastCommitAcceptedAt).toISOString() : "unavailable"}`,
-    "An accepted commit does not establish completed memory extraction.",
-    "Use /ov doctor for checks or /ov recall for stored context.",
-  ].join("\n")
-}
-
 export function recallText(view) {
   const lines = [
     `Session: ${view.sessionID}`,
     `Recall: ${view.state}; source: ${view.source ?? "unavailable"}`,
-    `Pending: ${view.pending === null ? "unavailable" : JSON.stringify(view.pending)}`,
-    "Live runtime error: unavailable",
     ...(view.error ? [`Inspection error: ${view.error}`] : []),
     ...(view.limitations ?? []),
   ]
@@ -45,9 +31,8 @@ export function recallText(view) {
 }
 
 /** TUI-local commands; every mutation requires the current session and confirmation. */
-export function startTuiControls(context, { renderDialog, renderStatus, updateStatus }) {
-  const rpc = context.client.rpc(OPENVIKING_CONTROLS)
-  const controller = new AbortController()
+export function startTuiControls(context, { renderDialog }) {
+  let controller
   let active = false
   let disposed = false
   let generation = 0
@@ -59,7 +44,7 @@ export function startTuiControls(context, { renderDialog, renderStatus, updateSt
     const route = context.ui.router.current()
     return route.type === "session" ? route.sessionID : undefined
   }
-  const show = (title, text) => {
+  const show = (title, text, onClose) => {
     if (disposed) return
     const id = ++dialogID
     dialogOwned = true
@@ -68,18 +53,15 @@ export function startTuiControls(context, { renderDialog, renderStatus, updateSt
       if (id !== dialogID) return
       dialogOpen = false
       dialogOwned = false
+      onClose?.()
     })
     context.ui.dialog.set({ size: "large" })
   }
-  const call = (action, input) => rpc[action](input, { location: location(), signal: controller.signal })
   const run = async (action) => {
     if (disposed || active) return
-    if (!ACTIONS.includes(action)) {
-      show("OpenViking", "Use /ov status, /ov doctor, /ov recall or /ov commit.")
-      return
-    }
     active = true
     const request = ++generation
+    let operation
     try {
       const sessionID = currentSession()
       if ((action === "commit" || action === "recall") && !sessionID) {
@@ -96,55 +78,56 @@ export function startTuiControls(context, { renderDialog, renderStatus, updateSt
         dialogOwned = false
         if (disposed || !confirmed) return
         if (currentSession() !== sessionID) {
-          show("OpenViking", "The current session changed. Run /ov commit again in the intended session.")
+          show("OpenViking", "The current session changed. Open the picker again in the intended session.")
           return
         }
       }
-      show(`OpenViking ${action}`, "Loading…")
-      updateStatus(`OV: ${action}…`)
-      const result = await call(action, action === "recall" || action === "commit" ? { sessionID } : {})
-      if (disposed || request !== generation) return
-      updateStatus(action === "status" || action === "doctor"
-        ? `OV: ${result.connection.state} · capture ${result.capture.state}` : "OV: /ov status to refresh")
+      operation = controller = new AbortController()
+      show(`OpenViking: ${ACTIONS[action]}`, "Loading…", () => {
+        // A confirmed commit may already be accepted; closing its dialog only hides the result.
+        if (action === "commit") return
+        operation.abort()
+        if (request === generation) active = false
+      })
+      const rpc = context.client.rpc(OPENVIKING_CONTROLS)
+      const result = await rpc[action](action === "recall" || action === "commit" ? { sessionID } : {},
+        { location: location(), signal: operation.signal })
+      if (disposed || request !== generation || operation.signal.aborted) return
       // A dismissed dialog must not reopen when its network request finishes.
       if (!dialogOpen || ((action === "recall" || action === "commit") && currentSession() !== sessionID)) return
-      show(`OpenViking ${action}`, action === "status" ? statusText(result)
-        : action === "doctor" ? result.text
+      show(`OpenViking: ${ACTIONS[action]}`, action === "doctor" ? result.text
           : action === "recall" ? recallText(result)
-            : COMMIT_MESSAGES[result.status] ?? "Commit returned an unsupported result. Run /ov doctor.")
+            : COMMIT_MESSAGES[result.status] ?? "Commit returned an unsupported result. Run Doctor from the OpenViking picker.")
     } catch (error) {
-      if (disposed || controller.signal.aborted) return
-      updateStatus("OV: unavailable · /ov doctor")
+      if (disposed || request !== generation || operation?.signal.aborted) return
       if (dialogOpen) {
         const kind = ["operation_failed", "rpc.not_found", "rpc.method_not_found"].includes(error?.type) ? ` (${error.type})` : ""
-        show("OpenViking unavailable", `The OpenViking control could not complete${kind}. Check that the server plugin is enabled and connected, then run /ov doctor. No extraction completion is implied.`)
+        show("OpenViking unavailable", `The OpenViking control could not complete${kind}. Check that the server plugin is enabled and connected, then retry from the picker.`)
       }
     } finally {
-      active = false
+      if (controller === operation) controller = undefined
+      if (request === generation) active = false
     }
   }
   context.keymap.layer(() => ({
-    commands: [{ id: "openviking.controls", title: "OpenViking controls", group: "OpenViking", palette: true,
-      slash: { name: "ov", arguments: true }, run: async (input) => {
-        if (disposed || active) return
-        const action = input?.trim()
-        if (action) return run(action)
+    mode: "global",
+    commands: [{ id: "openviking.controls", title: "OpenViking controls (/ov)", group: "OpenViking", palette: true,
+      slash: { name: "ov" }, run: async () => {
+        if (disposed || active || dialogOwned) return
         dialogID++
         dialogOpen = false
         dialogOwned = true
-        const selected = await context.ui.dialog.select({ title: "OpenViking", options: ACTIONS.map((value) => ({
-          title: value === "commit" ? "Commit current session…" : value[0].toUpperCase() + value.slice(1), value,
+        const selected = await context.ui.dialog.select({ title: "OpenViking", options: Object.entries(ACTIONS).map(([value, title]) => ({
+          title, value,
         })) })
         dialogOwned = false
-        if (selected) await run(selected)
+        if (Object.hasOwn(ACTIONS, selected)) await run(selected)
       } }],
   }))
-  const stopStatus = context.ui.slot({ append: "prompt.footer.status", render: renderStatus })
   return () => {
     disposed = true
     generation++
-    controller.abort()
-    stopStatus()
+    controller?.abort()
     if (dialogOwned) context.ui.dialog.clear()
     // OpenCode owns the keymap layer and removes it on reload/disable.
   }

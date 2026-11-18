@@ -304,14 +304,11 @@ The package exports an optional `./tui` part. OpenCode loads it alongside the se
 part in its terminal UI. Headless clients use the server entrypoint without UI imports.
 OpenCode supplies the Solid/OpenTUI runtime.
 
-- `/ov` opens the control picker.
-- `/ov status` and `/ov doctor` show read-only, scrollable native dialogs.
-- `/ov recall` shows recent OpenViking context stored with the current session.
-- `/ov commit` confirms before sending current-session activity to OpenViking.
-  Changing sessions dismisses the original intent.
-
-The footer shows the last requested connection/capture result. It starts `unchecked`;
-run status or Doctor to refresh it. No diagnostics are added to chat history.
+Select `/ov` from slash completion in the full terminal UI, or search for
+**OpenViking controls** in the command palette. The picker offers **Doctor**
+(Esc cancels a pending check), **View saved recall** (newest first), and
+**Commit current session…** (requires confirmation in that session).
+Diagnostics are not added to chat history.
 
 The recall inspector reads saved prompt metadata or the plugin's replay ledger when
 available. It exposes at most ten recent records, bounded text and source references.

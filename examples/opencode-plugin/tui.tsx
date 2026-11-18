@@ -1,15 +1,11 @@
 import { Plugin } from "@opencode/plugin/tui"
-import { createSignal } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { startTuiControls } from "./lib/tui-controls.mjs"
 
 export default Plugin.define({
   id: "openviking.tui",
   setup(context) {
-    const [status, setStatus] = createSignal("OV: unchecked · /ov")
     return startTuiControls(context, {
-      updateStatus: setStatus,
-      renderStatus: () => <text fg={context.theme.text.muted}>{status()}</text>,
       renderDialog: (title: string, text: string) => {
         const dimensions = useTerminalDimensions()
         return (

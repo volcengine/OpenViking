@@ -33,14 +33,16 @@ export async function inspectV2Recall(ctx, config, sessionID) {
     return view
   }
   let budget = 60000
-  view.turns = entries.map(([messageID, original]) => {
+  for (const [messageID, original] of entries.reverse()) {
+    if (budget <= 0) break
     const redacted = sanitizeDiagnosticText(config, original)
     const text = redacted.slice(0, Math.min(12000, budget))
+    if (!text.trim()) continue
     budget -= text.length
-    return { messageID, text, redacted: redacted !== original, truncated: text.length < redacted.length,
-      sources: [...new Set(text.match(/viking:\/\/[^\s<>"'`\]\)]+/g) ?? [])] }
-  })
-  view.state = "available"
+    view.turns.push({ messageID, text, redacted: redacted !== original, truncated: text.length < redacted.length,
+      sources: [...new Set(text.match(/viking:\/\/[^\s<>"'`\]\)]+/g) ?? [])] })
+  }
+  if (view.turns.length) view.state = "available"
   view.limitations.push("At most the latest 10 persisted turns and 60,000 characters are shown; configured credentials are redacted.")
   return view
 }
