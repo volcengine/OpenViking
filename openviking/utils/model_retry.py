@@ -318,6 +318,9 @@ def classify_api_error(error: Exception) -> str:
 
 def is_retryable_api_error(error: Exception) -> bool:
     """Return True if the error should be retried."""
+    model_error = model_error_from_exception(error)
+    if model_error is not None and model_error.status_code == 451:
+        return False
     kind = model_error_kind(error)
     if kind is not None:
         return kind in {
@@ -440,6 +443,8 @@ def _retry_limit(
 ) -> int:
     model_error = model_error_from_exception(error)
     if model_error is not None:
+        if model_error.status_code == 451:
+            return 0
         if model_error.kind in {
             ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             ModelErrorKind.TRANSIENT_NETWORK_ERROR,

@@ -3,6 +3,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -543,3 +544,228 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
     )
     assert outputs == [] and pipeline.status["input"] == "failed"
     assert pipeline.failures
+
+
+@pytest.fixture
+async def routing_embeddings(pipeline, monkeypatch):
+    """Run the Bot adapter against the HTTP route and a real SDK on synthetic HTTP."""
+    import httpx
+    import openai
+    from fastapi import FastAPI
+    from vikingbot.openviking_mount.ov_server import VikingClient
+
+    from openviking.models.embedder.base import FailoverEmbedder
+    from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
+    from openviking.models.embedder.retry_embedder import RetryEmbedder
+    from openviking.server.auth import get_request_context
+    from openviking.server.identity import RequestContext, Role
+    from openviking.server.routers import compile as api
+    from openviking_cli.client.http import AsyncHTTPClient
+    from openviking_cli.session.user_id import UserIdentifier
+
+    calls = []
+    outcomes: dict[str, tuple[int | None, Any]] = {}
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def respond(request):
+        text = json.loads(request.content)["input"]
+        calls.append(text)
+        status, body = outcomes.get(text, (200, [1.0, 0.0]))
+        if status is None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        assert status is not None
+        if status == 200:
+            body = {
+                "data": [{"embedding": body, "index": 0, "object": "embedding"}],
+                "model": "test",
+                "object": "list",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            }
+        return httpx.Response(status, json=body)
+
+    inner = OpenAIDenseEmbedder(model_name="test", api_key="test", dimension=2)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as provider_http:
+        sdk = openai.AsyncOpenAI(api_key="test", max_retries=0, http_client=provider_http)
+        monkeypatch.setattr(inner, "_get_async_client", lambda: sdk)
+        backup = OpenAIDenseEmbedder(model_name="test", api_key="backup", dimension=2)
+        backup_request = AsyncMock(side_effect=AssertionError("No credential switch"))
+        monkeypatch.setattr(backup, "embed_async", backup_request)
+        embedder = FailoverEmbedder([RetryEmbedder(inner), backup], ["primary", "backup"])
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role(Role.USER))
+        fs = SimpleNamespace(stat=AsyncMock(), _get_embedder=lambda _: embedder)
+        service = SimpleNamespace(
+            viking_fs=fs,
+            embedding_provider=SimpleNamespace(
+                get_status=AsyncMock(return_value=SimpleNamespace(fingerprint="model-v1"))
+            ),
+        )
+        monkeypatch.setattr(api, "get_service", lambda: service)
+        app = FastAPI()
+        app.include_router(api.router)
+        app.dependency_overrides[get_request_context] = lambda: ctx
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as http:
+            client = AsyncHTTPClient(url="http://test")
+            client._http = http
+            adapter = VikingClient.__new__(VikingClient)
+            adapter.client = client
+            pipeline.client.compile_embeddings = adapter.compile_embeddings
+            yield SimpleNamespace(
+                http=http,
+                app=app,
+                calls=calls,
+                outcomes=outcomes,
+                fs=fs,
+                inner=inner,
+                backup=backup,
+                started=started,
+                cancelled=cancelled,
+            )
+        backup_request.assert_not_awaited()
+        inner.close()
+        backup.close()
+
+
+async def test_endpoint_partial_451_preserves_positions(pipeline, routing_embeddings):
+    env = routing_embeddings
+    env.outcomes["refused"] = (451, {"error": {"message": "Unavailable"}})
+    body = {"target_uri": pipeline.target, "texts": ["alpha", "refused", "beta"]}
+    response = await env.http.post("/api/v1/compile/embeddings?allow_partial_451=true", json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == {
+        "model": "model-v1",
+        "vectors": [[1.0, 0.0], None, [1.0, 0.0]],
+    }
+    assert sorted(env.calls) == ["alpha", "beta", "refused"]
+    env.fs.stat.assert_awaited_once()
+    # Legacy callers still receive an error; successful legacy responses keep their shape.
+    assert (await env.http.post("/api/v1/compile/embeddings", json=body)).status_code == 500
+    body["texts"] = ["alpha"]
+    response = await env.http.post("/api/v1/compile/embeddings", json=body)
+    assert response.json()["result"] == {"model": "model-v1", "vectors": [[1.0, 0.0]]}
+
+
+async def test_shuffle_partial_451_retains_semantic_and_cached_candidates(
+    pipeline, routing_embeddings
+):
+    from vikingbot.compile.hashing import digest
+
+    pipeline.contract = contract(True)
+    texts = ["alpha", "beta", "refused shared", "shared"]
+    docs = [Document(f"{i}.md", f"drafts/{i}.md") for i in range(len(texts))]
+    for doc, text in zip(docs, texts, strict=True):
+        await pipeline.files.sandbox.write_file(doc.workspace_path, text)
+    routing_embeddings.outcomes[texts[2]] = (451, {"error": {"message": "Unavailable"}})
+    cache_key = f"embeddings/{digest(['model-v1', texts[1]])}"
+    await pipeline.files.put(cache_key, [1.0, 0.0])
+    assigned = {}
+
+    async def ask(stage, system, data, schema, validate, **kwargs):
+        assigned.update({a["document"]: a["candidates"] for a in data["assignments"]})
+        response = RouteResponse.model_validate(
+            {"decisions": [{"document": a["document"]} for a in data["assignments"]]}
+        )
+        validate(response)
+        return response
+
+    pipeline.model.ask = ask
+    node = parse_plan(MERGE, pipeline.contract)[1]
+    shuffle = Shuffle(pipeline)
+    for _ in range(2):
+        groups = await shuffle.run(node, docs)
+        assert [g.documents for g in groups] == [[d] for d in docs]
+        assert assigned[docs[0].workspace_path] == [docs[i].workspace_path for i in (1, 3)]
+        assert assigned[docs[1].workspace_path] == [docs[i].workspace_path for i in (0, 3)]
+        assert assigned[docs[2].workspace_path] == [docs[3].workspace_path]
+        assert assigned[docs[3].workspace_path] == [docs[i].workspace_path for i in (0, 1)]
+    assert sorted(routing_embeddings.calls) == sorted([texts[0], texts[2], texts[2], texts[3]])
+    assert await pipeline.files.get(cache_key) == [1.0, 0.0]
+    assert await pipeline.files.get(f"embeddings/{digest(['model-v1', texts[2]])}") is None
+    assert pipeline.warnings
+
+
+@pytest.mark.parametrize(
+    "status,body,kind",
+    [
+        (451, {"error": {"code": "content_policy_violation"}}, "content_safety"),
+        (451, {"error": {"code": "unrecognized_code"}}, "unknown"),
+        (403, {"error": {"message": "Denied"}}, "permission_denied"),
+        (200, [], None),
+    ],
+)
+async def test_partial_451_keeps_other_errors(pipeline, routing_embeddings, status, body, kind):
+    import httpx
+
+    from openviking.models.embedder.retry_embedder import RetryEmbedder
+    from openviking.models.model_error import ModelError
+    from openviking_cli.exceptions import InvalidArgumentError
+
+    env = routing_embeddings
+    env.fs._get_embedder = lambda _: RetryEmbedder(env.inner)
+    env.outcomes["bad"] = (status, body)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=env.app), base_url="http://test"
+    ) as http:
+        with pytest.raises(ModelError if kind else InvalidArgumentError) as exc:
+            await http.post(
+                "/api/v1/compile/embeddings?allow_partial_451=true",
+                json={"target_uri": pipeline.target, "texts": ["alpha", "bad"]},
+            )
+    if kind:
+        assert isinstance(exc.value, ModelError)
+        assert exc.value.kind.value == kind
+        assert exc.value.status_code == status
+    assert env.calls.count("bad") == 1
+
+
+@pytest.mark.parametrize("texts", [["refused", "refused"], ["refused", "alpha", "refused"]])
+async def test_partial_451_all_refused_and_duplicates(pipeline, routing_embeddings, texts):
+    routing_embeddings.outcomes["refused"] = (451, {"error": {"message": "Unavailable"}})
+    vectors = await Shuffle(pipeline).vectors(texts)
+    assert [None if v is None else list(v) for v in vectors] == [
+        None if t == "refused" else [1.0, 0.0] for t in texts
+    ]
+    assert sorted(routing_embeddings.calls) == sorted(set(texts))
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"model": "different", "vectors": [None]},
+        {"model": "model-v1", "vectors": []},
+    ],
+)
+async def test_partial_451_rejects_unmatched_response(pipeline, result):
+    pipeline.client.compile_embeddings = AsyncMock(
+        side_effect=[{"model": "model-v1", "vectors": []}, result]
+    )
+    with pytest.raises(ValueError, match="Embedding batch/model mismatch"):
+        await Shuffle(pipeline).vectors(["alpha"])
+
+
+async def test_partial_451_cancellation_propagates(pipeline, routing_embeddings):
+    env = routing_embeddings
+    env.outcomes["waiting"] = (None, None)
+    pipeline.contract = contract(True)
+    doc = Document("waiting.md", "drafts/waiting.md")
+    await pipeline.files.sandbox.write_file(doc.workspace_path, "waiting")
+    pipeline.model.ask = AsyncMock()
+    task = asyncio.create_task(
+        Shuffle(pipeline).run(parse_plan(MERGE, pipeline.contract)[1], [doc])
+    )
+    try:
+        await asyncio.wait_for(env.started.wait(), timeout=5)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert env.cancelled.is_set()
+    assert env.calls == ["waiting"]
+    pipeline.model.ask.assert_not_awaited()
+    assert not pipeline.warnings
