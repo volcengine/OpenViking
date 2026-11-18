@@ -240,12 +240,16 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     count = len(result.created) + len(result.updated)
     result.page_count = len(writer.outcomes)
     inspected_source = False
+    write_error = ""
     for call in calls:
+        name = call["tool_name"]
         if not call["execute_success"]:
-            result.warnings.append(str(call["result"])[:300])
+            warning = str(call["result"])[:300]
+            result.warnings.append(warning)
+            if name == writer.name and not write_error:
+                write_error = warning
             continue
         args = call["resolved_args"]
-        name = call["tool_name"]
         resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
         for resource in resources:
             if name == CompileDiffTool.name or (
@@ -277,7 +281,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     elif not writer.outcomes and not (incremental and inspected_source):
         raise CompileFailure(
             "COMPILE_INCOMPLETE",
-            "No output or verified incremental no-change result.",
+            write_error or "No output or verified incremental no-change result.",
             stage="agent",
         )
     return result

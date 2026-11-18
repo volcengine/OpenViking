@@ -12,8 +12,9 @@ from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
+from vikingbot.compile import simple
 from vikingbot.compile.file_ops import DocumentReader
-from vikingbot.compile.models import CompileLimits, SanitizedCompileRequest
+from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
@@ -589,6 +590,48 @@ async def test_compile_write_tool_allows_valid_okf_frontmatter():
     outcome = await tool.execute(ctx, path="selection-rules.md", content=valid)
     assert outcome == f"created: {uri}"
     client.write.assert_awaited_once()
+
+
+async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
+    pipeline, agent_loop
+):
+    loop, session_key, _ = agent_loop
+    pipeline.client.write = AsyncMock()
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write",
+                        "openviking_write",
+                        {
+                            "path": "selection-rules.md",
+                            "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
+                        },
+                        0,
+                    )
+                ],
+            ),
+            LLMResponse(content="Done"),
+        ]
+    )
+
+    with pytest.raises(CompileFailure, match=r"selection-rules\.md.*line 4, column 13") as caught:
+        await simple.run(
+            loop,
+            pipeline.client,
+            pipeline.request,
+            pipeline.request.from_,
+            pipeline.skill,
+            session_key,
+            None,
+            AsyncMock(),
+            {},
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    pipeline.client.write.assert_not_awaited()
 
 
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
