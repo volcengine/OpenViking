@@ -1,6 +1,6 @@
 //! Privacy configuration arguments.
 
-use clap::{Args, Subcommand};
+use clap::Subcommand;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -57,7 +57,17 @@ pub(crate) enum PrivacyCommands {
         field: Option<String>,
     },
     /// Resolve Privacy references in arguments and environment, then mask output
-    Run(PrivacyRunArgs),
+    Run {
+        /// Run with NAME resolved from a Privacy field reference (repeatable)
+        #[arg(long = "env", value_name = "NAME=reference")]
+        env: Vec<String>,
+        /// Run with NAME=reference entries from a file (repeatable)
+        #[arg(long = "env-file", value_name = "path")]
+        env_file: Vec<PathBuf>,
+        /// Program and arguments to run; Privacy references in arguments are resolved
+        #[arg(value_name = "command", required = true, trailing_var_arg = true)]
+        command: Vec<OsString>,
+    },
     /// Upsert privacy config values
     Upsert {
         /// Privacy config category
@@ -150,17 +160,4 @@ pub(crate) enum PrivacyCommands {
         )]
         node_limit: u16,
     },
-}
-
-#[derive(Args)]
-pub(crate) struct PrivacyRunArgs {
-    /// Run with NAME resolved from a Privacy field reference (repeatable)
-    #[arg(long = "env", value_name = "NAME=reference")]
-    pub(crate) env: Vec<String>,
-    /// Run with NAME=reference entries from a file (repeatable)
-    #[arg(long = "env-file", value_name = "path")]
-    pub(crate) env_file: Vec<PathBuf>,
-    /// Program and arguments to run; Privacy references in arguments are resolved
-    #[arg(value_name = "command", required = true, trailing_var_arg = true)]
-    pub(crate) command: Vec<OsString>,
 }

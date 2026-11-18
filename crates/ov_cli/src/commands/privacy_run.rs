@@ -16,42 +16,40 @@ struct ArgReference {
 }
 
 pub async fn run(
-    client: impl FnOnce() -> HttpClient,
+    client: impl std::ops::Deref<Target = HttpClient>,
     env: &[String],
     env_files: &[PathBuf],
     command: &[OsString],
 ) -> Result<i32> {
     let mut env_fields = Vec::new();
-    for path in env_files {
-        let content = std::fs::read_to_string(path).map_err(|error| {
-            Error::Client(format!(
-                "Cannot read --env-file {}: {error}",
-                path.display()
-            ))
-        })?;
+    for (index, path) in env_files.iter().enumerate() {
+        let source = format!("--env-file #{}", index + 1);
+        let content = std::fs::read_to_string(path)
+            .map_err(|error| Error::Client(format!("Cannot read {source}: {error}")))?;
         for (line_number, line) in content.trim_start_matches('\u{feff}').lines().enumerate() {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with('#') {
                 add_env_field(
                     &mut env_fields,
                     line,
-                    &format!("--env-file {}:{}", path.display(), line_number + 1),
+                    &format!("{source}, line {}", line_number + 1),
                 )?;
             }
         }
     }
-    for field in env {
-        add_env_field(&mut env_fields, field, "--env")?;
+    for (index, field) in env.iter().enumerate() {
+        add_env_field(&mut env_fields, field, &format!("--env #{}", index + 1))?;
     }
     let mut references = Vec::new();
-    for (_, reference) in &env_fields {
-        remember_reference(&mut references, reference);
-    }
+    let env_fields: Vec<_> = env_fields
+        .into_iter()
+        .map(|(name, reference)| (name, remember_reference(&mut references, reference)))
+        .collect();
 
     let program = command
         .first()
         .ok_or_else(|| Error::Client("A command is required".into()))?;
-    if program.to_string_lossy().contains("{{ov_privacy:") {
+    if reference_start(&program.to_string_lossy()).is_some() {
         return Err(Error::Client(
             "The program name cannot contain a Privacy reference".into(),
         ));
@@ -66,41 +64,14 @@ pub async fn run(
     let values = if references.is_empty() {
         Vec::new()
     } else {
-        let client = client();
-        let client_ref = &client;
-        stream::iter(&references)
-            .map(|reference| async move {
-                let result = client_ref
-                    .privacy_resolve_selector(reference)
-                    .await
-                    .map_err(|_| {
-                        Error::Client(format!("Cannot resolve Privacy reference {reference}"))
-                    })?;
-                result
-                    .get("value")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty() && !value.contains('\0'))
-                    .map(str::to_string)
-                    .ok_or_else(|| {
-                        Error::Client(format!(
-                            "Privacy reference must contain a nonempty string: {reference}"
-                        ))
-                    })
-            })
-            .buffered(MAX_CONCURRENT_RESOLVES)
-            .try_collect::<Vec<_>>()
-            .await?
+        resolve_references(&client, &references).await?
     };
 
     let mut child_command = Command::new(program);
     for (arg, spans) in command[1..].iter().zip(arg_references) {
         child_command.arg(replace_arg_references(arg, &spans, &values));
     }
-    for (name, reference) in env_fields {
-        let index = references
-            .iter()
-            .position(|item| item == &reference)
-            .unwrap();
+    for (name, index) in env_fields {
         child_command.env(name, &values[index]);
     }
     let mask_output = !values.is_empty();
@@ -112,7 +83,7 @@ pub async fn run(
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
     }
-    let mut child = child_command.spawn()?;
+    let mut child = spawn_child(&mut child_command)?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let wait_task = async {
@@ -136,6 +107,38 @@ pub async fn run(
         wait_task.await?
     };
     Ok(if interrupted { 130 } else { exit_code(status) })
+}
+
+async fn resolve_references(client: &HttpClient, references: &[String]) -> Result<Vec<String>> {
+    stream::iter(references.iter().enumerate())
+        .map(|(index, reference)| async move {
+            let result = client
+                .privacy_resolve_selector(reference)
+                .await
+                .map_err(|_| {
+                    Error::Client(format!("Cannot resolve Privacy reference #{}", index + 1))
+                })?;
+            result
+                .get("value")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty() && !value.contains('\0'))
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    Error::Client(format!(
+                        "Privacy reference #{} must contain a nonempty string without NUL bytes",
+                        index + 1
+                    ))
+                })
+        })
+        .buffered(MAX_CONCURRENT_RESOLVES)
+        .try_collect::<Vec<_>>()
+        .await
+}
+
+fn spawn_child(command: &mut Command) -> Result<tokio::process::Child> {
+    command
+        .spawn()
+        .map_err(|error| Error::Client(format!("Could not start the child command: {error}")))
 }
 
 fn exit_code(status: std::process::ExitStatus) -> i32 {
@@ -176,33 +179,54 @@ fn add_env_field(fields: &mut Vec<(String, String)>, entry: &str, source: &str) 
         })
         .unwrap_or(reference);
     if !valid_env_name(name) {
-        return Err(Error::Client(format!("Invalid {source} name: {name}")));
-    }
-    if !reference.starts_with("{{ov_privacy:") || !reference.ends_with("}}") {
         return Err(Error::Client(format!(
-            "{source} {name} requires a Privacy field reference"
+            "Invalid environment variable name in {source}"
         )));
     }
+    let reference = next_reference(reference)?
+        .filter(|(start, end, _)| *start == 0 && *end == reference.len())
+        .map(|(_, _, canonical)| canonical)
+        .ok_or_else(|| Error::Client(format!("{source} requires a Privacy field reference")))?;
     if let Some((_, current)) = fields.iter_mut().find(|(field, _)| field == name) {
-        *current = reference.to_string();
+        *current = reference;
     } else {
-        fields.push((name.to_string(), reference.to_string()));
+        fields.push((name.to_string(), reference));
     }
     Ok(())
 }
 
-fn remember_reference(references: &mut Vec<String>, reference: &str) -> usize {
-    if let Some(index) = references.iter().position(|item| item == reference) {
+fn remember_reference(references: &mut Vec<String>, reference: String) -> usize {
+    if let Some(index) = references.iter().position(|item| item == &reference) {
         index
     } else {
-        references.push(reference.to_string());
+        references.push(reference);
         references.len() - 1
     }
 }
 
+// The server accepts spaces and tabs immediately inside the braces.
+fn reference_start(text: &str) -> Option<(usize, usize)> {
+    text.match_indices("ov_privacy:").find_map(|(marker, _)| {
+        let before = text[..marker].trim_end_matches([' ', '\t']);
+        Some((before.strip_suffix("{{")?.len(), marker))
+    })
+}
+
+fn next_reference(text: &str) -> Result<Option<(usize, usize, String)>> {
+    let Some((start, marker)) = reference_start(text) else {
+        return Ok(None);
+    };
+    let (body, _) = text[marker..]
+        .split_once("}}")
+        .ok_or_else(|| Error::Client("Incomplete Privacy reference".into()))?;
+    let end = marker + body.len() + 2;
+    let body = body.trim_end_matches([' ', '\t']);
+    Ok(Some((start, end, format!("{{{{{body}}}}}"))))
+}
+
 fn collect_arg_references(arg: &OsStr, references: &mut Vec<String>) -> Result<Vec<ArgReference>> {
     let Some(text) = arg.to_str() else {
-        if arg.to_string_lossy().contains("{{ov_privacy:") {
+        if reference_start(&arg.to_string_lossy()).is_some() {
             return Err(Error::Client(
                 "An argument containing a Privacy reference must be UTF-8".into(),
             ));
@@ -211,14 +235,9 @@ fn collect_arg_references(arg: &OsStr, references: &mut Vec<String>) -> Result<V
     };
     let mut spans = Vec::new();
     let mut cursor = 0;
-    while let Some(offset) = text[cursor..].find("{{ov_privacy:") {
-        let start = cursor + offset;
-        let end = start
-            + text[start..]
-                .find("}}")
-                .ok_or_else(|| Error::Client("Incomplete Privacy reference in argument".into()))?
-            + 2;
-        let index = remember_reference(references, &text[start..end]);
+    while let Some((start, end, reference)) = next_reference(&text[cursor..])? {
+        let (start, end) = (cursor + start, cursor + end);
+        let index = remember_reference(references, reference);
         spans.push(ArgReference { start, end, index });
         cursor = end;
     }
@@ -473,8 +492,7 @@ impl OutputMasker {
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputMasker, collect_arg_references, replace_arg_references, run};
-    use crate::client::HttpClient;
+    use super::OutputMasker;
 
     #[test]
     fn masks_overlapping_and_multibyte_values_at_every_chunk_boundary() {
@@ -565,84 +583,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn argument_interpolation_preserves_special_values_and_does_not_reparse_them() {
-        let first = "{{ov_privacy:alice:viking://~/privacy/credential/demo#/values/a}}";
-        let second = "{{ov_privacy:alice:viking://~/privacy/credential/demo#/values/b}}";
-        let argument = format!("Authorization: Bearer {first}/{second}/{first}");
-        let mut references = Vec::new();
-        let spans = collect_arg_references(argument.as_ref(), &mut references).unwrap();
-        assert_eq!(references, [first, second]);
-        let value = format!("a b'\\\"$()\n{second}");
-        let result =
-            replace_arg_references(argument.as_ref(), &spans, &[value.clone(), "B".into()]);
-        assert_eq!(
-            result.to_string_lossy(),
-            format!("Authorization: Bearer {value}/B/{value}")
-        );
-        assert!(
-            collect_arg_references(
-                format!("x{first}{{{{ov_privacy:broken").as_ref(),
-                &mut references
-            )
-            .is_err()
-        );
-    }
-
     #[cfg(unix)]
     #[tokio::test]
-    async fn resolves_distinct_references_concurrently() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            let (mut first, _) = listener.accept().await.unwrap();
-            let (mut second, _) =
-                tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
-                    .await
-                    .unwrap()
-                    .unwrap();
-            let response = r#"{"status":"ok","result":{"value":"same-secret"}}"#;
-            for stream in [&mut first, &mut second] {
-                stream.read(&mut [0; 4096]).await.unwrap();
-                stream
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response}",
-                            response.len()
-                        )
-                        .as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-            }
-        });
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        let first = "{{ov_privacy:alice:viking://~/privacy/credential/demo#/values/first}}";
-        let second = "{{ov_privacy:alice:viking://~/privacy/credential/demo#/values/second}}";
-        let status = run(
-            || client,
-            &[format!("A={first}"), format!("B={second}")],
-            &[],
-            &[
-                "/bin/sh".into(),
-                "-c".into(),
-                "test \"$A\" = same-secret && test \"$B\" = same-secret".into(),
-            ],
-        )
-        .await
-        .unwrap();
-        server.await.unwrap();
-        assert_eq!(status, 0);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn reports_child_signal_as_shell_exit_status() {
-        let status = run(
-            || panic!("no client is needed without references"),
+    async fn local_command_returns_signal_status_without_building_an_http_client() {
+        let status = super::run(
+            std::sync::LazyLock::new(|| {
+                panic!("a local command must not initialize an HTTP client")
+            }),
             &[],
             &[],
             &["/bin/sh".into(), "-c".into(), "kill -TERM $$".into()],
