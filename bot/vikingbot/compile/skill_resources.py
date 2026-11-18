@@ -52,8 +52,8 @@ class SkillResources(Tool):
             files.sandbox.sandbox_cwd, COMPILE_STAGING_ROOT, "skills", uuid.uuid4().hex
         )
         self.description += (
-            f" Loaded attachments are saved under {self.local_root} with their Skill-relative "
-            "paths; reads return local_path for the complete file in the sandbox."
+            " Loaded attachments are saved in the sandbox with their Skill-relative paths; "
+            "reads return local_path for the complete file."
         )
 
     def path(self, path):
