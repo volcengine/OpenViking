@@ -68,10 +68,10 @@ export async function runChat({
   let interrupted = false;
   let delivered = false;
   const accept = () => {
-    if (delivered || signal.aborted || !current()) return;
+    if (delivered || !current()) return;
     delivered = true;
     undelivered.length = 0;
-    onDelivered?.();
+    if (!signal.aborted) onDelivered?.();
   };
   let renderer = false;
   let stage:
