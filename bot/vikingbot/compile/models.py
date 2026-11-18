@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from openviking.session.memory.dataclass import WikiLink
+from openviking.utils.compile_publication import publication_evidence
 from vikingbot.channels.openapi_models import OpenVikingConnection
 
 DEFAULT_COMPILE_INSTRUCTION = (
@@ -212,6 +213,14 @@ class CompileResult(BaseModel):
     page_count: int = 0
     link_count: int = 0
     warnings: list[str] = Field(default_factory=list)
+    publication: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_publication(cls, value):
+        if isinstance(value, dict) and value.get("publication") is not None:
+            return {**value, "publication": publication_evidence(value["publication"])}
+        return value
 
 
 class CompileTask(BaseModel):

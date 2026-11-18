@@ -59,6 +59,7 @@ from openviking.storage.pathlock_recovery import (
     is_compile_lock_conflict,
     lock_retry_delay,
 )
+from openviking.utils.compile_publication import PROTOCOL, publication_evidence, resolve_publication
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -745,7 +746,13 @@ class CompileLifecycle:
                 {
                     "snapshots": {
                         key: run["meta"][key]
-                        for key in ("start_snapshot", "finish_snapshot", "skill_snapshot_id")
+                        for key in (
+                            "start_snapshot",
+                            "finish_snapshot",
+                            "skill_snapshot_id",
+                            "publication",
+                        )
+                        if key in run["meta"]
                     },
                     "outcome": {
                         key: run[key]
@@ -1108,6 +1115,25 @@ class CompileLifecycle:
             snapshot = ExternalTaskSnapshot(status="cancelled")
         try:
             if snapshot.status == "completed" and meta["start_snapshot"]:
+                if "publication" not in meta:
+                    meta["publication"] = publication_evidence(
+                        (snapshot.result or {}).get("publication")
+                    )
+                # Capture the exact receipt set before resolving any background dependency.
+                await self._save_run(task, run)
+                meta["publication"] = await resolve_publication(
+                    meta["publication"],
+                    tracker=get_task_tracker(),
+                    account_id=task.account_id,
+                    user_id=task.user_id,
+                    target=target,
+                    ctx=ctx,
+                )
+                if meta["publication"]["state"] == "pending":
+                    run["status"] = "committing"
+                    await self._save_run(task, run)
+                    await self._save_checkpoint(task, {"phase": "committing"})
+                    return ExternalTaskSnapshot(status="running", stage="indexing")
                 await self._save_checkpoint(task, {"phase": "committing"})
                 run["status"] = "committing"
                 await self._save_run(task, run)
@@ -1141,7 +1167,16 @@ class CompileLifecycle:
                         head=meta["finish_snapshot"],
                         ctx=ctx,
                     )
+                    if (
+                        meta["publication"].get("protocol") == PROTOCOL
+                        and meta["publication"]["mode"] == "no_writes"
+                        and any(is_versioned(change["uri"]) for change in changes)
+                    ):
+                        meta["publication"]["state"] = "unknown"
+                        meta["publication"]["reason_codes"] = ["unreceipted_target_changes"]
                     run["result"] = dict.fromkeys(_RESULT_KEYS.values(), 0)
+                    if meta["publication"].get("protocol") == PROTOCOL:
+                        run["result"]["publication"] = meta["publication"]
                     for change in changes:
                         if is_versioned(change["uri"]):
                             run["result"][_RESULT_KEYS[change["change_type"]]] += 1
@@ -1200,6 +1235,12 @@ class CompileLifecycle:
         """Advance only the matching configuration's unchanged successful predecessor."""
         compile_name = self._compile_name(task)
         if not compile_name or run["status"] != "completed" or not run["meta"]["start_snapshot"]:
+            return
+        publication = run["meta"].get("publication") or {}
+        if publication.get("protocol") == PROTOCOL and publication.get("state") not in {
+            "complete",
+            "not_requested",
+        }:
             return
         from openviking.service.task_tracker import get_task_tracker
 

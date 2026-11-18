@@ -91,7 +91,7 @@ Submitting `from`, `to`, and a Skill URI directly is deprecated. Accepted reques
 
 A full-input request always performs a one-off full compile, including when the same output has saved configurations. It does not read or write saved configuration/run files and does not snapshot sources. Target start/finish snapshots, cancellation and recovery still apply. `skill="memory"` remains an independent in-place consolidation mode without `from`; it cannot be saved or scheduled through the creation endpoint.
 
-Both ordinary execution forms validate the target, create its directory when needed, and durably enqueue independent tagging before submitting the Compile execution task. Background index or tag delays do not block submission, output writes or Compile finalization, and tagging failures do not fail Compile. Acceptance does not mean the tag is searchable; the virtual lease protects pending targets as described above. Explicit start/finish snapshots, output `snapshot_id`, Outputs and rollback retain their existing semantics. The tag is a directory retrieval marker; task completion, failure or cancellation does not automatically remove it.
+Both ordinary execution forms validate the target, create its directory when needed, and durably enqueue independent tagging before submitting the Compile execution task. Background target-tag delays do not block submission, output writes or Compile finalization, and tagging failures do not fail Compile. Content processing created by actual Compile writes has the separate receipt boundary below. Acceptance does not mean the tag is searchable; the virtual lease protects pending targets as described above. Explicit start/finish snapshots, output `snapshot_id`, Outputs and rollback retain their existing semantics. The tag is a directory retrieval marker; task completion, failure or cancellation does not automatically remove it.
 
 Scheduling controls are rejected by the execution endpoint. `args.mode`, `last_compile_time`, `changes`, and `operation_id` are not public execution controls. OpenViking owns the execution plan.
 
@@ -199,6 +199,7 @@ A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `f
 | `start_snapshot` | Frozen source and target state at execution start |
 | `finish_snapshot` | Retained target state after publication or completed rollback; null until committed |
 | `skill_snapshot_id` | Skill snapshot, or null for a system Skill |
+| `publication` | Content-processing receipts and their server-resolved state after upgraded finalization; a missing legacy field means unknown |
 
 No-op runs may reuse the start snapshot. Failure and cancellation do not advance the successful source baseline. Execution plans and necessary recovery checkpoints remain private Task state; public configuration, runs and tasks never expose execution credentials.
 
@@ -215,7 +216,26 @@ Configurations are stored in account and user directories. Public APIs locate co
 
 State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
 
-Successful Compile finalization publishes output snapshots and advances the incremental baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
+Successful Compile finalization publishes output snapshots and advances the incremental baseline subject to the processing evidence below. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
+
+#### Content-processing receipts
+
+Runtime retains content API receipts outside model output. With `publication.protocol="content_task_receipts_v1"`, `receipts` is a bounded list of `{task_id, uri, kind}` for the exact asynchronous writes. `kind` is `content_write` or `content_batch_write`. Repeated writes to one URI retain each Task. Receipt overflow, a missing receipt or an unconfirmed write sets `incomplete`; truncation cannot prove success. Synchronously awaited Skill package publication uses `mode="synchronous"`; unchanged output uses `mode="no_writes"` and creates no processing Task.
+
+OV resolves only these durable Tasks under the accepted account/user, validating the Task type and canonical output URI. While any exact dependency is pending, running or cancelling, the Compile Task stays `running` at stage `indexing`, through the existing finalization retry owner. No global queue-idleness check or second polling loop is added. Output lease release or byte acknowledgement alone does not prove processing success.
+
+The server records the resolved evidence in run `meta.publication` and, for the supported protocol, in `result.publication`:
+
+| State | Meaning and baseline effect |
+|-------|-----------------------------|
+| `complete` | All exact asynchronous dependencies completed without content-processing errors, or the namespace API synchronously waited for processing |
+| `failed` | An exact dependency failed/cancelled or has processing errors; retain useful bytes and the previous successful source baseline |
+| `unknown` | A supported receipt set is incomplete, unavailable or mismatched; retain the previous successful source baseline |
+| `not_requested` | No new processing was requested; this makes no claim about pre-existing indexes. Unexpected versioned output changes invalidate this claim |
+
+`reason_codes` contains bounded generic codes, never raw Task errors. Receipt sets and final conclusions survive restart and repeated finalization. Useful bytes and changed-file counts remain available for a failed/unknown publication; the existing Task terminal status is unchanged. Consumers must inspect processing evidence separately from source-quality diagnostics. Processing success does not prove source completeness or that every intended fact was delivered.
+
+Legacy Runtime results without the supported protocol remain readable with unknown processing evidence; their existing result shape and default baseline behavior are preserved. The upgraded finalizer records `meta.publication.state="unknown"`; a field absent from an older saved run also means unknown. They are not relabeled as proven success. Independent directory tagging and rollback index rebuilds retain their own owners and do not become Compile content dependencies.
 
 ### Check Compile availability
 
