@@ -46,6 +46,37 @@ test('command mode falls back to the Console callback without a command override
   }
 });
 
+test('search content preserves filename punctuation while excerpts use prose links', async () => {
+  const contentUri = 'viking://resources/a;b,(c)[d].md.';
+  const opened = [];
+  const host = await mount(
+    async () =>
+      ok({
+        resources: [
+          { uri, abstract: `See ${uri}, for details.`, content: contentUri },
+        ],
+      }),
+    { onOpenUri: (value) => opened.push(value) },
+  );
+  try {
+    await host.execute('ov find notes --read-content');
+    await click(
+      host.records
+        .at(-1)
+        .querySelector('.ov-command-console__search-content a'),
+    );
+    await host.execute('ov find notes');
+    await click(
+      host.records
+        .at(-1)
+        .querySelector('.ov-command-console__search-preview a'),
+    );
+    assert.deepEqual(opened, [contentUri, uri]);
+  } finally {
+    await host.dispose();
+  }
+});
+
 test('a command override leaves conversation mode on the Console callback', async () => {
   const shared = [];
   const commands = [];

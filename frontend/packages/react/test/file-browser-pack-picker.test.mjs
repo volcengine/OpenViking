@@ -58,48 +58,49 @@ test('Console pack picker opens at the root and starts each request with an empt
   }
 });
 
-test('Console pack picker checks the requested directory before selection and before returning the file', async () => {
-  const ref = { current: null };
-  const importTarget = 'viking://resources/qa';
-  const permissionChecks = [];
-  let access = 'read';
-  const fetch = fixture(target, true, (call) => {
-    if (!call.path.endsWith('/fs/stat') || call.uri !== importTarget) return;
-    permissionChecks.push(call.uri);
-    return ok({ isDir: true, access });
+for (const importTarget of ['viking://resources', 'viking://resources/qa']) {
+  test(`Console pack picker checks ${importTarget} before selection and before returning the file`, async () => {
+    const ref = { current: null };
+    const permissionChecks = [];
+    let access = 'read';
+    const fetch = fixture(target, true, (call) => {
+      if (!call.path.endsWith('/fs/stat') || call.uri !== importTarget) return;
+      permissionChecks.push(call.uri);
+      return ok({ isDir: true, access });
+    });
+    const view = await mount(tree(fetch, target, { ref, acl: true }));
+    try {
+      await act(async () => {
+        await assert.rejects(
+          ref.current.choosePackFile(importTarget),
+          /write access/,
+        );
+      });
+      assert.equal(workflow(), null);
+
+      access = 'write';
+      let selected;
+      await act(() => {
+        selected = ref.current.choosePackFile(importTarget);
+      });
+      await selectFile();
+      access = 'read';
+      const denied = assert.rejects(selected, /write access/);
+      await submit();
+      await denied;
+      assert.equal(workflow(), null);
+
+      access = 'manage';
+      await act(() => {
+        selected = ref.current.choosePackFile(importTarget);
+      });
+      const file = await selectFile();
+      await submit();
+      assert.equal(await selected, file);
+      assert.equal(workflow(), null);
+      assert.equal(permissionChecks.length, 5);
+    } finally {
+      await view.unmount();
+    }
   });
-  const view = await mount(tree(fetch, target, { ref, acl: true }));
-  try {
-    await act(async () => {
-      await assert.rejects(
-        ref.current.choosePackFile(importTarget),
-        /write access/,
-      );
-    });
-    assert.equal(workflow(), null);
-
-    access = 'write';
-    let selected;
-    await act(() => {
-      selected = ref.current.choosePackFile(importTarget);
-    });
-    await selectFile();
-    access = 'read';
-    const denied = assert.rejects(selected, /write access/);
-    await submit();
-    await denied;
-    assert.equal(workflow(), null);
-
-    access = 'manage';
-    await act(() => {
-      selected = ref.current.choosePackFile(importTarget);
-    });
-    const file = await selectFile();
-    await submit();
-    assert.equal(await selected, file);
-    assert.equal(workflow(), null);
-    assert.equal(permissionChecks.length, 5);
-  } finally {
-    await view.unmount();
-  }
-});
+}

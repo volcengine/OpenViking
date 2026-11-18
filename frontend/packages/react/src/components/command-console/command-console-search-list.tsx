@@ -129,7 +129,7 @@ function SearchRow({
           >
             <CommandConsoleUriText
               text={preview}
-              mode="prose"
+              mode={hasContent ? 'literal' : 'prose'}
               onOpenUri={onOpenUri}
             />
           </span>

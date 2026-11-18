@@ -99,7 +99,11 @@ export function useFileBrowserAcl({
   const checkWrite = useCallback(
     async (target: string, requestSignal: AbortSignal) => {
       if (readOnly) return false;
-      if (!aclEnabled || !isAclTarget(target)) return true;
+      if (
+        !aclEnabled ||
+        (target !== 'viking://resources' && !isAclTarget(target))
+      )
+        return true;
       const level = await loadPermission(target, requestSignal);
       return level === 'write' || level === 'manage';
     },
