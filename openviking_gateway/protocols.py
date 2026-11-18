@@ -426,8 +426,10 @@ def session_id(headers: dict) -> str | None:
         "thread-id",
         "x-claude-code-session-id",
         "x-opencode-session-id",
+        "x-deepseek-harness-session-id",
         "x-session-id",
         "session-id",
+        "session_id",
     ):
         if headers.get(key):
             return hashlib.sha256(headers[key].encode()).hexdigest()
