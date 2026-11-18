@@ -468,13 +468,19 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
 
 
 @pytest.mark.parametrize(
-    "content",
+    "content,expected_pattern",
     [
-        "---\ntype: concept\ntitle: Rules\n description: leading space breaks YAML\n---\n\nBody\n",
-        "---\n type: concept\ntitle: Rules\n---\n\nBody\n",
+        (
+            "---\ntype: concept\ntitle: Rules\n description: leading space breaks YAML\n---\n\nBody\n",
+            r"invalid YAML frontmatter: .*mapping values are not allowed here \(line 4, column 13\)",
+        ),
+        (
+            "---\n type: concept\ntitle: Rules\n---\n\nBody\n",
+            r"invalid YAML frontmatter: .*line 3, column 1",
+        ),
     ],
 )
-async def test_compile_write_tool_rejects_invalid_okf_frontmatter(content):
+async def test_compile_write_tool_rejects_invalid_okf_frontmatter(content, expected_pattern):
     from vikingbot.compile.simple import CompileWriteTool
 
     client = SimpleNamespace(
@@ -484,7 +490,7 @@ async def test_compile_write_tool_rejects_invalid_okf_frontmatter(content):
     tool = CompileWriteTool(client, "viking://resources/distill", AsyncMock())
     ctx = ToolContext(session_key=SessionKey(type="cli", channel_id="test", chat_id="fm"))
 
-    with pytest.raises(ValueError, match="invalid YAML frontmatter"):
+    with pytest.raises(ValueError, match=expected_pattern):
         await tool.execute(ctx, path="selection-rules.md", content=content)
     client.write.assert_not_awaited()
     assert tool.outcomes == {}
@@ -507,11 +513,38 @@ async def test_compile_write_tool_allows_valid_okf_frontmatter():
     client.write.assert_awaited_once()
 
 
-async def test_finalize_rejects_invalid_okf_frontmatter(pipeline):
-    draft_path = "__compile_staging__/drafts/invalid/selection-rules.md"
+async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
+    pipeline.evidence["input"] = {"uri": "viking://resources/source/a.md"}
+    pipeline.status["input"] = "prepared"
+    valid_draft = "__compile_staging__/drafts/valid/valid.md"
+    invalid_draft = "__compile_staging__/drafts/invalid/selection-rules.md"
     await pipeline.files.sandbox.write_file_bytes(
-        draft_path,
+        valid_draft,
+        b"---\ntype: concept\ntitle: Valid\ndescription: Clean YAML\n---\n\nBody\n",
+    )
+    await pipeline.files.sandbox.write_file_bytes(
+        invalid_draft,
         b"---\ntype: concept\ntitle: Rules\n description: leading space\n---\n\nBody\n",
     )
-    with pytest.raises(ValueError, match="invalid YAML frontmatter"):
-        await finalize.run(pipeline, [Document("selection-rules.md", draft_path, ["input"])])
+
+    bundle = await finalize.run(
+        pipeline,
+        [
+            Document("valid.md", valid_draft, ["input"]),
+            Document("selection-rules.md", invalid_draft, ["input"]),
+        ],
+    )
+    assert [op["uri"] for op in bundle.operations] == ["viking://resources/wiki/valid.md"]
+    assert bundle.created == ["viking://resources/wiki/valid.md"]
+    assert len(pipeline.warnings) == 1
+    assert "selection-rules.md" in pipeline.warnings[0]
+    assert "mapping values are not allowed here (line 4, column 13)" in pipeline.warnings[0]
+
+    pipeline.warnings.clear()
+    empty_bundle = await finalize.run(
+        pipeline,
+        [Document("selection-rules.md", invalid_draft, ["input"])],
+    )
+    assert empty_bundle.operations == []
+    assert len(pipeline.warnings) == 1
+    assert "selection-rules.md" in pipeline.warnings[0]
