@@ -27,7 +27,7 @@ from openviking.config.ttl import (
     resolve_effective_ttl,
     validate_ttl_root,
 )
-from openviking.core.namespace import uri_parts
+from openviking.core.namespace import canonical_user_root, uri_parts
 from openviking.scheduling.expiry.api import (
     TTL_ITEM_TYPE,
     CallbackRequest,
@@ -44,7 +44,9 @@ from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
 from openviking.storage.abstract_overview import ABSTRACT_OVERVIEW_FILENAMES
+from openviking.storage.expr import And, FilterExpr, Or, Range, RawDSL
 from openviking.ttl.adapter import TTLBackfillRequest, TTLRecycleRequest, TTLRecycleResult
+from openviking.utils.time_utils import format_iso8601
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -470,6 +472,65 @@ class DirectoryTTL:
             await self.user_policy(account, parts[1]) if classify_ttl_uri(uri) is not None else None
         )
         return resolve_effective_ttl(*pair, uri, user)
+
+    async def event_filter(
+        self,
+        ctx: RequestContext,
+        target_directories: Sequence[str] | None,
+        now: datetime | None = None,
+    ) -> FilterExpr | None:
+        """Use existing policy snapshots; never enumerate users or probe records."""
+        targets = target_directories or (
+            [] if ctx.role == Role.ROOT else [canonical_user_root(ctx)]
+        )
+        scopes: dict[str, dict[TTLIndexType, str]] = {}
+        for target in targets:
+            parts = uri_parts(target)
+            if not parts or parts == ["user"]:
+                # An unbounded ROOT query cannot use one user's policy for others.
+                if ctx.role == Role.ROOT:
+                    return None
+                parts = uri_parts(canonical_user_root(ctx))
+            if len(parts) < 2 or parts[0] != "user":
+                continue
+            user = parts[1]
+            for kind, suffix in (
+                (TTLIndexType.USER_EVENTS, ["memories", "events"]),
+                (TTLIndexType.PEER_EVENTS, ["peers"]),
+            ):
+                root = ["user", user, *suffix]
+                if parts[: len(root)] == root or root[: len(parts)] == parts:
+                    scopes.setdefault(user, {})[kind] = "viking://" + "/".join(root)
+        if not scopes:
+            return None
+
+        pair = await self.policies(ctx.account_id)
+        now = now or datetime.now(timezone.utc)
+        filters = []
+        for user, roots in scopes.items():
+            user_ttl = await self.user_policy(ctx.account_id, user)
+            for root in roots.values():
+                ttl = resolve_effective_ttl(*pair, root, user_ttl)
+                if not ttl.enabled:
+                    continue
+                filters.append(
+                    Or(
+                        [
+                            RawDSL(
+                                {"op": "must_not", "field": "uri", "conds": [root], "para": "-d=-1"}
+                            ),
+                            Range("created_at", gt=format_iso8601(now - timedelta(days=ttl.days))),
+                        ]
+                    )
+                )
+        if not filters:
+            return None
+        return Or(
+            [
+                RawDSL({"op": "must_not", "field": "search_tags", "conds": ["memory_type=events"]}),
+                And(filters),
+            ]
+        )
 
     async def _initial_enabled(self, account: str, pair, state) -> bool:
         if self.enabled(pair):

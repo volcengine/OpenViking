@@ -16,8 +16,11 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from openviking.scheduling.expiry.api import ExpiryScheduler
     from openviking.server.identity import RequestContext
+    from openviking.storage.expr import FilterExpr
 
 
 @dataclass(frozen=True)
@@ -129,6 +132,14 @@ class TTLAdapter(Protocol):
         Missing scores/Redis failure yield None without failing the read.
         None alone does not imply TTL disabled or permanent retention.
         """
+
+    async def event_filter(
+        self,
+        ctx: "RequestContext",
+        target_directories: Optional[Sequence[str]],
+        now: Optional["datetime"] = None,
+    ) -> Optional["FilterExpr"]:
+        """Filter expired Event vectors in user-scoped queries, before ranking."""
 
     async def start(self) -> None:
         """Start background consumers/connections after the service is ready."""
