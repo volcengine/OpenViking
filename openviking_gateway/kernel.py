@@ -898,7 +898,10 @@ class MemoryKernel:
             # Messages after the cut are new client input that hidden history never expands.
             if messages[len(span) :] != kept:
                 raise SummaryError("cut_not_found")
-            instruction = summary_instruction(policy.summary_max_tokens, in_progress)
+            lookup = policy.capture and any(
+                t["function"]["name"] == "openviking_session_history" for t in request.root["tools"]
+            )
+            instruction = summary_instruction(policy.summary_max_tokens, in_progress, lookup)
             limit = policy.summary_max_tokens
             try:
                 response = await summarize(

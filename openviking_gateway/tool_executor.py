@@ -15,15 +15,19 @@ from urllib.parse import parse_qs, quote, urlsplit
 import async_timeout
 import orjson
 
+from .blocks import token_estimate
+from .capture import capture_messages, lineage
 from .capture_store import Document
 from .client import VikingError, peer_argument
+from .compaction import active_cut
 from .config import MOUNT_PATH
 from .protocols import string_type
+from .records import RecordKind as K
 from .state_store import get_state
 from .storage import digest
 from .tool_catalog import PREFIX, TOOL_OVERRIDES
 from .tool_protocols import tool_protocol
-from .windows import NATIVE_TOOLS
+from .windows import NATIVE_TOOLS, NEW_CONTEXT
 
 UPLOAD_URL = re.compile(
     r'https?://[^\s<>"\x27`]+/api/v1/resources/temp_upload\?token=[^\s<>"\x27`]+'
@@ -31,6 +35,10 @@ UPLOAD_URL = re.compile(
 DOWNLOAD_URL = re.compile(r'https?://[^\s<>"\x27`]+/api/v1/content/download\?token=[^\s<>"\x27`]+')
 AUTO_DETECTED_NOTE = re.compile(
     r"\n*Note for the user: this (?:upload|download) URL was auto-detected[^\n]*"
+)
+NOTHING_SAVED = (
+    "Nothing from this conversation is saved in OpenViking yet, so there is nothing to look up; "
+    "work from what is in your context."
 )
 UNKNOWN_OUTCOME = "Tool timed out or a previous attempt has an unknown outcome; inspect state before retrying writes"
 
@@ -142,6 +150,62 @@ def attachment_bytes(part, limit):
     return name, data
 
 
+# session_history results may fill this share of a context window, and at least two
+# full-size results, so a small window still allows a search and a read.
+HISTORY_SHARE = 0.2
+HISTORY_FLOOR = 8000
+
+
+def history_tokens(messages):
+    """Tokens of the raw session_history results in hidden tool rounds, in any wire protocol.
+
+    Calls are Chat tool_calls, Anthropic tool_use blocks or Responses function_call items;
+    results are Chat tool messages, tool_result blocks or function_call_output items.
+    """
+    calls, results = set(), []
+    for message in messages:
+        content = message.get("content")
+        blocks = content if isinstance(content, list) else []
+        for item in [message, *(message.get("tool_calls") or []), *blocks]:
+            if not isinstance(item, dict):
+                continue
+            function = item["function"] if isinstance(item.get("function"), dict) else item
+            if function.get("name") == "openviking_session_history":
+                calls.add(item.get("call_id", item.get("id")))
+            elif "tool_call_id" in item or item.get("type") in {
+                "tool_result",
+                "function_call_output",
+            }:
+                identifier = item.get("tool_call_id", item.get("tool_use_id", item.get("call_id")))
+                results.append((identifier, item.get("content", item.get("output"))))
+    return sum(token_estimate(text) for identifier, text in results if identifier in calls and text)
+
+
+def unsaved(request, capture):
+    """How many messages are neither saved nor in the current context window.
+
+    They follow the delivered anchor up to the active cut, the part a compaction summary or a
+    new window replaced. Without a cut everything unsaved is still in context. Without a delivered anchor in this
+    history, or when a new OpenViking session took over from earlier ones, the gateway cannot
+    tell which messages the saved sessions hold, so it counts none rather than too many.
+    """
+    delivered, chain, cut = capture.get("delivered", ""), request.capture_chain, active_cut(request)
+    if not delivered or delivered not in chain:
+        return 0
+    start = chain.index(delivered) + 1
+    return len(capture_messages(request.messages[start : cut + 1], chain[start : cut + 1]))
+
+
+def unsaved_note(count):
+    """The line after a result that lacks the ``count`` unsaved messages before the window."""
+    last = "last message" if count == 1 else f"last {count} messages"
+    verb = "is" if count == 1 else "are"
+    return (
+        f"Gateway note: the {last} before your current context window {verb} not saved yet and "
+        "may be missing from this result."
+    )
+
+
 def result_text(result, limit):
     """Text blocks only; structuredContent repeats them, and media becomes a note."""
     parts = []
@@ -175,8 +239,15 @@ class ToolExecutor:
             t["function"]["name"]: t["function"]["parameters"] for t in prepared.root["tools"]
         }
         self.allowed = set(self.schemas)
+        # session_history result tokens of this request, by the cut of the window they went to.
+        self.spent = {}
 
     async def execute(self, call):
+        result = await self._execute(call)
+        self.spend(call.get("function", {}).get("name", ""), result["content"])
+        return result
+
+    async def _execute(self, call):
         name = call.get("function", {}).get("name", "")
         call_id = call.get("id", "")
         result = {"role": "tool", "tool_call_id": call_id}
@@ -190,6 +261,8 @@ class ToolExecutor:
             except (ValueError, TypeError):
                 return {**result, "content": "Invalid tool arguments", "failed": True}
             return {**result, **await native.handler(self.request, self.credential, args)}
+        if name == "openviking_session_history" and (refusal := self.history_over_budget()):
+            return {**result, "content": refusal, "failed": False}
         # Retries sharing a history and call ID share the claim. A process crash
         # never causes automatic repetition of a potentially committed write.
         anchor = digest(
@@ -224,9 +297,12 @@ class ToolExecutor:
                         if time.time() - claim["time"] > timeout:
                             raise asyncio.TimeoutError
                         await asyncio.sleep(0.05)
-                value = await self._call(name.removeprefix(PREFIX), self.arguments(call))
-                content = result_text(value, self.policy.get("tool_result_bytes", 65536))
-                failed = bool(value.get("isError"))
+                if name == "openviking_session_history":
+                    content, failed = await self.history(self.arguments(call))
+                else:
+                    value = await self._call(name.removeprefix(PREFIX), self.arguments(call))
+                    content = result_text(value, self.policy.get("tool_result_bytes", 65536))
+                    failed = bool(value.get("isError"))
                 await self.store.state.swap(
                     scope, receipt_key, receipt, {**claim, "content": content, "failed": failed}
                 )
@@ -241,6 +317,74 @@ class ToolExecutor:
                 scope, receipt_key, receipt, {**claim, "content": content, "failed": True}
             )
         return {**result, "content": content, "failed": True}
+
+    def spend(self, name, content):
+        if name == "openviking_session_history":
+            cut = active_cut(self.request)
+            self.spent[cut] = self.spent.get(cut, 0) + token_estimate(content)
+
+    async def history(self, args):
+        """A session_history lookup; returns its text and whether it failed.
+
+        Without a session from the model it looks up this conversation's saved sessions and
+        says when messages cut from the current window are not saved yet, after the result
+        so that truncation keeps it.
+        """
+        session = args.get("session")
+        properties = self.schemas["openviking_session_history"].get("properties", {})
+        capture = None
+        if "session" in properties and (
+            session is None or (isinstance(session, str) and not session.strip())
+        ):
+            try:
+                capture = await self.store.capture.get(self.request.scope, self.request.session)
+                capture = capture.value
+            except Exception:
+                # A read-only lookup never fails on the store; the request's own view serves.
+                capture = self.request.capture.value
+            sessions = lineage(capture)
+            if not sessions:
+                # Nothing is saved yet, so every message so far is waiting.
+                waiting = len(capture_messages(self.request.messages, self.request.capture_chain))
+                if not waiting:
+                    return NOTHING_SAVED, False
+                count = "message so far is" if waiting == 1 else f"{waiting} messages so far are"
+                return NOTHING_SAVED + f" Its {count} waiting to be saved.", False
+            args["session"] = ",".join(sessions)
+        value = await self._call("session_history", args)
+        content = result_text(value, self.policy.get("tool_result_bytes", 65536))
+        if capture is not None and (count := unsaved(self.request, capture)):
+            content += "\n" + unsaved_note(count)
+        return content, bool(value.get("isError"))
+
+    def history_over_budget(self):
+        """The answer to a session_history call once its window budget is used, or "".
+
+        The budget covers the results in the current window: those in the hidden rounds
+        it replays, and this request's, as a cut inside the request starts a new window.
+        """
+        cut, records = active_cut(self.request), self.request.records
+        used = self.spent.get(cut, 0) + sum(
+            history_tokens(records[K.HIDDEN, anchor]["messages"])
+            for anchor in self.request.capture_chain[cut + 1 :]
+            if (K.HIDDEN, anchor) in records
+        )
+        if used < max(HISTORY_SHARE * self.request.context_window, HISTORY_FLOOR):
+            return ""
+        later = [
+            text
+            for text, offered in (
+                ("the next compaction", self.policy.get("compaction", True)),
+                (NEW_CONTEXT + " starts a new window", NEW_CONTEXT in self.allowed),
+            )
+            if offered
+        ]
+        more = " More lookups are possible after " + " or after ".join(later) + "." if later else ""
+        return (
+            "The session history budget for this context window is used up: earlier results "
+            f"(about {used} tokens) are still in context above. Work from them and note the "
+            "ids you need." + more
+        )
 
     def arguments(self, call):
         """Decoded arguments with only frozen keys and every required one."""

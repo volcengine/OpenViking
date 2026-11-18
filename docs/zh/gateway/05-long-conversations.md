@@ -8,7 +8,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 ## 压缩做什么 {#long-conversations}
 
-[压缩](../guides/15-gateway.md#key-terms)让对话始终不超出模型的上下文窗口（单次请求最多能容纳的 token 数），默认开启。对话接近窗口上限时，由同一个模型为目前为止的对话写一份摘要，此后截断点之前的全部内容都由这份摘要替代。客户端里显示的历史不受影响。开启了保存对话、模型也能用 OpenViking 的 `grep` 和 `read` 工具时，摘要末尾会附上[查找被压缩内容](#finding-what-was-cut)的方法。
+[压缩](../guides/15-gateway.md#key-terms)让对话始终不超出模型的上下文窗口（单次请求最多能容纳的 token 数），默认开启。对话接近窗口上限时，由同一个模型为目前为止的对话写一份摘要，此后截断点之前的全部内容都由这份摘要替代。客户端里显示的历史不受影响。开启了保存对话、模型也能用 OpenViking 的 `session_history` 工具（没有它时则是 `grep` 和 `read`）时，摘要末尾会附上[查找被压缩内容](#finding-what-was-cut)的方法。
 
 在 Studio 中的位置：**上下文配置** → **长对话**。
 
@@ -58,7 +58,8 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 - 文件、路径和标识符；
 - 出过的错误和修正；
 - 未完成的事项；
-- 最近几次工具结果里的要点。
+- 最近几次工具结果里的要点；
+- 对话提供了 `session_history` 工具时，末尾再列出之后可用来检索的确切字符串：文件路径、错误信息、命令、标识符，以及用户描述需求的原话。
 
 摘要是纯文本，最长**摘要长度上限**（8,000）个 token。思考内容也计入输出上限，而有些模型（如 DeepSeek V4.1）即使请求里没有思考设置也会默认思考，所以网关总在摘要长度上限之外再留 16,000 token 的输出余量；客户端手动指定了思考预算时，改为加上这份预算。这次请求和其他请求一样由服务商计费。整个请求最长 `summary_timeout_seconds`（见[配置](13-configuration.md#gateway-fields)；默认为 `upstream_timeout_seconds`，即 600 秒），超时按摘要失败处理。它的时间不计入 `prepare_timeout_seconds`。
 
@@ -79,12 +80,20 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 ### 查找被压缩的内容 {#finding-what-was-cut}
 
-对话本身仍保存在 OpenViking 里。开启了**保存对话**、这段对话也提供了 `openviking_grep` 和 `openviking_read` 工具时，摘要末尾会附上查找方法：
+对话本身仍保存在 OpenViking 里。开启了**保存对话**时，摘要末尾会附上查找方法，具体内容取决于这段对话提供的工具：
 
-- 这段对话对应的 OpenViking 会话（`viking://user/<user_id>/sessions/<session_id>/`），以及会话中消息的存放位置；
-- 检索步骤：先用具体的关键词 grep 会话，拿到行号，再读取匹配位置前后的内容。
+- **有 `openviking_session_history` 时**（OpenViking 服务的 MCP 工具中包含 `session_history`）：说明保存了什么（用户和助手的消息、工具调用及其完整输出，不含思考内容、图片和网关自己执行的 OpenViking 工具调用），以及如何按原文检索、再按 id 读取匹配位置前后的内容。
+- **否则，有 `openviking_grep` 和 `openviking_read` 时**：这段对话对应的 OpenViking 会话（`viking://user/<user_id>/sessions/<session_id>/`）和会话中消息的存放位置，以及检索步骤：先用具体的关键词 grep 会话，拿到行号，再读取匹配位置前后的内容。
 
 截断点落在一轮中间时，截断点之前的部分会立即保存到 OpenViking，模型在这一轮里就能检索到。
+
+`session_history` 和其他 OpenViking 工具一样默认提供，可以在**工具**里取消勾选（见[选择工具](04-openviking-tools.md#choose-tools)）；关闭**保存对话**时不提供。对话沿用开始时的工具清单，所以服务端还没有这个工具时开始的对话，仍然得到 grep 的查找方法。模型没有传 `session` 参数或传了空值时，网关填入保存着这段对话消息的 OpenViking 会话，从新到旧：当前会话（已经保存过内容时），然后是同一段历史较早的最多五个会话（例如客户端自己压缩之前的会话）。模型传了 `session` 时原样发送。这段对话还没有任何内容保存时，网关不请求 OpenViking，直接回复模型：目前没有可查的内容，以及有多少条消息正在等待保存。
+
+保存在后台进行，最新的消息可能还没写入 OpenViking。还在模型上下文里的未保存消息不需要提醒。网关填入了 `session`、且摘要或新窗口替换掉的消息里有尚未保存的，结果末尾会多一行网关说明：“Gateway note: the last *N* messages before your current context window are not saved yet and may be missing from this result.” 同一个请求里刚被 `openviking_new_context` 截掉的部分也算在内。网关无法判断已保存的会话包含哪些消息时（新的 OpenViking 会话接替了之前的会话，或已保存的位置属于历史的另一个分支），不加这一行。这一行在按**结果大小上限**截断之后才追加，不会被截掉。
+
+**每个窗口的历史查询预算。** 和所有 OpenViking 工具往返一样，`session_history` 的结果会一直留在模型的上下文里，直到下一个截断点。当前窗口里这些结果累计达到上下文窗口的五分之一或 8,000 token（取较大者，小窗口也够一次检索加一次读取）后，这个窗口里再调用 `session_history` 只会得到一行回复：之前的结果仍在上下文里，下次压缩之后（开启 Agent 自管上下文窗口时，也可以在模型开启新窗口之后）可以继续查询。网关根据已经为这个窗口保存的工具往返计算用量。
+
+**升级顺序。** 请先升级网关，再升级提供 `session_history` 的 OpenViking 服务，或者同时升级。旧版网关同样会把服务端的新工具以 `openviking_session_history` 提供给新对话，但没有默认会话、网关说明和预算；在网关升级之前，请把 `session_history` 加入上下文配置的 `disabled_tools`（在**工具**里取消勾选）。新版网关搭配旧版服务时，仍然使用现在的 grep 查找方法。
 
 ## 在请求日志中查看压缩 {#see-compaction-in-the-request-log}
 
@@ -116,7 +125,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 **特别长的会话可能超出请求大小上限。** 客户端的历史越来越长，特别长的会话最终可能超出请求大小上限：请求体超过 32 MiB 会被拒绝，返回 HTTP 413（见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)）。运维人员可以用 `max_body_bytes` 调整这个上限（见[网关字段](13-configuration.md#gateway-fields)）；网关前面的反向代理允许的请求体也不能比它小（见[反向代理和 HTTPS](../guides/22-gateway-operations.md#reverse-proxy-and-https)）。
 
-**客户端自己压缩会换到新会话。** 客户端压缩或编辑历史后，网关把新历史保存到新的 OpenViking 会话。检索工具可用时，新历史开头的网关说明会告诉模型之前的会话在哪里。
+**客户端自己压缩会换到新会话。** 客户端压缩或编辑历史后，网关把新历史保存到新的 OpenViking 会话。`session_history`（或 `grep` 和 `read`）可用时，新历史开头的网关说明会告诉模型如何查找之前的会话。
 
 ## 实验性：Agent 自管上下文窗口 {#experimental-agent-managed-context-windows}
 
@@ -151,7 +160,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 1. 这是模型开启的第 N 个窗口，内容不是用户写的；
 2. reason、notes 和 next_steps；
 3. 用户最新一条消息的原文；
-4. 检索之前窗口的方法（条件和[压缩](#finding-what-was-cut)时相同）；
+4. 检索之前窗口的方法（条件和[压缩](#finding-what-was-cut)时相同）；有 `session_history` 时，还会要求模型把之后的窗口要用到的消息 id 写进交接笔记；
 5. 这段对话开头的网关说明。
 
 之后的请求会根据客户端的历史重建同一个窗口。重置之前的内容会立即保存到 OpenViking，之后仍可检索；reason 和 notes 只出现在窗口头里，不保存到 OpenViking。每次重置让服务商缓存失效一次，但不需要摘要请求。
