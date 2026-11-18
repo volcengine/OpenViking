@@ -52,7 +52,7 @@ export const compileHelp = {
         {
           token: 'model_name',
           description:
-            '指定编译使用的模型 endpoint ID 或 MA 支持的模型名称。省略或为空时默认使用 doubao-2-1-lite。',
+            '指定支持该参数的 Compile Runtime 使用的模型 endpoint ID 或模型名称。支持范围与默认模型由服务端 Runtime 配置决定；内置 VikingBot Runtime 不接受此字段。',
         },
         {
           token: 'auto_update',
@@ -129,7 +129,7 @@ export const compileHelp = {
         {
           token: 'model_name',
           description:
-            'Model endpoint ID or MA-supported model name used for compilation. Defaults to doubao-2-1-lite when omitted or empty.',
+            'Model endpoint ID or model name for Compile Runtimes that support this parameter. Support and the default model depend on the server Runtime configuration; the built-in VikingBot Runtime does not accept this field.',
         },
         {
           token: 'auto_update',

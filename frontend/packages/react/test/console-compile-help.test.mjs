@@ -4,13 +4,19 @@ import { mount } from './helpers/console-dom.mjs';
 import { act, click, type } from './helpers/command-console-dom.mjs';
 
 test('Console shows the Compile guide and extended parameters in the selected locale', async () => {
-  for (const [locale, example, help] of [
+  for (const [locale, example, help, modelHelp] of [
     [
       'en-US',
       'ov find "What is the value of OpenViking?"',
       /Create and save a compile configuration/,
+      /server Runtime configuration/,
     ],
-    ['zh-CN', 'ov find "OpenViking 有什么价值？"', /创建并保存编译配置/],
+    [
+      'zh-CN',
+      'ov find "OpenViking 有什么价值？"',
+      /创建并保存编译配置/,
+      /服务端 Runtime 配置决定/,
+    ],
   ]) {
     const host = await mount(
       async () => assert.fail('Examples and help are local to the Console'),
@@ -50,6 +56,8 @@ test('Console shows the Compile guide and extended parameters in the selected lo
           'update_schedule.minute',
         ],
       );
+      assert.match(hint.textContent, modelHelp);
+      assert.doesNotMatch(hint.textContent, /doubao-2-1-lite/);
       assert.match(hint.textContent, /00:00.{1,4}03:59/);
       await host.execute('ov help');
       assert.match(host.records.at(-1).textContent, help);
