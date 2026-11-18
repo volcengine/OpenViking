@@ -151,6 +151,7 @@ class AddMessageRequest(BaseModel):
         Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
     ] = None
     source_message_ids: Optional[List[str]] = None
+    interrupted: bool = False
     telemetry: TelemetryRequest = False
 
     @field_validator("peer_id")
@@ -808,6 +809,7 @@ async def add_message(
                 "created_at": request.created_at,
                 "turn_id": request.turn_id,
                 "message_kind": request.message_kind,
+                **({"interrupted": True} if request.interrupted else {}),
                 "source_message_ids": request.source_message_ids,
             }
         ]
@@ -863,6 +865,7 @@ async def batch_add_messages(
                     "created_at": msg_request.created_at,
                     "turn_id": msg_request.turn_id,
                     "message_kind": msg_request.message_kind,
+                    **({"interrupted": True} if msg_request.interrupted else {}),
                     "source_message_ids": msg_request.source_message_ids,
                 }
             )

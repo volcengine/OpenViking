@@ -139,7 +139,7 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 | referenceSelection | 内置 `@` 选择器的受控引用状态                       | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | 可选             |
 | memoryCommit       | 隐藏「提交会话」操作                                | `false`                                               | 服务支持时启用   |
 
-适配器每个方法都收到 `AbortSignal`，应响应取消并在失败时抛出错误。后端自动保存消息时省略 `saveMessage`。
+适配器每个方法都收到 `AbortSignal`，应响应取消并在失败时抛出错误。后端自动保存消息时省略 `saveMessage`。 `loadMessages` 应为已知中断的助手回复返回 `interrupted: true`，打开历史会话时这些回复不会显示「提交会话」。
 
 ### ConsoleHitlOptions
 

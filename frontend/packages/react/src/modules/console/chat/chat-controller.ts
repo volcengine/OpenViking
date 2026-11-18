@@ -1,5 +1,6 @@
 import { asBotError as asError } from './errors.js';
 import { loadHistory } from './chat-history.js';
+import { createInterruptedReplyHistory } from './interrupted-reply-history.js';
 import { createPersistence } from './chat-persistence.js';
 import type { AnalyticsReporter } from '../../../shared/analytics/reporter.js';
 import { tagData, readData } from '../../../shared/monitoring/data.js';
@@ -38,11 +39,12 @@ export function createChatController(
   let appendInput: AppendInput | undefined;
   let lifetime = new AbortController();
   const undelivered: VikingBotDraft[] = [];
+  const reconcile = createInterruptedReplyHistory();
   const update = (
     patch: Partial<VikingBotChatState>,
     span?: MonitoringSpan,
   ) => {
-    state = { ...state, ...patch };
+    state = reconcile(state, patch);
     if (span) {
       if ('messages' in patch) tagData(monitoring, state.messages, [span]);
       if ('streaming' in patch) tagData(monitoring, state.streaming, [span]);

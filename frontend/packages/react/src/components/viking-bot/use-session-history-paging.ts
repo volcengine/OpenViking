@@ -5,8 +5,17 @@ export function useSessionHistoryPaging(
   open: boolean,
   sessions: VikingBotSessions,
 ) {
-  const { scopeKey, currentId, items, hasMore, isLoading, error, onLoadMore } =
-    sessions;
+  const {
+    scopeKey,
+    currentId,
+    items,
+    hasMore,
+    isLoading,
+    error,
+    onLoadMore,
+    onLoadMoreWithSignal,
+  } = sessions;
+  const canLoad = Boolean(hasMore && (onLoadMoreWithSignal || onLoadMore));
   const owner = useMemo(
     () => ({
       open,
@@ -25,10 +34,9 @@ export function useSessionHistoryPaging(
   }>();
   const current = status?.owner === owner ? status : undefined;
 
-  // Effect necessity: abort the host's page request when this popup/account/
-  // session stops owning it, including when outside dismissal unmounts the UI.
-  // A load handler does not observe those transitions. Release the pending
-  // slot too, so Strict Mode can set up the same owner again after cleanup.
+  // Effect necessity: invalidate late page results and abort opt-in requests
+  // when the popup/account/session loses ownership. A load handler cannot
+  // observe those transitions. Free the request slot for Strict Mode replay.
   useEffect(
     () => () => {
       owner.request?.abort();
@@ -39,8 +47,7 @@ export function useSessionHistoryPaging(
 
   const requestPage = useCallback(
     (visibleIds?: readonly string[]) => {
-      if (!open || !hasMore || isLoading || !onLoadMore || owner.request)
-        return;
+      if (!open || !canLoad || isLoading || owner.request) return;
       const controller = new AbortController();
       owner.request = controller;
       const { signal } = controller;
@@ -54,7 +61,11 @@ export function useSessionHistoryPaging(
         }
         setStatus({ owner, loading: true });
         try {
-          await onLoadMore(signal);
+          await Promise.resolve(
+            onLoadMoreWithSignal
+              ? onLoadMoreWithSignal(signal)
+              : onLoadMore?.(),
+          );
           if (!signal.aborted) setStatus({ owner });
         } catch (cause) {
           if (!signal.aborted)
@@ -67,18 +78,18 @@ export function useSessionHistoryPaging(
         }
       })();
     },
-    [open, hasMore, isLoading, onLoadMore, owner],
+    [open, canLoad, isLoading, onLoadMore, onLoadMoreWithSignal, owner],
   );
 
   const visibleIds = useMemo(() => {
-    if (!open || !currentId || !hasMore || !onLoadMore) return;
+    if (!open || !currentId || !canLoad) return;
     if (!items.some(({ id }) => id === currentId))
       return items.map(({ id }) => id);
-  }, [open, currentId, hasMore, items, onLoadMore]);
+  }, [open, currentId, canLoad, items]);
 
   // Effect necessity: the host can publish each page after the opening event.
   // Seek again only when previously unseen sessions appear, and stop on
-  // errors. The owner effect aborts any request after scope changes.
+  // errors. The owner effect invalidates the request after scope changes.
   useEffect(() => {
     if (!visibleIds || current?.loading || current?.error || error) return;
     if (!owner.requested || visibleIds.some((id) => !owner.seenIds.has(id)))
@@ -86,6 +97,7 @@ export function useSessionHistoryPaging(
   }, [visibleIds, current, error, owner, requestPage]);
 
   return {
+    canLoad,
     loading: current?.loading,
     error: current?.error,
     loadMore: () => requestPage(visibleIds),

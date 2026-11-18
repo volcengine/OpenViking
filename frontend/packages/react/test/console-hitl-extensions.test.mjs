@@ -146,3 +146,29 @@ test('scope switches discard pending field validation and drafts', async () => {
     await view.unmount();
   }
 });
+
+test('host-created source text keeps its string-list payload without a serializer', async () => {
+  const view = await mountHitl([card('compile_source', 'Sources')], {
+    hitl: {
+      cards: {
+        compile_source: {
+          createRequest: () => ({
+            kind: 'text',
+            question: 'Choose a preset',
+            initialValue: ' host-preset \n host-preset \n second-preset',
+          }),
+        },
+      },
+    },
+  });
+  try {
+    await view.start();
+    await submit(view);
+    assert.deepEqual(JSON.parse(view.requests[1].text).answers[0].value, [
+      'host-preset',
+      'second-preset',
+    ]);
+  } finally {
+    await view.unmount();
+  }
+});

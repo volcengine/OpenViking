@@ -31,9 +31,9 @@ test('opening history seeks the current session one page at a time', async () =>
   const requests = [];
   const props = {
     onRename() {},
-    onLoadMore: (signal) => {
-      requests.push(signal);
-      return pages[requests.length - 1].promise;
+    onLoadMore: (...args) => {
+      requests.push(args);
+      return pages[requests.length - 1]?.promise;
     },
   };
   const view = await mount(tree(props));
@@ -56,6 +56,8 @@ test('opening history seeks the current session one page at a time', async () =>
       'active',
     );
     assert.equal(loadMore().disabled, false);
+    await click(loadMore());
+    assert.deepEqual(requests, [[], [], []]);
   } finally {
     pages.forEach(({ resolve }) => resolve());
     await view.unmount();
@@ -67,7 +69,8 @@ test('unchanged history pages stop the automatic seek but allow manual retry', a
   const requests = [];
   const props = {
     scopeKey: 'account-1',
-    onLoadMore: (signal) => {
+    onLoadMore: () => assert.fail('the opt-in loader takes precedence'),
+    onLoadMoreWithSignal: (signal) => {
       requests.push(signal);
       if (requests.length === 2) return pending.promise;
     },
@@ -99,7 +102,7 @@ test('a page error is shown and closing history cancels a retry', async () => {
   const retry = Promise.withResolvers();
   const requests = [];
   const props = {
-    onLoadMore: (signal) => {
+    onLoadMoreWithSignal: (signal) => {
       requests.push(signal);
       if (requests.length === 1) throw new Error('Page unavailable');
       if (requests.length === 2) return retry.promise;

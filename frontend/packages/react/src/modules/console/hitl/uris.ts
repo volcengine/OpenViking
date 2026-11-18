@@ -36,15 +36,38 @@ export function parseCompileUri(value: string): string | undefined {
   }
 }
 
+export function splitSourceLines(value: string): string[] {
+  return [
+    ...new Set(
+      value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 export function parseSourceUris(value: string): string[] | undefined {
   const result = new Set<string>();
-  for (const line of value.split(/\r?\n/)) {
-    if (!line.trim()) continue;
+  for (const line of splitSourceLines(value)) {
     const uri = parseCompileUri(line);
     if (!uri) return;
     result.add(uri);
   }
   return [...result];
+}
+
+/** Compile requires a child of resource and memory namespaces; skill roots follow their own rules. */
+export function isCompileDataNamespaceRoot(uri: string) {
+  const [scope, ...path] = uri.slice(scheme.length).split('/');
+  if (scope === 'resources') return path.length === 0;
+  if (scope !== '~' && scope !== 'user') return false;
+  const personal = scope === 'user' ? path.slice(1) : path;
+  const content = personal[0] === 'peers' ? personal.slice(2) : personal;
+  return (
+    content.length === 1 &&
+    (content[0] === 'resources' || content[0] === 'memories')
+  );
 }
 
 export function overlapsSource(

@@ -14,7 +14,12 @@ import {
 } from './picker-fields.js';
 import { TargetField } from './target-field.js';
 import { checkDestination } from './directory-validation.js';
-import { overlapsSource, parseCompileUri, parseSourceUris } from './uris.js';
+import {
+  isCompileDataNamespaceRoot,
+  overlapsSource,
+  parseCompileUri,
+  parseSourceUris,
+} from './uris.js';
 
 function FieldError({
   code,
@@ -26,7 +31,8 @@ function FieldError({
     | 'targetNotDirectory'
     | 'targetReadOnly'
     | 'targetCheckFailed'
-    | 'targetOverlap';
+    | 'targetOverlap'
+    | 'targetNamespaceRoot';
 }) {
   return hitlLabels(useLocale())[code];
 }
@@ -113,6 +119,8 @@ function cardFields(
         const path = singleUri ? parseCompileUri(value) : undefined;
         if (singleUri && !path) return <FieldError code="uriInvalid" />;
         if (cardType === 'compile_target' && path) {
+          if (isCompileDataNamespaceRoot(path))
+            return <FieldError code="targetNamespaceRoot" />;
           if (overlapsSource(path, sources, userId))
             return <FieldError code="targetOverlap" />;
           if (scope.client) {
@@ -124,6 +132,8 @@ function cardFields(
             );
             if (checked && 'error' in checked)
               return <FieldError code={checked.error} />;
+            if (checked && isCompileDataNamespaceRoot(checked.uri))
+              return <FieldError code="targetNamespaceRoot" />;
             if (checked && overlapsSource(checked.uri, sources, userId))
               return <FieldError code="targetOverlap" />;
           }
@@ -151,8 +161,13 @@ export function presentCard(
     card.request.kind === 'steps'
       ? card.request
       : { ...card.request, question: title };
-  if (card.cardType === 'compile_target' && request.kind === 'text')
-    request.initialValue ??= recommendations[0];
+  if (card.cardType === 'compile_target' && request.kind === 'text') {
+    const suggested = parseCompileUri(request.initialValue ?? '');
+    request.initialValue =
+      suggested && recommendations.includes(suggested)
+        ? suggested
+        : recommendations[0];
+  }
   return {
     request,
     fields: cardFields(

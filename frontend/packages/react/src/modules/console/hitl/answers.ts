@@ -1,6 +1,11 @@
 import type { VikingBotInteractionAnswer } from '../../../components/viking-bot/index.js';
 import type { HitlCard, HitlGroup } from './types.js';
-import { parseCompileUri, parseSourceUris } from './uris.js';
+import {
+  isCompileDataNamespaceRoot,
+  parseCompileUri,
+  parseSourceUris,
+  splitSourceLines,
+} from './uris.js';
 import { weekdays } from './json.js';
 
 function wireValue(card: HitlCard, answer: VikingBotInteractionAnswer) {
@@ -20,13 +25,20 @@ function wireValue(card: HitlCard, answer: VikingBotInteractionAnswer) {
             : {}),
         };
   if (card.cardType === 'compile_source' && answer.kind === 'text') {
+    // A replacement card owns its validation; preserve its prior string-list payload.
+    if (card.options?.createRequest) return splitSourceLines(answer.value);
     const sources = parseSourceUris(answer.value);
     if (!sources?.length) throw new Error('Invalid compile source directories');
     return sources;
   }
-  if (card.cardType === 'compile_target' && answer.kind === 'text') {
+  if (
+    card.cardType === 'compile_target' &&
+    answer.kind === 'text' &&
+    !card.options?.createRequest
+  ) {
     const target = parseCompileUri(answer.value);
-    if (!target) throw new Error('Invalid compile output directory');
+    if (!target || isCompileDataNamespaceRoot(target))
+      throw new Error('Invalid compile output directory');
     return target;
   }
   return answer.value;

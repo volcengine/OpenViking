@@ -177,6 +177,8 @@ export interface VikingBotMessage {
   createdAt?: string;
   /** 该助手消息是否仍在生成中。Whether the assistant message is still being written. */
   streaming?: boolean;
+  /** 助手回复被中断。The assistant reply was interrupted before completion. */
+  interrupted?: boolean;
   /**
    * system 消息的语气，缺省为 `info`；`error` 用于连接中断等提示。
    * Tone of a system message, `info` by default; `error` for failures.

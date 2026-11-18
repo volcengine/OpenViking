@@ -139,7 +139,7 @@ When host content fails to render, the block shows the default fallback: an illu
 | referenceSelection | Controlled selection for the built-in `@` picker        | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | Optional               |
 | memoryCommit       | Hide the session commit action                          | `false`                                               | Enabled when supported |
 
-Every adapter method receives an `AbortSignal`, must honor cancellation, and throws on failure. Omit `saveMessage` when the backend persists messages automatically.
+Every adapter method receives an `AbortSignal`, must honor cancellation, and throws on failure. Omit `saveMessage` when the backend persists messages automatically. Set `interrupted: true` on known interrupted replies in `loadMessages` so they do not offer Commit session after reopening.
 
 ### ConsoleHitlOptions
 

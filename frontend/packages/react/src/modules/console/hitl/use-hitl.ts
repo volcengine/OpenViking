@@ -52,6 +52,7 @@ export function useHitl(
     requestOptions?.baseURL !== undefined ||
     requestOptions?.apiKey !== undefined ||
     requestOptions?.accountId !== undefined ||
+    requestOptions?.userId !== undefined ||
     requestOptions?.resourceId !== undefined;
   const client = inheritedClient ?? (hasConnection ? fallback : undefined);
   const owner = useMemo(

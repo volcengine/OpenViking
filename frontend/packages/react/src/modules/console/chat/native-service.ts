@@ -144,6 +144,8 @@ export function createNativeBotService(
               parts,
               turn_id: message.turnId,
               created_at: message.createdAt,
+              ...(message.role === 'assistant' &&
+                message.interrupted && { interrupted: true }),
               message_kind:
                 message.role === 'user' ? 'user_query' : 'assistant_step',
             },

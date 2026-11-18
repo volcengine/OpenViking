@@ -26,6 +26,7 @@ function latestCommitMessage(messages: readonly VikingBotMessage[]) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.role === 'user') break;
+    if (!latest && message.role === 'assistant' && message.interrupted) return;
     const alreadyCommitted = message.parts.some((part) => {
       if (part.type !== 'tool' && part.type !== 'tool_result') return false;
       if (part.type === 'tool' ? part.status === 'error' : part.isError)

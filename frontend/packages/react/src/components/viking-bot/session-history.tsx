@@ -70,7 +70,6 @@ export function SessionHistory({
       <VikingBotIcon name="history" />
     </Button>
   );
-  const hasMore = sessions.hasMore && sessions.onLoadMore;
   const list = (
     <SessionHistoryList
       sessions={{
@@ -101,7 +100,7 @@ export function SessionHistory({
               trigger={historyTrigger}
             >
               {list}
-              {hasMore ? (
+              {paging.canLoad ? (
                 <DropdownItem
                   className="ov-viking-bot__history-load-more"
                   closeOnClick={false}
@@ -139,7 +138,7 @@ export function SessionHistory({
                 </Button>
               )}
               popupFooter={
-                hasMore ? (
+                paging.canLoad ? (
                   <Button
                     type="text"
                     size="small"

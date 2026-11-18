@@ -12,6 +12,8 @@ const enUS = {
   sourceUriHint: 'Enter one Viking URI per line.',
   targetOverlap:
     'The output directory must be separate from every source directory.',
+  targetNamespaceRoot:
+    'Choose a directory inside the resource or memory namespace.',
   targetNotDirectory:
     'This location already exists as a file. Choose a directory.',
   targetReadOnly:
@@ -47,6 +49,7 @@ const zhCN: typeof enUS = {
   directory: '目录',
   sourceUriHint: '每行输入一个 Viking URI。',
   targetOverlap: '输出目录不能与来源目录相同，也不能互相包含。',
+  targetNamespaceRoot: '请选择资源或记忆命名空间下的目录。',
   targetNotDirectory: '此路径已存在同名文件，请选择目录。',
   targetReadOnly: '此目录不可写，请选择其他位置。',
   targetCheckFailed: '无法确认输出目录，请重试。',

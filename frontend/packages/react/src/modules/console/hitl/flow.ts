@@ -1,5 +1,9 @@
 import type { VikingBotInteractionAnswer } from '../../../components/viking-bot/index.js';
-import { parseSourceUris } from './uris.js';
+import {
+  isCompileDataNamespaceRoot,
+  parseCompileUri,
+  parseSourceUris,
+} from './uris.js';
 import type { HitlCard, HitlGroup } from './types.js';
 
 type Answers = Readonly<Record<string, VikingBotInteractionAnswer>>;
@@ -95,12 +99,13 @@ export function outputDirectories(
   const personal = userId
     ? `viking://user/${encodeURIComponent(userId)}/resources`
     : 'viking://~/resources';
-  const suggested = card.request.initialValue;
-  if (!path && !suggested) return ['viking://resources', personal];
+  const suggested = parseCompileUri(card.request.initialValue ?? '');
   return [
     ...new Set([
       ...(path ? [`viking://resources${path}`, `${personal}${path}`] : []),
-      ...(suggested ? [suggested] : []),
+      ...(suggested && !isCompileDataNamespaceRoot(suggested)
+        ? [suggested]
+        : []),
     ]),
   ];
 }
