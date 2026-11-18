@@ -185,6 +185,7 @@ export class TaskManager {
     lineFor,
     logger = null,
     recordActivity = () => {},
+    releaseClaims = () => {},
     slots = WORKER_SLOTS,
     reservedSlots = RESERVED_SLOTS,
     now = Date.now,
@@ -192,7 +193,9 @@ export class TaskManager {
     if (!db) throw new TypeError('db is required');
     if (!executor) throw new TypeError('executor is required');
     if (!inbox || inbox.db !== db) throw new TypeError('inbox must share the task database');
-    Object.assign(this, { db, config, executor, inbox, lineFor, logger, recordActivity, slots, reservedSlots, now });
+    Object.assign(this, {
+      db, config, executor, inbox, lineFor, logger, recordActivity, releaseClaims, slots, reservedSlots, now,
+    });
     this.db.exec(SCHEMA);
     for (const [table, column, type] of COLUMNS) {
       if (this.db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column)) continue;
@@ -254,6 +257,34 @@ export class TaskManager {
     return this.db.prepare(`SELECT t.id FROM task_inputs i JOIN tasks t ON t.id = i.task_id
       WHERE i.seq = ? AND i.role = 'owner' AND i.handed_back_at_ms IS NULL
         AND t.status NOT IN ('done', 'dropped', 'failed', 'stopped') LIMIT 1`).get(seq)?.id ?? null;
+  }
+
+  // The task that currently owns the decision for this input. Active tasks
+  // claim it directly; a successfully ended task keeps the claim while its
+  // final report is still waiting for the router. Failed/stopped tasks release
+  // it so the original request can be offered again.
+  decisionClaim(seq) {
+    return this.db.prepare(`SELECT t.id FROM task_inputs i JOIN tasks t ON t.id = i.task_id
+      WHERE i.seq = ? AND i.role IN ('owner', 'context') AND i.handed_back_at_ms IS NULL
+        AND (t.status IN ('queued', 'running', 'waiting', 'blocked') OR (
+          t.status IN ('done', 'dropped') AND EXISTS (
+            SELECT 1 FROM task_reports r JOIN task_report_deliveries d ON d.report_id = r.id
+            WHERE r.task_id = t.id AND d.settled_at_ms IS NULL
+          )
+        ))
+      ORDER BY i.id DESC LIMIT 1`).get(seq)?.id ?? null;
+  }
+
+  claimSeqs(taskId) {
+    return this.db.prepare(`SELECT DISTINCT seq FROM task_inputs
+      WHERE task_id = ? AND role = 'owner' AND seq IS NOT NULL AND handed_back_at_ms IS NULL ORDER BY seq`)
+      .all(taskId).map((row) => Number(row.seq));
+  }
+
+  releaseTaskClaims(taskId) {
+    const seqs = this.claimSeqs(taskId);
+    if (seqs.length) this.releaseClaims(seqs, taskId);
+    return seqs.length;
   }
 
   workerFor(token) {
@@ -479,6 +510,7 @@ export class TaskManager {
     this.db.prepare("UPDATE tasks SET status = 'stopped', ended_at_ms = ?, updated_at_ms = ? WHERE id = ?").run(this.now(), this.now(), taskId);
     this.recordActivity('task.ended', { summary: `${taskId} stopped${reason ? `: ${reason}` : ''}`, metadata: { task: taskId, status: 'stopped' } });
     this.handBackUnseen(taskId, 'the task was stopped before its worker saw them');
+    this.releaseTaskClaims(taskId);
     return this.get(taskId);
   }
 
@@ -796,6 +828,7 @@ export class TaskManager {
       this.request(taskId);
     } else if (ENDED.has(this.get(taskId)?.status)) {
       this.handBackUnseen(taskId, `the task ended (${this.get(taskId).status}) before its worker saw them`);
+      if (this.get(taskId).status === 'failed') this.releaseTaskClaims(taskId);
     }
   }
 
@@ -912,8 +945,30 @@ export class TaskManager {
   // Tasks a previous daemon generation was running start again with a
   // recovery note; queued ones go back in line.
   restore() {
+    const hasDecisions = Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decisions'").get());
+    let released = [];
     this.transaction(() => {
       this.db.exec('DELETE FROM task_input_claims');
+      // Versions before task-aware reminders recorded task routing as a final
+      // silent decision. Replace those rows with the task claim, except where
+      // the router has already settled the final report.
+      if (hasDecisions) this.db.exec(`DELETE FROM decisions WHERE outcome = 'silent' AND seq IN (
+        SELECT i.seq FROM task_inputs i JOIN tasks t ON t.id = i.task_id
+        WHERE i.role = 'owner' AND i.seq IS NOT NULL AND i.handed_back_at_ms IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM task_reports r JOIN task_report_deliveries d ON d.report_id = r.id
+            WHERE r.task_id = t.id AND d.settled_at_ms IS NOT NULL AND d.settled_by != 'unrelayed'
+          )
+      )`);
+      // A partial/corrupt old write must not eat an input forever. There is no
+      // foreign key on purpose, so reconcile orphaned claims explicitly.
+      const orphaned = this.db.prepare(`SELECT DISTINCT i.seq FROM task_inputs i LEFT JOIN tasks t ON t.id = i.task_id
+        WHERE t.id IS NULL AND i.role = 'owner' AND i.seq IS NOT NULL AND i.handed_back_at_ms IS NULL`).all();
+      const ended = this.db.prepare(`SELECT DISTINCT i.seq FROM task_inputs i JOIN tasks t ON t.id = i.task_id
+        WHERE t.status IN ('failed', 'stopped') AND i.role = 'owner' AND i.seq IS NOT NULL
+          AND i.handed_back_at_ms IS NULL`).all();
+      released = [...new Set([...orphaned, ...ended].map((row) => Number(row.seq)))];
+      this.db.exec('DELETE FROM task_inputs WHERE task_id NOT IN (SELECT id FROM tasks)');
       // Also recover final reports left unmarked by versions before the
       // durable outbox. Only the latest final report of a settled task is eligible.
       this.db.prepare(`INSERT OR IGNORE INTO task_report_deliveries(report_id, created_at_ms)
@@ -931,6 +986,7 @@ export class TaskManager {
       if (task.status === 'running') this.db.prepare("UPDATE tasks SET status = 'queued', recovering = 1 WHERE id = ?").run(task.id);
       this.request(task.id);
     }
+    if (released.length) this.releaseClaims(released, 'restore');
   }
 
   // ---- owner command (/tasks) ------------------------------------------------

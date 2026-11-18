@@ -2003,7 +2003,7 @@ describe('workers scheduler', () => {
     assert.equal(connectors.calls.length, 0);
   });
 
-  it('task_create hands the named inputs to a worker and counts as the decision on them', async (t) => {
+  it('task_create hands the named inputs to a worker and claims them without deciding them', async (t) => {
     const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
     const { turns } = attachTasks(service, store, workspace);
     const first = store.ingest(chatEvent({ messageId: 'om_taskOrigin1234', chatType: 'group', content: '帮我查下 X' })).inbound;
@@ -2011,7 +2011,12 @@ describe('workers scheduler', () => {
     const created = await call('task_create', { trigger_ids: ['message:om_taskMore123456', 'message:om_taskOrigin1234'], title: '查 X', note: 'Alice asked' });
     assert.match(created.text, /^Created t1: a worker is on it\./);
     assert.match(turns[0].prompt, new RegExp(`line ${first.seq}\nline ${second.seq}`), 'oldest first; the origin answers');
-    assert.equal(store.coveringDecision(first.scopeKey, first.seq), 'silent');
+    assert.equal(store.coveringDecision(first.scopeKey, first.seq), null);
+    assert.equal(service.tasks.decisionClaim(first.seq), 't1');
+    assert.equal(service.tasks.decisionClaim(second.seq), 't1');
+    const context = store.ingest(chatEvent({ messageId: 'om_taskContext123', chatType: 'group', content: '背景信息' })).inbound;
+    await call('task_route', { task_id: 't1', trigger_ids: ['message:om_taskContext123'], role: 'context' });
+    assert.equal(service.tasks.decisionClaim(context.seq), 't1');
     assert.match((await call('task_list', {})).text, /^t1 \[running\] "查 X"/);
     await assert.rejects(call('task_route', { task_id: 't9', trigger_ids: ['message:om_taskMore123456'], role: 'owner' }),
       (error) => error.code === 'unknown_task');

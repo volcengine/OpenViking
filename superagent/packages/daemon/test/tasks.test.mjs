@@ -72,6 +72,41 @@ describe('TaskManager', () => {
     assert.equal(executor.turns.length, 0);
   });
 
+  it('claims a request with its task transaction and releases failed or stopped work', async (t) => {
+    const released = [];
+    const { tasks, executor, db } = setup(t, { releaseClaims: (seqs) => released.push(seqs) });
+    const failed = row({ content: 'slow review' });
+    const stopped = row({ content: 'other review' });
+    tasks.create({ rows: [failed], title: 'A', runtime: 'pi' });
+    tasks.create({ rows: [stopped], title: 'B', runtime: 'pi' });
+    assert.equal(tasks.decisionClaim(failed.seq), 't1');
+    assert.equal(tasks.decisionClaim(stopped.seq), 't2');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM task_inputs').get().n, 2, 'claims are persisted as task inputs');
+
+    executor.turns[0].finish({ error: 'worker timed out' });
+    await settle();
+    assert.equal(tasks.get('t1').status, 'failed');
+    assert.equal(tasks.decisionClaim(failed.seq), null);
+    assert.deepEqual(released[0], [failed.seq]);
+
+    tasks.stop('t2', 'cancelled');
+    assert.equal(tasks.decisionClaim(stopped.seq), null);
+    assert.deepEqual(released[1], [stopped.seq]);
+  });
+
+  it('keeps a successful task claimed until its final report is settled', async (t) => {
+    const { tasks, executor } = setup(t);
+    const origin = row();
+    tasks.create({ rows: [origin], title: 'X', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: 'result' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.equal(tasks.get('t1').status, 'done');
+    assert.equal(tasks.decisionClaim(origin.seq), 't1');
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], by: 'reply_message' }), 1);
+    assert.equal(tasks.decisionClaim(origin.seq), null);
+  });
+
   it('starts a worker with the brief, under an authority that holds for its turn only', async (t) => {
     const { tasks, executor, workspace } = setup(t);
     const origin = row({ thread_id: 'omt_1', content: '帮我查下 X 为什么慢' });
@@ -426,6 +461,34 @@ describe('TaskManager', () => {
     assert.match(next.turns[0].prompt, /original request: never publish/);
     assert.equal(next.turns[0].task.native_session, null);
     assert.notEqual(next.turns[0].task.session_id, executor.turns[0].task.session_id);
+  });
+
+  it('reconciles legacy silent decisions and orphaned task claims on restore', async (t) => {
+    const { tasks, executor, db, workspace, inbox } = setup(t);
+    const active = row({ content: 'active request' });
+    const orphan = row({ content: 'orphaned request' });
+    tasks.create({ rows: [active], title: 'X', runtime: 'pi' });
+    tasks.shutdown();
+    executor.turns[0].finish({ text: '', error: 'stopped' });
+    await settle();
+
+    db.exec('CREATE TABLE decisions(seq INTEGER, outcome TEXT)');
+    db.prepare("INSERT INTO decisions(seq, outcome) VALUES (?, 'silent')").run(active.seq);
+    db.prepare(`INSERT INTO task_inputs(task_id, seq, role, text, created_at_ms)
+      VALUES ('missing', ?, 'owner', 'orphaned request', 1)`).run(orphan.seq);
+
+    const released = [];
+    const next = fakeExecutor();
+    const restored = new TaskManager({
+      db, config: { workspace }, executor: next, inbox, lineFor: () => '',
+      releaseClaims: (seqs, claim) => released.push({ seqs, claim }),
+    });
+    t.after(() => restored.shutdown());
+    restored.restore();
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM decisions').get().n, 0, 'the active task replaces legacy silence');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM task_inputs WHERE task_id = 'missing'").get().n, 0);
+    assert.deepEqual(released, [{ seqs: [orphan.seq], claim: 'restore' }]);
+    assert.equal(next.turns.length, 1, 'the active task still resumes');
   });
 
   it('runs a turn that failed for a passing reason again', async (t) => {

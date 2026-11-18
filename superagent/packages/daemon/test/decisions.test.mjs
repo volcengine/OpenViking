@@ -12,7 +12,9 @@ import { chatEvent, mailEvent } from './event-fixture.mjs';
 const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
 // A real Store and Harness; the runtime only records what it is handed.
-function setup(t, { runtime = 'codex', explicitSilence = true, decisionReminderLimit = 3, notifyFailure = null } = {}) {
+function setup(t, {
+  runtime = 'codex', explicitSilence = true, decisionReminderLimit = 3, notifyFailure = null, claimFor = () => null,
+} = {}) {
   const store = new Store(':memory:', quiet);
   store.initializeCognition(runtime, 'token');
   const submitted = [];
@@ -33,6 +35,7 @@ function setup(t, { runtime = 'codex', explicitSilence = true, decisionReminderL
     explicitSilence,
     decisionReminderLimit,
     notifyFailure,
+    claimFor,
     isStopping: () => state.stopping,
   });
   t.after(() => { harness.stop(); store.close(); });
@@ -63,7 +66,18 @@ describe('turn-end decision settlement', () => {
     assert.deepEqual(activities, []);
     assert.deepEqual(submitted, []);
     assert.deepEqual(settlement(), { message: 'decision_settlement', delivered: 0, silent: 1, superseded: 0,
-      expected_unsettled: 0, optional_unsettled: 0, nudged: 0 });
+      claimed: 0, expected_unsettled: 0, optional_unsettled: 0, nudged: 0 });
+  });
+
+  it('leaves an input claimed by a task undecided without reminding it', async (t) => {
+    const claims = new Map();
+    const { store, activities, submitted, ingest, settlement, turn } = setup(t, { claimFor: (seq) => claims.get(seq) });
+    const row = ingest({ messageId: 'om_claimed123456', chatId: 'oc_claimed123456' });
+    claims.set(row.seq, 't1');
+    await turn([row.seq]);
+    assert.equal(store.decisionFor(row.connectorInstance, row.eventId), null);
+    assert.deepEqual([activities, submitted], [[], []]);
+    assert.equal(settlement().claimed, 1);
   });
 
   it('reminds an undecided direct message three times with its original event= and seq, then stops', async (t) => {
@@ -241,7 +255,7 @@ describe('loop-stopped turn recovery', () => {
     assert.deepEqual(submitted.map((item) => item.seq), [waiting.seq, mail.seq]);
     assert.match(submitted[0].text, /msg=om_waiting123456 event=message:om_waiting123456 [^\]]* undecided=1\] hello$/);
     assert.deepEqual(logs.filter((line) => line.message === 'stopped_turn_settlement').at(-1),
-      { message: 'stopped_turn_settlement', decided: 1, superseded: 1, redelivered: 2, missing: 0 });
+      { message: 'stopped_turn_settlement', decided: 1, superseded: 1, claimed: 0, redelivered: 2, missing: 0 });
     assert.deepEqual(activities.map(({ status, inboundSeq, metadata }) => [status, inboundSeq, metadata.expectation]),
       [['NUDGED', waiting.seq, 'loop_stopped'], ['NUDGED', mail.seq, 'loop_stopped']]);
 
@@ -262,5 +276,44 @@ describe('loop-stopped turn recovery', () => {
     assert.equal(submitted.length, 1);
     assert.equal(submitted[0].seq, row.seq);
     assert.doesNotMatch(submitted[0].text, /undecided=/);
+  });
+
+  it('does not recover a stopped turn input while a task claims it', async (t) => {
+    const claims = new Map();
+    const { submitted, ingest, stopped } = setup(t, { claimFor: (seq) => claims.get(seq) });
+    const row = ingest({ messageId: 'om_stopClaim1234' });
+    claims.set(row.seq, 't1');
+    await stopped([row.seq]);
+    assert.deepEqual(submitted, []);
+  });
+});
+
+describe('released task claim recovery', () => {
+  it('offers a failed task input again once, without creating a decision', async (t) => {
+    const claims = new Map();
+    const { store, policy, submitted, activities, ingest } = setup(t, { claimFor: (seq) => claims.get(seq) });
+    const row = ingest({ messageId: 'om_failedTask1234' });
+    claims.set(row.seq, 't1');
+    policy.onClaimsReleased({ inboundSeqs: [row.seq], claim: 't1' });
+    await policy.harness.ingressBarrier;
+    assert.deepEqual(submitted, [], 'the live claim still owns it');
+
+    claims.delete(row.seq);
+    policy.onClaimsReleased({ inboundSeqs: [row.seq], claim: 't1' });
+    await policy.harness.ingressBarrier;
+    policy.harness.flushBufferedIngress();
+    assert.equal(submitted.length, 1);
+    assert.match(submitted[0].text, /msg=om_failedTask1234 .* undecided=1\] hello$/);
+    assert.equal(store.decisionFor(row.connectorInstance, row.eventId), null);
+    assert.equal(activities.at(-1).metadata.expectation, 'task_released');
+
+    policy.onClaimsReleased({ inboundSeqs: [row.seq], claim: 't1' });
+    await policy.harness.ingressBarrier;
+    assert.equal(submitted.length, 1, 'one release cannot enqueue the input twice');
+
+    policy.onClaimsReleased({ inboundSeqs: [row.seq], claim: 't2' });
+    await policy.harness.ingressBarrier;
+    policy.harness.flushBufferedIngress();
+    assert.equal(submitted.length, 2, 'a later task may release the same accepted input again');
   });
 });
