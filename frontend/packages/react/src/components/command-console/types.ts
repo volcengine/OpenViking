@@ -537,6 +537,8 @@ export interface CommandConsoleProps extends Omit<
    * Controlled input value.
    */
   value: string;
+  /** Keyboard recall entries in submission order. Defaults to the displayed records. */
+  history?: readonly Pick<CommandConsoleRecord, 'command'>[];
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
