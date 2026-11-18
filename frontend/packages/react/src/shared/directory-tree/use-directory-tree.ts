@@ -5,11 +5,13 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
 } from 'react';
 import { useRequestScope } from '../request/use-request-scope.js';
 import { expandChain } from './fs-path.js';
+import { useInitializeDirectoryTree } from './use-initialize-directory-tree.js';
+import { useReportExpansion } from './use-report-expansion.js';
+import { useDirectoryExpansion } from './use-directory-expansion.js';
 import { flattenTree } from './rows.js';
 import { DirectoryQueries } from './directory-queries.js';
 import { useQueryScope } from '../request/use-query-scope.js';
@@ -26,6 +28,8 @@ export function useDirectoryTree({
   rootUri,
   cacheScopeKey,
   defaultExpandedUri,
+  defaultExpandedUris,
+  onExpandedUrisChange,
   requestOptions,
 }: UseDirectoryTreeOptions) {
   const {
@@ -48,65 +52,32 @@ export function useDirectoryTree({
   useEffect(() => {
     activeSession.current = session;
   }, [session]);
-  const [local, setLocal] = useState<{
-    session: typeof session;
-    expanded: ReadonlySet<string>;
-  }>();
-  const expanded = useMemo(
-    () =>
-      local && local.session === session ? local.expanded : new Set([rootUri]),
-    [local, session, rootUri],
+  const {
+    expanded,
+    expandedRef,
+    initialExpanded,
+    hasSavedExpansion,
+    setExpanded,
+  } = useDirectoryExpansion(
+    session,
+    activeSession,
+    rootUri,
+    defaultExpandedUris,
   );
-  const expandedRef = useRef(expanded);
-  expandedRef.current = expanded;
-  const [initialized, setInitialized] = useState<{
-    session: typeof session;
-    uri?: string;
-  }>();
-  const initialLoad = useRef<Promise<void> | undefined>(undefined);
+  const initialPath = hasSavedExpansion ? undefined : defaultExpandedUri;
+  const { initialLoad, initializing } = useInitializeDirectoryTree({
+    session,
+    rootUri,
+    initialPath,
+    savedExpansion: hasSavedExpansion ? initialExpanded : undefined,
+    expandedRef,
+    setExpanded,
+  });
   const scope = useRequestScope(
     request?.client ?? null,
     request?.options,
     rootUri,
   );
-  const setExpanded = useMemo(
-    () => (update: React.SetStateAction<ReadonlySet<string>>) => {
-      setLocal((previous) => {
-        const session = activeSession.current;
-        const current =
-          previous && previous.session === session
-            ? previous.expanded
-            : new Set([rootUri]);
-        const next = typeof update === 'function' ? update(current) : update;
-        expandedRef.current = next;
-        return { session, expanded: next };
-      });
-    },
-    [rootUri],
-  );
-  // Synchronize the initial/default path with directory subscriptions after commit.
-  // Navigation and identity can change without a click. Cleanup only invalidates
-  // this navigation; Query observers own shared request cancellation.
-  useEffect(() => {
-    if (!session) return;
-    const controller = new AbortController();
-    initialLoad.current = (async () => {
-      await session.load(rootUri, 0, controller.signal);
-      for (const uri of expandChain(rootUri, defaultExpandedUri)) {
-        if (controller.signal.aborted) return;
-        const page = await session.load(uri, 0, controller.signal);
-        if (page?.error) break;
-        if (!controller.signal.aborted)
-          setExpanded((previous) => new Set(previous).add(uri));
-      }
-    })()
-      .catch(() => undefined)
-      .finally(() => {
-        if (!controller.signal.aborted)
-          setInitialized({ session, uri: defaultExpandedUri });
-      });
-    return () => controller.abort();
-  }, [session, rootUri, defaultExpandedUri, setExpanded]);
   const fetchPage = useCallback(
     async (...args: Parameters<DirectoryQueries['load']>) => {
       try {
@@ -155,7 +126,7 @@ export function useDirectoryTree({
         else retryScope();
       },
     }),
-    [scope, rootUri, setExpanded, fetchPage, retryScope],
+    [scope, rootUri, expandedRef, setExpanded, fetchPage, retryScope],
   );
   const rows = useMemo(
     () => flattenTree(rootUri, 0, dirs, expanded),
@@ -170,15 +141,19 @@ export function useDirectoryTree({
     rows,
     monitoring.map((operation) => operation.span),
   );
+  const isInitializing = !identityError && initializing;
+  const isReady = dirs[rootUri]?.ready ?? false;
+  useReportExpansion(
+    session,
+    isReady && !isInitializing && !dirs[rootUri]?.error,
+    rows,
+    onExpandedUrisChange,
+  );
   return {
     monitoring,
     rows,
-    isInitializing:
-      !identityError &&
-      (!session ||
-        initialized?.session !== session ||
-        initialized?.uri !== defaultExpandedUri),
-    isReady: dirs[rootUri]?.ready ?? false,
+    isInitializing,
+    isReady,
     error: identityError ?? dirs[rootUri]?.error ?? null,
     ...state,
     dirs,
@@ -187,6 +162,7 @@ export function useDirectoryTree({
       scope,
       dirs: session?.dirs ?? emptyDirectoryRef,
       initialLoad,
+      expanded: expandedRef,
       fetchPage,
       setExpanded,
     },

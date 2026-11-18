@@ -256,6 +256,12 @@ export interface FileBrowserProps extends Omit<
    */
   defaultExpandedUri?: string;
   /**
+   * 初始展开目录 URI 快照。传入后优先于 defaultExpandedUri，空数组只展开根目录。
+   * Initial expanded directory URIs. Takes precedence over defaultExpandedUri
+   * when provided. An empty array expands only the root.
+   */
+  defaultExpandedUris?: readonly string[];
+  /**
    * 内置接入抽屉的配置；传入后显示连接入口，省略时隐藏。
    * Configuration of the built-in connection drawer; enables its entry when provided.
    */
@@ -288,6 +294,11 @@ export interface FileBrowserProps extends Omit<
   onUriChange?: (uri: string | null) => void;
   /** 用户选中目录树条目时触发，包含重复选中。Reports a tree entry selection, including reselecting the same row. */
   onSelect?: (row: FileTreeEntryRow) => void;
+  /**
+   * 目录树初始化完成后，上报可见的展开目录，不含根目录。
+   * Reports visible expanded directory URIs after initialization, excluding the root.
+   */
+  onExpandedUrisChange?: (uris: readonly string[]) => void;
   /** Host gateway/view override; nullish values retain the native dashboard. */
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**

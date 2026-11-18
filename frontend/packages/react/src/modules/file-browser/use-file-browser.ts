@@ -3,7 +3,6 @@ import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
 import { useDirectoryPreviewLevels } from './use-directory-preview-levels.js';
 
-import type { FileTreeEntryRow } from '../../components/file-tree/index.js';
 import { useOvClient } from '../../client/provider.js';
 import { useFsPreview } from './use-fs-preview.js';
 import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
@@ -38,6 +37,8 @@ export function useFileBrowser({
   accessLabels,
   formatCharacterCount,
   defaultExpandedUri,
+  defaultExpandedUris,
+  onExpandedUrisChange,
   currentUri,
   requestOptions,
   onUriChange,
@@ -51,6 +52,8 @@ export function useFileBrowser({
     client,
     rootUri,
     defaultExpandedUri,
+    defaultExpandedUris,
+    onExpandedUrisChange,
     requestOptions,
   });
   const {
@@ -216,7 +219,7 @@ export function useFileBrowser({
       // and reporting only after it returns would let this late callback overwrite a
       // resource the user picked in the meantime. The selection belongs to the moment
       // of the click, not to a listing that arrives afterwards.
-      select: (row: FileTreeEntryRow) => {
+      select: (row) => {
         if (row.disabled || row.selectable === false) return Promise.resolve();
         cancelReveal();
         closeDashboard();

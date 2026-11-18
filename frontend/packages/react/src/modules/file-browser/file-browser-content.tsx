@@ -1,7 +1,6 @@
 import { useExposureRef } from '../../shared/analytics/use-exposure.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
+import { forwardRef, useMemo, useState, type CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
@@ -13,11 +12,7 @@ import {
 } from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
-import {
-  resolveLabels,
-  resolvePreviewLabels,
-  resolveSummaryLabels,
-} from './file-browser-labels.js';
+import { resolveLabels, resolvePaneLabels } from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js';
 import { useFileBrowser } from './use-file-browser.js';
@@ -52,6 +47,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     defaultUri,
     rootUri = 'viking://',
     defaultExpandedUri,
+    defaultExpandedUris,
     locale: localeProp,
     agentConnect,
     agentConnectOpen,
@@ -64,6 +60,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     previewActions,
     onUriChange,
     onSelect,
+    onExpandedUrisChange,
     onImportResources,
     renderImportResources,
     previewSlots,
@@ -94,20 +91,11 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   const treeMaxWidth = resolveTreeMaxWidth(width);
   const treeWidth = Math.min(preferredTreeWidth, treeMaxWidth);
 
-  // 摘要文案只影响展示，不作为预览请求的依赖。
-  // Summary copy changes presentation without restarting preview requests.
-  const summaryLabels = useMemo(
-    () => resolveSummaryLabels(locale, labels),
-    [locale, labels],
-  );
-
-  // 宿主文案和语言未变时，保留预览覆盖对象的引用。
-  // Preserve the preview overrides while the host copy and language are unchanged.
-  const previewLabels = useMemo(
-    () => resolvePreviewLabels(resolveLabels(labels, locale)),
+  // Keep preview and summary copy stable until locale or host overrides change.
+  const { summaryLabels, previewLabels } = useMemo(
+    () => resolvePaneLabels(labels, locale),
     [labels, locale],
   );
-
   const browser = useFileBrowser({
     rootUri,
     locale,
@@ -120,6 +108,8 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     formatCharacterCount: text.formatCharacterCount,
     accessLabels: text,
     defaultExpandedUri,
+    defaultExpandedUris,
+    onExpandedUrisChange,
     currentUri,
     requestOptions,
     onUriChange: changeUri,
@@ -142,6 +132,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     uri,
     reportedUri,
     pack.choosePackFile,
+    defaultExpandedUris !== undefined,
   );
 
   const search = useFileBrowserSearchDialog(layoutRef);

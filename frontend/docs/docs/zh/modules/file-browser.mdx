@@ -106,8 +106,10 @@ import '@openviking/react/modules/file-browser/style.css';
 | defaultUri               | 非受控时的初始资源 URI，省略时不选中资源                                                                           | `string`                                                                | -                        |
 | onUriChange              | 浏览器内部选中资源时触发，参数是新的 URI                                                                           | `(uri: string \| null) => void`                                         | -                        |
 | onSelect                 | 点击或键盘选中目录树条目时上报完整条目，重复选中仍触发。可根据 `row.type` 向 VikingBot 提供目录引用                | `(row: FileTreeEntryRow) => void`                                       | -                        |
+| onExpandedUrisChange     | 初始化完成后上报可见的展开目录 URI，不含根目录                                                                     | `(uris: readonly string[]) => void`                                     | -                        |
 | rootUri                  | 目录树的根，把浏览和搜索的范围限定在这个子树内                                                                     | `string`                                                                | `'viking://'`            |
 | defaultExpandedUri       | 首次加载后自动展开到的路径，逐级加载；省略时只展开根目录                                                           | `string`                                                                | -                        |
+| defaultExpandedUris      | 初始展开目录快照；空数组覆盖 `defaultExpandedUri`，只展开根目录                                                    | `readonly string[]`                                                     | -                        |
 | readOnly                 | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
 | acl                      | 开启共享资源的权限显示与授权管理，类型见下方 `FileBrowserAclOptions`                                               | `boolean \| FileBrowserAclOptions`                                      | `false`                  |
 | agentConnect             | 显示「连接 Agent」按钮，点击后从右侧打开接入抽屉，参数见 [AgentConnect](../components/agent-connect)；省略时不显示 | `AgentConnectProps`                                                     | -                        |
@@ -472,6 +474,7 @@ import '@openviking/react/modules/file-browser/style.css';
 - 点击文件预览正文；点击目录展开并选中它，预览区显示该目录的 L0 摘要和 L1 总览。
 - `viking://system` 下的目录保留页签和路径，不显示摘要；目录中的文件仍可预览。
 - 首次加载时，用 `defaultExpandedUri` 展开到指定位置。挂载后更新受控 `uri` 会[打开并定位资源](#打开并定位资源)。
+- 刷新后恢复目录展开状态时，按作用域保存 `onExpandedUrisChange` 上报的列表，并在下次挂载时传入 `defaultExpandedUris`。初始受控 URI 在恢复展开的目录范围内定位。
 - 文本文件最多读取 2000 行，超出时提示内容被截断。
 - 图片、视频、音频、PDF、Office 文档和压缩包按扩展名通过内容下载接口读取。
 - 可编辑的格式有 `.md`、`.json`、`.jsonl`、`.txt`、`.yaml`、`.yml`：进入编辑时重新读取完整内容，保存调用 `POST /api/v1/content/write`，成功后重新加载预览。
