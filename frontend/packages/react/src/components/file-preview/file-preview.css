@@ -750,6 +750,10 @@
   display: none;
 }
 
+.ov-file-preview__video-layout {
+  color: var(--ov-ui-file-preview-text);
+}
+
 .ov-file-preview__video-layout:not([open]) {
   display: contents;
 }
@@ -768,7 +772,6 @@
   overscroll-behavior: contain;
   border: 1px solid var(--ov-ui-file-preview-border);
   border-radius: 8px;
-  color: var(--ov-ui-file-preview-text);
   background: var(--ov-ui-file-preview-surface);
 }
 
