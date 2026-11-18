@@ -441,11 +441,11 @@ extraVolumeMounts:
 
 `$HOSTNAME` resolves from the environment to the pod name, so each pod writes its own file: replicas must never share a log file.
 
-Set `log_path` on a standalone gateway to write its application log (warnings, errors and tracebacks) to a rotating file as JSON lines with `time`, `level`, `logger`, `message`, `request_id` (when the line was written while serving a request) and `exc` (the traceback, when there is one), instead of text on stderr.
+Standalone application logs use the common UTC text format on stderr or, with `log_path`, in a rotating file. Each record carries `ts`, `level`, `logger`, `pid`, `request_id`, `trace_id`, and a quoted message. Context is captured before asynchronous writing; unavailable IDs use `-`. This application format also applies to Uvicorn. Request and capture records retain their separate JSON schema described above.
 
 When `management_api: false` disables Studio and the management endpoints, configure the stdout sink and collect process or container logs for monitoring. The same workflow applies with the stdout sink when management is enabled: the Requests page and Overview's request figures have no new records. Previously stored records remain visible until they expire.
 
-Aggregate reasons and first-call cache results from the request log's top-level fields. Alert on `capture_status: failed`, `openviking_http_429`, "could not commit" warnings in the gateway log, Redis memory/evictions and HTTP error rates. Gateway errors are records too: count them by `error_reason` and `error_origin` (see [Log records](../api/25-gateway.md#log-records)). The store sink keeps no record for a request refused before its key was confirmed, so with that sink count those 401/402/403 responses in proxy access logs; use gateway stderr for the traceback of an `internal_error`. Confirm your platform collects stdout; a mounted directory alone does not redirect it to files.
+Aggregate reasons and first-call cache results from the request log's top-level fields. Alert on `capture_status: failed`, `openviking_http_429`, "could not commit" warnings in the gateway log, Redis memory/evictions and HTTP error rates. Gateway errors are records too: count them by `error_reason` and `error_origin` (see [Log records](../api/25-gateway.md#log-records)). The store sink keeps no record for a request refused before its key was confirmed, so with that sink count those 401/402/403 responses in proxy access logs; use the gateway application log for a safe error-type summary of an `internal_error`. Confirm your platform collects stdout; a mounted directory alone does not redirect it to files.
 
 ### Status line {#status-line}
 

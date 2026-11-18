@@ -21,6 +21,8 @@ from collections import Counter
 import async_timeout
 import orjson
 
+from openviking.observability.log_safety import short_hash
+
 from .capture_store import Document
 from .client import without_deadline
 from .models import Policy
@@ -237,8 +239,10 @@ class CapturePipeline:
                     return
                 doc = await self.due(name, due)
         except Exception as error:
-            logger.warning(
-                "OpenViking Gateway could not make an idle commit: %s", type(error).__name__
+            logger.info(
+                "gateway idle commit failed; retaining pending commit error_type=%s",
+                type(error).__name__,
+                extra={"degraded": True, "error_type": type(error).__name__},
             )
         finally:
             self.running.discard(name)
@@ -270,9 +274,10 @@ class CapturePipeline:
                     # Not one that a turn ending meanwhile set to a later time.
                     await self.idle_commit(name, due)
             except Exception as error:
-                logger.warning(
-                    "OpenViking Gateway could not look at an overdue commit: %s",
+                logger.info(
+                    "gateway overdue commit check failed error_type=%s",
                     type(error).__name__,
+                    extra={"degraded": True, "error_type": type(error).__name__},
                 )
 
     async def commit(self, key, session, keep):
@@ -281,10 +286,15 @@ class CapturePipeline:
             with without_deadline():
                 await self.viking.commit(key, session, keep)
         except Exception as error:
-            logger.warning(
-                "OpenViking Gateway could not commit %s: %s",
-                session,
-                getattr(error, "reason", type(error).__name__),
+            logger.info(
+                "gateway session commit failed session_hash=%s error_type=%s",
+                short_hash(str(session)),
+                type(error).__name__,
+                extra={
+                    "degraded": True,
+                    "error_type": type(error).__name__,
+                    "operation": "gateway.commit",
+                },
             )
             return getattr(error, "status", None) in REFUSED
         return True
@@ -356,9 +366,10 @@ class CapturePipeline:
             async with async_timeout.timeout(CUT_SECONDS):
                 await self.save(request, credential, messages, chain, chain.index(anchor) + 1)
         except Exception as error:
-            logger.warning(
-                "OpenViking Gateway could not save the history before a cut: %s",
-                getattr(error, "reason", type(error).__name__),
+            logger.info(
+                "gateway history save before compaction failed; continuing compaction error_type=%s",
+                type(error).__name__,
+                extra={"degraded": True, "error_type": type(error).__name__},
             )
 
     @staticmethod

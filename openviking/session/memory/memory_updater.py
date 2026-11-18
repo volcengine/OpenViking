@@ -15,6 +15,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
+
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
@@ -150,10 +152,15 @@ async def write_stored_links(
                 try:
                     content = await viking_fs.read_file(uri, ctx=ctx)
                 except (NotFoundError, FileNotFoundError) as exc:
-                    logger.warning("Skipping links to missing memory %s: %s", uri, exc)
+                    logger.debug(
+                        "memory links skipped; target missing uri=%s error_type=%s",
+                        safe_uri_for_log(uri),
+                        type(exc).__name__,
+                        extra={"error_type": type(exc).__name__},
+                    )
                     continue
                 if not content:
-                    logger.warning("Skipping links to empty memory %s", uri)
+                    logger.debug("memory links skipped; target empty uri=%s", safe_uri_for_log(uri))
                     continue
                 mf = MemoryFileUtils.read(content, uri=uri)
             if link_groups["links"]:
@@ -174,7 +181,12 @@ async def write_stored_links(
             )
             updated_uris.append(uri)
         except Exception as e:
-            tracer.error(f"Failed to apply links to {uri}: {e}")
+            logger.debug(
+                "memory operation failed stage=%s error_type=%s",
+                "write_stored_links",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__},
+            )
             if errors is not None:
                 errors.append((uri, e))
     return updated_uris
@@ -936,10 +948,10 @@ class MemoryUpdater:
             updater._viking_fs = viking_fs
             return await updater.generate_overview(memory_type, directory_uri, ctx)
         except Exception:
-            logger.warning(
-                "Failed to refresh memory overview for %s",
-                directory_uri,
-                exc_info=True,
+            logger.info(
+                "memory overview refresh failed; retaining existing overview uri=%s",
+                safe_uri_for_log(directory_uri),
+                extra={"degraded": True},
             )
             if strict:
                 raise
@@ -975,7 +987,11 @@ class MemoryUpdater:
             )
             return attempted > 0
         except Exception:
-            logger.warning("Failed to refresh memory embedding for %s", uri, exc_info=True)
+            logger.info(
+                "memory embedding refresh failed uri=%s",
+                safe_uri_for_log(uri),
+                extra={"degraded": True},
+            )
             if strict:
                 raise
             return False
@@ -1004,7 +1020,7 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
 
         if not viking_fs:
-            tracer.error("VikingFS not available, skipping memory operations")
+            logger.debug("memory operation failed stage=%s", "apply_operations")
             return result
 
         # Use provided registry or fall back to self._registry
@@ -1071,15 +1087,16 @@ class MemoryUpdater:
                     MemoryOperationSkipCode.INVALID_RANGES,
                     MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
                 }:
-                    logger.warning(message)
+                    logger.debug(
+                        "memory operation skipped by resolution policy error_code=%s",
+                        resolution_skip.reason_code.value,
+                    )
                 else:
                     tracer.info(message)
                 continue
             resolution_error = ValueError("Missing resolved URI")
             result.add_error(error_target, resolution_error)
-            tracer.error(
-                f"Skipping unresolved memory operation: {error_target}: {resolution_error}"
-            )
+            logger.debug("memory operation failed stage=%s", "apply_operations")
 
         uri_remap = dict(getattr(operations, "delete_replacements", {}) or {})
         split_replacements = detect_split_replacements(operations)
@@ -1124,7 +1141,7 @@ class MemoryUpdater:
             except Exception as exc:
                 result.add_error(uri, exc)
             unavailable_link_uris.add(uri)
-            logger.warning("Skipping links to unavailable memory %s", uri)
+            logger.debug("memory links skipped; target unavailable uri=%s", safe_uri_for_log(uri))
         original_links = [
             link
             for link in original_links
@@ -1172,7 +1189,12 @@ class MemoryUpdater:
                     add_result(uri)
                     uri_memory_type_map[uri] = resolved_op.memory_type
                 except Exception as e:
-                    tracer.error(f"Failed to apply memory operation for {uri}", e)
+                    logger.debug(
+                        "memory operation failed stage=%s error_type=%s",
+                        "apply_operations",
+                        type(e).__name__,
+                        extra={"error_type": type(e).__name__},
+                    )
                     result.add_error(uri, e)
 
         failed_upsert_uris = {uri for uri, _error in result.errors}
@@ -1249,7 +1271,7 @@ class MemoryUpdater:
                     "Skipped delete because batch contains unresolved upsert URIs"
                 )
                 result.add_error(delete_uri, delete_error)
-                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                logger.debug("memory operation failed stage=%s", "apply_operations")
                 continue
             if delete_uri in failed_upsert_uris:
                 continue
@@ -1258,7 +1280,7 @@ class MemoryUpdater:
             if delete_uri in failed_link_migration_sources:
                 delete_error = ValueError("Skipped delete because link migration did not complete")
                 result.add_error(delete_uri, delete_error)
-                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                logger.debug("memory operation failed stage=%s", "apply_operations")
                 continue
             replacement_uri = uri_remap.get(delete_uri)
             if replacement_uri in failed_upsert_uris:
@@ -1266,7 +1288,7 @@ class MemoryUpdater:
                     f"Skipped delete because replacement write failed: {replacement_uri}"
                 )
                 result.add_error(delete_uri, delete_error)
-                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                logger.debug("memory operation failed stage=%s", "apply_operations")
                 continue
             if delete_uri in upserted_uris:
                 tracer.info(
@@ -1284,7 +1306,12 @@ class MemoryUpdater:
                 await self._apply_delete(delete_uri, ctx, lease_ref=self._transaction_handle)
                 result.add_deleted(delete_uri)
             except Exception as e:
-                tracer.error(f"Failed to delete memory {delete_uri}", e)
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "apply_operations",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 result.add_error(delete_uri, e)
 
         await self._sync_resource_refs_for_result(result, ctx, lease_ref=self._transaction_handle)
@@ -1354,7 +1381,19 @@ class MemoryUpdater:
                 ),
             )
 
-        tracer.info(f"Memory operations applied: {result.summary()}")
+        (logger.info if result.errors or result.skipped_operations else logger.debug)(
+            "memory operations applied written=%d edited=%d deleted=%d failed=%d skipped=%d",
+            len(result.written_uris),
+            len(result.edited_uris),
+            len(result.deleted_uris),
+            len(result.errors),
+            len(result.skipped_operations),
+            extra={
+                "failed": len(result.errors),
+                "skipped": len(result.skipped_operations),
+                "degraded": bool(result.errors or result.skipped_operations),
+            },
+        )
 
         # Collect directories that need overview generation
         # uri is now a string, so extract directory using os.path
@@ -1617,7 +1656,12 @@ class MemoryUpdater:
                         lease_ref=lease_ref,
                     )
             except Exception as exc:
-                logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
+                logger.info(
+                    "resource reference synchronization failed uri=%s error_type=%s",
+                    safe_uri_for_log(uri),
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
+                )
 
     async def _apply_upsert(
         self,
@@ -1956,12 +2000,20 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(deleted_uri, ctx=ctx)
             except (NotFoundError, FileNotFoundError) as e:
                 # Benign: the source may already be gone in an idempotent replay.
-                logger.warning(
-                    f"Skipping link inheritance; could not read deleted memory {deleted_uri}: {e}"
+                logger.info(
+                    "deleted memory link inheritance skipped; source missing uri=%s error_type=%s",
+                    safe_uri_for_log(deleted_uri),
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
                 )
                 continue
             except Exception as e:
-                tracer.error(f"Failed to read deleted memory links for {deleted_uri}: {e}")
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "_inherit_deleted_link_relations",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 result.add_error(deleted_uri, e)
                 completed = False
                 continue
@@ -2061,9 +2113,19 @@ class MemoryUpdater:
             except (NotFoundError, FileNotFoundError) as e:
                 # Benign: a linked neighbor may have been deleted in the same
                 # batch. Link inheritance is best-effort, so warn and skip.
-                logger.warning(f"Skipping link inheritance; could not read memory {uri}: {e}")
+                logger.info(
+                    "memory link inheritance skipped; target missing uri=%s error_type=%s",
+                    safe_uri_for_log(uri),
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
+                )
             except Exception as e:
-                tracer.error(f"Failed to inherit deleted memory links for {uri}: {e}")
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "_inherit_deleted_link_relations",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 result.add_error(uri, e)
                 completed = False
         return completed
@@ -2082,7 +2144,7 @@ class MemoryUpdater:
         try:
             await viking_fs.rm(uri, recursive=False, ctx=ctx, lease_ref=lease_ref)
         except NotFoundError:
-            tracer.error(f"Memory not found for delete: {uri}")
+            logger.debug("memory operation failed stage=%s", "_apply_delete")
             # Idempotent - deleting non-existent file succeeds
 
     async def _vectorize_memories(
@@ -2107,7 +2169,7 @@ class MemoryUpdater:
         """
         ingest_options = IngestOptions.from_value(ingest_options)
         if not self._vikingdb:
-            logger.debug("VikingDB not available, skipping vectorization")
+            logger.debug("vikingDB not available, skipping vectorization")
             return 0
 
         uri_memory_type_map = uri_memory_type_map or {}
@@ -2126,7 +2188,7 @@ class MemoryUpdater:
                 uris_to_vectorize.append(uri)
 
         if not uris_to_vectorize:
-            logger.debug("No memory files to vectorize")
+            logger.debug("no memory files to vectorize")
             return 0
 
         for uri in uris_to_vectorize:
@@ -2152,8 +2214,10 @@ class MemoryUpdater:
                             template_vars,
                         )
                         if missing_vars:
-                            logger.warning(
-                                f"Missing embedding template variables for {uri}, falling back to plain content: {sorted(missing_vars)}"
+                            logger.info(
+                                "embedding template variables missing; using plain content uri=%s missing=%d",
+                                safe_uri_for_log(uri),
+                                len(missing_vars),
                             )
                         else:
                             try:
@@ -2163,8 +2227,11 @@ class MemoryUpdater:
                                     extract_context=extract_context,
                                 )
                             except Exception as e:
-                                logger.warning(
-                                    f"Failed to render embedding template for {uri}, falling back to plain content: {e}"
+                                logger.info(
+                                    "embedding template render failed; using plain content uri=%s error_type=%s",
+                                    safe_uri_for_log(uri),
+                                    type(e).__name__,
+                                    extra={"degraded": True, "error_type": type(e).__name__},
                                 )
 
                 # Get parent URI
@@ -2214,15 +2281,31 @@ class MemoryUpdater:
                         message = f"Failed to enqueue memory for vectorization: {uri}"
                         if raise_on_enqueue_failure:
                             raise RuntimeError(message)
-                        tracer.error(message)
+                        logger.debug("memory operation failed stage=%s", "_vectorize_memories")
                         continue
                     attempted_count += 1
-                    logger.debug(f"Enqueued memory for vectorization: {uri}")
+                    logger.debug("memory vectorization enqueued uri=%s", safe_uri_for_log(uri))
 
             except Exception as e:
-                tracer.error(f"Failed to vectorize memory {uri}: {e}")
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "_vectorize_memories",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 if raise_on_enqueue_failure:
                     raise
+        if attempted_count < len(uris_to_vectorize):
+            logger.info(
+                "memory vectorization partial; skipping unavailable entries total=%d skipped=%d",
+                len(uris_to_vectorize),
+                len(uris_to_vectorize) - attempted_count,
+                extra={
+                    "degraded": True,
+                    "total": len(uris_to_vectorize),
+                    "skipped": len(uris_to_vectorize) - attempted_count,
+                },
+            )
         return attempted_count
 
     @staticmethod
@@ -2256,7 +2339,9 @@ class MemoryUpdater:
         schema = registry.get(memory_type)
 
         if not schema or not schema.overview_template:
-            logger.debug(f"No overview_template for memory type: {memory_type}")
+            logger.debug(
+                "memory overview template missing type_hash=%s", short_hash(str(memory_type))
+            )
             return False
 
         viking_fs = self._get_viking_fs()
@@ -2279,10 +2364,18 @@ class MemoryUpdater:
                     md_files.append(f"{base_uri}/{name}")
 
         except (NotFoundError, FileNotFoundError):
-            logger.debug("Skip overview generation for deleted directory: %s", directory)
+            logger.debug(
+                "memory overview generation skipped; directory deleted uri=%s",
+                safe_uri_for_log(directory),
+            )
             return False
         except Exception as e:
-            tracer.error(f"Failed to list files in {directory}: {e}")
+            logger.info(
+                "memory overview update failed; retaining current overview stage=%s error_type=%s",
+                "generate_overview",
+                type(e).__name__,
+                extra={"degraded": True, "error_type": type(e).__name__},
+            )
             return False
 
         # If no memory files, delete the .overview.md and the directory if empty
@@ -2301,10 +2394,10 @@ class MemoryUpdater:
             except (NotFoundError, FileNotFoundError):
                 pass
             except Exception:
-                logger.warning(
-                    "Failed to delete empty memory overview %s",
-                    overview_path,
-                    exc_info=True,
+                logger.info(
+                    "empty memory overview cleanup failed uri=%s",
+                    safe_uri_for_log(overview_path),
+                    extra={"degraded": True},
                 )
             # Try to delete empty directory
             if can_delete_directory:
@@ -2318,10 +2411,10 @@ class MemoryUpdater:
                 except (NotFoundError, FileNotFoundError):
                     pass
                 except Exception:
-                    logger.warning(
-                        "Failed to delete empty memory directory %s",
-                        directory,
-                        exc_info=True,
+                    logger.info(
+                        "empty memory directory cleanup failed uri=%s",
+                        safe_uri_for_log(directory),
+                        extra={"degraded": True},
                     )
             return True
 
@@ -2343,11 +2436,27 @@ class MemoryUpdater:
                     }
                 )
             except Exception as e:
-                tracer.error(f"Failed to parse {file_path}: {e}")
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "generate_overview",
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
+                )
                 continue
 
+        if len(items) < len(md_files):
+            logger.info(
+                "memory overview input partial; skipping invalid files total=%d skipped=%d",
+                len(md_files),
+                len(md_files) - len(items),
+                extra={
+                    "degraded": True,
+                    "total": len(md_files),
+                    "skipped": len(md_files) - len(items),
+                },
+            )
         if not items:
-            logger.debug(f"No valid memory files parsed in {directory}")
+            logger.debug("memory overview has no valid files uri=%s", safe_uri_for_log(directory))
             return False
 
         overview_context = {
@@ -2364,7 +2473,12 @@ class MemoryUpdater:
                 extract_context=extract_context,
             )
         except Exception as e:
-            tracer.error(f"Failed to render overview template for {memory_type}: {e}")
+            logger.info(
+                "memory overview update failed; retaining current overview stage=%s error_type=%s",
+                "generate_overview",
+                type(e).__name__,
+                extra={"degraded": True, "error_type": type(e).__name__},
+            )
             return False
 
         # Write .overview.md to the directory
@@ -2399,5 +2513,10 @@ class MemoryUpdater:
             )
             return True
         except Exception as e:
-            tracer.error(f"Failed to write overview {overview_path}: {e}")
+            logger.info(
+                "memory overview update failed; retaining current overview stage=%s error_type=%s",
+                "generate_overview",
+                type(e).__name__,
+                extra={"degraded": True, "error_type": type(e).__name__},
+            )
             return False
