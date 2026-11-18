@@ -35,6 +35,7 @@ from openviking.parse.base import (
 )
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
@@ -111,7 +112,7 @@ class PDFParser(BaseParser):
 
         Raises:
             FileNotFoundError: If PDF file doesn't exist
-            ValueError: If conversion fails with all strategies
+            InvalidArgumentError: If the PDF structure is invalid
         """
         start_time = time.time()
         pdf_path = Path(source)
@@ -170,6 +171,8 @@ class PDFParser(BaseParser):
 
             return result
 
+        except OpenVikingError:
+            raise
         except Exception as e:
             logger.error(f"Failed to parse PDF {pdf_path}: {e}")
             return create_parse_result(
@@ -197,7 +200,7 @@ class PDFParser(BaseParser):
             Tuple of (markdown_content, metadata_dict)
 
         Raises:
-            ValueError: If all conversion strategies fail
+            ValueError: If the configured strategy is unknown
         """
         if self.config.strategy == "local":
             return await self._convert_local(pdf_path, resource_name=resource_name)
@@ -216,10 +219,7 @@ class PDFParser(BaseParser):
                 if self.config.mineru_endpoint:
                     logger.info("Falling back to MinerU API")
                     return await self._convert_mineru(pdf_path, resource_name=resource_name)
-                else:
-                    raise ValueError(
-                        f"Local conversion failed and no MinerU endpoint configured: {e}"
-                    )
+                raise
 
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
@@ -239,6 +239,16 @@ class PDFParser(BaseParser):
         该方法会在 :meth:`_convert_local` 中通过 asyncio.to_thread 调用。
         """
         pdfplumber = lazy_import("pdfplumber")
+        from pdfminer.pdfparser import PDFSyntaxError
+        from pdfminer.psparser import PSEOF
+
+        # Earlier supported pdfplumber versions raise pdfminer errors directly.
+        try:
+            from pdfplumber.utils.exceptions import PdfminerException
+        except ImportError:
+            pdfminer_wrappers = ()
+        else:
+            pdfminer_wrappers = (PdfminerException,)
 
         # Import storage utilities
         if storage is None:
@@ -418,6 +428,12 @@ class PDFParser(BaseParser):
             return markdown_content, meta
 
         except Exception as e:
+            # pdfplumber wraps the original pdfminer error as its first argument.
+            error = e.args[0] if isinstance(e, pdfminer_wrappers) else e
+            if isinstance(error, (PDFSyntaxError, PSEOF)):
+                raise InvalidArgumentError(
+                    f"Invalid PDF file: {pdf_path.name}. Error: {error}"
+                ) from e
             logger.error(f"pdfplumber conversion failed: {e}")
             raise
 
