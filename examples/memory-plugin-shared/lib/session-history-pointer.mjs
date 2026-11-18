@@ -13,10 +13,15 @@
  * @param {string} ovSessionId  the OV session the plugin captures this host session into
  * @param {object} [options]
  * @param {"compact"|"resume"} [options.event]  what just happened to the context
- * @param {boolean} [options.sessionDefault]  whether the plugin's MCP proxy fills
- *   `session` for the model; when it cannot, the model is told to pass it
+ * @param {boolean} [options.sessionDefault]  whether the plugin fills `session`
+ *   for the model; when it cannot, the model is told to pass it
+ * @param {string} [options.tool]  how the note names the tool, for a plugin that
+ *   offers it as a native tool under its own name
  */
-export function formatSessionHistoryPointer(ovSessionId, { event = "compact", sessionDefault = true } = {}) {
+export function formatSessionHistoryPointer(
+  ovSessionId,
+  { event = "compact", sessionDefault = true, tool = "the OpenViking MCP tool session_history" } = {},
+) {
   const id = String(ovSessionId || "").trim();
   if (!id) return "";
   const resumed = event === "resume";
@@ -32,7 +37,7 @@ export function formatSessionHistoryPointer(ovSessionId, { event = "compact", se
     `OpenViking keeps the full record of this session as ${id}, ${covers}: user and assistant`
       + " messages and tool calls with their outputs (not thinking).",
     `When you need an exact detail ${missing} (code, an error message, command output, a value,`
-      + " the user's wording), look it up with the OpenViking MCP tool session_history instead of"
+      + ` the user's wording), look it up with ${tool} instead of`
       + " guessing or asking the user again:",
     '- action="search", query="<exact words>" lists matching messages with ids;',
     '- action="read", id="<id>" reads around a match;',
