@@ -33,6 +33,7 @@ from .notices import recall_notice
 from .observe import degrade
 from .profile import build_profile
 from .protocols import (
+    appended_request,
     classify,
     clean_text,
     client_openviking_tools,
@@ -342,6 +343,13 @@ class MemoryKernel:
         self.configure_tools(prepared, policy, owner)
         if not disabled and policy.capture and kind == "user" and anchor >= 0:
             await self.capture.open(prepared)
+        if kind == "auxiliary" and messages and appended_request(messages[-1]):
+            # Claude Code compacts by appending its request to a tool result: the history
+            # before it is saved as at a cut, and neither the request nor its reply is.
+            *before, last = messages
+            last = {**last, "content": last["content"][:-1]}
+            kept = [*body_chain[:-1], *hidden_chain([last], protocol, body_chain[:-1])]
+            await self.capture.save_cut(prepared, credential, kept[-1], [*before, last], kept)
         if kind in {"user", "continuation"}:
             prepared.context_window = window_size(prepared, policy)
             prepared.context_tokens = await self.measure(prepared)

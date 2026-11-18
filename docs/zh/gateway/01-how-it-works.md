@@ -95,7 +95,7 @@ Relevant memory from OpenViking. It is this user's own saved history (past conve
 
 ## 对话什么时候保存 {#when-conversations-are-saved}
 
-网关把完成的轮次保存到密钥所属用户的 OpenViking 会话里，会话名形如 `gateway-…`。结束一轮的请求在回复发出后立即写入这一轮，不等下一条消息。回复把这一轮交给客户端执行工具时，这次请求不保存；带着工具结果继续、最终结束这一轮的请求，把整轮连同客户端自己的工具调用和结果一起写入。网关在一轮中间压缩对话，或者模型开启新的上下文窗口时，截断点之前的历史会立即写入。
+网关把完成的轮次保存到密钥所属用户的 OpenViking 会话里，会话名形如 `gateway-…`。结束一轮的请求在回复发出后立即写入这一轮，不等下一条消息。回复把这一轮交给客户端执行工具时，这次请求不保存；带着工具结果继续、最终结束这一轮的请求，把整轮连同客户端自己的工具调用和结果一起写入。网关在一轮中间压缩对话，或者模型开启新的上下文窗口时，截断点之前的历史会立即写入。客户端在一轮中间自己压缩时（例如 Claude Code 把压缩请求附在工具结果后面），压缩请求之前的历史也这样写入，压缩请求和它得到的摘要不写入。
 
 一段对话始终写入同一个 OpenViking 会话。网关记着上次写到哪条消息，下一轮从那之后接着写。客户端重新生成或编辑了回答、自己压缩了历史，或者只发送最近的一部分消息时，上次写到的位置不在新的历史里，网关就从这一轮最新的用户消息开始，继续写入同一个会话：新旧两个版本的回答都留在 OpenViking 里，这一轮的用户消息也会出现两次；被编辑或压缩掉的较早内容不会重新写入。只有[重新同步对话](10-overview-and-requests.md#resync-a-conversation)会换一个新的 OpenViking 会话。
 
@@ -111,7 +111,7 @@ Relevant memory from OpenViking. It is this user's own saved history (past conve
 以下内容不保存：
 
 - 网关自己添加的内容，以及 `<system-reminder>` 这类客户端噪声，保存前会去掉。
-- 子 Agent 请求、辅助请求和 token 计数请求从不保存。
+- 子 Agent 请求、辅助请求和 token 计数请求从不保存；只有客户端压缩请求之前的历史会像上面说的那样写入。
 
 提交阈值、保留最近消息和空闲提交时间在[保存对话](08-context-profiles.md#save-conversations)里设置；每个请求的[保存状态](10-overview-and-requests.md#saving-status)显示在**请求日志**页。
 
