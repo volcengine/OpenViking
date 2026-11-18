@@ -34,6 +34,28 @@ export interface ExperienceTrajectory {
 export type ExperienceOutcome =
   'success' | 'partial' | 'unfinished' | 'failure' | 'unknown';
 
+export interface ExperienceSourceGroup {
+  id: string;
+  updatedAt: string;
+  trajectories: readonly ExperienceTrajectory[];
+}
+
+export interface ExperienceTrajectoryMessages {
+  archiveUri?: string;
+  items: readonly {
+    role: string;
+    content: string;
+    createdAt?: string;
+    tools?: readonly {
+      id: string;
+      name: string;
+      status: string;
+      input?: unknown;
+      output?: string;
+    }[];
+  }[];
+}
+
 export interface ExperienceDashboardData {
   experiences?: readonly ExperienceItem[];
   total?: number;
@@ -46,6 +68,7 @@ export interface ExperienceDashboardData {
   trajectories?: readonly ExperienceTrajectory[];
   trajectoryTotal?: number;
   sources?: readonly ExperienceTrajectory[];
+  sourceGroups?: readonly ExperienceSourceGroup[];
   testMaterials?: readonly {
     id: string;
     title: string;
@@ -148,6 +171,10 @@ export interface ExperienceDashboardProps extends Omit<
    */
   onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
+  onOpenTrajectory?: (
+    trajectory: ExperienceTrajectory,
+    trigger: HTMLButtonElement,
+  ) => void;
   /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
   slots?: { errorFallback?: ErrorFallback };
   labels?: Partial<ExperienceDashboardLabels>;

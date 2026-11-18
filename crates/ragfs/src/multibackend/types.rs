@@ -1,5 +1,6 @@
 //! Shared build-time types for multi-backend assembly.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(feature = "cache")]
@@ -17,9 +18,9 @@ pub struct MultiBackendBuildContext {
     pub pathlock_manager: Arc<PathLockManager>,
     /// Mount prefix used to restore manager-visible backend paths.
     pub backend_prefix: String,
-    /// Optional shared cache runtime used by cache-backed metadata.
+    /// Named cache runtimes used by cache-backed metadata.
     #[cfg(feature = "cache")]
-    pub cache_runtime: Option<Arc<CacheRuntime>>,
+    pub cache_runtimes: HashMap<String, Arc<CacheRuntime>>,
 }
 
 impl MultiBackendBuildContext {

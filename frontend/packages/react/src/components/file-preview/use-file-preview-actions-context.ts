@@ -98,6 +98,7 @@ export function useFilePreviewActionsContext({
     setViewMode: selectView,
     canSwitchView,
     editing: editing.editing,
+    draft: editing.editing ? editing.draft : undefined,
     busy: editing.saving || editing.loadingEdit,
     canEdit:
       Boolean(fileTab?.editing) &&

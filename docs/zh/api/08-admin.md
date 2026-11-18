@@ -944,7 +944,7 @@ Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则�
 
 ROOT 可读写任意 User 的配置，ADMIN 可读写所属 account 内非 GLOBAL User 的配置，
 USER 仅可读写自己的配置：URL 中的 `account_id` 和 `user_id` 必须同时匹配认证身份。
-User 配置接口支持 `add_targets`、`memory_policy` 和 `ttl`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
+User 配置接口支持 `add_targets`、`memory_policy`、`ttl` 和 `privacy`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
 用户记忆根据每条 Message 的 `peer_id` 自动写入 Self 或 Peer；Agent 记忆始终只写入
 Self。
 
@@ -994,6 +994,17 @@ DELETE /api/v1/user-settings/add-locations
 
 `ttl` 仍返回用户显式设置的值，不在此接口补全其他层级的 TTL。
 
+`privacy` 在 GET/PATCH 响应中返回生效配置：
+
+| 字段 | 说明 | 内置默认值 |
+|---|---|---|
+| `privacy.mode` | `off`、`registered`、`auto` 或 `auto_strict`，详见[隐私配置](../concepts/13-privacy.md#使用方法) | `off` |
+| `privacy.restore` | 是否在 `raw=true` 读取 Skill、Session 时还原占位符 | `true` |
+| `privacy.custom_rules` | 自定义规则数组；每项提供唯一的 `id`，以及 `prefix` + `min_length` 或 `regex` | `[]` |
+| `privacy.never_mask` | 不参与自动发现和按值匹配的精确字符串值 | `[]` |
+
+例如 PATCH `{"privacy":{"mode":"auto"}}` 开启 Skill、Session 的自动发现与保护。规则中的 `min_length` 是前缀后至少需要的字符数，`regex` 使用 Rust 正则语法。省略字段表示保留，`null` 恢复继承，数组整体替换（`[]` 表示清空）；`{"privacy":null}` 清除所有用户隐私设置。
+
 ---
 
 ### create_account
@@ -1024,7 +1035,7 @@ DELETE /api/v1/user-settings/add-locations
 | account_id | str | 是 | - | 工作区 ID；新建文件存储账户不超过 255 个 UTF-8 字节 |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 | settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
@@ -1422,7 +1433,7 @@ ov --sudo task status <task_id>
 | user_id | str | 是 | - | 用户 ID |
 | role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`；只有 `ROOT` 可以注册 `"global"`。ROOT 身份只来自 `server.root_api_key`。 |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 
 **说明：**
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。

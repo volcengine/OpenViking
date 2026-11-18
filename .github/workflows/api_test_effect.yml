@@ -137,6 +137,7 @@ jobs:
               "temperature": 0.1, "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "$EMBEDDING_API_KEY",
@@ -160,6 +161,7 @@ jobs:
               "temperature": 0.1, "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "dummy-embedding-api-key",

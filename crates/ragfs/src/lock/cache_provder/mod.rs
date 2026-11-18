@@ -12,7 +12,7 @@ use bytes::Bytes;
 use opentelemetry::KeyValue;
 
 use crate::cache_runtime::{
-    CacheError, CacheOperation, CacheRuntime, ScriptDefinition, ScriptRequest, ScriptValue,
+    CacheError, CacheOperation, CacheRuntime, ScriptRequest, ScriptValue,
 };
 
 use super::codec::LockTokenCodec;
@@ -92,9 +92,9 @@ impl RedisPathLockProvider {
         runtime
             .require_operations(&[CacheOperation::ExecuteScript])
             .map_err(Self::cache_error)?;
-        for definition in SCRIPT_DEFINITIONS {
+        for &(script_id, redis_lua) in SCRIPT_DEFINITIONS {
             runtime
-                .register_script(*definition)
+                .register_script(script_id.to_string(), redis_lua.to_string())
                 .map_err(Self::cache_error)?;
         }
         Ok(Self {

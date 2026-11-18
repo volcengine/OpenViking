@@ -22,10 +22,7 @@ use super::*;
             return;
         };
         runtime
-            .register_script(ScriptDefinition {
-                id: TEST_HASH_ID,
-                redis_lua: TEST_HASH_SCRIPT,
-            })
+            .register_script(TEST_HASH_ID.to_string(), TEST_HASH_SCRIPT.to_string())
             .unwrap();
 
         let cases = [

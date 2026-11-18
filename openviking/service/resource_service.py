@@ -27,8 +27,8 @@ from openviking.connector.auth import (
     is_external_feishu_auth,
     validate_feishu_auth_args,
 )
-from openviking.core.namespace import is_content_root_uri
-from openviking.observability.http_error_context import sanitize_public_http_error
+from openviking.core.namespace import classify_uri, is_content_root_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.network import (
@@ -69,6 +69,7 @@ from openviking.server.user_config import (
 )
 from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
 from openviking.storage.acl import AclAction, AclSpec
+from openviking.storage.expr import And, Eq, In, Or, PathScope
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
@@ -250,7 +251,6 @@ class ResourceService:
         self._runtime_config_manager = runtime_config_manager
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._connector_delegate: Optional["ConnectorDelegate"] = None
-        self.compile_versions: Optional[Any] = None
 
     def set_dependencies(
         self,
@@ -277,23 +277,36 @@ class ResourceService:
     async def _ensure_resource_target_available(
         self, uri: str, ctx: RequestContext, *, is_parent: bool = False
     ) -> None:
-        """Reject active Compile output destinations in this account before ingestion.
+        """Reject ingestion overlapping tagged output nodes without reading compile configuration.
 
-        A parent only supplies a new child's location; an exact destination mirrors
-        its subtree and must also exclude Compile targets nested beneath it.
+        Parent destinations only test ancestors; exact destinations also protect tagged
+        descendants whose content an ingestion replacement could overwrite.
         """
-        if self.compile_versions is None or not uri:
+        if not uri:
             return
         uri = normalize_storage_target_uri(uri)
         await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
-        target = await self.compile_versions.owning_target(ctx.account_id, uri)
-        if target is None and not is_parent:
-            targets = await self.compile_versions._targets_under(ctx.account_id, uri)
-            if targets:
-                target = targets[0]
-        if target is not None:
+        store = self._viking_fs._get_vector_store()
+        if store is None:
+            return
+        namespace = classify_uri(uri)
+        boundary = (namespace.content_index or 0) + 1
+        ancestors = [
+            "viking://" + "/".join(namespace.parts[:length])
+            for length in range(boundary, len(namespace.parts) + 1)
+        ]
+        scope = Or([Eq("uri", ancestor) for ancestor in ancestors])
+        if not is_parent:
+            scope = Or([scope, PathScope("uri", uri)])
+        records, _ = await store.scroll(
+            filter=And([scope, In("level", [0, 1]), Eq("search_tags", "compile_target=true")]),
+            limit=1,
+            output_fields=["uri"],
+            ctx=ctx,
+        )
+        if records:
             raise ConflictError(
-                "Add-resource destination overlaps a Compile target.",
+                "Add-resource destination overlaps a tagged Compile output directory.",
                 resource="COMPILE_TARGET",
             )
 
@@ -310,19 +323,11 @@ class ResourceService:
         if not execution_task_id or self._watch_manager is None:
             return
         applied = await self._watch_manager.settle(task_id, execution_task_id)
-        sanitized_error = (
-            sanitize_public_http_error(code="WATCH_EXECUTION_FAILED", message=error).message
-            if error
-            else None
-        )
         logger.info(
-            "[ResourceService] Watch first round recorded: watch_task_id=%s status=%s "
-            "execution_task_id=%s applied=%s%s",
-            task_id,
-            status,
-            execution_task_id,
+            "Watch execution recorded applied=%s%s",
             applied,
-            f" error={sanitized_error}" if sanitized_error else "",
+            " error=[REDACTED]" if error else "",
+            extra={"task_id": task_id, "task_status": status, "target_id": execution_task_id},
         )
 
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -499,8 +504,28 @@ class ResourceService:
                 except ConflictError:
                     raise
                 except Exception as e:
-                    logger.warning(
-                        f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
+                    log_failure = (
+                        logger.info
+                        if isinstance(e, OpenVikingError)
+                        and e.code
+                        in {
+                            "INVALID_ARGUMENT",
+                            "NOT_FOUND",
+                            "PERMISSION_DENIED",
+                            "UNAUTHENTICATED",
+                            "FAILED_PRECONDITION",
+                            "ALREADY_EXISTS",
+                            "CONFLICT",
+                            "RESOURCE_EXHAUSTED",
+                        }
+                        else logger.error
+                    )
+                    log_failure(
+                        "Watch task creation failed",
+                        extra={
+                            "target_id": safe_uri_for_log(watch_to),
+                            "error_type": type(e).__name__,
+                        },
                     )
                     raise
             elif to:
@@ -509,7 +534,10 @@ class ResourceService:
                 except ConflictError:
                     raise
                 except Exception as e:
-                    logger.warning(f"[ResourceService] Failed to cancel watch task for {to}: {e}")
+                    logger.info(
+                        "Watch task cancellation skipped after failure",
+                        extra={"target_id": safe_uri_for_log(to), "error_type": type(e).__name__},
+                    )
 
     async def _normalize_add_resource_args(
         self,
@@ -723,10 +751,9 @@ class ResourceService:
             )
             return True
         except Exception as exc:
-            logger.warning(
-                "[ResourceService] Failed to clean empty reserved target %s: %s",
-                root_uri,
-                exc,
+            logger.info(
+                "Empty reserved target cleanup failed; retaining target",
+                extra={"target_id": safe_uri_for_log(root_uri), "error_type": type(exc).__name__},
             )
             return False
 
@@ -2581,7 +2608,10 @@ class ResourceService:
             )
             result["memory_linking"] = link_result
         except Exception as exc:
-            logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
+            logger.info(
+                "Resource ingestion completed without reason memory linking",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
 
     @staticmethod
@@ -2667,7 +2697,10 @@ class ResourceService:
             initial_run_id=initial_run_id,
             lease_ref=lease_ref,
         )
-        logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
+        logger.info(
+            "Watch task created",
+            extra={"task_id": task.task_id, "target_id": safe_uri_for_log(to_uri)},
+        )
         return task
 
     async def _handle_watch_task_cancellation(self, to_uri: str, ctx: RequestContext) -> None:
@@ -2690,8 +2723,9 @@ class ResourceService:
             role=str(ctx.role),
         )
         if existing_task and ConnectorDelegate.is_watch_auth_state(existing_task.auth_state):
-            logger.info(
-                f"[ResourceService] Skip deactivating Connector watch task {existing_task.task_id} for {to_uri}"
+            logger.debug(
+                "Connector watch task deactivation skipped",
+                extra={"task_id": existing_task.task_id, "target_id": safe_uri_for_log(to_uri)},
             )
             return
         if existing_task:
@@ -2704,7 +2738,8 @@ class ResourceService:
                 invalidate_source_checkpoint=True,
             )
             logger.info(
-                f"[ResourceService] Deactivated watch task {existing_task.task_id} for {to_uri}"
+                "Watch task deactivated",
+                extra={"task_id": existing_task.task_id, "target_id": safe_uri_for_log(to_uri)},
             )
 
     async def add_skill(
@@ -2720,6 +2755,8 @@ class ResourceService:
         source_metadata: Optional[Dict[str, Any]] = None,
         task_id: Optional[str] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None,
+        before_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -2749,23 +2786,6 @@ class ResourceService:
         outcome_recorded = False
         telemetry_id = get_current_telemetry().telemetry_id
         telemetry_cleanup_scheduled = False
-
-        async def record_package(skill_uri: str, lease_ref: Any) -> None:
-            """Record an ordinary Skill package operation under its content lease."""
-            if (
-                self.compile_versions is not None
-                and owner_lease_ref is None
-                and (source_metadata or {}).get("source") != "compile"
-                and (target := await self.compile_versions.owning_target(ctx.account_id, skill_uri))
-                and await self.compile_versions._write_meta(ctx.account_id, target)
-            ):
-                await self.compile_versions.record_operation(
-                    [skill_uri],
-                    ctx,
-                    "agent_revise",
-                    {},
-                    lambda: self.compile_versions.register_transfer(ctx),
-                )
 
         try:
             # Establish ownership before any queue work can start. Descendant
@@ -2810,7 +2830,8 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
-                            on_package_written=record_package,
+                            request_id=request_id,
+                            before_hash=before_hash,
                         )
                     else:
                         result = await self._skill_processor.process_skill(
@@ -2824,7 +2845,8 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
-                            on_package_written=record_package,
+                            request_id=request_id,
+                            before_hash=before_hash,
                         )
                 if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                     result["root_uri"] = result["uri"]

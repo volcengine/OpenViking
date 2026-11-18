@@ -112,3 +112,5 @@ React imports these SVG files directly during its build. This file records where
   16px artwork supplied in the OpenViking Console design (Figma component set
   `8632:463133`). SVG geometry and viewBoxes are unchanged; HITL styles map paint
   to the active theme. They follow this repository's license.
+
+`file-preview/history-info.svg` comes from Arco Design IconInfoCircleFill (MIT); see [Arco Design license](../react/LICENSE.arco-design).

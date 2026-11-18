@@ -60,7 +60,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 - 未完成的事项；
 - 最近几次工具结果里的要点。
 
-摘要是纯文本，最长**摘要长度上限**（8,000）个 token。思考内容也计入输出上限，而有些模型（如 DeepSeek V4.1）即使请求里没有思考设置也会默认思考，所以网关总在摘要长度上限之外再留 16,000 token 的输出余量；客户端手动指定了思考预算时，改为加上这份预算。这次请求和其他请求一样由服务商计费。
+摘要是纯文本，最长**摘要长度上限**（8,000）个 token。思考内容也计入输出上限，而有些模型（如 DeepSeek V4.1）即使请求里没有思考设置也会默认思考，所以网关总在摘要长度上限之外再留 16,000 token 的输出余量；客户端手动指定了思考预算时，改为加上这份预算。这次请求和其他请求一样由服务商计费。整个请求最长 `summary_timeout_seconds`（见[配置](13-configuration.md#gateway-fields)；默认为 `upstream_timeout_seconds`，即 600 秒），超时按摘要失败处理。它的时间不计入 `prepare_timeout_seconds`。
 
 ## 压缩之后模型收到什么 {#what-the-model-receives-afterwards}
 

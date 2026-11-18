@@ -1,0 +1,111 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mount, ok } from './helpers/console-dom.mjs';
+
+test('find and search pass Volc retrieval options to the native data plane', async () => {
+  const calls = [];
+  const rendered = 'Relevant context from viking://resources/wiki/example.md';
+  const host = await mount(async (url, init) => {
+    const path = new URL(url).pathname;
+    const body = JSON.parse(init.body);
+    calls.push({ path, body });
+    return ok(body.mode === 'context' ? { entries: [], rendered } : {});
+  });
+  try {
+    await host.execute(
+      "ov find how does -n 12 retrieval work? -u viking://resources,viking://agent/skills -t .75 -L '[0, 2]' --after 2026-01-01 --before 2026-02-01 --events-time-decay-protection 0",
+    );
+    assert.deepEqual(calls.at(-1), {
+      path: '/gateway/api/v1/search/find',
+      body: {
+        query: 'how does retrieval work?',
+        target_uri: ['viking://resources', 'viking://agent/skills'],
+        node_limit: 12,
+        score_threshold: 0.75,
+        level: [0, 2],
+        since: '2026-01-01',
+        until: '2026-02-01',
+        events_time_decay_protection: '0',
+      },
+    });
+
+    await host.execute('ov find legacy --target_uri viking:// --limit 7');
+    assert.deepEqual(calls.at(-1).body, {
+      query: 'legacy',
+      target_uri: 'viking://',
+      limit: 7,
+    });
+
+    await host.execute(
+      'ov search --image "data:image/png;base64,YQ==" --mode context --session-id integration-test --events-time-decay-protection 7d',
+    );
+    assert.deepEqual(calls.at(-1), {
+      path: '/gateway/api/v1/search/search',
+      body: {
+        image_url: 'data:image/png;base64,YQ==',
+        mode: 'context',
+        session_id: 'integration-test',
+        events_time_decay_protection: '7d',
+      },
+    });
+    assert.ok(host.records.at(-1).textContent.includes(rendered));
+
+    for (const input of [
+      'ov find',
+      'ov find notes --threshold foo',
+      'ov find notes -L 0,text',
+      'ov find notes -L 0,3',
+      'ov find notes --events-time-decay-protection 5w',
+      'ov search notes --mode invalid',
+      'ov search notes --mode context -u viking://resources',
+      'ov search notes --mode context -L 2',
+    ]) {
+      await host.execute(input);
+      assert.equal(host.records.at(-1).dataset.status, 'error', input);
+    }
+    assert.equal(calls.length, 3);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('grep and glob pass their flags and defaults to the native data plane', async () => {
+  const calls = [];
+  const host = await mount(async (url, init) => {
+    calls.push({ path: new URL(url).pathname, body: JSON.parse(init.body) });
+    return ok({ matches: [] });
+  });
+  try {
+    await host.execute(
+      'ov grep "read me" -u viking://resources -i -n 32 -x viking://resources/archive -L 2',
+    );
+    assert.deepEqual(calls.at(-1), {
+      path: '/gateway/api/v1/search/grep',
+      body: {
+        pattern: 'read me',
+        uri: 'viking://resources',
+        case_insensitive: true,
+        node_limit: 32,
+        exclude_uri: 'viking://resources/archive',
+        level_limit: 2,
+      },
+    });
+
+    await host.execute('ov grep readme --case_insensitive --node_limit 16');
+    assert.deepEqual(calls.at(-1).body, {
+      pattern: 'readme',
+      uri: 'viking://',
+      case_insensitive: true,
+      node_limit: 16,
+      level_limit: 10,
+    });
+
+    await host.execute('ov glob *.md');
+    assert.deepEqual(calls.at(-1), {
+      path: '/gateway/api/v1/search/glob',
+      body: { pattern: '*.md', uri: 'viking://', node_limit: 256 },
+    });
+  } finally {
+    await host.dispose();
+  }
+});

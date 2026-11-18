@@ -52,7 +52,7 @@ on:
 jobs:
   check-linux-runner:
     name: Check dedicated Linux runner
-    if: github.event_name == 'workflow_dispatch' && inputs.check_linux_runner && github.repository == 'volcengine/OpenViking'
+    if: github.event_name == 'workflow_dispatch' && inputs.check_linux_runner && !inputs.build_wheels && github.repository == 'volcengine/OpenViking'
     runs-on: [self-hosted, Linux, X64, ci-linux-builds]
     permissions: {}
     timeout-minutes: 5
@@ -219,10 +219,14 @@ jobs:
            endsWith(github.run_number, '8')) &&
           '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
     container:
-      image: ubuntu:20.04
+      # The published Ubuntu 20 image is amd64; ARM keeps its native baseline.
+      image: ${{ matrix.arch == 'x86_64' && vars.CI_UBUNTU20_IMAGE || 'ubuntu:20.04' }}
       # Minimal Ubuntu images lack CA certificates before the first apt install.
       options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
@@ -237,6 +241,24 @@ jobs:
       env:
         UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
       run: |
+        packages=(
+          git ca-certificates cmake build-essential gcc-10 g++-10 ccache tzdata curl
+          pkg-config unzip xz-utils python3 libicu66
+          libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
+          libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev
+          libncursesw5-dev tk-dev uuid-dev libexpat1-dev
+        )
+        ready=true
+        for package in "${packages[@]}"; do
+          if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+            ready=false
+            break
+          fi
+        done
+        if "$ready"; then
+          echo "System dependencies are already installed in the CI image."
+          exit 0
+        fi
         sed -i 's|http://|https://|g' /etc/apt/sources.list
         if [ -n "$UBUNTU_MIRROR" ]; then
           case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
@@ -248,22 +270,23 @@ jobs:
           -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
           -o APT::Update::Error-Mode=any update
         apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
-          -o Acquire::Retries=2 install -y \
-          git ca-certificates cmake build-essential clang tzdata curl \
-          pkg-config unzip xz-utils python3 libicu66 \
-          libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
-          libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \
-          libncursesw5-dev tk-dev uuid-dev libexpat1-dev
+          -o Acquire::Retries=2 -o Acquire::https::Timeout=20 install -y --no-install-recommends \
+          "${packages[@]}"
         ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
         dpkg-reconfigure -f noninteractive tzdata
 
     - name: Select compiler toolchain (Linux)
       run: |
-        echo "CC=clang" >> "$GITHUB_ENV"
-        echo "CXX=clang++" >> "$GITHUB_ENV"
+        if [ "$(getconf GNU_LIBC_VERSION)" != "glibc 2.31" ]; then
+          echo "::error::Linux wheels require an Ubuntu 20.04 image with glibc 2.31."
+          exit 1
+        fi
+        # GCC 9 triggers the aws-lc-sys memcmp check on both architectures.
+        echo "CC=gcc-10" >> "$GITHUB_ENV"
+        echo "CXX=g++-10" >> "$GITHUB_ENV"
         echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
-        clang --version
-        clang++ --version
+        gcc-10 --version
+        g++-10 --version
 
     - uses: actions/checkout@v6
       with:
@@ -585,6 +608,12 @@ jobs:
       with:
         target: ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-msvc' || 'host' }}
 
+    - name: Reset macOS Intel compiler cache statistics
+      id: ccache-stats
+      if: matrix.os == 'macos-15-intel'
+      shell: bash
+      run: ccache --zero-stats
+
     - name: Create build environment without installing the project
       run: uv venv
 
@@ -669,6 +698,17 @@ jobs:
       env:
         OV_SKIP_OV_BUILD: '1'
       run: uv build --wheel
+
+    - name: Report macOS Intel compiler cache statistics
+      if: always() && matrix.os == 'macos-15-intel' && steps.ccache-stats.outcome == 'success'
+      shell: bash
+      run: |
+        {
+          echo '### macOS Intel C++ compiler cache (this run)'
+          echo '```text'
+          ccache --show-stats
+          echo '```'
+        } | tee -a "$GITHUB_STEP_SUMMARY"
 
     - name: Check bundled ov version matches wheel
       shell: bash

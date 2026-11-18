@@ -1,11 +1,14 @@
 import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { useMonitoringBinding } from '../../shared/monitoring/context.js';
+import { readData, tagData } from '../../shared/monitoring/data.js';
 import { NotificationScope } from '../../shared/feedback/notification-scope.js';
 import { useRenderErrors } from './labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { TaskTrackingProvider } from '../../shared/task-tracking/context.js';
 import { ConsoleTaskNotifications } from './task-notifications.js';
+import { formatConsoleTaskResult } from './task-records.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { useId, useRef } from 'react';
+import { useId, useMemo, useRef } from 'react';
 import { CommandConsole } from '../../components/command-console/index.js';
 import {
   VikingBot,
@@ -38,6 +41,7 @@ function ConsoleView({
   ...rest
 }: ConsoleProps) {
   const locale = useLocale(localeProp);
+  const openCommandUri = command?.onOpenUri ?? onOpenUri;
   const renderErrors = useRenderErrors(locale);
   const state = useConsole({
     mode,
@@ -49,10 +53,17 @@ function ConsoleView({
     taskService,
     onModeChange,
   });
+  const commandRecords = useMemo(
+    () => state.records.map(formatConsoleTaskResult),
+    [state.records],
+  );
+  const monitoring = useMonitoringBinding();
+  tagData(monitoring, commandRecords, readData(monitoring, [state.records]));
   const labels = consoleLabels(locale, overrides);
   const managedConversation = useConversation(
     { conversation, chatOptions, scopeKey, requestOptions, locale, modes },
     state.setConversationDraft,
+    state.conversationDraft,
   );
   const { sessions, headerActions, feedback, ...conversationProps } =
     managedConversation;
@@ -76,7 +87,7 @@ function ConsoleView({
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
         {feedback}
-        <ConsoleTaskNotifications locale={locale} />
+        <ConsoleTaskNotifications locale={locale} onOpenUri={openCommandUri} />
         {state.mode ? (
           <ErrorBoundary message={renderErrors.toolbar} resetKeys={[scopeKey]}>
             <ConsoleToolbar
@@ -149,16 +160,16 @@ function ConsoleView({
             >
               {slots?.commandHelp}
               <CommandConsole
-                records={state.records}
+                records={commandRecords}
                 value={state.command}
                 commands={state.commands}
                 commandGroups={consoleCommandGroups(locale)}
                 locale={locale}
-                disabled={state.isExecuting}
+                busy={state.isExecuting}
                 quickCommands={quickCommands ?? consoleQuickCommands(locale)}
                 onValueChange={state.setCommand}
                 onSubmit={(next) => void state.execute(next)}
-                onOpenUri={command?.onOpenUri ?? onOpenUri}
+                onOpenUri={openCommandUri}
                 labels={labels.commandConsole}
               />
             </ErrorBoundary>

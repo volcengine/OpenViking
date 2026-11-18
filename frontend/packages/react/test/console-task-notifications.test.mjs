@@ -20,7 +20,7 @@ for (const [status, type] of [
       taskService,
     });
     try {
-      await host.execute('ov add-resource https://example.com/resource');
+      await host.execute('ov add-skill https://example.com/skill');
       await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
       const card = document.querySelector('.ov-notification--loading');
       assert.ok(card);

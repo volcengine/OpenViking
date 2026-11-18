@@ -8,15 +8,13 @@
 
 ## 何时需要 commit
 
-普通 `write`、`rm` 等操作直接改变当前工作区，启用快照不代表每次写入都会自动生成版本。没有成功覆盖该路径的 snapshot commit，就不能通过快照找回它此前的内容。建议在导入完成、批量修改前后或一个业务阶段结束时提交，并保存返回的 `commit_oid`。
-
 Snapshot 保存文件树的版本，不会回滚当前 ACL，也不保存向量索引的历史。`restore` 写回文件后按需异步重建索引；它会修改工作区，执行前先用 `dry_run` 检查计划。
 
 `client.snapshot.commit()` 与会话的 `session.commit()` 职责不同：前者保存文件版本，后者归档对话并处理记忆。部分记忆流程会在更新 experience 后调用 snapshot，这不等于所有写入都自动快照。
 
 ## 提交范围与并发
 
-USER / ADMIN 必须给 `commit` 和 `log` 传入 `paths`，给 `restore` 传入 `project_dir`，给 `show` 传入文件 `path`。只有本地 ROOT 可以省略这些范围参数。对自己有写权限的项目目录提交，可以避免把无关资源纳入同一次快照。
+USER / ADMIN 必须给 `commit` 和 `log` 传入 `paths`，给 `restore` 传入 `project_dir`，给 `show` 传入文件 `path`。只有本地 ROOT 可以省略这些范围参数。对自己有读权限的项目目录提交，可以避免把无关资源纳入同一次快照。
 
 | `commit(paths=...)` 输入 | 含义 |
 | --- | --- |

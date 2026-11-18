@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 
-import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
-import { useFileBrowser } from './helpers/internal-hooks.mjs';
-import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
+import {
+  OpenVikingProvider,
+  useFileBrowser,
+} from './helpers/internal-hooks.mjs';
+import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
+import { click, fixture, tree } from './helpers/preview-native-dom.mjs';
 
 const ROOT = 'viking://';
 const DIR = 'viking://dir';
@@ -109,4 +112,117 @@ test('a non-empty server message still wins over the fallback', async () => {
 
   assert.match(api.current.previewTabs[0].levels[1].source.content, /权限不足/);
   await tree.unmount();
+});
+
+test('directory placeholders become empty summaries without removing real Markdown', async () => {
+  const placeholder =
+    '# viking://resources/team-docs [Directory abstract is not ready]';
+  let overview =
+    '# viking://resources/team-docs\n\n[Directory overview is not ready]';
+  const fetch = recordingFetch(({ path }) => {
+    if (path === '/api/v1/fs/ls') return ok([{ uri: DIR, isDir: true }]);
+    if (path === '/api/v1/content/abstract') return ok(placeholder);
+    if (path === '/api/v1/content/overview') return ok(overview);
+    return ok('');
+  });
+
+  const api = { current: undefined };
+  const Probe = probe(api);
+  const tree = await mount(
+    createElement(OpenVikingProvider, { fetch }, createElement(Probe)),
+  );
+
+  try {
+    const contents = () =>
+      api.current.previewTabs[0].levels.map(({ source }) => source.content);
+    assert.deepEqual(contents(), ['', '']);
+    for (const value of [
+      '# dir\n\n[Directory overview is not ready]',
+      '# dir\r\n\r\n[Directory overview is not ready]\r\n',
+    ]) {
+      overview = value;
+      await act(() => api.current.actions.refresh());
+      await settle();
+      assert.deepEqual(contents(), ['', '']);
+    }
+    overview = '# other-directory\n\n[Directory overview is not ready]';
+    await act(() => api.current.actions.refresh());
+    await settle();
+    assert.deepEqual(contents(), ['', overview]);
+    overview =
+      '# viking://resources/team-docs\n\nAn upstream placeholder follows.\n\n[Directory overview is not ready]';
+    await act(() => api.current.actions.refresh());
+    await settle();
+    assert.deepEqual(contents(), ['', overview]);
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('native directory summary placeholders show level-specific Chinese empty states', async () => {
+  const uri = 'viking://user/alice/memories/experiences';
+  const fetch = fixture(uri, true, (call) => {
+    if (call.path.endsWith('/content/abstract'))
+      return ok(`# ${uri} [Directory abstract is not ready]`);
+    if (call.path.endsWith('/content/overview'))
+      return ok(`# ${uri}\n\n[Directory overview is not ready]`);
+  });
+  const view = await mount(
+    tree(fetch, uri, {
+      rootUri: 'viking://',
+      locale: 'zh-CN',
+      dashboardKinds: [],
+    }),
+  );
+
+  try {
+    const levels = [
+      ...view.container.querySelectorAll('.ov-file-preview__level'),
+    ];
+    assert.deepEqual(
+      levels.map((level) => level.textContent),
+      ['L0 摘要', 'L1 总览'],
+    );
+    for (const [index, emptyTitle] of [
+      '暂无 L0 摘要',
+      '暂无 L1 总览',
+    ].entries()) {
+      await click(levels[index]);
+      const panel = view.container.querySelector(
+        '.ov-file-preview__body[role="tabpanel"]',
+      );
+      assert.equal(levels[index].getAttribute('aria-selected'), 'true');
+      assert.equal(panel?.textContent?.trim(), emptyTitle);
+    }
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('directory summary Markdown can mention the native placeholder suffixes', async () => {
+  const abstract = `# ${DIR} [Directory abstract is not ready]\n\n这里是摘要的实际正文。`;
+  const overview = `# ${DIR}\n\n这里是总览的实际正文。\n\n[Directory overview is not ready]`;
+  const fetch = recordingFetch((call) => {
+    if (call.path.endsWith('/fs/ls')) return ok([{ uri: DIR, isDir: true }]);
+    if (call.path.endsWith('/content/abstract')) return ok(abstract);
+    if (call.path.endsWith('/content/overview')) return ok(overview);
+    return ok('');
+  });
+  const api = { current: undefined };
+  const view = await mount(
+    createElement(
+      OpenVikingProvider,
+      { baseURL: 'https://ov.test', fetch },
+      createElement(probe(api)),
+    ),
+  );
+
+  try {
+    assert.deepEqual(
+      api.current.previewTabs[0].levels.map((level) => level.source.content),
+      [abstract, overview],
+    );
+  } finally {
+    await view.unmount();
+  }
 });

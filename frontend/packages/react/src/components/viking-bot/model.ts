@@ -264,6 +264,16 @@ export interface VikingBotLabels {
   session?: string;
   locateSession?: string;
   emptySessions?: string;
+  renameSession?: string;
+  removeSession?: string;
+  sessionName?: string;
+  requiredSessionName?: string;
+  saveSessionName?: string;
+  cancelSessionAction?: string;
+  confirmSessionRemoval?: string;
+  sessionRemovalNotice?: string;
+  renameSessionFailed?: string;
+  removeSessionFailed?: string;
   loading?: string;
   loadMore?: string;
   reference?: string;

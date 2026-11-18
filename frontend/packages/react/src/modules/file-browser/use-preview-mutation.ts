@@ -7,7 +7,7 @@ import { useContext, useEffect, useMemo, useState } from 'react';
 import { NotificationScopeContext } from '../../shared/feedback/notification-context.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { scopeKeyOf } from './fs-scope.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 
 /** A dialog owns its pending mutation. Failed submissions retain the caller's draft. */
 export function usePreviewMutation(

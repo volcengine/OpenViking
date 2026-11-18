@@ -1,5 +1,5 @@
 import type { SearchHit } from './search-types.js';
-import { nameFromUri } from './fs-model.js';
+import { nameFromUri } from '../../shared/directory-tree/rows.js';
 import { fileTypeIcon } from './fs-icon.js';
 
 /**

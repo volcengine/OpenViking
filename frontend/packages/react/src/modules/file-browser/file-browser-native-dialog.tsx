@@ -15,6 +15,7 @@ export function FileBrowserNativeDialog({
   canSaveSnapshot,
   versioned,
   showContent,
+  directory,
   ...props
 }: Omit<PreviewWorkflowProps, 'text'> & {
   kind: 'history' | 'importPack' | 'configure';
@@ -24,6 +25,7 @@ export function FileBrowserNativeDialog({
   canSaveSnapshot: boolean;
   versioned: boolean;
   showContent: boolean;
+  directory: boolean;
 }) {
   const exposure = useExposure(
     kind === 'history'
@@ -47,7 +49,12 @@ export function FileBrowserNativeDialog({
           : 'ov-file-browser-workflow'
       }
     >
-      <h2 ref={exposure}>{title}</h2>
+      <h2
+        ref={exposure}
+        className={kind === 'history' ? 'ov-file-history__heading' : undefined}
+      >
+        {title}
+      </h2>
       {kind === 'history' ? null : (
         <p className="ov-file-browser-workflow__uri">{props.uri}</p>
       )}
@@ -57,6 +64,8 @@ export function FileBrowserNativeDialog({
           canSaveSnapshot={canSaveSnapshot}
           versioned={versioned}
           showContent={showContent}
+          canWrite={canWrite}
+          directory={directory}
           loadingText={text.loading}
           retryText={text.retry}
         />

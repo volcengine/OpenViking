@@ -9,11 +9,12 @@ import type {
 } from '../../components/command-console/index.js';
 import type { Locale } from '../../shared/locale.js';
 import { COMMAND_SPECS, type CommandSpec } from './command-specs.js';
-import { parseArguments, tokenize } from './command-parser.js';
+import { parseArguments, tokenize, type Argument } from './command-parser.js';
 import { ConsoleCommandError } from './command-messages.js';
 import { resolveConsoleLocale } from './labels.js';
 import { formatResult } from './results.js';
 import type { ConsoleCommandGuide } from './types.js';
+import { parameterExamples } from './parameter-examples.js';
 
 // Command palette order, restricted to the commands this Console can execute.
 const COMMAND_GROUPS = {
@@ -21,11 +22,11 @@ const COMMAND_GROUPS = {
     'add-resource',
     'add-skill',
     'compile',
+    'compile create',
     'find',
     'read',
     'write',
     'add-memory',
-    'compile create',
   ],
   filesystem: ['ls', 'tree', 'mkdir', 'rm', 'mv', 'stat', 'cp'],
   search: ['find', 'search', 'grep', 'glob', 'abstract', 'overview', 'read'],
@@ -77,6 +78,14 @@ export function consoleCommands(
   const catalog = new Map(
     COMMAND_SPECS.map((spec) => {
       const guide = guides[spec.name];
+      const positional = (
+        spec.preferredPositional ??
+        spec.positional ??
+        []
+      ).filter((arg) => !arg.hidden);
+      const flags = (spec.preferredFlags ?? spec.flags ?? []).filter(
+        (arg) => !arg.hidden,
+      );
       return [
         spec.name,
         {
@@ -84,34 +93,37 @@ export function consoleCommands(
           inputText: `ov ${spec.name}`,
           description: guide?.description ?? text.commands[spec.name],
           summary: text.commands[spec.name],
-          examples: guide?.examples,
+          examples: guide?.examples ?? parameterExamples[spec.name],
+          quickStart: guide?.quickStart,
           usage: [
             'ov',
             spec.name,
-            ...(spec.positional ?? []).map((arg) =>
-              arg.optional ? `[${arg.name}]` : `<${arg.name}>`,
+            ...positional.map((arg) =>
+              arg.optional
+                ? `[${arg.placeholder ?? arg.name}]`
+                : `<${arg.placeholder ?? arg.name}>`,
             ),
-            ...(spec.flags ?? []).map((flag) =>
-              flag.required
-                ? `--${flag.name} <${flag.name}>`
-                : `[--${flag.name}${flag.kind === 'boolean' ? '' : ` <${flag.name}>`}]`,
-            ),
+            ...flags.map((flag) => {
+              const token = `--${flag.name}${parameterValue(flag)}`;
+              return flag.required ? token : `[${token}]`;
+            }),
           ].join(' '),
-          params: spec.positional?.map((arg) => ({
+          params: positional.map((arg) => ({
             label: arg.name,
             description:
-              descriptions[arg.name] ??
+              descriptions[arg.descriptionKey ?? arg.name] ??
               (arg.kind === 'uri' ? 'viking://…' : arg.name),
             required: !arg.optional,
+            defaultValue: formatDefault(arg.defaultValue),
           })),
-          options: spec.flags?.map((flag) => ({
-            token: flag.alias
-              ? `${flag.alias}, --${flag.name}`
-              : `--${flag.name}`,
+          options: flags.map((flag) => ({
+            token: `${flag.alias ? `${flag.alias}, ` : ''}--${flag.name}${parameterValue(flag)}`,
             required: flag.required,
-            defaultValue: flag.defaultValue,
+            defaultValue: formatDefault(flag.helpDefault ?? flag.defaultValue),
             description:
-              descriptions[flag.name] ?? flag.choices?.join(' | ') ?? flag.name,
+              descriptions[flag.descriptionKey ?? flag.name] ??
+              flag.choices?.join(' | ') ??
+              flag.name,
           })),
           skeleton: spec.skeleton,
         },
@@ -124,6 +136,16 @@ export function consoleCommands(
       return command ? [{ ...command, group }] : [];
     }),
   );
+}
+
+function parameterValue(flag: Argument) {
+  if (flag.kind === 'boolean') return '';
+  const value = `<${flag.placeholder ?? flag.name}>`;
+  return flag.kind === 'boolean-or-json' ? ` [${value}]` : ` ${value}`;
+}
+
+function formatDefault(value: Argument['defaultValue']) {
+  return value === undefined ? undefined : String(value);
 }
 
 export function createCommandHelp(locale: Locale): CommandConsoleRecordContent {

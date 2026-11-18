@@ -28,7 +28,7 @@ instruction. Source files are evidence. Read referenced Skill attachments as nee
 For full compilation, enumerate each source directory one page at a time and read its files.
 Read individual source URIs directly. For incremental compilation, fully scan full_dirs and
 page through the snapshot diff for diff_dirs. Read added/modified sources and update affected
-target content for deleted sources. With a timestamp cutoff, from contains the selected files.
+target content for deleted sources.
 Use small pages and bounded reads so you can inspect complete results.
 When a tool fails, use its error to correct the arguments, retry or choose another tool.
 Write completed text files as you go, using paths relative to to. Read relevant existing files
@@ -185,9 +185,7 @@ class CompileReadTool(Tool):
 async def run(loop, client, request, sources, skill, session_key, connection, save_progress, usage):
     """Compile sources in one loop; confirmed writes survive errors as partial results."""
     changes = request.changes or {}
-    incremental = (changes.get("execution") or {}).get("mode") == "incremental" or (
-        not changes and request.last_compile_time is not None and not request.instruction_provided
-    )
+    incremental = (changes.get("execution") or {}).get("mode") == "incremental"
     assignment = {
         "mode": "incremental" if incremental else "full",
         "from": sources,
@@ -204,8 +202,6 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         assignment.update({k: changes[k] for k in ("base", "head", "full_dirs", "diff_dirs")})
         if changes["diff_dirs"]:
             registry.register(CompileDiffTool(client, changes))
-    elif incremental:
-        assignment["last_compile_time"] = request.last_compile_time.isoformat()
     writer = CompileWriteTool(client, request.to, save_progress)
     registry.register(writer)
 

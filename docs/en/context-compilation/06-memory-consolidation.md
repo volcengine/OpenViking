@@ -2,6 +2,8 @@
 
 Besides compiling source material into Wikis, knowledge graphs, daily reports, and other artifacts with a Skill, `ov compile` has a special mode: **memory consolidation**. Instead of producing a new knowledge shape, it cleans up the **existing memories** in OpenViking in place — deduplicating, merging, splitting, and compacting them — while strictly conforming to each memory type's original schema.
 
+Memory consolidation is a one-off execution; `compile create` rejects `skill="memory"`, so this mode has no saved Compile configuration or schedule.
+
 Unlike regular compile, memory consolidation **does not go through VikingBot**; it runs directly inside OpenViking on the memory framework.
 
 ## When to use it
@@ -56,8 +58,10 @@ The command returns a task ID immediately. Use `ov task status <id>` to check th
 ## Behavior
 
 - **Type scope**: a type directory loads only its schema; a memories root loads all existing enabled types in that space into one ExtractLoop, with each type retaining its own schema. If a rename or merge affects existing links/backlinks, the system may still update neighboring memory files of other types to preserve referential integrity.
+- **Write boundary**: `--to` is a strict boundary for explicit writes, including when it selects a deeper subdirectory. Every create/update/rename/delete source and target, deletion replacement, and explicit link source must remain inside it; any violation rejects the whole batch before writes. Reading outside references and automatic link/backlink maintenance remain allowed.
 - **In place**: `--from` and `--to` are the same space and no external source is introduced, so there is no cross-identity leakage. The space being consolidated (the current user's own *self* space, or a `peers/{peer_id}` space) is determined by the `--to` URI.
 - **Conservative merging**: only memories that are clearly the same identity are merged; distinct entities are kept separate even when they share a topic, category, or attributes. A merge the model cannot infer from content (e.g. two different names that are actually one person) is performed only when `--instruction` spells it out.
+- **Message-dependent types**: consolidation has no original conversation messages. It cannot create types whose rendering templates use message-reading `extract_context` helpers (including built-in events and trajectories). This restriction is independent of `add_only`. Existing events/trajectories may be deleted, with a replacement in any selected type if it already exists or can be created without messages. A message-dependent creation rejects the whole candidate before any deletion. These rules apply with or without `--instruction`; ordinary session extraction keeps its existing add-only rules.
 - **No fabrication**: it only reorganizes existing memories; it never invents new facts.
 - **Facts preserved**: merges and compaction keep every distinct atomic fact and only compress duplicate wording.
 - **Rename support**: when the schema allows a URI-defining field to change (for example an entity's `category` or `name`), consolidation writes the new URI, migrates links/backlinks, and then deletes the old URI. The result reports this as the new URI in `adds` and the old URI in `deletes`.

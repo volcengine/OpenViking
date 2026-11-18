@@ -10,3 +10,4 @@
 @import './console-history.css';
 
 @import '../../shared/primitives/notification/style.css';
+@import './task-notifications.css';

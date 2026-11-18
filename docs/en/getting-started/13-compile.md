@@ -21,16 +21,27 @@ ov add-skill ./llm-wiki-v1.zip -p viking://agent/skills --wait
 ov read viking://agent/skills/llm-wiki/SKILL.md
 ```
 
-The package contains the project's LLM Wiki Skill. Compilation calls the model and writes output into a new directory. Use another target name for repeat runs.
+The package contains the project's LLM Wiki Skill. Compilation calls the model and writes output into a new directory.
 
 ## Submit compilation
 
+Create a named configuration with the sources, target, Skill, and optional `--instruction` and `--args`.
+
 ```bash
-ov compile --from viking://resources/onboarding-en-v1 \
+ov compile create --compile-name lighthouse-wiki \
+  --from viking://resources/onboarding-en-v1 \
   --to viking://resources/onboarding-wiki-en-v1 \
   --skill viking://agent/skills/llm-wiki \
   --instruction "Generate index.md and entity/lighthouse.md in English. Explain the isolated-network feedback pilot using the project, feedback, and meeting sources. Preserve full viking:// source URIs and identify undecided dates. Write only inside the target directory."
 ```
+
+Create the configuration once. Submit each run by name:
+
+```bash
+ov compile --compile-name lighthouse-wiki
+```
+
+Execution reuses the configuration's saved `from`, `to`, `skill`, and `instruction`.
 
 Record the returned `cmp_...` task ID and inspect progress:
 
@@ -41,6 +52,10 @@ ov task status <cmp_task_id>
 Check every 5 seconds for up to 5 minutes initially. Read outputs after `completed`. If still running, check later or request cancellation with `ov task cancel <cmp_task_id>`. On failure, inspect the task error and Compile Runtime configuration.
 
 After compilation, the target directory should contain an index and a project page. See the [sample Wiki page](/quickstart/wiki-output-en-v1.txt) for content organization and source citations, then follow the checks below to review your output.
+
+The first run is full. Subsequent runs use the last successful baseline. The name is required, case-sensitive, and unique for the current user within an account; it contains Han characters, ASCII letters, digits, underscores, or hyphens. ASCII-only names allow up to 64 characters. A name containing any Han character allows up to 32 characters in total. The first character cannot be a hyphen. Different users can use the same name. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
+
+The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 
 ## Open the body page
 

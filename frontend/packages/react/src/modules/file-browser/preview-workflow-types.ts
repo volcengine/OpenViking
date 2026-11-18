@@ -2,8 +2,35 @@ import type { OvRequestOptions } from '../../client/types.js';
 import type { Locale } from '../../shared/locale.js';
 export interface FileBrowserWorkflowLabels {
   configure: string;
+  target: string;
+  configurationHint: string;
+  selectSources: string;
+  selectSkill: string;
+  editSchedule: string;
+  selectFile: string;
+  selectVersion: string;
+  comparisonVersion: string;
+  latest: string;
+  rollback: string;
+  rollbackBadge: string;
+  rollbackTitle: string;
+  rollbackConfirm: string;
+  rollbackHint: string;
+  rollbackUnchanged: string;
+  rollbackSaved: string;
+  importChoose: string;
+  importDrop: string;
+  importFormat: string;
+  configuration: string;
+  configurationEmpty: string;
   historyEmpty: string;
   historyLimit: string;
+  snapshotPrompt: string;
+  snapshotChoice: string;
+  keepSnapshot: string;
+  skipSnapshot: string;
+  snapshotFileSaved: string;
+  done: string;
   snapshotNote: string;
   saveSnapshot: string;
   snapshotSaved: string;
@@ -13,8 +40,10 @@ export interface FileBrowserWorkflowLabels {
   addedLines: string;
   removedLines: string;
   copyOriginal: string;
+  copyPath: string;
   copied: string;
   historyPreview: string;
+  historyView: string;
   historyMarkdown: string;
   version: string;
   importFile: string;
@@ -35,6 +64,12 @@ export interface FileBrowserWorkflowLabels {
   automatic: string;
   schedule: string;
   noSchedule: string;
+  frequency: string;
+  selectWeekday: string;
+  weekdayRequired: string;
+  hour: string;
+  minute: string;
+  timezone: string;
   daily: string;
   weekly: string;
   time: string;
@@ -49,6 +84,8 @@ export interface PreviewWorkflowProps {
   onClose: () => void;
 }
 export interface CompileConfig {
+  compile_name?: string;
+  args?: Record<string, unknown>;
   to: string;
   from: string[];
   skill: string;
@@ -67,6 +104,7 @@ export interface PreviewHistoryEntry {
   path: string;
   title: string;
   numbered?: boolean;
+  restored?: boolean;
   note?: string;
   timestamp?: number;
 }

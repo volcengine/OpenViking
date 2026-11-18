@@ -46,7 +46,10 @@ class JevConfig(BaseModel):
     )
     log_payloads: bool = Field(
         default=False,
-        description="Log complete requests and responses, including Rule content",
+        description=(
+            "Log safe request and response summaries at DEBUG when enabled. "
+            "Task, Rule and response content are never logged."
+        ),
     )
 
     model_config = {"extra": "forbid"}

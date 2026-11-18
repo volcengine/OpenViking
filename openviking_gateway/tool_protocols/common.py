@@ -31,10 +31,21 @@ SUMMARY_HEADROOM = 16000
 
 
 class ToolLoopError(Exception):
-    def __init__(self, reason, status=502, content=None, headers=None, event=None):
+    """``code`` is the request record's error reason; the message is what clients see."""
+
+    def __init__(
+        self,
+        reason,
+        status=502,
+        content=None,
+        headers=None,
+        event=None,
+        *,
+        code="tool_upstream_invalid",
+    ):
         super().__init__(reason)
         self.status, self.content, self.headers = status, content, headers or {}
-        self.event = event
+        self.event, self.code = event, code
 
 
 class SummaryError(Exception):
@@ -446,8 +457,8 @@ class ToolProtocol(ABC):
     def terminal(self, final: dict) -> list[StreamEvent]:
         """Return the protocol's success terminal events."""
 
-    def error(self, message: str) -> list[StreamEvent]:
-        return [{"type": "error", "error": {"type": "gateway_tool_error", "message": message}}]
+    def error(self, message: str, kind: str = "gateway_tool_error") -> list[StreamEvent]:
+        return [{"type": "error", "error": {"type": kind, "message": message}}]
 
     def upstream_error(self, event: dict) -> list[StreamEvent]:
         """Return a normalized upstream error with this protocol's terminator."""

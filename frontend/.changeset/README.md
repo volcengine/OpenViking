@@ -34,8 +34,8 @@ files, updates versions and writes both languages into
 [changelog formatter](https://github.com/changesets/changesets/blob/main/docs/modifying-changelog-format.md).
 The command then updates the lockfile and generates the Chinese and English
 release-note pages under `docs/docs/{zh,en}/guide/changelog.md`. Commit these
-release materials together for review before publishing. Merging a PR never
-publishes a stable version.
+release materials together for review before publishing. You can also prepare
+these materials from **React UI Release**.
 
 `CHANGELOG.md` is the archive after changeset files are consumed. Keep its
 language markers when correcting a released note, then run
@@ -57,11 +57,23 @@ During beta staging, release-note checks and generation use the latest stable
 version archived in `CHANGELOG.md`, preserving the prepared stable major even
 when npm's `latest` still belongs to an older major.
 
-For a stable release, manually run **React UI Release**, choose `latest`, and
-enter an exact stable version such as `0.1.8`. Select the branch or tag to
-release. Alternatively, push `react@<version>`; the tag must match the package
-manifest at that commit. Stable tags and manual runs are the only ways to
-publish `latest`. An already published npm version is skipped.
+For a stable release, run **React UI Release** on official `main`, choose
+`latest`, and enter an exact version such as `0.1.13`. When the release notes
+are already archived, the workflow publishes from the selected ref. Otherwise
+it archives the pending Changesets, prepares the workspace versions and opens
+a release PR. The requested version must match the Changesets plan. A next
+patch release can also archive a batch planned for a minor bump before `1.0.0`.
+
+The generated PR contains `.changeset/react-stable-release.json`. Its merge
+into official `main` triggers stable publishing from that push, after the
+ordinary review and CI gates. Repository Actions settings must allow
+`GITHUB_TOKEN` to open PRs. A maintainer may need to approve the generated
+PR's checks. Existing release PRs prepared separately can use the manual
+workflow or tag path after approval.
+
+Alternatively, push `react@<version>` to the official repository. The tag must
+match the package manifest at that commit. An already published npm version is
+skipped.
 
 Stable releases also create or update a GitHub Release at `react@<version>`,
 using that version's archived `en-US` and `zh-CN` notes from

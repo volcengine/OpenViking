@@ -19,6 +19,7 @@ import type {
 import type {
   VikingBotLabels,
   VikingBotProps,
+  VikingBotReferences,
 } from '../../components/viking-bot/index.js';
 
 export type ConsoleMode = 'conversation' | 'command';
@@ -26,6 +27,7 @@ export type ConsoleMode = 'conversation' | 'command';
 export interface ConsoleCommandGuide {
   description: string;
   examples: readonly [string, ...string[]];
+  quickStart?: CommandConsoleCommandDefinition['quickStart'];
 }
 
 export interface ConsoleSlots {
@@ -62,6 +64,8 @@ export type ConsoleChatOptions = Omit<
 > & {
   service?: VikingBotChatService & VikingBotSessionService;
   hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
+  /** Control selected references while Console loads the picker tree and search. The host clears sent references; Console clears selection when resetting the conversation. */
+  referenceSelection?: Pick<VikingBotReferences, 'selected' | 'onChange'>;
 };
 
 /**
