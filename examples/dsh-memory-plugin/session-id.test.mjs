@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { deriveDshSessionId } from "./session-id.mjs";
+import { deriveDshSessionId, historySessionIds } from "./session-id.mjs";
 
 test("safe DSH session ids keep their existing OpenViking identity", () => {
   assert.equal(deriveDshSessionId("web-session_01"), "dsh-web-session_01");
@@ -27,4 +27,19 @@ test("normalization cannot merge distinct native session ids", () => {
 test("trailing dots and spaces are removed from the path component", () => {
   assert.equal(deriveDshSessionId("name."), "dsh-name___c39208ad84ba");
   assert.doesNotMatch(deriveDshSessionId("name "), /[. ]$/);
+});
+
+test("a seeded session's history continues through its parent chain", () => {
+  const sessions = new Map([
+    ["fork", { header: { id: "fork", parentSession: "main", isSeeded: true } }],
+    ["main", { header: { id: "main", isSeeded: false } }],
+  ]);
+  const sub = { id: "sub", header: { parentSession: "fork", isSeeded: true, origin: "subagent" } };
+  assert.equal(historySessionIds(sub, sessions), "dsh-sub,dsh-fork,dsh-main");
+  assert.equal(historySessionIds(sub), "dsh-sub,dsh-fork");
+  assert.equal(historySessionIds({ id: "fresh", header: { parentSession: "main", isSeeded: false } }), "dsh-fresh");
+  assert.equal(historySessionIds({ id: "solo", header: {} }), "dsh-solo");
+
+  const loop = new Map([["a", { header: { parentSession: "a", isSeeded: true } }]]);
+  assert.equal(historySessionIds({ id: "a", header: loop.get("a").header }, loop).split(",").length, 10);
 });

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Config } from "@deepseek-ai/dsh-mcp-client";
 import { resolveConfig } from "./config.mjs";
 import { apply } from "./index.mjs";
-import { buildMcpConfig, mountOpenVikingMcp, PROXY_PATH } from "./mcp.mjs";
+import { buildMcpConfig, fillHistorySession, mountOpenVikingMcp, PROXY_PATH } from "./mcp.mjs";
 
 /**
  * Run `fn` with an env whose credential files live in a throwaway directory,
@@ -306,4 +306,59 @@ test("apply mounts the tool surface instead of registering tools itself", () => 
   const bridge = mounted.find(entry => entry.plugin.name === "mcp-client");
   assert.ok(bridge, "the MCP bridge must be mounted");
   assert.equal(bridge.config.env.OPENVIKING_URL, "http://127.0.0.1:1933");
+});
+
+test("session_history without a session runs the bridged tool with the caller's", async () => {
+  const seen = [];
+  const tools = {
+    get(name, scope) {
+      seen.push({ name, scope });
+      return {
+        async execute(args, exec) {
+          seen.push({ args, signal: exec.signal });
+          if (args.query === "boom") throw new Error("server down");
+          return { content: [{ type: "text", text: "hit" }] };
+        },
+      };
+    },
+  };
+  const agent = { session: { id: "im:a/b" } };
+  const signal = new AbortController().signal;
+  const call = args => ({ name: "mcp__openviking__session_history", arguments: args, agent, signal });
+  const next = async () => assert.fail("a call without session must not reach the body unchanged");
+
+  const result = await fillHistorySession(tools, call(Object.freeze({ action: "search", query: "x", session: " " })), next);
+  assert.deepEqual(result, { isError: false, value: { content: [{ type: "text", text: "hit" }] }, content: [] });
+  assert.deepEqual(seen[0], { name: "mcp__openviking__session_history", scope: agent });
+  assert.match(seen[1].args.session, /^dsh-im_a_b__[0-9a-f]{12}$/);
+  assert.equal(seen[1].signal, signal);
+
+  const failed = await fillHistorySession(tools, call({ action: "search", query: "boom" }), next);
+  assert.equal(failed.isError, true);
+  assert.equal(failed.error.message, "server down");
+  assert.equal(failed.content[0].text, "Error: server down");
+});
+
+test("a fork's session_history call also covers the parent it was seeded from", async () => {
+  const seen = [];
+  const tools = { get: () => ({ execute: async args => (seen.push(args.session), "hit") }) };
+  const sessions = new Map([["origin", { header: { id: "origin", isSeeded: false } }]]);
+  const agent = { session: { id: "fork", header: { parentSession: "origin", isSeeded: true } } };
+  const exec = { name: "mcp__openviking__session_history", arguments: { action: "overview" }, agent };
+  await fillHistorySession(tools, exec, async () => assert.fail("must be filled"), sessions);
+  assert.deepEqual(seen, ["dsh-fork,dsh-origin"]);
+});
+
+test("a chosen session, another tool, or a call without an agent goes to the body untouched", async () => {
+  const tools = { get: () => assert.fail("the bridged tool must not be looked up") };
+  const body = { isError: false, value: "body", content: [] };
+  const next = async () => body;
+  const agent = { session: { id: "s" } };
+  for (const exec of [
+    { name: "mcp__openviking__session_history", arguments: { action: "overview", session: "dsh-other" }, agent },
+    { name: "mcp__openviking__search", arguments: { query: "x" }, agent },
+    { name: "mcp__openviking__session_history", arguments: { action: "overview" } },
+  ]) {
+    assert.equal(await fillHistorySession(tools, exec, next), body);
+  }
 });

@@ -101,7 +101,7 @@ test("session filtering skips subagents without changing main-session recall", a
   assert.deepEqual(seen, ["downstream replacement"]);
 });
 
-function mountPlugin() {
+function mountPlugin(input = {}, tools = { register() {} }, sessions = new Map()) {
   const handlers = new Map();
   let runtime;
   const ctx = {
@@ -113,13 +113,14 @@ function mountPlugin() {
       execute();
       return async () => {};
     },
-    tools: { register() {} },
+    tools,
+    sessions,
     plugin() {},
     on(name, handler) {
       handlers.set(name, handler);
     },
   };
-  apply(ctx, { endpoint: "http://127.0.0.1:1933", workspacePeer: false });
+  apply(ctx, { endpoint: "http://127.0.0.1:1933", workspacePeer: false, ...input });
   runtime.stopDrainer();
   // Replace only the network-bound part; initialize/profileMessage stay real so
   // the single-flight and delivered-once guarantees are the plugin's own.
@@ -261,6 +262,108 @@ test("agent/created returns on abort and never rejects on startup failure", asyn
     undefined,
   );
   assert.deepEqual(failing.injected, []);
+});
+
+async function preStepTexts(handlers, agent) {
+  const input = [message("next prompt")];
+  const decision = await handlers.get("agent/pre-step")({
+    agent,
+    messages: input,
+    signal: new AbortController().signal,
+  }, async () => ({ kind: "enter", messages: input }));
+  return decision.messages.map(m => m.content?.[0]?.text || "");
+}
+
+const historyNote = text => text.includes('source="session-history"');
+
+test("a finished compaction adds the session-history note to the next step, once", async () => {
+  const { handlers } = mountPlugin();
+  const agent = startupAgent("compacted");
+  await withQuietFetch(async () => {
+    await preStepTexts(handlers, agent);
+    handlers.get("session/event")(agent.session, {
+      type: "compaction/end",
+      data: { compactionId: "c1", turn: 1, error: "summarizer failed" },
+    });
+    assert.equal((await preStepTexts(handlers, agent)).some(historyNote), false);
+
+    handlers.get("session/event")(agent.session, {
+      type: "compaction/end",
+      data: { compactionId: "c2", turn: 2 },
+    });
+    const notes = (await preStepTexts(handlers, agent)).filter(historyNote);
+    assert.equal(notes.length, 1);
+    assert.match(notes[0], /full record of this session as dsh-compacted, including what the compaction summary replaced/);
+    assert.match(notes[0], /session defaults to this session/);
+    assert.equal((await preStepTexts(handlers, agent)).some(historyNote), false);
+  });
+});
+
+test("a fork's compaction note names its parent's record too", async () => {
+  const { handlers } = mountPlugin();
+  const agent = startupAgent("forked");
+  agent.session.header = { cwd: "/workspace", parentSession: "origin", isSeeded: true };
+  await withQuietFetch(async () => {
+    handlers.get("session/event")(agent.session, { type: "compaction/end", data: { turn: 1 } });
+    const [note] = (await preStepTexts(handlers, agent)).filter(historyNote);
+    assert.match(note, /as dsh-forked,dsh-origin, including/);
+  });
+});
+
+test("a resumed agent gets the session-history note on its first step", async () => {
+  const { handlers } = mountPlugin();
+  const agent = startupAgent("resumed");
+  await withQuietFetch(async () => {
+    await handlers.get("agent/created")({ agent, source: "resume" });
+    const notes = (await preStepTexts(handlers, agent)).filter(historyNote);
+    assert.equal(notes.length, 1);
+    assert.match(notes[0], /as dsh-resumed, including anything an earlier compaction summarized/);
+
+    const fresh = startupAgent("dsh-fresh");
+    await handlers.get("agent/created")({ agent: fresh, source: "startup" });
+    assert.equal((await preStepTexts(handlers, fresh)).some(historyNote), false);
+  });
+});
+
+test("sessionHistoryPointer false or capture off keeps the note out", async () => {
+  for (const input of [{ sessionHistoryPointer: false }, { autoCapture: false }]) {
+    const { handlers } = mountPlugin(input);
+    const agent = startupAgent("dsh-quiet");
+    await withQuietFetch(async () => {
+      await handlers.get("agent/created")({ agent, source: "resume" });
+      handlers.get("session/event")(agent.session, { type: "compaction/end", data: { turn: 1 } });
+      assert.equal((await preStepTexts(handlers, agent)).some(historyNote), false);
+    });
+  }
+});
+
+test("tools/execute fills session_history's session for main sessions only", async () => {
+  const calls = [];
+  const tools = {
+    register() {},
+    get(name) {
+      return name === "mcp__openviking__session_history"
+        ? { execute: async args => (calls.push(args), { content: [{ type: "text", text: "ok" }] }) }
+        : undefined;
+    },
+  };
+  const { handlers } = mountPlugin({ skipSubagentSessions: true }, tools);
+  const execute = handlers.get("tools/execute");
+  const next = async () => ({ isError: false, value: "body", content: [] });
+  const exec = session => ({
+    name: "mcp__openviking__session_history",
+    arguments: Object.freeze({ action: "overview" }),
+    agent: { session },
+    signal: new AbortController().signal,
+  });
+
+  const filled = await execute(exec({ id: "main", header: {} }), next);
+  assert.deepEqual(calls, [{ action: "overview", session: "dsh-main" }]);
+  assert.equal(filled.isError, false);
+
+  const child = await execute(exec({ id: "child", header: { origin: "subagent" } }), next);
+  assert.equal(child.value, "body");
+  assert.equal(calls.length, 1);
 });
 
 function message(text) {
