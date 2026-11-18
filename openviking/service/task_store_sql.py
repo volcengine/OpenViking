@@ -135,6 +135,12 @@ class SQLTaskWorkStore(TaskWorkStore):
     def work_recovery_mode(self) -> WorkRecoveryMode:
         return WorkRecoveryMode.DURABLE_STORE
 
+    def _configure_engine(self, engine: AsyncEngine) -> None:
+        """Apply provider-specific connection settings."""
+
+    async def _initialize_schema(self, engine: AsyncEngine) -> None:
+        """Initialize provider-managed schemas before checking their mappings."""
+
     async def load(self) -> None:
         """Connect and verify that the manually provisioned schema is usable."""
         if self._engine is not None:
@@ -152,6 +158,8 @@ class SQLTaskWorkStore(TaskWorkStore):
 
         try:
             engine = create_async_engine(self._url, **self._engine_options)
+            self._configure_engine(engine)
+            await self._initialize_schema(engine)
             sessions: async_sessionmaker[AsyncSession] = async_sessionmaker(
                 engine, class_=SQLAsyncSession, expire_on_commit=False
             )

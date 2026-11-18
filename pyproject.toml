@@ -96,6 +96,10 @@ dependencies = [
 
 
 [project.optional-dependencies]
+sqlite = [
+    "aiosqlite>=0.20,<1",
+    "SQLAlchemy[asyncio]>=2.0.54,<2.1",
+]
 reporting = [
     "kafka-python>=3.0.12,<4",
 ]
@@ -121,6 +125,7 @@ redis-mysql = [
   "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
 test = [
+  "aiosqlite>=0.20,<1",
   "SQLAlchemy[asyncio]>=2.0,<2.1",
   "redis>=5.3.1,<7",
   "pytest>=7.0.0",
