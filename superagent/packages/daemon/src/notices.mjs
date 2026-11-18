@@ -9,6 +9,26 @@ import { classifyModelError, resolveRuntimeModelTarget } from './runtime-catalog
 // attempted within this window (prevents switch churn if the user moves back).
 export const MODEL_FALLBACK_COOLDOWN_MS = 5 * 60 * 1_000;
 
+function recoverableRuntimeFailure(error, modelError) {
+  const message = String(error?.message ?? error ?? '');
+  if (/\b(?:cancelled|canceled|abort|permission denied|unauthorized|forbidden|invalid api key|tool (?:error|failed)|business error)\b/i.test(message)) return false;
+  const classified = modelError || classifyModelError(error);
+  if (['no-permission', 'effort'].includes(classified.kind)) return false;
+  if ([400, 401, 403, 404, 422].includes(classified.status)) return false;
+  return classified.retryable
+    || /\b(?:timeout|timed out|rate[_ ]limit(?:ed)?|quota exceeded|too many requests|you(?:'|’)ve hit your (?:\d+[- ]hour|weekly) limit|(?:\d+[- ]hour|weekly|usage) limit(?: reached| exceeded)?|overloaded|temporarily unavailable|service unavailable|network|connection (?:lost|reset|refused)|ECONNRESET|ETIMEDOUT|bad gateway|upstream|empty (?:stream|response)|3083)\b|空流/i.test(message);
+}
+
+function affectedInput(event) {
+  return [
+    `source=${event.source ?? event.connectorInstance ?? 'unknown'}`,
+    event.chatId && `chat=${event.chatId}`,
+    event.threadId && `thread=${event.threadId}`,
+    event.messageId && `msg=${event.messageId}`,
+    event.eventId && `event=${event.eventId}`,
+  ].filter(Boolean).join(' ');
+}
+
 // What happens when a model turn fails: one bounded backup window, then one
 // failure notice per conversation until the
 // runtime recovers, so a failure is reported once and never repeated.
@@ -69,6 +89,10 @@ export class FailurePolicy {
     } catch (error) {
       this.logger.warn('model_fallback_failed', { error: safeError(error) });
     }
+    if (recoverableRuntimeFailure(info.error, info.modelError)) {
+      await this.notifyRuntimeFailure(info);
+      return false;
+    }
     await this.notifyTurnFailure(info);
     return false;
   }
@@ -124,7 +148,8 @@ export class FailurePolicy {
       this.logger.warn('model_fallback_return_failed', { error: safeError(error) });
       this.recordActivity('agent.fallback', { status: 'FAILED', summary: safeError(error),
         metadata: { runtime: window.primaryRuntime, phase: 'return', admission: 'held' } });
-      try { await this.actions.replyToEvent(window.last, `主 runtime 恢复失败，新请求已暂停：${safeError(error)}`.slice(0, 600), 'fallback-return-failed'); } catch {}
+      try { await this.actions.notifyOwnerForEvent(window.last,
+        `主 runtime 恢复失败，新请求已暂停：${safeError(error)}`.slice(0, 600), 'fallback-return-failed'); } catch {}
     }
   }
 
@@ -138,14 +163,8 @@ export class FailurePolicy {
     // Transports also report sanitized strings. Only recognizable model/network
     // outages may activate a configurable route; tools, cancellation and denied
     // credentials must not be retried through a different runtime.
-    const message = String(error?.message ?? error ?? '');
-    if (/\b(?:cancelled|canceled|abort|permission denied|unauthorized|forbidden|invalid api key|tool (?:error|failed)|business error)\b/i.test(message)) return false;
-    const classified = modelError || classifyModelError(error);
-    if (['no-permission', 'effort'].includes(classified.kind)) return false;
-    if ([400, 401, 403, 404, 422].includes(classified.status)) return false;
     const legacyClaude = !this.config.primaryRuntime && !this.config.initialModel && primaryRuntime === 'claude';
-    if (!legacyClaude && !classified.retryable
-      && !/\b(?:timeout|timed out|rate limit(?:ed)?|quota exceeded|too many requests|network|connection (?:lost|reset|refused)|ECONNRESET|ETIMEDOUT|bad gateway|upstream|empty (?:stream|response)|3083)\b|空流/i.test(message)) return false;
+    if (!legacyClaude && !recoverableRuntimeFailure(error, modelError)) return false;
     if (this.fallbackInProgress) return false;
     const now = this.clock();
     if (now - this.lastFallbackAtMs < MODEL_FALLBACK_COOLDOWN_MS) return false;
@@ -195,7 +214,8 @@ export class FailurePolicy {
       revision: this.runtime.snapshot?.().revision, returning: false,
       deadline: this.clock() + returnAfterMs };
     this.backupWindow = window;
-    const notice = `因 ${errorSummary} 报错，已自动切换到 ${model || backupRuntime} 重试`.slice(0, 600);
+    const notice = (`${primaryRuntime} 运行异常，已自动切换到 ${model || backupRuntime} 重试。\n`
+      + `异常：${errorSummary}\n受影响消息：${affectedInput(last)}`).slice(0, 1200);
     // Preserve input identities and the shared action ledger across runtimes.
     // This is a turn retry, not a promise of exactly-once arbitrary shell tools.
     const admitted = this.runtime.submit(rows.map((row) => eventDeliveryItem(row, row.seq, {
@@ -210,10 +230,38 @@ export class FailurePolicy {
     }
     if (admitted?.accepted === false) throw new Error(`fallback retry rejected: ${admitted.reason}`);
     // Delivery cannot delay retry admission or the start of the return clock.
-    try { await this.actions.replyToEvent(last, notice, 'fallback-notice'); } catch (noticeError) {
+    try { await this.actions.notifyOwnerForEvent(last, notice, 'fallback-notice'); } catch (noticeError) {
       this.logger.warn('model_fallback_notice_failed', { error: safeError(noticeError) });
     }
     return true;
+  }
+
+  async notifyRuntimeFailure({ inboundSeqs, error }) {
+    if (this.isStopping()) return;
+    const seqs = Array.isArray(inboundSeqs) ? inboundSeqs : [];
+    const seq = seqs.at(-1) ?? null;
+    const inbound = seq === null || seq === undefined ? null : this.store.inboundBySeq(seq);
+    const errorSummary = safeError(error);
+    this.recordActivity('agent.failure_notice', {
+      summary: errorSummary,
+      status: inbound ? 'NOTIFYING_OWNER' : 'NO_TARGET',
+      conversationKey: inbound?.conversationKey,
+      inboundSeq: seq ?? undefined,
+      metadata: { notify: 'owner' },
+    });
+    if (!inbound) return;
+    const notice = (`Runtime 处理失败，未向原用户暴露异常。\n异常：${errorSummary}\n`
+      + `受影响消息：${affectedInput(inbound)}`).slice(0, 1200);
+    const sent = await this.actions.notifyOwnerForEvent(inbound, notice, 'runtime-failure-notice');
+    if (!sent.ok) {
+      this.recordActivity('agent.failure_notice', {
+        summary: safeChatLookupError(sent.error),
+        status: 'FAILED',
+        conversationKey: inbound.conversationKey,
+        inboundSeq: seq ?? undefined,
+        metadata: { notify: 'owner' },
+      });
+    }
   }
 
   // A failed turn consumes its messages without replying; tell the sender

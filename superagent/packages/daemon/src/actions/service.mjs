@@ -556,6 +556,34 @@ export class ActionService {
     }
   }
 
+  // Daemon-authored operational notice to the owner's primary IM. Unlike the
+  // notify_owner tool this does not settle the affected input: a fallback
+  // runtime still owns the user's decision after the notice is sent.
+  async notifyOwnerForEvent(event, text, purpose) {
+    const connector = this.config.channel;
+    const owner = this.connectors.owner?.(connector) ?? null;
+    if (!owner?.target || !this.supporting('message.send', 'actions').includes(connector)) {
+      return { ok: false, stage: 'no-target' };
+    }
+    const trace = { purpose, connector, action: 'message.send', inboundSeq: event?.seq };
+    try {
+      const result = await this.deliver({
+        caller: { trace }, connector, action: 'message.send',
+        input: { ...owner.target, content: { type: 'markdown', text } },
+        key: actionKey('daemon', purpose, eventIdentity(event), connector, owner.id),
+        summary: text,
+        scope: {},
+        inboundSeq: event?.seq ?? null,
+        metadata: { notify: 'owner' },
+      });
+      this.logger.info('daemon_owner_notice', { ...trace, outcome: result.duplicate ? 'duplicate' : result.dry_run ? 'dry_run' : 'ok' });
+      return { ok: true };
+    } catch (error) {
+      this.logger.warn('daemon_owner_notice', { ...trace, outcome: 'failed', error: safeError(error) });
+      return { ok: false, stage: 'send', error };
+    }
+  }
+
   // A removal a turn's end started is forgotten from temporaryReactions at once,
   // so it is waited for here: the Connectors stop right after.
   async close() {
