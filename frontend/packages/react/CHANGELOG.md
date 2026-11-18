@@ -1,5 +1,333 @@
 # @openviking/react
 
+## 0.1.14
+
+### Minor Changes
+
+<!-- release-note:en-US -->
+
+- 128b63d: AgentConnect accepts `isEnterprise` to show English or Chinese team onboarding instructions for agents supported by the official installer, preserving API key masking and copying. Existing instructions remain the default.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 128b63d: AgentConnect 新增 `isEnterprise`，为支持官方安装器的 Agent 展示中英文团队接入文案，复用 API Key 脱敏和复制逻辑。默认继续使用原有文案。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 1c25783: Add the named compile workflow and its CLI guide. FileBrowser now reports selected tree entries so hosts can add directory references to VikingBot, whose send button uses a rounded square.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 1c25783: 新增按名称创建和执行编译的流程及 CLI 指引。FileBrowser 支持上报选中的目录树条目，宿主可将目录引用传给 VikingBot，发送按钮采用圆角方形。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 196fad5: Add OpenViking CLI session, file download, and OVPack commands to Console. Local inputs use the browser file picker. Administrator-only backup and restore require opting in through `commandOptions.allowAdminCommands`.
+
+  With `--read-content`, Console search results display multiline file content and fall back to the abstract when content is unavailable or blank. Search result items support an optional `content` field for the multiline body.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 196fad5: Console 新增 OpenViking CLI 会话、文件下载和 OVPack 命令。本地输入通过浏览器文件选择器提供。管理员备份和恢复需要通过 `commandOptions.allowAdminCommands` 显式启用。
+
+  Console 检索命令使用 `--read-content` 时展示多行正文，正文不可读或为空白时回退到摘要。检索结果项支持通过可选的 `content` 字段提供多行正文。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 81c42ac: Align the Console's built-in command options with the Volcengine terminal, including filesystem limits, search filters, ACL JSON, inline writes, resource import options, and task filters. Show the canonical names, aliases, and defaults in command help. `tree` now requires a directory URI, for example `ov tree viking://resources -L 2`.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 81c42ac: 对齐 Console 内置命令与火山引擎终端的参数，包括文件系统限制、检索过滤、ACL JSON、正文写入、资源导入和任务筛选。在命令帮助中展示规范参数名、别名和默认值。`tree` 现在需要传入目录 URI，例如 `ov tree viking://resources -L 2`。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- d510934: FileBrowser can show test materials, group source trajectories by update, and display trajectory documents and source messages when the host supplies the corresponding loaders.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- d510934: 宿主提供相应的数据源后，文件浏览区块可分页展示测试素材，按经验更新分组展示来源轨迹，并在详情中查看轨迹正文和来源消息。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- a8d37f3: Show timestamped transcripts and extracted frames in FileBrowser for processed video segments. Select a transcript entry to seek the video, or open an extracted frame at full size.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- a8d37f3: FileBrowser 支持展示已解析视频切片的带时间戳转录文稿和抽帧图片。点击文稿可跳转到对应播放位置，点击抽帧可放大图片。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- b90eb2e: Show Create Wiki and Scheduled Report shortcuts in managed VikingBot. Use the toolbar @ or type @ in the draft to browse and search for files or directories to include with a message.
+
+  After switching languages, select another shortcut to replace the previous preset draft.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- b90eb2e: 内置 VikingBot 新增「创建 Wiki」和「定时日报」快捷入口；可点击工具栏的 @ 或在输入框键入 @ 浏览和搜索文件或目录，并随消息发送引用。
+
+  切换语言后，点击快捷入口仍可替换之前填入的预设草稿。
+
+<!-- /release-note:zh-CN -->
+
+### Patch Changes
+
+<!-- release-note:en-US -->
+
+- 0019eb7: Keep the active video transcript entry highlighted and in view during playback. Show extracted frame filenames, keep thumbnails stable when resizing the preview, and expand the video and transcript together while preserving playback.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 0019eb7: 播放视频时高亮当前转录文稿并自动滚动。显示抽帧文件名，拖动预览分栏时保持缩略图尺寸稳定，并支持在弹窗中同步查看视频和文稿，保留播放进度。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- b62b243: The command console accepts Han characters in compile configuration names, up to 32 characters in total. ASCII-only names allow up to 64 characters.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- b62b243: 命令台支持使用汉字创建和运行编译配置，含汉字的名称总长最多 32 个字符，纯 ASCII 名称最多 64 个字符。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- a961625: Allow Console hosts to control selected directory references while keeping the built-in picker and search. Reset the selection when switching or starting a conversation. Chat adapters can acknowledge accepted input before the reply arrives so a submitted clarification card can close promptly.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- a961625: 允许宿主控制 Console 的目录引用选中项，同时保留内置目录树和搜索。切换或新建会话时清空引用。对话适配器可以在回复到达前确认输入已送达，让已提交的澄清卡及时关闭。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- d510934: FileBrowser shows the appropriate empty state when a directory has no L0 or L1 summary.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- d510934: 文件浏览区块对未生成摘要的目录显示对应的 L0 和 L1 空态。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 1c25783: Align the version history and copy icons in the FileBrowser editor with the console. Hide the dashboard tab during editing, show a folder-specific empty message, and label the shared resources root.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 1c25783: 对齐文件浏览区块编辑态的版本历史和复制图标，编辑时隐藏看板页签。展开空文件夹时显示专用提示，并为顶层资源目录添加共享标签。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 84e5f15: Keep retrieval mode selection beside the FileBrowser search field, including when there are no matches. Switching modes retains the query and compatible filters.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 84e5f15: 文件浏览器在搜索框旁常驻检索方式选择器，无匹配结果时也可以切换。切换时保留输入词和新模式支持的筛选。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 3e229d1: Prevent the copy-path tooltip from opening after a mouse-driven rollback when focus moves to the copy button. The tooltip still opens on hover or keyboard focus.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 3e229d1: 修复鼠标确认回滚后，焦点落到复制路径按钮时误弹提示的问题。悬停和键盘聚焦仍会显示提示。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- b90eb2e: Make selected text stand out in the file editor, including on Wiki conflict lines.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- b90eb2e: 调整文件编辑器的文字选区颜色，使选区在 Wiki 冲突行上也清楚可见。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 1c25783: Hide the Preview / Source switch during editing. FileBrowser keeps version history available and copies the current editor draft.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 1c25783: 编辑态隐藏「预览 / 源码」切换。文件浏览区块保留版本历史，复制正文时取当前编辑草稿。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 85b3666: Hide in-progress resource import notifications in Console. Import progress stays visible in the command result, and Console still shows completion and failure notifications.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 85b3666: 隐藏 Console 中进行中的资源导入通知。命令结果仍显示导入进度，Console 仍会显示任务完成和失败通知。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 85b3666: Reveal the first conflict when opening the Wiki editor, align the VikingBot reference picker with the file tree's root order, and close a submitted clarification when the bot resumes.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 85b3666: 打开 Wiki 编辑器时定位首个冲突，统一 VikingBot 引用选择器与文件树的根目录顺序，Bot 继续运行后关闭已提交的澄清弹窗。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- b90eb2e: Enable the Load more and Retry buttons in the VikingBot reference picker so users can continue browsing directory pages and recover from listing errors.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- b90eb2e: 修复 VikingBot 引用选择器的「加载更多」和「重试」按钮，支持继续浏览目录分页并在目录加载失败后重试。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 13282ba: Show Rename and Delete in a per-session menu in VikingBot history.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 13282ba: VikingBot 历史会话将重命名和删除收拢到每行的更多操作菜单。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 85b3666: Keep the VikingBot history popover at a stable height during refresh, and show a centered diamond loader when switching conversations. Add session rename and delete actions when the session service supports them.
+
+  Dismiss pending rename and delete confirmations when the session account or service changes. Standalone VikingBot hosts can provide `sessions.scopeKey` to identify their session scope.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 85b3666: 刷新时保持 VikingBot 历史会话弹层高度稳定，切换会话时居中显示菱形加载动画。会话服务支持相应操作时，提供会话改名和删除入口。
+
+  切换会话账号或服务时关闭已打开的重命名和删除确认框。独立使用 VikingBot 时，宿主可通过 `sessions.scopeKey` 标识会话作用域。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 1c25783: Replace the file path in Wiki conflict rows with a compact pencil button. File Browser opens the editor directly for pending conflicts when editing is allowed.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 1c25783: Wiki 冲突列表将文件路径替换为铅笔图标按钮。有编辑权限时，可从文件浏览器的待确认冲突直接进入编辑。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- b90eb2e: Show a progress notification while FileBrowser saves Wiki changes, including conflict resolutions.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- b90eb2e: FileBrowser 保存 Wiki 改动时显示进度通知，包括冲突解决后的保存。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 1c25783: Use tagged data-plane search to list Wiki conflicts and mark directories with pending conflicts, even when the matching files are collapsed. Refresh conflict status after saving a Wiki file. Accept the current and legacy Compile registry response fields.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 1c25783: 通过数据面标签检索列出 Wiki 冲突，即使冲突文件所在分支处于收起状态，也能标记待确认冲突目录。保存 Wiki 文件后更新冲突状态，同时兼容当前和旧版的编译配置响应字段。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 1c25783: Highlight unresolved Wiki conflicts in the FileBrowser editor and show their explanations on hover. Conflict metadata stays out of the draft.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 1c25783: 在文件浏览区块的编辑器中高亮未解决的 Wiki 冲突，悬停时显示冲突说明。冲突元数据仍与草稿正文分离。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 6e8578d: Show the original Wiki conflict trailer in green at the end of the editor. The trailer is read-only, and saving still submits the editable body.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 6e8578d: 在 Wiki 编辑器末尾以绿色显示原始冲突尾注。尾注只读，保存继续提交可编辑正文。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- a86d3a4: Align Markdown and YAML syntax colors and the Wiki conflict tooltip with the console editor. Load YAML front matter highlighting regardless of when the Markdown grammar is registered.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- a86d3a4: 将 Markdown、YAML 语法配色及 Wiki 冲突气泡与控制台编辑器对齐。Markdown 语法提前注册时也能高亮 YAML 文件头。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- b90eb2e: Label versions created by a Wiki rollback and show a confirmation after restoring a version or selecting identical content.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- b90eb2e: 在版本历史中标记 Wiki 回滚生成的版本，并提示回滚完成或所选内容与当前文件一致。
+
+<!-- /release-note:zh-CN -->
+
 ## 0.1.13
 
 ### Patch Changes
