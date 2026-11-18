@@ -4,7 +4,6 @@
 
 import base64
 import json
-import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -253,14 +252,9 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         client = self.get_client()
-        t0 = time.perf_counter()
-        try:
+        with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
             response = self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            attempt.observe_response(response)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:
@@ -317,14 +311,9 @@ class VolcEngineVLM(OpenAIVLM):
         client = self.get_async_client()
 
         async def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            try:
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
                 response = await self._create_chat_completion(client, **kwargs)
-            except Exception as error:
-                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-                raise
-            elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                attempt.observe_response(response)
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:
@@ -499,14 +488,9 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         client = self.get_client()
-        t0 = time.perf_counter()
-        try:
+        with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
             response = self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            attempt.observe_response(response)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:
@@ -553,14 +537,9 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         client = self.get_async_client()
-        t0 = time.perf_counter()
-        try:
+        with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
             response = await self._create_chat_completion(client, **kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            attempt.observe_response(response)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:

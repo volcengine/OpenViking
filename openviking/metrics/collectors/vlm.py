@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from openviking.metrics.core.base import MetricCollector
-from openviking.metrics.datasources.model_usage import reported_token_subset
+from openviking.metrics.datasources.model_usage import reported_token_count, reported_token_subset
 
 from .base import EventMetricCollector
 
@@ -71,6 +71,10 @@ class VLMCollector(EventMetricCollector):
         DOMAIN, "usage_subset_reports", unit="total"
     )
 
+    USAGE_FIELD_REPORTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "usage_field_reports", unit="total"
+    )
+
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"vlm.call"})
 
     def collect(self, registry=None) -> None:
@@ -94,8 +98,8 @@ class VLMCollector(EventMetricCollector):
             provider=str(payload["provider"]),
             model_name=str(payload["model_name"]),
             duration_seconds=float(payload["duration_seconds"]),
-            prompt_tokens=int(payload["prompt_tokens"]),
-            completion_tokens=int(payload["completion_tokens"]),
+            prompt_tokens=reported_token_count(payload.get("prompt_tokens")),
+            completion_tokens=reported_token_count(payload.get("completion_tokens")),
             error_code=str(payload.get("error_code") or "OK"),
             account_id=(
                 None if payload.get("account_id") is None else str(payload.get("account_id"))
@@ -103,6 +107,8 @@ class VLMCollector(EventMetricCollector):
             source_type=payload.get("source_type"),
             prompt_cached_tokens=payload.get("prompt_cached_tokens"),
             completion_reasoning_tokens=payload.get("completion_reasoning_tokens"),
+            usage_known_fields=payload.get("usage_known_fields"),
+            observation_scope=payload.get("observation_scope", "legacy_usage"),
         )
 
     def record_call(
@@ -112,13 +118,15 @@ class VLMCollector(EventMetricCollector):
         provider: str,
         model_name: str,
         duration_seconds: float,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
         prompt_cached_tokens: int | None = None,
         completion_reasoning_tokens: int | None = None,
+        usage_known_fields: list[str] | None = None,
+        observation_scope: str = "legacy_usage",
     ) -> None:
         """
         Record one VLM call as counters for calls and tokens plus a latency histogram sample.
@@ -126,6 +134,14 @@ class VLMCollector(EventMetricCollector):
         Input, output, and total token counters are all emitted because different dashboards care
         about cost attribution at different levels of granularity.
         """
+        prompt_tokens, completion_tokens = (
+            reported_token_count(prompt_tokens),
+            reported_token_count(completion_tokens),
+        )
+        prompt_cached_tokens = reported_token_subset(prompt_cached_tokens, prompt_tokens)
+        completion_reasoning_tokens = reported_token_subset(
+            completion_reasoning_tokens, completion_tokens
+        )
         labels = {
             "provider": str(provider),
             "model_name": str(model_name),
@@ -144,16 +160,36 @@ class VLMCollector(EventMetricCollector):
             label_names=("provider", "model_name", "error_code"),
             account_id=account_id,
         )
-        # A failed attempt has no reliable usage payload. Keep token families
-        # success-only and avoid multiplying their cardinality by ``result``.
-        if labels["error_code"] != "OK":
+        for field, value in (
+            ("prompt_tokens", prompt_tokens),
+            ("completion_tokens", completion_tokens),
+            ("prompt_cached_tokens", prompt_cached_tokens),
+            ("completion_reasoning_tokens", completion_reasoning_tokens),
+        ):
+            registry.inc_counter(
+                self.USAGE_FIELD_REPORTS_TOTAL,
+                labels={
+                    "provider": str(provider),
+                    "model_name": str(model_name),
+                    "field": field,
+                    "state": "known" if value is not None else "unknown",
+                },
+                label_names=("provider", "model_name", "field", "state"),
+                account_id=account_id,
+            )
+        # Legacy failures never promised measured usage. New attempt observations
+        # explicitly enumerate reported fields, including usage before a stream failure.
+        if labels["error_code"] != "OK" and (
+            usage_known_fields is None
+            or observation_scope not in {"provider_attempt", "adapter_call"}
+        ):
             return
         token_labels = {"provider": str(provider), "model_name": str(model_name)}
         for metric, amount in (
             (self.TOKENS_INPUT_TOTAL, prompt_tokens),
             (self.TOKENS_OUTPUT_TOTAL, completion_tokens),
         ):
-            if amount > 0:
+            if amount is not None and amount > 0:
                 registry.inc_counter(
                     metric,
                     labels=token_labels,
@@ -166,7 +202,7 @@ class VLMCollector(EventMetricCollector):
             ("reasoning_completion", completion_reasoning_tokens, completion_tokens),
         ):
             known = reported_token_subset(value, parent)
-            if known is None:
+            if known is None or parent is None:
                 continue
             subset_labels = {**token_labels, "subset": subset}
             for metric, amount in (
@@ -183,7 +219,11 @@ class VLMCollector(EventMetricCollector):
                     amount=amount,
                     account_id=account_id,
                 )
-        total_tokens = int(prompt_tokens) + int(completion_tokens)
+        total_tokens = (
+            prompt_tokens + completion_tokens
+            if prompt_tokens is not None and completion_tokens is not None
+            else 0
+        )
         if total_tokens > 0:
             registry.inc_counter(
                 self.TOKENS_TOTAL,

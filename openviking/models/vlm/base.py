@@ -234,11 +234,18 @@ class VLMBase(ABC):
         self,
         model_name: str,
         provider: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: Optional[int],
+        completion_tokens: Optional[int],
         duration_seconds: float = 0.0,
         prompt_cached_tokens: Optional[int] = None,
         completion_reasoning_tokens: Optional[int] = None,
+        *,
+        attempt_id: Optional[str] = None,
+        api: Optional[str] = None,
+        outcome: str = "success",
+        error_code: str = "OK",
+        observation_scope: str = "legacy_usage",
+        usage_complete: Optional[bool] = None,
     ) -> None:
         """Update token usage
 
@@ -251,12 +258,19 @@ class VLMBase(ABC):
             prompt_cached_tokens: Number of cached prompt tokens from provider usage details
             completion_reasoning_tokens: Number of reasoning completion tokens from provider usage details
         """
-        self._token_tracker.update(
-            model_name=model_name,
-            provider=provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
+        from openviking.metrics.datasources.model_usage import reported_token_count
+
+        prompt_tokens = reported_token_count(prompt_tokens)
+        completion_tokens = reported_token_count(completion_tokens)
+        # Existing cumulative APIs expose known subtotals, not unknown=zero
+        # provider facts. The nullable official event carries coverage separately.
+        if prompt_tokens is not None or completion_tokens is not None:
+            self._token_tracker.update(
+                model_name=model_name,
+                provider=provider,
+                prompt_tokens=prompt_tokens or 0,
+                completion_tokens=completion_tokens or 0,
+            )
         # Operation-level telemetry aggregation (no-op when telemetry is disabled).
         try:
             from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage
@@ -264,8 +278,8 @@ class VLMBase(ABC):
             telemetry = get_current_telemetry()
             stage = get_current_telemetry_stage() or "vlm"
             telemetry.add_token_usage(
-                prompt_tokens,
-                completion_tokens,
+                prompt_tokens or 0,
+                completion_tokens or 0,
                 stage=stage,
                 prompt_cached_tokens=max(int(prompt_cached_tokens or 0), 0),
                 completion_reasoning_tokens=max(int(completion_reasoning_tokens or 0), 0),
@@ -282,19 +296,28 @@ class VLMBase(ABC):
         try:
             from openviking.metrics.datasources import VLMEventDataSource
             from openviking.observability.context import get_root_observability_context
+            from openviking.observability.reporting.facts import event_context
             from openviking.telemetry import get_ingestion_source_type
 
-            root_context = get_root_observability_context()
-
+            root = get_root_observability_context()
+            account_id = event_context("vlm.call").get(
+                "account_id", root.account_id if root else None
+            )
             VLMEventDataSource.record_call(
                 provider=str(provider),
                 model_name=str(model_name),
                 duration_seconds=float(duration_seconds),
-                prompt_tokens=int(prompt_tokens),
-                completion_tokens=int(completion_tokens),
-                account_id=root_context.account_id if root_context is not None else None,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                attempt_id=attempt_id,
+                api=api,
+                outcome=outcome,
+                error_code=error_code,
+                observation_scope=observation_scope,
+                usage_complete=usage_complete,
                 source_type=get_ingestion_source_type(),
                 cost_bearer=self.cost_bearer,
+                account_id=account_id,
                 prompt_cached_tokens=prompt_cached_tokens,
                 completion_reasoning_tokens=completion_reasoning_tokens,
             )
@@ -306,29 +329,24 @@ class VLMBase(ABC):
                 extra={"error_type": type(e).__name__, "degraded": True},
             )
 
-    def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
-        """Record one failed provider request attempt without token usage."""
-        try:
-            from openviking.metrics.datasources import VLMEventDataSource
-            from openviking.observability.context import get_root_observability_context
+    def observe_attempt(self, *, api="chat.completions", model_name=None):
+        from .attempt import observe_attempt
 
-            root_context = get_root_observability_context()
-            VLMEventDataSource.record_call(
-                provider=str(self.provider),
-                model_name=str(self.model or "unknown"),
-                duration_seconds=max(float(duration_seconds), 0.0),
-                prompt_tokens=0,
-                completion_tokens=0,
-                error_code=extract_metric_error_code(error),
-                cost_bearer=self.cost_bearer,
-                account_id=root_context.account_id if root_context is not None else None,
-            )
-        except Exception as metrics_error:
-            logger.info(
-                "vlm metrics unavailable; continuing without observation error_type=%s degraded=true",
-                type(metrics_error).__name__,
-                extra={"error_type": type(metrics_error).__name__, "degraded": True},
-            )
+        return observe_attempt(self, api=api, model_name=model_name)
+
+    def record_failed_call(self, *, duration_seconds: float, error: BaseException) -> None:
+        """Legacy explicit failure entrypoint; no fabricated zero usage."""
+        import asyncio
+
+        self.update_token_usage(
+            model_name=self.model or "unknown",
+            provider=self.provider,
+            prompt_tokens=None,
+            completion_tokens=None,
+            duration_seconds=duration_seconds,
+            outcome="cancelled" if isinstance(error, asyncio.CancelledError) else "failed",
+            error_code=extract_metric_error_code(error),
+        )
 
     @property
     def token_tracker(self):
@@ -761,11 +779,12 @@ class FailoverVLM(VLMBase):
         self,
         model_name: str,
         provider: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: Optional[int],
+        completion_tokens: Optional[int],
         duration_seconds: float = 0.0,
         prompt_cached_tokens: Optional[int] = None,
         completion_reasoning_tokens: Optional[int] = None,
+        **observation: Any,
     ) -> None:
         """Update token usage for the currently active instance."""
         self._active_vlm.update_token_usage(
@@ -776,6 +795,7 @@ class FailoverVLM(VLMBase):
             duration_seconds=duration_seconds,
             prompt_cached_tokens=prompt_cached_tokens,
             completion_reasoning_tokens=completion_reasoning_tokens,
+            **observation,
         )
 
     def get_token_usage(self) -> Dict[str, Any]:

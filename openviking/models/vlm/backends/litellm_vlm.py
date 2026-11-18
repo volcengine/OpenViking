@@ -5,7 +5,6 @@
 import base64
 import json
 import os
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
@@ -455,17 +454,9 @@ class LiteLLMVLMProvider(VLMBase):
         message = choice.message
 
         if has_tools:
-            usage = {}
-            if hasattr(response, "usage") and response.usage:
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                    "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
-                    "completion_tokens_details": getattr(
-                        response.usage, "completion_tokens_details", None
-                    ),
-                }
+            from openviking.models.vlm.attempt import field, public_response_usage
+
+            usage = public_response_usage(field(response, "usage"))
 
             return VLMResponse(
                 content=message.content,
@@ -531,10 +522,9 @@ class LiteLLMVLMProvider(VLMBase):
         kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
 
         def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = completion(**kwargs)
-            elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
+                response = completion(**kwargs)
+                attempt.observe_response(response)
             tracer.info(f"response={response}")
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
@@ -573,10 +563,9 @@ class LiteLLMVLMProvider(VLMBase):
         )
 
         async def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = await acompletion(**kwargs)
-            elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
+                response = await acompletion(**kwargs)
+                attempt.observe_response(response)
             tracer.info(f"response={response}")
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
@@ -601,10 +590,9 @@ class LiteLLMVLMProvider(VLMBase):
         kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, tool_choice, messages)
 
         def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = completion(**kwargs)
-            elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
+                response = completion(**kwargs)
+                attempt.observe_response(response)
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:
@@ -628,10 +616,9 @@ class LiteLLMVLMProvider(VLMBase):
         kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, tool_choice, messages)
 
         async def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = await acompletion(**kwargs)
-            elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
+                response = await acompletion(**kwargs)
+                attempt.observe_response(response)
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:

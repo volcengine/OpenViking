@@ -102,7 +102,7 @@ OpenAI、LiteLLM、VolcEngine Chat Completions 与媒体用量复用同一规范
 | `openviking_vlm_usage_subset_reports_total` | 上报有效值的成功事件数，包含真实 0 |
 
 现有输入、输出和总 Token 的含义不变，**不能把子集再加进总 Token**。
-未知字段不增加上报计数，失败事件不增加 Token 或子集上报。0 不递增只允许正增量的
+未知字段不增加子集上报计数；有明确 provider-attempt 归属的失败/取消流会保留已报告用量，旧失败事件仍不推断用量。0 不递增只允许正增量的
 registry Counter；通过上报计数区分真实 0 和缺失。
 
 在父项分母大于 0 时，可计算已上报调用的缓存命中比例：
@@ -124,3 +124,32 @@ rate(openviking_vlm_usage_subset_parent_tokens_total{subset="cached_prompt"}[5m]
 
 开启账户指标时，新指标遵循现有 allowlist 和基数策略（如 `openviking_vlm_*`），
 不记录提示、回答、任务 ID 或新增无界标签。
+
+
+## VLM 调用尝试事实
+
+现有 `vlm.call` 在实际接入的 SDK 调用点只结算一次；缺少 usage、失败、内容拒绝和
+取消也会生成事件。新增 `attempt_id`（与 `event_id` 相同）、`api`、`outcome/status`、
+`observation_scope`、`usage_known_fields`、`usage_complete` 和逐字段 `usage_provenance`。
+输入/输出与缓存/reasoning 均可为 `null`；未知不会转成实测 0。完整性要求两个主字段
+均有有效报告，且调用没有失败/中断；局部字段仍可保留。重复 usage 帧是快照，不累加
+成多次调用。工具响应的 usage 字典省略未知主字段，明确报告的 0 仍保留。
+
+`model_name` 对应选中的 SDK 请求型号，包括流式覆盖或 LiteLLM 路由前缀。事件不包含
+提示、模型回复、凭据或错误正文，沿用既有 Task 归属。主字段计数器分别累加已有报告；
+总 Token 计数仅覆盖两个主字段均已知的群体。失败/取消前已报告的流用量会计入，不能
+把缓存/reasoning 子集再次加到总量。只有子集与其父字段都已知，才进入命中率分母。
+
+OpenAI/Azure、继承路径 Kimi/GLM、LiteLLM、Ark 文本/视觉及 Responses 模型调用共用
+同一观测 owner。文件上传、轮询及删除不属于模型推理。Codex 内部 Responses/auth
+适配可能包含多次物理请求，显式标为 `adapter_call`，不假称全部 RPC；普通遗留更新
+标为 `legacy_usage`。RetryVLM/降级包装不额外重算用量，不改变重试、拒绝或取消策略。
+
+`provider_attempt` 是关闭 SDK 内部重试后的一次 SDK 调用尝试，可能在发送字节前就
+失败，不是已计费物理 RPC 的证明。Embedding/rerank 与共享批次分配仍由各自 owner
+负责，本改动不会从一个共享调用虚构多个 Task 的用量。
+
+新增 `openviking_vlm_usage_field_reports_total`，固定 `field` 与 `state=known/unknown`
+表示报告覆盖，不以 attempt ID 为指标标签。旧累计/操作遥测继续提供已知小计，不能
+证明完整性；对账应读取官方事件中的空值和覆盖信息。既有远程出口保留这些字段，
+自定义消费者需兼容可空主用量，不能强转为实测 0。事件交付仍为尽力而为，不是完整账单。

@@ -54,6 +54,7 @@ ACCOUNT_DIMENSION_SUPPORTED_METRICS = frozenset(
         "openviking_vlm_usage_subset_tokens_total",
         "openviking_vlm_usage_subset_parent_tokens_total",
         "openviking_vlm_usage_subset_reports_total",
+        "openviking_vlm_usage_field_reports_total",
         "openviking_vlm_ingestion_tokens_total",
         "openviking_rerank_calls_total",
         "openviking_rerank_call_duration_seconds",

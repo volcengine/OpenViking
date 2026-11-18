@@ -32,9 +32,14 @@ from openviking.metrics.core.base import ReadEnvelope
 from .base import DomainStatsMetricDataSource, EventMetricDataSource
 
 
-def reported_token_subset(value: object, parent: int) -> int | None:
+def reported_token_count(value: object) -> int | None:
+    return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+
+
+def reported_token_subset(value: object, parent: int | None) -> int | None:
     """Keep reported zero distinct from absence; reject invalid subset facts."""
-    return value if type(value) is int and 0 <= value <= parent else None
+    count = reported_token_count(value)
+    return count if count is not None and (parent is None or count <= parent) else None
 
 
 class UsageSubsets(TypedDict):
@@ -43,7 +48,7 @@ class UsageSubsets(TypedDict):
 
 
 def response_usage_subsets(
-    usage: object, prompt_tokens: int, completion_tokens: int
+    usage: object, prompt_tokens: int | None, completion_tokens: int | None
 ) -> UsageSubsets:
     """Normalize SDK object/mapping details and DeepSeek's cache-hit alias.
 
@@ -197,14 +202,19 @@ class VLMEventDataSource(EventMetricDataSource):
         provider: str,
         model_name: str,
         duration_seconds: float,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
         cost_bearer: str | None = None,
         prompt_cached_tokens: int | None = None,
         completion_reasoning_tokens: int | None = None,
+        attempt_id: str | None = None,
+        api: str | None = None,
+        outcome: str = "success",
+        observation_scope: str = "legacy_usage",
+        usage_complete: bool | None = None,
     ) -> None:
         """
         Emit one VLM call event with model identity, latency, token usage, error code, and account context.
@@ -212,18 +222,39 @@ class VLMEventDataSource(EventMetricDataSource):
         The caller is expected to provide already-normalized provider/model identifiers and the
         final token counts that should be reflected in Prometheus usage metrics.
         """
+        values = {
+            "prompt_tokens": reported_token_count(prompt_tokens),
+            "completion_tokens": reported_token_count(completion_tokens),
+            "prompt_cached_tokens": reported_token_subset(
+                prompt_cached_tokens, reported_token_count(prompt_tokens)
+            ),
+            "completion_reasoning_tokens": reported_token_subset(
+                completion_reasoning_tokens, reported_token_count(completion_tokens)
+            ),
+        }
+        known = [name for name, value in values.items() if value is not None]
         EventMetricDataSource._emit(
             "vlm.call",
             {
+                **values,
+                **({"event_id": attempt_id} if attempt_id else {}),
+                "attempt_id": attempt_id,
+                "api": api,
+                "outcome": outcome,
+                "status": outcome,
+                "observation_scope": observation_scope,
+                "usage_quality": "actual" if known and attempt_id else "unknown",
+                "usage_complete": all(
+                    values[key] is not None for key in ("prompt_tokens", "completion_tokens")
+                )
+                and usage_complete is not False,
+                "usage_known_fields": known,
+                "usage_provenance": dict.fromkeys(
+                    known, "provider_reported" if attempt_id else "unknown"
+                ),
                 "provider": str(provider),
                 "model_name": str(model_name),
                 "duration_seconds": float(duration_seconds),
-                "prompt_tokens": int(prompt_tokens),
-                "completion_tokens": int(completion_tokens),
-                "prompt_cached_tokens": reported_token_subset(prompt_cached_tokens, prompt_tokens),
-                "completion_reasoning_tokens": reported_token_subset(
-                    completion_reasoning_tokens, completion_tokens
-                ),
                 "error_code": str(error_code or "unknown"),
                 "account_id": None if account_id is None else str(account_id),
                 "source_type": source_type,
