@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import zipfile
+from collections import deque
 from dataclasses import replace
 from typing import Any, Optional
 
@@ -418,6 +419,69 @@ async def _backup_entries(viking_fs, ctx: RequestContext) -> list[dict[str, Any]
     return entries
 
 
+# Object-storage back ends pay a fixed latency per read, and reading export
+# files one at a time turns a large pack into hours of serial round trips.
+# Bounded read-ahead keeps the pack byte-identical while capping concurrency.
+OVPACK_EXPORT_READ_CONCURRENCY = 8
+
+
+async def _read_ovpack_file_bytes(
+    file_entries: list[dict[str, Any]],
+    root_uri: str,
+    viking_fs,
+    ctx: RequestContext,
+) -> list[bytes]:
+    """Read export file bytes with bounded concurrency, preserving entry order.
+
+    A sliding read-ahead window of twice the concurrency bounds how many
+    files are in flight, while the semaphore caps simultaneous reads. Callers
+    write zip entries, manifest sizes and hashes in the original entry order,
+    so the produced pack is identical to the serial implementation. On the
+    first failed read the outstanding reads are cancelled and the error
+    propagates, matching the previous fail-fast behaviour.
+    """
+    semaphore = asyncio.Semaphore(OVPACK_EXPORT_READ_CONCURRENCY)
+
+    async def read_one(entry: dict[str, Any]) -> bytes:
+        full_uri = entry.get("uri") or join_uri(root_uri, entry["rel_path"])
+        try:
+            async with semaphore:
+                return await viking_fs.read_file_bytes(full_uri, ctx=ctx)
+        except Exception as exc:
+            logger.warning(f"Failed to export file {full_uri}: {exc}")
+            raise
+
+    results: list[bytes] = [None] * len(file_entries)
+    window: deque[tuple[int, asyncio.Task]] = deque()
+
+    async def cancel_outstanding() -> None:
+        for _, task in window:
+            task.cancel()
+        if window:
+            await asyncio.gather(*(task for _, task in window), return_exceptions=True)
+
+    next_index = 0
+    try:
+        while next_index < len(file_entries) or window:
+            while (
+                next_index < len(file_entries)
+                and len(window) < OVPACK_EXPORT_READ_CONCURRENCY * 2
+            ):
+                index = next_index
+                next_index += 1
+                window.append(
+                    (index, asyncio.create_task(read_one(file_entries[index])))
+                )
+            if not window:
+                break
+            index, task = window.popleft()
+            results[index] = await task
+        return results
+    except BaseException:
+        await cancel_outstanding()
+        raise
+
+
 async def _write_ovpack_archive(
     viking_fs,
     root_uri: str,
@@ -444,6 +508,11 @@ async def _write_ovpack_archive(
         zf.writestr(f"{base_name}/{OVPACK_FILES_DIR}/", "")
 
         content_entries = [entry for entry in entries if entry["rel_path"] != ""]
+        file_entries = [entry for entry in content_entries if not entry.get("isDir")]
+        file_bytes = await _read_ovpack_file_bytes(file_entries, root_uri, viking_fs, ctx)
+        file_data_by_rel_path = {
+            entry["rel_path"]: data for entry, data in zip(file_entries, file_bytes)
+        }
         for entry in content_entries:
             rel_path = entry["rel_path"]
             zip_path = get_ovpack_zip_path(base_name, rel_path)
@@ -451,13 +520,7 @@ async def _write_ovpack_archive(
             if entry.get("isDir"):
                 zf.writestr(zip_path.rstrip("/") + "/", "")
             else:
-                full_uri = entry.get("uri") or join_uri(root_uri, rel_path)
-                try:
-                    data = await viking_fs.read_file_bytes(full_uri, ctx=ctx)
-                except Exception as exc:
-                    logger.warning(f"Failed to export file {full_uri}: {exc}")
-                    raise
-
+                data = file_data_by_rel_path[rel_path]
                 manifest_entry = manifest_file_entries.get(rel_path)
                 if manifest_entry is not None:
                     manifest_entry["size"] = len(data)
