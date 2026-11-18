@@ -103,7 +103,7 @@ class Stats:
     def reset(self):
         self.requests = self.rejected_overload = self.store_errors = 0
         self.records_unlogged = self.records_failed = self.records_dropped = 0
-        # Conversations whose turns were written to OpenViking, and failed delivery attempts.
+        # Finished turns written to OpenViking, and ones whose write failed.
         self.capture_delivered = self.capture_failed = 0
         self.errors, self.degradations, self.stream_errors = Counter(), Counter(), Counter()
 
@@ -144,7 +144,6 @@ class Stats:
             "store_errors": self.store_errors,
         }
         delivered, failed = self.capture_delivered, self.capture_failed
-        # Reset before the store is read, so counts made meanwhile go to the next line.
         self.since = now
         self.reset()
         state = app.state
@@ -155,14 +154,7 @@ class Stats:
             "reason": health.get("reason", ""),
             "open_circuits": breaker.open_count() if breaker else 0,
         }
-        capture = {"delivered": delivered, "failed": failed}
-        try:
-            capture.update(await state.store.capture.backlog(time.time()))
-        except Exception as error:
-            # The line still goes out; only the backlog is missing from it.
-            logger.warning("OpenViking Gateway capture backlog failed: %s", type(error).__name__)
-        capture["workers"] = sum(not task.done() for task in getattr(state, "captures", []))
-        line["capture"] = capture
+        line["capture"] = {"delivered": delivered, "failed": failed}
         return line
 
 

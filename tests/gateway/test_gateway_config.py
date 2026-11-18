@@ -52,7 +52,7 @@ def test_removed_fields_are_ignored_with_one_warning(caplog):
 
 
 def test_session_ttl_ignores_legacy_days_and_rejects_under_an_hour():
-    assert GatewayConfig(session_ttl_days=7).session_ttl_seconds == 30 * 86400
+    assert GatewayConfig(session_ttl_days=7).session_ttl_seconds == 86400
     assert GatewayConfig(session_ttl_seconds=7200).session_ttl_seconds == 7200
     with pytest.raises(ValidationError):
         GatewayConfig(session_ttl_seconds=600)

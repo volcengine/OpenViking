@@ -319,6 +319,32 @@ async def test_bookkeeping_that_hangs_is_cut_off(running_gateway, capsys, monkey
     assert record["bookkeeping_failed"] == ["completed"]
 
 
+@pytest.mark.parametrize("hangs, reason", [(True, "save_timeout"), (False, "save_failed")])
+async def test_save_that_fails_or_hangs_is_recorded(
+    running_gateway, capsys, monkeypatch, hangs, reason
+):
+    app, client, _, issued, _, _ = running_gateway
+    monkeypatch.setattr(proxy, "BOOKKEEPING_SECONDS", 0.05)
+
+    async def save(*args):
+        if hangs:
+            await asyncio.sleep(5)
+        raise RuntimeError("store failed")
+
+    monkeypatch.setattr(app.state.kernel, "save", save)
+    capsys.readouterr()
+    async with async_timeout.timeout(2):
+        response = await client.post(
+            "/v1/chat/completions",
+            headers=bearer(issued, **{"X-OpenViking-Session": "s"}),
+            json=CHAT,
+        )
+    assert response.status_code == 200
+    record = only_record(capsys)
+    assert record["capture_status"] == "failed" and record["capture_reason"] == reason
+    assert "error_reason" not in record and "bookkeeping_failed" not in record
+
+
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("tools", [False, True])
 async def test_one_record_per_request(running_gateway, capsys, stream, tools):

@@ -8,7 +8,6 @@ import time
 import async_timeout
 import orjson
 
-from .capture import CapturePipeline
 from .compaction import cut_messages
 from .notices import tool_tail
 from .observe import degrade
@@ -51,8 +50,10 @@ def public_stream_error(value):
 
 
 class HiddenToolLoop:
-    def __init__(self, prepared, executor, store, capture):
+    def __init__(self, prepared, executor, store, capture, saver=None):
+        """``saver`` is the kernel's capture pipeline; without one a cut is not saved early."""
         self.prepared, self.executor, self.store, self.capture = prepared, executor, store, capture
+        self.saver = saver
         self.protocol = prepared.protocol
         self.adapter = tool_protocol(self.protocol)(prepared.body)
         self.body = {
@@ -205,6 +206,9 @@ class HiddenToolLoop:
                 yield event
         if window:
             self.reset(*window)
+            # Later rounds of this request may search the part the cut replaced.
+            if self.saver:
+                await self.saver.save_cut(self.prepared, self.executor.credential, window[0])
         else:
             results = self.adapter.results(results)
             self.transcript.extend(results)
@@ -261,8 +265,6 @@ class HiddenToolLoop:
                     )
         elif self.hidden:
             degrade(self.prepared.metrics, "hidden_reply_without_anchor")
-        if self.window:
-            await CapturePipeline(self.store.capture).confirm_cut(self.prepared, self.window[0])
         self.final = self.adapter.final(self.usage)
         # The combined reply reads like any relayed one: calls left for the client
         # hand the turn off, and the continuation that ends it is captured.
