@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { normalizeResourceUri } from '../resource-uri.js';
 import type { DirectoryQueries } from './directory-queries.js';
+import { expansionPath } from './expansion-path.js';
 import type { UnresolvedExpansion } from './restore-expansion.js';
 import type { DirectoryRow } from './rows.js';
 
@@ -17,22 +18,27 @@ export function useReportExpansion(
   // asynchronous directory loads. There is no subscription to dispose.
   useEffect(() => {
     if (!session || !ready || !onChange) return;
-    const visible = new Map(
-      rows.flatMap((row) =>
-        row.kind === 'entry' && row.type === 'directory' && row.expanded
-          ? [[normalizeResourceUri(row.uri), row.uri] as const]
-          : [],
-      ),
-    );
+    const visible = new Map<string, string>();
+    const collapsed = new Set<string>();
+    for (const row of rows) {
+      if (row.kind !== 'entry' || row.type !== 'directory') continue;
+      const uri = normalizeResourceUri(row.uri);
+      if (row.expanded) visible.set(uri, row.uri);
+      else collapsed.add(uri);
+    }
     const saved = new Map(visible);
-    // Collapsing a branch removes it from the visible rows. Only still-open
-    // branches carry their unresolved paths into the published snapshot.
+    // A later page can reveal a branch that is still pending under the root.
+    // Honor its current collapse state and keep pending paths elsewhere.
     for (const [parent, pending] of unresolved) {
       if (parent !== rootUri && !visible.has(normalizeResourceUri(parent)))
         continue;
       for (const uri of pending) {
         const key = normalizeResourceUri(uri);
-        if (!saved.has(key)) saved.set(key, uri);
+        if (
+          !saved.has(key) &&
+          !expansionPath(rootUri, key).some((path) => collapsed.has(path))
+        )
+          saved.set(key, uri);
       }
     }
     const uris = [...saved.values()];
