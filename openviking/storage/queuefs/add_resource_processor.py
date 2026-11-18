@@ -9,6 +9,7 @@ from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from openviking.observability.context import bind_execution_context
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
@@ -98,7 +99,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                         resource_lock=lock_guard.lease,
                     )
             except Exception as exc:
-                logger.warning("[AddResource] Failed to release cancelled lock handoff: %s", exc)
+                logger.info("Failed to release cancelled lock handoff: %s", type(exc).__name__)
             finally:
                 await lock_guard.close()
         with suppress(Exception):
@@ -134,8 +135,10 @@ class AddResourceProcessor(DequeueHandlerBase):
                 error=error,
                 **kwargs,
             )
-        except Exception:
-            logger.exception("[AddResource] Failed to record initial Watch execution")
+        except Exception as _log_error:
+            logger.info(
+                "Failed to record initial Watch execution error_type=%s", type(_log_error).__name__
+            )
 
     async def _handle_cancelled(self, msg: AddResourceMsg, ctx: RequestContext) -> None:
         await self._release_cancelled_resources(msg, ctx)
@@ -149,10 +152,10 @@ class AddResourceProcessor(DequeueHandlerBase):
         from openviking.storage.queuefs import get_queue_manager
 
         await get_queue_manager().enqueue(self._queue_name, payload)
-        logger.warning(
-            "[AddResource] Requeued task %s after lock handoff failure: %s",
-            msg.task_id,
-            exc,
+        logger.info(
+            "Requeued task %s after lock handoff failure: %s",
+            short_hash(str(msg.task_id)),
+            type(exc).__name__,
         )
         return True
 
@@ -254,14 +257,12 @@ class AddResourceProcessor(DequeueHandlerBase):
             terminal = False
             try:
                 queue_message_id = str(data.get("id") or "")
-                logger.info(
-                    "[AddResourceStarted] %s root=%s phase=%s",
+                logger.debug(
+                    "%s root=%s phase=%s",
                     log_correlation(
-                        task_id=msg.task_id,
-                        telemetry_id=telemetry_id,
-                        message_id=queue_message_id,
+                        task_id=msg.task_id, telemetry_id=telemetry_id, message_id=queue_message_id
                     ),
-                    msg.root_uri,
+                    safe_uri_for_log(str(msg.root_uri)),
                     msg.job_phase.value,
                 )
                 if replay_result is None:
@@ -288,15 +289,14 @@ class AddResourceProcessor(DequeueHandlerBase):
                         errors = result.get("errors") or ["resource processing failed"]
                         error = "; ".join(str(error) for error in errors)
                         logger.error(
-                            "[AddResourceFailed] %s root=%s task_stage=%s error=%s",
+                            "Resource ingestion failed %s target=%s stage=%s error_code=RESOURCE_INGESTION_FAILED",
                             log_correlation(
                                 task_id=msg.task_id,
                                 telemetry_id=telemetry_id,
                                 message_id=queue_message_id,
                             ),
-                            msg.root_uri,
+                            safe_uri_for_log(msg.root_uri),
                             current_stage,
-                            error,
                         )
                         code = result.get("code")
                         failure_result = {"code": code} if isinstance(code, str) and code else {}
@@ -352,18 +352,15 @@ class AddResourceProcessor(DequeueHandlerBase):
                         result.setdefault("usage", {})
                         result["usage"]["tokens"] = _tokens
                     resource_summary = _snapshot.summary.get("resource", {})
-                    queue_summary = _snapshot.summary.get("queue", {})
-                    logger.info(
-                        "[AddResourceCompleted] %s root=%s total_ms=%s semantic=%s embedding=%s",
+                    logger.debug(
+                        "Resource ingestion completed %s target=%s duration_ms=%s",
                         log_correlation(
                             task_id=msg.task_id,
                             telemetry_id=telemetry_id,
                             message_id=queue_message_id,
                         ),
-                        result.get("root_uri"),
+                        safe_uri_for_log(str(result.get("root_uri") or "")),
                         (resource_summary.get("total") or {}).get("duration_ms"),
-                        queue_summary.get("semantic", {}),
-                        queue_summary.get("embedding", {}),
                     )
 
                 await self._resource_service._link_resource_reason_memory(
@@ -387,7 +384,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                 await self._record_watch_execution(msg, "completed")
                 terminal = True
                 return ProcessResult.success()
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as _log_error:
                 latest_task = None
                 with suppress(Exception):
                     latest_task = await tracker.get(
@@ -399,29 +396,28 @@ class AddResourceProcessor(DequeueHandlerBase):
                     TaskStatus.CANCELLING,
                     TaskStatus.CANCELLED,
                 ):
-                    logger.warning(
-                        "[AddResourceCancelled] %s root=%s",
+                    logger.info(
+                        "%s root=%s error_type=%s",
                         log_correlation(
                             task_id=msg.task_id,
                             telemetry_id=telemetry_id,
                             message_id=queue_message_id,
                         ),
-                        msg.root_uri,
+                        safe_uri_for_log(str(msg.root_uri)),
+                        type(_log_error).__name__,
                     )
                     await self._record_watch_execution(msg, "cancelled")
                     terminal = True
                 raise
             except Exception as exc:
-                logger.exception(
-                    "[AddResourceFailed] %s root=%s task_stage=%s error=%s",
+                logger.error(
+                    "%s root=%s task_stage=%s error=%s",
                     log_correlation(
-                        task_id=msg.task_id,
-                        telemetry_id=telemetry_id,
-                        message_id=queue_message_id,
+                        task_id=msg.task_id, telemetry_id=telemetry_id, message_id=queue_message_id
                     ),
-                    msg.root_uri,
-                    current_stage,
-                    exc,
+                    safe_uri_for_log(str(msg.root_uri)),
+                    short_hash(str(current_stage)),
+                    type(exc).__name__,
                 )
                 failure_result = (
                     {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else {}

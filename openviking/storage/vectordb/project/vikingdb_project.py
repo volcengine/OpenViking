@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import safe_path_for_log, short_hash
 from openviking.storage.vectordb.collection.collection import (
     Collection,
     load_collection_class,
@@ -10,7 +11,9 @@ from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
     VikingDBClient,
 )
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class VikingDBProject:
@@ -48,8 +51,11 @@ class VikingDBProject:
         # keep-alive session is reused instead of rebuilt per request.
         self._client = VikingDBClient(self.host, self.headers)
 
-        logger.info(
-            f"Initialized VikingDB project: {project_name} with host {host} and collection class {collection_class_path}"
+        logger.debug(
+            "Initialized VikingDB project: %s with host %s and collection class %s",
+            short_hash(str(project_name)),
+            short_hash(str(host)),
+            safe_path_for_log(str(collection_class_path)),
         )
 
     def close(self):
@@ -97,7 +103,7 @@ class VikingDBProject:
         data = {"ProjectName": self.project_name}
         response = self._client.do_req(method, path=path, req_body=data)
         if response.status_code != 200:
-            logger.error(f"List collections failed: {response.text}")
+            logger.debug("List collections failed: %s", type(response.text).__name__)
             return []
         try:
             result = response.json()
@@ -139,8 +145,8 @@ class VikingDBProject:
         """Drop specified collection"""
         collection = self.get_collection(collection_name)
         if not collection:
-            logger.warning(f"Collection {collection_name} does not exist")
+            logger.info("Collection %s does not exist", short_hash(str(collection_name)))
             return
 
         collection.drop()
-        logger.info(f"Dropped VikingDB collection: {collection_name}")
+        logger.debug("Dropped VikingDB collection: %s", short_hash(str(collection_name)))
