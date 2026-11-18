@@ -16,7 +16,7 @@ test('all OS implementations and the facade implement exactly the declared inter
     for (const key of expected.filter(key => !['loginService', 'maxCommandLineLength'].includes(key))) {
       assert.equal(typeof implementation[key], typeof posix[key], key);
     }
-    assert.ok([null, 'launchd', 'systemd', 'startupFolder'].includes(implementation.loginService));
+    assert.ok([null, 'launchd', 'systemd', 'startupFolder', 'runit'].includes(implementation.loginService));
     assert.ok(implementation.maxCommandLineLength === null || Number.isSafeInteger(implementation.maxCommandLineLength));
   }
   assert.deepEqual(Object.keys(facade).filter(key => key !== 'interfaceKeys').sort(), expected);
@@ -27,7 +27,7 @@ test('all OS implementations and the facade implement exactly the declared inter
 test('preview product support has one immutable policy, independent of adapter selection', () => {
   assert.deepEqual(capabilitiesFor({ ...posix, hostPlatformId: 'linux-x64' }), { updater: true, autostart: true, connectors: { email: true } });
   assert.deepEqual(capabilitiesFor(windows), { updater: false, autostart: true, connectors: { email: true } });
-  assert.deepEqual(capabilitiesFor(termux), { updater: false, autostart: false, connectors: { email: true } });
+  assert.deepEqual(capabilitiesFor(termux), { updater: false, autostart: true, connectors: { email: true } });
   assert.equal(capabilitiesFor({ ...posix, hostPlatformId: 'unknown-arm64' }).updater, false);
   const unsupported = capabilitiesFor({ ...windows, hostPlatformId: 'win32-arm64' });
   assert.equal(unsupported.updater, false);

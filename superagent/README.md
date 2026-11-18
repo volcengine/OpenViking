@@ -39,7 +39,7 @@ Once configured, send the bot a task in a direct chat:
 
 > Inspect the project in your workspace, explain how to start it, and check whether its tests pass.
 
-See the [installation guide](install.md) for details. Initial native Termux arm64 support reuses the Linux archive's JS with native tools from PATH; see [Termux prerequisites and phase-one limits](docs/termux.md). No dedicated Termux artifact is built yet.
+See the [installation guide](install.md) for details. For native Termux arm64, see [Termux installation](docs/termux.md); it uses the same POSIX installer with native Node and lark-cli.
 
 ## Everyday use
 

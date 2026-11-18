@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,7 +21,7 @@ test('Termux inherits POSIX semantics except identity, services, environment and
   const overrides = new Set(['hostPlatformId', 'loginService', 'systemEnvironmentKeys', 'urlOpenCommand']);
   for (const key of Object.keys(posix).filter(key => !overrides.has(key))) assert.equal(termux[key], posix[key], key);
   assert.equal(termux.hostPlatformId, `termux-${process.arch}`);
-  assert.equal(termux.loginService, null);
+  assert.equal(termux.loginService, 'runit');
   assert.equal(termux.urlOpenCommand({}), 'termux-open-url');
   assert.deepEqual(termux.systemEnvironmentKeys, Object.keys(runtimeEnv));
   assert.ok(Object.isFrozen(termux.systemEnvironmentKeys));
@@ -57,10 +57,10 @@ test('Android selects the Termux facade before config loads and preserves explic
     const platform = await import(${JSON.stringify(moduleUrl('../src/platform/index.mjs'))});
     const { capabilitiesFor } = await import(${JSON.stringify(moduleUrl('../src/capabilities.mjs'))});
     assert.equal(platform.hostPlatformId, 'termux-' + process.arch);
-    assert.equal(platform.loginService, null);
+    assert.equal(platform.loginService, 'runit');
     assert.equal(platform.urlOpenCommand(), 'termux-open-url');
     assert.equal(capabilitiesFor(platform).updater, false);
-    assert.equal(capabilitiesFor(platform).autostart, false);
+    assert.equal(capabilitiesFor(platform).autostart, true);
     const { getConfig } = await import(${JSON.stringify(moduleUrl('../src/config.mjs'))});
     process.env.LARK_CLI_BIN = '/custom tools/native-lark';
     assert.equal(getConfig().larkCliBin, process.env.LARK_CLI_BIN);
