@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Watch store contracts on the file store and, when configured, MySQL.
+"""Watch store contracts on file, SQLite and, when configured, MySQL.
 
 In file mode every simulated node shares the one process's store. Set
 OPENVIKING_WATCH_MYSQL_PARAMS to a JSON object of connection parameters for
@@ -24,6 +24,7 @@ from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_store import WatchStore
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_store_mysql import MySQLWatchStore
+from openviking.resource.watch_store_sqlite import SQLiteWatchStore
 from openviking.resource.watch_types import (
     PermissionDeniedError,
     WatchAuthority,
@@ -49,13 +50,18 @@ def _mysql_connection(params):
     return pymysql.connect(**values, charset="utf8mb4", autocommit=True)
 
 
-@pytest_asyncio.fixture(params=["file", "mysql"])
+@pytest_asyncio.fixture(params=["file", "sqlite", "mysql"])
 async def make_store(request, tmp_path):
     """Return a factory for stores sharing one database (one per simulated node)."""
     created: list[WatchStore] = []
     cleanup = None
     if request.param == "file":
         viking_fs = local_viking_fs(tmp_path / "agfs")
+    elif request.param == "sqlite":
+        params = {
+            "path": str(tmp_path / "watch.db"),
+            "credential_encryption_key": ENCRYPTION_KEY,
+        }
     else:
         if not MYSQL_PARAMS:
             pytest.skip("OPENVIKING_WATCH_MYSQL_PARAMS is not configured")
@@ -86,7 +92,8 @@ async def make_store(request, tmp_path):
                 return created[0]
             store: WatchStore = FileWatchStore(viking_fs)
         else:
-            store = MySQLWatchStore(service_name=service_name, params={**params, **overrides})
+            store_class = SQLiteWatchStore if request.param == "sqlite" else MySQLWatchStore
+            store = store_class(service_name=service_name, params={**params, **overrides})
         await store.initialize()
         created.append(store)
         return store
@@ -505,10 +512,10 @@ async def test_scan_pages_do_not_lose_due_or_running_watches(store):
 
 
 @pytest.mark.asyncio
-async def test_mysql_running_scan_does_not_decrypt_private_state(make_store):
+async def test_sql_running_scan_does_not_decrypt_private_state(make_store):
     first = await make_store()
-    if first.provider != "mysql":
-        pytest.skip("MySQL encryption contract")
+    if first.provider == "file":
+        pytest.skip("SQL encryption contract")
     task = await create(
         first,
         due=True,

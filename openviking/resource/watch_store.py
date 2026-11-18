@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""The Watch store contract shared by the file and MySQL implementations.
+"""The Watch store contract shared by file, MySQL and SQLite implementations.
 
 ``run_started_at`` makes a submission visible to target transfers before the
 resource layer creates its Task. ``current_run_id`` then associates that real
@@ -67,7 +67,7 @@ class WatchMoveResult:
 
 
 class WatchStore(ABC):
-    """Watch rows and run occupancy (process-local for File, persistent for MySQL)."""
+    """Watch rows and run occupancy (process-local for File, persistent for SQL)."""
 
     @property
     @abstractmethod

@@ -33,7 +33,7 @@ class TaskStoreConfig(BaseModel):
 
 
 class WatchStoreConfig(BaseModel):
-    """Watch store: the VikingFS control file for one node, MySQL when nodes share Watches."""
+    """Watch persistence in a VikingFS file, local SQLite, or shared MySQL."""
 
     provider: str = "file"
     params: Dict[str, Any] = Field(default_factory=dict)
@@ -41,10 +41,32 @@ class WatchStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql"}:
+        if self.provider not in {"file", "mysql", "sqlite"}:
             raise ValueError(
-                f"storage.watch_store.provider must be 'file' or 'mysql', got {self.provider!r}"
+                "storage.watch_store.provider must be 'file', 'mysql' or 'sqlite', "
+                f"got {self.provider!r}"
             )
+        if self.provider == "sqlite":
+            unknown = self.params.keys() - {
+                "path",
+                "busy_timeout_ms",
+                "table",
+                "credential_encryption_key",
+            }
+            if unknown:
+                raise ValueError(
+                    f"Unknown SQLite watch store parameters: {', '.join(sorted(unknown))}"
+                )
+            path = self.params.get("path")
+            if path is not None and (
+                not isinstance(path, str) or not path or not Path(path).is_absolute()
+            ):
+                raise ValueError("storage.watch_store.params.path must be an absolute local path")
+            timeout = self.params.get("busy_timeout_ms", 5000)
+            if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+                raise ValueError(
+                    "storage.watch_store.params.busy_timeout_ms must be a positive integer"
+                )
         return self
 
 
@@ -186,6 +208,13 @@ class StorageConfig(BaseModel):
             from openviking.resource.watch_store_mysql import MySQLWatchStore
 
             return MySQLWatchStore(service_name=service_name, params=self.watch_store.params)
+        if self.watch_store.provider == "sqlite":
+            from openviking.resource.watch_store_sqlite import SQLiteWatchStore
+
+            params = dict(self.watch_store.params)
+            if params.get("path") is None:
+                params["path"] = str(Path(self.workspace) / "_system" / "watch" / "watch.db")
+            return SQLiteWatchStore(service_name=service_name, params=params)
         from openviking.resource.watch_store_file import FileWatchStore
 
         return FileWatchStore(viking_fs)

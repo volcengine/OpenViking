@@ -287,6 +287,7 @@ jobs:
             tests/service/test_task_work_contract.py \
             tests/service/test_task_store_postgres.py \
             tests/resource/test_watch_store.py \
+            tests/resource/test_watch_store_sqlite.py \
             --junitxml=database-integration.xml
       - name: Require executed database cases
         if: always()

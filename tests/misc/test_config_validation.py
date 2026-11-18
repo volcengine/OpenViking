@@ -1472,8 +1472,8 @@ def _mysql_watch_store_config(watch_params):
 
 def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
     assert OpenVikingConfig.from_dict({}).storage.watch_store.provider == "file"
-    with pytest.raises(ValueError, match="'file' or 'mysql'"):
-        OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "sqlite"}}})
+    with pytest.raises(ValueError, match="'file', 'mysql' or 'sqlite'"):
+        OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "unknown"}}})
 
 
 def test_mysql_watch_store_requires_credential_encryption_key():
