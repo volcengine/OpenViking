@@ -950,9 +950,13 @@ class LocalCollection(ICollection):
 
         This method will:
         1. Save metadata for all indexes
-        2. Delete all indexes
-        3. Clear storage data
+        2. Clear storage data (before any index is dropped)
+        3. Delete all indexes
         4. Rebuild empty indexes using saved metadata
+
+        Steps 1 and 2 run before anything is mutated, so a failure there leaves
+        the collection intact. Failures while rebuilding are raised after every
+        index has been attempted.
 
         Uses locks to ensure no concurrent read/write requests cause errors during the operation.
         """
@@ -962,17 +966,26 @@ class LocalCollection(ICollection):
         # they become visible to concurrent readers or writers.
         with self._index_mutation_barrier.exclusive_mutation():
             with self._bulk_ingest_lock, self.indexes.get_all_with_lock() as indexes_dict:
-                # 1. Save metadata and names for all indexes
+                # 1. Save metadata and names for all indexes. Nothing has been
+                # mutated yet, so a failure here can safely abort the reset
+                # instead of silently dropping an index it cannot rebuild.
                 indexes_metadata = []
                 for index_name, index in indexes_dict.items():
-                    try:
-                        meta_data = index.get_meta_data()
-                        indexes_metadata.append((index_name, meta_data))
-                        logger.debug(f"Saved metadata for index: {index_name}")
-                    except Exception as e:
-                        logger.error(f"Failed to get metadata for index {index_name}: {e}")
+                    meta_data = index.get_meta_data()
+                    indexes_metadata.append((index_name, meta_data))
+                    logger.debug(f"Saved metadata for index: {index_name}")
 
-                # 2. Delete all indexes
+                # 2. Clear storage data before dropping indexes. Dropping an
+                # index is irreversible; if the clear fails, the collection must
+                # still have its indexes and stay searchable.
+                if self.store_mgr:
+                    self.store_mgr.clear()
+                    logger.info(
+                        "Storage cleared successfully",
+                        extra={"collection": self.collection_name},
+                    )
+
+                # 3. Delete all indexes
                 index_names = list(indexes_dict.keys())
                 for index_name in index_names:
                     try:
@@ -983,19 +996,11 @@ class LocalCollection(ICollection):
                     except Exception as e:
                         logger.error(f"Failed to drop index {index_name}: {e}")
 
-                # 3. Clear storage data
-                try:
-                    if self.store_mgr:
-                        self.store_mgr.clear()
-                        logger.info(
-                            "Storage cleared successfully",
-                            extra={"collection": self.collection_name},
-                        )
-                except Exception as e:
-                    logger.error(f"Failed to clear storage: {e}")
-                    raise
-
-                # 4. Rebuild empty indexes using saved metadata
+                # 4. Rebuild empty indexes using saved metadata. Attempt every
+                # index, then report failures: a collection with a missing index
+                # answers every search with an empty result, so returning
+                # success here would hide a wiped collection.
+                rebuild_errors: List[str] = []
                 for index_name, meta_data in indexes_metadata:
                     try:
                         empty_cands_list: List[CandidateData] = []
@@ -1012,7 +1017,14 @@ class LocalCollection(ICollection):
                         logger.info(f"Rebuilt index: {index_name}")
                     except Exception as e:
                         logger.error(f"Failed to rebuild index {index_name}: {e}")
-                        # Continue rebuilding other indexes, don't interrupt the process
+                        rebuild_errors.append(f"{index_name}: {e}")
+
+                if rebuild_errors:
+                    raise RuntimeError(
+                        f"Failed to rebuild {len(rebuild_errors)} of "
+                        f"{len(indexes_metadata)} index(es) after clearing storage: "
+                        + "; ".join(rebuild_errors)
+                    )
 
                 logger.info(f"delete_all_data completed. Rebuilt {len(indexes_dict)} indexes")
 
