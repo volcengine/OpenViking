@@ -179,7 +179,8 @@ jobs:
           python3 -m pytest --noconftest -q -o addopts='' \
             tests/misc/test_abi3_packaging_config.py \
             tests/misc/test_release_tag_selection.py \
-            tests/misc/test_linux_runner.py
+            tests/misc/test_linux_runner.py \
+            tests/misc/test_macos_wheel_cache.py
 
   build:
     needs: check-deps
