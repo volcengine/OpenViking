@@ -36,7 +36,6 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import url2pathname
 
-from agent.message_content import flatten_message_text
 from agent.memory_provider import MemoryProvider, spawn_context_thread
 from agent.secret_scope import get_secret
 from agent.skill_commands import extract_user_instruction_from_skill_message
@@ -46,6 +45,13 @@ from tools.registry import tool_error
 from utils import atomic_json_write, env_var_enabled
 
 from . import quick_local
+
+try:
+    from agent.message_content import flatten_message_text
+except ModuleNotFoundError as exc:
+    if exc.name != "agent.message_content":
+        raise
+    from session_rules.turns import flatten_message_text
 
 try:
     import fcntl
