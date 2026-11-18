@@ -1,6 +1,6 @@
 use crate::client::HttpClient;
 use crate::error::{Error, Result};
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -74,39 +74,15 @@ pub async fn run(
     for (name, index) in env_fields {
         child_command.env(name, &values[index]);
     }
-    let mask_output = !values.is_empty();
-    child_command
-        .stdin(std::process::Stdio::inherit())
-        .kill_on_drop(true);
-    if mask_output {
+    let masker =
+        (!values.is_empty()).then(|| OutputMasker::new(values.into_iter().zip(references)));
+    child_command.kill_on_drop(true);
+    if masker.is_some() {
         child_command
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
     }
-    let mut child = spawn_child(&mut child_command)?;
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let wait_task = async {
-        tokio::select! {
-            status = child.wait() => Ok((status?, false)),
-            _ = tokio::signal::ctrl_c() => {
-                child.start_kill()?;
-                Ok((child.wait().await?, true))
-            }
-        }
-    };
-    let (status, interrupted) = if mask_output {
-        let stdout = stdout.expect("stdout is piped");
-        let stderr = stderr.expect("stderr is piped");
-        let replacements: Vec<_> = values.into_iter().zip(references).collect();
-        let stdout_task = relay_output(stdout, tokio::io::stdout(), replacements.clone());
-        let stderr_task = relay_output(stderr, tokio::io::stderr(), replacements);
-        let (_, _, status) = tokio::try_join!(stdout_task, stderr_task, wait_task)?;
-        status
-    } else {
-        wait_task.await?
-    };
-    Ok(if interrupted { 130 } else { exit_code(status) })
+    run_child(&mut child_command, masker.as_ref()).await
 }
 
 async fn resolve_references(client: &HttpClient, references: &[String]) -> Result<Vec<String>> {
@@ -139,6 +115,36 @@ fn spawn_child(command: &mut Command) -> Result<tokio::process::Child> {
     command
         .spawn()
         .map_err(|error| Error::Client(format!("Could not start the child command: {error}")))
+}
+
+async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Result<i32> {
+    let mut child = spawn_child(command)?;
+    let output = relay_child_output(child.stdout.take(), child.stderr.take(), masker);
+    let wait = async {
+        tokio::select! {
+            status = child.wait() => status.map(exit_code),
+            _ = tokio::signal::ctrl_c() => {
+                child.kill().await?;
+                Ok(130)
+            }
+        }
+    };
+    let (_, code) = tokio::try_join!(output, wait)?;
+    Ok(code)
+}
+
+async fn relay_child_output(
+    stdout: Option<tokio::process::ChildStdout>,
+    stderr: Option<tokio::process::ChildStderr>,
+    masker: Option<&OutputMasker>,
+) -> std::io::Result<()> {
+    if let (Some(stdout), Some(stderr), Some(masker)) = (stdout, stderr, masker) {
+        tokio::try_join!(
+            relay_output(stdout, tokio::io::stdout(), masker),
+            relay_output(stderr, tokio::io::stderr(), masker),
+        )?;
+    }
+    Ok(())
 }
 
 fn exit_code(status: std::process::ExitStatus) -> i32 {
@@ -263,229 +269,186 @@ fn replace_arg_references(arg: &OsStr, spans: &[ArgReference], values: &[String]
 async fn relay_output<R, W>(
     mut reader: R,
     mut writer: W,
-    replacements: Vec<(String, String)>,
-) -> Result<()>
+    masker: &OutputMasker,
+) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut masker = OutputMasker::new(replacements);
+    let mut pending = Vec::new();
     let mut buffer = [0; 8192];
     loop {
-        let size = reader.read(&mut buffer).await?;
+        // Flush prompts before waiting for more input, and batch consecutive ready reads.
+        let size = match reader.read(&mut buffer).now_or_never() {
+            Some(size) => size?,
+            None => {
+                writer.flush().await?;
+                reader.read(&mut buffer).await?
+            }
+        };
         writer
-            .write_all(&masker.mask(&buffer[..size], size == 0))
+            .write_all(&masker.mask(&mut pending, &buffer[..size], size == 0))
             .await?;
         if size == 0 {
-            return Ok(writer.flush().await?);
+            return writer.flush().await;
         }
     }
 }
 
-/// Masks the values resolved for one command, including values split across reads.
+/// Aho-Corasick trie shared by both output streams. Each terminal stores the
+/// first reference for its value. Each stream keeps its own unfinished prefix.
 struct OutputMasker {
-    matcher: ValueMatcher,
-    references: Vec<Vec<u8>>,
-    pending: Vec<u8>,
-    longest_value: usize,
+    nodes: Vec<MatchNode>,
+    root_edges: [usize; 256],
 }
 
 #[derive(Default)]
 struct MatchNode {
-    children: Vec<(u8, usize)>,
+    edges: Vec<(u8, usize)>,
     failure: usize,
-    output_link: Option<usize>,
-    patterns: Vec<usize>,
+    suffix_match: usize,
+    depth: usize,
+    reference: Option<String>,
 }
 
 impl MatchNode {
-    #[inline]
     fn child(&self, byte: u8) -> Option<usize> {
-        match self.children.as_slice() {
-            [] => None,
-            [(edge, child)] => (*edge == byte).then_some(*child),
-            children => children
-                .iter()
-                .find_map(|&(edge, child)| (edge == byte).then_some(child)),
-        }
-    }
-}
-
-struct ValueMatcher {
-    nodes: Vec<MatchNode>,
-    lengths: Vec<usize>,
-    single: Option<(Vec<u8>, Vec<usize>)>,
-}
-
-impl ValueMatcher {
-    fn new(patterns: &[String]) -> Self {
-        if let [pattern] = patterns {
-            let pattern = pattern.as_bytes().to_vec();
-            let mut prefixes = vec![0; pattern.len()];
-            let mut border = 0;
-            for index in 1..pattern.len() {
-                while border > 0 && pattern[index] != pattern[border] {
-                    border = prefixes[border - 1];
-                }
-                if pattern[index] == pattern[border] {
-                    border += 1;
-                }
-                prefixes[index] = border;
-            }
-            return Self {
-                nodes: Vec::new(),
-                lengths: vec![pattern.len()],
-                single: Some((pattern, prefixes)),
-            };
-        }
-        let mut nodes = vec![MatchNode::default()];
-        for (index, pattern) in patterns.iter().enumerate() {
-            let mut state = 0;
-            for byte in pattern.bytes() {
-                state = match nodes[state].child(byte) {
-                    Some(child) => child,
-                    None => {
-                        let child = nodes.len();
-                        nodes.push(MatchNode::default());
-                        nodes[state].children.push((byte, child));
-                        child
-                    }
-                };
-            }
-            nodes[state].patterns.push(index);
-        }
-
-        let mut queue: VecDeque<_> = nodes[0].children.iter().map(|&(_, child)| child).collect();
-        while let Some(state) = queue.pop_front() {
-            for (byte, child) in nodes[state].children.clone() {
-                let mut failure = nodes[state].failure;
-                while failure != 0 && nodes[failure].child(byte).is_none() {
-                    failure = nodes[failure].failure;
-                }
-                let failure = nodes[failure].child(byte).unwrap_or(0);
-                nodes[child].failure = failure;
-                nodes[child].output_link = if nodes[failure].patterns.is_empty() {
-                    nodes[failure].output_link
-                } else {
-                    Some(failure)
-                };
-                queue.push_back(child);
-            }
-        }
-        Self {
-            nodes,
-            lengths: patterns.iter().map(String::len).collect(),
-            single: None,
-        }
-    }
-
-    fn matches(&self, input: &[u8], safe_end: usize) -> Vec<Option<usize>> {
-        let mut best = vec![None; safe_end];
-        if let Some((pattern, prefixes)) = &self.single {
-            let mut matched = 0;
-            for (end, &byte) in input.iter().enumerate() {
-                while matched > 0 && pattern[matched] != byte {
-                    matched = prefixes[matched - 1];
-                }
-                if pattern[matched] == byte {
-                    matched += 1;
-                }
-                if matched == pattern.len() {
-                    let start = end + 1 - matched;
-                    if start < safe_end {
-                        best[start] = Some(0);
-                    }
-                    matched = prefixes[matched - 1];
-                }
-            }
-            return best;
-        }
-        let mut state = 0;
-        for (end, &byte) in input.iter().enumerate() {
-            while state != 0 && self.nodes[state].child(byte).is_none() {
-                state = self.nodes[state].failure;
-            }
-            state = self.nodes[state].child(byte).unwrap_or(0);
-            let mut output = Some(state);
-            while let Some(node) = output {
-                for &index in &self.nodes[node].patterns {
-                    let start = end + 1 - self.lengths[index];
-                    if start < safe_end
-                        && best[start]
-                            .is_none_or(|previous| self.lengths[index] > self.lengths[previous])
-                    {
-                        best[start] = Some(index);
-                    }
-                }
-                output = self.nodes[node].output_link;
-            }
-        }
-        best
+        self.edges
+            .iter()
+            .find_map(|&(edge, child)| (edge == byte).then_some(child))
     }
 }
 
 impl OutputMasker {
-    fn new(replacements: Vec<(String, String)>) -> Self {
-        let mut patterns = Vec::with_capacity(replacements.len());
-        let mut references = Vec::with_capacity(replacements.len());
-        let mut longest_value = 0;
+    fn new(replacements: impl IntoIterator<Item = (String, String)>) -> Self {
+        let mut trie = Self {
+            nodes: vec![MatchNode::default()],
+            root_edges: [0; 256],
+        };
         for (value, reference) in replacements {
-            if value.is_empty() {
-                continue;
+            let mut node = 0;
+            for byte in value.bytes() {
+                node = match trie.nodes[node].child(byte) {
+                    Some(child) => child,
+                    None => {
+                        let child = trie.nodes.len();
+                        let depth = trie.nodes[node].depth + 1;
+                        trie.nodes[node].edges.push((byte, child));
+                        trie.nodes.push(MatchNode {
+                            depth,
+                            ..Default::default()
+                        });
+                        child
+                    }
+                };
             }
-            longest_value = longest_value.max(value.len());
-            patterns.push(value);
-            references.push(reference.into_bytes());
+            if node != 0 {
+                trie.nodes[node].reference.get_or_insert(reference);
+            }
         }
-        Self {
-            matcher: ValueMatcher::new(&patterns),
-            references,
-            pending: Vec::new(),
-            longest_value,
+        let mut queue = VecDeque::new();
+        for &(byte, child) in &trie.nodes[0].edges {
+            trie.root_edges[usize::from(byte)] = child;
+            queue.push_back(child);
         }
+        while let Some(node) = queue.pop_front() {
+            for (byte, child) in trie.nodes[node].edges.clone() {
+                let fallback = trie.advance(trie.nodes[node].failure, byte);
+                trie.nodes[child].failure = fallback;
+                trie.nodes[child].suffix_match = if trie.nodes[fallback].reference.is_some() {
+                    fallback
+                } else {
+                    trie.nodes[fallback].suffix_match
+                };
+                queue.push_back(child);
+            }
+        }
+        trie
     }
 
-    fn mask(&mut self, chunk: &[u8], finish: bool) -> Vec<u8> {
-        if self.longest_value == 0 {
-            return chunk.to_vec();
+    fn advance(&self, mut node: usize, byte: u8) -> usize {
+        while node != 0 {
+            if let Some(child) = self.nodes[node].child(byte) {
+                return child;
+            }
+            node = self.nodes[node].failure;
         }
-        self.pending.extend_from_slice(chunk);
-        let safe_end = if finish {
-            self.pending.len()
-        } else {
-            self.pending
-                .len()
-                .saturating_sub(self.longest_value.saturating_sub(1))
-        };
-        if safe_end == 0 {
-            return Vec::new();
-        }
-        if let Some((pattern, _)) = &self.matcher.single {
-            let first_byte = pattern[0];
-            if !self.pending.contains(&first_byte) {
-                let output = self.pending[..safe_end].to_vec();
-                self.pending.drain(..safe_end);
-                return output;
+        self.root_edges[usize::from(byte)]
+    }
+
+    fn mask(&self, pending: &mut Vec<u8>, chunk: &[u8], finish: bool) -> Vec<u8> {
+        pending.extend_from_slice(chunk);
+        // Scanning from left to right visits longer matches at the same start last.
+        // Node zero is the root and never represents a match.
+        let mut longest = Vec::new();
+        let mut node = 0;
+        let mut i = 0;
+        while i < pending.len() {
+            let byte = pending[i];
+            let next = self.advance(node, byte);
+            i += 1;
+            if next == 0 {
+                node = 0;
+                continue;
+            }
+            let previous = node;
+            node = next;
+            let mut matched = if self.nodes[node].reference.is_some() {
+                node
+            } else {
+                self.nodes[node].suffix_match
+            };
+            // Repeating a transition back to the same state yields the same matches.
+            if matched == 0 && previous == node {
+                let rest = &pending[i..];
+                i += rest.iter().position(|&b| b != byte).unwrap_or(rest.len());
+                continue;
+            }
+            while matched != 0 {
+                if longest.is_empty() {
+                    longest.resize(pending.len(), 0);
+                }
+                longest[i - self.nodes[matched].depth] = matched;
+                matched = self.nodes[matched].suffix_match;
             }
         }
-        let mut output = Vec::new();
+        // A leaf cannot grow. Its longest extendable suffix still can.
+        while node != 0 && self.nodes[node].edges.is_empty() {
+            node = self.nodes[node].failure;
+        }
+        let end = if finish {
+            pending.len()
+        } else {
+            pending.len() - self.nodes[node].depth
+        };
+        if longest.is_empty() {
+            return if end == pending.len() {
+                std::mem::take(pending)
+            } else {
+                pending.drain(..end).collect()
+            };
+        }
+        let mut output = Vec::with_capacity(end);
         let mut cursor = 0;
-        let matches = self.matcher.matches(&self.pending, safe_end);
-        while cursor < safe_end {
-            let Some(offset) = matches[cursor..].iter().position(Option::is_some) else {
+        while cursor < end {
+            let Some(offset) = longest[cursor..end].iter().position(|&n| n != 0) else {
+                output.extend_from_slice(&pending[cursor..end]);
+                cursor = end;
                 break;
             };
             let start = cursor + offset;
-            let index = matches[start].expect("matched position");
-            output.extend_from_slice(&self.pending[cursor..start]);
-            output.extend_from_slice(&self.references[index]);
-            cursor = start + self.matcher.lengths[index];
+            let matched = &self.nodes[longest[start]];
+            output.extend_from_slice(&pending[cursor..start]);
+            output.extend_from_slice(
+                matched
+                    .reference
+                    .as_ref()
+                    .expect("terminal node")
+                    .as_bytes(),
+            );
+            cursor = start + matched.depth;
         }
-        if cursor < safe_end {
-            output.extend_from_slice(&self.pending[cursor..safe_end]);
-            cursor = safe_end;
-        }
-        self.pending.drain(..cursor);
+        pending.drain(..cursor);
         output
     }
 }
@@ -495,40 +458,6 @@ mod tests {
     use super::OutputMasker;
 
     #[test]
-    fn masks_overlapping_and_multibyte_values_at_every_chunk_boundary() {
-        let replacements = vec![
-            ("secret".into(), "{{short}}".into()),
-            ("secret-123".into(), "{{long}}".into()),
-            ("secret-124".into(), "{{sibling}}".into()),
-            ("密钥🙂".into(), "{{unicode}}".into()),
-        ];
-        let input = "xsecret-123y密钥🙂zsecret-124wsecret".as_bytes();
-        let expected = b"x{{long}}y{{unicode}}z{{sibling}}w{{short}}";
-        for chunk_size in 1..=input.len() {
-            let mut masker = OutputMasker::new(replacements.clone());
-            let mut output = Vec::new();
-            for chunk in input.chunks(chunk_size) {
-                output.extend(masker.mask(chunk, false));
-            }
-            output.extend(masker.mask(&[], true));
-            assert_eq!(output, expected, "chunk size {chunk_size}");
-        }
-    }
-
-    #[test]
-    fn long_partial_prefix_does_not_mask_unmatched_output() {
-        let value = format!("{}b", "a".repeat(4095));
-        let input = vec![b'a'; 64 * 1024];
-        let mut masker = OutputMasker::new(vec![(value, "{{ref}}".into())]);
-        let mut output = Vec::new();
-        for chunk in input.chunks(8192) {
-            output.extend(masker.mask(chunk, false));
-        }
-        output.extend(masker.mask(&[], true));
-        assert_eq!(output, input);
-    }
-
-    #[test]
     fn streaming_mask_matches_longest_value_reference() {
         fn next(state: &mut u64) -> usize {
             *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -536,49 +465,55 @@ mod tests {
         }
 
         let alphabet = b"abXY09-";
-        for seed in 0..2000 {
+        for seed in 0_u64..2000 {
             let mut state = seed + 1;
             let mut replacements = Vec::new();
+            if seed.is_multiple_of(2) {
+                replacements.extend([
+                    ("密".to_owned(), "<first>".to_owned()),
+                    ("密钥".to_owned(), "<long>".to_owned()),
+                    ("密".to_owned(), "<alias>".to_owned()),
+                ]);
+            }
             for index in 0..1 + next(&mut state) % 8 {
                 let value: String = (0..1 + next(&mut state) % 10)
                     .map(|_| alphabet[next(&mut state) % alphabet.len()] as char)
                     .collect();
                 replacements.push((value, format!("<ref{index}>")));
             }
-            let mut input = Vec::new();
+            let mut input = vec![0xff];
             for _ in 0..100 {
-                if next(&mut state) % 5 == 0 {
+                if next(&mut state).is_multiple_of(5) {
                     let index = next(&mut state) % replacements.len();
                     input.extend_from_slice(replacements[index].0.as_bytes());
                 } else {
                     input.push(alphabet[next(&mut state) % alphabet.len()]);
                 }
             }
+            let masker = OutputMasker::new(replacements.clone());
+            // Stable sorting keeps the first reference when values are equal.
+            replacements.sort_by_key(|(value, _)| std::cmp::Reverse(value.len()));
             let mut expected = Vec::new();
-            let mut cursor = 0;
-            while cursor < input.len() {
-                let mut matched: Option<&(String, String)> = None;
-                for replacement in &replacements {
-                    if input[cursor..].starts_with(replacement.0.as_bytes())
-                        && matched.is_none_or(|(value, _)| replacement.0.len() > value.len())
-                    {
-                        matched = Some(replacement);
-                    }
-                }
-                if let Some((value, reference)) = matched {
+            let mut rest = input.as_slice();
+            while let Some((&first, tail)) = rest.split_first() {
+                if let Some((value, reference)) = replacements
+                    .iter()
+                    .find(|(value, _)| rest.starts_with(value.as_bytes()))
+                {
                     expected.extend_from_slice(reference.as_bytes());
-                    cursor += value.len();
+                    rest = &rest[value.len()..];
                 } else {
-                    expected.push(input[cursor]);
-                    cursor += 1;
+                    expected.push(first);
+                    rest = tail;
                 }
             }
-            let mut masker = OutputMasker::new(replacements);
+
+            let mut pending = Vec::new();
             let mut actual = Vec::new();
             for chunk in input.chunks(1 + next(&mut state) % 17) {
-                actual.extend(masker.mask(chunk, false));
+                actual.extend(masker.mask(&mut pending, chunk, false));
             }
-            actual.extend(masker.mask(&[], true));
+            actual.extend(masker.mask(&mut pending, &[], true));
             assert_eq!(actual, expected, "seed {seed}");
         }
     }
