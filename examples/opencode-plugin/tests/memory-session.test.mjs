@@ -876,3 +876,70 @@ test("commit of a session the server no longer has drops the stale local mapping
     await new Promise((resolve) => server.close(resolve))
   }
 })
+test("intentional commit sends current capture first, preserves failures and obeys privacy", async () => {
+  await withTempDir("ov-oc-explicit-", async (dir) => {
+    const requests = []
+    let failCapture = false
+    let failCommit = false
+    let cancelCapture
+    const server = createServer(async (req, res) => {
+      let body = ""
+      for await (const chunk of req) body += chunk
+      requests.push({ url: req.url, body })
+      if (cancelCapture && req.url.endsWith("/messages/batch")) {
+        cancelCapture.abort()
+        return
+      }
+      res.setHeader("Content-Type", "application/json")
+      const failed = (failCapture && req.url.endsWith("/messages/batch")) || (failCommit && req.url.endsWith("/commit"))
+      res.statusCode = failed ? 401 : 200
+      res.end(JSON.stringify(failed ? { status: "error", error: { message: "fixture auth denied" } } : { status: "ok", result: { job_id: "job-1" } }))
+    })
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const config = { ...baseConfig(`http://127.0.0.1:${server.address().port}`), commitTokenThreshold: 0 }
+    const previousPending = process.env.OPENVIKING_PENDING_DIR
+    process.env.OPENVIKING_PENDING_DIR = join(dir, "pending")
+    const manager = createMemorySessionManager({ config, pluginRoot: dir })
+    const add = async (id, message) => {
+      for (const event of contextMessageEvents(id, { id: message, type: "user", text: "A useful capture fixture message" })) await manager.handleEvent(event)
+    }
+    try {
+      await add("current", "m1")
+      await add("other", "m2")
+      assert.equal((await manager.commitCurrentSession("current")).status, "accepted")
+      const batch = requests.findIndex((r) => r.url.endsWith("/messages/batch"))
+      const commit = requests.findIndex((r) => r.url.endsWith("/commit"))
+      assert.ok(batch >= 0 && commit > batch)
+      assert.equal(requests.filter((r) => r.url.endsWith("/commit")).length, 1)
+      assert.equal(requests.some((r) => r.url.includes("oc-other")), false)
+      failCapture = true
+      await add("current", "m3")
+      await assert.rejects(manager.commitCurrentSession("current"), /Capture failed.*auth denied/)
+      assert.equal(requests.filter((r) => r.url.endsWith("/commit")).length, 1)
+      failCapture = false
+      failCommit = true
+      await assert.rejects(manager.commitCurrentSession("current"), /auth denied/)
+      fs.mkdirSync(process.env.OPENVIKING_PENDING_DIR)
+      fs.writeFileSync(join(process.env.OPENVIKING_PENDING_DIR, "queued.json"), JSON.stringify({ sessionId: manager.getMappedSessionId("current"), type: "addMessage" }))
+      const queuedBefore = requests.length
+      assert.equal((await manager.commitCurrentSession("current")).status, "pending_capture")
+      assert.equal(requests.length, queuedBefore)
+      const before = requests.length
+      config.autoCapture = false
+      assert.equal((await manager.commitCurrentSession("current")).status, "disabled")
+      assert.equal(requests.length, before)
+      config.autoCapture = true
+      await add("cancelled", "m4")
+      cancelCapture = new AbortController()
+      const cancelStart = requests.length
+      await assert.rejects(manager.commitCurrentSession("cancelled", cancelCapture.signal), { name: "AbortError" })
+      assert.deepEqual(requests.slice(cancelStart).map(({ url }) => url.split("/").at(-1)), ["health", "batch"])
+    } finally {
+      config.autoCapture = false
+      await manager.flushAll()
+      if (previousPending === undefined) delete process.env.OPENVIKING_PENDING_DIR
+      else process.env.OPENVIKING_PENDING_DIR = previousPending
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
+})

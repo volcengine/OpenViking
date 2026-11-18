@@ -98,9 +98,9 @@ export function loadPluginSettings(harness, env = process.env, options = {}) {
  * callers still need to know a value came from ovcli.conf rather than ov.conf.
  */
 export function resolveSettings(harness, options = {}) {
-  const { env = process.env, cwd = "", legacy = {}, clientVersion = "", cliFile = null } = options;
+  const { env = process.env, cwd = "", legacy = {}, clientVersion = "", cliFile = null, readOnly = false } = options;
   const key = harnessKey(harness);
-  const plugin = loadPluginSettings(key, env, { cwd, clientVersion, cliFile });
+  const plugin = loadPluginSettings(key, env, { cwd, clientVersion, cliFile, readOnly });
   const { settings, configured, sources } = resolveKnobs({
     harness: key,
     layers: [
@@ -119,7 +119,7 @@ export function resolveSettings(harness, options = {}) {
  * level, before the payload on stdin has said which directory the session is
  * actually in — the caller resolves this again once it knows.
  */
-export function resolveWorkspaceSettings(cwd, env = process.env, { clientVersion = "" } = {}) {
+export function resolveWorkspaceSettings(cwd, env = process.env, { clientVersion = "", readOnly = false } = {}) {
   const empty = { settings: {}, root: "", provenance: {}, warnings: [], announced: [] };
   try {
     const { root } = findWorkspaceRoot(cwd, env);
@@ -128,7 +128,7 @@ export function resolveWorkspaceSettings(cwd, env = process.env, { clientVersion
     const { layers, warnings } = loadWorkspaceLayers(root, { clientVersion });
     // The identity is what makes the registry's negative evidence work: without
     // it a directory reused by a different repository inherits the old peer.
-    const identity = resolveWorkspaceIdentity({ cwd, env });
+    const identity = resolveWorkspaceIdentity({ cwd, env, cache: !readOnly });
     const registry = readEntry(root, { identity, env });
     warnings.push(...registry.warnings);
     if (registry.entry?.settings) layers.push({ layer: "registry", data: registry.entry.settings });
@@ -196,6 +196,7 @@ export function buildPluginConfig(harness, {
   logFile = "",
   rootKeyFallback = false,
   deriveEffectivePeer = false,
+  readOnly = false,
 } = {}) {
   const name = String(harness || "");
   const key = harnessKey(name);
@@ -210,6 +211,7 @@ export function buildPluginConfig(harness, {
     legacy: legacy || ovConfSection(files.ovFile, key),
     cliFile: files.cliFile,
     clientVersion,
+    readOnly,
   });
   const connection = resolveConnection(key, { env, files, hostInput, rootKeyFallback });
   const { baseUrl, account, user } = connection;
@@ -278,7 +280,8 @@ export function buildPluginConfig(harness, {
   // it per session, against the directory the payload names, and an MCP proxy
   // must not derive one from wherever it happened to be launched.
   if (deriveEffectivePeer) {
-    const effectivePeer = resolveEffectivePeerId({ cfg: config, cwd: workspaceCwd, env });
+    const identity = readOnly ? resolveWorkspaceIdentity({ cwd: workspaceCwd, env, cache: false }) : null;
+    const effectivePeer = resolveEffectivePeerId({ cfg: config, cwd: workspaceCwd, env, identity });
     config.effectivePeer = effectivePeer;
     config.legacyPeerId = effectivePeer.legacyPeerId;
   }

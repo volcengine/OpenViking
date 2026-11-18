@@ -4,6 +4,7 @@ import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
 import { log } from "./utils.mjs"
+import { registerV2Controls } from "./v2-controls.mjs"
 
 const METADATA_KEY = "openviking"
 const CURSOR_KEY_PREFIX = "capture-cursor/"
@@ -37,6 +38,12 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     return task
   }
   const directory = ctx?.location?.project?.directory || ctx?.location?.directory
+
+  await registerV2Controls(ctx, runtime, {
+    pluginRoot,
+    serializeSession,
+    captureCurrent: (sessionID, signal) => captureV2Context(ctx, sessionManager, captureCursors, sessionID, { signal }),
+  })
 
   if (config.mcp.enabled && ctx?.mcp?.transform) {
     let registered = false
@@ -278,15 +285,20 @@ function sameLocation(ref, location) {
   return !ref.workspaceID || !location.workspaceID || ref.workspaceID === location.workspaceID
 }
 
-export async function captureV2Context(ctx, sessionManager, cursors, sessionID) {
+export async function captureV2Context(ctx, sessionManager, cursors, sessionID, { signal } = {}) {
   const messages = await ctx.session.context({ sessionID })
-  if (!Array.isArray(messages)) return
+  signal?.throwIfAborted()
+  if (!Array.isArray(messages)) {
+    if (signal) throw new Error("Cannot read the current OpenCode session context")
+    return
+  }
   // The cursor lives in host storage because the session state file is shared
   // by every location instance and cannot prove what was already captured.
   const cursor = cursors.get(sessionID) ?? await readCursor(ctx, sessionID)
   const cursorIndex = cursor ? messages.findIndex((message) => message?.id === cursor) : -1
   const pending = cursorIndex >= 0 ? messages.slice(cursorIndex + 1) : messages
   for (const message of pending) {
+    signal?.throwIfAborted()
     for (const normalized of contextMessageEvents(sessionID, message)) {
       await sessionManager.handleEvent(normalized)
     }
