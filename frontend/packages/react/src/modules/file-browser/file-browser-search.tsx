@@ -195,6 +195,10 @@ export function FileBrowserSearch({
           },
         }}
         onChange={setDraft}
+        onSelectMode={(next) => {
+          setMode(next);
+          setFilters((current) => normalizeFilters(current, next));
+        }}
         onToggleAdvanced={() => onToggleAdvanced(!advancedOpen)}
       />
       <div ref={exposure} className="ov-file-browser-search__content">
@@ -210,25 +214,16 @@ export function FileBrowserSearch({
             >
               <FileBrowserSearchResults
                 open={open}
-                mode={mode}
                 hits={hits}
                 listId={listId}
                 activeIndex={activeIndex}
                 query={query.trim()}
                 onHighlight={onHighlight}
                 onRetry={retry}
-                fallbackFocusRef={inputRef}
                 loading={search.loading || (awaitingQuery && !!draft.trim())}
                 error={search.error}
                 searched={search.result !== null}
                 text={text}
-                onSelectMode={(next) => {
-                  setMode(next);
-                  // 切模式时把筛选收敛到新模式真正会用的形态，显示与请求才不会脱节。
-                  // Collapse the filters to what the new mode actually uses, so the display
-                  // and the request cannot drift apart.
-                  setFilters((current) => normalizeFilters(current, next));
-                }}
                 onOpen={openResult}
               />
             </ErrorBoundary>
