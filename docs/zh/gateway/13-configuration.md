@@ -170,7 +170,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 
 | 列表 | 条目 | 命中后的效果 |
 | --- | --- | --- |
-| `auxiliary_patterns` | 正则表达式，不区分大小写 | 分别与 Messages 的 `system` 字段、Responses 的 `instructions` 和最后一条用户消息匹配，命中的请求算作**辅助请求**。Chat Completions `messages` 和 Responses `input` 里的 system、developer 消息不参与匹配，这类客户端要匹配用户消息里的文本。 |
+| `auxiliary_patterns` | 正则表达式，不区分大小写 | 分别与 Messages 的 `system` 字段、Responses 的 `instructions`、最后一条用户消息，以及客户端附在最后一条工具结果后面的文本匹配，命中的请求算作**辅助请求**。Chat Completions `messages` 和 Responses `input` 里的 system、developer 消息不参与匹配，这类客户端要匹配用户消息里的文本。 |
 | `noise_patterns` | 正则表达式，区分大小写 | 网关读取对话时忽略这些文本：不参与请求分类和记忆检索，也不写入保存的消息和工具结果，但仍原样发给模型。删完为空的用户消息不算新用户消息，请求按同一轮的延续处理。 |
 | `noise_tags` | 标签名 | `<tag …>…</tag>` 块（不区分大小写），处理方式同 `noise_patterns`。 |
 | `plugin_tags` | 标签名 | 系统提示词或客户端消息中出现代码之外的完整 `<tag>…</tag>` 块，表示客户端里运行着 OpenViking 记忆插件。该对话此后网关只做转发：不加记忆、不提供 OpenViking 工具、不保存（见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)）。只添加插件自己写入的标签。 |

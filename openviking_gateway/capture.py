@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """One capture document per client session: its OpenViking session and how far it is saved.
 
-The request that ends a turn writes the turn to OpenViking, and a gateway cut inside a
-turn writes the history before it at once. A commit then archives the saved messages
-and extracts memories from them: the gateway commits, or with ``openviking_auto_commit``
-OpenViking does by itself. The document holds no conversation text, only where the
-session stands and when its idle commit is due. Replay records are independent: a
-failed save never invalidates an old replacement.
+The request that ends a turn writes the turn to OpenViking. A gateway cut inside a turn
+writes the history before it at once, and so does Claude Code's or Codex's compaction
+request inside a turn. A commit then archives the saved messages and extracts memories from
+them: the gateway commits, or with ``openviking_auto_commit`` OpenViking does by itself.
+The document holds no conversation text, only where the session stands and when its idle
+commit is due. Replay records are independent: a failed save never invalidates an old
+replacement.
 """
 
 import asyncio
@@ -47,9 +48,11 @@ SWEEP_SECONDS = 60
 REFUSED = (401, 403, 404)
 # ``created`` says who commits the OpenViking session as it was last set up. ``idle_at``
 # is when the gateway's idle commit is due, for the key ``account`` and ``credential_id`` name.
+# ``answered`` is the last message of the request whose reply ended the latest saved turn.
 FIELDS = (
     "ov_session",
     "delivered",
+    "answered",
     "created",
     "reason",
     "previous",
@@ -148,6 +151,10 @@ class CapturePipeline:
         policy = Policy.model_validate(request.root["policy"])
         doc = await self.store.get(request.scope, request.session)
         value = current(doc.value)
+        # A history ending where a saved turn's request ended, as a compaction after that
+        # turn sends it, was written when the turn ended.
+        if not ended and chain[stop - 1] == value.get("answered"):
+            return 0
         positions = {anchor: index for index, anchor in enumerate(chain) if anchor}
         cursor = value["delivered"]
         if cursor in positions:
@@ -170,6 +177,8 @@ class CapturePipeline:
                 written = await self.viking.write(key, session, batch)
                 sent += len(batch)
                 mark = {"created": committer}
+                if ended and not captured:
+                    mark["answered"] = request.capture_chain[-1]
                 if self.auto_commit:
                     mark["idle_at"] = None
                 elif ended and not captured:
@@ -322,13 +331,16 @@ class CapturePipeline:
             doc = await self.store.get(request.scope, request.session)
             value = current(doc.value)
 
-    async def save_cut(self, request, credential, anchor):
-        """Write the history up to a gateway cut inside a turn, without waiting for its end.
+    async def save_cut(self, request, credential, anchor, messages=None, chain=None):
+        """Write the history up to a cut inside a turn, without waiting for its end.
 
         The model may search the saved session right after the cut. A turn's end covers
-        cuts before a user message, and whatever this write could not save.
+        cuts before a user message, and whatever this write could not save. ``messages``
+        and ``chain`` replace the request's history, as a client's compaction request
+        without its appended text.
         """
-        chain = request.capture_chain
+        messages = request.messages if messages is None else messages
+        chain = request.capture_chain if chain is None else chain
         if (
             request.disabled
             or request.anchor < 0
@@ -342,9 +354,7 @@ class CapturePipeline:
             return
         try:
             async with async_timeout.timeout(CUT_SECONDS):
-                await self.save(
-                    request, credential, request.messages, chain, chain.index(anchor) + 1
-                )
+                await self.save(request, credential, messages, chain, chain.index(anchor) + 1)
         except Exception as error:
             logger.warning(
                 "OpenViking Gateway could not save the history before a cut: %s",

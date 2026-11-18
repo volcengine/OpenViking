@@ -76,6 +76,7 @@ async def test_turn_is_written_when_its_reply_ends_it(setup_kernel, credential, 
     assert set(state) == {
         "ov_session",
         "delivered",
+        "answered",
         "created",
         "reason",
         "previous",
