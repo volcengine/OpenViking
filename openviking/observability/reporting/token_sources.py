@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator
 
+from .fact_context import event_context
+
 _source_type: ContextVar[str | None] = ContextVar("dashboard_token_source_type", default=None)
 _task_sources = frozenset({"session_commit", "add_skill", "content_write", "reindex", "compile"})
 _semantic_sources = {
@@ -31,8 +33,6 @@ def get_dashboard_token_source_type(
     if source_type:
         return source_type
     if task_type is None:
-        from .facts import event_context
-
         task_type = event_context("embedding.call").get("task_type")
     if task_type == "admin_reindex":
         return "reindex"
