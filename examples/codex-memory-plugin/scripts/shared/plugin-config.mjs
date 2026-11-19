@@ -189,6 +189,7 @@ function ovConfSection(ovFile, key) {
  */
 export function buildPluginConfig(harness, {
   cwd = "",
+  sessionId = "",
   env = process.env,
   legacy = null,
   manifestUrl = "",
@@ -212,7 +213,7 @@ export function buildPluginConfig(harness, {
     cliFile: files.cliFile,
     clientVersion,
   });
-  const connection = resolveConnection(key, { env, files, hostInput, rootKeyFallback });
+  const connection = resolveConnection(key, { cwd: workspaceCwd, sessionId: settings.enabled === false ? "" : sessionId, env, files, hostInput, rootKeyFallback });
   const { baseUrl, account, user } = connection;
   const timeoutMs = settings.timeoutMs;
   const peerId = resolvePluginPeerId({
@@ -247,6 +248,9 @@ export function buildPluginConfig(harness, {
     credentialSource: connection.credentialSource,
     apiKeySource: connection.apiKeySource,
     credentialPath: connection.credentialPath,
+    connectionPath: connection.connectionPath,
+    connectionFields: connection.connectionFields,
+    connectionScope: connection.connectionScope,
     hasApiKey: connection.hasApiKey,
     configPath: connection.cliPath || connection.ovPath || null,
     cliConfigPath: connection.cliPath,

@@ -1,7 +1,8 @@
 // GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 
 const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
 const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
@@ -61,7 +62,8 @@ function looksLikeOvcli(obj) {
     typeof obj.account_id === "string" ||
     typeof obj.user === "string" ||
     typeof obj.user_id === "string" ||
-    typeof obj.actor_peer_id === "string",
+    typeof obj.actor_peer_id === "string" ||
+    Array.isArray(obj.connections),
   );
 }
 
@@ -206,6 +208,96 @@ function trimSlash(value) {
   return value.replace(/\/+$/, "");
 }
 
+function connectionPath(value) {
+  const raw = str(value);
+  const expanded = raw === "~" ? homedir()
+    : /^~[/\\]/.test(raw) ? join(homedir(), raw.slice(2)) : raw;
+  if (!expanded || !isAbsolute(expanded)) {
+    throw new Error("ovcli.conf connections[].path must be an absolute or ~-prefixed directory");
+  }
+  const path = resolvePath(expanded);
+  return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+function pathConnectionEntries(cliFile) {
+  if (cliFile.connections === undefined) return [];
+  if (!Array.isArray(cliFile.connections)) throw new Error("ovcli.conf connections must be an array");
+  const paths = new Set();
+  return cliFile.connections.map((entry) => {
+    if (!isSection(entry)) throw new Error("ovcli.conf connections[] must be an object");
+    const path = connectionPath(entry.path);
+    if (paths.has(path)) throw new Error("ovcli.conf connections[].path must be unique");
+    paths.add(path);
+    const fields = {};
+    for (const key of ["url", "api_key", "account", "user"]) {
+      if (entry[key] === undefined) continue;
+      if (typeof entry[key] !== "string") {
+        throw new Error(`ovcli.conf connections[].${key} must be a string`);
+      }
+      fields[key] = entry[key];
+    }
+    return { path, fields };
+  });
+}
+
+function matchingConnection(entries, cwd) {
+  const directory = connectionPath(resolvePath(str(cwd) || process.cwd()));
+  let match = null;
+  for (const entry of entries) {
+    const suffix = relative(entry.path, directory);
+    if (suffix === "" || (!isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`))) {
+      if (!match || entry.path.length > match.path.length) match = entry;
+    }
+  }
+  return match;
+}
+
+/** Persist directory selection, never credentials, across short-lived hooks. */
+function sessionConnectionSelection(harness, { env, cliPath, cliFile, sessionId, cwd, entries }) {
+  if (!sessionId || !cliPath) return entries.length ? matchingConnection(entries, cwd) : null;
+  const root = normalizePath(env.OPENVIKING_HOME) || join(homedir(), ".openviking");
+  const key = createHash("sha256").update(JSON.stringify([harness, cliPath, sessionId])).digest("hex");
+  const dir = join(root, "connection-state");
+  const file = join(dir, `${key}.json`);
+  const route = (entry) => {
+    const fields = { ...cliFile, ...entry?.fields };
+    return createHash("sha256").update(JSON.stringify([
+      trimSlash(str(fields.url)), str(fields.account, str(fields.account_id)), str(fields.user, str(fields.user_id)),
+    ])).digest("hex");
+  };
+  const readSelection = () => {
+    let stored;
+    try { stored = JSON.parse(readFileSync(file, "utf8")); }
+    catch (error) {
+      if (error?.code === "ENOENT") return undefined;
+      throw new Error("Cannot read the session's saved OpenViking connection selection");
+    }
+    if (stored?.version !== 1 || typeof stored.path !== "string") {
+      throw new Error("Invalid saved OpenViking connection selection");
+    }
+    const entry = stored.path ? entries.find((candidate) => candidate.path === stored.path) : null;
+    if (stored.path && !entry) throw new Error("The session's OpenViking connection was removed; start a new session");
+    if (stored.route !== route(entry)) {
+      throw new Error("The session's OpenViking server or identity changed; start a new session");
+    }
+    return entry;
+  };
+  const saved = readSelection();
+  if (saved !== undefined) return saved;
+  if (!entries.length) return null;
+  const selected = matchingConnection(entries, cwd);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    writeFileSync(file, JSON.stringify({ version: 1, path: selected?.path || "", route: route(selected) }), {
+      encoding: "utf8", flag: "wx", mode: 0o600,
+    });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    return readSelection();
+  }
+  return selected;
+}
+
 /** The first layer that holds a value, with the source label and file it names. */
 function firstLayer(layers) {
   for (const [value, source, path = ""] of layers) {
@@ -221,8 +313,9 @@ function firstLayer(layers) {
  * `buildProxyConnection`, so the two sides of one harness cannot disagree.
  *
  * Only three kinds of input count: what an embedding host named (`hostInput`),
- * the environment, and the two files under `~/.openviking`. The working
- * directory never does — an MCP proxy starts wherever its host launches it.
+ * the environment, and the two files under `~/.openviking`. An optional
+ * connections[] entry in ovcli.conf selects file-owned overrides by directory.
+ * Hooks pin the selected entry by session; a proxy uses its launch directory.
  *
  * ovcli.conf pins the chain when it names a url, key, identity or peer and the
  * environment names none of those; pinned, the environment's credentials no
@@ -238,6 +331,8 @@ function firstLayer(layers) {
  * them, an identity from any layer means the deployment expects one.
  */
 export function resolveConnection(harness, {
+  cwd = process.cwd(),
+  sessionId = "",
   env = process.env,
   files = null,
   hostInput = {},
@@ -245,9 +340,14 @@ export function resolveConnection(harness, {
 } = {}) {
   const name = str(harness, "");
   const loaded = files || loadCredentialFiles(env);
-  const { cliFile, ovFile, cliPath, ovPath } = loaded;
+  const { cliFile: originalCliFile, ovFile, cliPath, ovPath } = loaded;
   const host = hostInput || {};
   const mode = sourceMode(env);
+  const entries = mode === "env" ? [] : pathConnectionEntries(originalCliFile);
+  const selected = mode !== "env" ? sessionConnectionSelection(name, {
+    env, cliPath, cliFile: originalCliFile, sessionId, cwd, entries,
+  }) : null;
+  const cliFile = selected ? { ...originalCliFile, ...selected.fields } : originalCliFile;
   const envHasCredentials = hasEnvCredentialFields(env);
   const pinned = mode === "cli" ||
     (mode === "auto" && !envHasCredentials && Boolean(cliPath) && hasCredentialFields(cliFile));
@@ -295,6 +395,10 @@ export function resolveConnection(harness, {
   const baseUrl = hostBaseUrl || trimSlash(envUrl || fileUrl) || serverAddress(fromFiles ? server : {});
   const envMcpUrl = pinned ? "" : str(env.OPENVIKING_MCP_URL, "");
   const mcpUrl = (!hostBaseUrl && envMcpUrl) ? envMcpUrl : `${baseUrl}/mcp`;
+  // Include the key because API-key auth may imply a tenant without explicit
+  // account/user headers. Only its digest is used for local queue isolation.
+  const connectionScope = entries.length ? createHash("sha256")
+    .update(JSON.stringify([baseUrl, mcpUrl, account, user, authMode, key.value])).digest("hex") : "";
 
   return {
     ...loaded,
@@ -314,6 +418,9 @@ export function resolveConnection(harness, {
     // `credentialSource` is the mode the chain ran in, not a file.
     apiKeySource: key.source,
     credentialPath: key.path,
+    connectionPath: selected?.path || "",
+    connectionFields: selected ? Object.keys(selected.fields) : [],
+    connectionScope,
   };
 }
 
@@ -347,9 +454,9 @@ function clampTimeout(value) {
  * chain to itself. A portable package has no installer to migrate anyone, so
  * an install that names only a `url` there keeps the key it has always used.
  */
-export function buildProxyConnection(harness, { env = process.env, manifestUrl = "", version = "" } = {}) {
+export function buildProxyConnection(harness, { cwd = process.cwd(), env = process.env, manifestUrl = "", version = "" } = {}) {
   const name = str(harness);
-  const connection = resolveConnection(name, { env, rootKeyFallback: true });
+  const connection = resolveConnection(name, { cwd, env, rootKeyFallback: true });
   return {
     harness: name,
     userAgent: buildUserAgent(name, str(version) || (manifestUrl ? readManifestVersion(manifestUrl) : "")),
@@ -364,6 +471,9 @@ export function buildProxyConnection(harness, { env = process.env, manifestUrl =
     credentialSource: connection.credentialSource,
     apiKeySource: connection.apiKeySource,
     credentialPath: connection.credentialPath,
+    connectionPath: connection.connectionPath,
+    connectionFields: connection.connectionFields,
+    connectionScope: connection.connectionScope,
     hasApiKey: connection.hasApiKey,
     cliPath: connection.cliPath,
     ovPath: connection.ovPath,

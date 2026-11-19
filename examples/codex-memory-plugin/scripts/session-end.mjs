@@ -44,7 +44,7 @@ const LOCK_WAIT_MS = (() => {
   return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 120_000;
 })();
 
-const { fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId });
+let fetchJSONRes, fetchJSON;
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -61,6 +61,7 @@ async function finish(sessionId, transcriptPath, cwd, endToken, heartbeat) {
   }
 
   const state = await loadState(sessionId);
+  if (cfg.connectionScope) state.connectionScope = cfg.connectionScope;
   activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd }).peerId;
   log("start", { sessionId, transcriptPath, hasPeer: Boolean(activePeerId) });
 
@@ -154,6 +155,7 @@ runHookStage({
   onSkip: (reason) => log("skip", { stage: "init", reason }),
 }, async ({ cfg: reloaded, input, raw, cwd, sessionId, emit }) => {
   cfg = reloaded;
+  ({ fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId }));
   const transcriptPath = input.transcript_path || null;
 
   if (!sessionId) {

@@ -48,7 +48,6 @@ if (!isPluginEnabled()) {
 }
 
 const { log, logError } = createLogger("session-start");
-const fetchJSON = makeFetchJSON(loadConfig());
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -101,6 +100,7 @@ runHookStage({
   envelope: approve,
   onSkip: (reason) => log("skip", { reason }),
 }, async ({ cfg, input, cwd, sessionId }) => {
+  const fetchJSON = makeFetchJSON(cfg);
   const source = input.source || "startup";
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", { source, sessionId, peerSource: effectivePeer.source });

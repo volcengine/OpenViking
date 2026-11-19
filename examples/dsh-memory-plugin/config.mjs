@@ -21,7 +21,7 @@ export const MCP_SERVER_NAME = "openviking";
  * named by the host is the more specific answer and stays ahead of the
  * credential chain.
  */
-export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()) {
+export function resolveConfig(input = {}, env = process.env, cwd = process.cwd(), sessionId = "") {
   // ov.conf's `dsh` section is the legacy layer here as everywhere else, but
   // the cordis patch shares that slot; the host named this process's settings,
   // so it wins the overlap.
@@ -29,6 +29,7 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
   const config = buildPluginConfig("dsh", {
     env,
     cwd,
+    sessionId,
     legacy: { ...(ovSection && typeof ovSection === "object" ? ovSection : {}), ...input },
     version: PLUGIN_VERSION,
     hostInput: {

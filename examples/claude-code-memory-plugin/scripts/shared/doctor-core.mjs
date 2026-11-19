@@ -1201,11 +1201,14 @@ export function credentialSources(cfg, cliConf, ovConf, { section = harnessKey(c
   // Pinned to ovcli.conf, the chain never looks at the environment; forced to
   // the environment, it never looks at a file.
   const pinned = cfg.credentialSource === "ovcli";
+  const connectionFields = cfg.connectionFields || [];
+  const pathSource = `${cliShort} connections[${cfg.connectionPath}]`;
   const envOnly = /^(env|environment)$/i.test(String(env.OPENVIKING_CREDENTIAL_SOURCE || env.OPENVIKING_CREDENTIALS_SOURCE || "").trim());
 
   const envUrl = env.OPENVIKING_URL || env.OPENVIKING_BASE_URL;
   const url = (!pinned && envUrl) ? "env"
     : envOnly ? "default (http://127.0.0.1:1933)"
+      : connectionFields.includes("url") ? pathSource
       : cli.url ? cliShort
         : server.url ? ovShort
           : (server.host || server.port) ? `${ovShort} server.host/port` : "default (http://127.0.0.1:1933)";
@@ -1214,7 +1217,8 @@ export function credentialSources(cfg, cliConf, ovConf, { section = harnessKey(c
   if (cfg.apiKeySource === "env") {
     apiKey = env.OPENVIKING_BEARER_TOKEN ? "env OPENVIKING_BEARER_TOKEN" : "env OPENVIKING_API_KEY";
   } else if (cfg.apiKeySource === "ovcli") {
-    apiKey = cli.api_key ? cliShort
+    apiKey = connectionFields.includes("api_key") ? pathSource
+      : cli.api_key ? cliShort
       : scoped.apiKey ? `${cliShort} plugin.${section}.apiKey`
         : plugin.apiKey ? `${cliShort} plugin.apiKey` : cliShort;
   } else if (cfg.apiKeySource === "ov") {
@@ -1230,6 +1234,7 @@ export function credentialSources(cfg, cliConf, ovConf, { section = harnessKey(c
   const identity = (envName, cliValue, name) => (
     (!pinned && env[envName]) ? "env"
       : envOnly ? "(unset)"
+        : connectionFields.includes(name === "accountId" ? "account" : "user") ? pathSource
         : cliValue ? cliShort
           : scoped[name] ? `${cliShort} plugin.${section}.${name}`
             : plugin[name] ? `${cliShort} plugin.${name}`
@@ -1248,6 +1253,7 @@ export function credentialSources(cfg, cliConf, ovConf, { section = harnessKey(c
  * `sources` is the host's own credential chain rendered as one label per field.
  */
 export function reportCredentials(report, cfg, sources, { account = "", user = "" } = {}) {
+  if (cfg.connectionPath) report.info(`connection directory  ${cfg.connectionPath}`);
   report.info(`url      ${cfg.baseUrl}  ← ${sources.url}`);
   for (const p of lintBaseUrl(cfg.baseUrl)) report[p.level](p.message, "", p.fix);
   if (sources.url.startsWith("default") && !isLoopbackUrl(cfg.baseUrl)) report.info("url fell back to the built-in default");
@@ -1471,6 +1477,7 @@ export async function runDoctor(host) {
       generatedAt: new Date().toISOString(),
       resolved: {
         baseUrl: cfg.baseUrl,
+        connectionPath: cfg.connectionPath || "",
         apiKey: configInfo.keyInfo.display,
         apiKeyFormat: configInfo.keyInfo.format,
         account: identity.account,

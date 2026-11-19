@@ -449,12 +449,10 @@ test("recallExcludeUris reaches the search request", async () => {
       };
     },
   }, { ...config(), recallExcludeUris: ["viking://user/default/skills", "viking://agent/skills"] }, { debug() {} });
-  runtime.initialize = async () => ({
-    ready: true,
-    config: { ...config(), recallExcludeUris: ["viking://user/default/skills", "viking://agent/skills"] },
-  });
+  const agent = { session: { id: "recall-exclude" } };
+  runtime.stateFor(agent.session).ready = true;
 
-  await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]);
+  await runtime.recallMessage(agent, [{ role: "user", content: "what did we decide" }]);
 
   assert.equal(bodies.length, 1);
   assert.deepEqual(bodies[0].exclude_uris, ["viking://user/default/skills", "viking://agent/skills"]);
@@ -471,9 +469,10 @@ test("recall sends no exclude_uris when recallExcludeUris is unset", async () =>
       };
     },
   }, config(), { debug() {} });
-  runtime.initialize = async () => ({ ready: true, config: config() });
+  const agent = { session: { id: "recall-default" } };
+  runtime.stateFor(agent.session).ready = true;
 
-  await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]);
+  await runtime.recallMessage(agent, [{ role: "user", content: "what did we decide" }]);
 
   assert.equal(bodies.length, 1);
   assert.equal("exclude_uris" in bodies[0], false);
@@ -734,12 +733,13 @@ test("missing DSH model only permits server rewrite in auto mode", async () => {
         return { ok: true, result: { rendered: "original fragments", entries: [], stats: {} } };
       },
     }, cfg, { debug() {} });
-    runtime.initialize = async () => ({ ready: true, config: cfg });
-    const message = await runtime.recallMessage({}, [{ role: "user", content: "which database" }]);
+    const agent = { session: { id: `recall-${mode}` } };
+    runtime.stateFor(agent.session).ready = true;
+    const message = await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
     assert.equal(body.rewrite, mode === "auto" ? "auto" : undefined);
     assert.match(message.content[0].text, /original fragments/);
     const controller = new AbortController();
     controller.abort();
-    assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "which database" }], controller.signal), null);
+    assert.equal(await runtime.recallMessage(agent, [{ role: "user", content: "which database" }], controller.signal), null);
   }
 });
