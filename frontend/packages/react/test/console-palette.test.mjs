@@ -146,7 +146,7 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
     );
     await pick('compile');
-    assert.equal(host.input.value, 'ov compile ');
+    assert.equal(host.input.value, 'ov compile --compile-name <name>');
     assert.equal(host.records.length, 0);
 
     await host.render({
