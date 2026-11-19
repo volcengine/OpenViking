@@ -3,11 +3,13 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import {
   mkdir,
   mkdtemp,
   readFile,
   realpath,
+  rm,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -634,6 +636,63 @@ test('the replacement shell outlives the updater and starts it from the new rele
   assert.equal(options.env.PM2_HOME, '/home/u/.ov-superagent/pm2');
 });
 
+test('the Windows replacement is a detached batch file that outlives the updater', async (t) => {
+  const windows = await import('../../daemon/src/platform/win32.mjs');
+  const release = await realpath(await mkdtemp(path.join(os.tmpdir(), 'superagent-updater-win-restart-')));
+  t.after(() => fs.rmSync(release, { recursive: true, force: true }));
+  await mkdir(path.join(release, 'bin'), { recursive: true });
+  await writeFile(path.join(release, 'bin', 'pm2.cmd'), '@echo off\r\n');
+  const calls = [];
+  scheduleUpdaterRestart({
+    release,
+    pm2Bin: 'fallback-pm2.cmd',
+    pm2Env: { PM2_HOME: 'C:\\Users\\u\\.ov-superagent\\pm2' },
+    implementation: windows,
+    spawnImpl: (command, args, options) => { calls.push({ command, args, options }); return { unref() {} }; },
+  });
+  const [{ command, args, options }] = calls;
+  assert.equal(command, process.env.ComSpec || 'cmd.exe');
+  const helper = args[3].slice('start "" /b "'.length, -1);
+  t.after(() => fs.rmSync(helper, { force: true }));
+  // `start` hands it to a new process, so PM2's tree kill of the updater misses
+  // it; the delay then restarts the updater from the release just installed.
+  assert.equal(args.slice(0, 3).join(' '), '/d /s /c');
+  assert.match(args[3], /^start "" \/b ".+\.cmd"$/);
+  assert.equal(options.detached, true);
+  assert.equal(options.windowsHide, true);
+  const script = await readFile(helper, 'utf8');
+  assert.match(script, /ping -n 3 127\.0\.0\.1 >nul/);
+  assert.ok(script.includes(`"${path.join(release, 'bin', 'pm2.cmd')}" delete superagent-updater`));
+  assert.ok(script.includes(`"${path.join(release, 'bin', 'pm2.cmd')}" start "${path.join(release, 'ecosystem.config.cjs')}" --only superagent-updater --update-env`));
+  assert.match(script, /del "%~f0" >nul 2>&1/);
+});
+
+test('a Windows updater endpoint is one stable named pipe per install directory', async () => {
+  const windows = await import('../../daemon/src/platform/win32.mjs');
+  const one = windows.localSocketPath('C:\\Users\\Alice\\.ov-superagent', 'updater', { shared: true });
+  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.ov-superagent\\', 'updater', { shared: true }));
+  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.ov-superagent\\other', 'updater', { shared: true }));
+  assert.match(one, /^\\\\.\\pipe\\superagent-updater-[0-9a-f]{24}$/);
+  // The per-process nonce stays on the daemon's own action endpoint.
+  assert.match(windows.localSocketPath('C:\\Users\\Alice\\.ov-superagent'), /-actions-[0-9a-f]{24}-[0-9a-f]{48}$/);
+});
+
+test('the updater serves and closes a Windows named pipe', { skip: process.platform !== 'win32' }, async (t) => {
+  const { localSocketPath } = await import('../../daemon/src/platform/index.mjs');
+  const socketPath = localSocketPath(path.join(os.tmpdir(), 'superagent-updater-pipe'), 'updater', { shared: true });
+  const first = await createUpdaterServer({
+    socketPath,
+    upgrade: async (target) => ({ target, status: 'ready' }),
+  });
+  t.after(() => first.close());
+  await assert.rejects(createUpdaterServer({ socketPath, upgrade: async () => ({}) }), { code: 'EADDRINUSE' });
+  const response = await post(socketPath, { target: 'beta' });
+  assert.equal(response.status, 200);
+  await first.close();
+  const again = await createUpdaterServer({ socketPath, upgrade: async () => ({}) });
+  await again.close();
+});
+
 test('server accepts one allowlisted upgrade over its private socket', async (t) => {
   const root = await fixtureTempRoot('superagent-updater-socket-test-');
   const socketPath = path.join(root, 'updater.sock');
@@ -811,4 +870,162 @@ test('CLI upgrade reaches the updater only on artifact-supported platforms', asy
     assert.equal(Buffer.concat(stderr).toString('utf8'),
       'Automatic release upgrades are not available on this platform. Stop OpenViking SuperAgent and update the installation manually.\n');
   }
+});
+
+// ---- Windows installer publication -----------------------------------------
+
+// Two instances on an older release, a newer release published by the installer,
+// and PM2 entries per ecosystem config and app name.
+function installerModeFixture() {
+  const events = [];
+  const entries = new Map();
+  const key = (config, app) => `${config}\0${app}`;
+  const state = { failStart: null, current: null };
+  return {
+    events,
+    state,
+    setEntry(config, app, entry) { entries.set(key(config, app), entry); },
+    execFileImpl: async (_command, args) => {
+      events.push(['pm2', ...args]);
+      const [operation] = args;
+      if (operation === 'jlist') {
+        return {
+          stdout: JSON.stringify([...state.current.entries()].map(([app, entry]) => ({
+            name: app,
+            pm2_env: { status: 'online', pm_exec_path: entry },
+          }))),
+        };
+      }
+      if (operation === 'delete' || operation === 'stop') {
+        state.current.delete(args[1]);
+        return { stdout: '' };
+      }
+      if (operation === 'start') {
+        const app = args[3];
+        if (state.failStart && state.failStart({ app, config: args[1] })) {
+          throw new Error(`${app} is not online (status=errored, exit_code=1)`);
+        }
+        const entry = entries.get(key(args[1], app));
+        assert.ok(entry, `unexpected ecosystem config for ${app}: ${args[1]}`);
+        state.current.set(app, entry);
+        return { stdout: '' };
+      }
+      if (operation === 'save') return { stdout: '' };
+      throw new Error(`unexpected PM2 operation: ${operation}`);
+    },
+  };
+}
+
+test('an installer publication skips the deploy lock the installer takes itself', async () => {
+  const fixture = await fixtureRelease();
+  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  await mkdir(path.dirname(daemonEntry), { recursive: true });
+  await writeFile(daemonEntry, '');
+  // The installer holds this directory while it runs; the updater must not.
+  await mkdir(path.join(path.dirname(fixture.releaseLink), 'deploy.lock'));
+  const harness = installerModeFixture();
+  harness.setEntry(path.join(fixture.release, 'ecosystem.config.cjs'), 'superagent-beta', daemonEntry);
+  harness.state.current = new Map([['superagent-beta', daemonEntry]]);
+  const result = await upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    mode: 'installer',
+    publishReleaseImpl: async () => ({
+      release: fixture.release,
+      commit: 'c',
+      version: '0.5.0',
+      published: false,
+      previousRelease: fixture.release,
+      previousVersion: '0.5.0',
+    }),
+    execFileImpl: harness.execFileImpl,
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+  });
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.apps, ['superagent-beta']);
+  assert.ok(fs.existsSync(path.join(path.dirname(fixture.releaseLink), 'deploy.lock')),
+    'the lock the installer owns is left untouched');
+});
+
+test('a Windows release that cannot start rolls the publication and the started apps back', async () => {
+  const fixture = await fixtureRelease();
+  const entryRelative = path.join('packages', 'daemon', 'src', 'main.mjs');
+  const newer = await fixtureAppRelease(fixture, '0.5.0-test', entryRelative);
+  const oldAlpha = path.join(fixture.release, entryRelative);
+  await mkdir(path.dirname(oldAlpha), { recursive: true });
+  await writeFile(oldAlpha, '');
+  const oldBeta = path.join(fixture.release, entryRelative);
+  const newAlpha = path.join(newer.release, entryRelative);
+  const newBeta = path.join(newer.release, entryRelative);
+  const oldConfig = path.join(fixture.release, 'ecosystem.config.cjs');
+
+  const harness = installerModeFixture();
+  harness.setEntry(oldConfig, 'superagent-alpha', oldAlpha);
+  harness.setEntry(oldConfig, 'superagent-beta', oldBeta);
+  harness.setEntry(newer.config, 'superagent-alpha', newAlpha);
+  harness.setEntry(newer.config, 'superagent-beta', newBeta);
+  harness.state.current = new Map([
+    ['superagent-alpha', oldAlpha],
+    ['superagent-beta', oldBeta],
+  ]);
+  harness.state.failStart = ({ app, config }) => app === 'superagent-beta' && config === newer.config;
+
+  const republished = [];
+  await assert.rejects(upgradeTarget('all', {
+    releaseLink: fixture.releaseLink,
+    mode: 'installer',
+    publishReleaseImpl: async () => {
+      await rm(fixture.releaseLink);
+      await symlink(newer.release, fixture.releaseLink);
+      return {
+        release: newer.release,
+        commit: 'd',
+        version: '0.5.0',
+        published: true,
+        previousRelease: fixture.release,
+        previousVersion: '0.4.0',
+      };
+    },
+    republishPreviousImpl: async (options) => {
+      republished.push(options.previousVersion);
+      await rm(fixture.releaseLink);
+      await symlink(fixture.release, fixture.releaseLink);
+      return { release: fixture.release, version: '0.4.0', published: true };
+    },
+    execFileImpl: harness.execFileImpl,
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+  }), /rolled back to 0\.4\.0/);
+
+  assert.deepEqual(republished, ['0.4.0']);
+  assert.equal(await realpath(fixture.releaseLink), await realpath(fixture.release));
+  // Alpha had already started on the new release and is moved back to the old one;
+  // beta was restored by the failed start's own rollback.
+  const alphaStart = harness.events.filter((event) => event[0] === 'pm2' && event[1] === 'start'
+    && event[4] === 'superagent-alpha').map((event) => event[2]);
+  assert.deepEqual(alphaStart, [newer.config, oldConfig]);
+  assert.equal(harness.state.current.get('superagent-alpha'), oldAlpha);
+  assert.equal(harness.state.current.get('superagent-beta'), oldBeta);
+});
+
+test('a failed Windows rollback keeps the original failure and says so', async () => {
+  const fixture = await fixtureRelease();
+  const newer = await fixtureAppRelease(fixture, '0.5.0-test', path.join('packages', 'daemon', 'src', 'main.mjs'));
+  const harness = installerModeFixture();
+  harness.state.current = new Map();
+  harness.state.failStart = () => true;
+  await assert.rejects(upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    mode: 'installer',
+    publishReleaseImpl: async () => {
+      await rm(fixture.releaseLink);
+      await symlink(newer.release, fixture.releaseLink);
+      return { release: newer.release, commit: 'd', version: '0.5.0', published: true,
+        previousRelease: fixture.release, previousVersion: '0.4.0' };
+    },
+    republishPreviousImpl: async () => { throw new Error('the release host answered 503'); },
+    execFileImpl: harness.execFileImpl,
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+  }), /is not online .*could not be made current again \(the release host answered 503\)/);
 });

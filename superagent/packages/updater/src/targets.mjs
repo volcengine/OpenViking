@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import os from 'node:os';
-import { homeDir as platformHomeDir } from '../../daemon/src/platform/index.mjs';
+import { homeDir as platformHomeDir, localSocketPath } from '../../daemon/src/platform/index.mjs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -87,8 +87,11 @@ export function shouldUpgradeSharedWeb(target, targets = loadTargets()) {
   return target === 'all' || getTarget(target, targets).upgradeSharedWeb === true;
 }
 
-export function defaultSocketPath(homeDir = platformHomeDir() || os.homedir()) {
-  return path.join(homeDir, '.ov-superagent', 'updater.sock');
+// Where the updater listens. A POSIX install uses a socket file; Windows has no
+// socket files, so the same directory maps to one stable named pipe that the CLI
+// and the updater both derive without being told.
+export function defaultUpdaterEndpoint(homeDir = platformHomeDir() || os.homedir()) {
+  return localSocketPath(path.join(homeDir, '.ov-superagent'), 'updater', { shared: true });
 }
 
 export function defaultReleaseLink(homeDir = platformHomeDir() || os.homedir()) {

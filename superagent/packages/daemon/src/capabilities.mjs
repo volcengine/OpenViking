@@ -6,9 +6,14 @@ const artifactPlatforms = createRequire(import.meta.url)('../../updater/artifact
 
 // Product support policy lives here, rather than in the OS implementations.
 export function capabilitiesFor(implementation) {
+  const artifact = artifactPlatforms[implementation.hostPlatformId];
+  // `release` publishes tar.gz archives the updater installs itself, so it needs
+  // the POSIX release layout; `installer` publishes Windows ZIP previews through
+  // the PowerShell installer the release ships (see updater/src/windows-installer.mjs).
+  const updater = artifact?.updater === 'installer'
+    || (artifact?.updater === 'release' && implementation.supportsShellScripts === true);
   return Object.freeze({
-    updater: implementation.supportsShellScripts && !!artifactPlatforms[implementation.hostPlatformId]
-      && artifactPlatforms[implementation.hostPlatformId].sourceOnly !== true,
+    updater,
     autostart: implementation.loginService !== null,
     connectors: Object.freeze({ email: true }),
   });

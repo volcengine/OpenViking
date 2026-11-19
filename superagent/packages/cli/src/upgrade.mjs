@@ -4,7 +4,7 @@
 import { capabilities } from '../../daemon/src/capabilities.mjs';
 
 import http from 'node:http';
-import { assertUpgradeTarget, defaultSocketPath, upgradeTargetNames } from '../../updater/src/targets.mjs';
+import { assertUpgradeTarget, defaultUpdaterEndpoint, upgradeTargetNames } from '../../updater/src/targets.mjs';
 
 // `ov-superagent upgrade` only asks the updater process; the updater fetches, publishes
 // and rolls the apps, so the upgrade survives the caller disconnecting.
@@ -38,7 +38,10 @@ function requestUpgrade(socketPath, target) {
         resolve(payload);
       });
     });
-    request.setTimeout(600_000, () => request.destroy(new Error('updater request timed out')));
+    // A POSIX upgrade downloads a whole archive, and a Windows one runs the
+    // packaged installer, which downloads and unpacks a ZIP; neither is a short
+    // request on a slow link. The updater keeps working if this client gives up.
+    request.setTimeout(1_800_000, () => request.destroy(new Error('updater request timed out')));
     request.once('error', reject);
     request.end(body);
   });
@@ -55,7 +58,7 @@ export async function upgradeCommand(args, { stdout = process.stdout, stderr = p
     return 2;
   }
   assertUpgradeTarget(target);
-  const result = await requestUpgrade(env.OV_SUPERAGENT_UPDATER_SOCKET || defaultSocketPath(), target);
+  const result = await requestUpgrade(env.OV_SUPERAGENT_UPDATER_SOCKET || defaultUpdaterEndpoint(), target);
   const apps = Array.isArray(result.apps) && result.apps.length > 0
     ? result.apps
     : [result.app].filter(Boolean);

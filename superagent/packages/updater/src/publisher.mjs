@@ -18,13 +18,17 @@ import {
 
 const execFile = promisify(execFileCallback);
 export const RELEASE_METADATA = 'release.json';
+// A Windows preview package describes itself in windows-preview.json; both files
+// name the version, platform and commit the updater reports.
+export const WINDOWS_RELEASE_METADATA = 'windows-preview.json';
+const RELEASE_METADATA_FILES = [RELEASE_METADATA, WINDOWS_RELEASE_METADATA];
 
 function isInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
 }
 
-async function currentRelease(baseDir) {
+export async function currentRelease(baseDir) {
   // `baseDir` may be reached through a symlink (for example /home ->
   // /srv/home); compare canonical paths.
   const releasesRoot = await realpath(path.join(baseDir, 'releases')).catch((error) => {
@@ -42,12 +46,15 @@ async function currentRelease(baseDir) {
 
 export async function readReleaseMetadata(release) {
   if (!release) return null;
-  try {
-    return JSON.parse(await readFile(path.join(release, RELEASE_METADATA), 'utf8'));
-  } catch (error) {
-    if (error?.code === 'ENOENT' || error instanceof SyntaxError) return null;
-    throw error;
+  for (const name of RELEASE_METADATA_FILES) {
+    try {
+      return JSON.parse(await readFile(path.join(release, name), 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT' || error instanceof SyntaxError) continue;
+      throw error;
+    }
   }
+  return null;
 }
 
 async function atomicSymlink(target, linkPath) {

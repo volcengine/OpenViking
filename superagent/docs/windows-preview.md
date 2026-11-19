@@ -8,8 +8,10 @@ triggers; Windows output is always a preview artifact, including on a release ta
 Manual and tag runs also publish it to the release bucket under
 `superagent/windows-preview/` (see [Download and install](#download-and-install));
 PR runs only keep the GitHub Actions artifact (sign-in required, expires after
-14 days). Either way it is not an entry in the stable updater feed: `superagent/latest`
-and `ov-superagent upgrade` stay macOS/Linux only.
+14 days). It is not an entry in the stable updater feed: `superagent/latest` is
+only for macOS/Linux releases, so a Windows `ov-superagent upgrade` follows this
+preview channel (see [Upgrade and rollback](installation-reference.md#upgrade-and-rollback))
+instead of the stable `latest` pointer.
 The package's `release.json` identifies the exact built commit (a PR run normally
 builds GitHub's merge commit), Node version and ZIP SHA-256.
 For a manual Windows-only test run, select the branch under **OpenViking SuperAgent Release → Run
@@ -168,18 +170,23 @@ without global Node/PM2, and selected Windows regression tests. It does not
 authenticate to a model or connector. On your machine, verify
 actual PIDs, the configured `/ready` response and connector state, then one
 uniquely labelled message/reply with no duplicate delivery. Report the commit,
-Windows/PowerShell versions, results and sanitized errors. No automatic upgrade is
-provided: a default install keeps the version it replaced under
-`~\.ov-superagent\releases` and names it in `~\.ov-superagent\rollback`, so rolling back means
-pointing `current` at that release again and running `ov-superagent restart`; an isolated
+Windows/PowerShell versions, results and sanitized errors. `ov-superagent upgrade <instance|all>`
+installs the newest preview through the `install-preview.ps1` inside the installed
+release, restarts the instances and rolls a release back if it cannot start; see
+[Upgrade and rollback](installation-reference.md#upgrade-and-rollback). A default install keeps
+the version it replaced under `~\.ov-superagent\releases` and names it in
+`~\.ov-superagent\rollback`, so a manual rollback means installing that version again
+(`install.ps1 -Version <version>`) and running `ov-superagent restart`; an isolated
 copy is rolled back by stopping it and starting the preserved installation with its
 own configuration. `ov-superagent autostart enable` writes a script into the current user's
 own Startup folder — no service, no administrator, visible in Task Manager's
 Startup tab — which runs `ov-superagent start` hidden at logon and logs to
 `~\.ov-superagent\logs\autostart.log`; an isolated copy is not covered by it.
-`ov-superagent start` needs `current` to be a directory link: on a
-volume without junctions the installer writes a pointer file instead, which runs
-`ov-superagent` but cannot be resolved as a release.
+`ov-superagent start` and `ov-superagent upgrade` need `current` to be a directory
+link: on a volume without junctions the installer writes a pointer file instead, which
+runs `ov-superagent` but cannot be resolved as a release. Upgrade also needs the
+package's `scripts\windows\install-preview.ps1` and Windows PowerShell (5.1 is enough);
+it hands the publication to that script instead of downloading the ZIP itself.
 
 
 ### Installer recovery and HOME overrides
