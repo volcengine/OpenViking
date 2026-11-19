@@ -40,6 +40,8 @@ _SKILL_EXCLUDED_FILES = frozenset(
 _EXEC_PATH_PREFIX = r"(?<![A-Za-z0-9_./-])"
 _EXEC_PATH_SUFFIX = r"(?=$|[\s\"'`;|&()<>])"
 _MATERIALIZED_SKILL_ROOT = ".remote-skill"
+_PRIVACY_REFERENCE = re.compile(r"\{\{[ \t]*ov_privacy:[^{}\r\n]+\}\}")
+_PRIVACY_NOTICE_PREFIX = "\n\n[Privacy Config Notice]\n"
 _TRANSPORT_TOOLS = frozenset({"openviking_multi_read"})
 _SHELL_CONTROL_TOKENS = frozenset({";", "&", "&&", "|", "||", "<", ">", "<<", ">>"})
 _EXEC_FILE_CONSUMERS = frozenset(
@@ -298,12 +300,24 @@ def _manifest_signature(result: Mapping[str, Any]) -> str:
     payload = {
         "root_uri": result.get("root_uri") or result.get("uri"),
         "revision": result.get("revision"),
-        "content_sha256": result.get("content_sha256"),
         "files": sorted(files, key=lambda item: str(item.get("path") or "")),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()
+
+
+def _matches_privacy_restoration(stored_content: str, restored_content: str) -> bool:
+    """Check that restoration changed only Privacy references and its notice."""
+    if restored_content == stored_content:
+        return True
+    if not _PRIVACY_REFERENCE.search(stored_content):
+        return restored_content.startswith(stored_content + _PRIVACY_NOTICE_PREFIX)
+
+    chunks = _PRIVACY_REFERENCE.split(stored_content)
+    pattern = r"[\s\S]*?".join(re.escape(chunk) for chunk in chunks)
+    pattern += rf"(?:{re.escape(_PRIVACY_NOTICE_PREFIX)}[\s\S]*)?"
+    return re.fullmatch(pattern, restored_content) is not None
 
 
 class SkillRuntimeContext:
@@ -445,7 +459,18 @@ class SkillRuntimeContext:
         return _normalize_uri(uri).endswith("/SKILL.md")
 
     def is_activation_call(self, tool_name: str, params: Mapping[str, Any]) -> bool:
-        if tool_name != "openviking_multi_read":
+        if tool_name != "openviking_multi_read" or params.get("with_revision"):
+            return False
+        offset = params.get("offset", 0)
+        limit = params.get("limit", -1)
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or offset != 0
+            or limit != -1
+        ):
             return False
         return any(self.is_skill_definition_uri(str(uri)) for uri in params.get("uris") or [])
 
@@ -465,12 +490,15 @@ class SkillRuntimeContext:
     async def activate_from_read(self, uri: str, content: str) -> ActiveRemoteSkill | None:
         """Activate a Skill after an OpenViking read reaches its SKILL.md.
 
-        The read content is only the activation trigger. Privacy restoration can
-        change the canonical bytes, and callers can request a line-limited read.
+        Privacy restoration can make the detail content differ from the bytes
+        read by the transport. In that case both the trigger and stored bytes
+        are checked against the manifest before the restored content is used.
         """
         if not self.is_skill_definition_uri(uri):
             self.note_remote_read(uri)
             return None
+        if not content:
+            raise SkillRuntimeError("SKILL_INVALID", "OpenViking returned an empty SKILL.md read")
 
         name, target_uri, root_uri, skill_md_uri = _skill_identity_from_uri(uri)
         lock = self._activation_locks.setdefault(root_uri, asyncio.Lock())
@@ -503,9 +531,16 @@ class SkillRuntimeContext:
                     "SKILL_INTEGRITY_UNAVAILABLE",
                     "OpenViking did not return the canonical SKILL.md content",
                 )
-            if len(canonical_content.encode("utf-8")) > self.settings.max_file_bytes:
+            canonical_bytes = canonical_content.encode("utf-8")
+            content_was_restored = canonical_content != content
+            if len(canonical_bytes) > self.settings.max_file_bytes:
                 raise SkillRuntimeError(
-                    "SKILL_PACKAGE_TOO_LARGE", "Remote SKILL.md exceeds the file limit"
+                    "SKILL_PACKAGE_TOO_LARGE",
+                    (
+                        "Privacy-restored SKILL.md exceeds the file limit"
+                        if content_was_restored
+                        else "Remote SKILL.md exceeds the file limit"
+                    ),
                 )
             content_checksum = str(result.get("content_sha256") or "").strip()
             if not content_checksum:
@@ -513,7 +548,7 @@ class SkillRuntimeContext:
                     "SKILL_INTEGRITY_UNAVAILABLE",
                     "OpenViking did not return a SKILL.md content checksum",
                 )
-            if hashlib.sha256(canonical_content.encode("utf-8")).hexdigest() != content_checksum:
+            if hashlib.sha256(canonical_bytes).hexdigest() != content_checksum:
                 raise SkillRuntimeError(
                     "SKILL_REVISION_CHANGED",
                     "OpenViking returned inconsistent SKILL.md integrity metadata",
@@ -586,14 +621,28 @@ class SkillRuntimeContext:
                 raise SkillRuntimeError(
                     "SKILL_INVALID", "OpenViking Skill manifest is missing SKILL.md"
                 )
-            try:
-                definition_bytes = await client.download_bytes(skill_md_uri)
-            except Exception as exc:
-                raise SkillRuntimeError(
-                    "SKILL_INTEGRITY_UNAVAILABLE",
-                    "Could not download stored SKILL.md for integrity verification",
-                ) from exc
-            self._validate_downloaded_file(definition, definition_bytes)
+            trigger_bytes = content.encode("utf-8")
+            self._validate_downloaded_file(definition, trigger_bytes)
+            if content_was_restored:
+                try:
+                    stored_bytes = await client.download_bytes(skill_md_uri)
+                except Exception as exc:
+                    raise SkillRuntimeError(
+                        "SKILL_INTEGRITY_UNAVAILABLE",
+                        f"Could not download stored SKILL.md for integrity verification: {exc}",
+                    ) from exc
+                self._validate_downloaded_file(definition, stored_bytes)
+                try:
+                    stored_content = stored_bytes.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise SkillRuntimeError(
+                        "SKILL_INVALID", "Stored SKILL.md is not valid UTF-8"
+                    ) from exc
+                if not _matches_privacy_restoration(stored_content, canonical_content):
+                    raise SkillRuntimeError(
+                        "SKILL_REVISION_CHANGED",
+                        "Privacy-restored SKILL.md does not match the stored placeholder content",
+                    )
 
             metadata = _parse_vikingbot_metadata(parsed.get("metadata"))
             active = ActiveRemoteSkill(

@@ -82,7 +82,7 @@ VikingBot 支持活动 Workspace 中的本地 Skill，以及保存在 OpenViking
 }
 ```
 
-激活会解析 frontmatter，并通过 `get_skill(include_integrity=true)` 校验正文、canonical URI、revision 和文件清单。此时不下载辅助文件。模型收到的正文附带包内相对路径与 canonical URI 的映射。激活需要完整正文；当前读取工具默认拒绝完整返回超过 512 KiB 的文件，因此应将大段参考资料拆到辅助文件，不能通过分段读取来激活定义。
+激活会解析 frontmatter，并通过 `get_skill(include_integrity=true)` 校验正文、canonical URI、revision 和文件清单。此时不下载辅助文件。Privacy 恢复使详情正文与读取通道返回的字节不一致时，激活还会下载存储层的 `SKILL.md`，分别用文件清单校验这两层字节，并要求两种表示只在 Privacy 占位符或追加的 Privacy 提示处不同。模型收到的正文附带包内相对路径与 canonical URI 的映射。激活需要完整正文并保持默认 `offset=0, limit=-1`；窗口读取只返回请求范围，不能激活定义。当前读取工具默认拒绝完整返回超过 512 KiB 的文件，因此应将大段参考资料拆到辅助文件。
 
 如果模型在同一批中同时请求读取定义和执行其他工具，运行时先处理激活，其余调用返回 `SKILL_CONTEXT_UPDATED`，由模型在新 Schema 下重试；激活失败时返回 `SKILL_ACTIVATION_FAILED`，不执行同批普通工具。
 
@@ -240,7 +240,7 @@ metadata: '{"vikingbot":{"requires":{"bins":["python3"]}}}'
 | `SKILL_CAPABILITY_UNAVAILABLE` | 在实际执行沙箱提供声明的命令/环境变量，确认沙箱可用 |
 | `SKILL_RESOURCE_NOT_FOUND` / `SKILL_RESOURCE_AMBIGUOUS` | 使用返回的 canonical 资源 URI；普通工作区输入使用 `workspace:` |
 | `SKILL_INTEGRITY_UNAVAILABLE` / `SKILL_REVISION_CHANGED` | 确认服务端支持完整性清单；Skill 更新完成后在新 Turn 重新读取 |
-| `SKILL_PACKAGE_TOO_LARGE` | 精简包内资源，或核对 Bot 与服务端限制 |
+| `SKILL_PACKAGE_TOO_LARGE` | 核对包内资源、Privacy 恢复后的 `SKILL.md` 大小，以及 Bot 与服务端限制 |
 
 ## 实现位置
 

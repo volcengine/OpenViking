@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import hashlib
 import io
 import json
 import sys
@@ -9,12 +10,12 @@ import zipfile
 from unittest.mock import AsyncMock
 
 import pytest
+from openviking_cli.session.user_id import UserIdentifier
 from starlette.responses import PlainTextResponse
 
 from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import patch_user_config
-from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.fixture(autouse=True)
@@ -697,7 +698,7 @@ async def test_skills_api_add_accepts_source_metadata_override(client, monkeypat
     assert len(downloads) == count
 
 
-async def test_skills_api_update_accepts_binary_auxiliary_files(client, service):
+async def test_skills_api_update_accepts_binary_files_and_separates_privacy_layers(client, service):
     from openviking.privacy.skill_placeholder import build_placeholder
 
     owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
@@ -742,6 +743,19 @@ async def test_skills_api_update_accepts_binary_auxiliary_files(client, service)
     await service.privacy_configs.upsert(reader, "skill", name, {field: "MemberSetting42"})
     current = await service.privacy_configs.get_current(owner, "skill", name)
     stored = await service.viking_fs.read_file(root + "/SKILL.md", ctx=owner)
+    restored = await service.fs.read(root + "/SKILL.md", ctx=owner)
+    detail = (
+        await client.get(
+            "/api/v1/skills/" + name,
+            params={"include_files": True, "include_integrity": True},
+        )
+    ).json()["result"]
+    [definition] = [item for item in detail["files"] if item["path"] == "SKILL.md"]
+    assert detail["content"] == restored
+    assert restored != stored
+    assert detail["content_sha256"] == hashlib.sha256(restored.encode()).hexdigest()
+    assert definition["sha256"] == hashlib.sha256(stored.encode()).hexdigest()
+    assert detail["content_sha256"] != definition["sha256"]
 
     upload = await client.post(
         "/api/v1/resources/temp_upload",
@@ -852,9 +866,10 @@ async def test_skills_api_validate_rfc_strict_and_loose_rules(client):
 async def test_skill_package_indexes_nested_content_and_returns_actual_hit(
     client, service, tmp_path
 ):
+    from openviking_cli.session.user_id import UserIdentifier
+
     from openviking.server.identity import RequestContext, Role
     from openviking.storage.expr import Eq
-    from openviking_cli.session.user_id import UserIdentifier
 
     archive = tmp_path / "package-search.zip"
     with zipfile.ZipFile(archive, "w") as package:
@@ -927,9 +942,10 @@ async def test_skill_package_indexes_nested_content_and_returns_actual_hit(
 
 
 async def test_mcp_skill_import_and_vector_rebuild_preserve_l1_frontmatter(client, service):
+    from openviking_cli.session.user_id import UserIdentifier
+
     from openviking.core.mcp_converter import mcp_to_skill
     from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
 
     tool = {
         "name": "review_calculator",

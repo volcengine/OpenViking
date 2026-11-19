@@ -82,7 +82,7 @@ For example, read a user Skill at the URI returned by the service:
 }
 ```
 
-Activation parses frontmatter and calls `get_skill(include_integrity=true)` to validate the content, canonical URI, revision, and file manifest. It does not download auxiliary files. Instructions returned to the model include bindings from package-relative paths to canonical resource URIs. Activation requires the complete definition. The read tool currently refuses full reads of files larger than 512 KiB by default, so move lengthy reference material into auxiliary files; partial reads cannot activate a definition.
+Activation parses frontmatter and calls `get_skill(include_integrity=true)` to validate the content, canonical URI, revision, and file manifest. It does not download auxiliary files. When Privacy restoration changes the detail content from the bytes returned by the read transport, activation also downloads the stored `SKILL.md`, validates both byte layers against the manifest, and requires the two representations to differ only at Privacy placeholders or the appended Privacy notice. Instructions returned to the model include bindings from package-relative paths to canonical resource URIs. Activation requires the complete definition with the default `offset=0, limit=-1`; partial reads stay partial and cannot activate a definition. The read tool currently refuses full reads of files larger than 512 KiB by default, so move lengthy reference material into auxiliary files.
 
 If the model requests activation and other tools in the same batch, activation runs first. Other calls return `SKILL_CONTEXT_UPDATED` so the model can retry with refreshed schemas. If activation fails, ordinary calls in that batch return `SKILL_ACTIVATION_FAILED` without executing.
 
@@ -240,7 +240,7 @@ Subagents use local Workspace Skill summaries and Always content. They currently
 | `SKILL_CAPABILITY_UNAVAILABLE` | Provide required commands/environment in the execution sandbox and ensure the sandbox is available |
 | `SKILL_RESOURCE_NOT_FOUND` / `SKILL_RESOURCE_AMBIGUOUS` | Use returned canonical resource URIs; use `workspace:` for ordinary Workspace inputs |
 | `SKILL_INTEGRITY_UNAVAILABLE` / `SKILL_REVISION_CHANGED` | Ensure server support for integrity manifests; read again in a new turn after Skill updates finish |
-| `SKILL_PACKAGE_TOO_LARGE` | Reduce package resources or review Bot and server limits |
+| `SKILL_PACKAGE_TOO_LARGE` | Review package resources, restored `SKILL.md` size, and Bot/server limits |
 
 ## Implementation Locations
 
