@@ -67,7 +67,14 @@ function createSemaphore(limit) {
 }
 
 function isRequest(message) {
-  return Object.prototype.hasOwnProperty.call(message || {}, "id");
+  // A JSON-RPC response carries an id too, and a notification carries a method.
+  // Only an id plus a method is a request that owes the client a reply.
+  return (
+    typeof message?.method === "string"
+    && Object.prototype.hasOwnProperty.call(message, "id")
+    && !("result" in message)
+    && !("error" in message)
+  );
 }
 
 function messageId(message) {

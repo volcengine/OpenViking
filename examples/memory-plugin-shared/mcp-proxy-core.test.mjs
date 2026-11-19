@@ -186,6 +186,69 @@ test("forwards notifications and writes no stdout for HTTP 202", async () => {
   });
 });
 
+test("forwards a client response without replying to it", async () => {
+  // A JSON-RPC response also carries an id, so classifying by id alone made the
+  // proxy answer the upstream's own acknowledgment with a -32003.
+  await withServer((_req, res, entry) => {
+    assert.deepEqual(entry.body, { jsonrpc: "2.0", id: "server-ping", result: {} });
+    res.writeHead(202, { "content-type": "application/json" });
+    res.end("");
+  }, async ({ url, requests }) => {
+    const { proxy, messages } = makeProxy({ url });
+    await proxy.handleMessage({ jsonrpc: "2.0", id: "server-ping", result: {} });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(await messages(), []);
+  });
+});
+
+test("forwards a client error response without replying to it", async () => {
+  await withServer((_req, res, entry) => {
+    assert.equal(entry.body.id, 0);
+    assert.deepEqual(entry.body.error, { code: -32601, message: "Method not found" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("");
+  }, async ({ url, requests }) => {
+    const { proxy, messages } = makeProxy({ url });
+    await proxy.handleMessage({
+      jsonrpc: "2.0",
+      id: 0,
+      error: { code: -32601, message: "Method not found" },
+    });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(await messages(), []);
+  });
+});
+
+test("does not answer a client response when delivery fails", async () => {
+  const { proxy, out } = makeProxy({
+    url: "http://127.0.0.1:1/mcp",
+    fetchImpl: async () => {
+      throw new Error("connection refused");
+    },
+  });
+  await proxy.handleMessage({ jsonrpc: "2.0", id: "server-ping", result: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(out.join("").trim(), "");
+});
+
+test("still answers a request whose id is 0 and a notification", async () => {
+  await withServer((_req, res, entry) => {
+    if (entry.body.method === "tools/list") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(jsonRpc(0, { tools: [] })));
+      return;
+    }
+    assert.equal(entry.body.method, "notifications/initialized");
+    res.writeHead(202, { "content-type": "application/json" });
+    res.end("");
+  }, async ({ url }) => {
+    const { proxy, messages } = makeProxy({ url });
+    await proxy.handleMessage({ jsonrpc: "2.0", id: 0, method: "tools/list" });
+    await proxy.handleMessage({ jsonrpc: "2.0", method: "notifications/initialized" });
+    assert.deepEqual(await messages(), [jsonRpc(0, { tools: [] })]);
+  });
+});
+
 test("uses independent POST requests for concurrent calls", async () => {
   await withServer(async (_req, res, entry) => {
     const delay = entry.body.id === 1 ? 50 : 5;
