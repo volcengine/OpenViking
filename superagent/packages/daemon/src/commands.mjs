@@ -223,12 +223,15 @@ export async function executeCommand(command, runtime, { primary, tasks, statusE
       return { ok: false, text: `未知或有歧义的 Runtime：${command.arg}\n可选：${options}` };
     }
     const applied = await runtime.transition({ kind: 'select-runtime', runtime: targets[0],
-      expectedRuntime: cached.runtime, expectedRevision: cached.revision });
+      expectedRuntime: cached.runtime, expectedRevision: cached.revision, resumeInterrupted: true });
     if (applied.ok === false) return { ok: false, text: 'Runtime 已变更，请重试 /runtime' };
     const adjustment = settingsAdjustmentText(applied);
+    const resumed = applied.resumedInputs > 0
+      ? `\n被打断的 ${applied.resumedInputs} 条消息由 ${applied.runtime} 接着处理，不用重发`
+      : '';
     return { ok: true, text: (applied.unchanged
       ? `当前已是 Runtime：${applied.runtime}（会话保留）`
-      : `已切换 Runtime：${applied.runtime}。会尝试从 OV 接上历史对话；隐藏思考和未落盘的工具过程不会继承`) + adjustment };
+      : `已切换 Runtime：${applied.runtime}。会尝试从 OV 接上历史对话；隐藏思考和未落盘的工具过程不会继承`) + resumed + adjustment };
   }
 
   let current = cached;

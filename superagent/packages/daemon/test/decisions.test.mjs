@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { DecisionPolicy, warnIfSilenceInert, warnIfStagedRepliesInert } from '../src/decisions.mjs';
+import { DecisionPolicy, switchNotice, warnIfSilenceInert, warnIfStagedRepliesInert } from '../src/decisions.mjs';
 import { Harness } from '../src/harness.mjs';
 import { RUNTIME_IDS, getRuntimeDefinition } from '../src/runtime-catalog.mjs';
 import { Store } from '../src/store.mjs';
@@ -262,5 +262,78 @@ describe('loop-stopped turn recovery', () => {
     assert.equal(submitted.length, 1);
     assert.equal(submitted[0].seq, row.seq);
     assert.doesNotMatch(submitted[0].text, /undecided=/);
+  });
+});
+
+describe('inputs a /runtime switch cut off', () => {
+  it('hands on every undecided one in order, untagged, and leaves the answered ones answered', async (t) => {
+    const { store, policy, submitted, activities, logs, ingest, silence } = setup(t);
+    const answered = ingest({ messageId: 'om_answered12345', chatId: 'oc_done12345678' });
+    silence(answered);
+    const first = ingest({ messageId: 'om_first12345678', chatId: 'oc_work12345678' });
+    const second = ingest({ messageId: 'om_second1234567', chatId: 'oc_work12345678' });
+    const mail = store.ingest(mailEvent({ uid: 11 })).inbound;
+
+    const plan = policy.resumeInterrupted({ inboundSeqs: [mail.seq, second.seq, answered.seq, first.seq, second.seq],
+      from: 'codex', to: 'pi' });
+    // Unlike a loop stop, the older line of a scope is shown too: the new
+    // session never saw it.
+    assert.deepEqual(plan.items.map((item) => item.seq), [first.seq, second.seq, mail.seq]);
+    assert.match(plan.items[0].text, /msg=om_first12345678 event=message:om_first12345678 time=\S+ from=\S+\] hello$/);
+    assert.doesNotMatch(plan.items[0].text, /undecided=1/);
+    assert.equal(submitted.length, 0, 'the switch delivers them itself');
+    assert.deepEqual(logs.filter((line) => line.message === 'switch_interrupted_settlement'),
+      [{ message: 'switch_interrupted_settlement', decided: 1, resumed: 3, failed: false }]);
+    assert.deepEqual(activities.map(({ kind, status, inboundSeq, metadata }) => [kind, status, inboundSeq, metadata]),
+      [['agent.switch_resumed', 'RESUMED', mail.seq, { from: 'codex', to: 'pi', inboundSeqs: [first.seq, second.seq, mail.seq], decided: 1 }]]);
+    assert.match(plan.notice, /^\[daemon notice\] \/runtime switched from codex to you while codex was working\./);
+    assert.match(plan.notice, /It sent nothing after the first of these inputs\.$/);
+  });
+
+  it('quotes what the stopped turn already sent, which the new history does not show', async (t) => {
+    const { store, policy, ingest } = setup(t);
+    const before = ingest({ messageId: 'om_before1234567', chatId: 'oc_work12345678' });
+    store.appendCognitionJournal({ kind: 'outbound', chatId: 'oc_work12345678', text: 'answered the earlier one' });
+    const cut = ingest({ messageId: 'om_cutoff1234567', chatId: 'oc_work12345678' });
+    store.appendCognitionJournal({ kind: 'outbound', chatId: 'oc_work12345678', text: 'on it, cloning the repo' });
+    store.appendCognitionJournal({ kind: 'outbound', status: 'PENDING', chatId: 'oc_work12345678', text: 'x'.repeat(500) });
+    assert.ok(before.seq < cut.seq);
+
+    const plan = policy.resumeInterrupted({ inboundSeqs: [cut.seq], from: 'pi', to: 'codex' });
+    const lines = plan.notice.split('\n');
+    assert.equal(lines[1], 'What it sent after the first of these inputs:');
+    assert.match(lines[2], /^\[chat=oc_work12345678 source=lark time=\S+ from=me\] on it, cloning the repo$/);
+    assert.match(lines[3], /from=me outcome=uncertain\] x+…$/);
+    assert.ok(lines[3].length <= 300);
+    assert.doesNotMatch(plan.notice, /answered the earlier one/);
+    assert.match(lines.at(-1), /^Do not send these again; a line with outcome=uncertain may or may not have arrived\.$/);
+  });
+
+  it('says so when the switch failed and the old runtime goes on in its own session', async (t) => {
+    const { store, policy, ingest } = setup(t);
+    const row = ingest({ messageId: 'om_failed1234567', chatId: 'oc_work12345678' });
+    store.appendCognitionJournal({ kind: 'outbound', chatId: 'oc_work12345678', text: 'started' });
+    const plan = policy.resumeInterrupted({ inboundSeqs: [row.seq], from: 'codex', to: 'claude', failed: true });
+    assert.equal(plan.notice, switchNotice({ from: 'codex', to: 'claude', failed: true }));
+    assert.match(plan.notice, /A \/runtime switch to claude failed, so you stay on codex\./);
+    assert.doesNotMatch(plan.notice, /started/, 'its own session has what it sent');
+  });
+
+  it('opens nothing when everything is answered, and nothing while the daemon stops', async (t) => {
+    const { policy, state, ingest, silence } = setup(t);
+    const row = ingest({ messageId: 'om_allgood123456' });
+    silence(row);
+    assert.equal(policy.resumeInterrupted({ inboundSeqs: [row.seq], from: 'codex', to: 'pi' }), null);
+    const open = ingest({ messageId: 'om_stillopen1234' });
+    state.stopping = true;
+    assert.equal(policy.resumeInterrupted({ inboundSeqs: [open.seq], from: 'codex', to: 'pi' }), null);
+  });
+
+  it('shows only the last ten lines it sent', () => {
+    const sent = Array.from({ length: 14 }, (_, index) => `[chat=oc_x source=lark time=t from=me] line ${index}`);
+    const notice = switchNotice({ from: 'codex', to: 'pi', sent });
+    assert.match(notice, /What it sent after the first of these inputs \(last 10 of 14\):/);
+    assert.doesNotMatch(notice, /line 3$/m);
+    assert.match(notice, /line 4$/m);
   });
 });

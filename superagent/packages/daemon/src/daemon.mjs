@@ -299,6 +299,8 @@ export class PersonalAgentDaemon {
         },
         // A runtime switch builds a new policy: with the soul as it is now.
         refreshPolicy: () => loadSoul(this.config, ovClient, { logger: this.logger }),
+        // What a /runtime switch cut off, still undecided, goes on in the runtime that stays.
+        resumeInterrupted: (cut) => this.decisionPolicy?.resumeInterrupted(cut) ?? null,
         persistRuntimePreference: this.config.manifestPath && this.config.instanceId
           ? (runtime) => updateRuntimePreference(this.config, runtime)
           : null,
@@ -517,7 +519,8 @@ export class PersonalAgentDaemon {
         statusExtra: () => taskStatusLine(this.tasks),
       });
     } catch (error) {
-      outcome = { ok: false, text: `命令执行失败：${safeError(error)}` };
+      const resumed = error?.resumedInputs > 0 ? `\n被打断的 ${error.resumedInputs} 条消息已交回当前 Runtime` : '';
+      outcome = { ok: false, text: `命令执行失败：${safeError(error)}${resumed}` };
     }
     this.recordSystemActivity('command.executed', {
       summary: `${label} → ${outcome.text.split('\n')[0]}`,
