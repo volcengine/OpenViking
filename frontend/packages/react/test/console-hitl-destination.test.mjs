@@ -6,8 +6,40 @@ import {
   click,
   input,
   mountHitl,
+  settle,
   submit,
 } from './helpers/console-hitl.mjs';
+
+test('output directory suggestions and receipts display Chinese while submitting the original URI', async () => {
+  const uri = 'viking://resources/%E4%B8%AD%E6%96%87%252F_wiki';
+  const label = 'viking://resources/中文%252F_wiki';
+  const fetch = recordingFetch(({ uri }) => ok({ uri, isDir: true }));
+  const view = await mountHitl(
+    [card('compile_target', 'Target', { suggested_value: uri })],
+    { fetch },
+  );
+  try {
+    await view.start();
+    const option = view.container.querySelector(
+      '.ov-viking-bot__interaction-option',
+    );
+    assert.ok(option);
+    assert.ok(option.textContent.includes(label));
+    assert.equal(option.querySelector('input').value, uri);
+    await submit(view);
+    await settle();
+    assert.equal(fetch.calls[0].uri, uri);
+    assert.equal(JSON.parse(view.requests[1].text).answers[0].value, uri);
+    const receipt = view.props.messages.find(
+      (message) => message.answerSummary,
+    );
+    assert.deepEqual(receipt?.answerSummary, [
+      { label: 'Target', value: label },
+    ]);
+  } finally {
+    await view.unmount();
+  }
+});
 
 test('userId alone scopes same-origin output validation without a Provider', async () => {
   const fetch = recordingFetch(({ path, uri, init }) => {
