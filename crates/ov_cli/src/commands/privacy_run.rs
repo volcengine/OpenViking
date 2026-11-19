@@ -163,83 +163,55 @@ fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
     unsafe extern "C" {
         fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     }
-    const F_GETFL: i32 = 3;
 
-    // SAFETY: F_GETFL takes no variadic arguments and only reads descriptor status flags.
-    let (out_flags, err_flags) = unsafe { (fcntl(out_fd, F_GETFL), fcntl(err_fd, F_GETFL)) };
-    if out_flags < 0 || out_flags != err_flags {
-        return false;
-    }
-    // Never call lseek(SEEK_CUR): XNU writes back fg_offset and races with concurrent writers.
-    #[cfg(target_os = "macos")]
-    {
-        #[repr(C)]
-        struct VnodeFdInfo {
-            openflags: u32,
-            status: u32,
-            offset: i64,
-            _vnode: [u8; 160],
-        }
-        unsafe extern "C" {
-            fn proc_pidfdinfo(
-                pid: i32,
-                fd: i32,
-                flavor: i32,
-                buffer: *mut VnodeFdInfo,
-                buffersize: i32,
-            ) -> i32;
-        }
-        const PROC_PIDFDVNODEINFO: i32 = 1;
-        const PROC_FP_SHARED: u32 = 1;
-
-        let pid = std::process::id() as i32;
-        let size = std::mem::size_of::<VnodeFdInfo>() as i32;
-        let mut out_info = std::mem::MaybeUninit::<VnodeFdInfo>::zeroed();
-        let mut err_info = std::mem::MaybeUninit::<VnodeFdInfo>::zeroed();
-        // SAFETY: Both buffers match sizeof(struct vnode_fdinfo) (176 bytes on macOS) and are
-        // read only when proc_pidfdinfo reports it filled the full struct.
-        unsafe {
-            if proc_pidfdinfo(
-                pid,
-                out_fd,
-                PROC_PIDFDVNODEINFO,
-                out_info.as_mut_ptr(),
-                size,
-            ) != size
-                || proc_pidfdinfo(
-                    pid,
-                    err_fd,
-                    PROC_PIDFDVNODEINFO,
-                    err_info.as_mut_ptr(),
-                    size,
-                ) != size
-            {
-                return false;
-            }
-            let (out_info, err_info) = (out_info.assume_init(), err_info.assume_init());
-            (out_info.status & PROC_FP_SHARED) != 0
-                && (err_info.status & PROC_FP_SHARED) != 0
-                && out_info.openflags == err_info.openflags
-                && out_info.offset == err_info.offset
-        }
-    }
     #[cfg(target_os = "linux")]
     {
-        let fd_pos = |fd: i32| {
-            std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}"))
-                .ok()?
-                .lines()
-                .find_map(|line| line.strip_prefix("pos:"))
-                .map(|value| value.trim().to_owned())
-        };
-        match (fd_pos(out_fd), fd_pos(err_fd)) {
-            (Some(out_pos), Some(err_pos)) => out_pos == err_pos,
-            _ => true,
+        const F_DUPFD_QUERY: i32 = 1027;
+        // SAFETY: F_DUPFD_QUERY takes one int argument and queries struct file equality.
+        let equal = unsafe { fcntl(out_fd, F_DUPFD_QUERY, err_fd) };
+        if equal >= 0 {
+            return equal == 1;
+        }
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        {
+            unsafe extern "C" {
+                fn syscall(num: std::ffi::c_long, ...) -> std::ffi::c_long;
+            }
+            #[cfg(target_arch = "x86_64")]
+            const SYS_KCMP: std::ffi::c_long = 312;
+            #[cfg(target_arch = "aarch64")]
+            const SYS_KCMP: std::ffi::c_long = 272;
+            const KCMP_FILE: i32 = 0;
+
+            let pid = std::process::id() as i32;
+            // SAFETY: KCMP_FILE compares two descriptors in this process without mutating state.
+            return unsafe {
+                syscall(SYS_KCMP, pid, pid, KCMP_FILE, out_fd as u64, err_fd as u64) == 0
+            };
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        {
+            false
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
     {
-        true
+        const F_GETFL: i32 = 3;
+        const O_APPEND: i32 = 0x0008;
+        // XNU does not expose open-file-description identity to userspace; only merge regular
+        // files when both descriptors use O_APPEND so independent non-append offsets stay intact.
+        // SAFETY: F_GETFL takes no variadic arguments and only reads descriptor status flags.
+        let (out_flags, err_flags) = unsafe { (fcntl(out_fd, F_GETFL), fcntl(err_fd, F_GETFL)) };
+        out_flags >= 0 && out_flags == err_flags && (out_flags & O_APPEND) != 0
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (
+            out_fd,
+            err_fd,
+            fcntl as unsafe extern "C" fn(i32, i32, ...) -> i32,
+        );
+        false
     }
 }
 

@@ -1056,15 +1056,59 @@ async fn preserves_regular_file_stdout_and_merged_stream_order() {
         format!("AGENT LOG HEADER\nwarn:{TOKEN}\n")
     );
 
-    use std::io::{Seek, SeekFrom};
-    let shared_log = dir.path().join("shared.log");
-    fs::write(&shared_log, "AGENT LOG HEADER\n").unwrap();
-    let mut shared_out = fs::OpenOptions::new()
+    use std::io::Write;
+    let independent_rw = dir.path().join("independent_rw.log");
+    fs::write(&independent_rw, "").unwrap();
+    let out_rw = fs::OpenOptions::new()
         .read(true)
         .write(true)
+        .open(&independent_rw)
+        .unwrap();
+    let mut err_rw = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&independent_rw)
+        .unwrap();
+    let (url, server) = resolver([(TOKEN, Some("secret-rw".into()))]).await;
+    let mut rw_cmd = privacy(dir.path(), &url);
+    rw_cmd
+        .args([
+            "run",
+            "--env",
+            &format!("TOKEN={TOKEN}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"printf 'warn:%s\n' "$TOKEN" >&2"#,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(out_rw.try_clone().unwrap()))
+        .stderr(Stdio::from(err_rw.try_clone().unwrap()));
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        rw_cmd.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let status = rw_cmd.status().await.unwrap();
+    assert_eq!(status.code(), Some(0));
+    server.await.unwrap();
+    err_rw.write_all(b"finish\n").unwrap();
+    drop((out_rw, err_rw));
+    assert_eq!(
+        fs::read_to_string(&independent_rw).unwrap(),
+        format!("warn:{TOKEN}\nfinish\n")
+    );
+
+    let shared_log = dir.path().join("shared.log");
+    fs::write(&shared_log, "AGENT LOG HEADER\n").unwrap();
+    let shared_out = fs::OpenOptions::new()
+        .append(true)
         .open(&shared_log)
         .unwrap();
-    shared_out.seek(SeekFrom::End(0)).unwrap();
     let shared_err = shared_out.try_clone().unwrap();
     let (url, server) = resolver([(TOKEN, Some("secret-shared".into()))]).await;
     let mut shared = privacy(dir.path(), &url);
@@ -1098,7 +1142,6 @@ async fn preserves_regular_file_stdout_and_merged_stream_order() {
         format!("AGENT LOG HEADER\n1\n2:{TOKEN}\n")
     );
 
-    use std::io::Write;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
