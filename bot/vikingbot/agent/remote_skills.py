@@ -463,7 +463,11 @@ class SkillRuntimeContext:
         return True
 
     async def activate_from_read(self, uri: str, content: str) -> ActiveRemoteSkill | None:
-        """Activate a Skill after the existing multi-read tool reads SKILL.md."""
+        """Activate a Skill after an OpenViking read reaches its SKILL.md.
+
+        The read content is only the activation trigger. Privacy restoration can
+        change the canonical bytes, and callers can request a line-limited read.
+        """
         if not self.is_skill_definition_uri(uri):
             self.note_remote_read(uri)
             return None
@@ -474,20 +478,6 @@ class SkillRuntimeContext:
             existing = self.active_skills.get(root_uri)
             if existing is not None:
                 return existing
-            if len(content.encode("utf-8")) > self.settings.max_file_bytes:
-                raise SkillRuntimeError(
-                    "SKILL_PACKAGE_TOO_LARGE", "Remote SKILL.md exceeds the file limit"
-                )
-            try:
-                parsed = SkillLoader.parse(content, source_path=skill_md_uri)
-            except Exception as exc:
-                raise SkillRuntimeError("SKILL_INVALID", str(exc)) from exc
-            parsed_name = str(parsed.get("name") or "").strip()
-            if parsed_name != name:
-                raise SkillRuntimeError(
-                    "SKILL_INVALID",
-                    f"Skill name {parsed_name!r} does not match URI name {name!r}",
-                )
 
             client = await self._get_client()
             try:
@@ -513,10 +503,9 @@ class SkillRuntimeContext:
                     "SKILL_INTEGRITY_UNAVAILABLE",
                     "OpenViking did not return the canonical SKILL.md content",
                 )
-            if canonical_content != content:
+            if len(canonical_content.encode("utf-8")) > self.settings.max_file_bytes:
                 raise SkillRuntimeError(
-                    "SKILL_REVISION_CHANGED",
-                    "Remote SKILL.md changed between read and activation",
+                    "SKILL_PACKAGE_TOO_LARGE", "Remote SKILL.md exceeds the file limit"
                 )
             content_checksum = str(result.get("content_sha256") or "").strip()
             if not content_checksum:
@@ -528,6 +517,16 @@ class SkillRuntimeContext:
                 raise SkillRuntimeError(
                     "SKILL_REVISION_CHANGED",
                     "OpenViking returned inconsistent SKILL.md integrity metadata",
+                )
+            try:
+                parsed = SkillLoader.parse(canonical_content, source_path=skill_md_uri)
+            except Exception as exc:
+                raise SkillRuntimeError("SKILL_INVALID", str(exc)) from exc
+            parsed_name = str(parsed.get("name") or "").strip()
+            if parsed_name != name:
+                raise SkillRuntimeError(
+                    "SKILL_INVALID",
+                    f"Skill name {parsed_name!r} does not match URI name {name!r}",
                 )
             revision = str(result.get("revision") or "").strip()
             if not revision:
@@ -587,12 +586,14 @@ class SkillRuntimeContext:
                 raise SkillRuntimeError(
                     "SKILL_INVALID", "OpenViking Skill manifest is missing SKILL.md"
                 )
-            definition_bytes = canonical_content.encode("utf-8")
-            if definition.size != len(definition_bytes) or definition.sha256 != content_checksum:
+            try:
+                definition_bytes = await client.download_bytes(skill_md_uri)
+            except Exception as exc:
                 raise SkillRuntimeError(
-                    "SKILL_REVISION_CHANGED",
-                    "SKILL.md content does not match its manifest integrity metadata",
-                )
+                    "SKILL_INTEGRITY_UNAVAILABLE",
+                    "Could not download stored SKILL.md for integrity verification",
+                ) from exc
+            self._validate_downloaded_file(definition, definition_bytes)
 
             metadata = _parse_vikingbot_metadata(parsed.get("metadata"))
             active = ActiveRemoteSkill(
