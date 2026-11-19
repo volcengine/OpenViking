@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonical_user_root
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
@@ -586,10 +587,17 @@ class OpenVikingService:
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
-        account_count, user_count = await directory_initializer.initialize_account_workspace(
-            default_ctx,
-            sync_system_assets=False,
+        # The vector collection can be pre-created externally. Existing resource
+        # metadata distinguishes a workspace restart from initial provisioning.
+        new_workspace = not await self._viking_fs.exists(
+            "viking://resources/.abstract.md", ctx=default_ctx
         )
+        source_type = "create_collection" if new_workspace else "workspace_init"
+        with bind_dashboard_token_source_type(source_type):
+            account_count, user_count = await directory_initializer.initialize_account_workspace(
+                default_ctx,
+                sync_system_assets=False,
+            )
         logger.info(
             "Initialized preset directories account=%d user=%d",
             account_count,
@@ -1127,14 +1135,15 @@ class OpenVikingService:
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0, 0
-        if lease_ref is not None:
-            return await self._directory_initializer.initialize_account_workspace(
-                ctx, lease_ref=lease_ref
-            )
-        async with self.account_workspace_lock(ctx) as lease:
-            return await self._directory_initializer.initialize_account_workspace(
-                ctx, lease_ref=lease
-            )
+        with bind_dashboard_token_source_type("create_account"):
+            if lease_ref is not None:
+                return await self._directory_initializer.initialize_account_workspace(
+                    ctx, lease_ref=lease_ref
+                )
+            async with self.account_workspace_lock(ctx) as lease:
+                return await self._directory_initializer.initialize_account_workspace(
+                    ctx, lease_ref=lease
+                )
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
         """Synchronize packaged system assets for every active account."""
@@ -1166,8 +1175,9 @@ class OpenVikingService:
                     f"User workspace is busy and cannot be initialized now: {ctx.user.user_id}",
                     uri=uri,
                 ) from exc
-            return await self._directory_initializer.initialize_user_directories(
-                ctx, lease_ref=lease
-            )
+            with bind_dashboard_token_source_type("register_user"):
+                return await self._directory_initializer.initialize_user_directories(
+                    ctx, lease_ref=lease
+                )
         finally:
             await guard.close()

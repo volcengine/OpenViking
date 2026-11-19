@@ -55,8 +55,7 @@ export function AgentConnectInstructionsView({
         </h4>
         <Button
           ref={exposure}
-          size="mini"
-          type="text"
+          type="primary"
           className="ov-agent-connect__copy"
           htmlType="button"
           disabled={status === 'pending'}

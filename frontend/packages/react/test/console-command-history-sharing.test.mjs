@@ -9,12 +9,12 @@ test('Consoles sharing a history key append without overwriting or restoring cle
     url: 'https://workbench.test',
   }).window;
   t.after(() => windowWithStorage.close());
-  const storage = windowWithStorage.sessionStorage;
-  t.mock.getter(window, 'sessionStorage', () => storage);
+  const storage = windowWithStorage.localStorage;
+  t.mock.getter(window, 'localStorage', () => storage);
 
   const commandHistoryKey = 'workbench:staging:member-a';
   const storageKey =
-    'openviking.console.command-history.v2:' + commandHistoryKey;
+    'openviking.console.command-history.v3:' + commandHistoryKey;
   const savedCommands = () =>
     JSON.parse(storage.getItem(storageKey) || '[]').map(
       ({ command }) => command,
@@ -30,10 +30,14 @@ test('Consoles sharing a history key append without overwriting or restoring cle
   try {
     await first.execute('ov health');
     await second.execute('ov invalid-command');
-    assert.deepEqual(savedCommands(), ['ov health']);
+    assert.deepEqual(savedCommands(), ['ov health', 'ov invalid-command']);
 
     await second.execute('ov status');
-    assert.deepEqual(savedCommands(), ['ov health', 'ov status']);
+    assert.deepEqual(savedCommands(), [
+      'ov health',
+      'ov invalid-command',
+      'ov status',
+    ]);
 
     await first.press('New session');
     assert.equal(storage.getItem(storageKey), null);

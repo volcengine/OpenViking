@@ -6,9 +6,9 @@ import treeZh from '../../components/file-tree/locales/zh-CN.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useLocale } from '../../shared/locale-context.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
-import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { displayNameFromUri } from '../../shared/directory-tree/rows.js';
+import { formatVikingUriLabel } from '../../shared/path-label.js';
 import { useSearchScopePage } from './use-search-scope-page.js';
-import { displayScopeUri } from './search-scope-display.js';
 import type { ScopeOption } from './search-types.js';
 
 interface FileBrowserSearchScopePickerProps {
@@ -96,10 +96,10 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 aria-pressed="true"
-                title={displayScopeUri(item)}
+                title={formatVikingUriLabel(item)}
                 onClick={() => onSelect(item)}
               >
-                <span>{displayScopeUri(item)}</span>
+                <span>{formatVikingUriLabel(item)}</span>
               </button>
             </li>
           ))}
@@ -118,7 +118,7 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 onClick={back}
-                aria-label={displayScopeUri(
+                aria-label={formatVikingUriLabel(
                   parents.at(-2) ?? text.searchScopes,
                 )}
               >
@@ -128,13 +128,13 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 aria-pressed={value.includes(uri)}
-                title={displayScopeUri(uri)}
+                title={formatVikingUriLabel(uri)}
                 onClick={() => {
                   onSelect(uri);
                   close();
                 }}
               >
-                <span>{displayScopeUri(nameFromUri(uri))}</span>
+                <span>{displayNameFromUri(uri)}</span>
               </button>
             </div>
           ) : null}
@@ -146,13 +146,11 @@ function ScopePicker({
               key={directory}
               type="button"
               className="ov-file-browser-search__scope-choice"
-              title={displayScopeUri(directory)}
+              title={formatVikingUriLabel(directory)}
               onClick={() => browse(directory)}
             >
               <FolderIcon aria-hidden="true" />
-              <span>
-                {displayScopeUri(uri ? nameFromUri(directory) : directory)}
-              </span>
+              <span>{uri ? displayNameFromUri(directory) : directory}</span>
               <ChevronIcon aria-hidden="true" />
             </button>
           ))}

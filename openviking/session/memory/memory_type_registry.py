@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from openviking.core.namespace import user_space_fragment
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log, short_hash
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.constants import RETIRED_MEMORY_TYPES
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
@@ -62,7 +63,11 @@ class MemoryTypeRegistry:
             raise RuntimeError(
                 f"No memory schemas loaded from memory templates directory: {memory_templates_dir}"
             )
-        logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
+        logger.info(
+            "memory schemas loaded total=%d path=%s",
+            loaded,
+            safe_path_for_log(str(memory_templates_dir)),
+        )
 
         # Load experimental memory templates when the experimental memory switch is enabled.
         if getattr(config.memory, "experimental_memory_switch", False):
@@ -72,9 +77,9 @@ class MemoryTypeRegistry:
                     experimental_memory_dir, replace=True
                 )
                 logger.info(
-                    "Loaded %s experimental memory schemas from: %s",
+                    "experimental memory schemas loaded total=%d path=%s",
                     experimental_memory_loaded,
-                    experimental_memory_dir,
+                    safe_path_for_log(str(experimental_memory_dir)),
                 )
 
         if custom_dir:
@@ -82,7 +87,9 @@ class MemoryTypeRegistry:
             if os.path.exists(custom_dir_expanded):
                 custom_loaded = self.load_from_directory(custom_dir_expanded, replace=True)
                 logger.info(
-                    f"Loaded {custom_loaded} memory schemas from custom: {custom_dir_expanded}"
+                    "custom memory schemas loaded total=%d path=%s",
+                    custom_loaded,
+                    safe_path_for_log(str(custom_dir_expanded)),
                 )
         else:
             memory_templates_dir = str(resolve_memory_templates_dir())
@@ -91,9 +98,9 @@ class MemoryTypeRegistry:
             ):
                 loaded = self.load_from_directory(memory_templates_dir, replace=True)
                 logger.info(
-                    "Loaded %s memory schemas from configured prompt templates: %s",
+                    "configured memory schemas loaded total=%d path=%s",
                     loaded,
-                    memory_templates_dir,
+                    safe_path_for_log(str(memory_templates_dir)),
                 )
 
         # Deployment overrides must not revive the retired automatic agent memories.
@@ -105,12 +112,16 @@ class MemoryTypeRegistry:
         if memory_type.memory_type in self._types:
             raise ValueError(f"Duplicate memory type '{memory_type.memory_type}'")
         self._types[memory_type.memory_type] = memory_type
-        logger.debug(f"Registered memory type: {memory_type.memory_type}")
+        logger.debug(
+            "memory schema registered type_hash=%s", short_hash(str(memory_type.memory_type))
+        )
 
     def replace(self, memory_type: MemoryTypeSchema) -> None:
         """Replace an existing memory type."""
         self._types[memory_type.memory_type] = memory_type
-        logger.debug(f"Replaced memory type: {memory_type.memory_type}")
+        logger.debug(
+            "memory schema replaced type_hash=%s", short_hash(str(memory_type.memory_type))
+        )
 
     def get(self, name: str) -> Optional[MemoryTypeSchema]:
         """Get a memory type by name."""
@@ -171,10 +182,14 @@ class MemoryTypeRegistry:
             Number of types loaded
         """
         count = 0
+        failed_schemas = 0
         dir_path_obj = Path(dir_path)
 
         if not dir_path_obj.exists():
-            logger.warning(f"Directory not found: {dir_path}")
+            logger.info(
+                "memory schema directory missing; skipping path=%s",
+                safe_path_for_log(str(dir_path)),
+            )
             return 0
 
         for yaml_file in dir_path_obj.glob("*.yaml"):
@@ -182,15 +197,34 @@ class MemoryTypeRegistry:
                 self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
-                logger.error(f"Failed to load {yaml_file}: {e}")
+                failed_schemas += 1
+                logger.debug(
+                    "memory schema load failed path=%s error_type=%s",
+                    safe_path_for_log(str(yaml_file)),
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
 
         for yaml_file in dir_path_obj.glob("*.yml"):
             try:
                 self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
-                logger.error(f"Failed to load {yaml_file}: {e}")
+                failed_schemas += 1
+                logger.debug(
+                    "memory schema load failed path=%s error_type=%s",
+                    safe_path_for_log(str(yaml_file)),
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
 
+        if failed_schemas:
+            logger.info(
+                "memory schema loading partial; skipping invalid schemas total=%d failed=%d",
+                count + failed_schemas,
+                failed_schemas,
+                extra={"degraded": True, "total": count + failed_schemas, "failed": failed_schemas},
+            )
         return count
 
     def _parse_memory_type(self, data: dict) -> MemoryTypeSchema:
@@ -251,9 +285,7 @@ class MemoryTypeRegistry:
 
         user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
 
-        logger.info(
-            f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}"
-        )
+        logger.debug("memory file initialization planned")
 
         viking_fs = get_viking_fs()
 
@@ -323,7 +355,7 @@ class MemoryTypeRegistry:
 
                 with bind_memory_type(schema.memory_type):
                     await viking_fs.write_file(file_uri, full_content, ctx=ctx)
-                logger.info(f"[MemoryTypeRegistry] Initialized memory file: {file_uri}")
+                logger.debug("memory file initialized uri=%s", safe_uri_for_log(file_uri))
             except Exception:
                 pass
 

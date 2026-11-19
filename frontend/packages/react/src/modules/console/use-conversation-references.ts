@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
+import { isOvClientError } from '../../client/errors.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
@@ -10,6 +11,7 @@ import type {
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import {
+  compileSkillQueries,
   mentionPattern,
   mentionSearchRows,
   MENTION_ROOT,
@@ -23,12 +25,14 @@ export function useConversationReferences({
   scopeKey,
   selection,
   directoryClient,
+  searchSkills = false,
 }: {
   enabled: boolean;
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
   selection?: ConsoleChatOptions['referenceSelection'];
   directoryClient?: OvClient;
+  searchSkills?: boolean;
 }) {
   const inheritedClient = useOvClient('local');
   const inheritedSignal = useOvSignal();
@@ -92,12 +96,16 @@ export function useConversationReferences({
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
   }, []);
   const [query, setQuery] = useState('');
-  const keyword = query
-    .trim()
+  const trimmedQuery = query.trim();
+  const keyword = trimmedQuery
     .replace(/^viking:\/\//i, '')
     .split('/')
     .filter(Boolean)
     .join('/');
+  const searchKey =
+    keyword && searchSkills && /^viking:\/\//i.test(trimmedQuery)
+      ? `${MENTION_ROOT}${keyword}`
+      : keyword;
   const opened = enabled && openCount > 0;
   const tree = useDirectoryTree({
     client: opened ? client : null,
@@ -107,7 +115,7 @@ export function useConversationReferences({
   });
   const [search, setSearch] = useState<{
     scope: typeof scope;
-    keyword: string;
+    key: string;
     rows?: ReturnType<typeof mentionSearchRows>;
     error?: string;
   }>();
@@ -118,32 +126,60 @@ export function useConversationReferences({
   }>();
   // Picker and scope changes cancel the old request, including its debounce.
   useEffect(() => {
-    if (!opened || !keyword) return;
+    if (!opened || !searchKey) return;
     const controller = new AbortController();
     const requestSignal = signal
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     const timer = setTimeout(() => {
-      void scope.client
-        .request<{ matches: unknown }>({
-          method: 'POST',
-          path: OV_PATHS.searchGlob,
-          body: {
-            uri: MENTION_ROOT,
-            pattern: mentionPattern(keyword),
-            node_limit: 100,
-          },
-          options: { ...scope.options, signal: requestSignal },
-        })
-        .then(({ matches }) => {
+      const queries = searchSkills
+        ? compileSkillQueries(searchKey)
+        : [
+            {
+              uri: MENTION_ROOT,
+              pattern: mentionPattern(searchKey),
+              node_limit: 100,
+            },
+          ];
+      void Promise.all(
+        queries.map(async (body) => {
+          try {
+            const { matches } = await scope.client.request<{
+              matches: unknown;
+            }>({
+              method: 'POST',
+              path: OV_PATHS.searchGlob,
+              body,
+              options: { ...scope.options, signal: requestSignal },
+            });
+            if (!Array.isArray(matches))
+              throw new Error('Invalid file search response');
+            return matches;
+          } catch (error) {
+            if (
+              searchSkills &&
+              isOvClientError(error) &&
+              (error.code === 'NOT_FOUND' || error.statusCode === 404)
+            )
+              return [];
+            throw error;
+          }
+        }),
+      )
+        .then((results) => {
           if (requestSignal.aborted) return;
-          setSearch({ scope, keyword, rows: mentionSearchRows(matches) });
+          const matches = results.flat();
+          setSearch({
+            scope,
+            key: searchKey,
+            rows: mentionSearchRows(matches),
+          });
         })
         .catch((error: unknown) => {
           if (requestSignal.aborted) return;
           setSearch({
             scope,
-            keyword,
+            key: searchKey,
             error: error instanceof Error ? error.message : String(error),
           });
         });
@@ -152,11 +188,11 @@ export function useConversationReferences({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [opened, keyword, scope, signal, attempt]);
+  }, [opened, searchKey, scope, signal, attempt, searchSkills]);
   if (!enabled) return { references: undefined, clearReferences };
 
   const result =
-    search?.scope === scope && search.keyword === keyword ? search : undefined;
+    search?.scope === scope && search.key === searchKey ? search : undefined;
   const hidden = collapsed?.result === result ? collapsed?.uris : undefined;
   const expandDirectory = (uri: string) => {
     if (keyword) {

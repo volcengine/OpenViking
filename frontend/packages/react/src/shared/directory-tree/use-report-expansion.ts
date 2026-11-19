@@ -47,10 +47,11 @@ export function useReportExpansion(
   {
     collapsed,
     expanded,
+    pendingEdits,
     identifyUri,
   }: Pick<
     ReturnType<typeof useDirectoryExpansion>,
-    'collapsed' | 'expanded' | 'identifyUri'
+    'collapsed' | 'expanded' | 'pendingEdits' | 'identifyUri'
   >,
   reconciling: boolean,
   onChange?: (uris: readonly string[]) => void,
@@ -98,10 +99,16 @@ export function useReportExpansion(
       last.current?.session === session ? last.current : { session };
     last.current = previous;
     if (onSnapshotChange) {
-      const snapshot = { expandedUris: uris, collapsedUris: [...collapsed] };
+      const snapshot = {
+        expandedUris: uris,
+        collapsedUris: [...collapsed],
+        pendingEdits,
+      };
       if (
         !sameUris(previous.snapshot?.expandedUris, snapshot.expandedUris) ||
-        !sameUris(previous.snapshot?.collapsedUris, snapshot.collapsedUris)
+        !sameUris(previous.snapshot?.collapsedUris, snapshot.collapsedUris) ||
+        JSON.stringify(previous.snapshot?.pendingEdits ?? []) !==
+          JSON.stringify(pendingEdits)
       ) {
         previous.snapshot = snapshot;
         onSnapshotChange(snapshot);
@@ -126,6 +133,7 @@ export function useReportExpansion(
     unresolved,
     collapsed,
     expanded,
+    pendingEdits,
     identifyUri,
     reconciling,
     onChange,

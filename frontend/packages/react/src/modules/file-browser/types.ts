@@ -134,6 +134,8 @@ export interface FileBrowserLabels {
   searchSwitchMode?: string;
   /** 高级筛选按钮的无障碍名称。Accessible name of the advanced-filter button. */
   searchAdvancedLabel?: string;
+  /** 带生效筛选数量的名称，接收按钮名称和本地化数字。Label with active filters; receives the label and formatted count. */
+  searchAdvancedLabelWithCount?: (label: string, count: string) => string;
   /** 搜索进行中的提示。Message shown while a search runs. */
   searchLoading?: string;
   searchDismiss?: string;

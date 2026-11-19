@@ -54,6 +54,7 @@ const messages = {
   searchVia: 'Retrieval mode',
   searchSwitchMode: 'Switch',
   searchAdvancedLabel: 'Advanced filters',
+  searchAdvancedLabelWithCount: (label, count) => `${label} (${count})`,
   loading: 'Loading…',
   searchDismiss: 'Esc to close',
   searchLoading: 'Searching…',

@@ -28,7 +28,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `host` | 独立 | `127.0.0.1` | | 监听地址 |
 | `port` | 独立 | `1935` | 1–65,535 | 监听端口 |
 | `workers` | 独立 | `1` | 1–64 | worker 进程数 |
-| `log_path` | 独立 | 空 | 文件路径 | 应用日志不再以文本写到 stderr，而是以 JSON 行写入这个轮转文件（256 MiB，保留四个旧文件）；需要 `workers: 1`。见[观测](../guides/22-gateway-operations.md#monitoring) |
+| `log_path` | 独立 | 空 | 文件路径 | 应用日志使用统一 UTC 文本格式写入这个轮转文件（256 MiB，保留四个旧文件），替代 stderr 输出；需要 `workers: 1`。见[观测](../guides/22-gateway-operations.md#monitoring) |
 | `keep_alive_seconds` | 独立 | `75` | 大于 0 | 两次请求之间保留空闲 HTTP 连接的秒数；应大于负载均衡器的后端空闲超时 |
 | `public_url` | 两者 | 空 | HTTP(S) URL，不带 `/gateway` | 客户端访问的对外地址，`/gateway` 由网关自己加。为空时，嵌入网关沿用 Server 的对外地址；两者都没有时，接入指南使用请求来源地址，MCP 文件上传和下载也不可用（`mcp_file_links` 为 `direct` 时除外）。见[对外地址](../guides/22-gateway-operations.md#public-address) |
 | `mcp_file_links` | 两者 | `proxy` | `proxy`、`direct` | MCP 上传和下载工具返回的链接如何交给客户端。`proxy` 改写为 `public_url` 加 `/gateway/uploads` 或 `/gateway/downloads`，需要设置 `public_url`。`direct` 原样透传 OpenViking 的链接，需要 Server 的 `OPENVIKING_PUBLIC_BASE_URL`（或 `server.public_base_url`）是客户端能访问的地址 |

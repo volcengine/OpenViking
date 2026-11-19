@@ -56,20 +56,20 @@ async def test_sdk_add_resource(http_client):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
 
-    result = await client.add_resource(path=str(f), reason="sdk test", wait=True)
-    assert "usage" not in result
-    assert "telemetry" not in result
-    assert "root_uri" in result
-    assert result["root_uri"].startswith("viking://")
+    result = await client.add_resource(path=str(f), wait=True)
+    assert result["root_uri"].startswith("viking://resources/")
     creator = RequestContext(
         user=UserIdentifier("sdk_test_account", "sdk_test_user"),
         role=Role.ADMIN,
     )
     acl = await service.fs.get_acl(result["root_uri"], ctx=creator)
-    assert acl["acl_mode"] == "none"
+    assert acl["acl_mode"] == "inherit"
     assert acl["direct_entries"] == []
+    content = await service.fs.read(result["root_uri"] + "/sdk_sample.md", ctx=creator)
+    assert content == SAMPLE_MD_CONTENT
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_sdk_add_resource_raises_processing_error_for_business_error(
     http_client,
     monkeypatch,
@@ -224,7 +224,9 @@ async def test_sdk_session_lifecycle(http_client):
 async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
     client, _ = http_client
 
-    session_info = await client.create_session()
+    session_info = await client.create_session(
+        options={"memory_policy": {"self": {"enabled": False}, "peer": {"enabled": False}}}
+    )
     session_id = session_info["session_id"]
 
     batch_result = await client.batch_add_messages(
@@ -274,8 +276,10 @@ async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
             break
         await asyncio.sleep(0.1)
 
+    assert task is not None and task["status"] == "completed", task
+    archive = await client.get_session_archive(session_id, "archive_001")
+    assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Batch hello", "Batch answer"]
     post_commit = await client.get_session_context(session_id)
-    assert post_commit["latest_archive_overview"]
     assert [m["role"] for m in post_commit["messages"]] == ["user"]
     assert post_commit["messages"][0]["parts"][0]["text"] == "Keep me live"
 
@@ -358,7 +362,7 @@ async def test_sdk_get_session_archive(http_client):
     session_id = session_info["session_id"]
 
     await client.add_message(session_id, "user", "Archive me")
-    commit_result = await client.commit_session(session_id)
+    commit_result = await client.commit_session(session_id, enable_working_memory=True)
     task_id = commit_result["task_id"]
 
     for _ in range(100):

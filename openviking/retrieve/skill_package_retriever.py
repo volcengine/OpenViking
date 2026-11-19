@@ -8,6 +8,7 @@ from typing import Optional
 
 from openviking.core.retrieval_types import SearchType
 from openviking.models.embedder.base import embed_compat
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.retrieve.skill_results import SkillResultResolver, candidate_key, pagination_key
@@ -46,7 +47,10 @@ class SkillPackageRetriever(HierarchicalRetriever):
         threshold = self._resolve_threshold(score_threshold)
         query_vector = sparse_vector = None
         if search_type == "semantic" and self.embedder:
-            with telemetry.measure("search.embed_query"):
+            with (
+                telemetry.measure("search.embed_query"),
+                bind_dashboard_token_source_type("skill_search"),
+            ):
                 embedded = await embed_compat(self.embedder, query.query, is_query=True)
                 query_vector, sparse_vector = embedded.dense_vector, embedded.sparse_vector
 
