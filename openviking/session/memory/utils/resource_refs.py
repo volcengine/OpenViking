@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.link_renderer import LinkRenderer
@@ -32,7 +32,6 @@ _RESOURCE_URI_RE = re.compile(_RESOURCE_URI_PATTERN)
 _CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？、）】》"
-_JSON_STRING_TERMINATORS = '"\\,]}'
 _SENTENCE_BOUNDARIES = "。！？.!?\n"
 _MAX_LINKIFIED_SENTENCE_CHARS = 160
 _MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
@@ -52,11 +51,13 @@ def sync_memory_resource_refs(
     before_content = mf.content
     before_refs = _coerce_resource_refs(mf.extra_fields.get("resource_refs"))
 
-    if _is_json_document(mf.content):
+    is_json, json_value = _json_document(mf.content)
+    if is_json:
         # A JSON body has no Markdown prose to linkify, and rewriting it would
         # turn a string value into a link, leaving the body unparsable. The URIs
-        # are still literal, so record them without touching the text.
-        refs = [{"resource_uri": uri} for uri in _json_resource_uris(mf.content)]
+        # are still literal once the strings are decoded, so record them without
+        # touching the text.
+        refs = [{"resource_uri": uri} for uri in _json_resource_uris(json_value)]
     else:
         code_spans = _protected_code_spans(mf.content)
         markdown_refs, markdown_spans = _extract_markdown_resource_refs(
@@ -239,36 +240,34 @@ def _remove_matching_bare_resource_uris(
     return text
 
 
-def _is_json_document(content: str) -> bool:
-    """Return whether the whole body is one JSON value rather than Markdown prose."""
+def _json_document(content: str) -> tuple[bool, Any]:
+    """Return whether the whole body is one JSON value, and that decoded value."""
     text = (content or "").strip()
-    if not text or text[0] not in "{[":
-        return False
+    if not text or text[0] not in '{["':
+        return False, None
     try:
-        json.loads(text)
+        value = json.loads(text)
     except ValueError:
-        return False
-    return True
+        return False, None
+    return isinstance(value, (dict, list, str)), value
 
 
-def _json_resource_uris(content: str) -> List[str]:
-    refs, markdown_spans = _extract_markdown_resource_refs(content, ())
-    uris = [ref["resource_uri"] for ref in refs]
+def _json_resource_uris(value: Any) -> List[str]:
     found: List[str] = []
-    for match in _RESOURCE_URI_RE.finditer(content or ""):
-        if _overlaps_spans(match.start(), match.end(), markdown_spans):
-            continue
-        uri = _trim_resource_uri(match.group(0))
-        # A URI that ends inside a JSON string is not usable as a stored ref.
-        if not uri or not _ends_clean_json_string(content, match.start(), uri):
-            continue
-        found.append(uri)
-    return uris + list(dict.fromkeys(found))
+    for text in _json_string_values(value):
+        found.extend(extract_resource_uris(text))
+    return list(dict.fromkeys(found))
 
 
-def _ends_clean_json_string(content: str, start: int, uri: str) -> bool:
-    end = start + len(uri)
-    return end >= len(content) or content[end] in _JSON_STRING_TERMINATORS
+def _json_string_values(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _json_string_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _json_string_values(item)
 
 
 def _linkify_bare_resource_uris(

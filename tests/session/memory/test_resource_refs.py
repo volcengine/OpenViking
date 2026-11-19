@@ -263,3 +263,34 @@ def test_sync_memory_resource_refs_records_json_refs_for_resource_memory_link():
 
     assert content_references_resource(mf.content, resource_uri)
     assert mf.extra_fields["resource_refs"][0]["resource_uri"] == resource_uri
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_uri"),
+    [
+        ('"Saved at viking://resources/demo.md"', "viking://resources/demo.md"),
+        ('"viking://resources/demo"', "viking://resources/demo"),
+    ],
+)
+def test_sync_memory_resource_refs_leaves_top_level_json_strings_parseable(body, expected_uri):
+    mf = MemoryFile(content=body, extra_fields={})
+
+    sync_memory_resource_refs(mf, source="content.write")
+
+    assert mf.content == body
+    assert json.loads(mf.content) == json.loads(body)
+    refs = mf.extra_fields["resource_refs"]
+    assert [ref["resource_uri"] for ref in refs] == [expected_uri]
+
+
+def test_sync_memory_resource_refs_decodes_escaped_json_string_values():
+    resource_uri = "viking://resources/café.md"
+    body = json.dumps({"ref": resource_uri})
+    assert "\\u00e9" in body
+
+    mf = MemoryFile(content=body, extra_fields={})
+
+    sync_memory_resource_refs(mf, source="content.write")
+
+    assert mf.content == body
+    assert mf.extra_fields["resource_refs"][0]["resource_uri"] == resource_uri
