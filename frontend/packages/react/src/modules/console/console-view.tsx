@@ -16,10 +16,7 @@ import {
   consoleQuickCommands,
 } from './command-catalog.js';
 import { ConsoleToolbar } from './console-toolbar.js';
-import {
-  ConsoleCollectionError,
-  ConsoleConversationPanel,
-} from './console-conversation-panel.js';
+import { ConsoleConversationPanel } from './console-conversation-panel.js';
 import { useBotActivation } from './use-bot-activation.js';
 import { useConversationDraftIdentity } from './use-conversation-draft-identity.js';
 import type { ConsoleMode, ConsoleProps } from './types.js';
@@ -63,14 +60,10 @@ export function ConsoleView(props: ConsoleProps) {
   const { status } = activation.state;
   const chatReady = status === 'ready';
   const visibleModes =
-    status === 'disabled' ||
-    status === 'checking' ||
-    status === 'collection-error'
+    status === 'disabled'
       ? modes.filter((item) => item !== 'conversation')
       : modes;
-  const showConversation =
-    visibleModes.includes('conversation') ||
-    (status === 'checking' && !visibleModes.length);
+  const showConversation = visibleModes.includes('conversation');
   const draftIdentity = useConversationDraftIdentity(props);
   const state = useConsole(
     { ...props, modes: visibleModes, locale },
@@ -97,11 +90,10 @@ export function ConsoleView(props: ConsoleProps) {
   };
   const id = useId();
   const commandPanel = useRef<HTMLDivElement>(null);
+  const commandInput = useRef<HTMLTextAreaElement>(null);
   const fillCommand = (command: string) => {
     state.setCommand(command);
-    commandPanel.current
-      ?.querySelector('textarea')
-      ?.focus({ preventScroll: true });
+    commandInput.current?.focus({ preventScroll: true });
   };
   return (
     <LocaleProvider locale={locale}>
@@ -110,7 +102,6 @@ export function ConsoleView(props: ConsoleProps) {
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
         {feedback}
-        <ConsoleCollectionError activation={activation} locale={botLocale} />
         <ConsoleTaskNotifications
           locale={locale}
           onOpenMemoryUri={conversationProps.onOpenUri ?? onOpenUri}
@@ -121,6 +112,8 @@ export function ConsoleView(props: ConsoleProps) {
               mode={state.mode}
               modes={visibleModes}
               panelId={id}
+              commandPanelRef={commandPanel}
+              commandInputRef={commandInput}
               locale={locale}
               labels={labels}
               history={state.history}
@@ -151,6 +144,8 @@ export function ConsoleView(props: ConsoleProps) {
         {showConversation ? (
           <ConsoleConversationPanel
             id={`${id}-conversation`}
+            commandPanelRef={commandPanel}
+            commandInputRef={commandInput}
             active={state.mode === 'conversation' || state.mode === undefined}
             activation={activation}
             media={chatOptions?.activation?.media}
@@ -168,6 +163,7 @@ export function ConsoleView(props: ConsoleProps) {
             id={`${id}-command`}
             ref={commandPanel}
             className="ov-console__panel"
+            tabIndex={-1}
             hidden={state.mode !== 'command'}
           >
             <ErrorBoundary
@@ -177,6 +173,7 @@ export function ConsoleView(props: ConsoleProps) {
             >
               {slots?.commandHelp}
               <CommandConsole
+                inputRef={commandInput}
                 records={commandRecords}
                 history={state.history}
                 value={state.command}

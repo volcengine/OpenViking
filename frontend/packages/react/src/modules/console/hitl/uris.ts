@@ -1,4 +1,10 @@
+import { formatVikingUriLabel } from '../../../shared/path-label.js';
+
 const scheme = 'viking://';
+
+export function formatCompileUriLabel(uri: string): string {
+  return formatVikingUriLabel(uri);
+}
 
 /** Validate and normalize a literal URI before it is used by the form or sent. */
 export function parseCompileUri(value: string): string | undefined {

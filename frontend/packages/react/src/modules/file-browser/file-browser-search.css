@@ -92,6 +92,7 @@
 
 /* 漏斗与 Modal 的关闭按钮同尺寸，两者相距 8；关闭按钮宽 28，所以右侧留 36。 */
 .ov-file-browser-search__advanced-toggle {
+  position: relative;
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -115,6 +116,27 @@
 .ov-file-browser-search__advanced-toggle:focus-visible {
   outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline-offset: -2px;
+}
+
+.ov-file-browser-search__filter-count {
+  position: absolute;
+  top: -3px;
+  right: -5px;
+  display: flex;
+  min-width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+  font-size: 10px;
+  line-height: 16px;
 }
 
 /* ── 内容区 ───────────────────────────────────────────────────────── */
@@ -145,7 +167,7 @@
   flex: none;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
+  gap: 4px;
   padding-left: 12px;
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
@@ -234,12 +256,12 @@
 }
 
 .ov-file-browser-search__menu .ov-file-browser-search__menu-item:hover {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
 }
 
 .ov-file-browser-search__menu
   .ov-file-browser-search__menu-item[aria-selected='true'] {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
 }
 
@@ -247,6 +269,12 @@
   .ov-file-browser-search__menu-item[aria-selected='true']
   .ov-file-browser-search__menu-name {
   font-weight: 500;
+}
+
+.ov-file-browser-search__menu .ov-select__check {
+  width: 16px;
+  height: 16px;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }
 
 .ov-file-browser-search__menu .ov-file-browser-search__menu-item:focus-visible {
@@ -278,7 +306,7 @@
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
   margin: 0;
   padding: 0;
   overflow: auto;
@@ -313,7 +341,7 @@
 .ov-file-browser-search__result[aria-selected='true'],
 .ov-file-browser-search__result:focus-visible {
   border-bottom-color: transparent;
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
   outline: none;
 }
 
@@ -770,12 +798,12 @@
 
 .ov-file-browser-search__dates {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
 }
 
 .ov-file-browser-search__dates > .ov-date-picker {
-  flex: 1;
+  width: 100%;
   min-width: 0;
 }
 

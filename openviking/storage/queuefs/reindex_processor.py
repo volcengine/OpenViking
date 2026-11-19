@@ -9,6 +9,7 @@ import json
 from typing import Any, Dict, Optional
 
 from openviking.observability.log_safety import short_hash
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_work_index import bind_task_context_from_message, extract_task_metadata
@@ -140,7 +141,7 @@ class ReindexProcessor(DequeueHandlerBase):
             from openviking.service.reindex_executor import ReindexExecutor
 
             executor = ReindexExecutor()
-            with bind_telemetry(telemetry):
+            with bind_telemetry(telemetry), bind_dashboard_token_source_type("reindex"):
                 # Share ownership state so even argument/initialization failures
                 # release the lease once, while handoff clears both references.
                 result = await executor._run(

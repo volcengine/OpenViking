@@ -20,6 +20,7 @@ const messages = {
   emptyDescription: 'Work directly with your context through the CLI',
   quickStart: 'Quick start:',
   noResult: 'No result returned',
+  codeOutput: 'Command output',
   justNow: 'Just now',
   formatMinutesAgo: (minutes) =>
     `${minutes} minute${minutes === 1 ? '' : 's'} ago`,

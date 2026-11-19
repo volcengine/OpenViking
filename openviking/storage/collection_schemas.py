@@ -768,11 +768,15 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                         _embed_t0 = _time.monotonic()
                         from openviking.observability.reporting.facts import bind_embedding_purpose
+                        from openviking.observability.reporting.token_sources import (
+                            bind_dashboard_token_source_type,
+                        )
 
                         purpose = embedding_msg.context_data.get("context_type", "unknown")
                         with (
                             bind_ingestion_source_type(embedding_msg.source_type),
                             bind_embedding_purpose(purpose),
+                            bind_dashboard_token_source_type(embedding_msg.dashboard_source_type),
                         ):
                             result = await embed_compat(
                                 embedder,
@@ -979,11 +983,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             inserted_data, ctx=ctx, options=upsert_options
                         )
                     record_id = result
-                    if record_id:
-                        logger.debug(
-                            "Successfully wrote embedding: %s",
-                            self._embedding_delivery_log_context(embedding_msg),
-                        )
+                    if not record_id:
+                        raise RuntimeError("Vector database upsert returned no record ID")
+                    logger.debug(
+                        "Successfully wrote embedding: %s",
+                        self._embedding_delivery_log_context(embedding_msg),
+                    )
                 except CollectionNotFoundError as db_err:
                     # During shutdown, queue workers may finish one dequeued item.
                     if self._vikingdb.is_closing:
@@ -1020,7 +1025,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     return self._embedding_failed(embedding_msg, error_msg)
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                return ProcessResult.success({"vector_written": bool(record_id)})
+                return ProcessResult.success({"vector_written": True})
 
         except asyncio.CancelledError:
             raise

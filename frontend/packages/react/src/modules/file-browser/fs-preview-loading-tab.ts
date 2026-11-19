@@ -1,5 +1,6 @@
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { decodePathLabel } from '../../shared/path-label.js';
 import { isSystemUri } from '../../shared/resource-uri.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
 
@@ -19,7 +20,7 @@ export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
     return {
       kind: 'directory',
       key: uri,
-      title: name,
+      title: decodePathLabel(name),
       loading: true,
       levels: [
         {
@@ -49,6 +50,7 @@ export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
     kind: 'file',
     key: uri,
     loading: true,
+    title: decodePathLabel(name),
     source: { fileName: name, path: uri, content: '' },
   };
 }

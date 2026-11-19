@@ -5,6 +5,7 @@ import type {
 import type { ReactNode } from 'react';
 
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { decodePathLabel } from '../../shared/path-label.js';
 import type { FsEntry } from '../../shared/directory-tree/types.js';
 import type { DirectorySummaryLabels } from './file-browser-labels.js';
 
@@ -41,7 +42,7 @@ export function toFileTab(
     // The tab shows the file name (with its extension) and the same type icon, not
     // the full URI: the breadcrumb in the header already carries the path, and
     // repeating it would crowd out the neighbouring tabs.
-    title: name,
+    title: decodePathLabel(name),
     icon,
     operations: { openParent },
     source: {
@@ -115,7 +116,7 @@ export function toDirectoryTab(
     // 目录页签显示末级目录名与文件夹图标，与树上的那一行一致。
     // A directory tab shows the last path segment and the folder icon, matching
     // the row in the tree.
-    title: name,
+    title: decodePathLabel(name),
     icon,
     levels: [
       {

@@ -10,8 +10,8 @@ const commands = {
   'add-resource': 'Add a resource from a URL',
   'add-skill': 'Install a Skill',
   'add-memory': 'Add memory directly',
-  compile: 'Compile material with a Skill',
-  'compile create': 'Create a compile configuration',
+  compile: 'Run compilation',
+  'compile create': 'Create a configuration to run with compile',
 
   grep: 'Match text in resources',
   glob: 'Match resource paths',
@@ -130,7 +130,7 @@ const messages = {
     'compile-name':
       'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters. Names must be unique per user and cannot be renamed.',
     'compile-from':
-      'At least one existing readable source directory. Repeat --from or separate URIs with commas. Duplicate URIs are removed.',
+      'At least one existing readable source directory. Individual files are unsupported. Repeat --from or separate URIs with commas. Duplicate URIs are removed.',
     'compile-to':
       'Writable output directory. The server can create it if needed.',
     from: 'Existing source directory URIs. Repeat --from or separate URIs with commas',

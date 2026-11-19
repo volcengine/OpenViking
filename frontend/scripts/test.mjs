@@ -41,6 +41,8 @@ try {
               'browser-search-results':
                 './src/modules/file-browser/file-browser-search-results.tsx',
               'fs-tree': './src/modules/file-browser/use-fs-tree.ts',
+              'fs-page': './src/shared/directory-tree/fs-page.ts',
+              'directory-rows': './src/shared/directory-tree/rows.ts',
               'browser-preview-model': './src/modules/file-browser/fs-model.ts',
               'scope-page':
                 './src/modules/file-browser/use-search-scope-page.ts',

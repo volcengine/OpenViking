@@ -2,7 +2,7 @@ import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 export type CommandConsoleTask = TaskSnapshot;
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode, Ref } from 'react';
 import type {
   CommandConsoleCommandDefinition,
   CommandConsoleCommandGroup,
@@ -489,6 +489,8 @@ export interface CommandConsoleLabels {
   quickStart?: string;
   /** 无返回结果时的提示。Message for an empty command result. */
   noResult?: string;
+  /** 代码输出滚动区域的无障碍名称。Accessible name for the code output scroll region. */
+  codeOutput?: string;
   /** 刚刚发送的时间文案。Time label for a just-sent record. */
   justNow?: string;
   /** 命令帮助的标题与操作提示。Command-help heading and hint. */
@@ -586,6 +588,8 @@ export interface CommandConsoleProps extends Omit<
   commands?: readonly CommandConsoleCommandDefinition[];
   /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */
   commandGroups?: readonly CommandConsoleCommandGroup[];
+  /** 获取实际命令输入框，可用于程序聚焦。Accesses the command textarea for programmatic focus. */
+  inputRef?: Ref<HTMLTextAreaElement>;
   /**
    * 输入值变化时触发，包括接受命令或示例；行内占位不改变值，也不提交。省略时输入框
    * 只读，用于展示历史记录。

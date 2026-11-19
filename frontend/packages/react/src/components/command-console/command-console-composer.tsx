@@ -1,5 +1,5 @@
-import { useId, useRef } from 'react';
-import type { RefObject } from 'react';
+import { useId, useImperativeHandle, useRef } from 'react';
+import type { Ref, RefObject } from 'react';
 
 import { getCommandConsoleInlineCompletion } from './command-completion.js';
 import { useCommandConsoleComposerKeyboard } from './use-command-console-composer-keyboard.js';
@@ -9,6 +9,7 @@ import type { CommandConsoleCompletion } from './use-command-console-completion.
 
 export interface CommandConsoleComposerProps {
   anchorRef: RefObject<HTMLDivElement | null>;
+  inputRef?: Ref<HTMLTextAreaElement>;
   assistId: string;
   onFocus: () => void;
   onDismiss: (value: string) => void;
@@ -31,6 +32,7 @@ export interface CommandConsoleComposerProps {
 /** 命令输入区：受控输入、键盘补全与提交意图。 */
 export function CommandConsoleComposer({
   anchorRef,
+  inputRef: externalInputRef,
   assistId,
   onFocus,
   onDismiss,
@@ -51,6 +53,8 @@ export function CommandConsoleComposer({
 }: CommandConsoleComposerProps) {
   const inputDisabled = disabled || busy;
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The textarea is always mounted; React owns external ref replacement and cleanup.
+  useImperativeHandle(externalInputRef, () => inputRef.current!, []);
   const inputId = useId();
   const mirrorRef = useRef<HTMLSpanElement>(null);
   const showSuggestions =

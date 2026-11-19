@@ -3,6 +3,7 @@ import { useId } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
 import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import { Radio } from '../../shared/primitives/radio/radio.js';
+import { formatVikingUriLabel } from '../../shared/path-label.js';
 import { FileBrowserSearchScopePicker } from './file-browser-search-scope-picker.js';
 import { isSearchScopeAllowed } from './search-model.js';
 import type { ScopeOption, SearchFilters } from './search-types.js';
@@ -73,6 +74,7 @@ export function FileBrowserSearchScopes({
           <ul className="ov-file-browser-search__options">
             {scopes.map((option) => {
               const selected = filters.scopes.includes(option.uri);
+              const label = formatVikingUriLabel(option.uri);
               return (
                 <li key={option.uri}>
                   {availability.scope === 'single' ? (
@@ -82,7 +84,7 @@ export function FileBrowserSearchScopes({
                       onChange={() => toggle(option.uri)}
                     >
                       <span className="ov-file-browser-search__option-uri">
-                        {option.uri}
+                        {label}
                       </span>
                     </Radio>
                   ) : (
@@ -91,7 +93,7 @@ export function FileBrowserSearchScopes({
                       onChange={() => toggle(option.uri)}
                     >
                       <span className="ov-file-browser-search__option-uri">
-                        {option.uri}
+                        {label}
                       </span>
                     </Checkbox>
                   )}

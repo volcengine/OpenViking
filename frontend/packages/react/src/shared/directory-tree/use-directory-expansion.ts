@@ -1,28 +1,31 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { RefObject, SetStateAction } from 'react';
-import { normalizeResourceUri, resourceUriIdentity } from '../resource-uri.js';
+import {
+  HOME_URI,
+  normalizeResourceUri,
+  resourceUriIdentity,
+} from '../resource-uri.js';
 import type { QueryRequest } from '../request/use-query-scope.js';
 import { useResourceUriIdentity } from '../request/use-resource-uri-identity.js';
 import type { DirectoryQueries } from './directory-queries.js';
 import { expansionPath } from './expansion-path.js';
 import type { DirectoryExpansionSnapshot } from './types.js';
 
-interface ExpansionState {
-  expanded: ReadonlySet<string>;
-  collapsed: ReadonlySet<string>;
-  edited: boolean;
-}
-
-function matchesIdentity(uri: string, home?: string) {
-  const key = resourceUriIdentity(uri, home);
-  return (candidate: string) => resourceUriIdentity(candidate, home) === key;
-}
-
-function underCollapse(uri: string, collapsed: ReadonlySet<string>) {
-  return [...collapsed].some(
-    (fold) => uri === fold || uri.startsWith(`${fold}/`),
-  );
-}
+import {
+  type ExpansionState,
+  applyExpansionEdit,
+  matchesIdentity,
+  settleExpansionEdits,
+  underCollapse,
+  unresolvedFold,
+} from './expansion-edits.js';
 
 export function useDirectoryExpansion({
   session,
@@ -66,6 +69,7 @@ export function useDirectoryExpansion({
       : undefined;
   const savedExpansion = seed?.expandedUris ?? legacySnapshot;
   const savedCollapses = seed?.collapsedUris;
+  const savedEdits = seed?.pendingEdits;
   const initial = useMemo<ExpansionState>(() => {
     const inRoot = (uris: readonly string[] = []) =>
       uris
@@ -74,12 +78,23 @@ export function useDirectoryExpansion({
     return {
       expanded: new Set([rootUri, ...inRoot(savedExpansion)]),
       collapsed: new Set(inRoot(savedCollapses)),
+      pendingEdits: (savedEdits ?? []).filter(
+        ({ uri }) => expansionPath(rootUri, uri).length,
+      ),
       edited: false,
     };
-  }, [rootUri, savedExpansion, savedCollapses]);
-  const state = local && local.session === session ? local.state : initial;
+  }, [rootUri, savedExpansion, savedCollapses, savedEdits]);
+  const raw = local && local.session === session ? local.state : initial;
+  const identifiedHome = identifyUri(HOME_URI);
+  const home = identifiedHome === HOME_URI ? undefined : identifiedHome;
+  const state = useMemo(() => settleExpansionEdits(raw, home), [raw, home]);
   const current = useRef(state);
-  current.current = state;
+  // Event handlers and async restore callbacks read the committed expansion.
+  // A suspended render must not publish another scope or pending state.
+  // Each commit replaces the ref; there is no external subscription to dispose.
+  useLayoutEffect(() => {
+    current.current = state;
+  }, [state]);
 
   const update = useCallback(
     (change: (previous: ExpansionState) => ExpansionState) => {
@@ -87,13 +102,12 @@ export function useDirectoryExpansion({
         if (activeSession.current !== session) return previous;
         const before =
           previous && previous.session === session ? previous.state : initial;
-        const next = change(before);
+        const next = change(settleExpansionEdits(before, readHome()));
         if (next === before) return previous;
-        current.current = next;
         return { session, state: next };
       });
     },
-    [activeSession, initial, session],
+    [activeSession, initial, readHome, session],
   );
   const setExpanded = useCallback(
     (change: SetStateAction<ReadonlySet<string>>) =>
@@ -108,9 +122,13 @@ export function useDirectoryExpansion({
     (uri: string) => {
       const home = readHome();
       const matches = matchesIdentity(uri, home);
-      const { collapsed, expanded } = current.current;
+      const { collapsed, expanded } = settleExpansionEdits(
+        current.current,
+        home,
+      );
       return (
         (expanded.has(uri) || [...expanded].some(matches)) &&
+        (Boolean(home) || !unresolvedFold(current.current, uri)) &&
         !underCollapse(
           resourceUriIdentity(uri, home),
           new Set(
@@ -123,23 +141,14 @@ export function useDirectoryExpansion({
   );
   const edit = useCallback(
     (uri: string, open: boolean) =>
-      update((previous) => {
-        const matches = matchesIdentity(uri, readHome());
-        const other = (candidate: string) => !matches(candidate);
-        if (open) {
-          return {
-            edited: true,
-            expanded: new Set([...previous.expanded].filter(other)).add(uri),
-            collapsed: new Set([...previous.collapsed].filter(other)),
-          };
-        }
-        return {
-          edited: true,
-          expanded: new Set([...previous.expanded].filter(other)),
-          collapsed: new Set(previous.collapsed).add(uri),
-        };
-      }),
+      update((previous) =>
+        applyExpansionEdit(previous, { uri, expanded: open }, readHome()),
+      ),
     [readHome, update],
+  );
+  const isDeferred = useCallback(
+    (uri: string) => !readHome() && unresolvedFold(current.current, uri),
+    [readHome],
   );
   const restoreListed = useCallback(
     (uri: string) =>
@@ -163,19 +172,23 @@ export function useDirectoryExpansion({
     const collapsed = new Set([...state.collapsed].map(identifyUri));
     return new Set(
       [...state.expanded].filter(
-        (uri) => !underCollapse(identifyUri(uri), collapsed),
+        (uri) =>
+          !underCollapse(identifyUri(uri), collapsed) &&
+          (Boolean(home) || !unresolvedFold(state, uri)),
       ),
     );
-  }, [state.expanded, state.collapsed, identifyUri]);
+  }, [state, home, identifyUri]);
   return {
     expanded,
     collapsed: state.collapsed,
+    pendingEdits: state.pendingEdits,
     edited: state.edited,
     savedExpansion: savedExpansion === undefined ? undefined : initial.expanded,
     identifyUri,
     readHome,
     resolveHome,
     isExpanded,
+    isDeferred,
     setExpanded,
     restoreListed,
     edit,

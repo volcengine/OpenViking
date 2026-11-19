@@ -131,7 +131,7 @@ test('closing an enlarged frame leaves focus on the thumbnail', async () => {
   }
 });
 
-test('expanded preview preserves the player and follows the current transcript', async () => {
+test('video preview pauses transcript scrolling on hover and preserves the player when expanded', async () => {
   const app = await mount(
     media({
       segments: [
@@ -152,9 +152,21 @@ test('expanded preview preserves the player and follows the current transcript',
     panel.getBoundingClientRect = () => ({ top: 0, bottom: 100 });
     Object.defineProperty(panel, 'clientHeight', { value: 100 });
     next.getBoundingClientRect = () => ({ top: 150, bottom: 200, height: 50 });
+    const pointer = (type) =>
+      act(() =>
+        panel.dispatchEvent(
+          new window.PointerEvent(type, {
+            bubbles: true,
+            pointerType: 'mouse',
+          }),
+        ),
+      );
+    await pointer('pointerover');
     player.currentTime = 1.25;
     await app.event(player, 'timeupdate');
     assert.match(active().textContent, /Second entry/);
+    assert.equal(panel.scrollTop, 0);
+    await pointer('pointerout');
     assert.equal(panel.scrollTop, 100);
 
     await openFrames(app);

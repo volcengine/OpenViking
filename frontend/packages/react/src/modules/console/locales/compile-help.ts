@@ -13,7 +13,7 @@ export const compileHelp = {
   'zh-CN': {
     createGuide: {
       description:
-        '创建并保存编译配置，包括来源目录、输出目录、Skill 和编译要求。只保存配置，不会开始编译。创建后才可执行 compile 命令。',
+        '创建并保存编译配置，包括配置名称、来源目录、输出目录、Skill 和编译要求。创建完成后，使用 compile 按名称执行编译。',
       examples: [create],
       quickStart: {
         documentation: { label: '操作指南', href: guide },
@@ -88,7 +88,7 @@ export const compileHelp = {
   'en-US': {
     createGuide: {
       description:
-        'Create and save a compile configuration with source directories, an output directory, a Skill, and compilation requirements. This command only saves the configuration. Run compile after it has been created.',
+        'Create and save a compile configuration with a name, source directories, an output directory, a Skill, and compilation requirements. Run the saved configuration by name with compile.',
       examples: [create],
       quickStart: {
         documentation: { label: 'Compilation guide', href: guide },

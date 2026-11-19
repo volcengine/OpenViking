@@ -26,6 +26,21 @@ import '@openviking/react/modules/console/style.css';
 
 ## 代码演示
 
+### 等待可用模式
+
+宿主确认可用模式期间，可渲染 `ConsoleSkeleton`。通过 `aria-label` 提供加载状态说明，并把骨架放在与 Console 相同的、有明确高度的面板中。
+
+```tsx
+import { Console, ConsoleSkeleton } from '@openviking/react/modules/console';
+import '@openviking/react/modules/console/style.css';
+
+const panel = loading ? (
+  <ConsoleSkeleton aria-label="正在加载 Console" />
+) : (
+  <Console modes={modes} />
+);
+```
+
 ### 基础用法
 
 面板默认进入对话模式；切换到「终端」，输入 `ov ls viking://resources/demo` 或 `ov read viking://resources/demo/notes.md`，点击结果里的资源链接，面板下方会显示 `onOpenUri` 收到的 URI。
@@ -60,7 +75,15 @@ import '@openviking/react/modules/console/style.css';
 
 ```
 
-通过 `isEligible` 确认当前作用域是否允许使用 Bot。返回 `true` 后，Console 显示对话标签页，并通过 `getStatus` 查询 Bot 是否已就绪。尚未启动时，用户点击「启用 VikingBot」会触发宿主的 `start` 回调。Console 会再次确认状态，就绪后加载对话和会话历史。切换库或身份时，更新 `scopeKey` 或传入对应的 `activation`。模拟火山宿主适配器将 `GetOpenVikingCollection` 返回的 `EnableVikingBot === true` 映射为 `isEligible` 的布尔结果。
+通过 `isEligible` 确认当前作用域是否允许使用 Bot。所有资格和状态读取，包括启用后复查和重试前检查，都保留 Bot 标签页并显示轻量加载提示；只有 `start` 等待返回时才显示启用中。启用流程中，只有 `isEligible` 返回 `false` 才移除 Bot 标签页。错误原文仅在通知中显示一次，卡片保留重试入口，常驻状态播报只报告流程状态变化，不重复播报错误。加载和就绪状态变化会保留用户选择的模式，包括命令模式。
+
+同一次失败的通知关闭后，切换 Bot/CLI 会保留关闭状态，只有新的失败才可重新展示。启用或重试时，若操作按钮持有焦点，先将焦点移到稳定的 Bot 面板，失败时留在 Bot。资格否定移除 Bot 控件时，仅当焦点位于被移除的模式切换组或 Bot 面板内才交给内置 CLI 编辑器，无法聚焦时回退面板，不抢占外部焦点。`CommandConsole` 的可选 `inputRef` 提供真实 textarea 引用，即使插槽嵌入完整 Console，焦点也会准确交给当前 Console 自己的编辑器。
+
+状态区域先空挂载、可见时发布公告。在支持的显隐信号使 Console 恢复可见时，会重播当前状态，不发起新请求。这些信号包括祖先属性变化（含 `data-state`）、`ResizeObserver` 可用时的盒子尺寸变化、窗口或可视视口尺寸变化，以及祖先 CSS 过渡和动画的开始、结束或取消。其他未产生上述信号的 CSS 显隐变化，宿主应同步 `hidden` 等显式可见状态，以便恢复显示时补播。
+
+作用域的请求 signal 已取消或随后被取消时，Console 保留 Bot 标签页并显示静态取消提示，不显示加载状态，也不提供无法重启已取消请求的重试按钮。宿主须换用未取消的新 signal，或移除已取消的 signal，才能重新检查。只修改 `scopeKey` 而继续传入同一个已取消的 signal，面板仍保持取消状态。
+
+`isEligible` 返回 `true` 后，Console 通过 `getStatus` 查询 Bot 是否已就绪。尚未启动时，用户点击「启用 VikingBot」会触发宿主的 `start` 回调。Console 会再次确认状态，就绪后加载对话和会话历史。切换库或身份时，更新 `scopeKey` 或传入对应的 `activation`。模拟火山宿主适配器将 `GetOpenVikingCollection` 返回的 `EnableVikingBot === true` 映射为 `isEligible` 的布尔结果。
 
 当前库和身份不变时保持适配器引用稳定。三个回调都接收 `AbortSignal`，失败时应抛出错误。可通过 `media` 用介绍视频或封面替换默认插图。
 
@@ -116,26 +139,26 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 ### Console
 
-| 参数              | 说明                                                                                                                                                                | 类型                                    | 默认值                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------- |
-| modes             | 启用的模式及工具栏顺序；只传一项即可单独接入对话或 TUI，空数组不显示面板                                                                                            | `readonly ConsoleMode[]`                | `['conversation', 'command']`                                     |
-| mode              | 当前模式，传入后由宿主控制；`'conversation'` 为对话，`'command'` 为命令                                                                                             | `ConsoleMode`                           | -                                                                 |
-| defaultMode       | 初始模式，传入 `mode` 后不再生效                                                                                                                                    | `ConsoleMode`                           | `'conversation'`                                                  |
-| onModeChange      | 用户切换模式时触发，参数为切换后的模式；传入 `mode` 时由宿主更新它                                                                                                  | `(mode: ConsoleMode) => void`           | -                                                                 |
-| conversation      | 对话模式的数据和回调：`sessions` 与 `headerActions` 显示在面板工具栏，其余属性传给 [VikingBot](../components/viking-bot)，省略 `draft` 时由 Console 保存对话草稿    | `Partial<VikingBotProps>`               | -                                                                 |
-| taskService       | 后台任务查询适配器，两个模式默认共享                                                                                                                                | `ConsoleTaskService`                    | 原生任务查询接口                                                  |
-| chatOptions       | 对话配置；自定义 service 同时实现对话和会话契约                                                                                                                     | `ConsoleChatOptions`                    | 原生服务                                                          |
-| quickCommands     | 命令模式空态里的快捷入口 `{ name, value }`，点击后把 `value` 填入输入框，不自动执行；传入空数组时不显示空态，类型见 [CommandConsole](../components/command-console) | `readonly CommandConsoleQuickCommand[]` | `add-resource`、`add-skill`、`add-memory`、`find`、`compile` 五条 |
-| scopeKey          | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                | -                                                                 |
-| commandHistoryKey | 同一标签页刷新时恢复命令历史，按宿主提供的环境和身份标识隔离                                                                                                        | `string`                                | -                                                                 |
-| command           | 命令模式的覆盖项，类型见下方 `ConsoleCommandProps`                                                                                                                  | `ConsoleCommandProps`                   | -                                                                 |
-| commandOptions    | [文件选择、下载与管理员命令配置](#consolecommandoptions)                                                                                                            | `ConsoleCommandOptions`                 | 使用浏览器处理文件，管理员命令关闭                                |
-| onOpenUri         | 点击资源链接时触发，参数为资源 URI；两种模式各自以 `conversation.onOpenUri`、`command.onOpenUri` 为准                                                               | `(uri: string) => void`                 | -                                                                 |
-| slots             | 在面板中插入宿主内容，类型见下方 `ConsoleSlots`                                                                                                                     | `ConsoleSlots`                          | -                                                                 |
-| labels            | 覆盖界面文案，类型见下方 `ConsoleLabels`                                                                                                                            | `ConsoleLabels`                         | -                                                                 |
-| locale            | 界面语言，规则见[国际化](../guide/i18n)                                                                                                                             | `'zh-CN' \| 'en-US'`                    | 继承上级，默认 `'en-US'`                                          |
-| requestOptions    | 覆盖请求配置，规则见[区块概览](./)                                                                                                                                  | `OvRequestOptions`                      | -                                                                 |
-| className、style  | 外观与布局，其余 HTML 属性透传到根元素                                                                                                                              | HTML 属性                               | -                                                                 |
+| 参数              | 说明                                                                                                                                                                | 类型                                    | 默认值                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| modes             | 启用的模式及工具栏顺序；只传一项即可单独接入对话或 TUI，空数组不显示面板                                                                                            | `readonly ConsoleMode[]`                | `['conversation', 'command']`                                                  |
+| mode              | 当前模式，传入后由宿主控制；`'conversation'` 为对话，`'command'` 为命令                                                                                             | `ConsoleMode`                           | -                                                                              |
+| defaultMode       | 初始模式，传入 `mode` 后不再生效                                                                                                                                    | `ConsoleMode`                           | `'conversation'`                                                               |
+| onModeChange      | 用户切换模式时触发，参数为切换后的模式；传入 `mode` 时由宿主更新它                                                                                                  | `(mode: ConsoleMode) => void`           | -                                                                              |
+| conversation      | 对话模式的数据和回调：`sessions` 与 `headerActions` 显示在面板工具栏，其余属性传给 [VikingBot](../components/viking-bot)，省略 `draft` 时由 Console 保存对话草稿    | `Partial<VikingBotProps>`               | -                                                                              |
+| taskService       | 后台任务查询适配器，两个模式默认共享                                                                                                                                | `ConsoleTaskService`                    | 原生任务查询接口                                                               |
+| chatOptions       | 对话配置；自定义 service 同时实现对话和会话契约                                                                                                                     | `ConsoleChatOptions`                    | 原生服务                                                                       |
+| quickCommands     | 命令模式空态里的快捷入口 `{ name, value }`，点击后把 `value` 填入输入框，不自动执行；传入空数组时不显示空态，类型见 [CommandConsole](../components/command-console) | `readonly CommandConsoleQuickCommand[]` | `add-resource`、`add-skill`、`add-memory`、`find`、`compile create`、`compile` |
+| scopeKey          | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                | -                                                                              |
+| commandHistoryKey | 在浏览器中保存命令历史，按宿主提供的环境、库和用户标识隔离                                                                                                          | `string`                                | -                                                                              |
+| command           | 命令模式的覆盖项，类型见下方 `ConsoleCommandProps`                                                                                                                  | `ConsoleCommandProps`                   | -                                                                              |
+| commandOptions    | [文件选择、下载与管理员命令配置](#consolecommandoptions)                                                                                                            | `ConsoleCommandOptions`                 | 使用浏览器处理文件，管理员命令关闭                                             |
+| onOpenUri         | 点击资源链接时触发，参数为资源 URI；两种模式各自以 `conversation.onOpenUri`、`command.onOpenUri` 为准                                                               | `(uri: string) => void`                 | -                                                                              |
+| slots             | 在面板中插入宿主内容，类型见下方 `ConsoleSlots`                                                                                                                     | `ConsoleSlots`                          | -                                                                              |
+| labels            | 覆盖界面文案，类型见下方 `ConsoleLabels`                                                                                                                            | `ConsoleLabels`                         | -                                                                              |
+| locale            | 界面语言，规则见[国际化](../guide/i18n)                                                                                                                             | `'zh-CN' \| 'en-US'`                    | 继承上级，默认 `'en-US'`                                                       |
+| requestOptions    | 覆盖请求配置，规则见[区块概览](./)                                                                                                                                  | `OvRequestOptions`                      | -                                                                              |
+| className、style  | 外观与布局，其余 HTML 属性透传到根元素                                                                                                                              | HTML 属性                               | -                                                                              |
 
 ### ConsoleChatOptions
 
@@ -379,7 +402,7 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 - 命令模式的「新建会话」会中止进行中的请求并忽略迟到的响应，同时清空命令记录、错误和输入框；服务端已接收的操作不会撤销，服务端数据也不会删除。`clear` 命令只清空本地记录。
 - 命令历史列出当前面板的记录，最新的在前，时间为提交时的本地时间（`YYYY-MM-DD HH:mm`）；点击一条会把命令填回输入框，不会执行。
 - 命令记录和草稿只保存在内存中。`scopeKey`、`requestOptions` 或 Provider 的配置变化时，Console 清空记录和草稿并中止进行中的请求，卸载时同样中止。
-- 设置 `commandHistoryKey` 后，Console 在浏览器的会话存储中在浏览器存储容量内保存最近最多 50 条有效只读命令及其提交时间。写入命令和格式错误的命令可在当前页面回填。「新建会话」清除当前身份范围的历史。
+- 设置 `commandHistoryKey` 后，Console 将已提交的命令文本及时间保存在浏览器本地存储中。刷新后，历史菜单和方向键可回查同一份记录。浏览器存储空间不足时，新记录会按需替换当前作用域最早的记录。若新记录仍无法写入，则保留已有历史并跳过保存。「新建会话」清除当前作用域的历史。
 - 身份字段使用函数时，保持函数引用稳定，并在身份变化时更新 `scopeKey`，或用身份作为组件的 `key`。
 - Console 撑满父容器的宽高，父容器需要有明确的高度，或是可伸展的 flex 布局。
 - 切换 `locale` 会更新已有记录里的命令帮助、参数错误和取消提示，保留记录和草稿；服务端返回的内容保持原样。

@@ -3,6 +3,7 @@ import type { VikingBotInteractionFieldContext } from '../../../components/vikin
 import { ChoiceInput } from '../../../components/viking-bot/interaction/choice-input.js';
 import { resolveInteractionLabels } from '../../../components/viking-bot/interaction/labels.js';
 import { hitlLabels } from './locales.js';
+import { formatCompileUriLabel } from './uris.js';
 
 export function TargetField({
   field,
@@ -21,7 +22,10 @@ export function TargetField({
       request={{
         kind: 'choice',
         question,
-        options: recommendations.map((uri) => ({ value: uri, label: uri })),
+        options: recommendations.map((uri) => ({
+          value: uri,
+          label: formatCompileUriLabel(uri),
+        })),
         allowCustomInput: { placeholder },
       }}
       value={field.value}

@@ -55,6 +55,7 @@
 .ov-auth,
 .ov-agent-connect,
 .ov-console,
+.ov-console-skeleton,
 .ov-divider,
 .ov-file-browser-action-bar,
 .ov-drawer,
@@ -226,6 +227,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-auth,
 .dark .ov-agent-connect,
 .dark .ov-console,
+.dark .ov-console-skeleton,
 .dark .ov-divider,
 .dark .ov-file-browser-action-bar,
 .dark .ov-drawer,
@@ -654,6 +656,11 @@ html.dark .ov-directory-tour {
   --ov-ui-tour-surface-default: var(--ov-ui-bg-1-default);
   --ov-ui-tour-border-default: var(--ov-ui-border-3-default);
   --ov-ui-tour-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-tour-illustration-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-memories-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-shared-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-experiences-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-peers-default: var(--ov-ui-bg-3-default);
 }
 
 /* Persistent notice surface from the console Arco theme (MIT). */

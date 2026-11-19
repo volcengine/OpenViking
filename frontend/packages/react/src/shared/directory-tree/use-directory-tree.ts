@@ -2,7 +2,7 @@ import { tagData } from '../monitoring/data.js';
 import { useDirectoryMonitoring } from './use-directory-monitoring.js';
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
@@ -16,6 +16,7 @@ import { useDirectoryRows } from './use-directory-rows.js';
 import { DirectoryQueries } from './directory-queries.js';
 import { useQueryScope } from '../request/use-query-scope.js';
 import type { DirState, UseDirectoryTreeOptions } from './types.js';
+import { useUserRootMode } from './user-root-context.js';
 
 const empty: Record<string, DirState> = {};
 const subscribeEmpty = () => () => {};
@@ -34,6 +35,7 @@ export function useDirectoryTree({
   onExpansionSnapshotChange,
   requestOptions,
 }: UseDirectoryTreeOptions) {
+  const userRootMode = useUserRootMode();
   const {
     request,
     aborted,
@@ -41,17 +43,19 @@ export function useDirectoryTree({
     retry: retryScope,
   } = useQueryScope(client, requestOptions, DIRECTORY_LOAD, cacheScopeKey);
   const session = useMemo(
-    () => request && new DirectoryQueries(request, rootUri, cacheScopeKey),
-    [request, rootUri, cacheScopeKey],
+    () =>
+      request &&
+      new DirectoryQueries(request, rootUri, cacheScopeKey, userRootMode),
+    [request, rootUri, cacheScopeKey, userRootMode],
   );
   const dirs = useSyncExternalStore(
     aborted ? subscribeEmpty : (session?.subscribe ?? subscribeEmpty),
     session?.getSnapshot ?? emptySnapshot,
   );
   const activeSession = useRef(session);
-  // Publish committed query subscriptions for stable event callbacks. Abandoned
-  // renders must not replace the session used by the visible preview.
-  useEffect(() => {
+  // Publish the committed query scope before event or restore callbacks run.
+  // Layout publication ignores suspended renders. Each commit replaces the ref.
+  useLayoutEffect(() => {
     activeSession.current = session;
   }, [session]);
   const expansion = useDirectoryExpansion({
@@ -80,6 +84,7 @@ export function useDirectoryTree({
     request?.client ?? null,
     request?.options,
     rootUri,
+    userRootMode,
   );
   const fetchPage = useCallback(
     async (...args: Parameters<DirectoryQueries['load']>) => {
@@ -147,6 +152,8 @@ export function useDirectoryTree({
     rootUri,
     dirs,
     expanded,
+    collapsed: expansion.collapsed,
+    pendingEdits: expansion.pendingEdits,
     identifyUri: expansion.identifyUri,
     resolveHome: expansion.resolveHome,
     initializing,
@@ -155,18 +162,15 @@ export function useDirectoryTree({
     dirs,
     dirs[rootUri]?.ready ?? false,
   );
-  tagData(
-    monitoring[0]?.span.binding,
-    rows,
-    monitoring.map((operation) => operation.span),
-  );
+  const spans = monitoring.map((operation) => operation.span);
+  tagData(spans[0]?.binding, rows, spans);
   const isInitializing = !identityError && initializing;
   const root = dirs[rootUri];
   const isReady = root?.ready ?? false;
   useReportExpansion(
     session,
     isReady &&
-      !isInitializing &&
+      (!isInitializing || expansion.edited) &&
       (!root?.error || (expansion.edited && root.entries.length > 0)) &&
       (!unresolved.size || expansion.edited),
     rootUri,

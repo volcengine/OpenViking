@@ -29,7 +29,10 @@ export type ConsoleBotActivationStatus = 'not-started' | 'ready';
 
 /** Optional lifecycle managed by the host for the current library and identity. */
 export interface ConsoleBotActivation {
-  /** Confirm whether the current scope allows Bot access. Only true enables its tab. */
+  /**
+   * Confirm whether the current scope allows Bot use. The tab stays visible while
+   * checking or on failure; false hides it, while true proceeds to runtime readiness.
+   */
   isEligible(signal: AbortSignal): Promise<boolean>;
   /** Read runtime readiness after the library has allowed access. */
   getStatus(signal: AbortSignal): Promise<ConsoleBotActivationStatus>;
@@ -138,7 +141,7 @@ export interface ConsoleOptions {
   defaultMode?: ConsoleMode;
   /** Change with the identity when using dynamic credential/identity functions. */
   scopeKey?: string;
-  /** Opt in to tab-session command history. Provide a stable, credential-free key for the environment and identity. */
+  /** Opt in to browser-local command history. Provide a stable, credential-free key for the environment, library, and user. */
   commandHistoryKey?: string;
   onModeChange?: (mode: ConsoleMode) => void;
   requestOptions?: OvRequestOptions;
