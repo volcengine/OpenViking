@@ -9,7 +9,8 @@
  * than exposing `Dayjs` in the public props.
  * Visual rules come from the console's theme-ve-o-aml-design skin.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Popover } from '../popover/popover.js';
 import type { KeyboardEvent } from 'react';
 import { useLocale } from '../../locale-context.js';
 import { resolveLocale } from '../../locale.js';
@@ -22,6 +23,7 @@ import { parseDate, shiftMonth } from './calendar.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 import { DatePickerPopup } from './date-picker-popup.js';
+import RemoveIcon from '../../../../../icons/svg/viking-bot/remove.svg?react';
 
 export interface DatePickerProps {
   /** 受控值，`YYYY-MM-DD`；空串表示未选。Controlled value; an empty string means none. */
@@ -99,7 +101,7 @@ export function DatePicker({
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const popupId = useId();
   // 点击日历格时输入框先 blur、后 click。blur 若照常提交，就会先按旧草稿发一次
   // onChange，紧接着 onPick 再发一次——宿主收到两次变更，中间还是用户没选的旧
   // 日期。pointerdown 在 blur 之前发生，因此在这里立起标记，blur 看到它就跳过。
@@ -132,23 +134,6 @@ export function DatePicker({
     if (next) setView({ year: next.year(), month: next.month() });
   }, [value]);
 
-  // 与 document 的指针事件同步：点击弹层外部要收起。弹层挂在组件内部，只监听
-  // 自身收不到外部点击；关闭或卸载时移除。
-  //
-  // Syncs with the document's pointer events to close on an outside click. The popup
-  // lives inside this component, so a listener on it never sees that click; removed on
-  // close or unmount.
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!(event.target instanceof Node)) return;
-      if (rootRef.current?.contains(event.target)) return;
-      setOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
-
   const commit = (next: string) => {
     onChange(next);
     setOpen(false);
@@ -175,73 +160,19 @@ export function DatePicker({
   };
 
   return (
-    <div className="ov-date-picker" ref={rootRef}>
-      <div className="ov-date-picker__field">
-        <input
-          type="text"
-          className="ov-date-picker__input"
-          aria-label={ariaLabel}
-          placeholder={placeholder}
-          value={draft}
-          disabled={disabled}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commitDraft}
-          onKeyDown={onKeyDown}
-          onFocus={() => !disabled && setOpen(true)}
-        />
-        {value ? (
-          <button
-            type="button"
-            className="ov-date-picker__clear"
-            aria-label={clearLabel ?? text.clearLabel}
-            disabled={disabled}
-            onClick={() => commit('')}
-          >
-            <svg
-              aria-hidden="true"
-              width={12}
-              height={12}
-              viewBox="0 0 16 16"
-              fill="none"
-            >
-              <path
-                d="m4 4 8 8M12 4l-8 8"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="ov-date-picker__calendar"
-          aria-label={calendarLabel ?? text.calendarLabel}
-          aria-expanded={open}
-          disabled={disabled}
-          onClick={() => setOpen((current) => !current)}
-        >
-          <svg
-            aria-hidden="true"
-            width={14}
-            height={14}
-            viewBox="0 0 16 16"
-            fill="none"
-          >
-            <rect
-              x="2.5"
-              y="3.5"
-              width="11"
-              height="10"
-              rx="1.5"
-              stroke="currentColor"
-            />
-            <path d="M2.5 6.5h11M5.5 2v2.5M10.5 2v2.5" stroke="currentColor" />
-          </svg>
-        </button>
-      </div>
-      {open ? (
+    <Popover
+      role="presentation"
+      trigger="click"
+      clickToClose={false}
+      placement="top"
+      alignment="start"
+      open={open}
+      onOpenChange={setOpen}
+      disabled={disabled}
+      className="ov-date-picker__overlay"
+      content={
         <div
+          id={popupId}
           // 在捕获阶段标记「这次指针操作落在弹层里」，让紧随其后的输入框 blur
           // 不再按旧草稿提交。挂在外层而不是每一格上，切换月份与选中走同一条路径。
           //
@@ -269,6 +200,8 @@ export function DatePicker({
             locale={locale}
             prevLabel={prevLabel ?? text.prevLabel}
             nextLabel={nextLabel ?? text.nextLabel}
+            prevYearLabel={text.prevYearLabel}
+            nextYearLabel={text.nextYearLabel}
             onShiftMonth={(delta) =>
               setView((current) =>
                 shiftMonth(current.year, current.month, delta),
@@ -277,7 +210,68 @@ export function DatePicker({
             onPick={commit}
           />
         </div>
-      ) : null}
-    </div>
+      }
+    >
+      <div className="ov-date-picker ov-date-picker__field">
+        <input
+          type="text"
+          className="ov-date-picker__input"
+          aria-label={ariaLabel}
+          aria-controls={open ? popupId : undefined}
+          placeholder={placeholder}
+          value={draft}
+          disabled={disabled}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commitDraft}
+          onKeyDown={onKeyDown}
+          onFocus={() => !disabled && setOpen(true)}
+        />
+        {value ? (
+          <button
+            type="button"
+            className="ov-date-picker__clear"
+            aria-label={clearLabel ?? text.clearLabel}
+            disabled={disabled}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              event.stopPropagation();
+              commit('');
+            }}
+          >
+            <RemoveIcon width={12} height={12} aria-hidden="true" />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="ov-date-picker__calendar"
+          aria-label={calendarLabel ?? text.calendarLabel}
+          aria-expanded={open}
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation();
+            setOpen((current) => !current);
+          }}
+        >
+          <svg
+            aria-hidden="true"
+            width={14}
+            height={14}
+            viewBox="0 0 16 16"
+            fill="none"
+          >
+            <rect
+              x="2.5"
+              y="3.5"
+              width="11"
+              height="10"
+              rx="1.5"
+              stroke="currentColor"
+            />
+            <path d="M2.5 6.5h11M5.5 2v2.5M10.5 2v2.5" stroke="currentColor" />
+          </svg>
+        </button>
+      </div>
+    </Popover>
   );
 }
