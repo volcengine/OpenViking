@@ -198,11 +198,32 @@ fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
     {
         const F_GETFL: i32 = 3;
         const O_APPEND: i32 = 0x0008;
-        // XNU does not expose open-file-description identity to userspace; only merge regular
-        // files when both descriptors use O_APPEND so independent non-append offsets stay intact.
-        // SAFETY: F_GETFL takes no variadic arguments and only reads descriptor status flags.
-        let (out_flags, err_flags) = unsafe { (fcntl(out_fd, F_GETFL), fcntl(err_fd, F_GETFL)) };
-        out_flags >= 0 && out_flags == err_flags && (out_flags & O_APPEND) != 0
+        const F_SETNOSIGPIPE: i32 = 73;
+        const F_GETNOSIGPIPE: i32 = 74;
+
+        // SAFETY: F_GETFL and F_GETNOSIGPIPE only read descriptor flags; F_SETNOSIGPIPE toggles
+        // FG_NOSIGPIPE on `struct fileglob` without touching file offsets or regular-file I/O.
+        unsafe {
+            let (out_flags, err_flags) = (fcntl(out_fd, F_GETFL), fcntl(err_fd, F_GETFL));
+            if out_flags < 0 || out_flags != err_flags {
+                return false;
+            }
+            if (out_flags & O_APPEND) != 0 {
+                return true;
+            }
+            let (out_nosig, err_nosig) =
+                (fcntl(out_fd, F_GETNOSIGPIPE), fcntl(err_fd, F_GETNOSIGPIPE));
+            if out_nosig < 0 || out_nosig != err_nosig {
+                return false;
+            }
+            let toggled = i32::from(out_nosig == 0);
+            if fcntl(out_fd, F_SETNOSIGPIPE, toggled) < 0 {
+                return false;
+            }
+            let shared = fcntl(err_fd, F_GETNOSIGPIPE) == toggled;
+            let _ = fcntl(out_fd, F_SETNOSIGPIPE, out_nosig);
+            shared
+        }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {

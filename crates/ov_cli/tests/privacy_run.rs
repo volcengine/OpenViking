@@ -1143,6 +1143,41 @@ async fn preserves_regular_file_stdout_and_merged_stream_order() {
         format!("AGENT LOG HEADER\n1\n2:{TOKEN}\n")
     );
 
+    let truncated_shared = dir.path().join("truncated_shared.log");
+    let trunc_out = fs::File::create(&truncated_shared).unwrap();
+    let trunc_err = trunc_out.try_clone().unwrap();
+    let (url, server) = resolver([(TOKEN, Some("secret-trunc".into()))]).await;
+    let mut trunc_cmd = privacy(dir.path(), &url);
+    trunc_cmd
+        .args([
+            "run",
+            "--env",
+            &format!("TOKEN={TOKEN}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"printf '1\n'; printf '2:%s\n' "$TOKEN" >&2; printf '3\n'; printf '4\n' >&2"#,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(trunc_out))
+        .stderr(Stdio::from(trunc_err));
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        trunc_cmd.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let status = trunc_cmd.status().await.unwrap();
+    assert_eq!(status.code(), Some(0));
+    server.await.unwrap();
+    assert_eq!(
+        fs::read_to_string(&truncated_shared).unwrap(),
+        format!("1\n2:{TOKEN}\n3\n4\n")
+    );
+
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
