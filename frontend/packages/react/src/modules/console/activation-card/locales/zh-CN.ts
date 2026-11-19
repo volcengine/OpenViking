@@ -8,4 +8,7 @@ export default {
   activating: '正在启用 VikingBot…',
   failed: 'VikingBot 启用失败。',
   retry: '重试',
+  introPlay: '播放 VikingBot 使用教程',
+  introTitle: '使用 VikingBot 创建 Wiki',
+  introClose: '关闭教程',
 } satisfies typeof enUS;

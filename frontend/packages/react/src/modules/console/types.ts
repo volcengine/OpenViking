@@ -35,7 +35,7 @@ export interface ConsoleBotActivation {
   getStatus(signal: AbortSignal): Promise<ConsoleBotActivationStatus>;
   /** Start the Bot after the user selects Enable. Console checks status again after it resolves. */
   start(signal: AbortSignal): Promise<void>;
-  /** Optional introduction media. Console renders an illustration by default. */
+  /** Optional introduction media. Console offers a playable tutorial by default. */
   media?: ReactNode;
 }
 

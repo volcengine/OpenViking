@@ -1,13 +1,10 @@
 import { useId, type ReactNode } from 'react';
-import {
-  ArrowRightIcon,
-  DocumentIcon,
-  WikiBookIcon,
-} from '../../../icons/index.js';
+import { ArrowRightIcon } from '../../../icons/index.js';
 import { useLocale } from '../../../shared/locale-context.js';
 import { resolveLocale, type Locale } from '../../../shared/locale.js';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { LoadingIcon } from '../../../shared/primitives/loading-icon/loading-icon.js';
+import { ActivationIntroMedia } from './intro-media.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 
@@ -17,38 +14,6 @@ interface ConsoleActivationCardProps {
   onAction?: () => void;
   media?: ReactNode;
   error?: ReactNode;
-}
-
-function ActivationArtwork() {
-  return (
-    <div className="ov-console-activation__artwork" aria-hidden="true">
-      <div className="ov-console-activation__window">
-        <div className="ov-console-activation__window-bar">
-          <span className="ov-console-activation__window-dots" />
-          <span className="ov-console-activation__window-address" />
-        </div>
-        <div className="ov-console-activation__window-body">
-          <div className="ov-console-activation__window-nav">
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="ov-console-activation__window-source">
-            <DocumentIcon width={24} height={24} />
-            <span />
-            <span />
-          </div>
-          <div className="ov-console-activation__window-wiki">
-            <WikiBookIcon width={18} height={18} />
-            <span />
-            <span />
-            <span />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export function ConsoleActivationCard({
@@ -78,7 +43,7 @@ export function ConsoleActivationCard({
     <section className="ov-console-activation" aria-labelledby={titleId}>
       <div className="ov-console-activation__main">
         <div className="ov-console-activation__cover">
-          {media ?? <ActivationArtwork />}
+          {media ?? <ActivationIntroMedia locale={locale} />}
         </div>
         <div className="ov-console-activation__copy">
           <h2 className="ov-console-activation__title" id={titleId}>

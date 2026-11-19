@@ -7,4 +7,7 @@ export default {
   activating: 'Enabling VikingBot…',
   failed: 'Could not enable VikingBot.',
   retry: 'Retry',
+  introPlay: 'Play VikingBot tutorial',
+  introTitle: 'Create a Wiki with VikingBot',
+  introClose: 'Close tutorial',
 };

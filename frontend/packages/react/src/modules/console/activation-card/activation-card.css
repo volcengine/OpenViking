@@ -1,15 +1,7 @@
 .ov-console-activation {
-  --ov-ui-console-activation-surface: var(
-    --ov-ui-color-bg-1,
-    var(--ov-ui-bg-1-default)
-  );
   --ov-ui-console-activation-subtle: var(
     --ov-ui-color-bg-5,
     var(--ov-ui-bg-5-default)
-  );
-  --ov-ui-console-activation-border: var(
-    --ov-ui-color-border-2,
-    var(--ov-ui-border-2-default)
   );
   --ov-ui-console-activation-accent: var(
     --ov-ui-color-primary,
@@ -23,13 +15,14 @@
   align-items: start;
   justify-content: center;
   overflow: auto;
-  padding: 80px 16px 24px;
+  padding: 24px 16px;
 }
 
 .ov-console-activation__main {
   display: grid;
   inline-size: 100%;
   max-inline-size: 280px;
+  margin-block: auto;
   gap: 24px;
   justify-items: center;
   text-align: center;
@@ -57,131 +50,39 @@
   object-fit: cover;
 }
 
-.ov-console-activation__artwork {
-  display: grid;
-  min-inline-size: 0;
-  place-items: center;
-  background:
-    radial-gradient(
-      ellipse at 100% 100%,
-      var(
-        --ov-ui-color-activation-preview-haze,
-        var(--ov-ui-activation-preview-haze-default)
-      ),
-      transparent 64%
-    ),
-    linear-gradient(
-      135deg,
-      var(
-        --ov-ui-color-activation-preview-haze,
-        var(--ov-ui-activation-preview-haze-default)
-      ),
-      var(
-        --ov-ui-color-activation-preview-sky,
-        var(--ov-ui-activation-preview-sky-default)
-      )
-    );
+.ov-console-activation__intro-trigger {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
-.ov-console-activation__window {
-  display: grid;
-  grid-template-rows: 13% 1fr;
-  inline-size: 78%;
-  block-size: 74%;
-  min-inline-size: 0;
-  overflow: hidden;
-  border: 1px solid var(--ov-ui-console-activation-border);
-  border-radius: 7px;
-  background: var(--ov-ui-console-activation-surface);
-  box-shadow: 0 7px 18px
-    color-mix(in srgb, var(--ov-ui-shadow-default) 20%, transparent);
+.ov-console-activation__intro-trigger > img {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
 }
 
-.ov-console-activation__window-bar {
-  display: flex;
-  align-items: center;
-  gap: 8%;
-  padding-inline: 5%;
-  border-block-end: 1px solid var(--ov-ui-console-activation-border);
-  background: var(--ov-ui-console-activation-subtle);
+.ov-console-activation__intro-dialog {
+  --ov-ui-modal-width: 960px;
 }
 
-.ov-console-activation__window-dots {
-  inline-size: 18px;
-  max-inline-size: 13%;
-  block-size: 4px;
-  background: radial-gradient(
-      circle,
-      var(--ov-ui-console-activation-accent) 34%,
-      transparent 39%
-    )
-    0 center / 6px 4px repeat-x;
+.ov-console-activation__intro-title {
+  margin: 0 40px 20px 0;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 26px;
 }
 
-.ov-console-activation__window-address {
-  inline-size: 64%;
-  block-size: 26%;
-  border-radius: 4px;
-  background: var(--ov-ui-console-activation-surface);
-}
-
-.ov-console-activation__window-body {
-  display: grid;
-  min-block-size: 0;
-  grid-template-columns: 24% 43% 33%;
-}
-
-.ov-console-activation__window-nav,
-.ov-console-activation__window-wiki,
-.ov-console-activation__window-source {
-  display: flex;
-  min-inline-size: 0;
-  flex-direction: column;
-  gap: 8%;
-}
-
-.ov-console-activation__window-nav {
-  padding: 12% 14%;
-  background: var(--ov-ui-console-activation-subtle);
-}
-
-.ov-console-activation__window-source {
-  align-items: center;
-  justify-content: center;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-}
-
-.ov-console-activation__window-wiki {
-  padding: 10%;
-  border-inline-start: 1px solid var(--ov-ui-console-activation-border);
-  color: var(--ov-ui-console-activation-accent);
-}
-
-.ov-console-activation__window-nav > span,
-.ov-console-activation__window-wiki > span,
-.ov-console-activation__window-source > span {
-  inline-size: 92%;
-  block-size: 4px;
-  border-radius: 4px;
-  background: var(--ov-ui-console-activation-border);
-}
-
-.ov-console-activation__window-source > span {
-  inline-size: 55%;
-}
-
-.ov-console-activation__window-nav > span:nth-child(2n),
-.ov-console-activation__window-wiki > span:last-child,
-.ov-console-activation__window-source > span:last-child {
-  inline-size: 65%;
-}
-
-.ov-console-activation__window-nav > span:first-child {
-  background: color-mix(
-    in srgb,
-    var(--ov-ui-console-activation-accent) 36%,
-    var(--ov-ui-console-activation-border)
-  );
+.ov-console-activation__intro-video {
+  display: block;
+  inline-size: 100%;
+  max-block-size: calc(100dvh - 160px);
+  object-fit: contain;
 }
 
 .ov-console-activation__copy {
@@ -244,10 +145,6 @@
 }
 
 @container (max-width: 360px) {
-  .ov-console-activation {
-    padding-block-start: 40px;
-  }
-
   .ov-console-activation__main {
     gap: 20px;
   }

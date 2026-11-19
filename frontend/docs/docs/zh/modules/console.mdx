@@ -62,7 +62,7 @@ import '@openviking/react/modules/console/style.css';
 
 通过 `isEligible` 确认当前作用域是否允许使用 Bot。返回 `true` 后，Console 显示对话标签页，并通过 `getStatus` 查询 Bot 是否已就绪。尚未启动时，用户点击「启用 VikingBot」会触发宿主的 `start` 回调。Console 会再次确认状态，就绪后加载对话和会话历史。切换库或身份时，更新 `scopeKey` 或传入对应的 `activation`。模拟火山宿主适配器将 `GetOpenVikingCollection` 返回的 `EnableVikingBot === true` 映射为 `isEligible` 的布尔结果。
 
-当前库和身份不变时保持适配器引用稳定。三个回调都接收 `AbortSignal`，失败时应抛出错误。可通过 `media` 用介绍视频或封面替换默认插图。
+当前库和身份不变时保持适配器引用稳定。三个回调都接收 `AbortSignal`，失败时应抛出错误。启用页自带可点击播放的教程视频，可通过 `media` 替换默认预览。
 
 ### 待确认交互
 
@@ -161,7 +161,7 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 | isEligible | 确认当前作用域是否允许使用 Bot，返回 false 时隐藏标签页 | `(signal: AbortSignal) => Promise<boolean>`                  | 必填     |
 | getStatus  | 资格确认后读取运行状态                                  | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>` | 必填     |
 | start      | 用户点击启用后启动 Bot，Console 随后再次确认状态        | `(signal: AbortSignal) => Promise<void>`                     | 必填     |
-| media      | 启用卡片中的介绍媒体                                    | `ReactNode`                                                  | 内置插画 |
+| media      | 启用卡片中的介绍媒体                                    | `ReactNode`                                                  | 教程视频 |
 
 ### ConsoleHitlOptions
 
