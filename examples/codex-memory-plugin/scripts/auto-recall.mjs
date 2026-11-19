@@ -18,7 +18,7 @@ import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { getStateDir, deriveOvSessionId } from "./session-state.mjs";
 import { createCodexCompressor } from "./host-compressor.mjs";
-import { buildRecallBlockDetailed } from "./shared/recall-core.mjs";
+import { buildRecallBlockDetailed, resolveRecallScoreThreshold } from "./shared/recall-core.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
@@ -145,7 +145,13 @@ runHookStage({
   const runCompressor = await createCodexCompressor(cfg, {
     log, logError, onActiveChild: (child) => { activeCompressor = child; },
   });
-  const recalled = await buildRecallBlockDetailed(fetchJSON, cfg, userPrompt, {
+  const recallCfg = {
+    ...cfg,
+    scoreThreshold: resolveRecallScoreThreshold(
+      cfg.scoreThreshold, health.result?.version, cfg.scoreThresholdConfigured,
+    ),
+  };
+  const recalled = await buildRecallBlockDetailed(fetchJSON, recallCfg, userPrompt, {
     actorPeerId: effectivePeer.peerId, legacyPeerId: effectivePeer.legacyPeerId,
     sessionId: recallSessionId || "", runCompressor,
     localCompressorAvailable: Boolean(runCompressor),

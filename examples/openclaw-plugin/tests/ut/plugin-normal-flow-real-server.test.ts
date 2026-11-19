@@ -51,7 +51,7 @@ describe("plugin normal flow with healthy backend", () => {
       requests.push({ body, method, path: `${url.pathname}${url.search}` });
 
       if (method === "GET" && url.pathname === "/health") {
-        json(res, 200, { status: "ok" });
+        json(res, 200, { status: "ok", version: "0.5.4.dev46" });
         return;
       }
 
@@ -269,6 +269,7 @@ describe("plugin normal flow with healthy backend", () => {
     expect(contextSearchBody).toMatchObject({
       mode: "context",
       purpose: "coding",
+      score_threshold: 0.575,
       quotas: {
         events: 1,
         entities: 1,

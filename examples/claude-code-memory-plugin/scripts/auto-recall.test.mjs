@@ -186,6 +186,25 @@ test("an empty server-assembled context is recorded as no_results", async () => 
   assert.equal(injectedContext(stdout), null);
 });
 
+test("a newer service receives the converted default on both recall endpoints", async () => {
+  const thresholds = [];
+  await recallTurn({
+    routes: {
+      "GET /health": () => ({ body: { status: "ok", version: "0.5.4.dev46" } }),
+      "POST /api/v1/search/search": async (req) => {
+        thresholds.push((await readRequestBody(req)).score_threshold);
+        return { status: 404, body: { status: "error" } };
+      },
+      "POST /api/v1/search/recall": async (req) => {
+        thresholds.push((await readRequestBody(req)).min_score);
+        return { body: { status: "ok", result: { rendered: "" } } };
+      },
+    },
+  });
+
+  assert.deepEqual(thresholds, [0.675, 0.675]);
+});
+
 test("a server-assembled block counts its URIs and its own token cost", async () => {
   const rendered = [
     "- viking://user/default/memories/entities/plugin.md — the shared recall core",

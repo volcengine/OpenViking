@@ -16,26 +16,14 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMe
   });
 }
 
-export async function quickHealthCheck(
-  client: OpenVikingClient,
-  agentId: string | undefined,
-  timeoutMs: number,
-): Promise<boolean> {
-  try {
-    await client.healthCheck(timeoutMs, agentId);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function quickRecallPrecheck(
   client: OpenVikingClient,
   agentId?: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const healthOk = await quickHealthCheck(client, agentId, 500);
-  if (healthOk) {
-    return { ok: true };
+): Promise<{ ok: true; serverVersion?: string } | { ok: false; reason: string }> {
+  try {
+    const health = await client.healthCheck(500, agentId);
+    return { ok: true, serverVersion: health?.version };
+  } catch {
+    return { ok: false, reason: "health check failed" };
   }
-  return { ok: false, reason: "health check failed" };
 }

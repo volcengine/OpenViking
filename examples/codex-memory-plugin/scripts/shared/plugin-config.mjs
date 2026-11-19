@@ -233,6 +233,7 @@ export function buildPluginConfig(harness, {
     harness: name,
     recallCompress: recallRewrite,
     recallRewrite,
+    scoreThresholdConfigured: configured.has("scoreThreshold"),
     clientVersion,
     userAgent: buildUserAgent(name, clientVersion),
 

@@ -131,6 +131,9 @@ export type MemoryOpenVikingConfig = {
   };
 };
 
+// Keep the source of the threshold on parsed config without adding an input key.
+export const RECALL_SCORE_THRESHOLD_CONFIGURED = Symbol("recallScoreThresholdConfigured");
+
 /** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
 export type ParsedMemoryOpenVikingConfig = Required<
   Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "apiKey" | "peer_role">
@@ -141,6 +144,7 @@ export type ParsedMemoryOpenVikingConfig = Required<
   peer_role: "none" | "assistant" | "sender";
   agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
   recallTargetTypes: Array<"resource" | "user" | "agent">;
+  [RECALL_SCORE_THRESHOLD_CONFIGURED]: boolean;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -650,6 +654,11 @@ export const memoryOpenVikingConfigSchema = {
       !("recallTargetTypes" in cfg) && recallResources,
     );
     const { enabledTools, disabledTools } = normalizeEnabledTools(cfg);
+    const recallScoreThreshold = toNumber(cfg.recallScoreThreshold, Number.NaN);
+    const previouslyConfigured =
+      (value as Partial<ParsedMemoryOpenVikingConfig>)[RECALL_SCORE_THRESHOLD_CONFIGURED];
+    const recallScoreThresholdConfigured = Number.isFinite(recallScoreThreshold)
+      && (previouslyConfigured !== false || recallScoreThreshold !== DEFAULT_RECALL_SCORE_THRESHOLD);
 
     return {
       mode,
@@ -678,8 +687,12 @@ export const memoryOpenVikingConfigSchema = {
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,
-        Math.max(0, toNumber(cfg.recallScoreThreshold, DEFAULT_RECALL_SCORE_THRESHOLD)),
+        Math.max(
+          0,
+          Number.isFinite(recallScoreThreshold) ? recallScoreThreshold : DEFAULT_RECALL_SCORE_THRESHOLD,
+        ),
       ),
+      [RECALL_SCORE_THRESHOLD_CONFIGURED]: recallScoreThresholdConfigured,
       recallMaxContentChars: Math.max(
         50,
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
