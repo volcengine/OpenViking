@@ -77,12 +77,7 @@ pub async fn run(
     let masker =
         (!values.is_empty()).then(|| OutputMasker::new(values.into_iter().zip(references)));
     child_command.kill_on_drop(true);
-    if masker.is_some() {
-        child_command
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-    }
-    run_child(&mut child_command, masker.as_ref()).await
+    run_child(child_command, masker.as_ref()).await
 }
 
 async fn resolve_references(client: &HttpClient, references: &[String]) -> Result<Vec<String>> {
@@ -118,7 +113,41 @@ fn spawn_child(command: &mut Command) -> Result<tokio::process::Child> {
 }
 
 #[cfg(unix)]
-async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Result<i32> {
+fn fd_metadata(fd: impl std::os::fd::AsFd) -> Option<std::fs::Metadata> {
+    // Duplicate before wrapping in File so dropping it does not close the caller's descriptor.
+    let duplicated = fd.as_fd().try_clone_to_owned().ok()?;
+    std::fs::File::from(duplicated).metadata().ok()
+}
+
+#[cfg(unix)]
+fn is_pipe_or_socket(fd: impl std::os::fd::AsFd) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+
+    fd_metadata(fd).is_some_and(|meta| {
+        let kind = meta.file_type();
+        kind.is_fifo() || kind.is_socket()
+    })
+}
+
+#[cfg(unix)]
+fn shared_non_tty_outputs() -> bool {
+    use std::io::IsTerminal;
+    use std::os::unix::fs::MetadataExt;
+
+    if std::io::stdout().is_terminal() {
+        return false;
+    }
+    let Some(out) = fd_metadata(std::io::stdout()) else {
+        return false;
+    };
+    let Some(err) = fd_metadata(std::io::stderr()) else {
+        return false;
+    };
+    out.ino() != 0 && out.dev() == err.dev() && out.ino() == err.ino()
+}
+
+#[cfg(unix)]
+async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Result<i32> {
     use std::io::{IsTerminal, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
@@ -144,12 +173,29 @@ async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Resu
         || std::io::stderr().is_terminal();
     let terminal = std::fs::File::open("/dev/tty").ok().filter(|_| job);
     if terminal.is_none() {
-        command
-            .process_group(0)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        command.process_group(0);
     }
-    let mut child = spawn_child(command)?;
+    let pipe_out = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stdout()));
+    let pipe_err = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stderr()));
+    let combined_rx = if pipe_out && pipe_err && shared_non_tty_outputs() {
+        let (tx, rx) = tokio::net::unix::pipe::pipe()?;
+        // Clear O_NONBLOCK so the child inherits standard blocking descriptors.
+        let write_fd = tx.into_blocking_fd()?;
+        command.stdout(Stdio::from(write_fd.try_clone()?));
+        command.stderr(Stdio::from(write_fd));
+        Some(rx)
+    } else {
+        if pipe_out {
+            command.stdout(Stdio::piped());
+        }
+        if pipe_err {
+            command.stderr(Stdio::piped());
+        }
+        None
+    };
+    let mut child = spawn_child(&mut command)?;
+    // Drop configured Stdio handles immediately so the parent holds no write end to combined_rx.
+    drop(command);
     let pid = child.id().expect("just spawned") as i32;
     // A SIGKILL sent to ov's group cannot reach the command's own group, and ov cannot catch it.
     // This shell joins the command's group and ends it when ov exits without writing a newline.
@@ -166,7 +212,10 @@ async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Resu
             .ok()
     };
     let wait = async {
-        relay_child_output(child.stdout.take(), child.stderr.take(), masker).await?;
+        match combined_rx {
+            Some(rx) => relay_stream(rx, tokio::io::stdout(), masker).await?,
+            None => relay_child_output(child.stdout.take(), child.stderr.take(), masker).await?,
+        }
         child.wait().await.map(exit_code)
     };
     tokio::pin!(wait);
@@ -206,8 +255,14 @@ async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Resu
 }
 
 #[cfg(not(unix))]
-async fn run_child(command: &mut Command, masker: Option<&OutputMasker>) -> Result<i32> {
-    let mut child = spawn_child(command)?;
+async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Result<i32> {
+    if masker.is_some() {
+        command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+    }
+    let mut child = spawn_child(&mut command)?;
+    drop(command);
     let output = relay_child_output(child.stdout.take(), child.stderr.take(), masker);
     let wait = async {
         tokio::select! {
@@ -227,12 +282,19 @@ async fn relay_child_output(
     stderr: Option<tokio::process::ChildStderr>,
     masker: Option<&OutputMasker>,
 ) -> std::io::Result<()> {
-    if let (Some(stdout), Some(stderr)) = (stdout, stderr) {
-        tokio::try_join!(
-            relay_stream(stdout, tokio::io::stdout(), masker),
-            relay_stream(stderr, tokio::io::stderr(), masker),
-        )?;
-    }
+    let relay_out = async {
+        if let Some(stdout) = stdout {
+            relay_stream(stdout, tokio::io::stdout(), masker).await?;
+        }
+        std::io::Result::Ok(())
+    };
+    let relay_err = async {
+        if let Some(stderr) = stderr {
+            relay_stream(stderr, tokio::io::stderr(), masker).await?;
+        }
+        std::io::Result::Ok(())
+    };
+    tokio::try_join!(relay_out, relay_err)?;
     Ok(())
 }
 

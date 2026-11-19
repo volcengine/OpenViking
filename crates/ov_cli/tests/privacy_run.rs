@@ -655,3 +655,104 @@ async fn closing_stdout_delivers_sigpipe_without_error_output() {
         }
     }
 }
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn preserves_regular_file_stdout_and_merged_stream_order() {
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out_path = dir.path().join("stdout.txt");
+    let mut file_command = privacy(dir.path(), "http://127.0.0.1:1");
+    file_command
+        .args([
+            "run",
+            "--",
+            "/bin/sh",
+            "-c",
+            "[ -f /dev/fd/1 ] && printf 'regular\\n' && printf 'err\\n' >&2",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(std::fs::File::create(&out_path).unwrap()))
+        .stderr(Stdio::piped());
+    // Detach from any terminal so the non-TTY file/pipe rules apply regardless of test runner.
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        file_command.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    // Use spawn + wait_with_output so tokio does not replace file stdout with a pipe.
+    let output = file_command
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .await
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&out_path).unwrap(), "regular\n");
+    assert_eq!(output.stderr, b"err\n");
+
+    for masked in [false, true] {
+        for _ in 0..5 {
+            let (url, server) = if masked {
+                let (url, server) = resolver([(TOKEN, Some("secret-mid".into()))]).await;
+                (url, Some(server))
+            } else {
+                ("http://127.0.0.1:1".to_owned(), None)
+            };
+            let (rx, tx) = std::io::pipe().unwrap();
+            let mut merged = privacy(dir.path(), &url);
+            merged.arg("run");
+            if masked {
+                merged.args(["--env", &format!("TOKEN={TOKEN}")]);
+            }
+            merged
+                .args([
+                    "--",
+                    "/bin/sh",
+                    "-c",
+                    r#"printf '1\n'; printf '2\n' >&2; printf '3:%s\n' "${TOKEN:-plain}"; printf '4\n' >&2"#,
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(tx.try_clone().unwrap()))
+                .stderr(Stdio::from(tx));
+            // SAFETY: setsid is async-signal-safe.
+            unsafe {
+                merged.pre_exec(|| {
+                    if posix::setsid() < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = merged.spawn().unwrap();
+            drop(merged);
+
+            timeout(Duration::from_secs(5), async {
+                let reader = tokio::task::spawn_blocking(move || {
+                    let mut rx = rx;
+                    let mut captured = String::new();
+                    std::io::Read::read_to_string(&mut rx, &mut captured).unwrap();
+                    captured
+                });
+                let (status, captured) = tokio::join!(child.wait(), reader);
+                assert_eq!(status.unwrap().code(), Some(0));
+                let expected = if masked {
+                    format!("1\n2\n3:{TOKEN}\n4\n")
+                } else {
+                    "1\n2\n3:plain\n4\n".to_owned()
+                };
+                assert_eq!(captured.unwrap(), expected);
+            })
+            .await
+            .expect("merged stream order test timed out");
+            if let Some(server) = server {
+                server.await.unwrap();
+            }
+        }
+    }
+}
