@@ -21,7 +21,9 @@ test('summary links navigate through FileBrowser and standalone directory operat
     await waitFor(
       () =>
         link('standalone', 'Absolute resource') &&
-        link('browser', 'Relative child'),
+        link('browser', 'Relative child') &&
+        link('file', 'Web reference') &&
+        link('anchor-only', 'Same document'),
     );
     link('standalone', 'Absolute resource').click();
     await waitFor(() => evidence().standalone.length === 1);
@@ -35,7 +37,7 @@ test('summary links navigate through FileBrowser and standalone directory operat
     await waitFor(() => evidence().standalone.length === 2);
     assert.equal(evidence().standalone[1], 'child/.overview.md');
 
-    for (const section of ['standalone', 'browser']) {
+    for (const section of ['standalone', 'browser', 'anchor-only']) {
       for (const [label, href] of [
         ['Web reference', 'https://example.com/reference'],
         ['HTTP reference', 'http://example.com/reference'],
@@ -61,9 +63,26 @@ test('summary links navigate through FileBrowser and standalone directory operat
       }
     }
     assert.equal(evidence().standalone.length, 2);
+    const hostLinks = [
+      ['Web reference', 'https://example.com/reference'],
+      ['Protocol relative', '//example.com/reference'],
+      ['Mail reference', 'mailto:reader@example.com'],
+      ['Phone reference', 'tel:+12025550123'],
+    ];
+    for (const [index, [label, target]] of hostLinks.entries()) {
+      link('file', label).click();
+      await waitFor(() => evidence().file.length === index + 1);
+      assert.equal(evidence().file[index], target);
+    }
+    const scrollsBeforeAnchor = evidence().scrolled.length;
+    link('anchor-only', 'Same document').click();
+    await waitFor(() => evidence().scrolled.length > scrollsBeforeAnchor);
+    assert.match(evidence().scrolled.at(-1), /details$/);
     const readsBeforeAnchor = evidence().reads.length;
+    const browserScrolls = evidence().scrolled.length;
     link('browser', 'Same document').click();
-    await waitFor(() => evidence().scrolled.length > 0);
+    await waitFor(() => evidence().scrolled.length > browserScrolls);
+    assert.match(evidence().scrolled.at(-1), /details$/);
     assert.equal(evidence().reads.length, readsBeforeAnchor);
     assert.equal(link('browser', 'Unsafe')?.getAttribute('href'), null);
     link('browser', 'Unsafe').click();
@@ -107,4 +126,20 @@ test('summary links navigate through FileBrowser and standalone directory operat
       false,
     );
     assert.equal(evidence().opened.length, 0);
+    for (const [index, name] of ['Finance#Q4', '100%', '100%20'].entries()) {
+      const section = `literal-${index}`;
+      await waitFor(() => link(section, 'Literal base child'));
+      const readsBeforeClick = evidence().reads.length;
+      link(section, 'Literal base child').click();
+      const target = `viking://resources/${name}/guide.md`;
+      await waitFor(() =>
+        evidence().reads.slice(readsBeforeClick).includes(target),
+      );
+      assert.equal(
+        evidence()
+          .reads.slice(readsBeforeClick)
+          .includes('viking://resources/guide.md'),
+        false,
+      );
+    }
   }));

@@ -395,19 +395,19 @@ export interface FilePreviewOperations {
    */
   openParent?: (uri: string) => Promise<void>;
   /**
-   * 打开文件正文或目录摘要里被点击的 Viking URI 和相对链接，完成后返回。
-   * 传入后组件阻止这些链接的默认跳转，并把 Markdown 里的原始目标交给宿主；
-   * 相对路径的解析也归宿主。HTTP(S)、mailto、tel 和 // 外链保留浏览器原生行为。
-   * 目录摘要里的同文档锚点在当前预览内定位。
+   * 打开 Markdown 链接，参数为原始目标，完成后返回；地址解析由宿主负责。
+   * 文件页签传入后由宿主接管所有链接，包括外链，组件阻止默认跳转。
+   * 目录摘要只将 Viking URI 和相对资源链接交给宿主；HTTP(S)、mailto、tel 和
+   * // 外链保留浏览器原生行为。同文档锚点始终在目录预览内定位，无需此回调。
    *
    * 目前只有 Markdown 正文会触发：其它格式的渲染器不提供链接点击回调。
    *
-   * Opens a Viking URI or relative link clicked in a file body or directory
-   * summary and resolves on completion. Supplying it prevents default navigation
-   * for those links and passes their raw Markdown targets to the host, which also
-   * resolves relative paths. HTTP(S), mailto, tel and // external links retain
-   * native browser behavior. Same-document anchors in directory summaries are
-   * located within the current preview.
+   * Opens a Markdown link and resolves on completion. The host receives and resolves
+   * the original target. In file tabs, supplying it takes over all links, including
+   * external links, and prevents default navigation. Directory summaries only pass
+   * Viking URIs and relative resource links to the host; HTTP(S), mailto, tel and //
+   * external links retain native behavior. Same-document anchors always scroll
+   * within the directory preview, without requiring this callback.
    *
    * Only Markdown bodies fire this today: the other renderers expose no link-click
    * callback.

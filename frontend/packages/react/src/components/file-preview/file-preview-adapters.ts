@@ -20,6 +20,8 @@ import {
   recoverImportedMarkdownImages,
 } from './file-preview-markdown-images.js';
 
+export type DirectoryLinkMode = 'resources' | 'anchors';
+
 /**
  * 组件内置的格式集合：文本、文档、图片与音视频。
  *
@@ -43,38 +45,45 @@ import {
 export function createFilePreviewAdapterList({
   onLinkClick,
   resolveImage,
+  directoryLinks,
 }: {
   /**
-   * 接管 Markdown 正文里的资源和相对链接，外部链接保留浏览器原生导航。
+   * 接管 Markdown 正文里的链接；目录正文通过内部模式保留外链原生导航。
    *
-   * Handles resource and relative Markdown links. External links retain native navigation.
+   * Handles Markdown links; directory bodies use an internal mode to preserve native external links.
    */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   resolveImage?: (src: string) => Promise<string>;
+  directoryLinks?: DirectoryLinkMode;
 } = {}): FileViewerCoreProps['adapters'] {
   return [
     code({ showLineNumbers: true }),
     text({ showLineNumbers: true }),
     json({ defaultExpandDepth: 4 }),
     markdown({
-      allowedLinkProtocols: onLinkClick ? ['viking'] : undefined,
+      onLinkClick: directoryLinks ? undefined : onLinkClick,
+      allowedLinkProtocols:
+        directoryLinks === 'resources' ? ['viking'] : undefined,
       rendererProps: {
-        linkPolicy: onLinkClick
+        linkPolicy: directoryLinks
           ? (target) => {
               const url = target.trim();
               const scheme = /^([a-z][a-z\d+.-]*):/i.exec(url)?.[1];
-              return url &&
-                !url.startsWith('//') &&
-                (!scheme || scheme.toLowerCase() === 'viking')
+              return url.startsWith('#') ||
+                (directoryLinks === 'resources' &&
+                  url &&
+                  !url.startsWith('//') &&
+                  (!scheme || scheme.toLowerCase() === 'viking'))
                 ? { render: true, callback: true, navigation: 'callback' }
                 : true;
             }
           : undefined,
         eventCallbacks: {
-          onLinkClick: onLinkClick
-            ? (event, link) =>
-                onLinkClick(event, { url: link.url, fileType: 'markdown' })
-            : undefined,
+          onLinkClick:
+            directoryLinks && onLinkClick
+              ? (event, link) =>
+                  onLinkClick(event, { url: link.url, fileType: 'markdown' })
+              : undefined,
         },
         // Parse raw HTML, then keep Ark's sanitizer in charge of tags and attributes.
         parsing: { enabledHtmlTags: true },

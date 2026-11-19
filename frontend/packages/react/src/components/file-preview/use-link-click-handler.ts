@@ -12,16 +12,16 @@ import { levelToFileTab } from './file-preview-source.js';
  * 依赖，一变就重启底座管线——层级切换时旧的那一层也会退回加载态，双层过渡
  * 等于白做。
  *
- * 只有宿主给了 `openUri` 才接管导航：传入回调后底座会阻止默认跳转，宿主没提供
- * 能力时接管等于把链接点死。
+ * 文件页签只在宿主给了 `openUri` 时接管导航。目录页签始终处理同文档锚点，
+ * 资源链接是否交给宿主由目录正文的链接策略决定。
  *
  * The link click handler for Markdown bodies. A ref carries the current tab and
  * actions so the callback never changes with the level: it feeds the body's adapter
  * dependencies, and a change restarts the base's pipeline — sending the old layer
  * back to a loading state too and wasting the two-layer transition.
  *
- * Navigation is taken over only when the host supplies `openUri`: passing the callback
- * makes the base skip the default jump, so taking over without one kills the link.
+ * File navigation is taken over only with a host `openUri`. Directory tabs always
+ * handle same-document anchors; their link policy decides whether resource links go to the host.
  */
 export function useLinkClickHandler(
   tab: FilePreviewDirectoryTab | FilePreviewFileTab | undefined,
@@ -41,10 +41,11 @@ export function useLinkClickHandler(
   const handler = useCallback<
     NonNullable<MarkdownAdapterOptions['onLinkClick']>
   >((event, link) => {
-    if (latest.current.directory && link.url.startsWith('#')) {
+    const url = link.url.trim();
+    if (latest.current.directory && url.startsWith('#')) {
       let id;
       try {
-        id = decodeURIComponent(link.url.slice(1));
+        id = decodeURIComponent(url.slice(1));
       } catch {
         return;
       }
@@ -59,5 +60,7 @@ export function useLinkClickHandler(
     const target = latest.current.fileTab;
     if (target) void latest.current.actions.openUri(target, link.url);
   }, []);
-  return fileTab?.operations?.openUri ? handler : undefined;
+  return tab?.kind === 'directory' || fileTab?.operations?.openUri
+    ? handler
+    : undefined;
 }
