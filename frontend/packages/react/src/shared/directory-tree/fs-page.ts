@@ -4,6 +4,7 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FsEntry } from './types.js';
 import { isSystemUri } from '../resource-uri.js';
+import type { UserRootMode } from './user-root-context.js';
 
 /** 一次取多少个子节点。One page of children. */
 export const PAGE_SIZE = 200;
@@ -23,11 +24,28 @@ export async function loadPage(
   signal: AbortSignal,
   requestOptions?: OvRequestOptions,
   retryError?: unknown,
+  userRootMode: UserRootMode = 'all',
 ): Promise<{
   entries: FsEntry[];
   hasMore: boolean;
   monitoring?: Workflow<'file_browser_directory_load'>;
 }> {
+  signal.throwIfAborted();
+  const userId = requestOptions?.userId;
+  if (
+    userRootMode === 'current' &&
+    uri.replace(/\/+$/, '') === 'viking://user' &&
+    typeof userId === 'string' &&
+    userId.trim()
+  ) {
+    return {
+      entries:
+        offset === 0
+          ? [{ uri: `viking://user/${userId.trim()}`, isDir: true }]
+          : [],
+      hasMore: false,
+    };
+  }
   const monitoring = beginWorkflow(
     client,
     'file_browser_directory_load',
