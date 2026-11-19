@@ -507,7 +507,7 @@ function assertIsolatedAgentStorage(agents) {
   }
 }
 
-const WEB_HOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '::']);
+const WEB_HOSTS = new Set(['127.0.0.1', '0.0.0.0', '::']);
 
 function parseWebSettings(value, ignored) {
   if (value === undefined || value === null) return Object.freeze({ host: '127.0.0.1' });
@@ -518,7 +518,7 @@ function parseWebSettings(value, ignored) {
   const host = value.host === undefined ? '127.0.0.1' : manifestString(value.host, 'deployment manifest web.host', { maxLength: 253 });
   // Each of these also answers on 127.0.0.1, where the CLI and updater probe /ready.
   if (!WEB_HOSTS.has(host)) {
-    throw new Error('deployment manifest web.host must be 127.0.0.1, localhost, 0.0.0.0 or ::');
+    throw new Error('deployment manifest web.host must be 127.0.0.1, 0.0.0.0 or ::');
   }
   return Object.freeze({ host });
 }

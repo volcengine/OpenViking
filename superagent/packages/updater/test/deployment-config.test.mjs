@@ -870,10 +870,10 @@ test('the shared Web takes its host from web.host and its key from secrets.env',
 });
 
 test('web.host only takes addresses that also answer on 127.0.0.1', () => {
-  for (const host of ['127.0.0.1', 'localhost', '0.0.0.0', '::']) {
+  for (const host of ['127.0.0.1', '0.0.0.0', '::']) {
     assert.equal(parseWebSettings({ host }).host, host);
   }
-  for (const host of ['::1', '10.0.0.5', 'box.example.com', ':', 'example..com']) {
+  for (const host of ['localhost', '::1', '10.0.0.5', 'box.example.com', ':', 'example..com']) {
     assert.throws(() => parseWebSettings({ host }), /web\.host must be/);
   }
 });
