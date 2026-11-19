@@ -721,8 +721,9 @@ class CollectionAdapter(ABC):
         compiled_filter = self._compile_filter(filter)
         logger.debug(
             "Keyword search prepared keyword_count=%d query_length=%d limit=%s offset=%s has_filter=%s",
-            len(keywords),
-            len(query),
+            # input params choose either keywords or query
+            len(keywords or ()),
+            len(query or ""),
             limit,
             offset,
             bool(compiled_filter),
