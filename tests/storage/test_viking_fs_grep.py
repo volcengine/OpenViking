@@ -565,6 +565,39 @@ async def test_grep_vikingdb_auto_remote_limit_uses_five_times_node_limit(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("remote_count", "filter_out_all", "candidate_limit_reached"),
+    [(49, False, False), (50, False, True), (50, True, True)],
+)
+async def test_grep_vikingdb_preserves_candidate_limit_without_matches(
+    monkeypatch, remote_count, filter_out_all, candidate_limit_reached
+):
+    fs = VikingFS(agfs=_DummyAgfs())
+    vector_store = _DummyVectorStore(
+        results=[{"uri": f"viking://resources/{index}.md"} for index in range(remote_count)]
+    )
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+    monkeypatch.setattr(fs, "read", AsyncMock(return_value=b"no regex match"))
+
+    result = await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=10,
+        ctx=None,
+        allowed_uris={"viking://resources/other.md"} if filter_out_all else None,
+    )
+
+    assert vector_store.calls[0]["limit"] == 50
+    assert result["matches"] == []
+    assert result["files_scanned"] == (0 if filter_out_all else remote_count)
+    assert result.get("candidate_limit_reached", False) is candidate_limit_reached
+    assert not result.get("limit_reached")
+
+
+@pytest.mark.asyncio
 async def test_grep_vikingdb_does_not_project_tags_without_filter_or_request(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
     vector_store = _DummyVectorStore(

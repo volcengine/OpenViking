@@ -167,6 +167,30 @@ async def test_grep_preserves_backend_limit_after_permission_filtering(visible_c
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("visible_count", [0, 1])
+async def test_grep_reports_candidate_limit_only_for_affected_pattern(visible_count):
+    async def grep(uri, pattern, **kwargs):
+        if pattern == "candidate-capped":
+            return {"matches": [], "candidate_limit_reached": True}
+        return {
+            "matches": [{"uri": f"{URI}/a.md", "line": 1, "content": "hit"}]
+            if visible_count
+            else []
+        }
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern=["candidate-capped", "complete"])
+
+    assert "Candidate search may have been capped for pattern(s): candidate-capped." in out
+    assert "Result limit reached" not in out
+    if visible_count:
+        assert "L1 [complete]: hit" in out
+    else:
+        assert out.startswith("No matches returned for pattern(s): candidate-capped, complete")
+
+
+@pytest.mark.asyncio
 async def test_grep_reports_matches_limits_and_errors_for_separate_patterns():
     async def grep(uri, pattern, **kwargs):
         if pattern == "broken":

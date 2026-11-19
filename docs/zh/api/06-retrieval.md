@@ -877,6 +877,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 原生文件系统 grep 在 ACL 权限过滤前应用 `node_limit`，并返回布尔字段 `limit_reached`。该字段为 true 时，即使 `matches` 少于 `node_limit` 条或为空，结果仍可能不完整。该标记不保证还存在更多可见匹配；可提高 `node_limit` 或缩小范围、调整模式后重试。返回的匹配及其数量仍经过权限过滤。其他 grep 实现及旧版服务可能省略该字段；字段缺失不代表结果完整。
 
+grep 使用 BM25 召回文件再执行正则匹配时，候选返回数量达到本次请求的上限会返回 `candidate_limit_reached: true`。即使 `matches` 为空，仍可能有文件未进入正则扫描。可缩小 URI 范围或直接读取有希望的文件核验证据。
+
 #### 3. 使用示例
 
 **HTTP API**

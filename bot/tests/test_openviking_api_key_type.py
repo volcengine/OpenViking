@@ -1848,6 +1848,28 @@ async def test_openviking_grep_keeps_explicit_resource_uri(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_object", [False, True])
+async def test_openviking_grep_reports_candidate_limit_without_matches(monkeypatch, as_object):
+    tool = VikingGrepTool()
+    capped_uri = "viking://resources/capped/"
+    complete_uri = "viking://resources/complete/"
+
+    async def grep(uri, *args, **kwargs):
+        result = {"matches": [], "candidate_limit_reached": uri == capped_uri}
+        return SimpleNamespace(**result) if as_object else result
+
+    monkeypatch.setattr(tool, "_get_client", AsyncMock(return_value=SimpleNamespace(grep=grep)))
+    monkeypatch.setattr(tool, "_fs_retrieval_uris", lambda *_: [capped_uri, complete_uri])
+
+    result = await tool.execute(SimpleNamespace(workspace_id="workspace"), pattern="needle")
+
+    assert result.startswith("No matches returned for pattern: 'needle'")
+    assert f"Candidate search may have been capped in: {capped_uri}" in result
+    assert complete_uri not in result
+    assert "Result limit reached" not in result
+
+
+@pytest.mark.asyncio
 async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(monkeypatch, tmp_path):
     calls = []
 

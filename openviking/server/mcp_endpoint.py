@@ -2549,7 +2549,8 @@ async def grep(
 
     Multiple patterns are searched concurrently, each with its own node_limit.
     If a pattern reaches the limit, more matches may exist. Increase node_limit
-    or narrow the pattern or URI to check. Use search for semantic retrieval.
+    or narrow the pattern or URI to check. Candidate search may also be capped
+    before regex matching. Use search for semantic retrieval.
     """
     import asyncio
 
@@ -2561,7 +2562,7 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict], bool, Optional[str]]:
+    async def _grep_one(p: str) -> tuple[str, list[dict], bool, bool, Optional[str]]:
         async with semaphore:
             try:
                 result = await service.fs.grep(
@@ -2577,7 +2578,8 @@ async def grep(
                 limit_reached = bool(result.get("limit_reached")) or (
                     node_limit > 0 and len(matches) >= node_limit
                 )
-                return (p, matches, limit_reached, None)
+                candidate_limit_reached = bool(result.get("candidate_limit_reached"))
+                return (p, matches, limit_reached, candidate_limit_reached, None)
             except Exception as exc:
                 # One bad pattern must not cost the others their matches -- that is what
                 # the fan-out is for -- but an empty list is indistinguishable from a real
@@ -2585,7 +2587,7 @@ async def grep(
                 # and re-raises these; reporting them is what keeps the two faces agreeing
                 # about whether a failure is a result.
                 code = exc.code if isinstance(exc, OpenVikingError) else type(exc).__name__
-                return (p, [], False, f"{code}: {exc}")
+                return (p, [], False, False, f"{code}: {exc}")
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
@@ -2593,12 +2595,15 @@ async def grep(
     tags_by_uri: dict[str, List[str]] = {}
     total = 0
     capped_patterns: list[str] = []
+    capped_candidate_patterns: list[str] = []
     failures: list[tuple[str, str]] = []
-    for p, matches, limit_reached, error in results:
+    for p, matches, limit_reached, candidate_limit_reached, error in results:
         if error is not None:
             failures.append((p, error))
         if limit_reached:
             capped_patterns.append(p)
+        if candidate_limit_reached:
+            capped_candidate_patterns.append(p)
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
@@ -2614,8 +2619,8 @@ async def grep(
     if merged:
         lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
     else:
-        successful = [p for p, _, _, error in results if error is None]
-        action = "returned" if capped_patterns else "found"
+        successful = [p for p, _, _, _, error in results if error is None]
+        action = "returned" if capped_patterns or capped_candidate_patterns else "found"
         label = "successful pattern(s)" if failures else "pattern(s)"
         lines = [f"No matches {action} for {label}: {', '.join(successful)}"]
     if capped_patterns:
@@ -2624,6 +2629,12 @@ async def grep(
             "Increase node_limit or narrow the scope/pattern."
         )
         lines.append(f"Capped patterns: {', '.join(capped_patterns)}")
+    if capped_candidate_patterns:
+        lines.append(
+            "Candidate search may have been capped for pattern(s): "
+            f"{', '.join(capped_candidate_patterns)}. "
+            "Narrow the URI or read a promising file directly."
+        )
     for m_uri, hits in merged.items():
         hits.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
         tag_suffix = _format_tags(tags_by_uri.get(m_uri)) if include_tags else ""

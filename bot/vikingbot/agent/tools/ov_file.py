@@ -759,7 +759,9 @@ class VikingGrepTool(OVFileTool):
             "Returns matching lines and URIs, with at most limit matches per scope (default: 10). "
             "The backend limit applies before permission filtering, so fewer visible matches "
             "can still be capped. If the limit is reached, more matches may exist; increase "
-            "limit or narrow the scope/pattern. Use openviking_multi_read for full content. "
+            "limit or narrow the scope/pattern. Candidate search may also be capped, even with "
+            "few or no matching lines. If the evidence is insufficient, narrow the URI or read "
+            "a promising file directly with openviking_multi_read. "
             "Avoid duplicate calls with the same intent in the same turn."
         )
 
@@ -806,6 +808,7 @@ class VikingGrepTool(OVFileTool):
             client = await self._get_client(tool_context)
             matches = []
             capped_scopes = []
+            capped_candidate_scopes = []
             target_uris = self._fs_retrieval_uris(client, tool_context, uri)
             for target_uri in target_uris:
                 try:
@@ -823,12 +826,16 @@ class VikingGrepTool(OVFileTool):
                 if isinstance(result, dict):
                     scope_matches = result.get("matches", [])
                     limit_reached = result.get("limit_reached", False)
+                    candidate_limit_reached = result.get("candidate_limit_reached", False)
                 else:
                     scope_matches = getattr(result, "matches", [])
                     limit_reached = getattr(result, "limit_reached", False)
+                    candidate_limit_reached = getattr(result, "candidate_limit_reached", False)
                 matches.extend(scope_matches)
                 if limit_reached or len(scope_matches) >= limit:
                     capped_scopes.append(target_uri)
+                if candidate_limit_reached:
+                    capped_candidate_scopes.append(target_uri)
 
             merged_results: dict[str, list[tuple[int, str]]] = {}
 
@@ -846,11 +853,18 @@ class VikingGrepTool(OVFileTool):
                     merged_results[match_uri] = []
                 merged_results[match_uri].append((line, content))
 
+            empty_action = "returned" if capped_candidate_scopes else "found"
             result_lines = [
                 f"Found {len(matches)} match{'es' if len(matches) != 1 else ''} for pattern '{pattern}':"
                 if matches
-                else f"No matches found for pattern: '{pattern}'"
+                else f"No matches {empty_action} for pattern: '{pattern}'"
             ]
+            if capped_candidate_scopes:
+                result_lines.append(
+                    "Candidate search may have been capped in: "
+                    f"{', '.join(capped_candidate_scopes)}. "
+                    "Narrow the URI or read a promising file directly with openviking_multi_read."
+                )
 
             for match_uri, uri_matches in merged_results.items():
                 uri_matches.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
