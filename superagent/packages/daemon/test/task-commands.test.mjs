@@ -92,7 +92,7 @@ describe('/tasks', () => {
     await settle();
     const { ok, text } = run('t1');
     assert.equal(ok, true);
-    assert.match(text, /^t1「查 X」\n状态：完成 · 不到 1 分钟前\n请求人：Alice · OpenViking 用户群 · 话题 · 创建于 \d\d-\d\d \d\d:\d\d\nrouter 备注：Alice 只要上周\n请求：\n  查一下 X 为什么慢\n/);
+    assert.match(text, /^t1「查 X」\n状态：完成 · 不到 1 分钟前\n请求人：Alice · OpenViking 用户群 · 话题 · 创建于 \d\d-\d\d \d\d:\d\d\nrouter 备注：Alice 只要上周\nRuntime：pi\n请求：\n  查一下 X 为什么慢\n/);
     assert.match(text, /追加（3）：\n  .* 追加：只看上周的\n  .* 已退回：帮我订个会议室\n  .* 背景：我们这边也慢\n/);
     assert.match(text, /结果：\n  .* 完成 · 待 router 转发：慢在缺索引\n/);
     assert.match(text, /产出：https:\/\/github\.com\/x\/pull\/1\nworker 运行次数：1 · 目录：/);

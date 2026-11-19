@@ -7,11 +7,20 @@ import path from 'node:path';
 import { chatTag, metadataTag, oneLine } from './runtime-input.mjs';
 import { safeError } from './logger.mjs';
 import { emptyTrash, formatBytes, isDirectory, isDirectoryWithin, moveToTrash, scanDir, TRASH } from './task-dirs.mjs';
+import { classifyWorkerFailure } from './worker-settings.mjs';
+import { recentTranscript, TRANSCRIPT_FORMATS } from './worker-transcript.mjs';
 
 // Workers (agents[].scheduler = workers). The main session is the router: it
 // reads every input (through the inbox), answers what is quick, and hands
 // longer work to a task with task_create. Each task gets a worker: its own
-// session on the same runtime, run one turn at a time (worker-executor.mjs).
+// session, run one turn at a time (worker-executor.mjs), on the runtime,
+// model and effort the workers' settings name when the task starts or
+// reopens (worker-settings.mjs, /workers). A task keeps them while it works.
+// It moves to another runtime only when it must: its runtime's quota ran out,
+// or its turns keep failing there. The move is a handover (task_handovers):
+// the next turn starts a session on the new runtime from the task record, the
+// last messages of the old session and that session's file, in the same
+// directory.
 // A worker never talks to people. It reports with task_report, and the
 // report reaches the router as a `[task report]` input, which the router
 // relays where the request was made. The router stays the only outlet, so
@@ -61,6 +70,10 @@ const CATCH_UP_TURNS = 3;
 const REOFFERS_AFTER_FAILURE = 3;
 const PARENT_DRAFT_CHARS = 1_500;
 const TRANSIENT_RETRIES = 2;
+// Moves to another runtime one round of a task may make because its runtime
+// failed (a new round moving to the runtime workers now use is not counted):
+// two runtimes that both fail are not tried back and forth.
+const MOVES_PER_ROUND = 2;
 const SUMMARY_CHARS = 600;
 const REPORT_RETRY_MS = 1_000;
 const CANDIDATES = 3;
@@ -187,6 +200,30 @@ const SCHEMA = `
     PRIMARY KEY (task_id, round)
   );
   CREATE INDEX IF NOT EXISTS task_rounds_origin ON task_rounds(origin_seq);
+  -- A task moving from one runtime to another. reason: 'round' (it reopened
+  -- for a new round, and workers now run elsewhere), 'exhausted' (its
+  -- runtime's quota or usage limit ran out) or 'failing' (its turns kept
+  -- failing there). from_session and transcript: the session it leaves and
+  -- that session's file, which the next worker is pointed to. taken_at_ms:
+  -- when a turn on the new runtime first completed; until then every brief
+  -- carries the handover.
+  CREATE TABLE IF NOT EXISTS task_handovers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    turn INTEGER NOT NULL,
+    from_runtime TEXT,
+    from_model TEXT,
+    from_session TEXT,
+    transcript TEXT,
+    to_runtime TEXT NOT NULL,
+    to_model TEXT,
+    reason TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    taken_at_ms INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS task_handovers_task ON task_handovers(task_id, id);
 `;
 
 const ORIGIN = ['origin_seq', 'origin_event', 'origin_instance', 'origin_scope', 'origin_chat', 'origin_thread', 'origin_message',
@@ -210,6 +247,13 @@ const COLUMNS = [
   ['tasks', 'round', 'INTEGER NOT NULL DEFAULT 1'],
   ['task_inputs', 'round', 'INTEGER NOT NULL DEFAULT 1'],
   ['task_reports', 'round', 'INTEGER NOT NULL DEFAULT 1'],
+  // The model and effort the task took on its runtime ('' the CLI's default,
+  // NULL for a task from before: it follows the router's), and the session its
+  // last turn ran in, kept when a failed turn drops the checkpoint: a handover
+  // points the next worker to that session's file.
+  ['tasks', 'model', 'TEXT'],
+  ['tasks', 'effort', 'TEXT'],
+  ['tasks', 'last_session', 'TEXT'],
 ];
 
 // Lookups on every input line, so that they cost the same with ten thousand
@@ -271,11 +315,15 @@ export class TaskManager {
     slots = WORKER_SLOTS,
     reservedSlots = RESERVED_SLOTS,
     now = Date.now,
+    // The workers' settings (worker-settings.mjs): the runtime, model and
+    // effort new work takes, and where a task goes when its runtime cannot
+    // serve. Without them a task keeps the runtime it was created on.
+    runtimes = null,
   }) {
     if (!db) throw new TypeError('db is required');
     if (!executor) throw new TypeError('executor is required');
     if (!inbox || inbox.db !== db) throw new TypeError('inbox must share the task database');
-    Object.assign(this, { db, config, executor, inbox, lineFor, logger, recordActivity, slots, reservedSlots, now });
+    Object.assign(this, { db, config, executor, inbox, lineFor, logger, recordActivity, slots, reservedSlots, now, runtimes });
     this.db.exec(SCHEMA);
     for (const [table, column, type] of COLUMNS) {
       if (this.db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column)) continue;
@@ -581,13 +629,15 @@ export class TaskManager {
     const time = this.now();
     const workdir = path.join(this.config.workspace, 'tasks', id);
     fs.mkdirSync(workdir, { recursive: true });
+    const settings = this.settingsFor(runtime);
     this.transaction(() => {
       this.db.prepare(`INSERT INTO tasks(id, title, status, origin_seq, origin_event, origin_instance, origin_scope, origin_chat,
-        origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, runtime, session_id, workdir,
-        parent_id, created_at_ms, updated_at_ms) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, runtime, model, effort,
+        session_id, workdir, parent_id, created_at_ms, updated_at_ms)
+        VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, clip(title, 120), origin.seq, origin.event_id, origin.connector_instance, origin.scope_key, origin.chat_id ?? null,
         origin.thread_id ?? null, origin.message_id ?? null, origin.chat_type ?? null, origin.source, origin.sender_id ?? null,
-        requester, clip(note, 400), runtime, randomUUID(), workdir, parent, time, time,
+        requester, clip(note, 400), runtime, settings.model, settings.effort, randomUUID(), workdir, parent, time, time,
       );
       this.insertRound(id, 1, origin, requester, { firstTurn: 1 });
       for (const row of rows) this.addInput(id, row, 'owner', 1);
@@ -650,18 +700,136 @@ export class TaskManager {
   // it; a live task's is never touched after this), and its session is
   // carried on only when it is still there and not too large: otherwise the
   // round starts a fresh session from the task record (brief).
+  //
+  // A new round is new work: it takes the runtime, model and effort workers
+  // run on now. When that is another runtime, the round starts there from a
+  // handover (handOver) instead of carrying the session on.
   openRound(task, origin, requester) {
     const number = (task.round ?? 1) + 1;
     const dir = this.dirState(task.workdir);
     const workdir = dir?.removed_at_ms != null || !isDirectory(task.workdir) ? 'removed' : dir?.pruned_at_ms != null ? 'pruned' : 'kept';
     fs.mkdirSync(task.workdir, { recursive: true });
     this.db.prepare('DELETE FROM task_workdirs WHERE path = ?').run(task.workdir);
-    const session = !task.native_session ? (workdir === 'removed' ? 'deleted' : 'none')
+    const target = this.runtimes?.forNewWork?.() ?? task.runtime;
+    const moving = Boolean(target && task.runtime && target !== task.runtime && this.executor.supports?.(target) !== false);
+    const session = moving ? 'switched' : !task.native_session ? (workdir === 'removed' ? 'deleted' : 'none')
       : this.executor.sessionState?.(task, { maxBytes: ROUND_SESSION_MAX_BYTES }) ?? 'kept';
     this.insertRound(task.id, number, origin, requester, { firstTurn: task.turns + 1, reopenedFrom: task.status, workdir, session });
     this.db.prepare(`UPDATE tasks SET round = ?, status = 'queued', ended_at_ms = NULL, updated_at_ms = ?,
       native_session = ? WHERE id = ?`).run(number, this.now(), session === 'kept' ? task.native_session : null, task.id);
+    if (moving) {
+      // The session it leaves is the one it ended with.
+      this.handOver({ ...this.get(task.id), native_session: task.native_session }, target, { reason: 'round' });
+    } else if (this.runtimes) {
+      // The same runtime: the round takes the model and effort set for it now.
+      const settings = this.settingsFor(task.runtime);
+      this.db.prepare('UPDATE tasks SET model = ?, effort = ? WHERE id = ?').run(settings.model, settings.effort, task.id);
+    }
     return this.roundOf({ ...task, round: number });
+  }
+
+  // The model and effort a task starting on `runtime` takes: '' for the CLI's
+  // own default, null (a task without settings follows the router's) when
+  // there are no worker settings.
+  settingsFor(runtime) {
+    if (!this.runtimes || !runtime) return { model: null, effort: null };
+    const { model, effort } = this.runtimes.modelFor(runtime);
+    return { model: model ?? '', effort: effort ?? '' };
+  }
+
+  // Moves a task to another runtime. A task that has worked leaves a session
+  // there: the handover records it and the file it is in, and until a turn on
+  // the new runtime completes, each brief starts from it (handoverBrief). The
+  // task's directory stays where it is. Called inside a transaction.
+  handOver(task, to, { reason, detail = '' }) {
+    const from = task.runtime;
+    const settings = this.settingsFor(to);
+    if (task.turns > 0) {
+      const session = task.last_session ?? task.native_session ?? null;
+      let transcript = null;
+      try { transcript = session ? this.executor.transcriptFile?.(from, task.id, session) ?? null : null; } catch { transcript = null; }
+      this.db.prepare(`INSERT INTO task_handovers(task_id, round, turn, from_runtime, from_model, from_session, transcript, to_runtime,
+        to_model, reason, detail, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        // A task from before workers had settings ran on the router's model.
+        task.id, task.round ?? 1, task.turns, from, task.model ?? this.runtimes?.modelFor?.(from)?.model ?? null, session, transcript, to, settings.model, reason,
+        clip(detail, 600), this.now());
+    }
+    this.db.prepare('UPDATE tasks SET runtime = ?, model = ?, effort = ?, native_session = NULL, updated_at_ms = ? WHERE id = ?')
+      .run(to, settings.model, settings.effort, this.now(), task.id);
+    this.recordActivity('task.runtime_switched', {
+      summary: `${task.id} ${from} → ${to} (${reason})${detail ? `: ${clip(detail, 160)}` : ''}`,
+      metadata: { task: task.id, round: task.round ?? 1, from, to, reason, handover: task.turns > 0 },
+    });
+  }
+
+  // A task about to take a turn on a runtime that is out of quota goes to
+  // one that is not, when there is one; it would only fail there.
+  leaveUnavailable(task) {
+    const out = this.runtimes?.unavailable?.(task.runtime);
+    if (!out) return task;
+    const to = this.runtimes.switchTarget(task.runtime);
+    if (!to || this.movesThisRound(task) >= MOVES_PER_ROUND) return task;
+    this.transaction(() => this.handOver(task, to, { reason: 'exhausted', detail: out.reason }));
+    return this.get(task.id);
+  }
+
+  movesThisRound(task) {
+    return Number(this.db.prepare(`SELECT COUNT(*) AS n FROM task_handovers WHERE task_id = ? AND round = ? AND reason != 'round'`)
+      .get(task.id, task.round ?? 1).n);
+  }
+
+  // After a failed turn: whether the task moved to another runtime, queued to
+  // go on there. Its runtime is out of quota, or kept failing for a passing
+  // reason past the retries; never for a failure another runtime would share.
+  moveOff(task, reason, detail) {
+    if (!this.runtimes || this.movesThisRound(task) >= MOVES_PER_ROUND) return false;
+    const to = this.runtimes.switchTarget(task.runtime);
+    if (!to) return false;
+    this.transaction(() => {
+      this.handOver(this.get(task.id), to, { reason, detail });
+      this.setStatus(task.id, 'queued');
+    });
+    this.retries.delete(task.id);
+    this.request(task.id);
+    return true;
+  }
+
+  // The handover the next turn starts from: the latest one to the task's
+  // runtime that no turn there has completed since.
+  pendingHandover(task) {
+    if (task.native_session) return null;
+    const handover = this.db.prepare('SELECT * FROM task_handovers WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(task.id);
+    return handover && handover.to_runtime === task.runtime && handover.taken_at_ms == null ? handover : null;
+  }
+
+  handovers(taskId) {
+    return this.db.prepare('SELECT * FROM task_handovers WHERE task_id = ? ORDER BY id').all(taskId);
+  }
+
+  // What a worker taking a task over from another runtime is told: who had
+  // it and why it moved, that the directory and what was done outside it are
+  // as that worker left them, its last messages, and where its whole session
+  // and earlier ones are.
+  handoverBrief(task, handover) {
+    const why = handover.reason === 'round'
+      ? `This round runs on ${handover.to_runtime}: the agent's workers run there now.`
+      : handover.reason === 'exhausted'
+        ? `${handover.from_runtime} cannot serve any more for now: its quota or usage limit is used up${handover.detail ? ` (${JSON.stringify(oneLine(clip(handover.detail, 200)))})` : ''}.`
+        : `Its turns kept failing on ${handover.from_runtime}${handover.detail ? ` (${JSON.stringify(oneLine(clip(handover.detail, 200)))})` : ''}.`;
+    const entries = handover.transcript ? recentTranscript(handover.transcript, handover.from_runtime) : [];
+    const earlier = this.db.prepare(`SELECT from_runtime, transcript FROM task_handovers WHERE task_id = ? AND id < ? AND transcript IS NOT NULL
+      ORDER BY id`).all(task.id, handover.id);
+    return [
+      `[handover] You take this task over from a worker that ran on ${handover.from_runtime}${handover.from_model ? ` (${handover.from_model})` : ''}. ${why}`,
+      `You run on ${handover.to_runtime}, in the same directory (${task.workdir}), with whatever that worker left there. Before you go on, check where the work stands (files, git status and branches) and what was already done outside the directory (commits, pushes, pull requests, comments, documents); do not repeat an outside action that was already done.`,
+      ...(entries.length ? [
+        'The last messages of that worker\'s session, oldest first (clipped; tool output left out):',
+        ...entries.map((entry) => quoted(`[${entry.role === 'tool' ? 'tool calls' : entry.role}] ${entry.text}`)),
+      ] : ['That worker\'s last messages could not be read; start from the task record below.']),
+      ...(handover.transcript ? [`Its whole session, if you need more of it: ${handover.transcript} (${TRANSCRIPT_FORMATS[handover.from_runtime] ?? 'JSONL'}). It is long: search or read only the parts you need.`] : []),
+      ...(earlier.length ? [`Earlier sessions of this task: ${earlier.map((row) => `${row.transcript} (${row.from_runtime})`).join(', ')}.`] : []),
+      'The task record follows.',
+    ];
   }
 
   note(taskId, text) {
@@ -798,7 +966,16 @@ export class TaskManager {
       // Only a successful turn is a checkpoint we can resume. After an
       // interrupted/failed turn, reconstruct from our ledger in a new session.
       const session = result.error ? null : result.nativeSession ?? (task.runtime === 'codex' ? null : task.session_id);
-      this.db.prepare('UPDATE tasks SET native_session = ? WHERE id = ?').run(session, task.id);
+      // The session this turn ran in, failed or not: a handover points to it.
+      const ran = result.nativeSession ?? (['codex', 'traex'].includes(task.runtime) ? task.native_session : task.session_id);
+      this.db.prepare('UPDATE tasks SET native_session = ?, last_session = COALESCE(?, last_session) WHERE id = ?')
+        .run(session, ran ?? null, task.id);
+      // A completed turn on the runtime a task moved to: the new session has
+      // taken the work over, and later briefs no longer carry the handover.
+      if (!result.error || reported) {
+        this.db.prepare(`UPDATE task_handovers SET taken_at_ms = ? WHERE task_id = ? AND to_runtime = ? AND taken_at_ms IS NULL`)
+          .run(this.now(), task.id, task.runtime);
+      }
     });
   }
 
@@ -850,7 +1027,13 @@ export class TaskManager {
     const opening = Boolean(round) && task.turns + 1 === round.first_turn;
     const recovery = task.turns > 0 && !task.native_session;
     const lost = opening && recovery && ['deleted', 'large'].includes(round.session_state);
-    const prefix = task.recovering
+    // A task that moved to another runtime starts there from the handover,
+    // until a turn on that runtime completes.
+    const handover = recovery ? this.pendingHandover(task) : null;
+    const prefix = handover
+      ? [...this.handoverBrief(task, handover),
+        ...(task.recovering ? ['The daemon also restarted since: the last turn may have stopped part way.'] : [])]
+      : task.recovering
       ? ['The daemon restarted while you were working on this task. Check your directory and what you already did (files, commits, issues, comments) before repeating any outside action.']
       : lost ? [round.session_state === 'large'
         ? 'Your session from the earlier rounds of this task grew too long to carry on: you start a fresh one from this brief, rebuilt from the task record.'
@@ -966,6 +1149,7 @@ export class TaskManager {
   }
 
   async runTurn(task, { reserved = false } = {}) {
+    task = this.leaveUnavailable(task);
     const token = randomUUID();
     const fork = this.forkSource(task);
     const inputs = this.undelivered(task.id);
@@ -1018,6 +1202,12 @@ export class TaskManager {
       status: result.error ? 'failed' : 'completed',
       metadata: { task: taskId, durationMs: this.now() - slot.startedAt, ...(result.usage ?? {}) },
     });
+    // A runtime whose quota or usage limit ran out is out for every task for a
+    // while (worker-settings.mjs), whether or not this turn reported first; a
+    // failed turn goes on at once on another runtime, without retrying here.
+    const failure = result.error ? classifyWorkerFailure(result.error) : null;
+    if (failure?.exhausted) this.runtimes?.markUnavailable?.(task.runtime, result.error);
+    if (failed && failure.exhausted && this.moveOff(task, 'exhausted', result.error)) return;
     // A passing failure runs the turn again; so does one whose resumed session
     // was gone (its CLI cleaned it up): settleInputs dropped the checkpoint, so
     // the next turn starts a new session from the task record.
@@ -1027,6 +1217,9 @@ export class TaskManager {
       this.request(taskId);
       return;
     }
+    // Still failing for a passing reason after the retries: another runtime
+    // may serve where this one does not.
+    if (failed && (failure.recoverable || result.transient) && this.moveOff(task, 'failing', result.error)) return;
     this.retries.delete(taskId);
     if (this.voidRound(task)) return;
     let report = final;
@@ -1476,6 +1669,7 @@ export class TaskManager {
         LEFT JOIN task_report_deliveries d ON d.report_id = r.id WHERE r.task_id = ? ORDER BY r.id`).all(task.id),
       children: this.db.prepare('SELECT id, title, status FROM tasks WHERE parent_id = ? ORDER BY created_at_ms').all(task.id),
       rounds: this.rounds(task.id),
+      handovers: this.handovers(task.id),
       dir: this.dirState(task.workdir),
       lastError,
     };

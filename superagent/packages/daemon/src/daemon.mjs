@@ -10,11 +10,13 @@ import { Harness } from './harness.mjs';
 import { MessageInbox } from './inbox.mjs';
 import { TaskManager } from './tasks.mjs';
 import { WorkerExecutor } from './worker-executor.mjs';
+import { WorkerSettings } from './worker-settings.mjs';
 import { formatInboundLine, resolveReplyTarget } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { executeCommand } from './commands.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
 import { executeTasksCommand, taskStatusLine } from './task-commands.mjs';
+import { executeWorkersCommand } from './worker-commands.mjs';
 import { ConnectorManager } from './connectors/process.mjs';
 import { ActionService } from './actions/service.mjs';
 import { startActionApi, stopActionApi } from './actions/api.mjs';
@@ -328,12 +330,18 @@ export class PersonalAgentDaemon {
       // The workers scheduler: tasks the router hands to worker sessions on
       // its own runtime. Their reports come back through the inbox.
       if (this.config.scheduler === 'workers') {
+        const router = () => ({ runtime: this.agentRuntime.runtime, model: this.agentRuntime.model, effort: this.agentRuntime.effort });
         const executor = new WorkerExecutor({
           config: this.config,
           logger: this.logger.child({ component: 'worker' }),
-          settings: () => ({ runtime: this.agentRuntime.runtime, model: this.agentRuntime.model, effort: this.agentRuntime.effort }),
+          settings: router,
+        });
+        // What workers run on, apart from the router (/workers).
+        this.workerSettings = new WorkerSettings({
+          store: this.store, config: this.config, router, logger: this.logger.child({ component: 'worker-settings' }),
         });
         this.tasks = new TaskManager({
+          runtimes: this.workerSettings,
           db: this.store.db,
           config: this.config,
           executor,
@@ -348,7 +356,7 @@ export class PersonalAgentDaemon {
           logger: this.logger.child({ component: 'tasks' }),
           recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
         });
-        this.actions.attachTasks(this.tasks, { runtime: () => this.agentRuntime.runtime, supports: (id) => executor.supports(id) });
+        this.actions.attachTasks(this.tasks, { runtime: () => this.workerSettings.forNewWork(), supports: (id) => executor.supports(id) });
       }
       this.harness = new Harness({
         inbox: this.inbox,
@@ -514,6 +522,9 @@ export class PersonalAgentDaemon {
           event, config: this.config, connectors: this.connectors,
         }),
         tasks: (parsed) => executeTasksCommand(parsed, { event, connectors: this.connectors, tasks: this.tasks }),
+        workers: (parsed) => executeWorkersCommand(parsed, {
+          event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime,
+        }),
         statusExtra: () => taskStatusLine(this.tasks),
       });
     } catch (error) {

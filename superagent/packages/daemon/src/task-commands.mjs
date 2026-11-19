@@ -18,6 +18,8 @@ const LIVE_SHOWN = 20;
 
 const STATUS = { queued: '排队', running: '运行', waiting: '等待回复', blocked: '受阻', done: '完成', dropped: '无需处理', failed: '失败', stopped: '已停止' };
 const STATE = { done: '完成', needs_user: '提问', blocked: '受阻', dropped: '无需处理', failed: '失败', progress: '进展' };
+// Why a task moved to another runtime (tasks.mjs, task_handovers).
+export const HANDOVER_REASON = { round: '新一轮请求，worker 已改用此 Runtime', exhausted: '原 Runtime 额度用尽', failing: '原 Runtime 持续失败' };
 const DELIVERY = { sent: '已发出', silent: '未发（router 判定不必回复）', unrelayed: '未能转发', settled: '已了结', offered: '待 router 转发', pending: '待投递' };
 
 function since(ms, now) {
@@ -108,6 +110,8 @@ function detailText(tasks, taskId, now) {
     ...(task.parent_id ? [`跟进自：${task.parent_id}`] : []),
     ...(task.children.length ? [`后续任务：${task.children.map((child) => `${child.id}（${STATUS[child.status] ?? child.status}）`).join('、')}`] : []),
     ...(task.note ? [`router 备注：${oneLine(task.note, 120)}`] : []),
+    ...(task.runtime ? [`Runtime：${task.runtime}${task.model ? ` · 模型 ${task.model}` : ''}${task.effort ? ` · 档位 ${task.effort}` : ''}`] : []),
+    ...(task.handovers ?? []).slice(-5).map((handover) => `  ${clock(handover.created_at_ms)} 第 ${handover.round} 轮从 ${handover.from_runtime} 交接到 ${handover.to_runtime}（${HANDOVER_REASON[handover.reason] ?? handover.reason}${handover.taken_at_ms ? '' : '；新 worker 还没完成一次运行'}）`),
     '请求：',
     ...request.map((input) => `  ${oneLine(said(input.text), 200)}`),
   ];
