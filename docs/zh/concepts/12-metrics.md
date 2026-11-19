@@ -187,8 +187,8 @@ P95 将 `0.99` 改为 `0.95`。平均耗时使用同一组 `operation, bucket_sc
 | `openviking_retrieval_results_total` | Counter | `account_id, context_type` | 检索返回结果数量累计 |
 | `openviking_retrieval_latency_seconds` | Histogram | `account_id, context_type` | 检索耗时分布 |
 | `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | 检索零结果次数 |
-| `openviking_retrieval_rerank_used_total` | Counter | `account_id` | 检索中使用 rerank 的次数 |
-| `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | 检索 rerank 回退次数 |
+| `openviking_retrieval_rerank_used_total` | Counter | `account_id` | 至少一个候选使用模型重排序分数的检索次数 |
+| `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | 启用重排序后，至少一个候选保留向量分数的检索次数；部分回退会同时增加两个重排序计数器 |
 | `openviking_resource_imports_total` | Counter | `account_id, pipeline, source_type` | 已受理的资源导入任务数；Connector 导入使用 `pipeline="connector"`，`source_type` 为 `repository` 或 `document` |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | 资源导入各阶段执行次数 |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | 资源导入阶段耗时分布 |

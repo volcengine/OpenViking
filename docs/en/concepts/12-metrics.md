@@ -192,8 +192,8 @@ Typical usage:
 | `openviking_retrieval_results_total` | Counter | `account_id, context_type` | total retrieved results |
 | `openviking_retrieval_latency_seconds` | Histogram | `account_id, context_type` | retrieval latency distribution |
 | `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | retrieval zero-result count |
-| `openviking_retrieval_rerank_used_total` | Counter | `account_id` | number of retrievals that used rerank |
-| `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | retrieval rerank fallback count |
+| `openviking_retrieval_rerank_used_total` | Counter | `account_id` | retrievals with at least one model-produced rerank score |
+| `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | rerank-enabled retrievals with at least one candidate retaining its vector score; partial fallback increments both rerank counters |
 | `openviking_resource_imports_total` | Counter | `account_id, pipeline, source_type` | accepted resource import tasks; Connector imports use `pipeline="connector"` and `source_type="repository"` or `"document"` |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | count of resource ingestion stages |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | duration distribution of ingestion stages |
