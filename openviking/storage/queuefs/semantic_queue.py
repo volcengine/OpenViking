@@ -7,6 +7,7 @@ import time
 from typing import Optional
 
 from openviking.pyagfs.async_client import AsyncAGFSClient
+from openviking.resource.processing_mode import SEMANTIC_QUEUE_DISABLED
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking_cli.utils.logger import get_logger
 
@@ -56,6 +57,15 @@ class SemanticQueue(NamedQueue):
 
     async def enqueue(self, msg: SemanticMsg, *, deduplicate_memory: bool = True) -> str:
         """Serialize SemanticMsg object and store in queue."""
+        if SEMANTIC_QUEUE_DISABLED:
+            logger.warning(
+                "[TemporaryVectorsOnly] dropping semantic enqueue uri=%s "
+                "context_type=%s generation_trigger=%s",
+                getattr(msg, "uri", "-"),
+                getattr(msg, "context_type", "-"),
+                getattr(msg, "generation_trigger", "-"),
+            )
+            return "vectors_only_disabled"
         if deduplicate_memory and msg.context_type == "memory" and not msg.coalesce_key:
             key = self._memory_parent_semantic_key(msg)
             now = time.monotonic()

@@ -6,6 +6,9 @@ from typing import Literal
 
 SEMANTIC_AND_VECTORS = "semantic_and_vectors"
 VECTORS_ONLY = "vectors_only"
+# Temporary rollout guard. Keep the queue worker alive to drain persisted
+# messages, but never enqueue or execute semantic/VLM work.
+SEMANTIC_QUEUE_DISABLED = True
 
 ProcessingMode = Literal["semantic_and_vectors", "vectors_only"]
 DEFAULT_PROCESSING_MODE: ProcessingMode = SEMANTIC_AND_VECTORS

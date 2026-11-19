@@ -14,6 +14,7 @@ import yaml
 
 from openviking.core.namespace import classify_uri
 from openviking.models.model_error import ModelErrorKind, model_error_kind
+from openviking.resource.processing_mode import SEMANTIC_QUEUE_DISABLED
 from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
@@ -511,6 +512,17 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception as exc:
             logger.error("Invalid semantic message: %s", exc, exc_info=True)
             return ProcessResult.failed(str(exc))
+
+        if SEMANTIC_QUEUE_DISABLED:
+            logger.warning(
+                "[TemporaryVectorsOnly] dropping persisted semantic message "
+                "uri=%s context_type=%s generation_trigger=%s",
+                msg.uri,
+                msg.context_type,
+                msg.generation_trigger,
+            )
+            await self._cleanup_local_artifact(msg)
+            return ProcessResult.success()
 
         if msg.context_type != "skill" or get_task_context() is not None:
             return await self._process_message(msg, lock)
