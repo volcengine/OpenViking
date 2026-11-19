@@ -39,7 +39,11 @@ from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
-from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
+from openviking.utils.image_input import (
+    MAX_COMPILE_IMAGE_DOWNLOAD_BYTES,
+    MAX_IMAGE_INPUT_DOWNLOAD_BYTES,
+)
+from openviking.utils.media_limits import DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -366,7 +370,7 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
     if problem == "format":
         uri = URI.replace(".png", ".svg")
     else:
-        pipeline.client.stat.return_value = {"size": MAX_MEDIA_FILE_BYTES + 1}
+        pipeline.client.stat.return_value = {"size": MAX_COMPILE_IMAGE_DOWNLOAD_BYTES + 1}
     with pytest.raises(CompileFailure) as caught:
         await read_source(pipeline.client, uri)
     assert caught.value.code == code
@@ -479,6 +483,64 @@ async def test_large_image_is_compressed_without_changing_source_identity(
             assert rendition_image.getpixel((50, 50)) == (255, 255, 255)
 
 
+@pytest.mark.parametrize("case", ["long_edge", "download_size"])
+async def test_compile_normalizes_images_on_preload_and_worker_reread(runtime, case):
+    pipeline, _ = runtime
+    limit = DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION
+    if case == "long_edge":
+        image = Image.new("RGB", (limit * 2, 128), "white")
+    else:
+        width = limit + 52
+        pixels = random.Random(6713).randbytes(width * width * 3)
+        image = Image.frombytes("RGB", (width, width), pixels)
+    with image, BytesIO() as output:
+        image.save(output, format="PNG")
+        original = output.getvalue()
+    client = pipeline.client
+    client.stat.return_value = {"size": len(original)}
+    client.download_bytes.return_value = original
+
+    native = await VikingMultiReadTool._read_image(client, URI)
+    if case == "long_edge":
+        assert len(original) < VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+        assert native["media_bytes"] == len(original)
+    else:
+        assert MAX_IMAGE_INPUT_DOWNLOAD_BYTES < len(original) <= MAX_COMPILE_IMAGE_DOWNLOAD_BYTES
+        assert not native["success"]
+        client.download_bytes.assert_not_awaited()
+
+    source = await read_source(client, URI)
+    url = source.image["image_url"]["url"]
+    assert url.startswith("data:image/jpeg;base64,")
+    rendition = base64.b64decode(url.split(",", 1)[1])
+    with Image.open(BytesIO(rendition)) as preview:
+        assert preview.size == (limit, 64 if case == "long_edge" else limit)
+    assert len(rendition) <= VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+    assert source.sha256 == content_hash(original)
+
+    reader = CompileImageReadTool(VikingMultiReadTool(), {URI: source.sha256})
+    result = await reader._read_image(client, URI)
+    assert result["image"] == source.image
+    assert result["media_bytes"] == len(rendition)
+    assert result["sha256"] == source.sha256
+
+
+async def test_compile_resizes_when_full_resolution_encoding_exceeds_budget(
+    runtime, large_png, monkeypatch
+):
+    pipeline, _ = runtime
+    pipeline.client.stat.return_value = {"size": len(large_png)}
+    pipeline.client.download_bytes.return_value = large_png
+    budget = 750_000
+    monkeypatch.setattr(VikingMultiReadTool, "_MAX_INLINE_MEDIA_BYTES", budget)
+
+    source = await read_source(pipeline.client, URI)
+    data = base64.b64decode(source.image["image_url"]["url"].split(",", 1)[1])
+    assert len(data) <= budget
+    with Image.open(BytesIO(data)) as preview:
+        assert preview.size == (900, 500)
+
+
 @pytest.mark.asyncio
 async def test_image_download_budget_and_inline_passthrough(runtime, monkeypatch):
     from vikingbot.agent.tools import ov_file
@@ -514,6 +576,9 @@ async def test_image_pixel_budget_precedes_decode(runtime, large_png, monkeypatc
     monkeypatch.setattr("PIL.PngImagePlugin.PngImageFile.load", unexpected_load)
     with pytest.raises(ValueError, match="pixel decode budget"):
         await VikingMultiReadTool._read_image(pipeline.client, URI)
+    with pytest.raises(CompileFailure, match="pixel decode budget") as caught:
+        await read_source(pipeline.client, URI)
+    assert caught.value.code == "SOURCE_READ_FAILED"
 
 
 @pytest.mark.asyncio
