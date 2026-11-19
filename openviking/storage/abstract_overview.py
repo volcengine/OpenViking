@@ -464,6 +464,68 @@ def _overview_heading_file_name(heading: str) -> str:
     return heading
 
 
+def _overview_entry_matches(target: str, candidate: str) -> bool:
+    """Compare an entry basename against a heading- or line-derived name."""
+
+    normalized = candidate.strip().rstrip("/")
+    return bool(normalized) and normalized == target.rstrip("/")
+
+
+def remove_overview_entry(body: str, entry_name: str) -> tuple[str, bool]:
+    """Remove one direct entry from an overview body without regenerating it.
+
+    The freshness gate defers full overview regeneration for wide
+    directories, but a deleted entry must not stay retrievable until that
+    refresh runs: its summary keeps living in ``.overview.md`` and in the
+    parent's L1 vector record. This drops the entry deterministically.
+
+    Handles the forms overview generation produces: ``### [name](viking://...)``
+    H3 sections (dropped through to the next section boundary) and single-line
+    ``[n] name: summary`` or ``- name (link: ...)`` entries. Returns the new
+    body and whether anything was removed; unmatched bodies come back
+    verbatim so callers can skip re-embedding.
+    """
+
+    target = entry_name.strip().rstrip("/")
+    if not body or not target:
+        return body, False
+
+    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    kept: list[str] = []
+    removed = False
+    dropping_section = False
+    for line in lines:
+        heading_match = re.match(r"^###\s+(.+?)\s*$", line)
+        numbered_match = None if heading_match else re.match(r"^\[(\d+)\]\s+(.+?):", line)
+        bullet_match = (
+            None if heading_match or numbered_match else re.match(r"^-\s+(.+?)\s*\(link:", line)
+        )
+        if heading_match:
+            dropping_section = _overview_entry_matches(
+                target, _overview_heading_file_name(heading_match.group(1))
+            )
+            if dropping_section:
+                removed = True
+                continue
+        elif numbered_match:
+            dropping_section = _overview_entry_matches(target, numbered_match.group(2))
+            if dropping_section:
+                removed = True
+                continue
+        elif bullet_match:
+            if _overview_entry_matches(target, bullet_match.group(1)):
+                removed = True
+                continue
+        elif dropping_section:
+            continue
+        kept.append(line)
+    if not removed:
+        return body, False
+
+    new_body = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip("\n")
+    return new_body, True
+
+
 def body_for_embedding(
     raw: str | bytes,
     whitelist: Sequence[str] = EMBEDDING_METADATA_FIELDS,

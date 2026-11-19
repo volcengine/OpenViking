@@ -61,8 +61,11 @@ from openviking.storage.abstract_overview import (
     body_for_preview,
     is_abstract_overview_uri,
     mark_abstract_overview_pending,
+    parse_abstract_overview,
     plan_abstract_overview_refresh,
+    remove_overview_entry,
     render_abstract_overview,
+    write_abstract_overview,
 )
 from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
@@ -822,6 +825,108 @@ class FSService:
                     overview_uris.append(overview_uri)
         return list(dict.fromkeys(overview_uris))
 
+    async def _surgically_remove_deleted_entry(
+        self,
+        *,
+        root_uri: str,
+        deleted_uri: str,
+        context_type: str,
+        ctx: RequestContext,
+    ) -> None:
+        """Drop a deleted entry's section from the parent overview without VLM.
+
+        The freshness gate defers full overview regeneration for wide
+        directories, but a deleted entry must not stay retrievable until that
+        refresh runs: its summary remains in ``.overview.md`` and in the
+        parent's L1 vector record, so retrieval keeps hitting deleted
+        content. Remove the section deterministically, preserve the pending
+        counter for the next full refresh, and re-embed the overview record
+        so the deleted content stops matching immediately. Best effort by
+        design: any degradation leaves the existing refresh behavior intact.
+        """
+        entry_name = deleted_uri.rstrip("/").rsplit("/", 1)[-1]
+        if not entry_name:
+            return
+        viking_fs = self._ensure_initialized()
+        base_uri = root_uri.rstrip("/")
+        overview_uri = f"{base_uri}/.overview.md"
+        abstract_uri = f"{base_uri}/.abstract.md"
+        lock_paths = [
+            viking_fs._uri_to_path(overview_uri, ctx=ctx),
+            viking_fs._uri_to_path(abstract_uri, ctx=ctx),
+        ]
+        try:
+            lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
+        except LockAcquisitionError:
+            logger.info(
+                "Skipping delete overview cleanup because sidecars are busy",
+                extra={"uri": safe_uri_for_log(base_uri), "degraded": True},
+            )
+            return
+        try:
+            try:
+                raw_overview = await viking_fs.read_file(overview_uri, ctx=ctx)
+                raw_abstract = await viking_fs.read_file(abstract_uri, ctx=ctx)
+            except Exception as exc:
+                # A missing sidecar (legacy directories) or an unreadable one
+                # leaves nothing deterministic to remove; full regeneration
+                # stays responsible for those cases.
+                logger.debug(
+                    "Delete overview cleanup skipped without sidecars",
+                    extra={
+                        "uri": safe_uri_for_log(base_uri),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                return
+            try:
+                document = parse_abstract_overview(raw_overview)
+                abstract_document = parse_abstract_overview(raw_abstract)
+            except AbstractOverviewFormatError:
+                logger.info(
+                    "Skipping delete overview cleanup for malformed sidecar",
+                    extra={"uri": safe_uri_for_log(base_uri), "degraded": True},
+                )
+                return
+
+            new_body, removed = remove_overview_entry(document.body, entry_name)
+            if not removed:
+                return
+            try:
+                result = await write_abstract_overview(
+                    viking_fs=viking_fs,
+                    dir_uri=base_uri,
+                    overview=new_body,
+                    abstract=abstract_document.body,
+                    ctx=ctx,
+                    metadata=dict(document.metadata),
+                    consume_pending=0,
+                    lock=lease,
+                    log_prefix="[Delete]",
+                )
+                if result.overview_body_changed:
+                    await vectorize_directory_meta(
+                        uri=base_uri,
+                        abstract=abstract_document.body,
+                        overview=new_body,
+                        context_type=context_type,
+                        ctx=ctx,
+                        include_abstract=False,
+                    )
+            except Exception as exc:
+                # Sidecars are already cleaned; a failed re-embed only leaves
+                # the stale vector record for the next normal refresh.
+                logger.info(
+                    "Delete overview cleanup degraded before re-embed",
+                    extra={
+                        "uri": safe_uri_for_log(base_uri),
+                        "error_type": type(exc).__name__,
+                        "degraded": True,
+                    },
+                )
+        finally:
+            await viking_fs._async_agfs.pathlock_release(lease)
+
     async def _enqueue_delete_refresh(
         self,
         *,
@@ -852,6 +957,12 @@ class FSService:
             return FreshnessAction.NOOP
 
         if decision.action is not FreshnessAction.REFRESH_NOW:
+            await self._surgically_remove_deleted_entry(
+                root_uri=root_uri,
+                deleted_uri=deleted_uri,
+                context_type=context_type,
+                ctx=ctx,
+            )
             return decision.action
         try:
             queue_manager = get_queue_manager()
