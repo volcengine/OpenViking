@@ -1,14 +1,12 @@
-import { decodePathLabel } from '../../../shared/path-label.js';
+import {
+  decodePathLabel,
+  formatVikingUriLabel,
+} from '../../../shared/path-label.js';
 
 const scheme = 'viking://';
 
 export function formatCompileUriLabel(uri: string): string {
-  if (!uri.startsWith(scheme)) return uri;
-  // Preserve path delimiters, literal escapes and encoded control characters.
-  return uri
-    .split(/(\/|%(?:2f|5c|3f|23|25|[01][\da-f]|7f))/i)
-    .map((part, index) => (index % 2 === 0 ? decodePathLabel(part) : part))
-    .join('');
+  return formatVikingUriLabel(uri);
 }
 
 /** Validate and normalize a literal URI before it is used by the form or sent. */

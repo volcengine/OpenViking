@@ -79,6 +79,39 @@ test('generated output directory suggestions keep literal Chinese Viking URI seg
   }
 });
 
+test('generated suggestions reuse an existing encoded target with the same readable name', async () => {
+  const existing =
+    'viking://resources/%E7%A0%94%E5%8F%91%E5%91%A8%E6%8A%A5_wiki';
+  const view = await mountHitl([
+    card('compile_name', 'Name'),
+    card('compile_output_type', 'Output', {
+      options: [{ value: 'wiki', label: 'Wiki' }],
+    }),
+    card('compile_target', 'Target', { suggested_value: existing }),
+  ]);
+  try {
+    await view.start();
+    await input(view.container.querySelector('[name=answer]'), '研发周报');
+    await submit(view);
+    await click(view.container.querySelector('input[value=wiki]'));
+    await submit(view);
+    const options = [
+      ...view.container.querySelectorAll('.ov-viking-bot__interaction-option'),
+    ];
+    const values = options.map((item) => item.querySelector('input').value);
+    assert.ok(values.includes(existing));
+    assert.ok(!values.includes('viking://resources/研发周报_wiki'));
+    assert.equal(
+      options.filter((item) =>
+        item.textContent.includes('viking://resources/研发周报_wiki'),
+      ).length,
+      1,
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('userId alone scopes same-origin output validation without a Provider', async () => {
   const fetch = recordingFetch(({ path, uri, init }) => {
     assert.equal(path, '/api/v1/fs/stat');

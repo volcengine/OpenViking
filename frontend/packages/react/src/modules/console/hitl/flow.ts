@@ -1,6 +1,7 @@
 import type { VikingBotInteractionAnswer } from '../../../components/viking-bot/index.js';
 import {
   compileTargetError,
+  formatCompileUriLabel,
   parseCompileUri,
   parseSourceUris,
 } from './uris.js';
@@ -100,10 +101,20 @@ export function outputDirectories(
     ? `viking://user/${encodeURIComponent(userId)}/resources`
     : 'viking://~/resources';
   const suggested = parseCompileUri(card.request.initialValue ?? '');
-  return [
-    ...new Set([
-      ...(path ? [`viking://resources${path}`, `${personal}${path}`] : []),
-      ...(suggested && !compileTargetError(suggested) ? [suggested] : []),
-    ]),
-  ];
+  const existing =
+    suggested && !compileTargetError(suggested) ? suggested : undefined;
+  const generated = path
+    ? [`viking://resources${path}`, `${personal}${path}`]
+    : [];
+  const candidates = existing
+    ? [
+        ...generated.map((uri) =>
+          formatCompileUriLabel(uri) === formatCompileUriLabel(existing)
+            ? existing
+            : uri,
+        ),
+        existing,
+      ]
+    : generated;
+  return [...new Set(candidates)];
 }

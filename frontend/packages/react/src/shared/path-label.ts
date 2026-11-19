@@ -7,7 +7,11 @@ export function decodePathLabel(segment: string): string {
   }
 }
 
-/** Decode an encoded Viking URI for display only; requests keep the original URI. */
-export function displayVikingUri(uri: string): string {
-  return decodePathLabel(uri);
+/** Decode readable URI text while preserving escapes that affect path identity. */
+export function formatVikingUriLabel(uri: string): string {
+  if (!uri.startsWith('viking://')) return uri;
+  return uri
+    .split(/(\/|%(?:2f|5c|3f|23|25|[01][\da-f]|7f))/i)
+    .map((part, index) => (index % 2 === 0 ? decodePathLabel(part) : part))
+    .join('');
 }
