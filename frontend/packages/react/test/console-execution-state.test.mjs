@@ -3,16 +3,20 @@ import test from 'node:test';
 import { act, key } from './helpers/command-console-dom.mjs';
 import { mount, ok } from './helpers/console-dom.mjs';
 
+const resultBody = '.ov-command-console__result-body';
+
 for (const outcome of ['success', 'error']) {
   test(`Console shows pending progress without an unavailable warning and unlocks after ${outcome}`, async () => {
     let finish;
+    let signal;
     let requests = 0;
     const host = await mount(
-      () => {
+      (_url, init) => {
         requests++;
+        signal = init.signal;
         return new Promise((resolve) => (finish = resolve));
       },
-      { modes: ['command'] },
+      { modes: ['command'], commandOptions: { allowAdminCommands: true } },
     );
     try {
       await host.execute('ov health');
@@ -35,7 +39,11 @@ for (const outcome of ['success', 'error']) {
       await key(host.input, 'Enter', { ctrlKey: true });
       assert.equal(requests, 1);
 
-      await host.render({ modes: ['command'], locale: 'zh-CN' });
+      await host.render({
+        modes: ['command'],
+        locale: 'zh-CN',
+        commandOptions: { allowAdminCommands: true },
+      });
       assert.equal(
         host.records[0]
           .querySelector('[role="img"]')
@@ -47,6 +55,7 @@ for (const outcome of ['success', 'error']) {
         null,
       );
       assert.equal(host.input.disabled, true);
+      assert.equal(signal.aborted, false);
       assert.equal(requests, 1);
       await act(() =>
         finish(
@@ -65,13 +74,57 @@ for (const outcome of ['success', 'error']) {
       assert.equal(host.records[0].dataset.status, outcome);
       assert.equal(host.container.querySelector('[aria-busy="true"]'), null);
       if (outcome === 'error')
-        assert.match(host.records[0].textContent, /DENIED: No access/);
+        assert.equal(
+          host.records[0].querySelector(resultBody).textContent,
+          'No access',
+        );
       await host.execute('ov health');
       assert.equal(requests, 2);
       await act(() => finish(ok({ status: 'healthy' })));
       assert.equal(host.records[1].dataset.status, 'success');
+      await host.render({
+        modes: ['command'],
+        commandOptions: { allowAdminCommands: false },
+      });
+      assert.equal(host.records.length, 2);
+      await host.execute('ov backup sample.ovpack');
+      assert.match(host.records[2].textContent, /unavailable/i);
+      assert.equal(requests, 2);
     } finally {
       await host.dispose();
     }
   });
 }
+
+test('Console shows the transport message when add-resource fails', async () => {
+  const host = await mount(
+    async () => {
+      throw new TypeError('NetworkError');
+    },
+    { modes: ['command'] },
+  );
+  try {
+    await host.execute(
+      'ov add-resource https://example.com/notes.md --wait=true',
+    );
+    const [record] = host.records;
+    assert.equal(record.dataset.status, 'error');
+    assert.equal(record.querySelector(resultBody).textContent, 'NetworkError');
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('Console falls back to the HTTP error code when the response has no message', async () => {
+  const host = await mount(async () => new Response(null, { status: 502 }), {
+    modes: ['command'],
+  });
+  try {
+    await host.execute('ov read viking://resources/demo');
+    const [record] = host.records;
+    assert.equal(record.dataset.status, 'error');
+    assert.equal(record.querySelector(resultBody).textContent, 'HTTP_502');
+  } finally {
+    await host.dispose();
+  }
+});

@@ -44,7 +44,7 @@ description: 开启 OpenViking 网关，签发网关密钥，发送测试请求�
 
 ## 发送测试请求 {#send-a-test-request}
 
-> **提示**：[确认记忆生效](#confirm-that-memory-works)的第 3 步要等对话停顿 10 分钟才会提取记忆。想更快试用，可以先建一份上下文配置，把**最新回复等待时长**调短（例如 30 秒），用它签发一个密钥，下面的 `GATEWAY_KEY` 就用这个密钥。上下文配置的修改只对之后开始的对话生效（见[修改何时生效](06-manage-in-studio.md#when-changes-take-effect)）。
+> **提示**：[确认记忆生效](#confirm-that-memory-works)的第 3 步要等网关提交会话后才会提取记忆，默认在对话停顿 10 分钟后提交。想更快试用，可以先建一份上下文配置，把**空闲提交时间**调短（例如 30 秒），用它签发一个密钥，下面的 `GATEWAY_KEY` 就用这个密钥。上下文配置的修改只对之后开始的对话生效（见[修改何时生效](06-manage-in-studio.md#when-changes-take-effect)）。
 
 用 curl 发两个请求：第一个列出密钥可用的模型，第二个经网关向模型提一个问题。把 `GATEWAY_URL` 设为你的网关地址（本地服务是 `http://127.0.0.1:1933/gateway`），并把 `<model>` 换成上游提供的模型：
 
@@ -73,21 +73,8 @@ curl -s "$GATEWAY_URL/v1/chat/completions" \
 依次确认三件事：请求经过了网关，对话已经保存，新对话里能召回记忆。
 
 1. **请求经过了网关。** 打开“请求日志”标签页，刚才的请求应该显示为**新消息**，状态 200。OpenViking 里有相关内容时，**记忆**列会显示补充的条数，例如 `+3`；全新账号下这一列为空。
-2. **对话已保存。** 用同一个 `X-OpenViking-Session` 值再发一个请求，它的 `messages` 要包含整段对话：你的第一条消息、收到的回复和一条新消息。聊天客户端会自动带上这些内容，用 curl 时要自己补上：
-
-   ```bash
-   curl -s "$GATEWAY_URL/v1/chat/completions" \
-     -H "Authorization: Bearer $GATEWAY_KEY" \
-     -H "Content-Type: application/json" \
-     -H "X-OpenViking-Session: quickstart-1" \
-     -d '{"model": "<model>", "messages": [
-       {"role": "user", "content": "记住：我喜欢简短的回答。"},
-       {"role": "assistant", "content": "<收到的回复>"},
-       {"role": "user", "content": "谢谢。"}]}'
-   ```
-
-   这个请求一到，第一轮对话就会保存（[为什么保存总是晚一轮](01-how-it-works.md#when-conversations-are-saved)）。打开 Studio 的**会话**页面，应该能看到一个 `gateway-…` 会话。会话属于密钥所属的用户：如果密钥是为别人签发的，需要在**连接设置**中填入该用户的 OpenViking API 密钥登录后才能看到。
-3. **记忆已提取。** 对话停顿达到**最新回复等待时长**（默认 10 分钟）后，网关提交会话，OpenViking 在后台提取记忆，需要稍等片刻。然后换一个会话值开始新对话，问一个依赖这条记忆的问题，例如“你的回答应该多长？”。**记忆**列应显示召回的条数，回复也应该用上了这条记忆。
+2. **对话已保存。** 回复结束后，网关立即把这一轮写入 OpenViking（见[对话什么时候保存](01-how-it-works.md#when-conversations-are-saved)），这条请求的**保存**列显示**正常**。打开 Studio 的**会话**页面，应该能看到一个 `gateway-…` 会话。会话属于密钥所属的用户：如果密钥是为别人签发的，需要在**连接设置**中填入该用户的 OpenViking API 密钥登录后才能看到。
+3. **记忆已提取。** 对话停顿达到**空闲提交时间**（默认 10 分钟）后，网关提交会话，OpenViking 在后台提取记忆，需要稍等片刻。然后换一个会话值开始新对话，问一个依赖这条记忆的问题，例如“你的回答应该多长？”。**记忆**列应显示召回的条数，回复也应该用上了这条记忆。
 
 如果**记忆**列一直为空，或者看不到会话，见[没有补充记忆](12-troubleshooting.md#no-memory-is-added)和[OpenViking 中看不到对话](12-troubleshooting.md#conversations-do-not-appear-in-openviking)。
 

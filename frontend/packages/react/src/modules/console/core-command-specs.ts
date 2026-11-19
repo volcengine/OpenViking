@@ -1,20 +1,12 @@
 import { OV_PATH_BUILDERS, OV_PATHS } from '../../client/paths.js';
 import type { CommandSpec } from './command-specs.js';
-import type { Argument } from './command-parser.js';
 import { ConsoleCommandError } from './command-messages.js';
+import {
+  RESOURCE_COMMAND_SPEC,
+  tempFileId,
+  telemetry,
+} from './resource-command-spec.js';
 import { COMPILE_COMMAND_SPECS } from './compile-command-specs.js';
-
-const tempFileId: Argument = {
-  name: 'temp-file-id',
-  valueKey: 'temp_file_id',
-  placeholder: 'id',
-  pattern: /\S/,
-};
-const telemetry: Argument = {
-  name: 'telemetry',
-  kind: 'boolean-or-json',
-  placeholder: 'true|json',
-};
 
 function validateSource(source: unknown, uploadId: unknown, label: string) {
   const options = `${label} / --temp-file-id`;
@@ -36,86 +28,7 @@ function skillSource(source: unknown) {
 }
 
 export const CORE_COMMAND_SPECS: readonly CommandSpec[] = [
-  {
-    name: 'add-resource',
-    positional: [
-      {
-        name: 'path',
-        descriptionKey: 'resource-source',
-        placeholder: 'path-or-url',
-        pattern: /\S/,
-        optional: true,
-      },
-    ],
-    flags: [
-      tempFileId,
-      { name: 'to', kind: 'uri' },
-      { name: 'parent', kind: 'uri' },
-      { name: 'parent-auto-create', kind: 'uri', alias: '-p' },
-      {
-        name: 'create-parent',
-        valueKey: 'create_parent',
-        kind: 'boolean',
-        hidden: true,
-      },
-      { name: 'reason', placeholder: 'text' },
-      {
-        name: 'instruction',
-        placeholder: 'text',
-        descriptionKey: 'resource-instruction',
-      },
-      { name: 'ignore-dirs', valueKey: 'ignore_dirs', placeholder: 'names' },
-      { name: 'include', placeholder: 'patterns' },
-      { name: 'exclude', placeholder: 'patterns' },
-      { name: 'strict', kind: 'boolean', hidden: true },
-      {
-        name: 'directly-upload-media',
-        valueKey: 'directly_upload_media',
-        kind: 'boolean',
-        hidden: true,
-      },
-      {
-        name: 'preserve-structure',
-        valueKey: 'preserve_structure',
-        kind: 'boolean',
-        hidden: true,
-      },
-      { ...telemetry, hidden: true },
-      {
-        name: 'watch-interval',
-        valueKey: 'watch_interval',
-        kind: 'number',
-        min: 0,
-        placeholder: 'minutes',
-        helpDefault: 0,
-      },
-      { name: 'args', kind: 'json-object', placeholder: 'json-object' },
-      {
-        name: 'acl',
-        descriptionKey: 'resource-acl',
-        kind: 'json-object',
-        placeholder: 'json-object',
-      },
-      { name: 'wait', kind: 'boolean' },
-    ],
-    skeleton: 'write',
-    request: ({ 'parent-auto-create': autoParent, ...body }) => {
-      validateSource(body.path, body.temp_file_id, '<path-or-url>');
-      if ([body.to, body.parent, autoParent].filter(Boolean).length > 1)
-        throw new ConsoleCommandError(
-          'invalidArgument',
-          '--to / --parent / -p',
-        );
-      return {
-        method: 'POST',
-        path: OV_PATHS.resources,
-        body: {
-          ...body,
-          ...(autoParent ? { parent: autoParent, create_parent: true } : {}),
-        },
-      };
-    },
-  },
+  RESOURCE_COMMAND_SPEC,
   {
     name: 'add-skill',
     positional: [
@@ -127,9 +40,15 @@ export const CORE_COMMAND_SPECS: readonly CommandSpec[] = [
       },
     ],
     flags: [
-      { name: 'target-uri', valueKey: 'target_uri', kind: 'uri', alias: '-p' },
+      {
+        name: 'parent-auto-create',
+        valueKey: 'target_uri',
+        kind: 'uri',
+        alias: '-p',
+        aliases: ['--target-uri'],
+      },
       tempFileId,
-      { name: 'wait', kind: 'boolean' },
+      { name: 'wait', kind: 'boolean', alias: '-w' },
       telemetry,
     ],
     skeleton: 'write',

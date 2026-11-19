@@ -1,53 +1,9 @@
 import { ConsoleCommandError } from './command-messages.js';
 import { parseValue } from './command-values.js';
 
-interface CommandToken {
-  value: string;
-  literal: boolean;
-}
+import { tokenize, type CommandToken } from './command-tokenizer.js';
 
-/** Parses arguments as data; never invokes a shell. */
-export function tokenize(input: string): CommandToken[] {
-  const tokens: CommandToken[] = [];
-  let value = '',
-    quote = '',
-    escaped = false,
-    started = false,
-    literal = false;
-  for (const character of input.trim()) {
-    if (escaped) {
-      value += character;
-      escaped = false;
-      started = true;
-    } else if (character === '\\' && quote !== "'") {
-      escaped = true;
-      literal ||= !/^--?[\w-]+=/.test(value);
-    } else if (quote) {
-      if (character === quote) quote = '';
-      else value += character;
-    } else if (character === '"' || character === "'") {
-      quote = character;
-      started = true;
-      literal ||= !/^--?[\w-]+=/.test(value);
-    } else if (/\s/.test(character)) {
-      if (started) tokens.push({ value, literal });
-      value = '';
-      started = false;
-      literal = false;
-    } else {
-      if ('|;&<>`$'.includes(character))
-        throw new ConsoleCommandError('shellSyntax');
-      value += character;
-      started = true;
-    }
-  }
-  if (quote || escaped) throw new ConsoleCommandError('unclosedQuote');
-  if (started) tokens.push({ value, literal });
-  if (tokens[0]?.value === 'ov') tokens.shift();
-  if (tokens[0]?.value.startsWith('/'))
-    tokens[0].value = tokens[0].value.slice(1);
-  return tokens;
-}
+export { tokenize } from './command-tokenizer.js';
 
 export interface Argument {
   name: string;
@@ -60,6 +16,7 @@ export interface Argument {
     | 'number'
     | 'boolean'
     | 'boolean-or-json'
+    | 'json-array'
     | 'json-object';
   placeholder?: string;
   descriptionKey?: string;
@@ -79,7 +36,7 @@ export interface Argument {
 }
 
 export type ArgumentValue =
-  string | number | boolean | string[] | number[] | Record<string, unknown>;
+  string | number | boolean | unknown[] | Record<string, unknown>;
 
 export type ArgumentValues = Record<string, ArgumentValue>;
 
@@ -109,6 +66,12 @@ export function parseArguments(
   tokens: readonly CommandToken[],
   positional: readonly Argument[],
   flags: readonly Argument[] = [],
+  onArgument?: (
+    argument: Argument,
+    value: string,
+    start: number,
+    end: number,
+  ) => void,
 ) {
   const result: ArgumentValues = {};
   const rest: string[] = [];
@@ -149,6 +112,12 @@ export function parseArguments(
           name,
         )
       : [token, 0];
+    if (onArgument) {
+      const valueToken = tokens[cursor + consumed]!;
+      const valueStart =
+        equals === -1 ? valueToken.start : valueToken.start + equals + 1;
+      onArgument(argument, raw, valueStart, valueToken.end);
+    }
     cursor += consumed;
     result[key] = parseValue(argument, raw, result[key], name);
   }
@@ -177,4 +146,15 @@ function applyDefault(
   if (result[key] !== undefined) return;
   if (required) throw new ConsoleCommandError('missingArgument', name);
   if (argument.defaultValue !== undefined) result[key] = argument.defaultValue;
+}
+
+export function clearRequested(input: string) {
+  try {
+    const tokens = tokenize(input);
+    if (tokens[0]?.value !== 'clear') return false;
+    parseArguments(tokens.slice(1), []);
+    return true;
+  } catch {
+    return false;
+  }
 }

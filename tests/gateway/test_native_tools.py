@@ -1045,11 +1045,7 @@ def test_upstream_stream_error_uses_protocol_terminator(protocol):
         list(loop.decode(SSEDecoder(), sse(upstream)))
 
     wire = loop.error(caught.value)
-    values = [
-        SSEDecoder.data(frame)
-        for frame in SSEDecoder().feed(wire)
-        if b"[DONE]" not in frame
-    ]
+    values = [SSEDecoder.data(frame) for frame in SSEDecoder().feed(wire) if b"[DONE]" not in frame]
     expected = {
         "type": "error",
         "error": {

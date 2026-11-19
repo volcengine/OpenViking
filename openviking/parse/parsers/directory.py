@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from weakref import WeakKeyDictionary
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.base import (
     NodeType,
@@ -149,7 +150,8 @@ class DirectoryParser(BaseParser):
         # Check if this is a git repository, delegate to CodeRepositoryParser
         if await self._is_git_repository(source_path):
             logger.debug(
-                f"Directory {source_path} is a git repository, delegating to CodeRepositoryParser"
+                "Git directory detected; selecting repository parser path=%s",
+                safe_path_for_log(str(source_path)),
             )
             from openviking.parse.parsers.code.code import CodeRepositoryParser
 
@@ -386,9 +388,8 @@ class DirectoryParser(BaseParser):
             if understanding_jobs:
                 parser_api = getattr(ov_config, "parser_api", None)
                 job_timeout = self._get_parser_api_job_timeout(parser_api)
-                logger.info(
-                    "[DirectoryParser] Processing %d Understanding file(s) with "
-                    "shared_max_concurrent=%d, job_timeout=%.1fs",
+                logger.debug(
+                    "Processing Understanding files total=%d concurrency=%d timeout=%.1fs",
                     len(understanding_jobs),
                     directory_config.max_concurrent,
                     job_timeout,
@@ -550,9 +551,10 @@ class DirectoryParser(BaseParser):
         except InvalidArgumentError:
             raise
         except Exception as exc:
-            logger.error(
-                f"[DirectoryParser] Failed to parse directory {source_path}: {exc}",
-                exc_info=True,
+            logger.debug(
+                "Directory parsing failed path=%s error_type=%s",
+                safe_path_for_log(str(source_path)),
+                type(exc).__name__,
             )
             return create_parse_result(
                 root=ResourceNode(type=NodeType.ROOT),
@@ -582,10 +584,10 @@ class DirectoryParser(BaseParser):
                     elif pending_result.temp_dir_path:
                         await self._get_viking_fs().delete_temp(pending_result.temp_dir_path)
                 except Exception as exc:
-                    logger.warning(
-                        "[DirectoryParser] Failed to clean temporary artifact %s: %s",
-                        pending_result.temp_dir_path,
-                        exc,
+                    logger.info(
+                        "Temporary artifact cleanup failed path=%s error_type=%s",
+                        safe_path_for_log(str(pending_result.temp_dir_path)),
+                        type(exc).__name__,
                     )
 
     @staticmethod
@@ -950,10 +952,10 @@ class DirectoryParser(BaseParser):
             try:
                 await viking_fs.delete_temp(sub_result.temp_dir_path)
             except Exception as exc:
-                logger.warning(
-                    "[DirectoryParser] Failed to clean temporary artifact %s: %s",
-                    sub_result.temp_dir_path,
-                    exc,
+                logger.info(
+                    "Temporary artifact cleanup failed path=%s error_type=%s",
+                    safe_path_for_log(str(sub_result.temp_dir_path)),
+                    type(exc).__name__,
                 )
             raise
         if not merged:
@@ -1249,7 +1251,10 @@ class DirectoryParser(BaseParser):
                 )
                 kwargs["repo_ref"] = branch
             except Exception as e:
-                logger.debug(f"Failed to get git branch: {e}")
+                logger.info(
+                    "Git branch lookup failed; omitting branch error_type=%s degraded=true",
+                    type(e).__name__,
+                )
 
             # Get commit
             try:
@@ -1258,12 +1263,18 @@ class DirectoryParser(BaseParser):
                 )
                 kwargs["repo_commit"] = commit
             except Exception as e:
-                logger.debug(f"Failed to get git commit: {e}")
+                logger.info(
+                    "Git commit lookup failed; omitting commit error_type=%s degraded=true",
+                    type(e).__name__,
+                )
 
             # repo_name and original_source are already set from accessor, no need to get from git
 
         except Exception as e:
-            logger.debug(f"Failed to get git metadata: {e}")
+            logger.info(
+                "Git metadata lookup failed; omitting metadata error_type=%s degraded=true",
+                type(e).__name__,
+            )
 
     @staticmethod
     async def _recursive_move(

@@ -8,8 +8,7 @@ import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
-from urllib.parse import urlencode
+from dataclasses import dataclass, replace
 
 import aiohttp
 from packaging.version import InvalidVersion, Version
@@ -20,6 +19,9 @@ from .cache import TTLCache
 # unless the body sets peer_scope "actor". Tool calls carry it only under "actor". Without a
 # peer there is nothing to narrow to, so "actor" sends what "all" does.
 PEER_HEADER = "X-OpenViking-Actor-Peer"
+# OpenViking's bounds for a session's automatic commits.
+MIN_IDLE_SECONDS = 300
+MAX_COMMIT_TOKENS = 1_000_000
 
 
 @dataclass
@@ -35,6 +37,20 @@ class CallContext:
 
 # Set per request; tasks the request starts copy it, background work has none.
 CALL: ContextVar[CallContext | None] = ContextVar("openviking_call", default=None)
+
+
+@contextmanager
+def without_deadline():
+    """Calls made inside keep the request's ID and circuit but not its OpenViking budget."""
+    call = CALL.get()
+    if call is None or call.deadline is None:
+        yield
+        return
+    bound = CALL.set(replace(call, deadline=None))
+    try:
+        yield
+    finally:
+        CALL.reset(bound)
 
 
 def peer_header(peer):
@@ -250,35 +266,61 @@ class VikingClient:
             "POST", f"/api/v1/sessions/{session}/messages/batch", key, {"messages": messages}
         )
 
-    async def create_session(self, key, session, memory_types=None):
+    async def create_session(self, key, session, policy, auto_commit=False):
+        """Create the session, or set an existing one's automatic commits the same way.
+
+        With ``auto_commit`` OpenViking commits the session by itself: when the
+        uncommitted messages pass the profile's ``commit_tokens``, keeping the latest
+        ``keep_recent_messages`` live, and everything left once the session has been
+        idle for ``idle_seconds``, which needs ``memory.session_auto_commit.enabled``
+        on the server. Without it OpenViking's automatic commits are off and the
+        gateway commits.
+        """
+        commits = {
+            "pending_token_threshold": 0,
+            "message_count_threshold": 0,
+            "idle_timeout_seconds": 0,
+        }
+        if auto_commit:
+            commits = {
+                "pending_token_threshold": min(policy.commit_tokens, MAX_COMMIT_TOKENS),
+                "message_count_threshold": 0,
+                "idle_timeout_seconds": max(MIN_IDLE_SECONDS, round(policy.idle_seconds)),
+                "keep_recent_count": policy.keep_recent_messages,
+            }
         memory_policy = {}
-        if not await self._supports_commit_wm_override(key):
+        # The gateway owns summaries. From 0.5.0 working memory is off unless the user
+        # turns it on, and a session policy would replace the user's whole policy.
+        if not await self._working_memory_opt_in(key):
             memory_policy["working_memory"] = {"enabled": False}
-        if memory_types is not None:
-            memory_policy["memory_types"] = memory_types
+        if policy.capture_memory_types is not None:
+            memory_policy["memory_types"] = policy.capture_memory_types
         try:
-            return await self.request(
+            await self.request(
                 "POST",
                 "/api/v1/sessions",
                 key,
                 {
                     "session_id": session,
-                    "auto_commit_policy": {
-                        "pending_token_threshold": 0,
-                        "message_count_threshold": 0,
-                        "idle_timeout_seconds": 0,
-                    },
+                    "auto_commit_policy": commits,
                     **({"memory_policy": memory_policy} if memory_policy else {}),
                 },
             )
         except VikingError as error:
             if error.status != 409:
                 raise
+            # The session exists: an earlier gateway version or the other setting created it.
+            await self.request(
+                "PATCH",
+                f"/api/v1/sessions/{session}/config",
+                key,
+                {"auto_commit_policy": commits},
+            )
 
     async def commit(self, key, session, keep=0):
         body = {"keep_recent_count": keep}
         # The gateway owns summaries; leave the resolved extraction policy intact.
-        if await self._supports_commit_wm_override(key):
+        if await self._working_memory_opt_in(key):
             body["enable_working_memory"] = False
         return await self.request(
             "POST",
@@ -288,28 +330,9 @@ class VikingClient:
             timeout=45,
         )
 
-    async def _supports_commit_wm_override(self, key):
+    async def _working_memory_opt_in(self, key):
+        """From 0.5.0 a commit writes working memory only where a policy asks for it."""
         return Version((await self.health(key))["version"]) >= Version("0.5.0")
-
-    async def read_content(self, key, uri):
-        try:
-            return await self.request(
-                "GET", "/api/v1/content/read?" + urlencode({"uri": uri, "raw": "true"}), key
-            )
-        except VikingError as error:
-            if error.status == 404 or error.reason == "openviking_NOT_FOUND":
-                return None
-            raise
-
-    async def pending_tokens(self, key, session):
-        info = await self.request("GET", f"/api/v1/sessions/{session}", key)
-        return info.get("pending_tokens", 0)
-
-    async def archive_state(self, key, uri):
-        for marker, state in ((".done", "completed"), (".failed.json", "failed")):
-            if await self.read_content(key, uri.rstrip("/") + "/" + marker) is not None:
-                return state
-        return "pending"
 
     async def tools(self, key):
         async def load():

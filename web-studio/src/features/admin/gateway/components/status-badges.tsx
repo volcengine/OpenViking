@@ -108,6 +108,7 @@ export function HttpStatusBadge({ status }: { status?: number }) {
 const CAPTURE_TONES: Record<string, Tone> = {
   active: 'success',
   disabled: 'neutral',
+  failed: 'danger',
   retrying: 'warning',
   paused: 'danger',
   lost: 'danger',

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from openviking.models.embedder.base import query_embed_cache_scope
+from openviking.observability.log_safety import short_hash
 from openviking.retrieve.context_assembler.budget import (
     oversized_abstract_needs_body,
     per_entry_cap,
@@ -53,7 +54,12 @@ async def _load_session(
     except NotFoundError:
         return None
     except Exception as exc:
-        logger.info("Session %s unavailable for context assembly: %s", session_id, exc)
+        logger.info(
+            "session unavailable; assembling context without session session_hash=%s error_type=%s",
+            short_hash(session_id),
+            type(exc).__name__,
+            extra={"degraded": True, "error_type": type(exc).__name__},
+        )
         return None
 
 
@@ -71,7 +77,11 @@ def _context_reranker(service: Any, params: AssembleParams) -> Optional[Reranker
     try:
         return factory()
     except Exception as exc:
-        logger.warning("Context rerank unavailable, keeping vector scores: %s", exc)
+        logger.info(
+            "context rerank unavailable; keeping vector scores error_type=%s",
+            type(exc).__name__,
+            extra={"degraded": True, "error_type": type(exc).__name__},
+        )
         return None
 
 
@@ -112,7 +122,11 @@ async def assemble_context(
         try:
             expansion_planner = await resolver.get_query_planner(ctx.account_id)
         except Exception as exc:
-            logger.warning("Account expansion planner unavailable: %s", exc)
+            logger.info(
+                "account expansion planner unavailable; using original query error_type=%s",
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
             queries, expansion_status = [params.query], "failed"
         else:
             queries, expansion_status = await expand_queries(
@@ -193,18 +207,24 @@ async def assemble_context(
         try:
             rewrite_enabled = await resolver.has_dedicated_query_planner(ctx.account_id)
         except Exception as exc:
-            logger.warning("Account rewrite planner unavailable: %s", exc)
+            logger.info(
+                "account rewrite planner unavailable; skipping context rewrite error_type=%s",
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
             rewrite_enabled = False
             rewrite_status = "failed"
     if plan.entries and rewrite_enabled:
         if resolver is None:
-            raise RuntimeError(
-                "Context assembly requires a VLM resolver for account-owned rewrite"
-            )
+            raise RuntimeError("Context assembly requires a VLM resolver for account-owned rewrite")
         try:
             planner = await resolver.get_query_planner(ctx.account_id)
         except Exception as exc:
-            logger.warning("Account rewrite planner unavailable: %s", exc)
+            logger.info(
+                "account rewrite planner unavailable; keeping assembled context error_type=%s",
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
             rewrite_status = "failed"
         else:
             digest, rewrite_status, rewrite_usage = await rewrite_context(
@@ -226,7 +246,11 @@ async def assemble_context(
         try:
             await ledger.record(served)
         except Exception as exc:
-            logger.debug("Recall ledger record failed (%s); dedup stays best-effort", exc)
+            logger.info(
+                "recall ledger record failed; continuing without persisted dedup error_type=%s",
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
 
     stats: Dict[str, Any] = {
         **gather_stats,

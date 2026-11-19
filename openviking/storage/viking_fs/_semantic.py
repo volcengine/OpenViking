@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
+from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
@@ -51,7 +52,12 @@ class _SemanticMixin:
             raw = self._handle_agfs_read(await self._async_agfs.read(f"{path}/.{field}.md"))
             return body_for_preview(self._decode_bytes(raw))
         except AbstractOverviewFormatError as exc:
-            logger.warning("Malformed directory %s for %s: %s", field, uri, exc)
+            logger.info(
+                "Malformed directory %s for %s: %s",
+                type(field).__name__,
+                safe_uri_for_log(str(uri)),
+                type(exc).__name__,
+            )
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
@@ -88,8 +94,8 @@ class _SemanticMixin:
             parent_uri = self._path_to_uri(parent_path, ctx=ctx)
             logger.info(
                 "content/abstract: %s is a file, falling back to parent directory %s",
-                uri,
-                parent_uri,
+                safe_uri_for_log(str(uri)),
+                safe_uri_for_log(str(parent_uri)),
             )
             return await self.abstract(parent_uri, ctx=real_ctx)
         return await self._read_directory_summary(uri, "abstract", ctx=ctx)
@@ -120,8 +126,8 @@ class _SemanticMixin:
             parent_uri = self._path_to_uri(parent_path, ctx=ctx)
             logger.info(
                 "content/overview: %s is a file, falling back to parent directory %s",
-                uri,
-                parent_uri,
+                safe_uri_for_log(str(uri)),
+                safe_uri_for_log(str(parent_uri)),
             )
             return await self.overview(parent_uri, ctx=real_ctx)
         return await self._read_directory_summary(uri, "overview", ctx=ctx)
@@ -236,8 +242,10 @@ class _SemanticMixin:
         )
 
         logger.debug(
-            "[VikingFS.find] Calling retriever.retrieve with "
-            f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+            "Retrieval prepared",
+            extra=safe_log_fields(
+                {"account_id": real_ctx.account_id, "user_id": real_ctx.user.user_id}
+            ),
         )
 
         result = await retriever.retrieve(
@@ -473,10 +481,10 @@ class _SemanticMixin:
                         timeout=retrieval_config.recall_intent_timeout_s,
                     )
             except Exception as exc:
-                logger.warning(
+                logger.info(
                     "Intent analysis failed (%s); using original query: %s",
                     type(exc).__name__,
-                    exc,
+                    type(exc).__name__,
                 )
             else:
                 typed_queries = query_plan.queries
@@ -501,8 +509,10 @@ class _SemanticMixin:
 
         async def _execute(tq: TypedQuery):
             logger.debug(
-                "[VikingFS.search._execute] Calling retriever.retrieve with "
-                f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+                "Retrieval prepared",
+                extra=safe_log_fields(
+                    {"account_id": real_ctx.account_id, "user_id": real_ctx.user.user_id}
+                ),
             )
             return await retriever.retrieve(
                 tq,
@@ -611,5 +621,5 @@ class _SemanticMixin:
                 )
 
         except Exception as e:
-            logger.error(f"[VikingFS] Failed to write {uri}: {e}")
+            logger.debug("Failed to write %s: %s", safe_uri_for_log(str(uri)), type(e).__name__)
             raise IOError(f"Failed to write {uri}: {e}")

@@ -22,8 +22,8 @@ The gateway address is the server's address followed by `/gateway`. In Studio, i
 | [Chat clients and SDKs](#chat-clients-and-sdks) | Chat Completions (or the API your SDK uses) | `https://ov.example.com/gateway/v1` | `X-OpenViking-Session`, which you send yourself |
 | [Open WebUI](#open-webui) | Chat Completions | `https://ov.example.com/gateway/v1` | An `X-OpenViking-Session` header set on the connection |
 | [OpenCode](#opencode) | Chat Completions, Anthropic Messages or Responses | `https://ov.example.com/gateway/v1` | OpenCode's session header |
-| [pi](#pi) | Chat Completions, Anthropic Messages or Responses | `https://ov.example.com/gateway/v1` (Anthropic Messages: `https://ov.example.com/gateway`) | Usually matched from the conversation history |
-| [DSH](#dsh) | Chat Completions, Anthropic Messages or Responses | `https://ov.example.com/gateway/v1` (Anthropic Messages: `https://ov.example.com/gateway`) | Usually matched from the conversation history |
+| [pi](#pi) | Chat Completions, Anthropic Messages or Responses | `https://ov.example.com/gateway/v1` (Anthropic Messages: `https://ov.example.com/gateway`) | pi's session header over Responses, otherwise matched from the conversation history |
+| [DSH](#dsh) | Chat Completions, Anthropic Messages or Responses | `https://ov.example.com/gateway/v1` (Anthropic Messages: `https://ov.example.com/gateway`) | DSH's session header over Responses, otherwise matched from the conversation history |
 | [Volcano Engine Ark and BytePlus ModelArk SDKs](#volcano-engine-ark-and-byteplus-modelark-sdks) | Any of the three | `https://ov.example.com/gateway/api/v3` or `https://ov.example.com/gateway/api/compatible` | Depends on the headers the client sends |
 
 The last column is explained in [How conversations are recognized](#how-conversations-are-recognized).
@@ -258,7 +258,7 @@ The example uses Chat Completions. For another protocol, set `api` and `baseUrl`
 | Anthropic Messages | `anthropic-messages` | `https://ov.example.com/gateway` |
 
 - `apiKey` reads the gateway key from the `OPENVIKING_GATEWAY_KEY` environment variable; export it before you start pi. Keep the leading `$`, or pi sends the string itself as the key.
-- pi usually sends no session header, so the gateway matches its conversations by their history (see [How conversations are recognized](#how-conversations-are-recognized)).
+- Over Responses pi sends `session-id`, which the gateway recognizes its conversations by. Over Chat Completions and Anthropic Messages it sends no session header, so the gateway matches its conversations by their history (see [How conversations are recognized](#how-conversations-are-recognized)).
 - If pi's own OpenViking extension is active, the gateway steps aside for those conversations. Use one or the other.
 
 Next, [check the connection](#check-the-connection).
@@ -286,7 +286,7 @@ Export the gateway key as `OPENVIKING_GATEWAY_KEY`, the variable `apiKeyEnv` nam
 - You can also add the provider in the Web UI under Settings → Models → Add model provider → Custom model API, which writes the same file.
 - Desktop does not see variables exported in a terminal. On macOS, export `OPENVIKING_GATEWAY_KEY` in your shell startup file (`~/.zprofile` or `~/.zshrc`); on Windows, set it with `setx`. Then quit Desktop with ⌘Q or from the tray and reopen it. If Desktop's recovery dialog runs, it moves `cordis.patch.yml` aside to a `.bak-<timestamp>` file, so add the provider again.
 - A DSH provider speaks one protocol. To use the gateway over several, declare one provider per protocol.
-- Unless DSH sends one of the session headers, the gateway matches its conversations by their history (see [How conversations are recognized](#how-conversations-are-recognized)).
+- Over Responses DSH sends `session_id`, which the gateway recognizes its conversations by. Over Chat Completions and Anthropic Messages it sends no session header, so the gateway matches its conversations by their history (see [How conversations are recognized](#how-conversations-are-recognized)).
 - If the [OpenViking plugin for DSH](../agent-integrations/17-dsh.md) is installed in the same profile, the gateway steps aside for those conversations. Use one or the other.
 
 Next, [check the connection](#check-the-connection).
@@ -319,7 +319,7 @@ Check every new client setup once, with a short conversation. This matters most 
 
 1. In the client, send two messages in one conversation (one chat, or one agent session). You should get normal replies.
 2. In Studio, open the **Requests** tab. Both requests should appear as **New message** with status 200.
-3. Expand both requests. They should show the same **Conversation**, and **Saving** should read **On**, which means saving is enabled and healthy. The first turn is saved once the second message arrives; to see it, look for a `gateway-…` session on Studio's **Sessions** page, signed in as the key's user (see [Confirm that memory works](02-quickstart.md#confirm-that-memory-works)).
+3. Expand both requests. They should show the same **Conversation**, and **Saving** should read **On**, which means saving is enabled and healthy. Each turn is saved as soon as its reply ends; to see the saved turns, look for a `gateway-…` session on Studio's **Sessions** page, signed in as the key's user (see [Confirm that memory works](02-quickstart.md#confirm-that-memory-works)).
 
 If something is off:
 
@@ -331,14 +331,16 @@ Every column and label of the log is explained in [Requests](10-overview-and-req
 
 ## How conversations are recognized {#how-conversations-are-recognized}
 
-A conversation is the series of requests the gateway treats as one chat: it keeps one context profile and one upstream, and is saved to an OpenViking session, or to a new one in some cases, for example when the client rewrites its history (see [Saving status](10-overview-and-requests.md#saving-status)). To decide which conversation a request belongs to, the gateway takes the first of these request headers that is present:
+A conversation is the series of requests the gateway treats as one chat: it keeps one context profile and one upstream, and is saved to one OpenViking session until someone [resyncs](10-overview-and-requests.md#resync-a-conversation) it (see [When conversations are saved](01-how-it-works.md#when-conversations-are-saved)). To decide which conversation a request belongs to, the gateway takes the first of these request headers that is present:
 
 1. `X-OpenViking-Session`
 2. `thread-id`
 3. `x-claude-code-session-id` (Claude Code)
 4. `x-opencode-session-id` (OpenCode)
-5. `x-session-id`
-6. `session-id` (Codex CLI)
+5. `x-deepseek-harness-session-id` (DSH with its built-in DeepSeek provider)
+6. `x-session-id`
+7. `session-id` (Codex CLI, pi over Responses)
+8. `session_id` (DSH over Responses; a reverse proxy in front of the gateway must pass header names with underscores, for nginx `underscores_in_headers on`)
 
 If none is present, the gateway looks at the latest assistant reply in the history. If exactly one earlier conversation produced that reply, the request joins it; otherwise it starts a new conversation. Two conversations that only share an opening message are never merged. This handles ordinary back-and-forth chat, but retries, regenerated answers and identical conversations are ambiguous and may start a new conversation. So send `X-OpenViking-Session` whenever your client lets you set headers.
 

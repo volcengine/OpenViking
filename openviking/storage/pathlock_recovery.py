@@ -154,7 +154,7 @@ async def adopt_or_reacquire(
         _validate_requests(handoff["covered_paths"], account_id)
     try:
         return await agfs.pathlock_adopt(handoff, **kwargs)
-    except HandoffRecoveryRequired as error:
+    except HandoffRecoveryRequired as _log_error:
         operation = (
             _validate_requests(await fallback_requests(), account_id)
             if fallback_requests is not None
@@ -186,10 +186,9 @@ async def adopt_or_reacquire(
         except Exception as blocked:
             raise HandoffRecoveryBlocked(str(blocked)) from blocked
         logger.info(
-            "Recovered pathlock handoff owner=%s reason=%s coverage=%s",
-            handoff.get("owner_id", handoff.get("handle_id")),
-            error.reason,
-            requests,
+            "Pathlock handoff recovered total=%d error_type=%s",
+            len(requests),
+            type(_log_error).__name__,
         )
         return lease
     except LockAcquisitionError as blocked:

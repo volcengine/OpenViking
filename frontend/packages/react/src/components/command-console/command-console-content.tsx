@@ -27,6 +27,7 @@ import { findCommandConsoleCommand } from './command-definitions.js';
 export function CommandConsoleContent({
   records,
   value,
+  history = records,
   disabled = false,
   busy = false,
   emptyState,
@@ -180,7 +181,7 @@ export function CommandConsoleContent({
           anchorRef={composerRef}
           onFocus={() => setDismissedValue(null)}
           value={value}
-          history={records.map((record) =>
+          history={history.map((record) =>
             formatCommandConsoleCommandInput(record.command, commands),
           )}
           labels={text}

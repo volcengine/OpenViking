@@ -174,7 +174,7 @@
   display: flex;
   flex-direction: column;
   width: min(320px, calc(100vw - 24px));
-  height: clamp(160px, calc(100dvh - 160px), 482px);
+  max-height: clamp(160px, calc(100dvh - 160px), 482px);
   padding: 8px;
   overflow: hidden;
 }
@@ -252,6 +252,8 @@
 }
 .ov-viking-bot__history-placeholder {
   display: flex;
+  box-sizing: border-box;
+  min-height: 160px;
   flex: 1;
   flex-direction: column;
   align-items: center;
@@ -428,6 +430,7 @@
 .ov-viking-bot__managed-session-history li {
   display: flex;
   align-items: center;
+  padding-inline-end: 8px;
 }
 
 .ov-viking-bot__managed-session-history li > .ov-viking-bot__history-option {
@@ -443,8 +446,28 @@
   flex: 0 0 24px;
   align-items: center;
   justify-content: center;
+  border-radius: 6px;
   padding: 0;
   color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__history-action[aria-expanded='true'] {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-viking-bot__history-action-menu.ov-dropdown.ov-popover {
+  width: max-content;
+  min-width: min(140px, calc(100vw - 16px));
+  border-radius: 8px;
+  padding: 4px;
+}
+.ov-viking-bot__history-action-menu .ov-dropdown__item {
+  min-height: 36px;
+  gap: 8px;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 14px;
+}
+.ov-viking-bot__history-action-menu .ov-viking-bot__history-delete {
+  color: var(--ov-ui-color-status-error, var(--ov-ui-status-error-default));
 }
 @media (hover: hover) {
   .ov-viking-bot__managed-session-history

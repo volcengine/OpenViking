@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react';
-import type { Dispatch, RefObject, SetStateAction } from 'react';
+import type { RefObject } from 'react';
 import { useOvSignal } from '../../client/provider.js';
-import { isHomeResourceUri, resourceUriIdentity } from './fs-uri.js';
+import {
+  needsHomeIdentity,
+  resourceUriIdentity,
+} from '../../shared/resource-uri.js';
 import type { DirState } from '../../shared/directory-tree/types.js';
 import type { RequestScopeHandle } from '../../shared/request/use-request-scope.js';
 
 const childPrefix = (uri: string) => (uri.endsWith('/') ? uri : `${uri}/`);
-const isUserUri = (uri: string) =>
-  uri === 'viking://user' || uri.startsWith('viking://user/');
-
-const needsHomeIdentity = (left: string, right: string) =>
-  (isHomeResourceUri(left) && isUserUri(right)) ||
-  (isHomeResourceUri(right) && isUserUri(left));
-
 function isTimeoutReason(reason: unknown) {
   return (
     typeof reason === 'object' &&
@@ -27,8 +23,9 @@ export function useFsTreeReveal({
   scope,
   dirs,
   initialLoad,
+  isExpanded,
   fetchPage,
-  setExpanded,
+  expandForNavigation,
   resolveHome,
   requestSignal,
 }: {
@@ -36,13 +33,14 @@ export function useFsTreeReveal({
   scope: RequestScopeHandle;
   dirs: RefObject<Record<string, DirState>>;
   initialLoad: RefObject<Promise<void> | undefined>;
+  isExpanded: (uri: string) => boolean;
   fetchPage: (
     uri: string,
     offset: number,
     signal?: AbortSignal,
     refresh?: boolean,
   ) => Promise<DirState | undefined>;
-  setExpanded: Dispatch<SetStateAction<ReadonlySet<string>>>;
+  expandForNavigation: (uri: string) => void;
   resolveHome: (signal: AbortSignal) => Promise<string | undefined>;
   requestSignal?: AbortSignal;
 }) {
@@ -54,7 +52,7 @@ export function useFsTreeReveal({
   // observe removal of the mounted tree; cleanup aborts the active navigation.
   useEffect(() => cancelReveal, [cancelReveal]);
   const reveal = useCallback(
-    async (resource: string) => {
+    async (resource: string, preserveExpansion = false) => {
       cancelReveal();
       const controller = new AbortController();
       active.current = controller;
@@ -90,15 +88,15 @@ export function useFsTreeReveal({
       await initialLoad.current;
       const expand = async (uri: string) => {
         if (!valid()) return false;
-        setExpanded((previous) => new Set(previous).add(uri));
+        expandForNavigation(uri);
         // The row is already located. Child refresh errors stay in its error
         // row and must not turn successful selection into a navigation failure.
         await fetchPage(uri, 0, signal, true);
         return valid();
       };
-      if (target === root) return expand(rootUri);
+      if (target === root) return preserveExpansion || expand(rootUri);
       let parent = rootUri;
-      while (valid()) {
+      while (valid() && (!preserveExpansion || isExpanded(parent))) {
         const cached = dirs.current[parent];
         // A listing may omit virtual ancestors (e.g. viking://user) and return
         // a deeper directory directly. Follow actual rows rather than URI segments.
@@ -157,10 +155,10 @@ export function useFsTreeReveal({
         if (!entry || entry.access === 'denied') return false;
         if (identify(entry.uri) === identify(resource)) {
           if (entry.access === 'container') return false;
-          return entry.isDir ? expand(entry.uri) : true;
+          return entry.isDir && !preserveExpansion ? expand(entry.uri) : true;
         }
         if (!entry.isDir) return false;
-        setExpanded((previous) => new Set(previous).add(entry.uri));
+        if (!preserveExpansion) expandForNavigation(entry.uri);
         parent = entry.uri;
       }
       return false;
@@ -170,9 +168,10 @@ export function useFsTreeReveal({
       dirs,
       fetchPage,
       initialLoad,
+      isExpanded,
       rootUri,
       scope,
-      setExpanded,
+      expandForNavigation,
       resolveHome,
       callerSignal,
     ],

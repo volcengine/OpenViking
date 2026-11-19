@@ -1,5 +1,6 @@
-import { createContext } from 'react';
+import { createContext, type RefObject } from 'react';
 
-export const DropdownContext = createContext<(() => void) | undefined>(
-  undefined,
-);
+export const DropdownContext = createContext<{
+  close: () => void;
+  menu: RefObject<HTMLDivElement | null>;
+} | null>(null);

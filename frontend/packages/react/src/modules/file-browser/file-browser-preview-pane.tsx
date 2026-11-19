@@ -180,14 +180,14 @@ export function FileBrowserPreviewPane(
 ) {
   const { browser, locale, requestOptions, rootUri } = props;
   const client = useOvClient();
-  const key = scopeKeyOf(
-    client,
-    requestOptions,
-    JSON.stringify([rootUri, browser.currentUri]),
-  );
+  const scope = JSON.stringify([rootUri, browser.currentUri]);
+  const key = scopeKeyOf(client, requestOptions, scope);
   return (
     <MonitoringFlow operation={browser.previewMonitoring}>
-      <WikiSaveNotification saving={browser.wikiSaving} locale={locale} />
+      <WikiSaveNotification
+        feedback={browser.wikiSaveFeedback}
+        locale={locale}
+      />
       <ErrorBoundary
         monitoringRegion="preview"
         message={useRenderErrors(props.locale).preview}

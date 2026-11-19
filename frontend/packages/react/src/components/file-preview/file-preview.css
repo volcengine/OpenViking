@@ -244,10 +244,18 @@
   white-space: nowrap;
 }
 
-.ov-file-preview__breadcrumb-measure {
+/* Keep the intrinsic widths measurable without contributing to page overflow. */
+.ov-file-preview__breadcrumb-measure-clip {
   position: absolute;
+  inline-size: 0;
+  block-size: 0;
+  overflow: hidden;
   visibility: hidden;
   pointer-events: none;
+}
+
+.ov-file-preview__breadcrumb-measure {
+  inline-size: max-content;
   white-space: nowrap;
 }
 
@@ -725,7 +733,7 @@
   min-height: 0;
 }
 
-.ov-file-preview__image-frame:has(> .ov-file-preview__media--video-details) {
+.ov-file-preview__image-frame:has(.ov-file-preview__media--video-details) {
   display: flex;
   flex-direction: column;
   overflow: auto;
@@ -737,6 +745,118 @@
   padding: 8px 12px;
 }
 
+.ov-file-preview__media--video-details
+  video::-webkit-media-controls-fullscreen-button {
+  display: none;
+}
+
+.ov-file-preview__video-layout {
+  color: var(--ov-ui-file-preview-text);
+}
+
+.ov-file-preview__video-layout:not([open]) {
+  display: contents;
+}
+
+.ov-file-preview__video-layout:modal {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  box-sizing: border-box;
+  width: min(90vw, 1200px);
+  height: min(86dvh, 760px);
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  border: 1px solid var(--ov-ui-file-preview-border);
+  border-radius: 8px;
+  background: var(--ov-ui-file-preview-surface);
+}
+
+.ov-file-preview__video-layout::backdrop {
+  background: var(--ov-ui-color-overlay, var(--ov-ui-overlay-default));
+}
+
+.ov-file-preview__video-toggle.ov-button {
+  --ov-ui-button-fill: var(
+    --ov-ui-color-video-background,
+    var(--ov-ui-video-background-default)
+  );
+  --ov-ui-button-fill-hover: var(
+    --ov-ui-color-video-control-hover,
+    var(--ov-ui-video-control-hover-default)
+  );
+  --ov-ui-button-text: var(
+    --ov-ui-color-video-control-text,
+    var(--ov-ui-video-control-text-default)
+  );
+  position: absolute;
+  inset-block-start: 12px;
+  inset-inline-end: 16px;
+  z-index: 1;
+  color: var(--ov-ui-button-text);
+}
+
+.ov-file-preview__video-toggle.ov-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+@supports selector(video::-webkit-media-controls-panel) {
+  .ov-file-preview__video-layout:not([open])
+    .ov-file-preview__media--video-details
+    video::-webkit-media-controls-panel {
+    padding-right: 40px;
+  }
+
+  .ov-file-preview__video-layout:not([open]) .ov-file-preview__video-toggle {
+    inset-block-start: auto;
+    inset-block-end: 42px;
+    inset-inline-end: 22px;
+  }
+}
+
+.ov-file-preview__video-layout:modal .ov-file-preview__video-toggle {
+  inset-block-start: 5px;
+  inset-inline-end: 8px;
+}
+
+.ov-file-preview__video-layout:modal .ov-file-preview__media--video-details {
+  position: static;
+  min-height: 0;
+  padding: 0;
+  background: var(
+    --ov-ui-color-video-background,
+    var(--ov-ui-video-background-default)
+  );
+}
+
+.ov-file-preview__video-layout:modal .ov-file-preview__video-details {
+  min-height: 0;
+  border-inline-start: 1px solid var(--ov-ui-file-preview-border);
+}
+
+@media (max-width: 640px) {
+  .ov-file-preview__video-layout:modal {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .ov-file-preview__video-layout:modal .ov-file-preview__video-details {
+    border-inline-start: 0;
+    border-block-start: 1px solid var(--ov-ui-file-preview-border);
+  }
+}
+
+.ov-file-preview__video-heading {
+  margin: 0;
+  padding: 8px 44px 8px 12px;
+  font-size: inherit;
+  border-bottom: 1px solid var(--ov-ui-file-preview-border);
+}
+
 .ov-file-preview__video-details {
   flex: 1;
   min-height: 10rem;
@@ -744,8 +864,9 @@
   flex-direction: column;
 }
 
-.ov-file-preview__video-details > [role='tabpanel'] {
+.ov-file-preview__video-panel {
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .ov-file-preview__video-tabs {
@@ -797,21 +918,35 @@
   font-size: 12px;
 }
 
-.ov-file-preview__video-transcript button:hover,
-.ov-file-preview__video-transcript button[aria-current='true'] {
+.ov-file-preview__video-transcript button:hover {
   background: var(--ov-ui-file-preview-row-hover);
+}
+
+.ov-file-preview__video-transcript button[aria-current='true'] {
+  color: var(--ov-ui-color-text-accent, var(--ov-ui-text-accent-default));
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
 }
 
 .ov-file-preview__video-frames {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(120px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, min(144px, 100%));
   gap: 8px;
 }
 
 .ov-file-preview__video-frames li {
   display: grid;
-  place-items: center;
-  overflow-wrap: anywhere;
+  align-content: start;
+  gap: 4px;
+}
+
+.ov-file-preview__video-frame-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ov-file-preview__video-frames button {

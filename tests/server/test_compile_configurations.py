@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import datetime, timedelta
+from time import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -175,6 +176,8 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
     name = SAVED_INPUTS["compile_name"]
     assert (await client.post("/api/v1/compile/create", json=SAVED_INPUTS)).status_code == 200
     store = service.compile.lifecycle.store
+    scope = (service.user.account_id, service.user.user_id, name)
+    created_at = (await store.get(*scope))["task_first_create_time"]
     write_json = store.write_json
     error = ValueError("invalid lock request: owned lease capability does not match ref 'task'")
     queue = SimpleNamespace(enqueue=AsyncMock(side_effect=error if failure == "enqueue" else None))
@@ -199,7 +202,6 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
     if failure == "expired":
         first_id = response.json()["result"]["task_id"]
         assert first_id == queue.enqueue.await_args.args[1]["task_id"]
-        scope = (service.user.account_id, service.user.user_id, name)
         first = await store.get_run(*scope, first_id)
         for index in range(3):
             if index == 1:
@@ -210,9 +212,8 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
             run = await store.get_run(*scope, response.json()["result"]["task_id"])
             assert run["meta"]["trigger"] == "manual"
             state = await store.get(*scope)
-            assert state["task_first_create_time"] == (None if index == 0 else first["created_at"])
-            if index > 0:
-                assert state["last_run_time"] == run["created_at"]
+            assert state["task_first_create_time"] == created_at
+            assert state["last_run_time"] == (None if index == 0 else run["created_at"])
         assert scan.await_count == 3
         assert all(call.args == scope for call in scan.await_args_list)
         assert first["meta"]["trigger"] == "initial"
@@ -567,14 +568,18 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     tracker = get_task_tracker()
 
     inputs = {**SAVED_INPUTS, "to": TARGET.replace("_", " ")}
+    create_started_at = time()
     created = await client.post("/api/v1/compile/create", json=inputs)
+    create_finished_at = time()
     assert created.status_code == 200, created.text
     assert created.json()["result"] == {"compile_name": inputs["compile_name"]}
     compile_name = created.json()["result"]["compile_name"]
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert state["to"] == TARGET
     assert not await service.viking_fs.exists(inputs["to"], ctx=ctx)
-    assert state["task_first_create_time"] is state["last_run_time"] is None
+    created_at = state["task_first_create_time"]
+    assert create_started_at <= created_at <= create_finished_at
+    assert state["last_run_time"] is None
     assert await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name) == []
     assert runtime.calls == []
     service.fs.ensure_compile_target.assert_awaited_once_with(TARGET, ctx)
@@ -634,7 +639,8 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         state_path,  # finish
     ]
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
-    assert state["task_first_create_time"] == state["last_run_time"] == first.created_at
+    assert state["task_first_create_time"] == created_at
+    assert state["last_run_time"] == first.created_at
     run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, first.task_id)
     assert run["meta"]["mode"] == "full"
     assert run["actor"] == ctx.user.user_id
@@ -665,7 +671,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert noop.task_id != first.task_id
     assert len(runtime.calls) == 1
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
-    assert state["task_first_create_time"] == first.created_at
+    assert state["task_first_create_time"] == created_at
     assert state["last_run_time"] == noop.created_at
     assert state["last_triggered_slot"] is None
 
@@ -800,11 +806,12 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     first_delivery, retry = queue.enqueue.await_args_list
     assert first_delivery == retry
     after = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
-    assert after["task_first_create_time"] == after["last_run_time"] is not None
+    assert after["task_first_create_time"] == before["task_first_create_time"]
     assert after["last_triggered_slot"] == due.isoformat()
     assert after["next_triggered_slot"] == (due + timedelta(days=1)).isoformat()
     runs = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
     assert len(runs) == 1 and runs[0]["meta"]["trigger"] == "initial"
+    assert after["last_run_time"] == runs[0]["created_at"]
     assert runs[0]["actor"] == executor.user.user_id
     assert await store.get(ctx.account_id, executor.user.user_id, compile_name) is None
     assert runs[0]["task_id"] == retry.args[1]["task_id"]
@@ -872,6 +879,9 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
             CompileCreateRequest.model_validate(SAVED_INPUTS), ctx=ctx
         )
     )["compile_name"]
+    created_at = (await store.get(ctx.account_id, ctx.user.user_id, compile_name))[
+        "task_first_create_time"
+    ]
     request = CompileRequest(compile_name=compile_name)
     task = await service.compile.create(
         request, ctx=ctx, connection={}, idempotency_key="compile-frozen-config"
@@ -900,7 +910,8 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     updated = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert updated["updated_by"] == "bob"
     assert updated["execution_context"]["executor"]["user_id"] == editor.user.user_id
-    assert updated["task_first_create_time"] == updated["last_run_time"] == task.created_at
+    assert updated["task_first_create_time"] == created_at
+    assert updated["last_run_time"] == task.created_at
     assert updated["progress"] == {"source_commit": "old-success"}
     assert "conflict_num" not in updated
     assert updated["to"] == TARGET

@@ -86,9 +86,10 @@ def test_quiet_reasons_show_nothing(reason):
 
 
 def test_session_start_lists_injected_parts_in_order():
-    notice = recall_notice(["skills", "history", "profile", "memories"], "recalled", [entry("a/x")])
+    parts = ["skills", "history", "profile", "soul", "memories"]
+    notice = recall_notice(parts, "recalled", [entry("a/x")])
     assert notice == (
-        "> OpenViking context: user profile, memory index, skill list, earlier sessions\n"
+        "> OpenViking context: soul, user profile, memory index, skill list, earlier sessions\n"
         "> OpenViking recall: 1 item — x\n\n"
     )
     assert RECALL_NOTICE.fullmatch(notice)

@@ -108,6 +108,7 @@ export function FileBrowserSearchTime({
               aria-label={text.searchSince}
               placeholder={text.searchSince}
               value={filters.since}
+              maxDate={filters.until}
               locale={locale}
               onChange={(next) => onChange({ ...filters, since: next })}
             />
@@ -116,6 +117,7 @@ export function FileBrowserSearchTime({
               aria-label={text.searchUntil}
               placeholder={text.searchUntil}
               value={filters.until}
+              minDate={filters.since}
               locale={locale}
               onChange={(next) => onChange({ ...filters, until: next })}
             />

@@ -2,6 +2,8 @@ export * from './console.js';
 export type {
   ConsoleChatOptions,
   ConsoleCommandProps,
+  ConsoleCommandOptions,
+  ConsoleCommandFiles,
   ConsoleLabels,
   ConsoleMode,
   ConsoleProps,

@@ -4,7 +4,7 @@
  * Copyright (c) 2021 Bytedance, Inc. and its affiliates. See LICENSE.arco-design.
  * Keeps the single-day picker: a text field, a month grid with prev/next navigation,
  * today and a clear action. Omits the range picker, time and week/quarter/year modes,
- * shortcuts, timezones, disabledDate and ConfigProvider — none of them is used here, and
+ * shortcuts, timezones and ConfigProvider — none of them is used here, and
  * each would drag in another dependency. The value stays a `YYYY-MM-DD` string rather
  * than exposing `Dayjs` in the public props.
  * Visual rules come from the console's theme-ve-o-aml-design skin.
@@ -15,6 +15,7 @@ import { useLocale } from '../../locale-context.js';
 import { resolveLocale } from '../../locale.js';
 import type { Locale } from '../../locale.js';
 import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
 
 import { toApiDate } from './api-date.js';
 import { parseDate, shiftMonth } from './calendar.js';
@@ -33,6 +34,10 @@ export interface DatePickerProps {
   placeholder?: string;
   /** 禁用。Disables the control. */
   disabled?: boolean;
+  /** 包含边界的最早可选日期。Earliest selectable date (inclusive), YYYY-MM-DD. */
+  minDate?: string;
+  /** 包含边界的最晚可选日期。Latest selectable date (inclusive), YYYY-MM-DD. */
+  maxDate?: string;
   /**
    * 界面语言，同时决定月份/周标题与无障碍文案。月份与周名交给 `Intl`，任何受支持
    * 的 BCP 47 标签都成立；内置的无障碍文案只有中英两套，其他标签回落到 `en-US`。
@@ -76,6 +81,8 @@ export function DatePicker({
   onChange,
   placeholder,
   disabled,
+  minDate = '',
+  maxDate = '',
   locale: localeProp,
   prevLabel,
   nextLabel,
@@ -103,6 +110,11 @@ export function DatePicker({
   // runs before the blur, so a flag raised there makes the blur stand down.
   const pickingRef = useRef(false);
   const parsed = parseDate(value);
+  const earliest = parseDate(minDate);
+  const latest = parseDate(maxDate);
+  const isDateDisabled = (date: Dayjs) =>
+    (earliest !== null && date.isBefore(earliest, 'day')) ||
+    (latest !== null && date.isAfter(latest, 'day'));
   const [view, setView] = useState(() => {
     const base = parsed ?? dayjs();
     return { year: base.year(), month: base.month() };
@@ -148,7 +160,7 @@ export function DatePicker({
       return;
     }
     const next = parseDate(draft);
-    if (next) commit(toApiDate(next));
+    if (next && !isDateDisabled(next)) commit(toApiDate(next));
     else setDraft(value);
   };
 
@@ -253,6 +265,7 @@ export function DatePicker({
             year={view.year}
             month={view.month}
             selected={parsed}
+            isDateDisabled={isDateDisabled}
             locale={locale}
             prevLabel={prevLabel ?? text.prevLabel}
             nextLabel={nextLabel ?? text.nextLabel}
