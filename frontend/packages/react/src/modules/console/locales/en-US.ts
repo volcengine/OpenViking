@@ -58,6 +58,7 @@ const messages = {
     >
   >,
   telemetryResult: (value: string) => `Telemetry: ${value}`,
+  taskResult: 'Task result',
   memoryCommit: {
     idle: 'Commit session',
     pending: 'Committing session',
