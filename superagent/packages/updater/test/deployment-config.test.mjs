@@ -14,6 +14,7 @@ const {
   deploymentDaemonEnvOverrides,
   applyDeploymentDaemonEnv,
   loadDeploymentManifest,
+  parseWebSettings,
   resolveDeploymentManifestPath,
   resolveSecretsFilePath,
   resolvedDeploymentDaemonEnv,
@@ -865,5 +866,14 @@ test('the shared Web takes its host from web.host and its key from secrets.env',
     });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('web.host accepts IPv4, IPv6 and hostnames only', () => {
+  for (const host of ['0.0.0.0', '127.0.0.1', '::', '::1', 'localhost', 'box.example.com']) {
+    assert.equal(parseWebSettings({ host }).host, host);
+  }
+  for (const host of [':', '...', '1:2:3', 'example..com', 'bad-.example', '999.1.1.1']) {
+    assert.throws(() => parseWebSettings({ host }), /web\.host is invalid/);
   }
 });

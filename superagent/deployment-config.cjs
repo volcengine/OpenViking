@@ -4,6 +4,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const net = require('node:net');
 const { homeDir } = require('./packages/daemon/src/platform/index.mjs');
 const path = require('node:path');
 
@@ -507,6 +508,10 @@ function assertIsolatedAgentStorage(agents) {
   }
 }
 
+function isHostname(value) {
+  return value.length <= 253 && !/^[\d.]+$/.test(value) && value.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label));
+}
+
 function parseWebSettings(value, ignored) {
   if (value === undefined || value === null) return Object.freeze({ host: '127.0.0.1' });
   if (typeof value !== 'object' || Array.isArray(value)) {
@@ -514,7 +519,7 @@ function parseWebSettings(value, ignored) {
   }
   ignoreUnknownFields(value, WEB_FIELDS, 'web.', ignored);
   const host = value.host === undefined ? '127.0.0.1' : manifestString(value.host, 'deployment manifest web.host', { maxLength: 253 });
-  if (!/^(?:[0-9a-f.:]+|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)$/i.test(host)) {
+  if (!net.isIP(host) && !isHostname(host)) {
     throw new Error('deployment manifest web.host is invalid');
   }
   return Object.freeze({ host });
