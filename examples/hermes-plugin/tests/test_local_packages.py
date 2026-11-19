@@ -100,6 +100,31 @@ def test_bad_hash_never_reaches_pm(external_provider, tmp_path, wheel_source, mo
     assert not (ql.managed_paths(home).root / "runtime-requirements.json").exists()
 
 
+@pytest.mark.parametrize(
+    ("server", "pinned"),
+    [
+        (
+            "openviking[local-embed] @ https://files.pythonhosted.org/packages/"
+            f"openviking-0.5.5-cp310-abi3-manylinux_2_28_x86_64.whl#sha256={'a' * 64}",
+            False,
+        ),
+        ("openviking[local-embed]==0.5.4", False),
+        ("openviking[local-embed]==0.5.3", True),
+    ],
+)
+def test_litellm_is_pinned_only_for_releases_that_leave_it_open(
+    external_provider, monkeypatch, server, pinned
+):
+    _h, _p, module, _s = external_provider("releases")
+    packages = importlib.import_module(module.__name__ + ".local_packages")
+    litellm = packages._LITELLM_ON_PYTHON_314
+    monkeypatch.setattr(
+        packages, "install_requirements", lambda **_kw: ["openviking", "native", litellm]
+    )
+    monkeypatch.setattr(packages, "resolve_server_requirement", lambda **_kw: server)
+    assert packages.runtime_requirements() == [server, "native", *([litellm] if pinned else [])]
+
+
 def _distribution(version, *, tag="py3-none-any", **changes):
     filename = f"openviking-{version}-{tag}.whl"
     return {
