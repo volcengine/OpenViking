@@ -578,3 +578,17 @@ describe('Volc', () => {
     assert.match(assembleVolcConversationPolicy({}), /## Role\n\nYour soul [^\n]*\n\nRole boundary:/);
   });
 });
+
+ it('requires a non-empty internal final only for TraeX routers and workers', () => {
+  for (const assemble of [assembleConversationPolicy, assembleWorkerPolicy]) {
+    const config = { scheduler: 'workers', explicitSilence: true };
+    const text = assemble(config, { runtime: 'traex' });
+    assert.match(text, /always end with a short, non-empty final answer/);
+    assert.match(text, /after a silent decision or a worker task report/);
+    assert.match(text, /Do not call a delivery tool to send this completion text/);
+    assert.match(text, /does not replace any required delivery, silent decision, or task report/);
+    for (const runtime of ['codex', 'claude', 'pi']) {
+      assert.doesNotMatch(assemble(config, { runtime }), /## Internal turn completion/);
+    }
+  }
+});

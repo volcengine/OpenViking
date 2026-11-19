@@ -205,6 +205,17 @@ function workersSection(config = {}) {
   return config.scheduler === 'workers' ? renderPrompt(config, 'workers.md') : '';
 }
 
+// TraeX's internal gateway can reject a turn with no final answer as an
+// empty stream, even after a successful tool delivery or task report.
+function runtimeCompletionSection(runtime) {
+  if (runtime !== 'traex') return '';
+  return [
+    '## Internal turn completion',
+    'After completing this turn’s required tool actions, always end with a short, non-empty final answer, such as "本轮处理完成。" This also applies after a silent decision or a worker task report. Silence means no external delivery; it does not mean an empty final answer.',
+    'The final answer is internal telemetry only. Do not call a delivery tool to send this completion text, repeat a delivery, or repeat a task report. This text does not replace any required delivery, silent decision, or task report, and does not claim that unfinished work succeeded.',
+  ].join('\n\n');
+}
+
 // A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
 // keeps the instance's Role, for the domain and the voice of its drafts.
 export function assembleWorkerPolicy(config = {}, { runtime = null } = {}) {
@@ -213,6 +224,7 @@ export function assembleWorkerPolicy(config = {}, { runtime = null } = {}) {
     shellSection(config, { runtime, worker: true }),
     roleSection(config),
     naturalWritingSection(config),
+    runtimeCompletionSection(runtime),
   ]);
 }
 
@@ -287,6 +299,7 @@ export function assembleConversationPolicy(config = {}, { runtime = null } = {})
     explicitSilencePromptSection(config),
     inboxSection(config),
     workersSection(config),
+    runtimeCompletionSection(runtime),
   ]);
 }
 
