@@ -646,7 +646,7 @@ class ProxyRequest:
                 )
             stats.capture_failed += 1
             self.metrics.update(capture_status="failed", capture_reason=reason)
-            logger.info(
+            logger.error(
                 "gateway finished turn save failed; preserving response session_hash=%s error_type=%s",
                 short_hash(str(self.prepared.session)),
                 type(error).__name__,

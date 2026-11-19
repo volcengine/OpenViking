@@ -449,6 +449,8 @@ extraVolumeMounts:
 
 从请求日志的顶层字段统计 reason 和首调缓存结果。对保存失败（`capture_status: "failed"`，按 `capture_reason` 统计）、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。网关自身的错误也会写入记录：按 `error_reason` 和 `error_origin` 统计（见[日志记录](../api/25-gateway.md#log-records)）。store 输出不保存密钥确认之前就被拒绝的请求，使用它时请从代理访问日志统计这些 401/402/403；在网关应用日志中查看 `internal_error` 的安全异常类型摘要。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
 
+对话写入失败以 ERROR 输出，消息为 `gateway finished turn save failed` 或 `gateway history save before compaction failed`：模型回复仍可能成功，但历史可能丢失。commit 失败以 INFO 输出，消息为 `gateway session commit failed`，可查看 `error_code` 区分 `openviking_http_429` 和 `openviking_unavailable` 等原因。这些后台 commit 失败不会进入请求记录。压缩前历史保存失败的日志也包含 `error_code`。
+
 ### 状态行 {#status-line}
 
 设置 `snapshot_interval_seconds`（例如 `60`）后，每个网关进程按这个间隔写一行状态。使用 `stdout` 和 `file` 输出时，它和请求记录写在同一处；使用 `store` 时，由 `openviking_gateway.snapshot` logger 以 INFO 级别输出，宿主没有配置日志 handler 时写到 stderr。状态行不含账户、用户、会话、模型或请求 ID，字段见[状态行](../api/25-gateway.md#status-line)。每行统计的是距上一行的这段时间。区间计数（包括 `capture.delivered` 和 `capture.failed`）和 `inflight_*` 按进程统计，可以跨进程相加。建议的告警：

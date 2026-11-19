@@ -21,7 +21,7 @@ from collections import Counter
 import async_timeout
 import orjson
 
-from openviking.observability.log_safety import short_hash
+from openviking.observability.log_safety import safe_log_fields, short_hash
 
 from .capture_store import Document
 from .client import without_deadline
@@ -286,13 +286,19 @@ class CapturePipeline:
             with without_deadline():
                 await self.viking.commit(key, session, keep)
         except Exception as error:
+            error_code = (
+                safe_log_fields({"error_code": getattr(error, "reason", None)}).get("error_code")
+                or type(error).__name__
+            )
             logger.info(
-                "gateway session commit failed session_hash=%s error_type=%s",
+                "gateway session commit failed session_hash=%s error_type=%s error_code=%s",
                 short_hash(str(session)),
                 type(error).__name__,
+                error_code,
                 extra={
                     "degraded": True,
                     "error_type": type(error).__name__,
+                    "error_code": error_code,
                     "operation": "gateway.commit",
                 },
             )
@@ -366,10 +372,19 @@ class CapturePipeline:
             async with async_timeout.timeout(CUT_SECONDS):
                 await self.save(request, credential, messages, chain, chain.index(anchor) + 1)
         except Exception as error:
-            logger.info(
-                "gateway history save before compaction failed; continuing compaction error_type=%s",
+            error_code = (
+                safe_log_fields({"error_code": getattr(error, "reason", None)}).get("error_code")
+                or type(error).__name__
+            )
+            logger.error(
+                "gateway history save before compaction failed; continuing compaction error_type=%s error_code=%s",
                 type(error).__name__,
-                extra={"degraded": True, "error_type": type(error).__name__},
+                error_code,
+                extra={
+                    "degraded": True,
+                    "error_type": type(error).__name__,
+                    "error_code": error_code,
+                },
             )
 
     @staticmethod
