@@ -53,6 +53,8 @@ test('search dates cannot be reversed using the calendar or keyboard', async () 
     await click(
       view.container.querySelector('.ov-file-browser__search-trigger'),
     );
+    const modal = document.querySelector('.ov-file-browser-search');
+    modal.style.zIndex = '2400';
     await click(document.querySelector('[aria-label="Advanced filters"]'));
     await click(document.querySelector('input[type="radio"]'));
     const start = field('Start date');
@@ -61,10 +63,12 @@ test('search dates cannot be reversed using the calendar or keyboard', async () 
 
     await act(async () => end.focus());
     const popup = document.getElementById(end.getAttribute('aria-controls'));
+    const overlay = popup.closest('.ov-date-picker__overlay');
     assert.equal(picker(end).contains(popup), false);
-    assert.equal(
-      popup.closest('.ov-date-picker__overlay').parentNode === document.body,
-      true,
+    assert.ok(overlay.isConnected);
+    assert.ok(
+      Number(window.getComputedStyle(overlay).zIndex) >
+        Number(window.getComputedStyle(modal).zIndex),
     );
     const title = () =>
       popup.querySelector('.ov-date-picker__title').textContent;

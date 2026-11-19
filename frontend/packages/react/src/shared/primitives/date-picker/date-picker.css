@@ -83,6 +83,7 @@
 }
 
 .ov-popover.ov-date-picker__overlay {
+  z-index: calc(var(--ov-ui-modal-z-index, 1001) + 1);
   width: 240px;
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);

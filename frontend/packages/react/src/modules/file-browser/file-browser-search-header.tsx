@@ -1,4 +1,5 @@
 import type { ComponentPropsWithoutRef, RefObject } from 'react';
+import { useLocale } from '../../shared/locale-context.js';
 
 import FilterIcon from '../../../../icons/svg/file-browser/search-filter.svg?react';
 import type { SearchFilters, SearchMode } from './search-types.js';
@@ -55,12 +56,14 @@ export function FileBrowserSearchHeader({
   onChange,
   onToggleAdvanced,
 }: FileBrowserSearchHeaderProps) {
+  const locale = useLocale();
   const filterCount =
     filters.scopes.length +
     filters.levels.length +
     Number(Boolean(filters.since)) +
     Number(Boolean(filters.until)) +
     Number(filters.caseInsensitive);
+  const formattedCount = new Intl.NumberFormat(locale).format(filterCount);
   return (
     <div className="ov-file-browser-search__header">
       <input
@@ -76,7 +79,14 @@ export function FileBrowserSearchHeader({
       <button
         type="button"
         className="ov-file-browser-search__advanced-toggle"
-        aria-label={`${text.searchAdvancedLabel}${filterCount ? ` (${filterCount})` : ''}`}
+        aria-label={
+          filterCount
+            ? text.searchAdvancedLabelWithCount(
+                text.searchAdvancedLabel,
+                formattedCount,
+              )
+            : text.searchAdvancedLabel
+        }
         aria-expanded={advancedOpen}
         onClick={onToggleAdvanced}
       >
@@ -86,7 +96,7 @@ export function FileBrowserSearchHeader({
             className="ov-file-browser-search__filter-count"
             aria-hidden="true"
           >
-            {filterCount}
+            {formattedCount}
           </span>
         ) : null}
       </button>

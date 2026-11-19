@@ -182,7 +182,7 @@ A directory's summary levels, for example an L0 abstract and an L1 overview. It 
 | defaultLevelKey     | Initial level when uncontrolled                                                                                | `string`                                                               | First level |
 | resources           | Companion resources shared by all levels; a level's own `resources` take precedence                            | `readonly FileViewerResource[]`                                        | -           |
 | resolveImage        | Resolves Markdown image targets of the current level, with the same rules as file tabs                         | `(src: string, source: FilePreviewSource) => Promise<string>`          | -           |
-| operations          | Asynchronous capabilities; directory tabs use only `openParent`                                                | `FilePreviewOperations`                                                | -           |
+| operations          | Asynchronous capabilities; directory tabs support `openParent` and `openUri`                                   | `FilePreviewOperations`                                                | -           |
 | actions             | Your commands in the header row; `source` and `path` in the context point to the current level                 | `FilePreviewActionSource`                                              | -           |
 | onActiveLevelChange | Called when the level changes, with the new level's `key`                                                      | `(key: string) => void`                                                | -           |
 | slots               | Slots for the header row, footer and states, the same as file tabs                                             | `FilePreviewFileTabSlots`                                              | -           |
@@ -241,10 +241,10 @@ One summary level of a directory tab's `levels`.
 
 The component calls these methods to carry out an operation, and fires the matching `onOpenParent` or `onOpenUri` only after the promise resolves; a rejection is silent and notifies nothing.
 
-| Property   | Description                                                                                                                                       | Type                             | Default |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | ------- |
-| openParent | Opens the clicked ancestor level, taking that level's full URI; without it the breadcrumb levels are not clickable                                | `(uri: string) => Promise<void>` | -       |
-| openUri    | Opens a clicked Markdown link, taking the target as written in the Markdown; supplying it hands navigation, including relative paths, to your app | `(uri: string) => Promise<void>` | -       |
+| Property   | Description                                                                                                                                            | Type                             | Default |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------- |
+| openParent | Opens the clicked ancestor level, taking that level's full URI; without it the breadcrumb levels are not clickable                                     | `(uri: string) => Promise<void>` | -       |
+| openUri    | Opens Markdown resource links using the original target; the app handles Viking URIs and relative paths, while external links retain native navigation | `(uri: string) => Promise<void>` | -       |
 
 ### FilePreviewEditing
 
@@ -415,7 +415,7 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 - Markdown front matter: leading YAML metadata appears as a code block in the preview, while the source view, editing, saving and copying keep the original text.
 - Dotted backdrop: Markdown bodies and the area around PDF, Word and PowerPoint pages show a dotted backdrop that follows the host theme; its colors are in Theme variables below.
 - Markdown images: `resources` are matched first, then `resolveImage` is called, and a rejected `resolveImage` falls back to the image's original target; the component never turns `viking://` into an HTTP address.
-- Markdown links: only Markdown bodies trigger `operations.openUri`, and the component passes the target as written, without resolving relative paths.
+- Markdown links in file and directory tabs can use `operations.openUri` for Viking URIs and relative paths. The component passes the original target for the app to resolve. HTTP, HTTPS, mail, phone, and protocol-relative external links retain native anchors and browser actions. Same-document anchors in directory summaries scroll within the current preview.
 - JSON logs: `.json` and `.jsonl` render as a JSON tree; render structured files that need their own view, such as session logs, in a content tab.
 - Large files: the component does not check file size; FileViewer shows a confirmation state when it needs one, and `slots.confirmFallback` replaces it. Limit the length of editable text in `editing`.
 - Extras: previous/next image and neighbor preloading are not part of the component; compose them outside the preview, or inject them through `slots.actions` and `slots.footer`.

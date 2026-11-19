@@ -45,12 +45,9 @@ export function createFilePreviewAdapterList({
   resolveImage,
 }: {
   /**
-   * Markdown 正文里的链接被点击时调用。传入后由回调接管导航，底座不再自行
-   * 跳转；只有 Markdown Adapter 支持这个回调，其余格式忽略它。
+   * 接管 Markdown 正文里的资源和相对链接，外部链接保留浏览器原生导航。
    *
-   * Called when a link inside a Markdown body is clicked. Supplying it hands
-   * navigation to the callback and the base no longer jumps on its own. Only the
-   * Markdown adapter supports this; other formats ignore it.
+   * Handles resource and relative Markdown links. External links retain native navigation.
    */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   resolveImage?: (src: string) => Promise<string>;
@@ -60,9 +57,25 @@ export function createFilePreviewAdapterList({
     text({ showLineNumbers: true }),
     json({ defaultExpandDepth: 4 }),
     markdown({
-      onLinkClick,
       allowedLinkProtocols: onLinkClick ? ['viking'] : undefined,
       rendererProps: {
+        linkPolicy: onLinkClick
+          ? (target) => {
+              const url = target.trim();
+              const scheme = /^([a-z][a-z\d+.-]*):/i.exec(url)?.[1];
+              return url &&
+                !url.startsWith('//') &&
+                (!scheme || scheme.toLowerCase() === 'viking')
+                ? { render: true, callback: true, navigation: 'callback' }
+                : true;
+            }
+          : undefined,
+        eventCallbacks: {
+          onLinkClick: onLinkClick
+            ? (event, link) =>
+                onLinkClick(event, { url: link.url, fileType: 'markdown' })
+            : undefined,
+        },
         // Parse raw HTML, then keep Ark's sanitizer in charge of tags and attributes.
         parsing: { enabledHtmlTags: true },
         sourcePlugins: (current) => [

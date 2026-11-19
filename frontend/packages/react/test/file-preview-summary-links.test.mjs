@@ -96,31 +96,42 @@ test('summary links navigate through FileBrowser and standalone directory operat
     await waitFor(() => evidence().standalone.length === 2);
     assert.equal(evidence().standalone[1], 'child/.overview.md');
 
-    link('browser', 'Web reference').click();
-    await waitFor(() => evidence().opened.length === 1);
-    assert.deepEqual(
-      [...evidence().opened[0]],
-      ['https://example.com/reference', '_blank', 'noopener,noreferrer'],
-    );
+    for (const section of ['standalone', 'browser']) {
+      for (const [label, href] of [
+        ['Web reference', 'https://example.com/reference'],
+        ['HTTP reference', 'http://example.com/reference'],
+        ['Protocol relative', '//example.com/reference'],
+        ['Mail reference', 'mailto:reader@example.com'],
+        ['Phone reference', 'tel:+12025550123'],
+      ]) {
+        const anchor = link(section, label);
+        assert.equal(anchor.getAttribute('href'), href);
+        assert.equal(anchor.getAttribute('target'), '_blank');
+        for (const [type, button] of [
+          ['auxclick', 1],
+          ['contextmenu', 2],
+        ]) {
+          const event = new dom.window.MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            button,
+          });
+          anchor.dispatchEvent(event);
+          assert.equal(event.defaultPrevented, false);
+        }
+      }
+    }
+    assert.equal(evidence().standalone.length, 2);
     const readsBeforeAnchor = evidence().reads.length;
     link('browser', 'Same document').click();
     await waitFor(() => evidence().scrolled.length > 0);
     assert.equal(evidence().reads.length, readsBeforeAnchor);
-    link('browser', 'Cross document').click();
-    await waitFor(() => evidence().opened.length === 2);
-    assert.equal(
-      evidence().opened[1][0],
-      'https://preview.test/other.md#details',
-    );
     assert.equal(link('browser', 'Unsafe')?.getAttribute('href'), null);
     link('browser', 'Unsafe').click();
-    assert.equal(evidence().opened.length, 2);
+    assert.equal(evidence().opened.length, 0);
     assert.equal(evidence().reads.length, readsBeforeAnchor);
     link('browser', 'Malformed fragment').click();
     assert.equal(evidence().reads.length, readsBeforeAnchor);
-    link('browser', 'Protocol relative').click();
-    await waitFor(() => evidence().opened.length === 3);
-    assert.equal(evidence().opened[2][0], 'https://example.com/reference');
     link('browser', 'Relative child').click();
     await waitFor(() =>
       evidence().reads.includes('viking://resources/docs/child'),
@@ -142,8 +153,13 @@ test('summary links navigate through FileBrowser and standalone directory operat
     await waitFor(() =>
       evidence().reads.includes('viking://resources/docs/child folder'),
     );
-    await waitFor(() => link('browser', 'Absolute resource'));
-    link('browser', 'Absolute resource').click();
+    await waitFor(() => link('browser', 'Cross document'));
+    link('browser', 'Cross document').click();
+    await waitFor(() =>
+      evidence().reads.includes('viking://resources/docs/child folder/other'),
+    );
+    await waitFor(() => link('browser', 'Queried resource'));
+    link('browser', 'Queried resource').click();
     await waitFor(() =>
       evidence().reads.includes('viking://resources/guide.md'),
     );
@@ -151,6 +167,7 @@ test('summary links navigate through FileBrowser and standalone directory operat
       evidence().reads.some((uri) => uri.startsWith('https:')),
       false,
     );
+    assert.equal(evidence().opened.length, 0);
   } finally {
     dom?.window.close();
     await rm(output, { recursive: true, force: true });

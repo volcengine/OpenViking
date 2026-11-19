@@ -24,11 +24,15 @@ const content = [
   '[Absolute resource](viking://resources/guide.md)',
   '[Encoded resource](viking://resources/docs/child%20folder/.overview.md)',
   '[Web reference](https://example.com/reference)',
+  '[HTTP reference](http://example.com/reference)',
   '[Protocol relative](//example.com/reference)',
+  '[Mail reference](mailto:reader@example.com)',
+  '[Phone reference](tel:+12025550123)',
   '[Same document](#details)',
   '[Malformed fragment](#broken%)',
   '<span id="details">Details</span>',
-  '[Cross document](other.md#details)',
+  '[Cross document](other/.overview.md#details)',
+  '[Queried resource](viking://resources/guide.md?view=preview#details)',
   '[Unsafe](javascript:alert(1))',
 ].join('\n\n');
 const ok = (result: unknown) =>

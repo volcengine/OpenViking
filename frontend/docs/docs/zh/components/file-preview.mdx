@@ -182,7 +182,7 @@ import '@openviking/react/components/file-preview/style.css';
 | defaultLevelKey     | 非受控时的初始层级                                             | `string`                                                               | 第一级  |
 | resources           | 各层级共用的伴随资源，层级自己的 `resources` 优先              | `readonly FileViewerResource[]`                                        | -       |
 | resolveImage        | 解析当前层级 Markdown 里的图片地址，规则同文件页签             | `(src: string, source: FilePreviewSource) => Promise<string>`          | -       |
-| operations          | 异步执行能力，目录页签只使用 `openParent`                      | `FilePreviewOperations`                                                | -       |
+| operations          | 异步执行能力，目录页签支持 `openParent` 和 `openUri`           | `FilePreviewOperations`                                                | -       |
 | actions             | 标题行里的宿主操作，上下文里的 `source` 和 `path` 指向当前层级 | `FilePreviewActionSource`                                              | -       |
 | onActiveLevelChange | 层级变化时触发，参数为新层级的 `key`                           | `(key: string) => void`                                                | -       |
 | slots               | 标题行、页脚与状态插槽，与文件页签相同                         | `FilePreviewFileTabSlots`                                              | -       |
@@ -241,10 +241,10 @@ import '@openviking/react/components/file-preview/style.css';
 
 组件调用这些方法执行操作，Promise 完成后才触发对应的 `onOpenParent`、`onOpenUri`，拒绝时静默，不触发通知。
 
-| 参数       | 说明                                                                                             | 类型                             | 默认值 |
-| ---------- | ------------------------------------------------------------------------------------------------ | -------------------------------- | ------ |
-| openParent | 打开被点击的祖先层级，参数是该层级的完整 URI，省略时面包屑的层级不可点击                         | `(uri: string) => Promise<void>` | -      |
-| openUri    | 打开 Markdown 里被点击的链接，参数是 Markdown 里写的原始地址，传入后由宿主接管导航并解析相对路径 | `(uri: string) => Promise<void>` | -      |
+| 参数       | 说明                                                                                           | 类型                             | 默认值 |
+| ---------- | ---------------------------------------------------------------------------------------------- | -------------------------------- | ------ |
+| openParent | 打开被点击的祖先层级，参数是该层级的完整 URI，省略时面包屑的层级不可点击                       | `(uri: string) => Promise<void>` | -      |
+| openUri    | 打开 Markdown 资源链接，参数为原始地址；宿主接管 Viking URI 和相对路径，外部链接保留浏览器导航 | `(uri: string) => Promise<void>` | -      |
 
 ### FilePreviewEditing
 
@@ -415,7 +415,7 @@ import '@openviking/react/components/file-preview/style.css';
 - Markdown 元数据：开头的 YAML 元数据在预览里显示为代码块，源码、编辑、保存和复制仍使用原文。
 - 点阵背景：Markdown 正文及 PDF、Word、PPT 的页面外围显示点阵背景，随宿主主题切换，底色和点色见下方「主题变量」。
 - Markdown 图片：先匹配 `resources`，未命中再调用 `resolveImage`，`resolveImage` 拒绝时使用图片的原始地址；组件不会把 `viking://` 转成 HTTP 地址。
-- Markdown 链接：只有 Markdown 触发 `operations.openUri`，组件传出 Markdown 里写的原始地址，不补全相对路径。
+- Markdown 链接：文件和目录页签的 Markdown 正文均可通过 `operations.openUri` 打开 Viking URI 和相对路径，组件传出原始地址，由宿主解析。HTTP、HTTPS、邮件、电话和协议相对外链保留原生链接，支持浏览器新窗口、复制地址和右键菜单。目录正文的同文档锚点在当前预览内滚动。
 - JSON 日志：`.json` 和 `.jsonl` 渲染为 JSON 树，会话日志等需要自己呈现的结构化文件，用内容页签渲染。
 - 大文件：组件不判断文件大小，FileViewer 需要确认时显示确认态，可用 `slots.confirmFallback` 替换；编辑文本的长度上限由宿主在 `editing` 里处理。
 - 增强功能：上一张与下一张和相邻图片预加载不在组件内，在预览区外组合，或通过 `slots.actions`、`slots.footer` 注入。
