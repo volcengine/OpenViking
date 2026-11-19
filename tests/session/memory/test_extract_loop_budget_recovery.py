@@ -189,13 +189,11 @@ class TestToolsDisabledStillUsesVLMResponse:
             ),
         )
 
-        async def create(**_kwargs):
+        async def post(_path, **_kwargs):
             return raw
 
         vlm = volcengine_vlm({"provider": "volcengine", "model": "test-model"})
-        vlm.get_async_client = lambda: SimpleNamespace(
-            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
-        )
+        vlm.get_async_client = lambda: SimpleNamespace(post=post)
         loop = _make_loop(vlm)
 
         operations, _tools = await _run_loop(loop)
@@ -270,13 +268,11 @@ class TestTruncationDetection:
             ),
         )
 
-        async def create(**_kwargs):
+        async def post(_path, **_kwargs):
             return raw
 
         vlm = volcengine_vlm({"provider": "volcengine", "model": "test-model"})
-        vlm.get_async_client = lambda: SimpleNamespace(
-            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
-        )
+        vlm.get_async_client = lambda: SimpleNamespace(post=post)
         loop = _make_loop(vlm)
 
         with pytest.raises(RuntimeError, match="finish_reason='length'"):

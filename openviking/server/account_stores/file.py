@@ -161,8 +161,11 @@ class FileStore(AccountStore):
             return
         try:
             await self._save_accounts_json(delete_account_ids={account_id})
-        except Exception:
-            logger.exception("Failed to persist rollback for account %s", account_id)
+        except Exception as exc:
+            logger.error(
+                "Account creation rollback persistence failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     async def load(self) -> None:
         """Load persisted identities; only writers bootstrap and migrate the store."""
@@ -226,9 +229,10 @@ class FileStore(AccountStore):
             # become the baseline for an older in-memory snapshot.
             if self._read_only:
                 await self._reload()
-        except Exception:
-            logger.warning(
-                "Initial account store signature failed; watcher will retry", exc_info=True
+        except Exception as exc:
+            logger.info(
+                "Initial account store signature failed; watcher will retry",
+                extra={"error_type": type(exc).__name__},
             )
             last_signature = None
 
@@ -236,8 +240,11 @@ class FileStore(AccountStore):
             await asyncio.sleep(self._watch_interval_seconds)
             try:
                 signature = await self._compute_store_signature()
-            except Exception:
-                logger.debug("Account store signature check failed", exc_info=True)
+            except Exception as exc:
+                logger.info(
+                    "Account store signature check failed; watcher will retry",
+                    extra={"error_type": type(exc).__name__},
+                )
                 continue
             if signature == last_signature:
                 continue
@@ -245,8 +252,11 @@ class FileStore(AccountStore):
                 await self._reload()
                 last_signature = signature
                 logger.info("Account store change detected; provider cache reloaded")
-            except Exception:
-                logger.warning("Account store reload failed; will retry", exc_info=True)
+            except Exception as exc:
+                logger.info(
+                    "Account store reload failed; will retry",
+                    extra={"error_type": type(exc).__name__},
+                )
 
     async def _reload(self) -> None:
         """Read-only refresh: re-read store and atomically swap state (never writes/migrates)."""
@@ -350,6 +360,7 @@ class FileStore(AccountStore):
             )
 
             if self._api_key_hashing_enabled and allow_migration:
+                migrated_keys = 0
                 for user_id, user_info in users.items():
                     key_or_hash = user_info.get("key", "")
                     if not key_or_hash or key_or_hash.startswith("$argon2"):
@@ -360,7 +371,12 @@ class FileStore(AccountStore):
                     user_info["key"] = stored_key
                     user_info["key_prefix"] = key_prefix
                     await self._save_users_json(account_id, {user_id: user_info})
-                    logger.info("Migrated API key for user %s in account %s", user_id, account_id)
+                    migrated_keys += 1
+                if migrated_keys:
+                    logger.info(
+                        "Account API key hashing migration completed",
+                        extra={"account_id": account_id, "total": migrated_keys},
+                    )
             account_key_indexes[account_id] = self._build_account_key_index(account_id, users)
 
         return accounts, account_key_indexes, user_group_ids
@@ -389,8 +405,11 @@ class FileStore(AccountStore):
             info = await self._async_agfs.stat(path, bypass_cache=True)
         except AGFSNotFoundError:
             return (path, None, None)
-        except Exception:
-            logger.debug("Failed to stat %s for key-store signature", path, exc_info=True)
+        except Exception as exc:
+            logger.info(
+                "Account store stat failed; using unavailable signature",
+                extra={"error_type": type(exc).__name__},
+            )
             return (path, None, None)
 
         if not isinstance(info, dict):
@@ -652,9 +671,8 @@ class FileStore(AccountStore):
                     await self._write_json(path, users_data, lease_ref=users_lease)
                     created_users += len(new_users)
                     logger.info(
-                        "Persisted trusted identities for account %s: %s",
-                        account_id,
-                        new_users,
+                        "Trusted identities persisted",
+                        extra={"account_id": account_id, "total": len(new_users)},
                     )
 
                 account = self._accounts.get(account_id)
@@ -870,6 +888,7 @@ class FileStore(AccountStore):
                 "GLOBAL identities cannot change roles; delete and recreate instead."
             )
 
+        old_user_info = copy.deepcopy(account.users[user_id])
         account.users[user_id]["role"] = resolved_role
 
         # Update role in prefix index
@@ -886,7 +905,14 @@ class FileStore(AccountStore):
                     entry.role = resolved_role
                     break
 
-        await self._save_users_json(account_id, {user_id: account.users[user_id]})
+        try:
+            await self._save_users_json(account_id, {user_id: account.users[user_id]})
+        except Exception:
+            account.users[user_id] = old_user_info
+            self._account_key_indexes[account_id] = self._build_account_key_index(
+                account_id, account.users
+            )
+            raise
 
     def _get_accounts(
         self,

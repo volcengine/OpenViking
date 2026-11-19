@@ -150,6 +150,46 @@ const activity = {
     resizeContext: 'Resize filesystem width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
+    resourceActionsMenu: 'Resource actions',
+    transferResource: {
+      copyButton: 'Copy',
+      moveButton: 'Move / Rename',
+      copyTitle: 'Copy shared resource',
+      moveTitle: 'Rename or move shared resource',
+      copyDescription:
+        'Create a copy inside the shared Resources directory. The source stays unchanged. Vector records are copied and parent semantic indexes refresh in the background.',
+      moveDescription:
+        'Rename or move inside the shared Resources directory. The old URI will stop working. Vector records, scheduled syncs, and Compile configuration migrate according to the existing rules.',
+      sourceLabel: 'Current resource',
+      targetLabel: 'Full target URI',
+      targetPlaceholder: 'viking://resources/',
+      targetHint:
+        'Only children of viking://resources/ are allowed. The target must differ from the current URI.',
+      cancel: 'Cancel',
+      copyConfirm: 'Copy',
+      moveConfirm: 'Move',
+      submitting: 'Processing...',
+      copied: 'Resource copied; index is updating in the background',
+      moved: 'Resource moved; index is updating in the background',
+      copyFailed: 'Could not copy shared resource',
+      moveFailed: 'Could not move shared resource',
+    },
+    deleteResource: {
+      button: 'Delete',
+      title: 'Permanently delete shared resource?',
+      fileDescription:
+        'This resource and its semantic index will be permanently deleted. Associated scheduled syncs will also be removed. This cannot be undone.',
+      directoryDescription:
+        'Everything in this directory and its semantic index will be permanently deleted. Associated scheduled syncs will also be removed. This cannot be undone.',
+      confirmationLabel: 'Type the full URI above to confirm deletion',
+      cancel: 'Cancel',
+      confirm: 'Delete permanently',
+      deleting: 'Deleting and updating index...',
+      deleted: 'Shared resource deleted and index updated',
+      deletedIndexFailed:
+        'Resource deleted, but the index update failed. Rebuild the index.',
+      failed: 'Could not delete shared resource',
+    },
     tabs: {
       terminal: 'Terminal',
       agent: 'Agent',

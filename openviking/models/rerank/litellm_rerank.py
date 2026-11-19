@@ -85,22 +85,27 @@ class LiteLLMRerankClient(RerankBase):
 
             results = response.results
             if not results:
-                logger.warning(f"[LiteLLMRerankClient] Unexpected response format: {response}")
+                logger.info(
+                    "rerank results missing; using vector scores degraded=true",
+                    extra={"degraded": True},
+                )
                 return None
 
             if len(results) != len(documents):
-                logger.warning(
-                    "[LiteLLMRerankClient] Unexpected rerank result length: expected=%s actual=%s",
+                logger.info(
+                    "rerank result count mismatch; using vector scores total=%d returned=%d degraded=true",
                     len(documents),
                     len(results),
+                    extra={"total": len(documents), "degraded": True},
                 )
                 return None
 
             for item in results:
                 idx = _result_field(item, "index")
                 if idx is None or not (0 <= idx < len(documents)):
-                    logger.warning(
-                        "[LiteLLMRerankClient] Out-of-bounds or missing index in result: %s", item
+                    logger.info(
+                        "rerank index invalid; using vector scores degraded=true",
+                        extra={"degraded": True},
                     )
                     return None
 
@@ -108,11 +113,17 @@ class LiteLLMRerankClient(RerankBase):
             sorted_results = sorted(results, key=lambda x: _result_field(x, "index"))
             scores = [_result_field(item, "relevance_score", 0.0) for item in sorted_results]
 
-            logger.debug(f"[LiteLLMRerankClient] Reranked {len(documents)} documents")
+            logger.debug(
+                "rerank completed total=%d", len(documents), extra={"total": len(documents)}
+            )
             return scores
 
         except Exception as e:
-            logger.error(f"[LiteLLMRerankClient] Rerank failed: {e}")
+            logger.info(
+                "rerank failed; using vector scores error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
             return None
 
     @classmethod

@@ -1827,6 +1827,234 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
         return config, ollama_running
 
 
+def _open_setup_browser(url: str) -> None:
+    """Keep setup usable when the browser must be opened manually."""
+    import webbrowser
+
+    try:
+        opened = webbrowser.open(url)
+    except webbrowser.Error:
+        opened = False
+    if not opened:
+        print(f"  Open this link in your browser: {url}")
+
+
+def _wizard_volcengine() -> dict[str, Any] | object:
+    """Authorize directly in the browser and configure both models."""
+    from openviking_cli.volcengine_setup import (
+        ArkSetupError,
+        VolcengineSetup,
+        activated_models,
+        fetch_models,
+        probe_models,
+    )
+
+    _rule("VolcEngine account setup · 火山账号授权配置")
+    print("  Sign in to VolcEngine in your browser to configure VLM and embedding.")
+    print("  Model activation, real-name verification and billing remain with VolcEngine.")
+    try:
+        if not _stdin_stdout_tty():
+            print(f"  {_yellow('Run this setup in an interactive terminal for browser login.')}")
+            return _GO_BACK
+        plan = _select_access_plan("VolcEngine", VOLCENGINE_PLANS, allow_back=True)
+        if plan is _GO_BACK:
+            return _GO_BACK
+        print(f"  Selected: {plan.label} · {plan.api_base}")
+        scene = "RealAgentPlanPersonal" if "/api/plan/" in plan.api_base else None
+        with VolcengineSetup() as account:
+            authorization = account.start_authorization()
+            browser_url = (
+                authorization.get("verification_uri_complete") or authorization["verification_uri"]
+            )
+            print(f"\n  Authorize OpenViking: {browser_url}")
+            print(f"  Device code: {authorization['user_code']}")
+            print("  Waiting for browser authorization... (Ctrl-C to cancel)", flush=True)
+            _open_setup_browser(browser_url)
+            account.wait_for_authorization(authorization)
+            print(f"  {_green('Authorized. Fetching ' + plan.label + ' API keys...')}")
+            project = "default"
+            while True:
+                try:
+                    keys = account.list_keys(project, scene=scene)
+                    if not keys:
+                        print(f"  No active {plan.label} API key in project {project}.")
+                        console_url = (
+                            "https://ark.volcengine.com/region:cn-beijing/openManagement?advancedActiveKey=agentPlan"
+                            if scene
+                            else "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"
+                        )
+                        print(f"  Create a key in the Ark console: {console_url}")
+                        action = _prompt_choice(
+                            "No API keys found. What next?",
+                            [
+                                ("Create a key in the console", ""),
+                                ("Use another project", ""),
+                                ("Return to setup menu", ""),
+                            ],
+                        )
+                        if action == 3:
+                            return _GO_BACK
+                        if action == 2:
+                            project = _prompt_required_input("Project name", default=project)
+                            if not project:
+                                return _GO_BACK
+                            continue
+                        _open_setup_browser(console_url)
+                        if not _prompt_confirm("Created the key? Fetch it automatically now?"):
+                            return _GO_BACK
+                        continue
+                    if len(keys) == 1:
+                        selected = keys[0]
+                        print(f"  Using API key: {selected.get('Name') or selected['Id']}")
+                    else:
+                        choice = _prompt_choice(
+                            "Choose a model API key:",
+                            [
+                                (str(row.get("Name") or row["Id"]), f"project: {project}")
+                                for row in keys
+                            ],
+                            allow_back=True,
+                        )
+                        if choice == 0:
+                            return _GO_BACK
+                        selected = keys[choice - 1]
+                    key = account.api_key(selected)
+                    break
+                except ArkSetupError as exc:
+                    print(f"  {_yellow(str(exc))}")
+                    retry = _prompt_choice(
+                        "Browser authorization is complete. What next?",
+                        [
+                            ("Retry fetching API keys", "(keeps this authorization session)"),
+                            ("Use another project", ""),
+                            ("Return to setup menu", ""),
+                        ],
+                        default=1,
+                    )
+                    if retry == 3:
+                        return _GO_BACK
+                    if retry == 2:
+                        project = _prompt_required_input("Project name", default=project)
+                        if not project:
+                            return _GO_BACK
+            preset = plan
+            while True:
+                try:
+                    models = (
+                        account.agent_plan_models()
+                        if scene == "RealAgentPlanPersonal"
+                        else fetch_models(plan.api_base, key)
+                    )
+                    if "/api/v3" in plan.api_base:
+                        models = activated_models(models, account.model_activations())
+                        print("  Showing only models confirmed activated for this account.")
+                except ArkSetupError as exc:
+                    print(f"  {_yellow(str(exc))}")
+                    if _prompt_confirm("Retry fetching models?", default=False):
+                        continue
+                    return _GO_BACK
+                if not all(
+                    any(m.get("domain") in domains for m in models)
+                    for domains in ({"VLM"}, {"Embedding"})
+                ):
+                    print("  No confirmed usable VLM and Embedding pair in this catalog.")
+                    print("  Models with unknown capabilities or activation are excluded.")
+                    console_url = "https://console.volcengine.com/ark/region:ark+cn-beijing/model"
+                    print(f"  Check model activation in the Ark console: {console_url}")
+                    if _prompt_confirm(
+                        "Open the console to review model activation?", default=False
+                    ):
+                        _open_setup_browser(console_url)
+                        if _prompt_confirm(
+                            "Refresh models after reviewing activation?", default=False
+                        ):
+                            continue
+                    return _GO_BACK
+                selected_models = []
+                for label, domains, recommended in (
+                    ("VLM", {"VLM"}, preset.default_vlm_model),
+                    ("Embedding", {"Embedding"}, preset.default_embedding_model),
+                ):
+                    candidates = [m for m in models if m.get("domain") in domains]
+                    if not candidates:
+                        print(f"  {_yellow('No ' + label + ' models in the selected catalog.')}")
+                        return _GO_BACK
+                    choice = _prompt_choice(
+                        label + " model:",
+                        [
+                            (m["id"], str(m.get("domain") or "capabilities not reported"))
+                            for m in candidates
+                        ],
+                        default=next(
+                            (i for i, m in enumerate(candidates, 1) if m["id"] == recommended), 1
+                        ),
+                        allow_back=True,
+                    )
+                    if choice == 0:
+                        return _GO_BACK
+                    selected_models.append(candidates[choice - 1])
+                vlm_model, embedding_model = (m["id"] for m in selected_models)
+                embedding_input = selected_models[1].get("input")
+                if embedding_input not in ("text", "multimodal"):
+                    if embedding_model == preset.default_embedding_model:
+                        embedding_input = "multimodal"
+                    else:
+                        choice = _prompt_choice(
+                            "Embedding API protocol (check the model documentation):",
+                            [
+                                ("Multimodal", "embeddings/multimodal"),
+                                ("Text", "embeddings"),
+                            ],
+                            allow_back=True,
+                        )
+                        if choice == 0:
+                            return _GO_BACK
+                        embedding_input = "multimodal" if choice == 1 else "text"
+                if embedding_model == preset.default_embedding_model:
+                    dimension = preset.default_embedding_dim
+                    print(f"  Dimension: {dimension} (auto-filled)")
+                else:
+                    while True:
+                        dimension = _prompt_required_int(
+                            "Embedding dimension", default=preset.default_embedding_dim
+                        )
+                        if dimension is None:
+                            return _GO_BACK
+                        if dimension > 0:
+                            break
+                        print(f"  {_red('Embedding dimension must be positive')}")
+                common = {"provider": "volcengine", "api_base": plan.api_base, "api_key": key}
+                config = {
+                    "storage": {"workspace": _workspace_path()},
+                    "embedding": {
+                        "dense": {
+                            **common,
+                            "model": embedding_model,
+                            "dimension": dimension,
+                            "input": embedding_input,
+                        }
+                    },
+                    "vlm": {**common, "model": vlm_model, "max_retries": 2},
+                }
+                if not _prompt_confirm("Test both models now? (two small requests, billed by Ark)"):
+                    print("  Model access has not been verified. You can run doctor after saving.")
+                    return config
+                results = probe_models(config)
+                for label, ok, detail in results:
+                    print(f"  {label}: {detail}" if ok else f"  {_yellow(label + ': ' + detail)}")
+                if all(ok for _, ok, _ in results):
+                    return config
+                print(
+                    "  Check the selected project's key permissions, model activation and balance:"
+                )
+                print("  https://console.volcengine.com/ark/region:ark+cn-beijing/model")
+                if not _prompt_confirm("Retry model selection and verification?", default=False):
+                    return _GO_BACK
+    except ArkSetupError as exc:
+        print(f"  {_yellow(str(exc))}")
+        return _GO_BACK
+
+
 def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Prompt for server binding, port, and auth (root API key when remote).
 
@@ -2329,6 +2557,10 @@ def run_init() -> int:
                 ),
                 ("Recommended local setup", "(all-Ollama, sized to your RAM, one confirm)"),
                 ("Manual", "(edit ov.conf directly)"),
+                (
+                    "VolcEngine account setup (火山账号授权配置)",
+                    "(sign in once for VLM & embedding)",
+                ),
             ],
             default=1,
         )
@@ -2342,6 +2574,11 @@ def run_init() -> int:
             config_dict = result  # type: ignore[assignment]
         elif mode == 2:
             config_dict, ollama_running = _wizard_ollama()
+        elif mode == 4:
+            result = _wizard_volcengine()
+            if result is _GO_BACK:
+                continue
+            config_dict = result  # type: ignore[assignment]
         else:
             _wizard_custom()
             return 0

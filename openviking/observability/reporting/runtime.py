@@ -9,9 +9,11 @@ import os
 import uuid
 
 from openviking.observability.events import register_event_subscriber, unregister_event_subscriber
+from openviking.telemetry import get_ingestion_source_type
 
 from .config import load_configuration
 from .reporter import KafkaEventReporter
+from .token_sources import get_dashboard_token_source_type
 
 logger = logging.getLogger(__name__)
 _reporter = None
@@ -88,6 +90,13 @@ def make_subscriber(reporter, config):
         elif name == "file_mutation" and source.get("operation") == "compile_commit":
             payload["timestamp"] = int(source.get("updated_at") or payload["timestamp"])
         if name in {"vlm_call", "embedding_call"}:
+            source_type = payload.get("source_type")
+            if not isinstance(source_type, str) or not source_type.strip():
+                payload["source_type"] = (
+                    get_ingestion_source_type()
+                    or get_dashboard_token_source_type(source.get("task_type"))
+                    or "unknown"
+                )
             # An unclassified billing owner stays unknown, rather than silently charged to OV.
             mappings = config.get("telemetry", {}).get("model_cost_bearers", [])
             matching = [

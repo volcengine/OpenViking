@@ -1,11 +1,13 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { mediaKind } from './file-preview-media.js';
 import { useCallback } from 'react';
 
-import { readCopyableText } from './file-preview-source.js';
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import type { FilePreviewPanelActions } from './file-preview-edit-context.js';
 import type {
-  FilePreviewActions,
   FilePreviewFileTab,
+  FilePreviewSource,
   FilePreviewTab,
   FilePreviewViewMode,
 } from './types.js';
@@ -24,6 +26,8 @@ type Editing = ReturnType<typeof useFilePreviewEditing>;
 export function useFilePreviewActionsContext({
   activeTab,
   fileTab,
+  currentPath,
+  currentSource,
   viewMode,
   canSwitchView,
   setViewMode,
@@ -32,17 +36,35 @@ export function useFilePreviewActionsContext({
 }: {
   activeTab: FilePreviewTab;
   fileTab?: FilePreviewFileTab;
+  /** 当前页签的路径；目录页签也有。The current tab's path; a directory has one too. */
+  currentPath?: string;
+  /** 当前页签的正文来源；目录页签取当前那一级。The body source; a directory uses its active level. */
+  currentSource?: FilePreviewSource;
   viewMode: FilePreviewViewMode;
   canSwitchView: boolean;
   setViewMode: (mode: FilePreviewViewMode) => void;
   editing: Editing;
   operations: Operations;
-}): FilePreviewActions {
-  const startEditing = useCallback(() => {
-    if (!fileTab) return;
-    setViewMode('source');
-    void editing.start(fileTab);
-  }, [editing, fileTab, setViewMode]);
+}): FilePreviewPanelActions {
+  const track = useTrack();
+  const selectView = (mode: FilePreviewViewMode) => {
+    if (mode !== viewMode)
+      track(
+        mode === 'source'
+          ? 'file_preview_source_view_select'
+          : 'file_preview_preview_view_select',
+      );
+    setViewMode(mode);
+  };
+  const startEditingAtAnnotation = useCallback(
+    (matchText?: string) => {
+      if (!fileTab?.editing || mediaKind(fileTab.source) || editing.editing)
+        return;
+      setViewMode('source');
+      void editing.start(fileTab, matchText);
+    },
+    [editing, fileTab, setViewMode],
+  );
 
   const saveEditing = useCallback(async () => {
     if (!fileTab) return false;
@@ -63,37 +85,33 @@ export function useFilePreviewActionsContext({
     setViewMode('preview');
   }, [activeTab, editing, setViewMode]);
 
-  const copyContent = useCallback(async () => {
-    const copyable = fileTab && readCopyableText(fileTab.source);
-    if (!fileTab || !copyable) return false;
-    return operations.copyContent(fileTab, copyable);
-  }, [fileTab, operations]);
-
+  // 复制路径按路径判断，不按页签类型：目录与文件都有路径行，两者都需要它。
+  // Copy-path is decided by the path, not the tab kind: both a directory and a
+  // file have a path row and both need it.
   const copyPath = useCallback(async () => {
-    const path = fileTab?.source.path;
+    const path = currentPath;
     if (!path) return false;
     return operations.copyPath(activeTab, path);
-  }, [activeTab, fileTab, operations]);
-
-  const download = useCallback(() => {
-    if (fileTab) void operations.download(fileTab);
-  }, [fileTab, operations]);
+  }, [activeTab, currentPath, operations]);
 
   return {
+    source: currentSource,
+    path: currentPath,
     viewMode,
-    setViewMode,
+    setViewMode: selectView,
     canSwitchView,
     editing: editing.editing,
+    draft: editing.editing ? editing.draft : undefined,
     busy: editing.saving || editing.loadingEdit,
-    canEdit: Boolean(fileTab?.editing) && !editing.editing,
-    startEditing,
+    canEdit:
+      Boolean(fileTab?.editing) &&
+      !mediaKind(fileTab!.source) &&
+      !editing.editing,
+    startEditing: () => startEditingAtAnnotation(),
+    startEditingAtAnnotation,
     saveEditing,
     cancelEditing,
-    canCopyContent: Boolean(fileTab && readCopyableText(fileTab.source)),
-    copyContent,
-    canCopyPath: Boolean(fileTab?.source.path),
+    canCopyPath: Boolean(currentPath),
     copyPath,
-    canDownload: Boolean(fileTab?.operations?.download),
-    download,
   };
 }

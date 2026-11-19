@@ -9,6 +9,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from openviking.core.namespace import is_session_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import FilterExpr, PathScope, RawDSL
@@ -221,9 +222,10 @@ class _GrepMixin:
             count = await self._get_cached_count(uri, ctx)
             if count < switch_to_remote_threshold:
                 return fallback_engine
-        except Exception:
-            logger.debug(
-                "grep engine=auto: count() check failed, falling back to fs", exc_info=True
+        except Exception as _log_error:
+            logger.info(
+                "grep engine=auto: count() check failed, falling back to fs error_type=%s",
+                type(_log_error).__name__,
             )
             return fallback_engine
 
@@ -276,20 +278,15 @@ class _GrepMixin:
             expires_at = None if result else time.monotonic() + _FULLTEXT_UNSUPPORTED_CACHE_TTL
             self._fulltext_available[cache_key] = (result, expires_at)
             return result
-        except Exception:
+        except Exception as _log_error:
             if raise_on_error:
-                logger.error(
-                    "Failed to check collection fulltext config: "
-                    "account_id=%s backend=%s collection=%s index=%s",
-                    account_id,
-                    cache_key[1],
-                    cache_key[2],
-                    cache_key[3],
-                    exc_info=True,
+                logger.debug(
+                    "Full-text configuration check failed error_type=%s", type(_log_error).__name__
                 )
                 raise
             logger.debug(
-                "Failed to check collection fulltext config, assuming no fulltext", exc_info=True
+                "Full-text configuration check failed; treating full-text as unavailable error_type=%s",
+                type(_log_error).__name__,
             )
             return False
 
@@ -359,7 +356,10 @@ class _GrepMixin:
                     after_context=after_context,
                 )
             except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
-                logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
+                logger.info(
+                    "agfs grep unavailable, falling back to VikingFS implementation: %s",
+                    type(e).__name__,
+                )
 
         return await self._grep_encrypted(
             uri=uri,
@@ -422,12 +422,10 @@ class _GrepMixin:
         # Step 1: vikingdb recall candidate files
         try:
             logger.debug(
-                "grep vikingdb search_by_keywords request: query=%r limit=%s filter=%r "
-                "output_fields=%s",
-                query,
+                "Vector keyword search prepared query_length=%d limit=%d has_filter=%s",
+                len(query),
                 remote_return_limit,
-                filter_expr,
-                output_fields,
+                bool(filter_expr),
             )
             result = await vector_store.search_by_keywords(
                 query=query,
@@ -439,7 +437,7 @@ class _GrepMixin:
                 ctx=ctx,
             )
         except Exception as e:
-            logger.warning(f"grep vikingdb step failed, falling back to fs: {e}")
+            logger.info("grep vikingdb step failed, falling back to fs: %s", type(e).__name__)
             if tag_filter is not None and allowed_uris is None:
                 try:
                     records = await self._grep_tag_records(
@@ -453,9 +451,9 @@ class _GrepMixin:
                         ordered=engine in {"opengauss_then_fs", "opengauss_fs"},
                     )
                 except Exception as filter_error:
-                    logger.warning(
+                    logger.info(
                         "grep tag-filter fallback failed; returning no results: %s",
-                        filter_error,
+                        type(filter_error).__name__,
                     )
                     return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
                 allowed_uris = {str(record["uri"]) for record in records if record.get("uri")}
@@ -664,9 +662,12 @@ class _GrepMixin:
                 before_context=before_context,
                 after_context=after_context,
             )
-        except (AttributeError, AGFSNotSupportedError, NotImplementedError):
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError) as _log_error:
             # Capability missing: let the outer caller fall back to the VikingFS implementation.
-            logger.warning("agfs grep unavailable, falling back to VikingFS implementation")
+            logger.debug(
+                "agfs grep unavailable, falling back to VikingFS implementation error_type=%s",
+                type(_log_error).__name__,
+            )
             raise
 
         matches = result.get("matches", [])
@@ -814,7 +815,10 @@ class _GrepMixin:
                 normalized_current_uri == excluded_prefix
                 or normalized_current_uri.startswith(excluded_prefix + "/")
             ):
-                logger.debug(f"Skipping excluded uri during grep: {normalized_current_uri}")
+                logger.debug(
+                    "Skipping excluded uri during grep: %s",
+                    safe_uri_for_log(str(normalized_current_uri)),
+                )
                 return
 
             offset = 0
@@ -826,7 +830,7 @@ class _GrepMixin:
                         offset=offset,
                         ctx=ctx,
                     )
-                except PermissionDeniedError:
+                except PermissionDeniedError as _log_error:
                     # A denial on the first page means this child subtree is
                     # no longer visible and can be skipped. Once traversal has
                     # consumed a page, swallowing the error would misreport a
@@ -834,7 +838,9 @@ class _GrepMixin:
                     if current_depth == 0 or offset > 0:
                         raise
                     logger.debug(
-                        f"Skipping inaccessible directory during grep: {normalized_current_uri}"
+                        "Skipping inaccessible directory during grep: %s error_type=%s",
+                        safe_uri_for_log(str(normalized_current_uri)),
+                        type(_log_error).__name__,
                     )
                     return
 
@@ -843,10 +849,16 @@ class _GrepMixin:
                     if excluded_prefix and (
                         entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
                     ):
-                        logger.debug(f"Skipping excluded uri during grep: {entry_uri}")
+                        logger.debug(
+                            "Skipping excluded uri during grep: %s",
+                            safe_uri_for_log(str(entry_uri)),
+                        )
                         continue
                     if entry.get("access") == "denied":
-                        logger.debug(f"Skipping inaccessible uri during grep: {entry_uri}")
+                        logger.debug(
+                            "Skipping inaccessible uri during grep: %s",
+                            safe_uri_for_log(str(entry_uri)),
+                        )
                         continue
 
                     if entry.get("isDir"):
@@ -862,7 +874,9 @@ class _GrepMixin:
         if excluded_prefix and (
             normalized_uri == excluded_prefix or normalized_uri.startswith(excluded_prefix + "/")
         ):
-            logger.debug(f"Skipping excluded uri during grep: {normalized_uri}")
+            logger.debug(
+                "Skipping excluded uri during grep: %s", safe_uri_for_log(str(normalized_uri))
+            )
             return file_uris
         root_stat = await self.stat(normalized_uri, ctx=ctx, skip_count=True)
         if not root_stat.get("isDir", False):
@@ -945,7 +959,9 @@ class _GrepMixin:
                         break
             return matches, 1
         except Exception as e:
-            logger.debug(f"Failed to grep {entry_uri}: {e}")
+            logger.debug(
+                "Failed to grep %s: %s", safe_uri_for_log(str(entry_uri)), type(e).__name__
+            )
             return [], 1
 
     @staticmethod

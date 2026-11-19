@@ -57,6 +57,8 @@ def _configure_test_env(monkeypatch, tmp_path):
     config_path.write_text(
         json.dumps(
             {
+                # Session endpoint tests use an AGFS mock without leader leases.
+                "enable_watch_scheduler": False,
                 "storage": {
                     "workspace": str(tmp_path / "workspace"),
                     "agfs": {"backend": "local"},
@@ -434,16 +436,25 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Archived seed"),
-    )
-    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    assert commit_resp.status_code == 200
-
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
-    await session.load()
+    archived = Message(
+        id="archived-user",
+        role="user",
+        parts=[TextPart("Archived seed")],
+        peer_id=DEFAULT_USER.user_id,
+    )
+    archive_uri = f"{session.uri}/history/archive_001"
+    await session._viking_fs.write_file(
+        uri=f"{archive_uri}/messages.jsonl",
+        content=archived.to_jsonl() + "\n",
+        ctx=ctx,
+    )
+    await session._viking_fs.write_file(
+        uri=f"{archive_uri}/.done",
+        content=json.dumps({"enable_working_memory": False}),
+        ctx=ctx,
+    )
     pending_messages = [
         Message(
             id="pending-user",
@@ -640,6 +651,55 @@ async def test_session_initialization_preserves_concurrent_message(
     assert meta["message_count"] == 1
     assert meta["pending_tokens"] > 0
     assert meta["last_message_at"]
+
+
+async def test_concurrent_create_with_explicit_id_has_single_winner(
+    client: httpx.AsyncClient,
+    monkeypatch,
+):
+    session_id = "concurrent-explicit-create"
+    request_count = 8
+    ready_count = 0
+    ready_lock = asyncio.Lock()
+    all_ready = asyncio.Event()
+    original_ensure_exists = Session.ensure_exists
+
+    async def synchronize_before_create(session):
+        nonlocal ready_count
+        if session.session_id == session_id:
+            async with ready_lock:
+                ready_count += 1
+                if ready_count == request_count:
+                    all_ready.set()
+            await asyncio.wait_for(all_ready.wait(), timeout=5)
+        return await original_ensure_exists(session)
+
+    monkeypatch.setattr(Session, "ensure_exists", synchronize_before_create)
+    requests = [
+        {
+            "session_id": session_id,
+            "auto_commit_policy": {"message_count_threshold": threshold},
+        }
+        for threshold in range(10, 10 + request_count)
+    ]
+
+    responses = await asyncio.wait_for(
+        asyncio.gather(*(client.post("/api/v1/sessions", json=request) for request in requests)),
+        timeout=10,
+    )
+
+    winners = [response for response in responses if response.status_code == 200]
+    conflicts = [response for response in responses if response.status_code == 409]
+    assert len(winners) == 1
+    assert len(conflicts) == request_count - 1
+    assert all(response.json()["error"]["code"] == "ALREADY_EXISTS" for response in conflicts)
+
+    persisted = await client.get(f"/api/v1/sessions/{session_id}")
+    assert persisted.status_code == 200
+    assert (
+        persisted.json()["result"]["auto_commit_policy"]
+        == winners[0].json()["result"]["auto_commit_policy"]
+    )
 
 
 async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClient):
@@ -1085,22 +1145,6 @@ async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, 
     assert isinstance(session.messages[0].parts[1], ImagePart)
 
 
-async def test_batch_add_message_ignores_removed_auto_commit_policy(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/messages/batch",
-        json={
-            "messages": [{"role": "user", "content": "hello"}],
-            "auto_commit_policy": {"pending_token_threshold": 1},
-        },
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["result"]["message_count"] == 1
-
-
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
@@ -1216,6 +1260,37 @@ async def test_add_message_persistence_regression(client: httpx.AsyncClient, ser
     assert session.messages[1].content == "Message B"
 
 
+@pytest.mark.parametrize("batch", [False, True])
+async def test_interrupted_assistant_reply_survives_session_history_reload(
+    client: httpx.AsyncClient, service, batch: bool
+):
+    created = await client.post("/api/v1/sessions", json={})
+    assert created.status_code == 200
+    session_id = created.json()["result"]["session_id"]
+    endpoint = f"/api/v1/sessions/{session_id}/messages"
+    replies = [
+        {"role": "assistant", "content": "Partial reply", "interrupted": True},
+        {"role": "assistant", "content": "Completed reply"},
+    ]
+
+    if batch:
+        result = await client.post(f"{endpoint}/batch", json={"messages": replies})
+        assert result.status_code == 200
+    else:
+        for reply in replies:
+            result = await client.post(endpoint, json=reply)
+            assert result.status_code == 200
+
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    history = service.sessions.session(ctx, session_id)
+    await history.load()
+    partial, completed = history.messages
+    assert partial.content == "Partial reply"
+    assert partial.to_dict()["interrupted"] is True
+    assert completed.content == "Completed reply"
+    assert "interrupted" not in completed.to_dict()
+
+
 async def test_get_session_pending_tokens_counts_tool_only_messages(
     client: httpx.AsyncClient, service
 ):
@@ -1313,6 +1388,7 @@ async def test_commit_updates_archive_metadata_before_background_task(client: ht
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert commit_resp.status_code == 200
     commit_result = commit_resp.json()["result"]
+    assert commit_result["status"] == "accepted"
     assert commit_result["archived"] is True
 
     immediate_get = await client.get(f"/api/v1/sessions/{session_id}")

@@ -20,10 +20,12 @@ class EmbeddingQueue(NamedQueue):
     async def enqueue(self, msg: Optional[EmbeddingMsg]) -> str:
         """Serialize EmbeddingMsg object and store in queue."""
         if msg is None:
-            logger.warning("Embedding message is None, skipping enqueuing")
+            logger.info("Embedding message is None, skipping enqueuing")
             return ""
         msg.queue_enqueued_at = time.time()
-        logger.debug("Enqueued embedding message: uri=%s", msg.context_data.get("uri", ""))
+        logger.debug(
+            "Enqueued embedding message: uri=%s", type(msg.context_data.get("uri", "")).__name__
+        )
         return await super().enqueue(msg.to_dict())
 
     async def dequeue(self) -> Optional[EmbeddingMsg]:
@@ -36,14 +38,14 @@ class EmbeddingQueue(NamedQueue):
                 try:
                     return EmbeddingMsg.from_json(data_dict["data"])
                 except Exception as e:
-                    logger.debug(f"[EmbeddingQueue] Failed to parse message data: {e}")
+                    logger.debug("Failed to parse message data: %s", type(e).__name__)
                     return None
             elif isinstance(data_dict["data"], dict):
                 try:
                     return EmbeddingMsg.from_dict(data_dict["data"])
                 except Exception as e:
                     logger.debug(
-                        f"[EmbeddingQueue] Failed to create EmbeddingMsg from data dict: {e}"
+                        "Failed to create EmbeddingMsg from data dict: %s", type(e).__name__
                     )
                     return None
 

@@ -32,6 +32,7 @@ from enum import Enum
 from typing import Any, Dict, Literal, Mapping, Tuple
 
 from openviking.concurrency import bounded_map
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.resource_rnfv import (
     CONTROL_BASENAMES,
@@ -364,13 +365,10 @@ async def resolve_resource_diff(
     directory_content_counts = Counter(entry.content_state.value for entry in directory_entries)
     file_index_counts = Counter(entry.index_state.value for entry in file_entries)
     directory_index_counts = Counter(entry.index_state.value for entry in directory_entries)
-    logger.info(
-        "[ResourceDiffResult] %s target=%s n_files=%d n_dirs=%d f_files=%d f_dirs=%d "
-        "logical_root=%s v_records=%d root_state=%s root_index=%s "
-        "md5_fast_path=%d body_compared=%d new_files_hashed=%d "
-        "states={file:%s,dir:%s} index={file:%s,dir:%s}",
+    logger.debug(
+        "%s target=%s n_files=%d n_dirs=%d f_files=%d f_dirs=%d logical_root=%s v_records=%d root_state=%s root_index=%s md5_fast_path=%d body_compared=%d new_files_hashed=%d states={file:%s,dir:%s} index={file:%s,dir:%s}",
         log_correlation(),
-        snapshot.request.target_uri,
+        safe_uri_for_log(str(snapshot.request.target_uri)),
         n_files,
         n_dirs,
         f_files,
@@ -492,17 +490,17 @@ async def prepare_artifact_inventory(
                     (await store.read_bytes(ref, mapping_entry.rel_path)).decode("utf-8")
                 )
             except Exception as exc:
-                logger.warning(
-                    "[ArtifactInventory] Ignoring unreadable image mapping sidecar %s: %s",
-                    mapping_entry.rel_path,
-                    exc,
+                logger.info(
+                    "Ignoring unreadable image mapping sidecar %s: %s",
+                    safe_path_for_log(str(mapping_entry.rel_path)),
+                    type(exc).__name__,
                 )
                 loaded = None
             if not isinstance(loaded, dict):
                 if loaded is not None:
-                    logger.warning(
-                        "[ArtifactInventory] Ignoring invalid image mapping sidecar %s",
-                        mapping_entry.rel_path,
+                    logger.info(
+                        "Ignoring invalid image mapping sidecar %s",
+                        safe_path_for_log(str(mapping_entry.rel_path)),
                     )
             else:
                 current_mappings = loaded
@@ -611,18 +609,6 @@ async def build_rnfv_snapshot(
         asyncio.create_task(read_artifact()),
         asyncio.create_task(read_formal()),
     ]
-    if request.vectorize and vector_inventory is None:
-        tasks.append(
-            asyncio.create_task(
-                _read_incremental_vector_inventory(
-                    vikingdb,
-                    target_uri=target_uri,
-                    ctx=ctx,
-                    projection=projection,
-                    vector_scope=vector_scope,
-                )
-            )
-        )
     try:
         results = await asyncio.gather(*tasks)
     except BaseException:
@@ -631,15 +617,33 @@ async def build_rnfv_snapshot(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
-    artifact, formal = results[:2]
+    artifact, formal = results
+    target_files, files_complete = formal
+    if not files_complete:
+        raise ValueError("cannot build RNFV snapshot from an incomplete formal tree")
+    base = target_uri.rstrip("/")
     if not request.vectorize:
         inventory: Dict[str, Dict[str, Any]] = {}
     elif vector_inventory is not None:
         inventory = dict(vector_inventory)
     else:
-        inventory = results[2]
-    target_files, files_complete = formal
-    base = target_uri.rstrip("/")
+        # Include old paths removed from the new source, so a missed record
+        # can still be recovered before the planner builds its delete actions.
+        expected_levels = {base: {2} if root_is_file else {0, 1}}
+        for entries in (target_files, artifact.entries):
+            for path, entry in entries.items():
+                if vector_scope == "self" and path:
+                    continue
+                node_uri = f"{base}/{path}" if path else base
+                expected_levels.setdefault(node_uri, set()).update({0, 1} if entry.is_dir else {2})
+        inventory = await _read_incremental_vector_inventory(
+            vikingdb,
+            target_uri=target_uri,
+            ctx=ctx,
+            projection=projection,
+            vector_scope=vector_scope,
+            expected_levels=expected_levels,
+        )
     prefix = base + "/"
     vector_records: Dict[str, VectorRecordSnapshot] = {}
     for record_id, record in inventory.items():
@@ -676,12 +680,14 @@ async def _read_incremental_vector_inventory(
     ctx: Any,
     projection: frozenset[str],
     vector_scope: Literal["subtree", "self"] = "subtree",
+    expected_levels: Mapping[str, set[int]],
 ) -> Dict[str, Dict[str, Any]]:
     """Read the lightweight V snapshot used to build RNFV."""
     return await vikingdb.get_incremental_inventory_under_uri(
         target_uri,
         ctx=ctx,
         output_fields=sorted(projection),
+        expected_levels=expected_levels,
         # The shared inventory API expresses an exact URI as a non-recursive
         # scope without direct children. Keep its richer recursive/direct-child
         # contract instead of adding a parallel depth parameter solely for the

@@ -15,7 +15,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.skill_processor import SkillProcessor
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -157,6 +157,10 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     vikingdb.enqueue_embedding_msg = AsyncMock(return_value=False)
     viking_fs = MagicMock()
     viking_fs.write_context = AsyncMock()
+    viking_fs.exists = AsyncMock(return_value=False)
+    viking_fs.read = AsyncMock(side_effect=NotFoundError("history", "file"))
+    viking_fs.tree = AsyncMock(return_value=[])
+    viking_fs.write_file = AsyncMock()
     viking_fs._async_agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "test"})
     viking_fs._async_agfs.pathlock_release = AsyncMock()
 

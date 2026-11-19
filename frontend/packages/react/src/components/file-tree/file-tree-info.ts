@@ -1,3 +1,4 @@
+import { splitVikingUri } from '../../shared/viking-uri.js';
 import type { FileTreeInfoKey } from './types.js';
 
 /**
@@ -43,6 +44,14 @@ const USER_SCOPE_KEY_BY_SEGMENT: Record<string, FileTreeInfoKey> = {
   skills: 'skills',
 };
 
+/** Agent 根下的目录，按 `viking://agent/` 后的第二段判定。 */
+const AGENT_KEY_BY_SEGMENT: Record<string, FileTreeInfoKey> = {
+  endpoints: 'agentEndpoints',
+  payments: 'agentPayments',
+  skills: 'agentSkills',
+  tools: 'agentTools',
+};
+
 /** 长期记忆下的目录，按 `/user/{id}/memories/` 后的第四段判定。 */
 const MEMORY_KEY_BY_SEGMENT: Record<string, FileTreeInfoKey> = {
   'profile.md': 'profile',
@@ -57,23 +66,6 @@ const MEMORY_KEY_BY_SEGMENT: Record<string, FileTreeInfoKey> = {
 };
 
 const USER_SEGMENTS = new Set(['user', 'users']);
-
-/**
- * 把 `viking://` 地址拆成小写路径段，忽略协议、查询串与末尾斜杠。
- *
- * Splits a `viking://` address into lower-cased segments, ignoring the scheme,
- * query string and trailing slashes.
- */
-export function splitVikingUri(uri: string): string[] {
-  const withoutScheme = uri.replace(/^viking:\/*/i, '');
-  const withoutQuery = withoutScheme.split(/[?#]/)[0] ?? '';
-
-  return withoutQuery
-    .split('/')
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .map((segment) => segment.toLowerCase());
-}
 
 /**
  * 按路径结构判定目录的语义键，判定不出来时返回 `null`。
@@ -117,6 +109,15 @@ export function resolveFileTreeInfoKey(uri: string): FileTreeInfoKey | null {
     if (first === 'resources') return 'sharedResources';
 
     return ROOT_KEY_BY_SEGMENT[first] ?? null;
+  }
+
+  // Agent 根的子目录有各自的含义；更深的层级不再细分，沿用「无」。
+  // Children of the agent root carry their own meaning; deeper levels are not
+  // distinguished and resolve to none.
+  if ((first === 'agent' || first === 'agents') && segments.length === 2) {
+    const second = segments[1];
+
+    return second ? (AGENT_KEY_BY_SEGMENT[second] ?? null) : null;
   }
 
   return null;

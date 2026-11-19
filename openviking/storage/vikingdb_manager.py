@@ -67,19 +67,6 @@ class VikingDBManager(VikingVectorIndexBackend):
         """
         self._closing = True
 
-    async def close(self) -> None:
-        """Close storage connection and release resources."""
-        self.mark_closing()
-        try:
-            # We do NOT stop the queue manager here as it is an injected dependency
-            # and should be managed by the creator (OpenVikingService).
-
-            # Then close the base backend
-            await super().close()
-
-        except Exception as e:
-            logger.error(f"Error closing VikingDB manager: {e}")
-
     @property
     def is_closing(self) -> bool:
         """Whether the manager is in shutdown flow."""
@@ -123,7 +110,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             True if enqueued successfully, False otherwise
         """
         if not embedding_msg:
-            logger.warning("Embedding message is None, skipping enqueuing")
+            logger.info("Embedding message is None, skipping enqueuing")
             return False
 
         if not self._queue_manager:
@@ -134,10 +121,10 @@ class VikingDBManager(VikingVectorIndexBackend):
             if not embedding_queue:
                 raise RuntimeError("Embedding queue not initialized")
             await embedding_queue.enqueue(embedding_msg)
-            logger.debug(f"Enqueued embedding message: {embedding_msg.id}")
+            logger.debug("Enqueued embedding message: %s", type(embedding_msg.id).__name__)
             return True
         except Exception as e:
-            logger.error(f"Error enqueuing embedding message: {e}")
+            logger.error("Error enqueuing embedding message: %s", type(e).__name__)
             return False
 
     async def get_embedding_queue_size(self) -> int:
@@ -154,7 +141,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             embedding_queue = self._queue_manager.get_queue("embedding")
             return await embedding_queue.size()
         except Exception as e:
-            logger.error(f"Error getting embedding queue size: {e}")
+            logger.info("Error getting embedding queue size: %s", type(e).__name__)
             return 0
 
 

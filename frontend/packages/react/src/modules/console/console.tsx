@@ -1,26 +1,26 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { NotificationScope } from '../../shared/feedback/notification-scope.js';
+import { useRenderErrors } from './labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
+import { TaskTrackingProvider } from '../../shared/task-tracking/context.js';
 import type { ConsoleProps } from './types.js';
+import { ConsoleView } from './console-view.js';
 
-export type {
-  ConsoleLabels,
-  ConsoleMode,
-  ConsoleProps,
-  ConsoleSlots,
-} from './types.js';
-
-/** 占位组件：渲染一个带模块名的空容器，真实实现随模块 Hook 与组合视图迁入。 */
-export function Console({ className, style, labels }: ConsoleProps) {
+function ConsoleMonitoredView(props: ConsoleProps) {
   return (
-    <div
-      className={['ov-module-placeholder', className].filter(Boolean).join(' ')}
-      style={style}
+    <ErrorBoundary
+      fallback={props.slots?.errorFallback}
+      message={useRenderErrors(props.locale).console}
+      locale={props.locale}
+      resetKeys={[props.scopeKey]}
     >
-      <p className="ov-module-placeholder__title">
-        {labels?.conversation ?? 'Console'}
-      </p>
-      <p className="ov-module-placeholder__description">
-        {labels?.description ??
-          'Placeholder. Functionality is not available yet.'}
-      </p>
-    </div>
+      <TaskTrackingProvider service={props.taskService}>
+        <NotificationScope locale={props.locale} isolateRequests>
+          <ConsoleView {...props} />
+        </NotificationScope>
+      </TaskTrackingProvider>
+    </ErrorBoundary>
   );
 }
+
+export const Console = withMonitoring(ConsoleMonitoredView, 'Console');

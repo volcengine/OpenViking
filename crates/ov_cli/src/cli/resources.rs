@@ -20,10 +20,25 @@ pub(crate) enum AttrsCommands {
         /// Comma-separated k=v tags, e.g. env=prod,team=search
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
-        /// Tag update mode: replace or append (append replaces existing values by key)
+        /// Tag update mode: replace, append, or clear; append supports k=v, k+=number, k-=number
         #[arg(long, default_value = "replace")]
         mode: String,
         /// Recursively update descendant files and semantic nodes when target is a directory
+        #[arg(long, default_value = "false")]
+        recursive: bool,
+    },
+    /// Update explicit retrieval tags metadata for multiple URIs
+    BatchSetTags {
+        /// Viking URIs
+        #[arg(value_name = "uri", required = true, num_args = 1..)]
+        uris: Vec<String>,
+        /// Comma-separated tag updates
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode: replace, append, or clear; append supports k=v, k+=number, k-=number
+        #[arg(long, default_value = "replace")]
+        mode: String,
+        /// Recursively update descendant files and semantic nodes for directory targets
         #[arg(long, default_value = "false")]
         recursive: bool,
     },
@@ -59,9 +74,30 @@ pub(crate) enum AclCommands {
     },
 }
 
-/// Compile shortcuts select a fixed skill and reuse the Compile request pipeline.
+/// Compile subcommands save persistent configurations or consolidate memories.
 #[derive(Subcommand)]
 pub(crate) enum CompileCommands {
+    /// Save a persistent configuration without executing it; scheduling controls belong in --args
+    Create {
+        /// Configuration name unique to the current user within the account
+        #[arg(long, value_name = "name", allow_hyphen_values = true, value_parser = super::parse_compile_name)]
+        compile_name: String,
+        #[arg(
+            long = "from",
+            value_delimiter = ',',
+            value_name = "uri",
+            required = true
+        )]
+        from_uris: Vec<String>,
+        #[arg(long, value_name = "uri")]
+        to: String,
+        #[arg(long, value_name = "uri")]
+        skill: String,
+        #[arg(long, value_name = "text")]
+        instruction: Option<String>,
+        #[arg(long, value_name = "json")]
+        args: Option<String>,
+    },
     /// Consolidate existing memories in place without external sources
     Memory {
         /// Existing writable memory directory; ~ identifies the current request user

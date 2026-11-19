@@ -147,6 +147,10 @@ pub enum GitError {
     #[error("too many log filter paths: {count} exceeds limit {limit}")]
     TooManyLogPaths { count: usize, limit: usize },
 
+    /// Log offset cannot be represented by the SQL providers.
+    #[error("snapshot log offset {0} exceeds {max}", max = i64::MAX)]
+    InvalidLogOffset(usize),
+
     /// A filtered log path has too many tree components.
     #[error("log filter path {path:?} has depth {depth}, exceeds limit {limit}")]
     LogPathTooDeep {

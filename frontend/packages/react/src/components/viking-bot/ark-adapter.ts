@@ -54,6 +54,14 @@ const toReasoningItem = (
   summary: part.text ? [part.text] : [],
   visibility: 'contentAllowed',
   durationMs: part.durationMs,
+  startedAt:
+    part.startedAt === undefined
+      ? undefined
+      : new Date(part.startedAt).getTime(),
+  completedAt:
+    part.completedAt === undefined
+      ? undefined
+      : new Date(part.completedAt).getTime(),
 });
 
 const toToolItem = (
@@ -66,11 +74,48 @@ const toToolItem = (
   tool: part.name,
   arguments: part.input,
   resultPreview: part.output,
+  error: part.status === 'error' ? part.output : undefined,
   durationMs: part.durationMs,
+  startedAt:
+    part.startedAt === undefined
+      ? undefined
+      : new Date(part.startedAt).getTime(),
+  completedAt:
+    part.completedAt === undefined
+      ? undefined
+      : new Date(part.completedAt).getTime(),
 });
 
 const isActivityPart = (part: VikingBotMessagePart) =>
   part.type === 'reasoning' || part.type === 'tool';
+
+/** Pair separately delivered results by id, keeping the original call position. */
+export function mergeToolResults(
+  parts: readonly VikingBotMessagePart[],
+): VikingBotMessagePart[] {
+  const results = new Map(
+    parts.flatMap((part) =>
+      part.type === 'tool_result' ? [[part.id, part] as const] : [],
+    ),
+  );
+  const calls = new Set(
+    parts.flatMap((part) => (part.type === 'tool' ? [part.id] : [])),
+  );
+  return parts
+    .filter((part) => part.type !== 'tool_result' || !calls.has(part.id))
+    .map((part) => {
+      if (part.type !== 'tool') return part;
+      const result = results.get(part.id);
+      return result
+        ? {
+            ...part,
+            output: result.output,
+            results: result.results ?? part.results,
+            status: result.isError ? 'error' : 'completed',
+          }
+        : part;
+    });
+}
 
 /**
  * 把片段聚合成执行块：带 `groupId` 的相邻推理与工具片段归为一组，

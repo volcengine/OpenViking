@@ -1,3 +1,4 @@
+import { startModelManagement } from "./models/index.mjs";
 import { randomUUID } from "node:crypto";
 import { loadConfig, PluginError, request, requiredText, toolConfig } from "./runtime.mjs";
 
@@ -17,7 +18,12 @@ function tool(description, properties, required, run) {
 }
 
 // Magpie calls every exported function as a plugin: keep helpers in runtime.mjs.
-export default async function OpenVikingMemory(_, options = {}) {
+export default async function OpenViking(input, options = {}) {
+  for (const flag of ["memoryEnabled", "modelsEnabled"]) {
+    if (options[flag] !== undefined && typeof options[flag] !== "boolean") throw new PluginError("invalid");
+  }
+  if (options.modelsEnabled !== false) startModelManagement(input, options);
+  if (options.memoryEnabled === false) return {};
   return {
     tool: {
       status: tool("Check OpenViking configuration and authenticated connectivity; never returns credentials.", {}, [], async (_, ctx) => {

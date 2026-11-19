@@ -261,22 +261,23 @@ def plugin_present(body: dict, headers: dict) -> bool:
     if headers.get("x-openviking-plugin"):
         return True
 
-    def marked(text):
-        # An echoed or summarized gateway envelope is not a plugin installation.
-        text = re.sub(
-            r"<openviking-context\b[^>]*>",
-            lambda match: (
-                ""
-                if any(
-                    name.lower() == "source" and value.lower().startswith("gateway-")
-                    for name, _, value in re.findall(r"([\w-]+)\s*=\s*(['\"])(.*?)\2", match[0])
-                )
-                else match[0]
-            ),
-            text,
-            flags=re.I,
+    def from_gateway(attrs):
+        return any(
+            name.lower() == "source" and value.lower().startswith("gateway-")
+            for name, _, value in re.findall(r"([\w-]+)\s*=\s*(['\"])(.*?)\2", attrs)
         )
-        return any(re.search(rf"<{re.escape(tag)}(?:\s|>)", text, re.I) for tag in PLUGIN_TAGS)
+
+    def marked(text):
+        # Plugins inject whole blocks. A tag quoted as code is not one (a compaction
+        # summary may quote the gateway's own envelope), nor is a gateway envelope.
+        text = re.sub(r"^```.*?^```|`[^`\n]*`", "", text, flags=re.M | re.S)
+        return any(
+            not from_gateway(attrs)
+            for tag in map(re.escape, PLUGIN_TAGS)
+            for attrs in re.findall(
+                rf"<{tag}(\s[^<>]*)?>(?:(?!<{tag}[\s>]).)*?</{tag}\s*>", text, re.I | re.S
+            )
+        )
 
     # Plugins mark the context they inject. OpenViking tools alone, as from an MCP
     # connection, only keep the gateway's tools out (see client_openviking_tools).
@@ -370,6 +371,29 @@ def auxiliary(text: str) -> bool:
     )
 
 
+def appended_request(message: dict) -> str:
+    """The text a client appended to a tool result, as Claude Code appends its compaction
+    request: the message's last block, read as conversation is, or ""."""
+    content = message.get("content")
+    if message.get("role") != "user" or not isinstance(content, list) or not content:
+        return ""
+    last = content[-1]
+    if not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content) or not (
+        isinstance(last, dict) and string_type(last) == "text" and isinstance(last.get("text"), str)
+    ):
+        return ""
+    return clean_text(unwrap_client(last["text"]))
+
+
+def codex_turn(headers: dict) -> dict:
+    """Codex's turn metadata, or {}."""
+    try:
+        turn = orjson.loads(headers.get("x-codex-turn-metadata") or "null")
+    except orjson.JSONDecodeError:
+        return {}
+    return turn if isinstance(turn, dict) else {}
+
+
 def classify(body: dict, headers: dict, messages: list[dict]) -> tuple[str, int]:
     anchor = next((i for i in range(len(messages) - 1, -1, -1) if is_user(messages[i])), -1)
     request_class = headers.get("x-claude-code-request-class", "")
@@ -395,16 +419,14 @@ def classify(body: dict, headers: dict, messages: list[dict]) -> tuple[str, int]
         return "auxiliary", anchor
     # Codex sends the whole turn metadata (workspace paths, remotes, tool names) on every
     # request; only its request_kind says what the request is.
-    try:
-        turn = orjson.loads(headers.get("x-codex-turn-metadata") or "null")
-    except orjson.JSONDecodeError:
-        turn = None
-    if isinstance(turn, dict) and turn.get("request_kind") in ("compaction", "memory"):
+    if codex_turn(headers).get("request_kind") in ("compaction", "memory"):
         return "auxiliary", anchor
     # Each part on its own and as plain text, so a pattern's anchors and line breaks hold.
     parts = [text_content({"content": body.get(key, "")}) for key in ("system", "instructions")]
     if anchor >= 0:
         parts.append(text_content(messages[anchor]))
+    if messages:
+        parts.append(appended_request(messages[-1]))
     if any(auxiliary(part) for part in parts if part):
         return "auxiliary", anchor
     if anchor < 0:
@@ -425,8 +447,10 @@ def session_id(headers: dict) -> str | None:
         "thread-id",
         "x-claude-code-session-id",
         "x-opencode-session-id",
+        "x-deepseek-harness-session-id",
         "x-session-id",
         "session-id",
+        "session_id",
     ):
         if headers.get(key):
             return hashlib.sha256(headers[key].encode()).hexdigest()

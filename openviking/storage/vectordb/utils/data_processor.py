@@ -343,11 +343,11 @@ class DataProcessor:
             return fields_json
         try:
             parsed = json.loads(fields_json)
-        except json.JSONDecodeError:
-            logger.warning(
-                "convert_fields_for_index: skipping corrupted JSON payload "
-                "(%d chars) and returning raw value",
+        except json.JSONDecodeError as _log_error:
+            logger.info(
+                "convert_fields_for_index: skipping corrupted JSON payload (%d chars) and returning raw value error_type=%s",
                 len(fields_json),
+                type(_log_error).__name__,
             )
             return fields_json
         data = sanitize_unicode_for_json(parsed)

@@ -11,10 +11,12 @@ import pytest
 import pytest_asyncio
 
 import openviking.service.reindex_executor as reindex_mod
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclMode
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     InvalidURIError,
@@ -81,6 +83,50 @@ async def test_log_returns_recent_commits(client_with_resource):
     log = body["result"]
     assert isinstance(log, list) and len(log) >= 1
     assert "oid" in log[0] and "message" in log[0]
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+async def test_native_file_versions_and_restore_without_compile_config(
+    client_with_resource_and_blob, service, guarded
+):
+    """Ordinary files use commit cursors and restore snapshots without a Compile registration."""
+    client, first_oid, uri, first_bytes = client_with_resource_and_blob
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    await service.viking_fs.write_file(uri, b"second version", ctx=ctx)
+    second = await service.viking_fs.commit(message="second file version", paths=[uri], ctx=ctx)
+    second_oid = second["commit_oid"]
+
+    response = await client.get("/api/v1/snapshot/versions", params={"uri": uri, "limit": 1})
+    assert response.status_code == 200, response.text
+    page = response.json()["result"]
+    assert set(page) == {"uri", "versions", "next_before_snapshot"}
+    assert page["versions"][0]["oid"] == second_oid
+    assert page["next_before_snapshot"] == second_oid
+    previous = await client.get(
+        "/api/v1/snapshot/versions",
+        params={"uri": uri, "limit": 1, "before_snapshot": second_oid},
+    )
+    assert previous.status_code == 200, previous.text
+    assert previous.json()["result"]["versions"][0]["oid"] == first_oid
+
+    payload = {"path": uri, "restore_commit_id": first_oid}
+    if guarded:
+        payload["current_commit_id"] = second_oid
+    dry_run = await client.post("/api/v1/snapshot/restore", json={**payload, "dry_run": True})
+    assert dry_run.status_code == 200, dry_run.text
+    assert dry_run.json()["result"]["result"] == "dry_run"
+    assert await service.viking_fs.read_file_bytes(uri, ctx=ctx) == b"second version"
+    restored = await client.post("/api/v1/snapshot/restore", json=payload)
+    assert restored.status_code == 200, restored.text
+    result = restored.json()["result"]
+    assert set(result) == {"uri", "snapshot_id", "result"}
+    assert result["result"] == "created"
+    assert await service.viking_fs.read_file_bytes(uri, ctx=ctx) == first_bytes
+    stale = await client.post(
+        "/api/v1/snapshot/restore", json={**payload, "current_commit_id": second_oid}
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["error"]["details"]["resource"] == "VERSION_CONFLICT"
 
 
 async def test_log_empty_repo_returns_404(client_with_no_repo):
@@ -211,16 +257,8 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
     extra_uri = f"{root}/remove.md"
 
     await service.fs.mkdir(root, ctx=admin)
-    assert await service.vikingdb_manager.upsert(
-        {
-            "id": "snapshot-acl-restore-root",
-            "uri": root,
-            "account_id": admin.account_id,
-            "context_type": "resource",
-            "level": 0,
-            "vector": [0.1] * service.vikingdb_manager.vector_dim,
-        },
-        ctx=admin,
+    await service.fs.ensure_directory_index(
+        root, admin, fallback_abstract="Snapshot ACL restore", wait=True
     )
     await service.fs.set_acl(
         root,
@@ -229,14 +267,15 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
             {"principal": "user:snapshot_reader", "level": "read"},
         ],
         ctx=admin,
+        acl_mode=AclMode.RESTRICTED,
     )
     await service.fs.write(file_uri, content="v1", mode="create", wait=True, ctx=admin)
     v1 = await service.fs.commit(message="acl restore v1", paths=[root], ctx=writer)
 
     assert await service.fs.show(v1["commit_oid"], path=file_uri, ctx=reader)
     assert await service.fs.log(paths=[root], ctx=reader)
-    with pytest.raises(PermissionDeniedError):
-        await service.fs.commit(message="reader cannot commit", paths=[root], ctx=reader)
+    snapshot = await service.fs.commit(message="reader snapshot", paths=[root], ctx=reader)
+    assert snapshot["commit_oid"] == v1["commit_oid"]
 
     await service.fs.write(file_uri, content="v2", mode="replace", wait=True, ctx=writer)
     await service.fs.commit(message="acl restore v2", paths=[root], ctx=writer)
@@ -308,6 +347,10 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
     assert all(ctx.actor_peer_id == "snapshot-peer" for ctx in reindex_contexts)
     assert all(ctx.bypass_acl for ctx in reindex_contexts)
 
+    await service.fs.set_acl(file_uri, [], ctx=admin, acl_mode=AclMode.RESTRICTED)
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.commit(message="unreadable descendant", paths=[root], ctx=reader)
+
 
 async def test_show_commit_metadata(client_with_resource):
     client, _ = client_with_resource
@@ -326,12 +369,13 @@ async def test_show_commit_metadata(client_with_resource):
     assert "tree" in meta and "message" in meta
 
 
-async def test_show_blob_returns_binary_with_headers(client_with_resource_and_blob):
+@pytest.mark.parametrize("use_branch", [False, True])
+async def test_show_blob_returns_binary_with_headers(client_with_resource_and_blob, use_branch):
     """show?path=<file> must return raw bytes + X-Snapshot-* headers."""
     client, commit_oid, blob_uri, expected_bytes = client_with_resource_and_blob
     resp = await client.get(
         "/api/v1/snapshot/show",
-        params={"target_ref": commit_oid, "path": blob_uri},
+        params={"target_ref": "main" if use_branch else commit_oid, "path": blob_uri},
     )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/octet-stream")
@@ -339,6 +383,13 @@ async def test_show_blob_returns_binary_with_headers(client_with_resource_and_bl
     assert "x-snapshot-size" in {k.lower() for k in resp.headers}
     assert int(resp.headers["x-snapshot-size"]) == len(expected_bytes)
     assert resp.content == expected_bytes
+    metadata = await client.get("/api/v1/snapshot/show", params={"target_ref": commit_oid})
+    assert metadata.status_code == 200
+    assert resp.headers["x-snapshot-commit-oid"] == commit_oid
+    assert (
+        int(resp.headers["x-snapshot-time-seconds"])
+        == metadata.json()["result"]["committer"]["time_seconds"]
+    )
 
 
 async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypatch):
@@ -346,6 +397,7 @@ async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypa
 
     stored = b'visible content\n\n<!-- MEMORY_FIELDS\n{"version": 2}\n-->'
     show_mock = AsyncMock(return_value={"oid": "a" * 40, "size": len(stored), "bytes": stored})
+    show_mock.return_value.update(commit_oid="b" * 40, commit_time_seconds=1793951444)
     monkeypatch.setattr(
         snapshot,
         "get_service",
@@ -355,7 +407,7 @@ async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypa
     response = await snapshot_router_client.get(
         "/api/v1/snapshot/show",
         params={
-            "target_ref": "a" * 40,
+            "target_ref": "b" * 40,
             "path": "viking://user/default/memories/experiences/example.md",
             "raw": "false",
         },
@@ -364,6 +416,9 @@ async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypa
     assert response.status_code == 200, response.text
     assert response.content == b"visible content"
     assert response.headers["x-snapshot-size"] == str(len(response.content))
+    assert response.headers["x-snapshot-oid"] == "a" * 40
+    assert response.headers["x-snapshot-commit-oid"] == "b" * 40
+    assert response.headers["x-snapshot-time-seconds"] == "1793951444"
 
 
 async def test_show_path_not_found_returns_404(client_with_resource):
@@ -379,7 +434,71 @@ async def test_show_path_not_found_returns_404(client_with_resource):
         },
     )
     assert resp.status_code == 404
-    assert resp.json()["status"] == "error"
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["details"] == {
+        "type": "git_blob",
+        "resource": "viking://resources/does_not_exist.txt",
+        "reason": "path_not_found",
+        "deleted_file": False,
+    }
+
+
+@pytest.mark.parametrize("was_directory", [False, True], ids=["large-file", "directory"])
+async def test_show_deleted_path_reports_whether_first_parent_had_a_file(
+    client_with_resource, service, was_directory
+):
+    client, _ = client_with_resource
+    path = "viking://resources/recreated_wiki.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    vfs = service.viking_fs
+    if was_directory:
+        await vfs.mkdir(path, ctx=ctx)
+        await vfs.write_file(f"{path}/page.md", b"a directory child\n", ctx=ctx)
+    else:
+        await vfs.write_file(path, b"large Markdown file\n" * 100_001, ctx=ctx)
+    await vfs.commit(message="original path", paths=[path], ctx=ctx)
+
+    await vfs.rm(path, recursive=was_directory, ctx=ctx)
+    deletion = await vfs.commit(message="removed path", paths=[path], ctx=ctx)
+    await vfs.write_file(path, b"recreated as file\n", ctx=ctx)
+    await vfs.commit(message="recreated file", paths=[path], ctx=ctx)
+
+    response = await client.get(
+        "/api/v1/snapshot/show",
+        params={"target_ref": deletion["commit_oid"], "path": path, "raw": "false"},
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["details"] == {
+        "type": "git_blob",
+        "resource": path,
+        "reason": "path_not_found",
+        "deleted_file": not was_directory,
+    }
+
+
+async def test_show_missing_snapshot_object_does_not_report_missing_tree_path(
+    snapshot_router_client, monkeypatch
+):
+    from openviking.server.routers import snapshot
+
+    path = "viking://resources/tracked.txt"
+    show_mock = AsyncMock(side_effect=AGFSNotFoundError("object not found"))
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(show_blob_raw=show_mock)),
+    )
+
+    response = await snapshot_router_client.get(
+        "/api/v1/snapshot/show",
+        params={"target_ref": "b" * 40, "path": path},
+    )
+    assert response.status_code == 404
+    error = response.json()["error"]
+    assert error["code"] == "NOT_FOUND"
+    assert error["details"] == {"type": "git_blob", "resource": path}
 
 
 async def test_diff_returns_unified_diff_for_path(client_with_resource, service):

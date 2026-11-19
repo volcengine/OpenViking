@@ -449,7 +449,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             return result
         except Exception as e:
             if not self._is_expected_read_not_found(e):
-                tracer.error(f"Failed to read {uri}: {e}")
+                logger.info(
+                    "memory operation failed stage=%s error_type=%s",
+                    "read_file",
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
+                )
             return None
 
     async def search_files(
@@ -472,7 +477,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 return [m.get("uri", "") for m in result.get("memories", []) if m.get("uri")]
             return []
         except Exception as e:
-            tracer.error(f"Failed to search: {e}")
+            logger.info(
+                "memory operation failed stage=%s error_type=%s",
+                "search_files",
+                type(e).__name__,
+                extra={"degraded": True, "error_type": type(e).__name__},
+            )
             return []
 
     async def _append_structured_read_result(
@@ -503,7 +513,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         messages = self.messages
 
         if not isinstance(messages, list):
-            tracer.error(f"Expected List[Message], got {type(messages)}")
+            logger.info("memory operation failed stage=%s", "prefetch", extra={"degraded": True})
             return []
 
         # 先构建 Conversation History user message

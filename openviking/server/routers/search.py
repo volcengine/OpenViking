@@ -71,7 +71,7 @@ def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
     return node_limit if node_limit is not None else limit
 
 
-def _resolve_search_filter(
+def resolve_search_filter(
     request_filter: Optional[Dict[str, Any]],
     context_type: Optional[SearchContextTypeInput],
     since: Optional[str],
@@ -379,7 +379,7 @@ async def find(
     """Semantic search without session context."""
     service = get_service()
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
-    effective_filter = _resolve_search_filter(
+    effective_filter = resolve_search_filter(
         request.filter,
         request.context_type,
         request.since,
@@ -487,7 +487,7 @@ async def search(
     """Semantic search with optional session context."""
     service = get_service()
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
-    effective_filter = _resolve_search_filter(
+    effective_filter = resolve_search_filter(
         request.filter,
         request.context_type,
         request.since,
