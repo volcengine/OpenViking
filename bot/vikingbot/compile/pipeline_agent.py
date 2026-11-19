@@ -96,7 +96,7 @@ class TargetReader(Tool):
     """Read a known target path and remember its revision before allowing replacement."""
 
     name = "read_target_file"
-    description = "Read an existing file under the output destination before updating it."
+    description = "Read a target file you need to update. Use read_file for your drafts."
     parameters = {
         "type": "object",
         "properties": {
@@ -155,8 +155,10 @@ def agent_runner(loop, session_key, connection, limits):
         if evidence.allowed:
             registry.register(evidence)
         registry.register(runtime.resources)
-        registry.register(TargetReader(runtime))
-        search = runtime.tools.get("openviking_search")
+        can_update_target = runtime.target_has_content is not False or bool(runtime.changes)
+        if can_update_target:
+            registry.register(TargetReader(runtime))
+        search = runtime.tools.get("openviking_search") if can_update_target else None
         if search is not None and runtime.tool_context is not None:
 
             async def search_target(tool_context=None, **arguments):
@@ -181,15 +183,14 @@ def agent_runner(loop, session_key, connection, limits):
             except InvalidWorkerOutput as error:
                 validation_error = error
                 messages = child.context.add_assistant_message(context.messages, context.text, [])
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": f"Outputs are not ready: {error}. Repair the files or use delete_file "
-                        "for obsolete outputs, preserving all substantive facts. Finish only after "
-                        "the directory contains the requested deliverables.",
-                    }
+                return _PlainTextDelivered(
+                    messages=messages,
+                    tools_used=[],
+                    next_prompt=(
+                        f"Fix only this output issue: {error}. Keep valid Markdown and its facts. "
+                        "Use delete_file for obsolete drafts. Once fixed, reply Done."
+                    ),
                 )
-                return _PlainTextDelivered(messages=messages, tools_used=[])
             except Exception as error:
                 # AgentLoop swallows callback exceptions for ordinary chat replies.
                 # Carry infrastructure failures out without regenerating the files.
@@ -201,8 +202,7 @@ def agent_runner(loop, session_key, connection, limits):
             if remaining in (20, 5, 1):
                 return (
                     f"{remaining} model/tool rounds remain, including this one. "
-                    "Finish the assigned deliverables and reserve a round for the completion message. "
-                    "Do not claim incomplete work is complete."
+                    "Reply Done as soon as the requested files are ready."
                 )
             return None
 
@@ -210,15 +210,11 @@ def agent_runner(loop, session_key, connection, limits):
             messages=[
                 {
                     "role": "system",
-                    "content": system + "\nRead assignment.json with read_file. "
-                    "Read all assigned materials. assignment.json and assigned inputs/ paths "
-                    "are read-only. Use write_file and edit_file for deliverable Markdown, "
-                    "with paths relative to the publication destination. Read and edit your "
-                    "outputs using the same paths. Use delete_file to remove obsolete outputs. "
-                    "Write only deliverables, without scratch files. "
-                    f"Budget: {limits.subagent_iterations} model/tool rounds, including checks and completion. "
-                    "Finish with a brief completion message after all writes succeed. "
-                    "A completion message alone does not produce files.",
+                    "content": system + "\nRead assignment.json and all assigned evidence. "
+                    "Write only deliverable Markdown at publication-relative paths. "
+                    "Use delete_file for obsolete drafts. Reply Done once required writes succeed. "
+                    "Reopen files only to resolve a specific issue. "
+                    f"Budget: {limits.subagent_iterations} rounds.",
                 },
                 {
                     "role": "user",

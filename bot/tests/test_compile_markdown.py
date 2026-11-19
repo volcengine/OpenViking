@@ -267,6 +267,7 @@ async def test_file_worker_uses_existing_tools_without_emit(
     pipeline, agent_loop, monkeypatch, ending
 ):
     loop, key, _ = agent_loop
+    pipeline.target_has_content = ending != "success"
     replies = [
         LLMResponse(
             content="",
@@ -342,6 +343,7 @@ async def test_file_worker_uses_existing_tools_without_emit(
         names = {t["function"]["name"] for t in call.kwargs["tools"]}
         assert {"read_file", "write_file", "edit_file"} <= names
         assert "emit" not in names
+        assert ("read_target_file" in names) == pipeline.target_has_content
 
 
 @pytest.mark.parametrize("input_path", ["assignment.json", "inputs/0.md"])
@@ -824,11 +826,13 @@ async def test_file_worker_can_remove_obsolete_outputs_before_completion(pipelin
 
     assert [document.path for document in outputs] == ["fact.md"]
     runner.assert_awaited_once()
-    assert any(
-        f"Output must be nonempty Markdown: {stale_path}" in message.get("content", "")
+    prompts = [
+        message["content"]
         for message in chat.await_args_list[2].kwargs["messages"]
         if message["role"] == "user"
-    )
+    ]
+    assert f"Output must be nonempty Markdown: {stale_path}" in prompts[-1]
+    assert prompts[-1].endswith("Once fixed, reply Done.")
 
 
 async def test_worker_delete_rejects_directories_and_outside_symlinks(pipeline):

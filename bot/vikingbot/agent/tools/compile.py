@@ -289,9 +289,7 @@ class CompileChildTool(Tool):
         if self.merge_only:
             if self.readonly_paths:
                 parameters["properties"][field]["description"] = (
-                    "Output path relative to the publication destination. Use the same path "
-                    "to read, write, edit or delete an output. assignment.json and the assigned "
-                    "inputs/ paths are read-only inputs; other workspace paths are unavailable."
+                    "Worker-relative path. assignment.json and assigned inputs/ are read-only."
                 )
                 return parameters
             parameters["properties"][field]["description"] = (
