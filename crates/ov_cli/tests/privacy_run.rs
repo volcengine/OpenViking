@@ -446,10 +446,12 @@ async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
     use std::process::Stdio;
 
     let dir = tempfile::tempdir().unwrap();
+    let up_pid_path = dir.path().join("up.pid");
     let value = "interactive-fixture";
     let (url, server) = resolver([(TOKEN, Some(value.into()))]).await;
     let mut command = privacy(dir.path(), &url);
     command
+        .current_dir(dir.path())
         .args([
             "run",
             "--env",
@@ -457,7 +459,7 @@ async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
             "--",
             "/bin/sh",
             "-c",
-            r#"(printf 'ready?'; IFS= read -r line; printf '%s\n' "$line"; exec sleep 20) | /bin/sh -c 'cat; exit 130'"#,
+            r#"sh -c 'printf "%s\n" "$$" > up.pid; printf "ready?"; IFS= read -r line; printf "%s\n" "$line"; exec sleep 20' | cat"#,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped());
@@ -488,9 +490,31 @@ async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
         let mut echo = String::new();
         stdout.read_line(&mut echo).await.unwrap();
         assert_eq!(echo, format!("{TOKEN}\n"));
+        let up_pid: i32 = std::fs::read_to_string(&up_pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
 
         assert_eq!(posix::kill(child.id().unwrap() as i32, posix::SIGINT), 0);
-        assert_eq!(child.wait().await.unwrap().code(), Some(130));
+        // With `| cat`, bash WCE may return 0 if upstream dies before `cat` receives SIGINT,
+        // so also confirm both EOF on stdout and that the upstream `sleep` actually stopped.
+        let code = child.wait().await.unwrap().code();
+        assert!(
+            matches!(code, Some(0 | 130)),
+            "unexpected exit code: {code:?}"
+        );
+        stdout.read_to_end(&mut Vec::new()).await.unwrap();
+        for _ in 0..50 {
+            if posix::kill(up_pid, 0) < 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            posix::kill(up_pid, 0) < 0,
+            "upstream command {up_pid} kept running after SIGINT"
+        );
     })
     .await
     .expect("the prompt or pipeline cancellation did not complete");
