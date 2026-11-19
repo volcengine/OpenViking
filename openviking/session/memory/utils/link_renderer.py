@@ -186,7 +186,10 @@ class LinkRenderer:
                     range(first_line, last_line), token.content.split("\n"), strict=False
                 ):
                     source_offset = offsets[line]
-                    source_line = content[source_offset : offsets[line + 1]]
+                    # The parser replaces NUL with U+FFFD without changing offsets.
+                    source_line = content[source_offset : offsets[line + 1]].replace(
+                        "\x00", "\ufffd"
+                    )
                     # CommonMark can emit spaces for a partially consumed list tab.
                     body = text.lstrip(" \t")
                     body_start = inline_offset + len(text) - len(body)

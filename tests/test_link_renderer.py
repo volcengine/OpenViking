@@ -121,6 +121,7 @@ class TestLinkSatisfaction:
         [
             "<!-- Example: `OpenViking` -->\n\n",
             "Example <!-- `OpenViking` --> ",
+            "Example\x00 <!-- `OpenViking` --> ",
             "- A preview\n\t![OpenViking](img.png) ",
         ],
     )
