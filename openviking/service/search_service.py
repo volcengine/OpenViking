@@ -8,6 +8,7 @@ Provides search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.item_search import SearchAsItemOptions, validate_item_search_request
 from openviking.core.namespace_policy import is_system_uri
 from openviking.core.retrieval_types import SearchType
 from openviking.models.rerank import RerankClient
@@ -160,6 +161,7 @@ class SearchService:
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
+        search_as_item: Optional[SearchAsItemOptions | Dict[str, Any]] = None,
     ) -> Any:
         """Search with session context.
 
@@ -175,18 +177,30 @@ class SearchService:
         Returns:
             FindResult
         """
+        try:
+            search_as_item = validate_item_search_request(
+                search_as_item,
+                events_time_decay_protection=events_time_decay_protection,
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         if search_type == "keywords" and image_url:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
-        _validate_query(query, resolved_image_url)
+        _validate_query(query, resolved_image_url, filter)
         _reject_system_targets(target_uri)
-        if search_type == "keywords":
+        if search_type == "keywords" and search_as_item is None:
             await self.ensure_keywords_search_supported(ctx)
         viking_fs = self._ensure_initialized()
 
         session_info = None
-        # Intent off: session_info is unused by VikingFS — skip the archive/message scan.
-        if session is not None and self.is_intent_enabled() and not resolved_image_url:
+        # Item mode and intent-off searches do not use session context.
+        if (
+            search_as_item is None
+            and session is not None
+            and self.is_intent_enabled()
+            and not resolved_image_url
+        ):
             session_info = await session.get_context_for_search(query)
 
         result = await viking_fs.search(
@@ -202,6 +216,7 @@ class SearchService:
             events_time_decay_protection=events_time_decay_protection,
             search_type=search_type,
             context_types=context_types,
+            **({"search_as_item": search_as_item} if search_as_item is not None else {}),
         )
         return result
 
@@ -218,6 +233,7 @@ class SearchService:
         image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
+        search_as_item: Optional[SearchAsItemOptions | Dict[str, Any]] = None,
     ) -> Any:
         """Search without session context.
 
@@ -234,6 +250,13 @@ class SearchService:
         """
         if search_type == "keywords" and image_url:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
+        try:
+            search_as_item = validate_item_search_request(
+                search_as_item,
+                events_time_decay_protection=events_time_decay_protection,
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _validate_query(query, resolved_image_url, filter)
         _reject_system_targets(target_uri)
@@ -249,6 +272,7 @@ class SearchService:
             image_url=resolved_image_url,
             events_time_decay_protection=events_time_decay_protection,
             search_type=search_type,
+            **({"search_as_item": search_as_item} if search_as_item is not None else {}),
         )
         return result
 

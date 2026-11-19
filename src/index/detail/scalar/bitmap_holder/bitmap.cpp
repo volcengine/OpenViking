@@ -206,6 +206,14 @@ void Bitmap::get_set_list(std::vector<uint32_t>& result) const {
   }
 }
 
+void Bitmap::for_each(const std::function<void(uint32_t)>& visitor) const {
+  if (is_roaring_) {
+    for (uint32_t offset : roaring_) visitor(offset);
+  } else {
+    for (uint32_t offset : set_) visitor(offset);
+  }
+}
+
 uint32_t Bitmap::get_range_list(std::vector<uint32_t>& result, uint32_t limit,
                                 uint32_t offset) {
   uint32_t max_num = get_cached_nbit();

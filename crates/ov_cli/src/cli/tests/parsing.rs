@@ -160,6 +160,100 @@ fn cli_parses_search_image_with_query() {
 }
 
 #[test]
+fn cli_parses_item_search_and_declaration_flags() {
+    let filter = r#"{"op":"must","field":"item_attrs","conds":["asset_id=V1"]}"#;
+    let find = Cli::try_parse_from([
+        "ov",
+        "find",
+        "--filter",
+        filter,
+        "--search-as-item",
+        "--aggregation",
+        "sum",
+    ])
+    .expect("filter-only Item find should parse");
+    match find.command {
+        Commands::Find {
+            query,
+            filter,
+            search_as_item,
+            aggregation,
+            ..
+        } => {
+            assert!(query.is_none());
+            assert_eq!(filter.unwrap()["field"], "item_attrs");
+            assert!(search_as_item);
+            assert_eq!(aggregation.as_deref(), Some("sum"));
+        }
+        _ => panic!("expected find command"),
+    }
+
+    let search = Cli::try_parse_from(["ov", "search", "beach", "--search-as-item"])
+        .expect("Item search with default max aggregation should parse");
+    assert!(matches!(
+        search.command,
+        Commands::Search {
+            search_as_item: true,
+            aggregation: None,
+            ..
+        }
+    ));
+
+    let mkdir = Cli::try_parse_from([
+        "ov",
+        "mkdir",
+        "viking://resources/A",
+        "--as-item",
+        "--item-attrs",
+        r#"{"asset_id":"V1"}"#,
+    ])
+    .expect("Item directory declaration should parse");
+    assert!(matches!(
+        mkdir.command,
+        Commands::Mkdir {
+            as_item: true,
+            item_attrs: Some(_),
+            ..
+        }
+    ));
+
+    let add = Cli::try_parse_from([
+        "ov",
+        "add-resource",
+        "./README.md",
+        "--as-item",
+        "--item-attrs",
+        "{}",
+    ])
+    .expect("Item resource declaration should parse");
+    assert!(matches!(
+        add.command,
+        Commands::AddResource {
+            as_item: true,
+            item_attrs: Some(_),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn cli_item_flags_enforce_dependencies_and_conflicts() {
+    assert!(
+        Cli::try_parse_from(["ov", "mkdir", "viking://resources/A", "--item-attrs", "{}",])
+            .is_err()
+    );
+    assert!(Cli::try_parse_from(["ov", "find", "beach", "--aggregation", "sum"]).is_err());
+    assert!(Cli::try_parse_from([
+        "ov",
+        "search",
+        "beach",
+        "--search-as-item",
+        "--read-content",
+    ])
+    .is_err());
+}
+
+#[test]
 fn cli_parses_grep_context_lines() {
     let cli = Cli::try_parse_from([
         "ov",

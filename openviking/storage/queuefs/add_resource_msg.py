@@ -68,6 +68,8 @@ class AddResourceMsg:
     tag_mode: str = "replace"
     acl: Optional[Dict[str, Any]] = None
     internal_task: bool = False
+    as_item: bool = False
+    item_attrs: Optional[Dict[str, str]] = None
 
     def __post_init__(self) -> None:
         inferred = (
@@ -244,5 +246,11 @@ class AddResourceMsg:
             acl=data.get("acl"),
             tags=(list(data["tags"]) if isinstance(data.get("tags"), list) else None),
             tag_mode=str(data.get("tag_mode") or "replace"),
+            as_item=bool(data.get("as_item", False)),
+            item_attrs=(
+                {str(key): str(value) for key, value in data["item_attrs"].items()}
+                if isinstance(data.get("item_attrs"), dict)
+                else None
+            ),
             internal_task=bool(data.get("internal_task", False)),
         )

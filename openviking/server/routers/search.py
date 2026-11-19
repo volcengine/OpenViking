@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openviking.core.item_search import SearchAsItemOptions, validate_item_search_request
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_types import SearchType
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -147,6 +148,7 @@ class FindRequest(BaseModel):
     read_content: bool = False
     telemetry: TelemetryRequest = False
     events_time_decay_protection: Optional[str] = None
+    search_as_item: Optional[SearchAsItemOptions] = None
 
     @model_validator(mode="after")
     def _validate_time_decay(self) -> "FindRequest":
@@ -154,6 +156,12 @@ class FindRequest(BaseModel):
         if self.events_time_decay_protection is not None:
             if not self.query.strip() and not self.image_url:
                 raise ValueError("events_time_decay_protection requires a semantic query or image")
+        validate_item_search_request(
+            self.search_as_item,
+            read_content=self.read_content,
+            include_provenance=self.include_provenance,
+            events_time_decay_protection=self.events_time_decay_protection,
+        )
         return self
 
 
@@ -224,6 +232,7 @@ class SearchRequest(BaseModel):
 
     query: str = ""
     search_type: SearchType = "semantic"
+    search_as_item: Optional[SearchAsItemOptions] = None
     image_url: str | list[str] | None = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
@@ -260,6 +269,13 @@ class SearchRequest(BaseModel):
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
         validate_event_time_decay_request(self.events_time_decay_protection)
+        validate_item_search_request(
+            self.search_as_item,
+            mode=self.mode,
+            read_content=self.read_content,
+            include_provenance=self.include_provenance,
+            events_time_decay_protection=self.events_time_decay_protection,
+        )
         if self.search_type == "keywords":
             if not self.query.strip():
                 raise ValueError("query must not be empty when search_type='keywords'")
@@ -402,6 +418,11 @@ async def find(
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
             events_time_decay_protection=request.events_time_decay_protection,
+            **(
+                {"search_as_item": request.search_as_item}
+                if request.search_as_item is not None
+                else {}
+            ),
         ),
     )
     result = execution.result
@@ -509,8 +530,12 @@ async def search(
 
     async def _search():
         session = None
-        # Intent off: skip session.load — SearchService will not scan session either.
-        if request.session_id and service.search.is_intent_enabled():
+        # Item mode does not consume session context, even when intent is enabled.
+        if (
+            request.search_as_item is None
+            and request.session_id
+            and service.search.is_intent_enabled()
+        ):
             session = service.sessions.session(_ctx, request.session_id)
             await session.load()
         return await service.search.search(
@@ -528,6 +553,11 @@ async def search(
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
             events_time_decay_protection=request.events_time_decay_protection,
+            **(
+                {"search_as_item": request.search_as_item}
+                if request.search_as_item is not None
+                else {}
+            ),
         )
 
     execution = await run_operation(

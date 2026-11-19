@@ -18,6 +18,11 @@ SearchResult IndexEngine::search(const SearchRequest& req) {
   return result;
 }
 
+void IndexEngine::visit_filtered_labels(
+    const std::string& dsl, const std::function<void(uint64_t)>& visitor) {
+  impl_->visit_filtered_labels(dsl, visitor);
+}
+
 std::optional<SearchResult> IndexEngine::search_with_filter_token(
     const SearchRequest& req, uint64_t filter_token) {
   SearchResult result;

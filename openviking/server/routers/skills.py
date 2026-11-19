@@ -881,6 +881,9 @@ async def update_skill(
                     source_path_hint=source_path_hint,
                 )
                 expected_name = _validate_skill_name(skill_name)
+                # The definition is temporarily removed during replacement.
+                # Preserve the existing Item declaration (or its absence).
+                preparation.is_update = True
                 if preparation.skill_dict.get("name") != expected_name:
                     raise InvalidArgumentError(
                         f"Skill name mismatch: path name is '{expected_name}', content name is '{preparation.skill_dict.get('name')}'",

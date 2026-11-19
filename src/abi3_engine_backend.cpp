@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "common/log_utils.h"
+#include "catalog/catalog_engine.h"
 #include "index/common_structs.h"
 #include "index/index_engine.h"
 #include "store/bytes_row.h"
@@ -22,6 +23,7 @@ namespace vdb = vectordb;
 namespace {
 
 constexpr const char* kIndexCapsuleName = "openviking.vectordb.IndexEngine";
+constexpr const char* kCatalogCapsuleName = "openviking.vectordb.CatalogEngine";
 constexpr const char* kStoreCapsuleName = "openviking.vectordb.KVStore";
 constexpr const char* kSchemaCapsuleName = "openviking.vectordb.Schema";
 constexpr const char* kBytesRowCapsuleName = "openviking.vectordb.BytesRow";
@@ -2007,7 +2009,86 @@ PyObject* py_store_seek_range_page(PyObject*, PyObject* args) {
   }
 }
 
+void catalog_capsule_destructor(PyObject* capsule) {
+  delete static_cast<vdb::CatalogEngine*>(
+      PyCapsule_GetPointer(capsule, kCatalogCapsuleName));
+}
+
+PyObject* py_new_catalog_engine(PyObject*, PyObject* args) {
+  const char* path = nullptr;
+  if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+  try {
+    auto engine = call_without_gil([&]() {
+      return std::make_unique<vdb::CatalogEngine>(path);
+    });
+    auto* capsule = PyCapsule_New(engine.get(), kCatalogCapsuleName,
+                                  catalog_capsule_destructor);
+    if (capsule) engine.release();
+    return capsule;
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_catalog_engine_execute(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* request = nullptr;
+  if (!PyArg_ParseTuple(args, "Os", &capsule, &request)) return nullptr;
+  auto* engine = capsule_to_ptr<vdb::CatalogEngine>(capsule, kCatalogCapsuleName);
+  if (!engine) return nullptr;
+  try {
+    const std::string owned_request(request);
+    const auto result = call_without_gil([&]() { return engine->execute(owned_request); });
+    return PyUnicode_FromStringAndSize(result.data(), result.size());
+  } catch (const std::invalid_argument& exc) {
+    raise_value_error(exc.what());
+    return nullptr;
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_catalog_engine_aggregate_filter(PyObject*, PyObject* args) {
+  PyObject* catalog_capsule = nullptr;
+  PyObject* index_capsule = nullptr;
+  PyObject* store_capsule = nullptr;
+  PyObject* row_capsule = nullptr;
+  const char* request = nullptr;
+  if (!PyArg_ParseTuple(args, "OOOOs", &catalog_capsule, &index_capsule,
+                        &store_capsule, &row_capsule, &request)) return nullptr;
+  auto* catalog = capsule_to_ptr<vdb::CatalogEngine>(catalog_capsule, kCatalogCapsuleName);
+  if (!catalog) return nullptr;
+  auto* index = capsule_to_ptr<vdb::IndexEngine>(index_capsule, kIndexCapsuleName);
+  if (!index) return nullptr;
+  auto* store = capsule_to_ptr<vdb::KVStore>(store_capsule, kStoreCapsuleName);
+  if (!store) return nullptr;
+  auto* row = capsule_to_ptr<BytesRowHandle>(row_capsule, kBytesRowCapsuleName);
+  if (!row) return nullptr;
+  try {
+    // args retains all four capsules while the GIL is released.
+    const std::string owned_request(request);
+    const auto result = call_without_gil([&]() {
+      return catalog->aggregate_filter(*index, *store, *row->bytes_row, owned_request);
+    });
+    return PyUnicode_FromStringAndSize(result.data(), result.size());
+  } catch (const std::invalid_argument& exc) {
+    raise_value_error(exc.what());
+    return nullptr;
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
 PyMethodDef kModuleMethods[] = {
+    {"_new_catalog_engine", py_new_catalog_engine, METH_VARARGS,
+     "Open a collection-owned native Catalog."},
+    {"_catalog_engine_execute", py_catalog_engine_execute, METH_VARARGS,
+     "Execute a scoped Catalog operation."},
+    {"_catalog_engine_aggregate_filter", py_catalog_engine_aggregate_filter, METH_VARARGS,
+     "Aggregate all scalar-filtered Item members without Python materialization."},
     {"_new_schema", py_new_schema, METH_VARARGS, "Create a schema handle."},
     {"_schema_get_total_byte_length", py_schema_get_total_byte_length,
      METH_VARARGS, "Read total schema byte length."},

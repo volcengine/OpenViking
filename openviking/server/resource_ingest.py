@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_content_target_uri
@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.storage.acl import AclSpec
+from openviking.storage.catalog import ITEM_ATTRS_OMITTED
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -80,6 +81,8 @@ class AddResourceRequest(BaseModel):
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
     acl: AclSpec | None = None
+    as_item: StrictBool = False
+    item_attrs: Optional[dict[str, str]] = None
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -193,6 +196,9 @@ async def ingest_resource_request(
         kwargs["temp_file_id"] = request.temp_file_id
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
+    kwargs["as_item"] = request.as_item
+    if "item_attrs" in request.model_fields_set:
+        kwargs["item_attrs"] = request.item_attrs
 
     try:
         return await resources.add_resource(
@@ -235,6 +241,8 @@ async def ingest_temp_upload(
     tag_mode: str = "replace",
     parse_mode: ParseMode | str = ParseMode.DEFAULT,
     acl: AclSpec | None = None,
+    as_item: bool = False,
+    item_attrs: Any = ITEM_ATTRS_OMITTED,
 ) -> dict[str, Any]:
     """Resolve a temp upload and ingest it as a resource; return the raw add_resource result.
 
@@ -272,6 +280,8 @@ async def ingest_temp_upload(
                 tags=tags,
                 tag_mode=tag_mode,
                 acl=acl,
+                as_item=as_item,
+                **({"item_attrs": item_attrs} if item_attrs is not ITEM_ATTRS_OMITTED else {}),
             )
         except Exception:
             raise

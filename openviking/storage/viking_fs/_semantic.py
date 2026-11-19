@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
+from openviking.core.item_search import (
+    SearchAsItemOptions,
+    validate_item_search_request,
+)
+from openviking.core.namespace import context_type_for_uri
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
 from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log
@@ -28,8 +33,12 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_decay import parse_duration_ms
-from openviking_cli.exceptions import InvalidArgumentError
-from openviking_cli.retrieve import ContextType
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    UnimplementedError,
+)
+from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 
@@ -132,6 +141,155 @@ class _SemanticMixin:
             return await self.overview(parent_uri, ctx=real_ctx)
         return await self._read_directory_summary(uri, "overview", ctx=ctx)
 
+    async def _retrieve_items(
+        self,
+        *,
+        query: str,
+        image_url: str | list[str] | None,
+        ctx: RequestContext,
+        target_directories: List[str],
+        limit: int,
+        score_threshold: Optional[float],
+        filter: Optional[Dict],
+        level: Optional[List[int]],
+        search_type: SearchType,
+        options: SearchAsItemOptions | Dict[str, Any],
+        events_time_decay_protection: Optional[str] = None,
+        filter_only: bool = False,
+    ) -> FindResult:
+        """Ask the storage engine for ordered groups, then attach Item roots."""
+        from openviking.models.embedder.base import embed_compat, embedder_supports_multimodal
+        from openviking.storage.catalog import decode_item_attrs
+        from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+
+        try:
+            options = validate_item_search_request(
+                options, events_time_decay_protection=events_time_decay_protection
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+        assert options is not None
+        storage = self._get_vector_store()
+        if not storage:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+        for target_dir in target_directories:
+            await self._ensure_retrieval_scope(target_dir, ctx)
+
+        query_vector = None
+        sparse_query_vector = None
+        if not filter_only:
+            if search_type == "keywords":
+                # The commercial platform adapter will implement this through
+                # GroupByEntity; raw BM25 candidates must not be grouped in OV.
+                raise UnimplementedError(
+                    "Item keyword grouping is not supported by the configured backend"
+                )
+            embedder = self._get_embedder(ctx)
+            if embedder is None:
+                raise FailedPreconditionError("Item semantic search requires an embedder")
+            if image_url and not await embedder_supports_multimodal(embedder):
+                raise InvalidArgumentError("Image search requires a multimodal embedding model")
+            embedded = await embed_compat(
+                embedder,
+                build_multimodal_embedding_input(query, image_url) if image_url else query,
+                is_query=True,
+            )
+            if not embedded.dense_vector:
+                raise FailedPreconditionError("Item semantic search requires a dense query vector")
+            query_vector = embedded.dense_vector
+            sparse_query_vector = embedded.sparse_vector or None
+
+        proxy = VikingDBManagerProxy(storage, ctx)
+        grouped = await proxy.search_items_in_tenant(
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            target_directories=target_directories,
+            extra_filter=filter,
+            level=level,
+            limit=limit,
+            aggregation=options.aggregation,
+            score_threshold=score_threshold,
+            filter_only=filter_only,
+        )
+        groups = grouped.get("groups", [])
+        if not isinstance(groups, list) or not groups:
+            return FindResult(memories=[], resources=[], skills=[])
+
+        if any(
+            not isinstance(group, dict)
+            or not group.get("entity_id")
+            or not group.get("entity_uri")
+            or "entity_attrs" not in group
+            or "entity_score" not in group
+            for group in groups
+        ):
+            raise RuntimeError(
+                "Item groups must include identity, score, root URI and own attributes"
+            )
+
+        root_uris = []
+        for group in groups:
+            root_uri = str(group["entity_uri"])
+            if root_uri.startswith("/"):
+                root_uri = "viking://" + root_uri.lstrip("/")
+            root_uris.append(root_uri)
+        access = (
+            await self._can_access_many(root_uris, ctx) if ctx.data_access is not None else None
+        )
+        buckets: dict[ContextType, list[MatchedContext]] = {
+            ContextType.MEMORY: [],
+            ContextType.RESOURCE: [],
+            ContextType.SKILL: [],
+        }
+        for group, root_uri in zip(groups, root_uris, strict=True):
+            if access is not None and not access.get(root_uri, False):
+                continue
+            item_uuid = str(group["entity_id"])
+            candidate_uris = [
+                uri for uri in group.get("candidate_members_uri", []) if isinstance(uri, str)
+            ]
+            extra_info = None
+            count = group.get("candidate_members_count", group.get("count"))
+            if count is not None:
+                truncated = group.get(
+                    "candidate_members_truncated", group.get("labels_truncated", False)
+                )
+                if (
+                    type(count) is not int
+                    or type(truncated) is not bool
+                    or count < len(candidate_uris)
+                    or (not truncated and count != len(candidate_uris))
+                ):
+                    raise RuntimeError("Item group candidate count does not match its URI list")
+                extra_info = {
+                    "candidate_members_count": count,
+                    "candidate_members_uri": candidate_uris,
+                }
+                if truncated:
+                    extra_info["candidate_members_truncated"] = True
+            attrs = group["entity_attrs"]
+            # Classify the declaration root, never a representative member.
+            # Root metadata needs no summary/content read or model invocation.
+            context_type = ContextType(context_type_for_uri(root_uri))
+            buckets[context_type].append(
+                MatchedContext(
+                    uri=root_uri,
+                    context_type=context_type,
+                    level=ContextLevel.ABSTRACT,
+                    score=float(group["entity_score"]),
+                    item_uuid=item_uuid,
+                    item_attrs=decode_item_attrs(attrs),
+                    item_extra_info=extra_info,
+                )
+            )
+        result = FindResult(
+            memories=buckets[ContextType.MEMORY],
+            resources=buckets[ContextType.RESOURCE],
+            skills=buckets[ContextType.SKILL],
+        )
+        get_current_telemetry().set("vector.returned", result.total)
+        return result
+
     async def find(
         self,
         query: str,
@@ -144,6 +302,7 @@ class _SemanticMixin:
         image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
+        search_as_item: Optional[SearchAsItemOptions | Dict[str, Any]] = None,
     ):
         """Semantic search.
 
@@ -202,6 +361,22 @@ class _SemanticMixin:
 
             retrieval_targets = replace(
                 retrieval_targets, target_directories=list(real_ctx.data_access.effective_targets)
+            )
+
+        if search_as_item is not None:
+            return await self._retrieve_items(
+                query=query,
+                image_url=image_url,
+                ctx=real_ctx,
+                target_directories=retrieval_targets.target_directories,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                level=level,
+                search_type=search_type,
+                options=search_as_item,
+                events_time_decay_protection=events_time_decay_protection,
+                filter_only=filter_only,
             )
 
         if filter_only:
@@ -380,6 +555,7 @@ class _SemanticMixin:
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
+        search_as_item: Optional[SearchAsItemOptions | Dict[str, Any]] = None,
     ):
         """Complex search with session context.
 
@@ -393,7 +569,13 @@ class _SemanticMixin:
         Returns:
             FindResult
         """
-        _ensure_non_empty_search_query(query, image_url)
+        filter_only = is_filter_only_query(query, image_url)
+        if filter_only:
+            if search_as_item is None:
+                _ensure_non_empty_search_query(query, image_url)
+            _ensure_filter_present(filter)
+        else:
+            _ensure_non_empty_search_query(query, image_url)
         if events_time_decay_protection is not None:
             parse_duration_ms(
                 events_time_decay_protection, parameter_name="events_time_decay_protection"
@@ -402,16 +584,28 @@ class _SemanticMixin:
             datetime.now(timezone.utc) if events_time_decay_protection is not None else None
         )
         telemetry = get_current_telemetry()
-        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
-        from openviking.retrieve.intent_analyzer import IntentAnalyzer
-        from openviking_cli.retrieve import (
-            FindResult,
-            QueryPlan,
-            TypedQuery,
-        )
-
         real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        if search_as_item is not None:
+            return await self._retrieve_items(
+                query=query,
+                ctx=real_ctx,
+                image_url=image_url,
+                target_directories=retrieval_targets.target_directories,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                level=level,
+                search_type=search_type,
+                options=search_as_item,
+                events_time_decay_protection=events_time_decay_protection,
+                filter_only=filter_only,
+            )
+
+        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+        from openviking.retrieve.intent_analyzer import IntentAnalyzer
+        from openviking_cli.retrieve import FindResult, QueryPlan, TypedQuery
+
         primary_target_uri = retrieval_targets.first_explicit_directory
 
         session_summary = (

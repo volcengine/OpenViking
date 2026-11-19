@@ -52,7 +52,7 @@ from openviking.utils.tags import (
 )
 from openviking.utils.time_decay import parse_duration_ms
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, UnimplementedError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -379,6 +379,11 @@ class _SingleAccountBackend:
             self._mode,
         )
 
+    def _partition_kwargs(self) -> Dict[str, Any]:
+        if getattr(self._adapter, "supports_partition_scope", False) is True:
+            return {"partition_by": self._bound_account_id}
+        return {}
+
     @asynccontextmanager
     async def operation(self):
         """Borrow across every I/O step, including nested backend operations."""
@@ -672,7 +677,9 @@ class _SingleAccountBackend:
 
         if options.partial_update:
             try:
-                existing_records = await self._async_adapter.call("get", [payload["id"]])
+                existing_records = await self._async_adapter.call(
+                    "get", [payload["id"]], **self._partition_kwargs()
+                )
                 if self._bound_account_id:
                     existing_records = [
                         record
@@ -765,7 +772,9 @@ class _SingleAccountBackend:
                 raise ValueError(f"Invalid context_type: {context_type}. Must be one of {allowed}")
 
             payload = await self._async_adapter.run(self._prepare_update_payload, payload)
-            ids = await self._async_adapter.call("update_data", [payload])
+            ids = await self._async_adapter.call(
+                "update_data", [payload], **self._partition_kwargs()
+            )
             normalized_ids = [str(item) for item in (ids or []) if item is not None]
             return UpdateResult(
                 ok=bool(normalized_ids),
@@ -801,7 +810,7 @@ class _SingleAccountBackend:
     @_backend_operation
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
-            records = await self._async_adapter.call("get", ids)
+            records = await self._async_adapter.call("get", ids, **self._partition_kwargs())
             if self._bound_account_id:
                 records = [r for r in records if r.get("account_id") == self._bound_account_id]
             return records
@@ -826,7 +835,7 @@ class _SingleAccountBackend:
     @_backend_operation
     async def get_strict(self, ids: List[str]) -> List[Dict[str, Any]]:
         """Fetch records without converting backend errors to misses."""
-        records = await self._async_adapter.call("get", ids)
+        records = await self._async_adapter.call("get", ids, **self._partition_kwargs())
         if self._bound_account_id:
             records = [r for r in records if r.get("account_id") == self._bound_account_id]
         return records
@@ -845,7 +854,9 @@ class _SingleAccountBackend:
             ids = valid_ids
         if not ids:
             return 0
-        return int(await self._async_adapter.call("delete", ids=ids) or 0)
+        return int(
+            await self._async_adapter.call("delete", ids=ids, **self._partition_kwargs()) or 0
+        )
 
     @_backend_operation
     async def strict_query(
@@ -888,7 +899,7 @@ class _SingleAccountBackend:
                     logger.warning("Attempted to delete records outside bound account")
                 ids = valid_ids
 
-            return await self._async_adapter.call("delete", ids=ids)
+            return await self._async_adapter.call("delete", ids=ids, **self._partition_kwargs())
         except Exception as e:
             logger.debug("Error deleting records: %s", type(e).__name__)
             raise
@@ -897,7 +908,9 @@ class _SingleAccountBackend:
     async def delete_by_filter(self, filter: FilterExpr) -> int:
         """Root-only: 直接通过 filter 删除"""
         try:
-            return await self._async_adapter.call("delete", filter=filter)
+            return await self._async_adapter.call(
+                "delete", filter=filter, **self._partition_kwargs()
+            )
         except Exception as e:
             logger.debug("Error deleting by filter: %s", type(e).__name__)
             raise
@@ -964,6 +977,30 @@ class _SingleAccountBackend:
         except Exception as e:
             logger.debug("Error querying collection: %s", type(e).__name__)
             raise
+
+    @_backend_operation
+    async def search_item_groups(
+        self,
+        *,
+        query_vector: Optional[List[float]] = None,
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        self._validate_vector_dimension(query_vector)
+        return await self._async_adapter.call(
+            "search_item_groups",
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=self._with_account_filter(filter),
+            max_groups=max_groups,
+            aggregation=aggregation,
+            score_threshold=score_threshold,
+            filter_only=filter_only,
+        )
 
     @_backend_operation
     async def search_by_random(
@@ -1280,6 +1317,19 @@ class VikingVectorIndexBackend:
     async def _get_backend_for_context(self, ctx: RequestContext) -> _SingleAccountBackend:
         """根据上下文获取 backend"""
         return await self.get_account_backend(ctx.account_id)
+
+    async def catalog_execute(
+        self, request: Dict[str, Any], *, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        backend = await self._get_backend_for_context(ctx)
+        try:
+            return await backend._async_adapter.call(
+                "catalog_execute", {**request, "scope": ctx.account_id}
+            )
+        except NotImplementedError as exc:
+            raise UnimplementedError(str(exc)) from exc
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
 
     def set_vector_config_resolver(self, resolver) -> None:
         self._vector_config_resolver = resolver
@@ -1993,6 +2043,46 @@ class VikingVectorIndexBackend:
     # =========================================================================
     # Tenant-Aware 方法（保持向后兼容）
     # =========================================================================
+
+    async def search_items_in_tenant(
+        self,
+        ctx: RequestContext,
+        *,
+        query_vector: Optional[List[float]],
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+        limit: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        acl_enabled = await self._acl_enabled(ctx)
+        scope_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            level=level,
+            acl_enabled=acl_enabled,
+        )
+        backend = await self._get_backend_for_context(ctx)
+        try:
+            return await backend.search_item_groups(
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                filter=scope_filter,
+                max_groups=limit,
+                aggregation=aggregation,
+                score_threshold=score_threshold,
+                filter_only=filter_only,
+            )
+        except NotImplementedError as exc:
+            raise UnimplementedError(str(exc)) from exc
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
 
     async def search_in_tenant(
         self,

@@ -1174,6 +1174,18 @@ class LocalIndex(IIndex):
                 "Failed to record cuVS search telemetry error_type=%s", type(_log_error).__name__
             )
 
+    def aggregate_items(self, catalog: Any, store: Any, request: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.engine_proxy or not self.engine_proxy.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        request = dict(request)
+        if self.field_type_converter:
+            request["filter"] = self.field_type_converter.convert_filter_for_index(
+                request["filter"]
+            )
+        return catalog.aggregate_filter(
+            self.engine_proxy.index_engine, store.storage_engine, CandidateData.bytes_row, request
+        )
+
     def aggregate(
         self,
         filters: Optional[Dict[str, Any]] = None,

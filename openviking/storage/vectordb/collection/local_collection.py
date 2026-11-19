@@ -8,8 +8,10 @@ import shutil
 import threading
 import time
 from contextlib import contextmanager
+from functools import partial
 from itertools import zip_longest
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
+from weakref import WeakValueDictionary
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -60,9 +62,17 @@ AUTO_ID_KEY = SpecialFields.AUTO_ID.value
 _RECOVERY_BATCH_SIZE = 1024
 
 
+class _AccountMutations:
+    def __init__(self):
+        self.active = 0
+        self.generation = 0
+
+
 class _MutationMarker:
     def __init__(self):
         self.changed = False
+        self.labels: set[str] = set()
+        self.accounts: tuple[_AccountMutations, ...] = ()
 
     def mark_changed(self) -> None:
         self.changed = True
@@ -84,6 +94,9 @@ class _IndexMutationBarrier:
         self._publisher = False
         self._waiting_publishers = 0
         self._generation = 0
+        self._writing_labels: set[str] = set()
+        self._accounts: WeakValueDictionary[str, _AccountMutations] = WeakValueDictionary()
+        self._all_accounts = _AccountMutations()
 
     @contextmanager
     def mutation(self) -> Iterator[_MutationMarker]:
@@ -102,9 +115,51 @@ class _IndexMutationBarrier:
             with self._condition:
                 if marker.changed:
                     self._generation += 1
+                for account in marker.accounts:
+                    if marker.changed:
+                        account.generation += 1
+                    account.active -= 1
+                self._writing_labels.difference_update(marker.labels)
                 self._active_mutations -= 1
-                if self._active_mutations == 0:
-                    self._condition.notify_all()
+                self._condition.notify_all()
+
+    def reserve_labels(self, marker: _MutationMarker, labels: Iterable[str]) -> None:
+        """Keep previous ownership stable from the Store read through index update."""
+        keys = set(labels)
+        with self._condition:
+            while not self._writing_labels.isdisjoint(keys):
+                self._condition.wait()
+            self._writing_labels.update(keys)
+            marker.labels = keys
+
+    def before_member_write(self, marker: _MutationMarker, changes: list[DeltaRecord]) -> None:
+        """Register both previous and new owners before any member bytes can change."""
+        account_ids: set[str] = set()
+        for change in changes:
+            for fields in (change.old_fields, change.fields):
+                if fields:
+                    try:
+                        account_id = json.loads(fields)["account_id"]
+                    except (ValueError, KeyError, TypeError):
+                        account_ids.add("")
+                    else:
+                        account_ids.add(account_id if isinstance(account_id, str) else "")
+        with self._condition:
+            marker.accounts = (
+                (self._all_accounts,)
+                if "" in account_ids
+                else tuple(self._account(account_id) for account_id in account_ids)
+            )
+            for account in marker.accounts:
+                account.active += 1
+
+    def _account(self, account_id: str) -> _AccountMutations:
+        # Only in-flight mutations and readers need to retain account history.
+        account = self._accounts.get(account_id)
+        if account is None:
+            account = _AccountMutations()
+            self._accounts[account_id] = account
+        return account
 
     @contextmanager
     def exclusive_mutation(self) -> Iterator[None]:
@@ -114,6 +169,13 @@ class _IndexMutationBarrier:
             finally:
                 with self._condition:
                     self._generation += 1
+                    self._all_accounts.generation += 1
+
+    @contextmanager
+    def read_snapshot(self) -> Iterator[None]:
+        """Freeze Store/index writes and replacement without changing generation."""
+        with self._exclusive():
+            yield
 
     def snapshot_generation(self) -> int:
         """Return a boundary ordered after any exclusive collection mutation."""
@@ -133,6 +195,24 @@ class _IndexMutationBarrier:
                 and self._generation == expected_generation
             )
 
+    def item_snapshot(self, scope: str) -> tuple[int, _AccountMutations, int]:
+        with self._condition:
+            while self._publisher or self._waiting_publishers:
+                self._condition.wait()
+            account = self._account(scope)
+            return self._all_accounts.generation, account, account.generation
+
+    def is_item_snapshot_current(self, snapshot: tuple[int, _AccountMutations, int]) -> bool:
+        collection_generation, account, account_generation = snapshot
+        with self._condition:
+            return (
+                not self._publisher
+                and self._all_accounts.active == 0
+                and self._all_accounts.generation == collection_generation
+                and account.active == 0
+                and account.generation == account_generation
+            )
+
     @contextmanager
     def publish_if_current(self, expected_generation: int) -> Iterator[bool]:
         """Reserve publication and report whether the snapshot is still current."""
@@ -140,7 +220,12 @@ class _IndexMutationBarrier:
         with self._exclusive():
             with self._condition:
                 current = self._generation == expected_generation
-            yield current
+            try:
+                yield current
+            finally:
+                if current:
+                    with self._condition:
+                        self._all_accounts.generation += 1
 
     @contextmanager
     def _exclusive(self) -> Iterator[None]:
@@ -233,6 +318,16 @@ class LocalCollection(ICollection):
         self._bulk_ingest_depth = 0
         self.meta: CollectionMeta = meta
         self.collection_name = ""
+        self._catalog_lock = threading.RLock()
+        self._catalog: Any = None
+        self._catalog_enabled = False
+        self._catalog_path = (
+            str(safe_join(self.collection_dir, "catalog"))
+            if hasattr(self, "collection_dir")
+            else ""
+        )
+        if self._catalog_path and os.path.isdir(self._catalog_path):
+            self._open_catalog()
 
         self.ttl_cleanup_seconds = get_config_value(
             config, "ttl_cleanup_seconds", ENV_TTL_CLEANUP_SECONDS, DEFAULT_TTL_CLEANUP_SECONDS
@@ -257,6 +352,79 @@ class LocalCollection(ICollection):
         )
         self.scheduler.start()
 
+    def _open_catalog(self):
+        from openviking.storage.vectordb.engine import CatalogEngine
+
+        if self._catalog is None:
+            self._catalog = CatalogEngine(self._catalog_path)
+            self._catalog_enabled = self._catalog.execute(
+                {"op": "capabilities", "scope": "_engine"}
+            )["enabled"]
+        return self._catalog
+
+    def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._catalog_enabled and request["op"] in (
+            "configure",
+            "upsert_nodes",
+            "declare_item",
+        ):
+            # Publish activation under the same barrier as vector writes. Item
+            # declarations may be introduced after unrelated ordinary records;
+            # only writes made after activation need Catalog node registration.
+            with self._index_mutation_barrier.exclusive_mutation():
+                with self._catalog_lock:
+                    result = self._open_catalog().execute(request)
+                    self._catalog_enabled = self._catalog.execute(
+                        {"op": "capabilities", "scope": "_engine"}
+                    )["enabled"]
+                    return result
+        with self._catalog_lock:
+            if not self._catalog_enabled and request["op"] == "resolve":
+                return {
+                    "data": [{"uri": uri} for uri in request["uris"]],
+                    "revision": "0",
+                }
+            if not self._catalog_enabled and request["op"] == "query_items":
+                return {"data": [], "revision": "0"}
+            if not self._catalog_enabled and request["op"] == "validate_resource_update":
+                return {"valid": True, "has_item": False, "revision": "0"}
+            if not self._catalog_enabled and request["op"] in (
+                "delete_subtree",
+                "move_subtree",
+            ):
+                return {}
+            if self._catalog is None:
+                # Reads on an ordinary collection must not enable Catalog or
+                # change its future write path.
+                from openviking.storage.vectordb.engine import CatalogEngine
+
+                return CatalogEngine().execute(request)
+            return self._open_catalog().execute(request)
+
+    @staticmethod
+    def _catalog_scope(filters: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Read only mandatory account predicates; never infer scope from an OR."""
+        if not filters:
+            return None
+        if "filter" in filters:
+            return LocalCollection._catalog_scope(filters["filter"])
+        if filters.get("op") == "and":
+            scopes = {
+                scope
+                for child in filters.get("conds", [])
+                if (scope := LocalCollection._catalog_scope(child)) is not None
+            }
+            if len(scopes) == 1:
+                return scopes.pop()
+        if (
+            filters.get("op") == "must"
+            and filters.get("field") == "account_id"
+            and len(filters.get("conds", [])) == 1
+            and isinstance(filters["conds"][0], str)
+        ):
+            return filters["conds"][0]
+        return None
+
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
         meta_data: Dict[str, Any] = {}
         if fields is not None:
@@ -277,6 +445,8 @@ class LocalCollection(ICollection):
     def close(self):
         with self._index_mutation_barrier.exclusive_mutation():
             self._persist_all_indexes()
+            with self._catalog_lock:
+                self._catalog = None
             self._delete_scheduler_job()
             if self.scheduler:
                 self.scheduler.shutdown(wait=False)
@@ -508,6 +678,18 @@ class LocalCollection(ICollection):
         ):
             raise NotImplementedError("Local advanced ranking supports time_decay only")
         search_result = SearchResult()
+        if getattr(self, "_catalog", None) is not None:
+            catalog_scope = self._catalog_scope(filters)
+            if catalog_scope:
+                compiled = self.catalog_execute(
+                    {
+                        "op": "compile_filter",
+                        "scope": catalog_scope,
+                        "filter": filters or {},
+                    }
+                )
+                filters = compiled["filter"]
+                search_result.catalog_revision = compiled.get("revision")
         index = self.indexes.get(index_name)
         if not index:
             return search_result
@@ -641,6 +823,86 @@ class LocalCollection(ICollection):
             )
         ]
         return search_result
+
+    def search_item_groups(
+        self,
+        index_name: str,
+        *,
+        dense_vector: Optional[List[float]] = None,
+        sparse_vector: Optional[Dict[str, float]] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        """Recall semantic candidates or stream scalar matches into native Item grouping."""
+        scope = self._catalog_scope(filters)
+        if scope is None:
+            raise ValueError("Item grouping requires a mandatory account scope")
+        request: Dict[str, Any] = {
+            "op": "group_candidates",
+            "scope": scope,
+            "aggregation": aggregation,
+            "max_groups": max_groups,
+        }
+        if score_threshold is not None:
+            request["score_threshold"] = score_threshold
+        if filter_only:
+            # Acquire the collection barrier BEFORE the Catalog lock, matching
+            # writes/activation. It freezes Store + index publication/writes
+            # while native filtering, field projection and grouping run.
+            with self._index_mutation_barrier.read_snapshot():
+                with self._catalog_lock:
+                    catalog = self._open_catalog()
+                    index = self.indexes.get(index_name)
+                    if not index:
+                        return {
+                            "group_field": "item_uuids",
+                            "aggregation": aggregation,
+                            "group_count": 0,
+                            "groups_truncated": False,
+                            "groups": [],
+                        }
+                    if not self.store_mgr:
+                        raise RuntimeError("Store manager is not initialized")
+                    request.update(
+                        filter=filters or {},
+                        candidate_table=StoreManager.CandsTable,
+                        primary_key=self.meta.primary_key,
+                    )
+                    return index.aggregate_items(catalog, self.store_mgr.storage, request)
+
+        with self._catalog_lock:
+            self._open_catalog()
+        # Group TopK must not change the semantic scoring population (especially sum).
+        candidate_limit = 1000
+        for _ in range(3):
+            snapshot = self._index_mutation_barrier.item_snapshot(scope)
+            recalled = self.search_by_vector(
+                index_name=index_name,
+                dense_vector=dense_vector,
+                sparse_vector=sparse_vector,
+                limit=candidate_limit,
+                filters=filters,
+                output_fields=["uri"],
+            )
+            candidates = [
+                {
+                    "label": str(item.id),
+                    "uri": item.fields["uri"],
+                    "score": float(item.score or 0.0),
+                }
+                for item in recalled.data
+                if item.fields and item.fields.get("uri")
+            ]
+            request["candidates"] = candidates
+            grouped = self.catalog_execute(request)
+            if grouped.get("revision") == recalled.catalog_revision and (
+                self._index_mutation_barrier.is_item_snapshot_current(snapshot)
+            ):
+                return grouped
+        raise RuntimeError("Collection changed repeatedly during Item recall; retry the request")
 
     def search_by_id(
         self,
@@ -879,9 +1141,31 @@ class LocalCollection(ICollection):
 
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        with self._index_mutation_barrier.mutation() as mutation:
+        barrier = self._index_mutation_barrier
+        with barrier.mutation() as mutation:
+            barrier.reserve_labels(mutation, (str(candidate.label) for candidate in cands_list))
+            # Catalog must be enabled by an explicit declaration. Ordinary local
+            # collections keep their historical write path and are not backfilled.
+            if getattr(self, "_catalog_enabled", False):
+                scopes: Dict[str, List[Dict[str, str]]] = {}
+                for data in data_list:
+                    if data.get("uri") and data.get("account_id"):
+                        scopes.setdefault(data["account_id"], []).append(
+                            {
+                                "uri": data["uri"],
+                                "node_type": "dir" if data.get("level") in (0, 1) else "file",
+                            }
+                        )
+                for scope, nodes in scopes.items():
+                    self.catalog_execute({"op": "upsert_nodes", "scope": scope, "nodes": nodes})
+
             need_record_delta = True if self.indexes.count() > 0 else False
-            delta_list = self.store_mgr.add_cands_data(cands_list, ttl, need_record_delta)
+            delta_list = self.store_mgr.add_cands_data(
+                cands_list,
+                ttl,
+                need_record_delta,
+                before_write=partial(barrier.before_member_write, mutation),
+            )
             mutation.mark_changed()
 
             def upsert_to_index(name, index):
@@ -943,9 +1227,15 @@ class LocalCollection(ICollection):
         )
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        with self._index_mutation_barrier.mutation() as mutation:
+        barrier = self._index_mutation_barrier
+        with barrier.mutation() as mutation:
+            barrier.reserve_labels(mutation, map(str, labels_list))
             need_record_delta = True if self.indexes.count() > 0 else False
-            delta_list = self.store_mgr.delete_data(labels_list, need_record_delta)
+            delta_list = self.store_mgr.delete_data(
+                labels_list,
+                need_record_delta,
+                before_write=partial(barrier.before_member_write, mutation),
+            )
             mutation.mark_changed()
 
             def delete_from_index(name, index):
@@ -1045,8 +1335,12 @@ class LocalCollection(ICollection):
     def _expire_timeout_data(self):
         if not self.store_mgr:
             return
-        with self._index_mutation_barrier.mutation() as mutation:
-            delta_list = self.store_mgr.expire_data()
+        barrier = self._index_mutation_barrier
+        with barrier.mutation() as mutation:
+            delta_list = self.store_mgr.expire_data(
+                before_read=partial(barrier.reserve_labels, mutation),
+                before_write=partial(barrier.before_member_write, mutation),
+            )
             if delta_list:
                 mutation.mark_changed()
 

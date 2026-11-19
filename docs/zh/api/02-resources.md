@@ -181,6 +181,8 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 | temp_file_id | string | 否 | - | 临时上传文件 ID。与 `path` 二选一 |
 | to | string | 否 | - | 本次导入的最终保存位置。目标已存在时会覆盖该目标；与 `parent` 互斥 |
 | parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
+| as_item | bool | 否 | False | 将本次导入的实际根声明为 Item；已有 Item 可同根更新，存量普通根不支持补声明 |
+| item_attrs | object | 否 | 省略 | 可选扁平字符串 KV，仅 `as_item=true` 可传；只属于声明根，不继承、不合并 |
 | create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
 | add_type | string | 否 | None | 显式指定 Connector 类型；要求同时传 `path` 和精确的 `to`，不能与 `parent` 或 `temp_file_id` 组合 |
 | source_name | string | 否 | None | 来源显示名；上传文件省略时使用原始文件名 |
@@ -245,6 +247,8 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 - 对单文件输入使用 `no_split` 时，如果解析结果恰好只有一个可见文件且未指定 `to`，该文件会直接放到解析出的父目录下（例如 `guide.md` 写入 `viking://resources/guide.md`），不会创建同名上层目录，也不会生成目录级 `.abstract.md` / `.overview.md`。如果解析结果还包含图片等其他可见文件，则保留上层目录。显式指定的 `to` 始终作为最终 URI 原样保留。
 - `no_split` 只改变 Markdown 正文的存储布局，不改变语义处理、文件向量化和内部 embedding 分块。Markdown 相对链接会按同一个 no-split 输出布局解析，不会再指向仅拆分模式存在的路径。该模式下不会为目录文件调用 Understanding。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](12-content.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
+
+声明方式、UUID 生命周期和 `item_attrs` 限制见 [Item Search](06-retrieval.md#item-search预览)。
 
 #### 3. 使用示例
 

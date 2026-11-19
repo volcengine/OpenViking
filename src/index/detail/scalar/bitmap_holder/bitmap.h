@@ -168,6 +168,9 @@ class Bitmap final {
   // Access data
   void get_set_list(std::vector<uint32_t>& result) const;
 
+  // Visit offsets without materializing a second copy of the full bitmap.
+  void for_each(const std::function<void(uint32_t)>& visitor) const;
+
   uint32_t get_range_list(std::vector<uint32_t>& result, uint32_t limit,
                           uint32_t offset = 0);
 

@@ -278,7 +278,8 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        real_ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(real_ctx, bypass_acl=True)
         await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
@@ -299,17 +300,20 @@ class _OpsMixin:
 
         async def _finish_missing_delete() -> Dict[str, Any]:
             """Clean orphan index records for an idempotent delete."""
+            from openviking.storage.catalog import delete_catalog_subtree
+
             if no_vector:
+                await delete_catalog_subtree(self, target_uri, real_ctx)
                 return {"estimated_deleted_count": 0}
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
-            real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             vector_store = self._get_vector_store()
             if recursive and vector_store is not None:
                 await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
             else:
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            await delete_catalog_subtree(self, target_uri, real_ctx)
             logger.info("rm target not found, cleaned orphan index: %s", safe_uri_for_log(str(uri)))
             return {"estimated_deleted_count": estimated_count}
 
@@ -410,6 +414,9 @@ class _OpsMixin:
                 raise
             # Add estimated_deleted_count to the result
             emit_file_change(target_uri, ctx, "deleted", is_dir=is_dir)
+            from openviking.storage.catalog import delete_catalog_subtree
+
+            await delete_catalog_subtree(self, target_uri, real_ctx)
             if isinstance(result, dict):
                 result["estimated_deleted_count"] = estimated_count
             else:
@@ -499,7 +506,9 @@ class _OpsMixin:
             )
 
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="cp")
-        await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
+        target_preexisted = await self._ensure_transfer_target_type(
+            new_path, new_uri, is_dir=is_dir
+        )
         lock_requests = (
             self._directory_transfer_lock_requests(old_path, new_path)
             if is_dir
@@ -540,16 +549,17 @@ class _OpsMixin:
                         **({"source_uris": source_uris} if is_dir else {}),
                     )
                 except Exception:
-                    try:
-                        await self._cleanup_transfer_target(
-                            new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
-                        )
-                    except Exception as _log_error:
-                        logger.info(
-                            "Failed to clean copy target %s error_type=%s",
-                            safe_uri_for_log(str(new_uri)),
-                            type(_log_error).__name__,
-                        )
+                    if not target_preexisted:
+                        try:
+                            await self._cleanup_transfer_target(
+                                new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
+                            )
+                        except Exception as _log_error:
+                            logger.info(
+                                "Failed to clean copy target %s error_type=%s",
+                                safe_uri_for_log(str(new_uri)),
+                                type(_log_error).__name__,
+                            )
                     raise
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
@@ -578,19 +588,20 @@ class _OpsMixin:
         finally:
             await self._async_agfs.pathlock_release(lease)
 
-    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> None:
+    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> bool:
         """Allow overwrite/merge, but never replace a file with a directory or vice versa."""
         try:
             stat = await self._async_agfs.stat(path)
         except Exception as exc:
             if is_not_found_error(exc):
-                return
+                return False
             mapped = map_exception(exc, resource=uri)
             if mapped is not None:
                 raise mapped from exc
             raise
         if bool(stat.get("isDir", False)) != is_dir:
             raise InvalidArgumentError(f"transfer source and target types differ: {uri}")
+        return True
 
     async def _prepare_transfer_entries(
         self,
@@ -814,7 +825,9 @@ class _OpsMixin:
         if is_dir:
             await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="mv")
-        await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
+        target_preexisted = await self._ensure_transfer_target_type(
+            new_path, new_uri, is_dir=is_dir
+        )
 
         if not is_dir:
             if new_uri.rstrip("/") != new_uri:
@@ -894,7 +907,15 @@ class _OpsMixin:
                 raise
 
             # Update or remove source VectorDB records before deleting the source.
+            catalog_undo = None
             try:
+                from openviking.storage.catalog import (
+                    move_catalog_subtree,
+                )
+
+                catalog_undo = await move_catalog_subtree(
+                    self, old_uri, new_uri, self._ctx_or_default(ctx)
+                )
                 vector_result = None
                 if vector_mode == "transfer":
                     vector_result = await self._update_vector_store_uris(
@@ -910,16 +931,29 @@ class _OpsMixin:
                 elif vector_mode != "none":
                     raise ValueError(f"unsupported move vector mode: {vector_mode}")
             except Exception:
-                try:
-                    await self._cleanup_transfer_target(
-                        new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
-                    )
-                except Exception as _log_error:
-                    logger.info(
-                        "Failed to clean move target %s error_type=%s",
-                        safe_uri_for_log(str(new_uri)),
-                        type(_log_error).__name__,
-                    )
+                if catalog_undo is not None:
+                    try:
+                        from openviking.storage.catalog import restore_catalog_move
+
+                        await restore_catalog_move(self, catalog_undo, self._ctx_or_default(ctx))
+                    except Exception as _log_error:
+                        logger.warning(
+                            "Failed to restore Catalog after move failure: %s -> %s error_type=%s",
+                            safe_uri_for_log(str(old_uri)),
+                            safe_uri_for_log(str(new_uri)),
+                            type(_log_error).__name__,
+                        )
+                if not target_preexisted:
+                    try:
+                        await self._cleanup_transfer_target(
+                            new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                        )
+                    except Exception as _log_error:
+                        logger.info(
+                            "Failed to clean move target %s error_type=%s",
+                            safe_uri_for_log(str(new_uri)),
+                            type(_log_error).__name__,
+                        )
                 raise
 
             # Old mv semantics: source deletion is the last step, with no copy-back on failure.

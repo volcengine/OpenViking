@@ -762,6 +762,8 @@ impl HttpClient {
         &self,
         uri: &str,
         description: Option<&str>,
+        as_item: bool,
+        item_attrs: Option<Value>,
         acl: Option<Value>,
     ) -> Result<serde_json::Value> {
         let mut body = match description {
@@ -771,15 +773,30 @@ impl HttpClient {
         if let Some(acl) = acl {
             body["acl"] = acl;
         }
-        self.post("/api/v1/fs/mkdir", &body).await
+        if as_item {
+            body["as_item"] = Value::Bool(true);
+        }
+        if let Some(item_attrs) = item_attrs {
+            body["item_attrs"] = item_attrs;
+        }
+        let result: Value = self.post("/api/v1/fs/mkdir", &body).await?;
+        if as_item
+            && result
+                .get("item_uuid")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(Error::Api {
+                code: Some("FAILED_PRECONDITION".to_string()),
+                message: "Server did not confirm the Item declaration. Upgrade the server and check the target URI; an ordinary directory may already have been created.".to_string(),
+                details: Some(serde_json::json!({"uri": uri, "stage": "item_declaration_confirmation"})),
+                status: None,
+            });
+        }
+        Ok(result)
     }
 
-    pub async fn rm(
-        &self,
-        uri: &str,
-        recursive: bool,
-        wait: bool,
-    ) -> Result<serde_json::Value> {
+    pub async fn rm(&self, uri: &str, recursive: bool, wait: bool) -> Result<serde_json::Value> {
         let params = vec![
             ("uri".to_string(), uri.to_string()),
             ("recursive".to_string(), recursive.to_string()),
@@ -834,9 +851,12 @@ impl HttpClient {
         time_field: Option<String>,
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
+        filter: Option<Value>,
         tags: Option<Vec<String>>,
         read_content: bool,
         events_time_decay_protection: Option<String>,
+        search_as_item: bool,
+        aggregation: Option<String>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -850,9 +870,14 @@ impl HttpClient {
             "time_field": time_field,
             "level": level,
             "context_type": context_type,
+            "filter": filter,
             "tags": tags,
             "read_content": read_content.then_some(true),
             "events_time_decay_protection": events_time_decay_protection,
+            "search_as_item": search_as_item.then(|| match aggregation {
+                Some(aggregation) => serde_json::json!({"aggregation": aggregation}),
+                None => serde_json::json!({}),
+            }),
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
@@ -873,9 +898,12 @@ impl HttpClient {
         time_field: Option<String>,
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
+        filter: Option<Value>,
         tags: Option<Vec<String>>,
         read_content: bool,
         events_time_decay_protection: Option<String>,
+        search_as_item: bool,
+        aggregation: Option<String>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -893,9 +921,14 @@ impl HttpClient {
             "time_field": time_field,
             "level": level,
             "context_type": context_type,
+            "filter": filter,
             "tags": tags,
             "read_content": read_content.then_some(true),
             "events_time_decay_protection": events_time_decay_protection,
+            "search_as_item": search_as_item.then(|| match aggregation {
+                Some(aggregation) => serde_json::json!({"aggregation": aggregation}),
+                None => serde_json::json!({}),
+            }),
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -975,6 +1008,8 @@ impl HttpClient {
         resource_args: Option<Map<String, Value>>,
         tags: Vec<String>,
         tag_mode: String,
+        as_item: bool,
+        item_attrs: Option<Value>,
         acl: Option<Value>,
         show_progress: bool,
         verbose: bool,
@@ -999,6 +1034,12 @@ impl HttpClient {
                 body["acl"] = acl.clone();
             }
             add_resource_tag_fields(&mut body, &tags, &tag_mode);
+            if as_item {
+                body["as_item"] = Value::Bool(true);
+            }
+            if let Some(item_attrs) = &item_attrs {
+                body["item_attrs"] = item_attrs.clone();
+            }
             if create_parent {
                 body.as_object_mut()
                     .expect("add_resource request body must be an object")
@@ -1584,9 +1625,8 @@ impl HttpClient {
             .headers(self.base.build_headers())
             .json(&body)
             .query(&[("profile", "0")]);
-        let progress = show_progress.then(|| {
-            ProgressGuard::new("Preparing OVPack on server", "OVPack download failed")
-        });
+        let progress = show_progress
+            .then(|| ProgressGuard::new("Preparing OVPack on server", "OVPack download failed"));
         let response = self
             .base
             .send_request(request, "HTTP request failed")
@@ -1637,8 +1677,8 @@ impl HttpClient {
         show_progress: bool,
         message: &str,
     ) -> Result<serde_json::Value> {
-        let processing = show_progress
-            .then(|| ProgressGuard::new(message, "OVPack processing failed"));
+        let processing =
+            show_progress.then(|| ProgressGuard::new(message, "OVPack processing failed"));
         let result = self.post(endpoint, body).await?;
         if let Some(processing) = processing {
             processing.finish("OVPack processing complete");
@@ -2073,10 +2113,7 @@ impl HttpClient {
         self.get(&path, &[]).await
     }
 
-    pub async fn privacy_resolve_selector(
-        &self,
-        selector: &str,
-    ) -> Result<serde_json::Value> {
+    pub async fn privacy_resolve_selector(&self, selector: &str) -> Result<serde_json::Value> {
         self.post(
             "/api/v1/privacy-configs/resolve",
             &serde_json::json!({"selector": selector}),
@@ -2163,10 +2200,7 @@ impl HttpClient {
             .await
     }
 
-    pub async fn privacy_delete_selector(
-        &self,
-        selector: &str,
-    ) -> Result<serde_json::Value> {
+    pub async fn privacy_delete_selector(&self, selector: &str) -> Result<serde_json::Value> {
         self.delete_with_body(
             "/api/v1/privacy-configs/selector",
             &serde_json::json!({"selector": selector}),
@@ -2174,10 +2208,7 @@ impl HttpClient {
         .await
     }
 
-    pub async fn privacy_scan(
-        &self,
-        body: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    pub async fn privacy_scan(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
         self.post("/api/v1/privacy-configs/scan", body).await
     }
 
@@ -2417,9 +2448,7 @@ mod resource_wait_tests;
 #[cfg(test)]
 mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
-    use crate::base_client::{
-        api_error_from_envelope, spawn_test_response, take_test_progress,
-    };
+    use crate::base_client::{api_error_from_envelope, spawn_test_response, take_test_progress};
     use reqwest::StatusCode;
     use serde_json::{Map, json};
     use std::collections::HashMap;
@@ -2514,6 +2543,8 @@ mod tests {
                 None,
                 Vec::new(),
                 "replace".to_string(),
+                false,
+                None,
                 None,
                 false,
                 false,
@@ -2550,6 +2581,8 @@ mod tests {
                 Some(no_split_args),
                 Vec::new(),
                 "replace".to_string(),
+                false,
+                None,
                 None,
                 false,
                 false,
@@ -2602,6 +2635,9 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                false,
+                None,
                 false,
                 None,
             )
@@ -2636,9 +2672,12 @@ mod tests {
                 None,
                 None,
                 Some(vec!["memory".to_string()]),
+                None,
                 Some(vec!["project=openviking".to_string()]),
                 false,
                 Some("7d".to_string()),
+                false,
+                None,
             )
             .await
             .expect("context search should succeed");
@@ -2659,6 +2698,99 @@ mod tests {
                 "tags": ["project=openviking"],
                 "events_time_decay_protection": "7d"
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn item_search_request_preserves_empty_query_filter_and_aggregation() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let filter = json!({
+            "op": "must",
+            "field": "item_attrs",
+            "conds": ["asset_id=V1"]
+        });
+        client
+            .find(
+                String::new(),
+                "viking://resources/items".to_string(),
+                None,
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(filter.clone()),
+                None,
+                false,
+                None,
+                true,
+                Some("sum".to_string()),
+            )
+            .await
+            .expect("Item find should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({
+                "query": "",
+                "target_uri": "viking://resources/items",
+                "limit": 10,
+                "filter": filter,
+                "search_as_item": {"aggregation": "sum"}
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn item_declaration_keeps_empty_attrs_and_requires_confirmation() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let error = client
+            .mkdir("viking://resources/A", None, true, Some(json!({})), None)
+            .await
+            .expect_err("a legacy success without a declaration must not confirm an Item");
+        assert_eq!(error.code(), "FAILED_PRECONDITION");
+
+        let request = request_rx.await.expect("request should be captured");
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({"uri": "viking://resources/A", "as_item": true, "item_attrs": {}})
+        );
+    }
+
+    #[tokio::test]
+    async fn item_mkdir_accepts_a_declaration_receipt() {
+        let base_url = spawn_test_response(
+            "200 OK",
+            r#"{"status":"ok","result":{"uri":"viking://resources/A","item_uuid":"uuid-a","item_attrs":{}}}"#,
+        ).await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let result = client
+            .mkdir("viking://resources/A", None, true, None, None)
+            .await
+            .expect("the server confirmed the declaration");
+        assert_eq!(result["item_uuid"], "uuid-a");
+    }
+
+    #[tokio::test]
+    async fn ordinary_mkdir_omits_item_fields_and_accepts_a_legacy_response() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .mkdir("viking://resources/plain", None, false, None, None)
+            .await
+            .expect("ordinary mkdir remains compatible");
+        let request = request_rx.await.expect("request captured");
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({"uri": "viking://resources/plain"})
         );
     }
 
@@ -3333,7 +3465,13 @@ mod tests {
             .expect_err("HTTP error should fail download");
         let progress = take_test_progress().expect("download progress should be recorded");
 
-        assert!(matches!(error, crate::error::Error::Api { status: Some(500), .. }));
+        assert!(matches!(
+            error,
+            crate::error::Error::Api {
+                status: Some(500),
+                ..
+            }
+        ));
         assert!(progress.is_finished());
         assert_eq!(progress.message(), "OVPack download failed");
     }

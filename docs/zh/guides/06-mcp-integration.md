@@ -128,8 +128,8 @@ claude mcp add --transport http openviking \
 |------|------|----------|
 | `find_mcp_tools` | 按用户意图语义检索已注册的上游 MCP 工具。返回按相关度排序的候选项，包含 `uri`、`score` 和完整 MCP `tool` 定义（含 `inputSchema` 与 annotations）。可直接将返回的 `uri` 作为 `invoke_mcp_tool.tool_uri`，无需额外调用 `read` | `query`, `limit`（默认 10） |
 | `invoke_mcp_tool` | 执行 `find_mcp_tools` 选出的工具。OpenViking 在服务端解析上游 Server 和凭证，并透明保留上游返回的 `content`、`structuredContent` 与 `isError`。上游工具可能产生外部副作用，调用不会自动重试 | `tool_uri`, `arguments`（可选，必须符合检索结果中的 `tool.inputSchema`） |
-| `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `tags`(可选——只保留带有全部所列 `k=v` 标签的命中；格式不合法的标签会被拒绝), `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选)。每条命中行末尾以 `tags=[...]` 给出该条目的标签 |
-| `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `tags`（两种模式均可选；list 模式的命中行末尾带 `tags=[...]`）, `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
+| `find` | `search_as_item={}` 返回声明根，见 [Item Search](#item-search)。普通模式：无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 普通 list 结果会显示每条命中的标签。 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `tags`（可选，匹配所有指定的 `k=v` 标签，格式不合法时拒绝请求）, `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选), `filter`（可选）, `search_as_item`（可选对象） |
+| `search` | Item 模式见 [Item Search](#item-search)，仅支持 `list`。普通模式：深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` 普通 list 结果会显示每条命中的标签。 | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `tags`（可选，匹配所有指定的 `k=v` 标签，格式不合法时拒绝请求）, `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`）, `filter`（可选）, `search_as_item`（可选对象）, `read_content`（仅普通 list 模式） |
 | `rule_search` | 检索适用于具体任务上下文的已启用 Rule。调用方仍需依据已知事实判断每条 Rule 的 `applies_when` 与 `exception` | `task_context`, `rule_probability_threshold`（可选，默认 `0.65`） |
 | `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频；需要原始字节时用 `download` | `uri`（读一个文件）或 `uris`（数组，一次读多个文件）, `offset`, `limit`（文本行数） |
 | `download` | 返回一个短时有效、只能使用一次的 URL，用 `curl` 获取单个文件的原始字节（任意类型，包括 PDF、图片、压缩包、音频和视频）；不返回文件内容。不支持目录 | `uri` |
@@ -138,7 +138,7 @@ claude mcp add --transport http openviking \
 | `remember` | 提交消息做长期记忆提取；立即返回后台任务的 `task_id`，提取结果可能什么都不保留 | `messages`（`{role, content}` 列表） |
 | `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit`。skill 包不要用它维护：调用方自己的 `skills/` 子树会被拒绝，写 `viking://agent/skills` 则生成绕过安装流程的普通文件，请改用 `add_skill` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — `replace` 的兼容别名), `wait`(可选,阻塞直到重建索引完成), `acl`(可选) |
 | `edit` | 在已有 `viking://` 文件中把精确字符串替换为新文本——用于局部修改，避免整文件重写。若 `old_string` 找不到、或匹配多处且 `replace_all` 为 false，则编辑失败且文件保持不变。编辑 skill 包内的文件不会重新触发 skill 安装流程，请改用 `add_skill` | `uri`, `old_string`, `new_string`, `replace_all`(可选), `wait`(可选,阻塞直到重建索引完成) |
-| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `parent`(可选,目标父目录，缺失时自动创建), `tags` / `tag_mode`(可选,检索标签), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`), `acl`(可选) |
+| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `parent`(可选,目标父目录，缺失时自动创建), `tags` / `tag_mode`(可选,检索标签), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`), `acl`(可选), `as_item`（可选，默认 false）, `item_attrs`（可选字符串 KV，要求 `as_item=true`） |
 | `add_skill` | 新建、安装或替换 agent skill。新 skill 直接传完整 SKILL.md 文本；Git 与 GitHub tree URL 默认安装源里的全部 skill，可用 `skills` 挑选；本地 SKILL.md、目录或 zip 会和 `add_resource` 一样返回签名上传 URL | `data`（SKILL.md 文本）或 `path`（Git URL 或本地路径）, `skills`(可选), `target_uri`(可选；`viking://agent/skills` 表示账户共享), `list_only`(可选) |
 | `list_watches` | 列出当前 Agent 可见的 watch 任务（自动刷新订阅），每行显示目标 URI、刷新间隔（分钟）、active/paused 状态以及下一次调度时间 | 无 |
 | `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
@@ -171,6 +171,18 @@ claude mcp add --transport http openviking \
 > 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。一次性用户 token 导入只传 `args.feishu_access_token`；用户 token watch 还必须传 `args.feishu_refresh_token`。可为该 watch 同时传入 `args.feishu_app_id` 和 `args.feishu_app_secret`，也可回退使用服务端应用凭证；实际使用的应用必须与用户 token 的签发应用一致。
 
 > `processing_mode=vectors_only` 会跳过 VLM 语义理解阶段，不生成或刷新 `.abstract.md` / `.overview.md`；它只向量化当前非隐藏资源文件，并保留已存在的旧语义产物。
+
+### Item Search
+
+`find` 和 `search` 都支持 `search_as_item: {}`，仅返回已声明的对象；`write`／经验提取不会自动声明 Item。新建 Skill 包在支持的后端上自动声明，历史普通包不自动补声明。
+
+例如，按 Item 属性做纯过滤检索，`query` 传空字符串：
+
+```json
+{"name":"find","arguments":{"query":"","filter":{"op":"must","field":"item_attrs","conds":["kind=runbook"]},"search_as_item":{}}}
+```
+
+两者均支持语义查询；默认取 `max`，需要求和时传 `{"aggregation":"sum"}`。结果沿用分类文本，包含根 URI、聚合分和 Item 元数据；`limit` 限制总 Item 数。Item 模式忽略 `session_id`，不加载会话、摘要或正文，且拒绝 `read_content`、事件时间衰减和 context 模式。完整约束见 [Item Search 协议](../api/06-retrieval.md#item-search预览)。
 
 ### 使用 skill 中引用的凭据
 

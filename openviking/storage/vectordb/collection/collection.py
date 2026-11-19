@@ -22,6 +22,27 @@ class ICollection(ABC):
     def __init__(self):
         pass
 
+    def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute Catalog operations; declarations are scoped to an account.
+
+        Inheritance mode configuration applies to the field in the collection.
+        """
+        raise NotImplementedError("Catalog is not supported by this collection")
+
+    def search_item_groups(
+        self,
+        index_name: str,
+        *,
+        dense_vector: Optional[List[float]] = None,
+        sparse_vector: Optional[Dict[str, float]] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+    ) -> Dict[str, Any]:
+        raise NotImplementedError("Item grouping is not supported by this collection")
+
     @abstractmethod
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
         raise NotImplementedError
@@ -223,6 +244,16 @@ class Collection:
             "collection must be an instance of CollectionInterface"
         )
         self.__collection: Optional[ICollection] = collection
+
+    def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        return self.__collection.catalog_execute(request)
+
+    def search_item_groups(self, index_name: str, **kwargs: Any) -> Dict[str, Any]:
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        return self.__collection.search_item_groups(index_name, **kwargs)
 
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
         """
@@ -635,7 +666,7 @@ class Collection:
             raise RuntimeError("Collection is closed")
         return self.__collection.upsert_data(data_list, ttl)
 
-    def update_data(self, data_list: List[Dict[str, Any]]) -> Any:
+    def update_data(self, data_list: List[Dict[str, Any]], **kwargs: Any) -> Any:
         """
         Update existing data in the collection using only explicitly provided fields.
 
@@ -648,9 +679,9 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.update_data(data_list)
+        return self.__collection.update_data(data_list, **kwargs)
 
-    def fetch_data(self, primary_keys: List[Any]) -> List[Dict[str, Any]]:
+    def fetch_data(self, primary_keys: List[Any], **kwargs: Any) -> List[Dict[str, Any]]:
         """
         Retrieve data documents from the collection using their primary keys.
 
@@ -663,9 +694,9 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.fetch_data(primary_keys)
+        return self.__collection.fetch_data(primary_keys, **kwargs)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], **kwargs: Any):
         """
         Delete specific data documents from the collection using their primary keys.
 
@@ -674,7 +705,7 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.delete_data(primary_keys)
+        return self.__collection.delete_data(primary_keys, **kwargs)
 
     def delete_all_data(self):
         """
