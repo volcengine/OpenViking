@@ -203,11 +203,14 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
         || std::io::stdout().is_terminal()
         || std::io::stderr().is_terminal();
     let terminal = std::fs::File::open("/dev/tty").ok().filter(|_| job);
-    if terminal.is_none() {
-        command.process_group(0);
-    }
     let pipe_out = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stdout()));
     let pipe_err = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stderr()));
+    // Unmasked non-terminal commands whose outputs go straight to files stay in the caller's
+    // group so background services survive normal exit and group SIGKILL still reaches workers.
+    let isolate = terminal.is_none() && (pipe_out || pipe_err);
+    if isolate {
+        command.process_group(0);
+    }
     let combined_rx = if pipe_out && pipe_err && shared_non_tty_outputs() {
         let (tx, rx) = tokio::net::unix::pipe::pipe()?;
         // Clear O_NONBLOCK so the child inherits standard blocking descriptors.
@@ -228,30 +231,14 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
     // Drop configured Stdio handles immediately so the parent holds no write end to combined_rx.
     drop(command);
     let pid = child.id().expect("just spawned") as i32;
-    // A SIGKILL sent to ov's group cannot reach the command's own group, and ov cannot catch it.
-    // Run the guard in its own group so kill(-pid, 0) detects surviving background workers and
-    // keeps watching until the outer caller group finishes.
-    const GUARD_SCRIPT: &str = r#"trap '' INT TERM HUP
-if ! IFS= read -r line; then
-    kill -KILL -$1 2>/dev/null
-elif [ "$line" = watch ]; then
-    while kill -0 -$1 2>/dev/null; do
-        kill -0 -$2 2>/dev/null || { kill -KILL -$1 2>/dev/null; break; }
-        sleep 0.05 2>/dev/null || sleep 1
-    done
-fi"#;
-    let guard = if terminal.is_some() {
+    // A SIGKILL sent to ov's group cannot reach an isolated group, and ov cannot catch it.
+    // This shell joins the command's group and ends it when ov exits without writing a newline.
+    let guard = if !isolate {
         None
     } else {
         std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                GUARD_SCRIPT,
-                "ov-guard",
-                &pid.to_string(),
-                &caller_pgrp.to_string(),
-            ])
-            .process_group(0)
+            .args(["-c", "trap '' INT TERM HUP; read line || kill -s KILL 0"])
+            .process_group(pid)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -270,18 +257,14 @@ fi"#;
         let sig = tokio::select! {
             biased;
             status = &mut wait => {
-                if status.is_err() && terminal.is_none() {
+                if status.is_err() && isolate {
                     kill(-pid, SIGKILL);
                 }
                 if let Some(mut guard) = guard {
-                    let keep_watching = status.is_ok() && kill(-pid, 0) == 0;
                     if let Some(mut stdin) = guard.stdin.take() {
-                        let msg: &[u8] = if keep_watching { b"watch\n" } else { b"done\n" };
-                        let _ = stdin.write_all(msg);
+                        let _ = stdin.write_all(b"\n");
                     }
-                    if !keep_watching {
-                        let _ = guard.wait();
-                    }
+                    let _ = guard.wait();
                 }
                 return Ok(status?);
             }
@@ -289,16 +272,18 @@ fi"#;
             _ = terminate.recv() => SignalKind::terminate(),
             _ = hangup.recv() => SignalKind::hangup(),
         };
-        let target = match &terminal {
-            None => -pid,
+        let target = if isolate {
+            -pid
+        } else {
             // Ctrl-C reaches every process in the terminal's foreground job, the child included.
             // A SIGINT sent only to a foreground ov is therefore not forwarded.
-            Some(tty)
-                if sig == SignalKind::interrupt() && tcgetpgrp(tty.as_raw_fd()) == getpgrp() =>
+            if let Some(tty) = &terminal
+                && sig == SignalKind::interrupt()
+                && tcgetpgrp(tty.as_raw_fd()) == caller_pgrp
             {
                 continue;
             }
-            Some(_) => pid,
+            pid
         };
         // A child that already exited is reported by the wait above.
         kill(target, sig.as_raw_value());

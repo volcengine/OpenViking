@@ -569,6 +569,68 @@ async fn killing_outer_job_stops_redirected_background_worker() {
 
     let dir = tempfile::tempdir().unwrap();
     let _ = privacy(dir.path(), "http://127.0.0.1:1");
+    fs::write(
+        dir.path().join("service.sh"),
+        "printf '%s\\n' \"$$\" > service.pid\nexec sleep 5\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("worker.sh"),
+        "printf '%s\\n' \"$$\" > worker.ready\nsleep 0.35\n: > worker.done\n",
+    )
+    .unwrap();
+
+    // Normal outer exit must preserve a background service started under a redirected file.
+    let mut service_outer = Command::new("/bin/sh");
+    service_outer
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
+        .env("OPENVIKING_LANG", "en")
+        .args([
+            "-c",
+            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./service.sh &' >service.log 2>&1; while [ ! -s service.pid ]; do sleep 0.02; done"#,
+            "sh",
+            env!("CARGO_BIN_EXE_ov"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        service_outer.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let service_status = timeout(Duration::from_secs(5), service_outer.status())
+        .await
+        .expect("normal outer job did not finish")
+        .unwrap();
+    assert_eq!(service_status.code(), Some(0));
+    let service_pid: i32 = fs::read_to_string(dir.path().join("service.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        posix::kill(service_pid, 0),
+        0,
+        "background service {service_pid} was killed after normal outer exit"
+    );
+    assert_eq!(posix::kill(service_pid, posix::SIGKILL), 0);
+    for _ in 0..20 {
+        if posix::kill(service_pid, 0) < 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
     let worker_ready = dir.path().join("worker.ready");
     let worker_done = dir.path().join("worker.done");
     let next_step = dir.path().join("next_step");
@@ -582,7 +644,7 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         .env("OPENVIKING_LANG", "en")
         .args([
             "-c",
-            r#""$1" privacy run -- /bin/sh -c '(printf "%s\n" "$$" > worker.ready; sleep 0.6; : > worker.done) &' >job.log 2>&1; : > next_step; exec sleep 10"#,
+            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./worker.sh &' >job.log 2>&1; : > next_step; sleep 10; :"#,
             "sh",
             env!("CARGO_BIN_EXE_ov"),
         ])
@@ -604,7 +666,11 @@ async fn killing_outer_job_stops_redirected_background_worker() {
     let outer_pgid = outer_child.id().unwrap() as i32;
 
     timeout(Duration::from_secs(5), async {
-        while !worker_ready.exists() || !next_step.exists() {
+        while fs::read_to_string(&worker_ready)
+            .map(|text| text.trim().is_empty())
+            .unwrap_or(true)
+            || !next_step.exists()
+        {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -615,11 +681,16 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         .trim()
         .parse()
         .unwrap();
+    assert_eq!(
+        posix::kill(worker_pid, 0),
+        0,
+        "recorded worker {worker_pid} should still be alive before cancellation"
+    );
 
     assert_eq!(posix::kill(-outer_pgid, posix::SIGKILL), 0);
     outer_child.wait().await.unwrap();
 
-    for _ in 0..20 {
+    for _ in 0..15 {
         if posix::kill(worker_pid, 0) < 0 {
             break;
         }
@@ -629,6 +700,7 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         posix::kill(worker_pid, 0) < 0,
         "redirected background worker {worker_pid} outlived outer job"
     );
+    tokio::time::sleep(Duration::from_millis(450)).await;
     assert!(!worker_done.exists());
 }
 
