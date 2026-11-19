@@ -7,6 +7,10 @@ const { useConversation } = await import(
   pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'console-conversation.js'))
 );
 
+const { OpenVikingProvider } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'provider.js'))
+);
+
 export const card = (card_type, title, payload = {}) => ({
   card_type,
   title,
@@ -57,6 +61,9 @@ export async function mountHitl(
     onAnswer,
     answerEvents,
     locale = 'zh-CN',
+    fetch,
+    requestOptions,
+    prompt = 'Create a wiki',
   } = {},
 ) {
   let props;
@@ -87,7 +94,7 @@ export async function mountHitl(
       {
         locale: language,
         scopeKey: scope,
-        chatOptions: { service, hitl },
+        chatOptions: { service, hitl, requestOptions },
         ...(controlled ? { conversation: { messages: [] } } : {}),
       },
       () => {},
@@ -96,7 +103,15 @@ export async function mountHitl(
       ? h(VikingBotInteraction, { ...props.interaction, locale: language })
       : null;
   }
-  const view = await mount(h(Host));
+  const render = (props) =>
+    fetch
+      ? h(
+          OpenVikingProvider,
+          { fetch, baseURL: 'https://ov.test' },
+          h(Host, props),
+        )
+      : h(Host, props);
+  const view = await mount(render());
   return {
     ...view,
     get props() {
@@ -105,11 +120,9 @@ export async function mountHitl(
     requests,
     saved,
     start: async () => {
-      await act(async () =>
-        props.onSend({ text: 'Create a wiki', attachments: [] }),
-      );
+      await act(async () => props.onSend({ text: prompt, attachments: [] }));
       await settle();
     },
-    rerender: (values) => view.render(h(Host, values)),
+    rerender: (values) => view.render(render(values)),
   };
 }

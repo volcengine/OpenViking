@@ -27,6 +27,18 @@ const messages: typeof enUS = {
     >
   >,
   telemetryResult: (value: string) => `遥测：${value}`,
+  memoryCommit: {
+    idle: '提交会话',
+    pending: '会话提交中',
+    submitted: '会话提交中',
+    success: '会话已提交',
+    empty: '当前会话暂无可生成的新记忆',
+    skipped: '本轮未生成新记忆',
+    failed: '会话提交失败',
+    completed: '记忆提取已完成',
+    saved: '记忆已生成，并保存至目录文件',
+    view: '查看记忆',
+  },
   taskCompletion: {
     title: '任务完成',
     description: '异步任务已完成。',

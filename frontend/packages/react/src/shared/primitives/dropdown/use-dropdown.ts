@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useViewActive } from '../../view-activity.js';
 import type { KeyboardEvent, PointerEvent } from 'react';
 
 function menuItems(menu: HTMLDivElement | null) {
@@ -16,14 +17,19 @@ export function useDropdown(
   onOpenChange?: (open: boolean) => void,
   nested = false,
 ) {
+  const active = useViewActive();
+  const currentActivity = useRef(active);
+  currentActivity.current = active;
   const [localOpen, setLocalOpen] = useState(false);
-  const open = controlledOpen ?? localOpen;
+  if (!active && localOpen) setLocalOpen(false);
+  const open = active && (controlledOpen ?? localOpen);
   const setOpen = useCallback(
     (next: boolean) => {
+      if (next && !active) return;
       setLocalOpen(next);
       onOpenChange?.(next);
     },
-    [onOpenChange],
+    [active, onOpenChange],
   );
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement | null>(null);
@@ -35,8 +41,11 @@ export function useDropdown(
     timer.current = undefined;
   };
   // The pointerleave timer bridges the gap to the portal. Unmount is not a
-  // pointer event, so an effect must cancel any pending browser timer on cleanup.
-  useEffect(() => () => clearTimeout(timer.current), []);
+  // pointer event, so hiding its owning view or unmounting must cancel the timer.
+  useEffect(() => {
+    if (!active) clearTimeout(timer.current);
+    return () => clearTimeout(timer.current);
+  }, [active]);
   // Browser focus may leave a pointer-open menu without blurring either of its
   // own nodes. Observe document focus while open; remove the subscription on close
   // or unmount. Local handlers cannot observe those external focus changes.
@@ -69,7 +78,10 @@ export function useDropdown(
   }, [open, setOpen]);
   const close = (restore = true) => {
     clear();
-    if (restore || menu.current?.contains(document.activeElement))
+    if (
+      currentActivity.current &&
+      (restore || menu.current?.contains(document.activeElement))
+    )
       trigger.current?.focus();
     setOpen(false);
   };

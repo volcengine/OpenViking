@@ -34,7 +34,7 @@ export interface TaskSource {
 
 export interface TrackedTask extends TaskSnapshot {
   key: string;
-  origin?: 'command';
+  origin?: 'command' | 'memory-commit';
 }
 
 export const isTaskTerminal = (status?: TaskStatus) =>

@@ -1045,6 +1045,7 @@ class Session:
                     created_at=created_at,
                     turn_id=turn_id,
                     message_kind=message_kind,
+                    interrupted=role == "assistant" and spec.get("interrupted") is True,
                     source_message_ids=(
                         list(source_message_ids) if source_message_ids is not None else None
                     ),

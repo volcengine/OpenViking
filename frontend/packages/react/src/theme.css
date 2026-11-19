@@ -670,3 +670,13 @@ html.dark .ov-notification-stack {
 .ov-toast-stack {
   --ov-ui-toast-shadow-default: var(--ov-ui-overlay-shadow-default);
 }
+
+/* VikingBot activation cover, shown when the host supplies no tutorial media. */
+.ov-console {
+  --ov-ui-activation-preview-sky-default: #7ab7f6;
+  --ov-ui-activation-preview-haze-default: #dce1f6;
+}
+.dark .ov-console {
+  --ov-ui-activation-preview-sky-default: #315b92;
+  --ov-ui-activation-preview-haze-default: #292841;
+}
