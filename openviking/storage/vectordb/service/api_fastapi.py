@@ -683,9 +683,6 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
                 offset=offset,
                 filters=filters,
                 output_fields=output_fields,
-                bm25_k1=request.bm25_k1,
-                bm25_b=request.bm25_b,
-                advance=data_utils.convert_dict(request.advance) if request.advance else None,
             )
             return success_response("search success", asdict(result), request=req)
         except Exception as e:

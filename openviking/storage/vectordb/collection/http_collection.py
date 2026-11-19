@@ -571,6 +571,9 @@ class HttpCollection(ICollection):
         bm25_b: Optional[float] = None,
         advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
+        # bm25_k1/bm25_b/advance only exist for interface parity with
+        # Collection.search_by_keywords; the built-in keyword-search service
+        # serves local collections, which do not support these options.
         url = self.url_prefix + "api/vikingdb/data/search/keywords"
         payload = {
             "project": self.project_name,
@@ -582,9 +585,6 @@ class HttpCollection(ICollection):
             "fields": json.dumps(fields) if fields else None,
             "filter": json.dumps(filters) if filters else None,
             "output_fields": json.dumps(output_fields) if output_fields else None,
-            "bm25_k1": bm25_k1,
-            "bm25_b": bm25_b,
-            "advance": json.dumps(advance) if advance else None,
             "limit": limit,
             "offset": offset,
         }

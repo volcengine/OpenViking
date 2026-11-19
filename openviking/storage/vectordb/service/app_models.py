@@ -169,9 +169,6 @@ class SearchByKeywordsRequest(BaseModel):
     fields: Optional[Any] = Field(None, description="Fields used for keyword matching")
     filter: Optional[Any] = Field(None, description="Filter conditions")
     output_fields: Optional[Any] = Field(None, description="Output fields")
-    bm25_k1: Optional[float] = Field(None, description="BM25 k1 parameter")
-    bm25_b: Optional[float] = Field(None, description="BM25 b parameter")
-    advance: Optional[Any] = Field(None, description="Advanced search options")
     limit: Optional[int] = Field(10, description="Result limit")
     offset: Optional[int] = Field(0, description="Result offset")
 

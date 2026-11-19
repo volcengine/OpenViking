@@ -1710,7 +1710,7 @@ pub async fn handle_search(
     }
     if let Some(ref args) = args {
         params.push(format!(
-            "--args {}",
+            "--args '{}'",
             serde_json::Value::Object(args.clone())
         ));
     }
