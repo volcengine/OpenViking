@@ -15,11 +15,15 @@ from typing import Any
 
 from loguru import logger
 
-from openviking.models.model_error import model_error_kind
+from openviking.models.model_error import chat_finish_error, model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
 from openviking.models.vlm.base import ToolResultMediaMode
 from openviking.utils.message_format import tool_images_as_user_messages
-from openviking.utils.model_retry import effective_max_retries, retry_async
+from openviking.utils.model_retry import (
+    effective_max_retries,
+    extract_metric_error_code,
+    retry_async,
+)
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 from vikingbot.integrations.langfuse import LangfuseClient
@@ -494,6 +498,7 @@ class VLMProviderAdapter(LLMProvider):
         reasoning_parts: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason = "stop"
+        finish_error = None
         usage: dict[str, int] = {}
         start_time = time.perf_counter()
 
@@ -515,7 +520,10 @@ class VLMProviderAdapter(LLMProvider):
                     continue
                 choice = choices[0]
                 if getattr(choice, "finish_reason", None):
-                    finish_reason = choice.finish_reason or finish_reason
+                    finish_reason = choice.finish_reason
+                    finish_error = chat_finish_error(finish_reason, vlm.provider)
+                    if finish_error is not None:
+                        break
                 delta = getattr(choice, "delta", None)
                 if delta is None:
                     continue
@@ -539,8 +547,18 @@ class VLMProviderAdapter(LLMProvider):
                         fallback_index=fallback_index,
                     )
 
+        duration = time.perf_counter() - start_time
         if usage:
-            self._record_vlm_usage(vlm, usage, time.perf_counter() - start_time)
+            self._record_vlm_usage(
+                vlm,
+                usage,
+                duration,
+                extract_metric_error_code(finish_error) if finish_error else "OK",
+            )
+        elif finish_error:
+            vlm.record_failed_call(duration_seconds=duration, error=finish_error)
+        if finish_error:
+            raise finish_error
 
         yield LLMStreamEvent(
             type="response",
@@ -660,6 +678,7 @@ class VLMProviderAdapter(LLMProvider):
         vlm: Any,
         usage: dict[str, int],
         duration_seconds: float,
+        error_code: str,
     ) -> None:
         update_token_usage = getattr(vlm, "update_token_usage", None)
         if not callable(update_token_usage):
@@ -673,6 +692,7 @@ class VLMProviderAdapter(LLMProvider):
                 duration_seconds=duration_seconds,
                 prompt_cached_tokens=usage.get("cache_read_input_tokens", 0),
                 completion_reasoning_tokens=usage.get("reasoning_tokens", 0),
+                error_code=error_code,
             )
         except Exception as e:
             logger.debug(f"[VLM] Failed to record stream token usage: {e}")
