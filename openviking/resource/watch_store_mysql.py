@@ -798,7 +798,10 @@ class MySQLWatchStore(WatchStore):
                     c.current_run_id,
                     c.run_started_at,
                     c.connector,
+                    c.last_status,
                     c.payload["instruction"].as_string().label("instruction"),
+                    c.payload["source_checkpoint"].label("source_checkpoint"),
+                    c.payload["recovery_attempts"].as_integer().label("recovery_attempts"),
                     db_now().label("db_now"),
                 )
                 .where(
@@ -819,6 +822,13 @@ class MySQLWatchStore(WatchStore):
                     now=float(row["db_now"]),
                     connector=bool(row["connector"]),
                     instruction=row["instruction"] or "",
+                    source_checkpoint=(
+                        row["source_checkpoint"]
+                        if isinstance(row["source_checkpoint"], dict)
+                        else None
+                    ),
+                    last_status=row["last_status"],
+                    recovery_attempts=int(row["recovery_attempts"] or 0),
                 )
                 for row in rows
             ]
@@ -947,10 +957,13 @@ class MySQLWatchStore(WatchStore):
             if not rows:
                 return False
             payload = dict(rows[0]["payload"] or {})
-            if result.source_checkpoint is not None and payload.get(
-                "run_source_checkpoint_version"
-            ) == payload.get("source_checkpoint_version", 0):
-                payload["source_checkpoint"] = result.source_checkpoint
+            if payload.get("run_source_checkpoint_version") == payload.get(
+                "source_checkpoint_version", 0
+            ):
+                if result.source_checkpoint is not None:
+                    payload["source_checkpoint"] = result.source_checkpoint
+                if result.recovery_attempts is not None:
+                    payload["recovery_attempts"] = result.recovery_attempts
             payload["run_source_checkpoint_version"] = None
             values["payload"] = payload
             changed = (

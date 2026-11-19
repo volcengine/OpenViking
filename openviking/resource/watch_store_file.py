@@ -593,6 +593,9 @@ class FileWatchStore(WatchStore):
                         now=now,
                         connector=is_connector(row.task.auth_state),
                         instruction=row.task.instruction,
+                        source_checkpoint=row.task.source_checkpoint,
+                        last_status=row.task.last_status,
+                        recovery_attempts=row.task.recovery_attempts,
                     )
                 )
             return result
@@ -688,11 +691,11 @@ class FileWatchStore(WatchStore):
             }
             if result.has_connector_states:
                 changes["connector_states"] = result.connector_states
-            if (
-                result.source_checkpoint is not None
-                and task.run_source_checkpoint_version == task.source_checkpoint_version
-            ):
-                changes["source_checkpoint"] = result.source_checkpoint
+            if task.run_source_checkpoint_version == task.source_checkpoint_version:
+                if result.source_checkpoint is not None:
+                    changes["source_checkpoint"] = result.source_checkpoint
+                if result.recovery_attempts is not None:
+                    changes["recovery_attempts"] = result.recovery_attempts
             changes["run_source_checkpoint_version"] = None
             settled = replace(
                 row,

@@ -34,7 +34,13 @@ PAYLOAD_FIELDS = MUTABLE_FIELDS - {
     "connector_states",
 }
 PRIVATE_PATCH_FIELDS = frozenset(
-    {"source_checkpoint", "source_checkpoint_version", "credential_version", "credential_paused"}
+    {
+        "source_checkpoint",
+        "source_checkpoint_version",
+        "credential_version",
+        "credential_paused",
+        "recovery_attempts",
+    }
 )
 TERMINAL_RUN_STATUSES = frozenset({"completed", "partial", "failed", "cancelled", "error"})
 
@@ -89,6 +95,10 @@ class WatchTask(BaseModel):
     last_task_id: Optional[str] = Field(None, description="Latest ingestion task identifier")
     last_status: Optional[str] = Field(None, description="Latest execution status")
     last_error: Optional[str] = Field(None, description="Latest sanitized execution error")
+    recovery_attempts: int = Field(
+        default=0,
+        description="Consecutive same-source recovery failures; reset on a successful run",
+    )
     next_execution_time: Optional[datetime] = Field(None, description="Next execution time")
     is_active: bool = Field(default=True, description="Whether the task is active")
     account_id: str = Field(default="default", description="Account ID (tenant)")
@@ -140,6 +150,7 @@ class WatchTask(BaseModel):
             "run_source_checkpoint_version",
             "credential_version",
             "credential_paused",
+            "recovery_attempts",
         ):
             data[name] = getattr(self, name)
         if self.auth_state is not None:
@@ -247,6 +258,7 @@ class WatchPatch:
             values.update(
                 source_checkpoint=None,
                 source_checkpoint_version=task.source_checkpoint_version + 1,
+                recovery_attempts=0,
             )
         return values
 
@@ -299,6 +311,11 @@ class WatchRunning:
     now: float
     connector: bool
     instruction: str
+    # Previous settlement state, used to tell a first failure from a failed
+    # same-source recovery attempt without loading the full Watch row.
+    source_checkpoint: Optional[dict[str, Any]] = None
+    last_status: Optional[str] = None
+    recovery_attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -319,6 +336,7 @@ class WatchRunResult:
     connector_states: Optional[dict[str, Any]] = None
     has_connector_states: bool = False
     source_checkpoint: Optional[dict[str, Any]] = None
+    recovery_attempts: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.status not in TERMINAL_RUN_STATUSES:
@@ -327,3 +345,7 @@ class WatchRunResult:
             raise ValueError("connector_states must be an object")
         if self.source_checkpoint is not None and not isinstance(self.source_checkpoint, dict):
             raise ValueError("source_checkpoint must be an object")
+        if self.recovery_attempts is not None and (
+            not isinstance(self.recovery_attempts, int) or self.recovery_attempts < 0
+        ):
+            raise ValueError("recovery_attempts must be a non-negative integer")
