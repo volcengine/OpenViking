@@ -39,7 +39,7 @@ Agent 可以先读摘要定位内容，再按需读全文，减少不相关内�
 | L1 | 目录概览 `.overview.md` | 4,000 字符 | 导航与精排 |
 | L2 | 原始文件或解析后的内容 | 无统一上限 | 按需读取详情 |
 
-L0/L1 是目录级附属文件，是否可用取决于处理状态和配置。资源目录的 L1 开头放生成的摘要，末尾放使用指引。渲染时按 `semantic.overview_max_chars` 截断超长摘要，并用剩余空间放导航。自动生成的 L0 从 L1 中的摘要取最多 `semantic.abstract_max_chars` 个字符。详见[上下文层级](../concepts/03-context-layers.md)。
+L0/L1 是目录级附属文件，是否可用取决于处理状态和配置。资源目录的 L1 开头放生成的摘要，末尾放使用指引。渲染时按 `semantic.overview_max_chars` 截断超长摘要，并用剩余空间放导航。自动生成的 L0 尽量从 L1 摘要中取完整句子。首句超过 `semantic.abstract_max_chars` 时，仍保留完整首句。详见[上下文层级](../concepts/03-context-layers.md)。
 
 ### Viking URI 是什么？有什么作用？
 

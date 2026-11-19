@@ -39,7 +39,7 @@ An agent can use summaries to locate relevant material before reading full conte
 | L1 | Directory overview, `.overview.md` | 4,000 characters | Navigation and reranking |
 | L2 | Original or parsed content | No shared limit | Reading details on demand |
 
-L0/L1 are directory sidecars. Their availability depends on processing state and configuration. For resources, L1 starts with the generated summary and ends with the access guide. The renderer truncates the summary if needed to fit `semantic.overview_max_chars` and uses the remaining space for navigation. An automatically generated L0 takes up to `semantic.abstract_max_chars` characters from the summary in L1. See [Context Layers](../concepts/03-context-layers.md).
+L0/L1 are directory sidecars. Their availability depends on processing state and configuration. For resources, L1 starts with the generated summary and ends with the access guide. The renderer truncates the summary if needed to fit `semantic.overview_max_chars` and uses the remaining space for navigation. An automatically generated L0 takes complete sentences from the L1 summary when possible. It keeps the first sentence if that sentence exceeds `semantic.abstract_max_chars`. See [Context Layers](../concepts/03-context-layers.md).
 
 ### What is Viking URI? What's its purpose?
 

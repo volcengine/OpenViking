@@ -23,7 +23,8 @@ from tests.storage.test_abstract_overview_freshness import _FakeFS
 
 @pytest.mark.asyncio
 async def test_directory_generation_uses_the_same_summary_for_l0_and_l1():
-    full_abstract = "Documentation for the search service."
+    first_sentence = "Documentation for the search service."
+    full_abstract = f"{first_sentence} It covers configuration and deployment."
     complete = AsyncMock(return_value=full_abstract)
     result = await generate_directory_semantics(
         "viking://resources/product docs",
@@ -37,15 +38,17 @@ async def test_directory_generation_uses_the_same_summary_for_l0_and_l1():
         language="en",
         complete=complete,
     )
-    assert result.abstract == "Documentation for"
+    assert result.abstract == first_sentence
     assert f"\n\n{full_abstract}\n\n" in result.overview
     assert "viking://resources/product%20docs/guide%20%231.md" in result.overview
     assert result.overview.index("[api]") < result.overview.index("[guide #1.md]")
     assert "Only some entries are listed" in result.overview
     assert "Access guide" in result.overview
     complete.assert_awaited_once()
-    assert "Coverage: 2 of 513" in complete.await_args.args[0]
-    assert "at most 17 characters" in complete.await_args.args[0]
+    prompt = complete.await_args.args[0]
+    assert "Coverage: 2 of 513" in prompt
+    assert "50-150 words" in prompt
+    assert "Include core keywords from the provided summaries for easy searching" in prompt
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Mapping
 
@@ -28,6 +29,38 @@ class DirectoryGeneration:
     abstract: str
     overview: str
     preset_abstract: bool = False
+
+
+def _truncate_generated_text(text: str, max_chars: int) -> str:
+    """Prefer complete sentences when shortening the directory abstract."""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+
+    if max_chars <= 3:
+        return text[:max_chars]
+
+    first_sentence_end = None
+    last_sentence_end_within_limit = None
+    for sentence_end_match in re.finditer(r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text):
+        sentence_end = sentence_end_match.end()
+        if first_sentence_end is None:
+            first_sentence_end = sentence_end
+        if sentence_end <= max_chars:
+            last_sentence_end_within_limit = sentence_end
+        elif last_sentence_end_within_limit is not None:
+            break
+
+    if last_sentence_end_within_limit is not None:
+        return text[:last_sentence_end_within_limit].strip()
+    if first_sentence_end is not None:
+        return text[:first_sentence_end].strip()
+
+    candidate = text[: max_chars - 3].rstrip()
+    word_boundary = candidate.rfind(" ")
+    if word_boundary > 0:
+        return candidate[:word_boundary].rstrip() + "..."
+
+    return candidate + "..."
 
 
 def _render_directory_overview(
@@ -143,7 +176,6 @@ async def generate_directory_semantics(
                 "sampled_entries": len(entries),
                 "total_entries": total_entries,
                 "output_language": language,
-                "max_chars": config.abstract_max_chars,
             },
         )
 
@@ -201,6 +233,8 @@ async def generate_directory_semantics(
         navigation_renderer=navigation_renderer,
     )
     abstract = (
-        overview_summary[: config.abstract_max_chars].rstrip() if generate_summary else summary
+        _truncate_generated_text(overview_summary, config.abstract_max_chars)
+        if generate_summary
+        else summary
     )
     return DirectoryGeneration(abstract=abstract, overview=overview, preset_abstract=seeded)
