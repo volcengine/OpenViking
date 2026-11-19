@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import httpx
 from loguru import logger
+from PIL.Image import DecompressionBombError
 
 from openviking.utils.image_input import (
+    MAX_COMPILE_IMAGE_DOWNLOAD_BYTES,
     MAX_IMAGE_INPUT_DOWNLOAD_BYTES,
     compress_image_input,
 )
@@ -1138,8 +1140,8 @@ class VikingMultiReadTool(OVFileTool):
         }
 
     @classmethod
-    async def _read_image(cls, client, uri):
-        """Load one native image for multi-read and Compile using the same checks."""
+    async def _read_image(cls, client, uri, *, for_compile: bool = False):
+        """Load one native image and opt into pixel normalization for Compile."""
         stat = await client.stat(uri)
         size = stat.get("size") if isinstance(stat, dict) else None
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
@@ -1149,12 +1151,15 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        if size > MAX_IMAGE_INPUT_DOWNLOAD_BYTES:
+        download_limit = (
+            MAX_COMPILE_IMAGE_DOWNLOAD_BYTES if for_compile else MAX_IMAGE_INPUT_DOWNLOAD_BYTES
+        )
+        if size > download_limit:
             return {
                 "uri": uri,
                 "content": (
                     f"Image is {size} bytes; the model image download limit is "
-                    f"{MAX_IMAGE_INPUT_DOWNLOAD_BYTES} bytes."
+                    f"{download_limit} bytes."
                 ),
                 "success": False,
                 "media_kind": "image",
@@ -1176,7 +1181,22 @@ class VikingMultiReadTool(OVFileTool):
                 "media_kind": "image",
             }
         model_data, mime_type = data, image_format.mime_type
-        if len(data) > cls._MAX_INLINE_MEDIA_BYTES:
+        if for_compile:
+            try:
+                model_data, mime_type = await asyncio.to_thread(
+                    compress_image_input,
+                    data,
+                    mime_type,
+                    compile_inline_budget=cls._MAX_INLINE_MEDIA_BYTES,
+                )
+            except (DecompressionBombError, OSError, ValueError) as exc:
+                return {
+                    "uri": uri,
+                    "content": f"Cannot prepare image for Compile: {exc}",
+                    "success": False,
+                    "media_kind": "image",
+                }
+        elif len(data) > cls._MAX_INLINE_MEDIA_BYTES:
             model_data, mime_type = await asyncio.to_thread(compress_image_input, data, mime_type)
         if len(model_data) > cls._MAX_INLINE_MEDIA_BYTES:
             return {

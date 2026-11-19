@@ -61,7 +61,7 @@ class CompileImageReadTool(VikingMultiReadTool):
         await self.reader._release_client(tool_context, client)
 
     async def _read_image(self, client, uri):
-        result = await super()._read_image(client, uri)
+        result = await super()._read_image(client, uri, for_compile=True)
         if result["success"]:
             if uri in self.hashes and result["sha256"] != self.hashes[uri]:
                 return {
