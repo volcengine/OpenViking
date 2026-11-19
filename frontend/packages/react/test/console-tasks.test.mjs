@@ -98,7 +98,7 @@ test('Console custom task adapter is isolated and aborts on identity switch', as
   }
 });
 
-test('a completed resource import keeps its output link without a notification', async () => {
+test('a completed resource import keeps its output and opens the final URI without a notification', async () => {
   const rootUri = 'viking://resources/demo';
   const finalUri = 'viking://resources/demo-2';
   const opened = [];
@@ -142,12 +142,20 @@ test('a completed resource import keeps its output link without a notification',
       [...record.querySelectorAll('.ov-command-console__write-line')].map(
         (line) => line.textContent,
       ),
-      ['Task id: resource-task', `Root uri: ${rootUri}`],
+      [
+        'Task id: resource-task',
+        `Root uri: ${rootUri}`,
+        `任务结果: ${finalUri}`,
+      ],
     );
     const link = record.querySelector(`a[href="${rootUri}"]`);
     assert.equal(link.textContent, rootUri);
     await act(() => link.click());
     assert.deepEqual(opened, [rootUri]);
+    const finalLink = record.querySelector(`a[href="${finalUri}"]`);
+    assert.ok(finalLink);
+    await act(() => finalLink.click());
+    assert.deepEqual(opened, [rootUri, finalUri]);
     assert.equal(document.querySelector('.ov-notification'), null);
   } finally {
     await host.dispose();
