@@ -1,0 +1,17 @@
+export const transferSession = {
+  get: '下载文件',
+  import: '导入 OVPack',
+  export: '导出 OVPack',
+  backup: '备份公共数据范围',
+  restore: '恢复备份',
+  'session new': '新建会话',
+  'session list': '列出会话',
+  'session get': '查看会话详情',
+  'session get-session-context': '查看会话上下文',
+  'session get-session-archive': '查看会话归档',
+  'session delete': '删除会话',
+  'session add-message': '添加会话消息',
+  'session add-messages': '批量添加会话消息',
+  'session commit': '提交会话',
+  'session config set': '修改会话配置',
+};

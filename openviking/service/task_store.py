@@ -181,6 +181,15 @@ class TaskWorkStore(Protocol):
         user_id: Optional[str] = None,
     ) -> Optional[TaskRecord]: ...
 
+    async def get_durable_task(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> Optional[TaskRecord]:
+        """Read one owner's persisted Task, including private state, bypassing local caches.
+
+        Return None if the Task is absent. Storage and decoding errors propagate.
+        """
+        ...
+
     async def get_task_with_events(
         self,
         task_id: str,
@@ -202,6 +211,12 @@ class TaskWorkStore(Protocol):
         include_internal: bool = True,
         q: Optional[str] = None,
     ) -> List[TaskRecord]: ...
+
+    async def list_durable(
+        self, account_id: str, *, task_type: Optional[str] = None
+    ) -> List[TaskRecord]:
+        """Read shared task records without a process-local cache for resource admission."""
+        ...
 
     async def delete_tasks(
         self,
@@ -1097,6 +1112,35 @@ class PersistentTaskStore(TaskWorkStore):
         tasks.sort(key=lambda task: (task.created_at, task.task_id), reverse=True)
         return tasks if limit is None else tasks[:limit]
 
+    async def list_durable(
+        self, account_id: str, *, task_type: Optional[str] = None
+    ) -> List[TaskRecord]:
+        """Read current shared records, including private state, without populating the cache.
+
+        Internal admission callers hold their resource lock while inspecting these
+        records. Storage and malformed-record errors propagate so missing evidence
+        cannot admit another writer after a process restart.
+        """
+        records = []
+        for user_id in await self._owner_users(account_id):
+            directory = self._task_dir(account_id, user_id)
+            try:
+                entries = await self._ls(directory)
+            except (AGFSNotFoundError, FileNotFoundError):
+                continue
+            for entry in entries:
+                name = str(entry.get("name") or "")
+                if not name.endswith(".json"):
+                    continue
+                try:
+                    payload = json.loads(_decode_bytes(await self._read(f"{directory}/{name}")))
+                except (AGFSNotFoundError, FileNotFoundError):
+                    continue
+                record = _task_from_payload(payload, account_id=account_id, user_id=user_id)
+                if task_type is None or record.task_type == task_type:
+                    records.append(record)
+        return records
+
     async def _list_owner_page(
         self,
         account_id: str,
@@ -1535,6 +1579,17 @@ class PersistentTaskStore(TaskWorkStore):
                 return self._task_cache[owner]
         if not account_id or not user_id:
             return None
+        task = await self.get_durable_task(task_id, account_id=account_id, user_id=user_id)
+        if task is None:
+            return None
+        self._put_if_absent(task)
+        with self._lock:
+            return self._task_cache.get((account_id, user_id, task_id))
+
+    async def get_durable_task(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> Optional[TaskRecord]:
+        """Read the owner's task file without consulting or updating this worker's cache."""
         try:
             payload = json.loads(
                 _decode_bytes(await self._read(self._task_path(account_id, user_id, task_id)))
@@ -1542,9 +1597,7 @@ class PersistentTaskStore(TaskWorkStore):
         except (AGFSNotFoundError, FileNotFoundError):
             return None
         task = _task_from_payload(payload, account_id=account_id, user_id=user_id)
-        self._put_if_absent(task)
-        with self._lock:
-            return self._task_cache.get((account_id, user_id, task_id))
+        return task if task.task_id == task_id else None
 
     def _find_cached_owner(
         self, task_id: str, account_id: Optional[str], user_id: Optional[str]

@@ -1,4 +1,13 @@
 export { VikingBot } from './viking-bot.js';
+export { VikingBotSessionActions } from './session-actions.js';
+export type {
+  VikingBotQuickInput,
+  VikingBotReference,
+  VikingBotReferences,
+  VikingBotSession,
+  VikingBotSessions,
+  VikingBotInputFeatures,
+} from './capabilities.js';
 export { VikingBotComposer } from './lazy-composer.js';
 export { VikingBotMessageList } from './viking-bot-message-list.js';
 export {
@@ -26,7 +35,9 @@ export type {
   VikingBotStreamingState,
   VikingBotTextPart,
   VikingBotToolPart,
+  VikingBotTask,
   VikingBotToolResultPart,
+  VikingBotToolResultLink,
 } from './model.js';
 export type {
   VikingBotComposerProps,
@@ -35,6 +46,14 @@ export type {
   VikingBotProps,
 } from './types.js';
 export type {
+  VikingBotInteractionCustomInputContext,
+  VikingBotInteractionDirectoryPicker,
+  VikingBotInteractionDirectoryPermission,
+  VikingBotInteractionDirectoryInfo,
+  VikingBotInteractionDirectoryOperations,
+  VikingBotInteractionTargetRequest,
+  VikingBotInteractionSingleRequest,
+  VikingBotInteractionSingleAnswer,
   VikingBotInteractionAnswer,
   VikingBotInteractionLabels,
   VikingBotInteractionOption,
@@ -44,3 +63,9 @@ export type {
   VikingBotRepairOption,
   VikingBotScheduleValue,
 } from './interaction/types.js';
+
+export type {
+  VikingBotInteractionFields,
+  VikingBotInteractionField,
+  VikingBotInteractionFieldContext,
+} from './interaction/field-types.js';

@@ -1,14 +1,16 @@
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { flattenResult } from '../src/modules/file-browser/search-hit-order.ts';
 
-import { mergeFindResult } from '../src/modules/file-browser/find-result.ts';
-import {
-  flattenTree,
-  nameFromUri,
-  toDirectoryTab,
-  toEntryRow,
-  toFileTab,
-} from '../src/modules/file-browser/fs-model.ts';
+import { normalizeFindResult } from '../src/modules/file-browser/search-model.ts';
+const { flattenTree, nameFromUri, toEntryRow } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'directory-rows.js'))
+);
+const { toDirectoryTab, toFileTab } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'browser-preview-model.js'))
+);
 
 test('a name comes from the last URI segment', () => {
   assert.equal(
@@ -127,28 +129,28 @@ test('a failed directory shows an error row instead of a paging row', () => {
   assert.equal(rows.at(-1).kind, 'error');
 });
 
-test('search results merge into one list deduplicated by URI', () => {
-  const merged = mergeFindResult({
-    memories: [
-      { uri: 'viking://a.md', abstract: ' A ' },
-      { uri: 'viking://b.md' },
-    ],
-    resources: [{ uri: 'viking://a.md' }],
-    skills: [{ uri: 'viking://c.md' }],
-  });
+test('search results flatten into one list deduplicated by URI', () => {
+  const merged = flattenResult(
+    normalizeFindResult({
+      memories: [
+        { uri: 'viking://a.md', abstract: ' A ' },
+        { uri: 'viking://b.md' },
+      ],
+      resources: [{ uri: 'viking://a.md' }],
+      skills: [{ uri: 'viking://c.md' }],
+    }),
+  );
 
   assert.deepEqual(
-    merged.map((entry) => entry.uri),
+    merged.map((hit) => hit.uri),
     ['viking://a.md', 'viking://b.md', 'viking://c.md'],
   );
   assert.equal(merged[0].abstract, 'A');
-  // 结果都是文件，目录行不能出现在搜索结果里。
-  assert.equal(merged[0].isDir, false);
 });
 
 test('a missing search result becomes an empty list', () => {
-  assert.deepEqual(mergeFindResult(undefined), []);
-  assert.deepEqual(mergeFindResult({}), []);
+  assert.deepEqual(flattenResult(null), []);
+  assert.deepEqual(flattenResult(normalizeFindResult({})), []);
 });
 
 test('an expanded directory still loading gets a loading row, not an empty one', () => {

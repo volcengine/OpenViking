@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement, Suspense } from 'react';
 
-import { OpenVikingProvider } from '@openviking/react/client';
-import { useFileBrowser } from '@openviking/react/modules/file-browser';
-import { scopeKeyOf } from '../src/modules/file-browser/fs-scope.ts';
+import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
+import { useFileBrowser } from './helpers/internal-hooks.mjs';
+import { scopeKeyOf } from '../src/shared/request/fs-scope.ts';
 import { deferred, mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 const ROOT = 'viking://';

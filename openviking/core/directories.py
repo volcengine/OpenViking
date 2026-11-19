@@ -18,7 +18,11 @@ from openviking.core.namespace import (
     is_session_uri,
     user_space_fragment,
 )
+from openviking.observability.log_safety import safe_uri_for_log
+from openviking.privacy.global_policy import ensure_global_policy_file
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext
+from openviking.session.memory.agent_file import ensure_agent_file
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.vector_ids import vector_record_id
@@ -204,10 +208,14 @@ class DirectoryInitializer:
         vikingdb: "VikingDBManager",
         viking_fs: Optional["VikingFS"] = None,
         system_asset_synchronizer: Optional["SystemAssetSynchronizer"] = None,
+        user_config_defaults: Optional[UserConfigDefaults] = None,
     ):
         self.vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._system_asset_synchronizer = system_asset_synchronizer
+        self.user_config_defaults = (
+            user_config_defaults if user_config_defaults is not None else UserConfigDefaults()
+        )
 
     def _get_viking_fs(self) -> "VikingFS":
         if self._viking_fs is not None:
@@ -233,6 +241,13 @@ class DirectoryInitializer:
             (*account_children, *user_children),
             lease_ref=lease_ref,
         )
+        await ensure_agent_file(
+            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+        )
+        if self.user_config_defaults.preset_global_policy:
+            await ensure_global_policy_file(
+                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+            )
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
 
@@ -260,9 +275,17 @@ class DirectoryInitializer:
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
-        return len(
-            await self._initialize_directory_trees((user_root,), user_children, lease_ref=lease_ref)
+        created = await self._initialize_directory_trees(
+            (user_root,), user_children, lease_ref=lease_ref
         )
+        await ensure_agent_file(
+            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+        )
+        if self.user_config_defaults.preset_global_policy:
+            await ensure_global_policy_file(
+                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+            )
+        return len(created)
 
     async def _initialize_directory_trees(
         self,
@@ -398,18 +421,26 @@ class DirectoryInitializer:
                 else:
                     contents[name] = body_for_preview(raw)
         except AbstractOverviewFormatError as exc:
-            logger.warning(
-                "[VikingFS] Directory %s (account=%s) has invalid L0/L1 metadata; "
-                "preserving existing contents: %s",
-                target.uri,
+            logger.info(
+                "directory metadata invalid; preserving existing contents uri=%s account_id=%s error_type=%s",
+                safe_uri_for_log(target.uri),
                 target.ctx.account_id,
-                exc,
+                type(exc).__name__,
+                extra={
+                    "degraded": True,
+                    "account_id": target.ctx.account_id,
+                    "error_type": type(exc).__name__,
+                },
             )
             return None
         if not missing:
-            logger.debug(f"[VikingFS] Directory {target.uri} already exists")
+            logger.debug("directory metadata already exists uri=%s", safe_uri_for_log(target.uri))
             return None
-        logger.debug(f"[VikingFS] Creating directory: {target.uri} for scope {target.scope}")
+        logger.debug(
+            "creating directory metadata uri=%s scope=%s",
+            safe_uri_for_log(target.uri),
+            target.scope,
+        )
         await viking_fs.write_context(
             uri=target.uri,
             **missing,

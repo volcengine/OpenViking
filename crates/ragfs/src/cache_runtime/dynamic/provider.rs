@@ -1020,7 +1020,7 @@ impl CacheProvider for DynamicProvider {
     }
 
     async fn execute_script(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
-        let script_source = self.scripts.resolve(&request.script_id)?.to_string();
+        let script_source = self.scripts.resolve(&request.script_id)?;
         self.call("execute_script", move |state| {
             state.with_call("execute_script", |api, handle| {
                 let callback = required(api.execute_script, CacheOperation::ExecuteScript)?;

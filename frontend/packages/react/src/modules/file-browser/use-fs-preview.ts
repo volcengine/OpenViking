@@ -1,28 +1,28 @@
+import type { DirectorySummaryLabels } from './file-browser-labels.js';
+import {
+  beginWorkflow,
+  type Workflow,
+} from '../../shared/monitoring/workflow.js';
 import { useEffect, useState } from 'react';
 
 import type {
-  FilePreviewFileTab,
+  FilePreviewDirectoryTab,
   FilePreviewTab,
 } from '../../components/file-preview/index.js';
-import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
-import { fileTypeIcon } from './fs-icon.js';
-import { isAbort, nameFromUri, toFileTab } from './fs-model.js';
+import { directoryIcon } from './fs-icon.js';
+import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
+import { isAbort } from '../../shared/request/fs-errors.js';
+import { toDirectoryTab, type DirectorySummary } from './fs-model.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
 import { readDirectory } from './fs-read-directory.js';
-import { abortError, resolveIsDirectory } from './fs-stat.js';
-
-/** 读取正文的行数上限；读满即按截断处理。 */
-const MAX_LINES = 2000;
-
-export interface PreviewState {
-  tabs: readonly FilePreviewTab[] | null;
-  activeKey: string | null;
-  error: Error | null;
-  /** 底部元信息，例如字符数。Footer metadata such as the character count. */
-  footer?: string;
-  setActiveKey: (key: string) => void;
-}
+import { loadingTab } from './fs-preview-loading-tab.js';
+import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
+import { createPreviewImageResolver } from './fs-preview-images.js';
+import { readFile } from './fs-read-file.js';
+import { loadVideoDetails } from './fs-video-details.js';
+import { abortError, readPreviewStat } from './fs-stat.js';
+import { useWikiSaveFeedback } from './use-wiki-save-feedback.js';
 
 export interface UseFsPreviewOptions {
   client: OvClient | null;
@@ -42,8 +42,13 @@ export interface UseFsPreviewOptions {
    * repeatedly. The three-state value is a stable string, so that cannot happen.
    */
   resourceType?: 'directory' | 'file' | 'unknown';
+  contentKind?: 'plain' | 'wiki' | 'pending';
+  activeLevelKey?: string;
+  onActiveLevelChange?: (key: string) => void;
   /** 目录两级摘要的标题。Titles of the two summary levels. */
-  labels?: { l0: string; l1: string; failure: string };
+  labels?: DirectorySummaryLabels;
+  /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
+  formatCharacterCount?: (count: number) => string;
   /**
    * 打开路径上的某一级祖先。面包屑与目录页签共用它。
    * Opens one ancestor level; the breadcrumb and a directory tab share it.
@@ -73,38 +78,48 @@ export interface UseFsPreviewOptions {
  * A file reads its content and a directory reads its overview, falling back to the
  * abstract; both are Markdown and go through the same preview component.
  */
-const DEFAULT_SUMMARY_LABELS = {
-  l0: 'L0 Summary',
-  l1: 'L1 Overview',
-  failure: 'The summary could not be loaded.',
-};
-
 export function useFsPreview({
   client,
   uri,
   resourceType = 'file',
-  labels = DEFAULT_SUMMARY_LABELS,
+  contentKind = 'plain',
+  activeLevelKey = 'l0',
+  onActiveLevelChange,
+  labels = resolveSummaryLabels('en-US'),
+  formatCharacterCount = resolveLabels(undefined, 'en-US').formatCharacterCount,
   openParent,
   generation = 0,
   requestOptions,
-}: UseFsPreviewOptions): PreviewState {
+}: UseFsPreviewOptions) {
+  const [monitoring, setMonitoring] =
+    useState<Workflow<'file_browser_preview_load'>>();
+  const [directory, setDirectory] = useState<{
+    uri: string;
+    summary: DirectorySummary;
+    resolveImage: FilePreviewDirectoryTab['resolveImage'];
+  } | null>(null);
   const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
-  const [footer, setFooter] = useState<string | undefined>(undefined);
+  const [stat, setStat] = useState<{ uri: string; updatedAt: string }>();
+  const [saveGeneration, setSaveGeneration] = useState(0);
+  const [wikiSaveFeedback, wikiSave] = useWikiSaveFeedback(
+    client,
+    uri,
+    requestOptions,
+  );
 
-  // 当前资源决定要读什么。资源切换必须取消上一次读取，否则慢的旧响应会覆盖新
-  // 资源的页签；卸载时同样取消。
-  //
-  // The current resource decides what is read. A resource switch cancels the
-  // previous read, or a slow response would overwrite the new resource's tabs; the
-  // same happens on unmount.
+  // useEffect 必要性：按 URI、资源类型与请求配置同步远端正文和目录摘要。
+  // URI 也会由宿主属性改变，点击事件无法覆盖这些变化，渲染本身不能发请求。
+  // 依赖变化与卸载中止请求并忽略过期结果；摘要层级与文案仅影响展示。
   useEffect(() => {
+    setDirectory(null);
+    setStat(undefined);
+    wikiSave.reset();
     if (!client || !uri) {
       setTabs(null);
       setActiveKey(null);
       setError(null);
-      setFooter(undefined);
       return;
     }
     const controller = new AbortController();
@@ -116,10 +131,23 @@ export function useFsPreview({
     // the whole preview area disappear and reappear, flashing on every switch.
     setTabs([loadingTab(uri, resourceType !== 'file')]);
     setActiveKey(uri);
-    setActiveKey(null);
     setError(null);
-    setFooter(undefined);
-    const options = { ...requestOptions, signal: controller.signal };
+    const { options, onStatus } = wikiSave.bind(controller.signal);
+    const { signal } = options;
+    if (contentKind === 'pending') return () => controller.abort();
+    const operation = beginWorkflow(
+      client,
+      'file_browser_preview_load',
+      signal,
+    );
+    if (operation) operation.identity = uri;
+    setMonitoring(operation);
+    const api = operation?.client(client) ?? client;
+    const metadata = readPreviewStat(api, uri, options);
+    void metadata.then((result) => {
+      if (!signal.aborted && result?.updatedAt)
+        setStat({ uri, updatedAt: result.updatedAt });
+    });
 
     // 类型未知时先问一次 `fs/stat`。仅凭「不在已知目录集合里」就按文件处理是错的：
     // 集合只覆盖已加载的层，宿主直接传一个尚未展开过的目录 URI 时它就是空的，
@@ -131,15 +159,29 @@ export function useFsPreview({
     // directory URI the host passes directly, before it was ever expanded, is simply
     // absent — and the directory would be read as content and lose its L0/L1 summary.
     // What is missing is metadata, not evidence that it is a file.
-    const read: Promise<FilePreviewTab> = (async () => {
+    const read = (async () => {
       const isDir =
         resourceType === 'unknown'
-          ? await resolveIsDirectory(client, uri, options)
+          ? (await metadata)?.isDirectory
           : resourceType === 'directory';
-      if (controller.signal.aborted) throw abortError();
-      return isDir
-        ? readDirectory(client, uri, options, labels, openParent)
-        : readFile(client, uri, options, openParent);
+      if (signal.aborted) throw abortError();
+      if (isDir)
+        return isSystemUri(uri)
+          ? { tab: toSystemDirectoryTab(uri, openParent) }
+          : { summary: await readDirectory(api, uri, options) };
+      return {
+        tab: await readFile(
+          api,
+          uri,
+          options,
+          openParent,
+          () => {
+            if (!signal.aborted) setSaveGeneration((value) => value + 1);
+          },
+          contentKind === 'wiki',
+          onStatus,
+        ),
+      };
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -154,21 +196,33 @@ export function useFsPreview({
     // overwrite the newly selected resource. Cancellation is the caller's intent and
     // no result may land after it.
     void read.then(
-      (tab) => {
-        if (controller.signal.aborted) return;
+      (result) => {
+        if (signal.aborted) return;
+        if (result.summary) {
+          setDirectory({
+            uri,
+            summary: result.summary,
+            resolveImage: createPreviewImageResolver(
+              client,
+              uri,
+              true,
+              options,
+            ),
+          });
+          setActiveKey(uri);
+          return;
+        }
+        const tab = result.tab;
         setTabs([tab]);
         setActiveKey(tab.key);
-        // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body =
-          tab.kind === 'directory'
-            ? (tab.levels[0].source.content ?? '')
-            : tab.kind === 'file'
-              ? (tab.source.content ?? '')
-              : '';
-        setFooter(`${body.length} characters`);
+        // Supplemental content can fail independently of the playable video.
+        void loadVideoDetails(client, tab, options, (updatedTab) =>
+          setTabs([updatedTab]),
+        ).catch(() => undefined);
       },
       (cause: unknown) => {
-        if (isAbort(cause) || controller.signal.aborted) return;
+        if (isAbort(cause) || signal.aborted) return;
+        operation?.fail(cause, 'protocol', signal);
         setTabs([]);
         setError(cause instanceof Error ? cause : new Error(String(cause)));
       },
@@ -179,102 +233,45 @@ export function useFsPreview({
     client,
     uri,
     resourceType,
-    labels,
+    contentKind,
     openParent,
     generation,
-    requestOptions,
+    saveGeneration,
+    wikiSave,
   ]);
 
-  return { tabs, activeKey, error, footer, setActiveKey };
-}
-
-/**
- * 加载中占位页签：只带 key 与文件名，`loading` 让组件渲染加载态而不是「空文件」。
- * A placeholder tab while loading: it carries the key and file name, and `loading`
- * makes the component render its loading state rather than "empty file".
- */
-function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
-  if (isDirectory) {
-    return {
-      kind: 'directory',
-      key: uri,
-      loading: true,
-      levels: [
-        {
-          key: 'l0',
-          label: '',
-          source: {
-            fileName: `${nameFromUri(uri)}.md`,
-            path: uri,
-            fileType: 'markdown',
-            content: '',
-          },
-        },
-        {
-          key: 'l1',
-          label: '',
-          source: {
-            fileName: `${nameFromUri(uri)}.md`,
-            path: uri,
-            fileType: 'markdown',
-            content: '',
-          },
-        },
-      ],
-    };
-  }
+  const directoryTab =
+    directory?.uri === uri
+      ? {
+          ...toDirectoryTab(
+            directory.uri,
+            directory.summary,
+            labels,
+            openParent,
+            directoryIcon(),
+          ),
+          resolveImage: directory.resolveImage,
+          activeLevelKey,
+          onActiveLevelChange,
+        }
+      : undefined;
+  const current = tabs?.[0];
+  const count = directoryTab
+    ? (
+        directoryTab.levels.find((level) => level.key === activeLevelKey)
+          ?.source.content ?? ''
+      ).length
+    : current?.key === uri && current.kind === 'file' && !current.loading
+      ? current.source.content?.length
+      : undefined;
   return {
-    kind: 'file',
-    key: uri,
-    loading: true,
-    source: { fileName: nameFromUri(uri), path: uri, content: '' },
+    monitoring,
+    tabs: directoryTab ? [directoryTab] : tabs,
+    activeKey,
+    error,
+    wikiSaveFeedback,
+    footer: count === undefined ? undefined : formatCharacterCount(count),
+    updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
+    setActiveKey,
   };
-}
-
-/**
- * 读文件并包装成页签。文本走 `content/read`，二进制走 `content/download` 取原始
- * 字节——前者把内容当文本返回，二进制文件经过它只会得到一串乱码，图片与 PDF
- * 因此永远渲染不出来。
- *
- * Reads a file into a tab. Text goes through `content/read` and binary files
- * through `content/download` for the raw bytes: the former returns content as
- * text, so a binary file only yields mojibake and images or PDFs never render.
- */
-async function readFile(
-  client: OvClient,
-  uri: string,
-  options: OvRequestOptions,
-  openParent?: (uri: string) => Promise<void>,
-): Promise<FilePreviewFileTab> {
-  const name = nameFromUri(uri);
-  const icon = fileTypeIcon(name);
-
-  if (isBinaryFile(name)) {
-    const blob = await client.request<Blob>({
-      method: 'GET',
-      path: OV_PATHS.contentDownload,
-      query: { uri },
-      responseType: 'blob',
-      options,
-    });
-    // 接口返回 octet-stream，这里按扩展名补上真实类型：底座靠它选择 Adapter。
-    // The endpoint answers octet-stream; the real type is restored from the
-    // extension, which is what the base uses to pick an adapter.
-    const typed = new Blob([blob], { type: mimeTypeOf(name) });
-    return toBinaryTab(uri, name, typed, icon, openParent);
-  }
-
-  const content = await client.request<string>({
-    method: 'GET',
-    path: OV_PATHS.contentRead,
-    query: { uri, limit: MAX_LINES },
-    options,
-  });
-  return toFileTab(
-    { uri },
-    typeof content === 'string' ? content : '',
-    MAX_LINES,
-    icon,
-    openParent,
-  );
 }

@@ -20,6 +20,7 @@ class _DummyAgfs:
 class _RemoteGlobVectorStore:
     _backend_type = "vikingdb"
     _mode = "vikingdb"
+    enable_path_glob = True
 
     async def get_account_backend(self, account_id):
         assert account_id
@@ -801,7 +802,7 @@ async def test_glob_checks_access_before_listing(monkeypatch, fs):
         called = True
         raise PermissionError(f"denied: {uri}")
 
-    monkeypatch.setattr(fs, "_ensure_access", fake_ensure_access)
+    monkeypatch.setattr(fs, "_ensure_traversable", fake_ensure_access)
 
     with pytest.raises(PermissionError):
         await fs.glob("**/*.md", uri="viking://resources", ctx=_default_ctx())

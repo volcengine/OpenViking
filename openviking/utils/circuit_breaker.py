@@ -68,7 +68,7 @@ class CircuitBreaker:
             elapsed = time.monotonic() - self._last_failure_time
             if elapsed >= self._current_reset_timeout:
                 self._state = _STATE_HALF_OPEN
-                logger.info("Circuit breaker transitioning OPEN -> HALF_OPEN (timeout elapsed)")
+                logger.info("circuit breaker transitioning OPEN -> HALF_OPEN (timeout elapsed)")
                 return
             raise CircuitBreakerOpen(
                 f"Circuit breaker is OPEN, retry after {self._current_reset_timeout - elapsed:.0f}s"
@@ -90,7 +90,7 @@ class CircuitBreaker:
         """Record a successful API call. Resets failure count."""
         with self._lock:
             if self._state == _STATE_HALF_OPEN:
-                logger.info("Circuit breaker transitioning HALF_OPEN -> CLOSED (probe succeeded)")
+                logger.info("circuit breaker transitioning HALF_OPEN -> CLOSED (probe succeeded)")
             self._failure_count = 0
             self._state = _STATE_CLOSED
             self._current_reset_timeout = self._base_reset_timeout
@@ -100,17 +100,26 @@ class CircuitBreaker:
         """Record a failed API call. May trip the breaker."""
         kind = model_error_kind(error)
         legacy_class = classify_api_error(error) if kind is None else None
-        if kind in {
-            ModelErrorKind.AUTHENTICATION_ERROR,
-            ModelErrorKind.PERMISSION_DENIED,
-            ModelErrorKind.MODEL_NOT_FOUND,
-            ModelErrorKind.UNSUPPORTED,
-            ModelErrorKind.INVALID_REQUEST,
-            ModelErrorKind.INPUT_TOO_LARGE,
-            ModelErrorKind.CONTENT_SAFETY,
-        } or legacy_class == ERROR_CLASS_INPUT_TOO_LARGE:
+        if (
+            kind
+            in {
+                ModelErrorKind.AUTHENTICATION_ERROR,
+                ModelErrorKind.PERMISSION_DENIED,
+                ModelErrorKind.MODEL_NOT_FOUND,
+                ModelErrorKind.UNSUPPORTED,
+                ModelErrorKind.INVALID_REQUEST,
+                ModelErrorKind.INPUT_TOO_LARGE,
+                ModelErrorKind.CONTENT_SAFETY,
+            }
+            or legacy_class == ERROR_CLASS_INPUT_TOO_LARGE
+        ):
             label = kind.value if kind is not None else legacy_class
-            logger.info("Circuit breaker ignoring %s error: %s", label, error)
+            logger.debug(
+                "circuit breaker ignoring request error error_code=%s error_type=%s",
+                label,
+                type(error).__name__,
+                extra={"error_code": label, "error_type": type(error).__name__},
+            )
             return
 
         with self._lock:
@@ -124,7 +133,10 @@ class CircuitBreaker:
                     self._max_reset_timeout,
                 )
                 logger.info(
-                    f"Circuit breaker transitioning HALF_OPEN -> OPEN (probe failed: {error})"
+                    "circuit breaker transitioning HALF_OPEN -> OPEN error_type=%s reset_timeout_seconds=%s",
+                    type(error).__name__,
+                    self._current_reset_timeout,
+                    extra={"error_type": type(error).__name__},
                 )
             elif kind is ModelErrorKind.QUOTA_EXHAUSTED or legacy_class in {
                 ERROR_CLASS_PERMANENT,
@@ -134,13 +146,20 @@ class CircuitBreaker:
                 self._state = _STATE_OPEN
                 self._current_reset_timeout = self._base_reset_timeout
                 label = kind.value if kind is not None else legacy_class
-                logger.info("Circuit breaker tripped immediately on %s: %s", label, error)
+                logger.info(
+                    "circuit breaker opened immediately error_code=%s error_type=%s",
+                    label,
+                    type(error).__name__,
+                    extra={"error_code": label, "error_type": type(error).__name__},
+                )
             elif self._failure_count >= self._failure_threshold:
                 self._state = _STATE_OPEN
                 self._current_reset_timeout = self._base_reset_timeout
                 logger.info(
-                    f"Circuit breaker tripped after {self._failure_count} consecutive "
-                    f"failures: {error}"
+                    "circuit breaker opened after consecutive failures failed=%d error_type=%s",
+                    self._failure_count,
+                    type(error).__name__,
+                    extra={"failed": self._failure_count, "error_type": type(error).__name__},
                 )
             if self._state == _STATE_OPEN:
                 # Keep the failure available to consumers of subsequent blocked

@@ -519,8 +519,11 @@ class _CuVSRuntime:
         with self.device_scope():
             try:
                 self.cp.get_default_memory_pool().free_all_blocks()
-            except Exception:
-                logger.debug("Could not release unused CuPy memory-pool blocks", exc_info=True)
+            except Exception as _log_error:
+                logger.debug(
+                    "Could not release unused CuPy memory-pool blocks error_type=%s",
+                    type(_log_error).__name__,
+                )
 
     def is_out_of_memory(self, exc: Exception) -> bool:
         out_of_memory_type = getattr(self.cp.cuda.memory, "OutOfMemoryError", ())
@@ -1021,7 +1024,7 @@ class CuVSDenseIndex:
                 daemon=True,
             )
             self._micro_batch_worker.start()
-        logger.info(
+        logger.debug(
             "Initialized cuVS dense index: algorithm=%s metric=%s dimension=%d micro_batching=%s",
             self.algorithm,
             self._metric,
@@ -1750,10 +1753,8 @@ class CuVSDenseIndex:
                     else None
                 )
             self._dirty = False
-            logger.info(
-                "Built cuVS %s index with %d vectors",
-                self.algorithm,
-                len(candidate.labels),
+            logger.debug(
+                "Built cuVS %s index with %d vectors", self.algorithm, len(candidate.labels)
             )
             return True
 
@@ -2150,7 +2151,7 @@ class CuVSDenseIndex:
                     return
                 self._dispatch_micro_batch(requests)
         except BaseException as exc:
-            logger.exception("The cuVS micro-batch worker stopped unexpectedly")
+            logger.error("The cuVS micro-batch worker stopped unexpectedly")
             with self._micro_batch_condition:
                 self._micro_batch_worker_failure = exc
                 pending = [

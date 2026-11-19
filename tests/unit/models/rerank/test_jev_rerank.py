@@ -3,6 +3,7 @@
 """Tests for the Jev (TypeSafe System One) rerank client."""
 
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -109,22 +110,40 @@ class TestJevRerankClient:
             json=mock_client.post.call_args.kwargs["json"],
         )
 
-    @patch("openviking.models.rerank.jev_rerank.logger.warning")
+    @pytest.mark.parametrize("level", [logging.INFO, logging.DEBUG])
+    @pytest.mark.parametrize("mode", [MODE_NOUL, MODE_CHOICE])
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")
-    def test_logs_request_and_response_without_api_key(self, mock_client_class, mock_log):
+    def test_logs_safe_debug_summaries(self, mock_client_class, monkeypatch, caplog, level, mode):
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
-        mock_client.post.return_value = _mock_response(_systemone_payload([0.9]))
+        payload = _systemone_payload([0.9])
+        if mode == MODE_CHOICE:
+            payload["answers"] = {
+                "relevance": {"type": MODE_CHOICE, "probabilities": {"candidate_0": 0.9}}
+            }
+        payload["untrusted"] = "private-response-body"
+        mock_client.post.return_value = _mock_response(payload)
+        capture_logger = logging.getLogger("test.jev.summary")
+        monkeypatch.setattr("openviking.models.rerank.jev_rerank.logger", capture_logger)
+        caplog.set_level(level, logger=capture_logger.name)
 
-        client = JevRerankClient(api_key="secret-key", log_payloads=True, mode=MODE_NOUL)
-        assert client.rerank_batch("query", ["document"]) == [0.9]
+        client = JevRerankClient(api_key="secret-key", log_payloads=True, mode=mode)
+        assert client.rerank_batch("private-query", ["private-document"]) == [0.9]
 
-        messages = [str(call) for call in mock_log.call_args_list]
-        assert any("[JevRerank] Request" in message for message in messages)
-        assert any("[JevRerank] Response" in message for message in messages)
-        assert all("secret-key" not in message for message in messages)
+        records = [record for record in caplog.records if record.name == capture_logger.name]
+        summaries = [record for record in records if getattr(record, "payload", False)]
+        assert len(summaries) == (2 if level == logging.DEBUG else 0)
+        assert all(record.levelno == logging.DEBUG for record in records)
+        for secret in ("secret-key", "private-query", "private-document", "private-response-body"):
+            assert secret not in caplog.text
+            assert all(secret not in str(record.__dict__) for record in records)
+        if summaries:
+            assert summaries[0].total == 1
+            assert summaries[1].http_status_code == 200
+            assert summaries[1].duration_ms >= 0
+        client.close()
 
-    @patch("openviking.models.rerank.jev_rerank.logger.warning")
+    @patch("openviking.models.rerank.jev_rerank.logger")
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")
     def test_payload_logging_disabled_by_default(self, mock_client_class, mock_log):
         mock_client = MagicMock()
@@ -133,7 +152,40 @@ class TestJevRerankClient:
 
         client = JevRerankClient(api_key="secret-key", mode=MODE_NOUL)
         assert client.rerank_batch("query", ["document"]) == [0.9]
-        mock_log.assert_not_called()
+        assert all(
+            not call.kwargs.get("extra", {}).get("payload")
+            for call in mock_log.debug.call_args_list
+        )
+        mock_log.warning.assert_not_called()
+
+    @pytest.mark.parametrize("failure", ["http", "exception", "missing_answers"])
+    @patch("openviking.models.rerank.jev_rerank.httpx.Client")
+    def test_fallback_logs_once_without_sensitive_text(
+        self, mock_client_class, monkeypatch, caplog, failure
+    ):
+        secret = "private-response /private/sensitive/file.md private-peer"
+        capture_logger = logging.getLogger("test.jev.fallback")
+        monkeypatch.setattr("openviking.models.rerank.jev_rerank.logger", capture_logger)
+        caplog.set_level(logging.DEBUG, logger=capture_logger.name)
+        if failure == "http":
+            mock_client_class.return_value.post.return_value = httpx.Response(
+                503, text=secret, request=httpx.Request("POST", "https://example.com")
+            )
+        elif failure == "exception":
+            mock_client_class.return_value.post.side_effect = RuntimeError(secret)
+        else:
+            mock_client_class.return_value.post.return_value = _mock_response({"untrusted": secret})
+        client = JevRerankClient(api_key="secret-key")
+
+        assert client.rerank_batch("private-query", ["private-document"]) is None
+        records = [record for record in caplog.records if record.name == capture_logger.name]
+        assert len(records) == 1
+        assert records[0].levelno == logging.INFO
+        assert records[0].degraded is True
+        assert records[0].exc_info is None
+        assert secret not in caplog.text
+        assert secret not in str(records[0].__dict__)
+        client.close()
 
     @pytest.mark.parametrize("candidates_visible", [True, False])
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")

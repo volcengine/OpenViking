@@ -37,26 +37,27 @@ export function groupMessages(
       (!previous.turnId ||
         !message.turnId ||
         previous.turnId === message.turnId);
+    const actions =
+      message.actions ??
+      (message.action
+        ? [{ messageId: message.id, action: message.action }]
+        : undefined);
     if (sameTurn && previous) {
       previous.parts = [...previous.parts, ...message.parts];
       previous.turnId ??= message.turnId;
       previous.streaming = previous.streaming || message.streaming;
+      previous.createdAt = message.createdAt ?? previous.createdAt;
       // 动作与原始消息身份属于各自的消息，不能随合并转移：带动作的后继消息
       // 若被并进前一条，动作会挂到错误的 messageId 上或直接丢失。
-      if (message.action) {
-        previous.actions = [
-          ...(previous.actions ?? []),
-          { messageId: message.id, action: message.action },
-        ];
+      if (actions?.length) {
+        previous.actions = [...(previous.actions ?? []), ...actions];
       }
       continue;
     }
     groups.push({
       ...message,
       parts: [...message.parts],
-      actions: message.action
-        ? [{ messageId: message.id, action: message.action }]
-        : undefined,
+      actions,
     });
   }
   return groups;
@@ -64,6 +65,10 @@ export function groupMessages(
 
 /** 取消息的纯文本，用于复制。Plain text of a message, used for copying. */
 export function messageText(message: VikingBotMessage): string {
+  if (message.answerSummary)
+    return message.answerSummary
+      .map((row) => `${row.label}: ${row.value}`)
+      .join('\n');
   return message.parts
     .filter((part) => part.type === 'text')
     .map((part) => part.text)
@@ -79,7 +84,16 @@ export function groupByActivity(
   for (const part of parts) {
     const groupId = 'groupId' in part ? part.groupId : undefined;
     const previous = blocks.at(-1);
-    if (previous && groupId && previous.groupId === groupId) {
+    const activity = part.type === 'reasoning' || part.type === 'tool';
+    const previousType = previous?.parts[0]?.type;
+    const previousActivity =
+      previousType === 'reasoning' || previousType === 'tool';
+    if (
+      previous &&
+      groupId &&
+      previous.groupId === groupId &&
+      activity === previousActivity
+    ) {
       previous.parts.push(part);
       continue;
     }

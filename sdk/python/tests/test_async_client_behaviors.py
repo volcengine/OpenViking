@@ -466,11 +466,13 @@ async def test_async_http_client_write_forwards_processing_mode():
     await client.write(
         "viking://resources/demo.md",
         "updated",
-        options={"processing_mode": "vectors_only"},
+        options={"processing_mode": "vectors_only", "defer_processing": True, "use_snapshot": True},
     )
 
     payload = fake_http.post.await_args.kwargs["json"]
     assert payload["processing_mode"] == "vectors_only"
+    assert payload["defer_processing"] is True
+    assert payload["use_snapshot"] is True
 
 
 @pytest.mark.asyncio
@@ -1034,11 +1036,19 @@ async def test_write_extra_forwards_unknown_fields_to_payload():
     await client.write(
         "viking://resources/demo.md",
         "body",
-        options={"extra": {"future_flag": 1}},
+        options={"extra": {"future_flag": 1, "resolve_conflicts": True}},
     )
 
     payload = fake_http.post.await_args.kwargs["json"]
     assert payload["future_flag"] == 1
+    assert payload["resolve_conflicts"] is True
+
+    with pytest.raises(ValueError, match="extra cannot override 'resolve_conflicts'"):
+        await client.write(
+            "viking://resources/demo.md",
+            "body",
+            options={"resolve_conflicts": False, "extra": {"resolve_conflicts": True}},
+        )
 
 
 @pytest.mark.asyncio
@@ -1714,17 +1724,26 @@ async def test_batch_write_serializes_processing_mode_and_operation_metadata():
             {
                 "uri": "viking://resources/wiki/a.md",
                 "content": "new",
+                "expected_sha256": "a" * 64,
+                "resolve_conflicts": True,
                 "tags": ["team=search"],
                 "tag_mode": "append",
                 "acl": {"acl_mode": "restricted", "entries": []},
             }
         ],
-        options={"processing_mode": "vectors_only", "defer_processing": True},
+        options={
+            "processing_mode": "vectors_only",
+            "skip_conflicts": True,
+            "use_snapshot": True,
+        },
     )
 
     payload = client._request.await_args.kwargs["json"]
     assert payload["processing_mode"] == "vectors_only"
-    assert payload["defer_processing"] is True
+    assert payload["skip_conflicts"] is True
+    assert payload["use_snapshot"] is True
+    assert payload["operations"][0]["expected_sha256"] == "a" * 64
+    assert payload["operations"][0]["resolve_conflicts"] is True
     assert payload["operations"][0]["tags"] == ["team=search"]
     assert payload["operations"][0]["tag_mode"] == "append"
     assert payload["operations"][0]["acl"] == {"acl_mode": "restricted", "entries": []}
@@ -1881,3 +1900,65 @@ async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
 
     with pytest.raises(ValueError, match="is not a file"):
         await client.import_ovpack(str(pack_dir), parent="viking://resources/")
+
+
+def test_compile_configuration_and_named_execution():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._request = AsyncMock(return_value=object())
+    client._async_client._handle_response = lambda _response: {"compile_name": "research-summary"}
+    saved = client.create_compile_task(
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+        options={"args": {"auto_update": False}},
+        compile_name="research-summary",
+    )
+    assert client._async_client._request.await_args.args == ("POST", "/api/v1/compile/create")
+    assert client._async_client._request.await_args.kwargs["json"] == {
+        "compile_name": "research-summary",
+        "from": ["viking://resources/source"],
+        "to": "viking://resources/output",
+        "skill": "viking://agent/skills/wiki",
+        "args": {"auto_update": False},
+    }
+    args = {"owner_user_id": "alice"}
+    client.compile(compile_name=saved["compile_name"], options={"args": args})
+    assert client._async_client._request.await_args.kwargs["json"] == {
+        "compile_name": saved["compile_name"],
+        "args": args,
+    }
+    with pytest.raises(ValueError, match="cannot be combined"):
+        client.compile(compile_name=saved["compile_name"], to="viking://resources/other")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        client.compile(compile_name=saved["compile_name"], options={"instruction": "override"})
+    with pytest.raises(ValueError, match="requires"):
+        client.compile()
+
+
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+async def test_compile_configuration_requires_a_name(client_type):
+    client = client_type(url="http://localhost:1933")
+    inputs = (
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+    )
+    with pytest.raises(TypeError, match="compile_name"):
+        client.create_compile_task(*inputs)
+    with pytest.raises(ValueError, match="compile_name is required"):
+        if client_type is AsyncHTTPClient:
+            await client.create_compile_task(*inputs, compile_name="")
+        else:
+            client.create_compile_task(*inputs, compile_name="")
+
+
+def test_compile_memory_omits_sources_without_losing_target():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._request = AsyncMock(return_value=object())
+    client._async_client._handle_response = lambda _response: {"task_id": "cmp_memory"}
+    client.compile(to="viking://~/memories", skill="memory")
+    assert client._async_client._request.await_args.kwargs["json"] == {
+        "from": [],
+        "to": "viking://~/memories",
+        "skill": "memory",
+    }

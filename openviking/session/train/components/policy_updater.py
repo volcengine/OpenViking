@@ -104,7 +104,6 @@ class MemoryFilePolicyUpdater:
         }
         related_uris.update(operations.delete_replacements)
         related_uris.update(operations.delete_replacements.values())
-        # The caller reloads these files under the EXP tree lock before planning.
         for source in operations.delete_file_contents:
             related_uris.update(
                 uri
@@ -350,6 +349,8 @@ def _policy_or_plan_item_memory_file(
 ) -> MemoryFile:
     if current is not None:
         return _policy_to_memory_file(current)
+    if item.before_file is not None and item.before_file.uri == uri:
+        return item.before_file
     return MemoryFile(
         uri=uri,
         content=item.before_content or "",

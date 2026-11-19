@@ -75,7 +75,7 @@ export default defineConfig([
     // `role="separator"` is an interactive role, and both `tabIndex` and the arrow
     // keys are required by the pattern. The default config judges it as a
     // decorative rule; the exception is narrowed to this one component.
-    files: ['packages/react/src/shared/components/resizable/*.tsx'],
+    files: ['packages/react/src/shared/primitives/resizable/*.tsx'],
     rules: {
       'jsx-a11y/no-noninteractive-tabindex': [
         'error',

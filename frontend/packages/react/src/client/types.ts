@@ -72,12 +72,12 @@ export interface OvRequestOptions {
  */
 export interface OvClientOptions extends OvRequestOptions {
   /**
-   * 是否携带浏览器 Cookie。商业版的数据面与控制面接口都依赖 Cookie 鉴权，
-   * 跨源调用时需要设为 `include`。
+   * 是否携带浏览器 Cookie。默认 `include`，跨源请求也允许携带 Cookie；
+   * 可显式覆盖为 `same-origin` 或 `omit`。仍遵循服务端 CORS 与浏览器 Cookie 策略。
    *
-   * Whether browser cookies are sent. The commercial edition authenticates both
-   * data-plane and control-plane requests with a cookie, so a cross-origin call
-   * needs `include`.
+   * Whether browser cookies are sent. Defaults to `include`, including for
+   * cross-origin requests. Override with `same-origin` or `omit` as needed.
+   * Server CORS and browser cookie policies still apply.
    */
   credentials?: RequestCredentials;
   /**
@@ -114,6 +114,7 @@ export interface OvRequestSpec {
    */
   path: string;
   query?: Readonly<Record<string, OvQueryValue>>;
+  /** JSON data or FormData for native multipart uploads; FormData sets its own boundary. */
   body?: unknown;
   /**
    * 响应体的读取方式。省略时为 `json`：解析原生外壳并返回 `result`。需要原始
@@ -140,16 +141,16 @@ export interface OvRequestSpec {
 export type OvResponseType = 'json' | 'blob';
 
 /**
- * 一次 JSON 请求的外壳与 `result`。列表接口把 `has_more` 放在 `result` 之外，
- * 需要分页时用 {@link OvClient.requestEnvelope} 才能读到它。
- * The envelope and `result` of one JSON request. A listing puts `has_more`
- * outside `result`, so paging reads it through {@link OvClient.requestEnvelope}.
+ * 一次 JSON 请求的 `result` 和外壳元数据。
+ * The `result` and envelope metadata of one JSON request.
  */
 export interface OvResponseEnvelope<TResult = unknown> {
   /** 原生响应的 `result`。The native response's `result`. */
   result: TResult;
   /** 是否还有下一页；接口不返回该字段时为 `false`。 */
   hasMore: boolean;
+  /** 服务端返回的遥测数据。Telemetry returned by the server. */
+  telemetry?: Record<string, unknown>;
 }
 
 /** 查询参数可接受的值；`undefined` 与 `null` 表示不发送。 */
@@ -232,12 +233,12 @@ export interface OvStreamSpec extends Omit<OvRequestSpec, 'responseType'> {
 }
 
 /**
- * 已建立的流。异步迭代得到事件，`abort` 中止请求后迭代器以 `AbortError` 拒绝。
+ * 已建立的流。异步迭代得到事件，`abort` 中止请求后迭代器正常结束。
  * 响应体边读边消费，因此只能迭代一次。
  *
  * An open stream. Iterating yields events; `abort` stops the request and the
- * iterator then rejects with an `AbortError`. The body is consumed as it is
- * read, so it can be iterated only once.
+ * iterator then ends without an error. The body is consumed as it is read, so
+ * it can be iterated only once.
  */
 export interface OvStream extends AsyncIterable<OvStreamEvent> {
   /** 中止请求并释放连接。Aborts the request and releases the connection. */
@@ -258,12 +259,11 @@ export interface OvClient {
    */
   request<TResult>(spec: OvRequestSpec): Promise<TResult>;
   /**
-   * 与 `request` 相同，但同时返回 `result` 之外的分页标记。列表接口用它判断
-   * 是否还有下一页；`responseType: 'blob'` 不适用。
+   * 与 `request` 相同，同时返回 `result` 之外的分页标记和遥测数据。
+   * `responseType: 'blob'` 不适用。
    *
-   * Same as `request`, but also returns the pagination flag that sits outside
-   * `result`. A listing uses it to decide whether a next page exists; not
-   * applicable to `responseType: 'blob'`.
+   * Same as `request`, with pagination and telemetry from outside `result`.
+   * Supports JSON responses.
    */
   requestEnvelope<TResult>(
     spec: OvRequestSpec,

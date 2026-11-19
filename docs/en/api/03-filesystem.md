@@ -178,12 +178,27 @@ The HTTP `result` remains an entry array. `has_more=true` means more matching no
       "mode": 16877,
       "modTime": "2024-01-01T00:00:00Z",
       "isDir": true,
-      "uri": "viking://resources/docs/"
+      "uri": "viking://resources/docs/",
+      "access": "read"
     }
   ],
   "has_more": true
 }
 ```
+
+Entries returned by `ls`, recursive listings, `tree`, and `stat` include `access`: the current caller's effective permission for that URI. Both `original` and `agent` outputs include it; the URI-only `simple=true` output is unchanged.
+
+| access | Meaning |
+|------------|---------|
+| `denied` | No access; listings retain only a name placeholder that cannot be expanded; direct `stat` requests still return 403 |
+| `container` | A directory that can only be expanded to reach authorized descendants, without reading its own content or modifying it |
+| `read` | Read |
+| `write` | Read and write |
+| `manage` | Read, write, and manage |
+
+Shared resources combine direct and inherited grants, group membership, and implicit administrator access. Missing ACL fields or empty direct grants do not automatically mean `denied`: ancestor ACLs and shared defaults still apply. Restricted nodes without matching grants deny ordinary users. When ACL is disabled, or the URI is outside shared resources, existing identity and namespace rules apply, including read-only system files. Having a vector record does not itself grant permission.
+
+Clients can reuse the listing `access` value to control editing without a per-item `stat` or manager-only ACL request. This field does not guarantee an editable format, permission to delete a namespace root, or access to every descendant; operations still enforce their path restrictions and current authorization. The underlying filesystem `mode` is not the caller's permission.
 
 ---
 
@@ -384,6 +399,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
     "isLocked": false,
+    "access": "write",
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
   }
@@ -402,6 +418,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": true,
     "isLocked": false,
+    "access": "manage",
     "uri": "viking://resources/docs",
     "count": 42
   }
@@ -471,6 +488,7 @@ curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+
 ```
 
 **CLI**
@@ -481,6 +499,8 @@ ov attrs get viking://resources/docs/api.md tags
 ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
 ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
 ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs batch-set-tags viking://resources/docs/api.md viking://resources/docs/guide.md \
+  --tags count+=1 --mode append
 ```
 
 For `set-tags`, directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
@@ -523,6 +543,8 @@ For `set-tags`, directory targets update the directory semantic records; `recurs
 ```
 
 `attrs.memory` is parsed from `MEMORY_FIELDS` metadata with content removed. `attrs.tags` is the explicit retrieval tag list used by `attrs set-tags` and search filters.
+
+Batch requests accept 1-50 URIs, deduplicate normalized URIs, and return `items` and `failed` in input order. Individual failures do not fail the whole HTTP request.
 
 ---
 

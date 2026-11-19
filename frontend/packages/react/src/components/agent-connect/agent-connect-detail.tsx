@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 import CodexDetailIcon from '../../../../icons/svg/agent-connect/codex-detail.svg?react';
 import type { AgentConnectEntry } from './agent-connect-design.js';
-import { AGENT_CONNECT_COPY } from './agent-connect-copy.js';
+import { resolveAgentConnectLabels } from './agent-connect-copy.js';
 import { getAgentConnectInstructions } from './agent-connect-instructions.js';
 import { AgentConnectInstructionsView } from './agent-connect-instructions-view.js';
 import type { AgentConnectLocale } from './types.js';
@@ -12,16 +12,18 @@ interface DetailViewProps {
   apiKey: string;
   locale: AgentConnectLocale;
   baseUrl: string;
+  isEnterprise: boolean;
   agreementUrl?: string;
   onCopy?: (text: string) => void;
 }
 
-/** 指南和凭据变化时重建复制区，不将凭据放进 DOM 或 React key。 */
+/** 指南和凭据变化时重建复制区；切换语言保留曝光周期，凭据不进入 DOM 或 React key。 */
 export function AgentConnectDetailView({
   selected,
   apiKey,
   locale,
   baseUrl,
+  isEnterprise,
   agreementUrl,
   onCopy,
 }: DetailViewProps) {
@@ -34,6 +36,7 @@ export function AgentConnectDetailView({
     apiKey,
     baseUrl,
     activeGuide?.id,
+    isEnterprise,
   );
   const [credentials, setCredentials] = useState({
     apiKey,
@@ -44,7 +47,7 @@ export function AgentConnectDetailView({
   if (credentials.apiKey !== apiKey || credentials.baseUrl !== baseUrl) {
     setCredentials({ apiKey, baseUrl, revision: credentials.revision + 1 });
   }
-  const labels = AGENT_CONNECT_COPY[locale];
+  const labels = resolveAgentConnectLabels(locale);
   const title = selected.name.endsWith(labels.integration)
     ? selected.name
     : `${selected.name} ${labels.integration}`;
@@ -101,8 +104,9 @@ export function AgentConnectDetailView({
         </div>
       ) : null}
       <AgentConnectInstructionsView
-        key={`${selected.id}:${locale}:${activeGuide?.id ?? ''}:${credentials.revision}`}
+        key={`${selected.id}:${activeGuide?.id ?? ''}:${isEnterprise}:${credentials.revision}`}
         instructions={instructions}
+        apiKey={apiKey}
         locale={locale}
         agreementUrl={agreementUrl}
         onCopy={onCopy}

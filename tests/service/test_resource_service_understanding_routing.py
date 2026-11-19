@@ -27,6 +27,7 @@ def mpeg_ts_probe() -> bytes:
 async def test_extensionless_remote_url_queues_frozen_understanding_route(
     monkeypatch,
     tmp_path,
+    watch_vfs,
 ):
     """Queue understanding ingestion for extensionless remote URLs after prepare."""
     ctx = RequestContext(
@@ -68,15 +69,19 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         reserve_unique_candidate=AsyncMock(return_value=("viking://resources/manual", lock)),
         process_resource=AsyncMock(),
     )
+    for name, operation in vars(agfs).items():
+        monkeypatch.setattr(watch_vfs._async_agfs, name, operation)
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        viking_fs=watch_vfs,
         resource_processor=processor,
         skill_processor=object(),
     )
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        create=AsyncMock(
+            return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+        ),
         patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
@@ -133,6 +138,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
 async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     monkeypatch,
     tmp_path,
+    watch_vfs,
 ):
     """Route MPEG-TS resources to understanding with video target resolution."""
     ctx = RequestContext(
@@ -173,15 +179,19 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         reserve_unique_candidate=AsyncMock(return_value=("viking://resources/video/sample", lock)),
         process_resource=AsyncMock(),
     )
+    for name, operation in vars(agfs).items():
+        monkeypatch.setattr(watch_vfs._async_agfs, name, operation)
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        viking_fs=watch_vfs,
         resource_processor=processor,
         skill_processor=object(),
     )
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        create=AsyncMock(
+            return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+        ),
         patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
@@ -232,6 +242,7 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     monkeypatch,
     tmp_path,
     temp_file_id,
+    watch_vfs,
 ):
     """Upload snapshots keep only the external file_id before entering ExternalParse."""
     ctx = RequestContext(
@@ -274,15 +285,19 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
         reserve_unique_candidate=AsyncMock(return_value=("viking://resources/audio", lock)),
         process_resource=AsyncMock(),
     )
+    for name, operation in vars(agfs).items():
+        monkeypatch.setattr(watch_vfs._async_agfs, name, operation)
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        viking_fs=watch_vfs,
         resource_processor=processor,
         skill_processor=object(),
     )
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        create=AsyncMock(
+            return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+        ),
         patch_task=AsyncMock(),
         fail=AsyncMock(),
     )

@@ -1,32 +1,28 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { Sender } from '@ark-design/ui/sender';
-import type { RichTextValue, SenderInstance } from '@ark-design/ui/sender';
+import type { SenderInstance } from '@ark-design/ui/sender';
+import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react';
+
+import { resolveVikingBotLabels } from './labels.js';
+import { VikingBotSubmitActions } from './composer-controls.js';
+import { composerEvents } from './composer-events.js';
+import { ComposerHeader } from './composer-header.js';
+import { attachmentsAreReady } from './composer-attachments.js';
 import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from 'react';
-
-import { DEFAULT_LABELS } from './labels.js';
-import type { VikingBotDraft } from './model.js';
+  ComposerReferenceContext,
+  composerMention,
+} from './composer-references.js';
+import { ComposerFooter } from './composer-footer.js';
+import { QuickInputs } from './quick-inputs.js';
+import { useQuickInput } from './use-quick-input.js';
+import {
+  composerCaret,
+  toPlainText,
+  toRichText,
+  useSyncComposerValue,
+  writeComposerText,
+} from './composer-text.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
-
-const HARD_BREAK = 'hardBreak';
-const TEXT = 'text';
-
-/** 从富文本里取纯文本，忽略附件与标签。 */
-const toPlainText = (content: RichTextValue[]): string =>
-  content
-    .map((item) => {
-      if (item.type === HARD_BREAK) return '\n';
-      return item.type === TEXT ? (item.text ?? '') : '';
-    })
-    .join('')
-    .trim();
-
-const toRichText = (text: string): RichTextValue[] =>
-  text ? [{ type: TEXT, text }] : [];
 
 /**
  * 输入区。发送与停止都由宿主决定，组件只上报意图。
@@ -38,80 +34,87 @@ export const VikingBotComposerView = forwardRef<
 >(function VikingBotComposerView(
   {
     value,
+    locale: localeProp,
     className,
     attachments = [],
     disabled,
     disabledReason,
     isSending,
+    canSendWhileStreaming = false,
+    isSubmitting,
     variant = 'default',
     accept,
     maxAttachments = 10,
     actions,
+    quickInputs,
+    onQuickInputSelect,
+    references,
     onValueChange,
     onFilesAdded,
     onAttachmentRemove,
+    onOpenUri,
     onSend,
     onCancel,
     labels: overrides,
   },
   ref,
 ) {
-  const labels = { ...DEFAULT_LABELS, ...overrides };
+  const locale = useLocale(localeProp);
+  const labels = resolveVikingBotLabels(locale, overrides);
   const senderRef = useRef<SenderInstance>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const readOnly = !onValueChange;
+  const writing = useRef(false);
+  const locked = Boolean(
+    disabled ||
+    !onValueChange ||
+    isSubmitting ||
+    (isSending && !canSendWhileStreaming),
+  );
+  const canSubmit =
+    (value.trim() || attachments.length || references?.selected.length) &&
+    attachmentsAreReady(attachments);
+  const isSubmitMode = !isSending || canSendWhileStreaming;
   const remaining = Math.max(0, maxAttachments - attachments.length);
-  const limitReached = remaining === 0;
 
   const setText = useCallback(
     (text: string) => {
-      senderRef.current?.setValue(toRichText(text));
+      writeComposerText(senderRef.current, text, writing);
       onValueChange?.(text);
     },
     [onValueChange],
   );
+  const shortcuts = useQuickInput(value, setText, onQuickInputSelect);
 
-  // useEffect 必要性：把受控 value 的后续变化同步到 Ark 编辑器。编辑器是外部
-  // 非 React 控件，只有它的 setValue 能改写内部文档，渲染计算无法做到。仅当
-  // 外部文本与编辑器当前纯文本不一致时才写入，避免覆盖用户正在输入的光标。
-  // 组件卸载或 value 再次变化时由下一次同步覆盖，无需额外清理。
-  useEffect(() => {
-    const current = toPlainText(senderRef.current?.getValue() ?? []);
-    if (current === value) return;
-    senderRef.current?.setValue(toRichText(value));
-  }, [value]);
+  useSyncComposerValue(senderRef, value, writing);
 
   /** 按剩余额度截断并上报文件。 */
   const reportFiles = useCallback(
     (files: readonly File[]) => {
-      if (!onFilesAdded || files.length === 0 || limitReached) return;
-      const accepted = files.slice(0, remaining);
-      if (accepted.length) onFilesAdded(accepted);
+      if (!locked && files.length && remaining)
+        onFilesAdded?.(files.slice(0, remaining));
     },
-    [limitReached, onFilesAdded, remaining],
+    [locked, onFilesAdded, remaining],
   );
 
   useImperativeHandle(ref, () => ({
     setText,
     appendText: (text: string) => setText(`${value}${text}`),
     addFiles: (files: readonly File[]) => reportFiles(files),
-    isAttachmentLimitReached: () => limitReached,
+    isAttachmentLimitReached: () => remaining === 0,
     clear: () => setText(''),
     focus: () => senderRef.current?.getEditor()?.commands.focus('end'),
   }));
 
   const submit = () => {
-    if (!onSend || disabled || isSending) return;
+    if (!onSend || locked || !canSubmit) return;
     const text = toPlainText(
       senderRef.current?.getValue() ?? toRichText(value),
-    );
-    onSend({ text, attachments } satisfies VikingBotDraft);
+    ).trim();
+    onSend({
+      text,
+      attachments,
+      ...(references ? { references: references.selected } : {}),
+    });
   };
-
-  // 拦截拖放的默认行为与是否接受文件是两件事：满额或禁用时仍要阻止浏览器
-  // 直接打开被拖入的文件（那会离开当前会话并丢掉未发送草稿），只是不添加文件。
-  const interceptDrop = Boolean(onFilesAdded);
-  const acceptDrop = interceptDrop && !disabled && !limitReached;
 
   return (
     <div
@@ -122,94 +125,87 @@ export const VikingBotComposerView = forwardRef<
       ]
         .filter(Boolean)
         .join(' ')}
-      onDragOver={(event) => {
-        if (!interceptDrop) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = acceptDrop ? 'copy' : 'none';
-      }}
-      onDrop={(event) => {
-        if (!interceptDrop) return;
-        // 无论能否接受，都先取消默认行为，避免浏览器打开该文件。
-        event.preventDefault();
-        if (!acceptDrop) return;
-        reportFiles([...(event.dataTransfer.files ?? [])]);
-      }}
+      {...composerEvents(
+        Boolean(onFilesAdded),
+        !locked && remaining > 0,
+        reportFiles,
+        senderRef,
+      )}
     >
       {disabled && disabledReason ? (
         <p className="ov-viking-bot__composer-hint" role="status">
           {disabledReason}
         </p>
       ) : null}
-      {attachments.length > 0 ? (
-        <ul className="ov-viking-bot__attachments">
-          {attachments.map((attachment) => (
-            <li key={attachment.key}>
-              <span>{attachment.name}</span>
-              {attachment.status === 'error' ? (
-                <span className="ov-viking-bot__attachment-status">
-                  {attachment.errorMessage ?? labels.toolError}
-                </span>
-              ) : null}
-              {onAttachmentRemove ? (
-                <button
-                  type="button"
-                  aria-label={labels.removeAttachment}
-                  disabled={disabled}
-                  onClick={() => onAttachmentRemove(attachment)}
-                >
-                  ×
-                </button>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <Sender
-        ref={senderRef}
-        className="ov-viking-bot__sender"
-        defaultContent={toRichText(value)}
-        sending={isSending}
-        sendDisabled={disabled || readOnly}
-        onContentChange={(content) => {
-          if (!readOnly) onValueChange?.(toPlainText(content));
+      <QuickInputs
+        items={quickInputs}
+        disabled={locked}
+        onSelect={(item) => {
+          shortcuts.select(item);
+          senderRef.current?.getEditor()?.commands.focus('end');
         }}
-        onSend={() => {
-          submit();
-        }}
-        onStop={() => onCancel?.()}
-        richTextAreaProps={{
-          placeholder: labels.placeholder,
-          disabled,
-        }}
-        renderFooter={({ components }) => (
-          <div className="ov-viking-bot__composer-actions">
-            {components.sendBtnComponent}
-            {onFilesAdded ? (
-              <>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept={accept}
-                  multiple
-                  hidden
-                  onChange={(event) => {
-                    reportFiles([...(event.target.files ?? [])]);
-                    event.target.value = '';
-                  }}
-                />
-                <button
-                  type="button"
-                  disabled={disabled || limitReached}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  {labels.attach}
-                </button>
-              </>
-            ) : null}
-            {actions}
-          </div>
-        )}
       />
+      <ComposerReferenceContext.Provider
+        value={{ config: references, disabled: locked, labels, locale }}
+      >
+        <Sender
+          ref={senderRef}
+          className="ov-viking-bot__sender"
+          defaultContent={toRichText(value)}
+          sending={isSending && !canSendWhileStreaming}
+          sendDisabled={isSubmitMode ? locked || !canSubmit || !onSend : false}
+          onContentChange={(content) => {
+            if (!onValueChange || writing.current) return;
+            const next = toPlainText(content);
+            shortcuts.tracker.edit(next, composerCaret(senderRef.current));
+            onValueChange?.(next);
+          }}
+          onSend={submit}
+          onStop={() => onCancel?.()}
+          renderHeader={() => (
+            <ComposerHeader
+              references={references}
+              labels={labels}
+              onOpenUri={onOpenUri}
+              attachments={attachments}
+              onAttachmentRemove={onAttachmentRemove}
+              disabled={locked}
+            />
+          )}
+          renderSubmit={(props) => (
+            <VikingBotSubmitActions
+              props={props}
+              streaming={isSending}
+              canSteer={canSendWhileStreaming}
+              onCancel={onCancel}
+              labels={labels}
+            />
+          )}
+          richTextAreaProps={{
+            mentionConfig: composerMention(references, locked),
+            placeholder: labels.placeholder,
+            disabled,
+            minRows: 1,
+            maxRows: 6,
+            lineHeight: 22,
+            style: { minHeight: 44 },
+          }}
+          renderFooter={({ components }) => (
+            <ComposerFooter
+              locale={locale}
+              references={references}
+              senderRef={senderRef}
+              labels={labels}
+              disabled={locked}
+              filesDisabled={Boolean(locked || remaining === 0)}
+              accept={accept}
+              onFiles={onFilesAdded ? reportFiles : undefined}
+              actions={actions}
+              submit={components.sendBtnComponent}
+            />
+          )}
+        />
+      </ComposerReferenceContext.Provider>
     </div>
   );
 });

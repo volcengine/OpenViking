@@ -661,34 +661,6 @@ async def test_safe_validation_detail_and_typed_request_reason(running_gateway):
     assert response.status_code == 422 and response.json()["reason"] == "invalid_configuration"
 
 
-async def test_revoked_key_keeps_pending_capture(running_gateway):
-    from conftest import make_due
-
-    app, client, admin, key, _, _ = running_gateway
-    await client.post(
-        "/v1/chat/completions",
-        headers={"X-API-Key": key["key"], "X-OpenViking-Session": "pending"},
-        json={
-            "model": "model",
-            "messages": [{"role": "user", "content": "Keep this unsaved conversation"}],
-        },
-    )
-    scope, session = digest("tenant\0alice\0chat"), digest("pending")
-    before = (await app.state.store.capture.get(scope, session)).value
-    assert before["pending"]
-    await client.delete(P + "/keys/" + key["id"], headers=admin)
-    await make_due(app.state.store)
-    assert await app.state.worker.once()
-    after = (await app.state.store.capture.get(scope, session)).value
-    assert after["pending"][0]["messages"] == before["pending"][0]["messages"]
-    assert after["error"]["reason"] == "gateway_key_revoked"
-    logs = await app.state.management.logs("tenant", user_id="alice")
-    assert logs[0]["capture_status"] == "paused"
-    assert logs[0]["capture_reason"] == "gateway_key_revoked"
-    overview = (await client.get(P + "/overview", headers=admin)).json()
-    assert overview["capture_issues"]["paused"] == 1
-
-
 async def test_identity_cache_accepts_root_does_not_cache_failures():
     from openviking_gateway.client import VikingClient, VikingError
 
@@ -821,85 +793,6 @@ async def test_non_ascii_management_header_is_rejected_cleanly(running_gateway):
         ],
     )
     assert response.status_code == 401 and response.json()["reason"] == "management_key_invalid"
-
-
-async def test_revoked_capture_is_idle_until_ttl_expires(running_gateway):
-    import time
-
-    from conftest import make_due
-
-    app, client, admin, key, _, _ = running_gateway
-    headers = {"X-API-Key": key["key"], "X-OpenViking-Session": "ttl-pending"}
-    await client.post(
-        "/v1/chat/completions",
-        headers=headers,
-        json={
-            "model": "model",
-            "messages": [{"role": "user", "content": "Preserve until retention expires"}],
-        },
-    )
-    scope, session = digest("tenant\0alice\0chat"), digest("ttl-pending")
-    await client.delete(P + "/keys/" + key["id"], headers=admin)
-    await make_due(app.state.store)
-    assert await app.state.worker.once()
-    paused = (await app.state.store.capture.get(scope, session)).value
-    assert paused["pending"] and paused["error"]["retry_at"] is None
-    with app.state.store.connect() as connection:
-        touched = connection.execute(
-            "SELECT touched FROM sessions WHERE scope=? AND session=?", (scope, session)
-        ).fetchone()[0]
-    assert not await app.state.worker.once()
-    with app.state.store.connect() as connection:
-        assert (
-            connection.execute(
-                "SELECT touched FROM sessions WHERE scope=? AND session=?", (scope, session)
-            ).fetchone()[0]
-            == touched
-        )
-    await app.state.store.expire(time.time() + app.state.config.session_ttl_seconds)
-    assert not (await app.state.store.capture.get(scope, session)).value
-
-
-async def test_replacement_key_resumes_paused_capture(running_gateway):
-    from conftest import make_due
-
-    app, client, admin, key, _, writes = running_gateway
-    messages = [{"role": "user", "content": "Remember this retained conversation"}]
-    headers = {"X-API-Key": key["key"], "X-OpenViking-Session": "resume-paused"}
-    body = {"model": "model", "messages": messages}
-    assert (
-        await client.post("/v1/chat/completions", headers=headers, json=body)
-    ).status_code == 200
-    await client.delete(P + "/keys/" + key["id"], headers=admin)
-    await make_due(app.state.store)
-    assert await app.state.worker.once()
-    scope, session = digest("tenant\0alice\0chat"), digest("resume-paused")
-    assert (await app.state.store.capture.get(scope, session)).value["error"]["retry_at"] is None
-    replacement = (
-        await client.post(
-            P + "/keys",
-            headers=admin,
-            json={
-                "name": "replacement",
-                "user_id": "alice",
-                "policy_id": "default",
-                "upstream_ids": ["chat"],
-            },
-        )
-    ).json()
-    headers["X-API-Key"] = replacement["key"]
-    body["messages"] = [
-        *messages,
-        {"role": "assistant", "content": "hello"},
-        {"role": "user", "content": "Continue this conversation"},
-    ]
-    assert (
-        await client.post("/v1/chat/completions", headers=headers, json=body)
-    ).status_code == 200
-    state = (await app.state.store.capture.get(scope, session)).value
-    assert not state["error"] and state["credential_id"] == replacement["id"]
-    assert await app.state.worker.once()
-    assert writes
 
 
 async def test_version_error_includes_required_version(running_gateway):

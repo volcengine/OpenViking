@@ -1,4 +1,7 @@
-import { useCallback, type ReactNode } from 'react';
+import { Empty } from '../../shared/primitives/empty/empty.js';
+import { Input } from '../../shared/primitives/input/input.js';
+import { useCallback } from 'react';
+import { Highlight } from './highlight.js';
 import { moveScopeFocus } from './scope-keyboard.js';
 import CheckIcon from '../../../../icons/svg/scope-switcher/check.svg?react';
 import SearchIcon from '../../../../icons/svg/scope-switcher/search.svg?react';
@@ -10,30 +13,6 @@ import type {
   ScopeSwitcherSlots,
   ScopeSwitcherState,
 } from './types.js';
-
-/**
- * 把标签里所有命中关键字的片段包进 `<mark>`，逐处高亮而不是只标第一处。大小写不敏感，保留原文大小写。
- *
- * Wraps every keyword hit in the label with `<mark>`, highlighting each occurrence
- * rather than only the first. Case-insensitive; the original casing is preserved.
- */
-function Highlight({ text, keyword }: { text: string; keyword: string }) {
-  const needle = keyword.trim().toLocaleLowerCase();
-  if (!needle) return <>{text}</>;
-  const haystack = text.toLocaleLowerCase();
-  const parts: ReactNode[] = [];
-  let cursor = 0;
-  let hit = haystack.indexOf(needle);
-  while (hit >= 0) {
-    if (hit > cursor) parts.push(text.slice(cursor, hit));
-    const end = hit + needle.length;
-    parts.push(<mark key={`${hit}-${end}`}>{text.slice(hit, end)}</mark>);
-    cursor = end;
-    hit = haystack.indexOf(needle, cursor);
-  }
-  if (cursor < text.length) parts.push(text.slice(cursor));
-  return <>{parts}</>;
-}
 
 export function ScopePanel({
   label,
@@ -51,7 +30,7 @@ export function ScopePanel({
   slots?: ScopeSwitcherSlots;
   actions?: ScopeSwitcherActions;
   onSelect: NonNullable<ScopeSwitcherActions['onSelect']>;
-  labels?: ScopeSwitcherLabels;
+  labels: Required<ScopeSwitcherLabels>;
 }) {
   const focusPanel = useCallback((node: HTMLDivElement | null) => {
     const target =
@@ -79,40 +58,44 @@ export function ScopePanel({
       Math.max(options.length, data.options.length, data.total ?? 0) >
         SCOPE_SWITCHER_SEARCH_THRESHOLD);
   const search = searchVisible ? (
-    <div className="ov-scope-switcher__search-field">
-      <SearchIcon className="ov-scope-switcher__search-icon" />
-      <input
-        type="search"
-        className="ov-scope-switcher__search"
-        value={keyword}
-        aria-label={labels?.searchPlaceholder ?? 'Search'}
-        placeholder={labels?.searchPlaceholder ?? 'Search'}
-        onChange={(event) =>
-          actions?.onSearchKeywordChange?.(event.currentTarget.value)
-        }
-      />
-    </div>
+    <Input
+      size="small"
+      prefix={<SearchIcon className="ov-scope-switcher__search-icon" />}
+      type="search"
+      className="ov-scope-switcher__search-field"
+      value={keyword}
+      aria-label={labels.searchPlaceholder}
+      placeholder={labels.searchPlaceholder}
+      onChange={(event) =>
+        actions?.onSearchKeywordChange?.(event.currentTarget.value)
+      }
+    />
   ) : null;
   let list;
   if (state?.loading) {
     list = (
       <div className="ov-scope-switcher__state" role="status">
-        {labels?.loading ?? 'Loading…'}
+        {labels.loading}
       </div>
     );
   } else if (state?.error) {
     list = (
       <div className="ov-scope-switcher__state" role="alert">
-        {slots?.errorFallback ?? labels?.error ?? 'Unable to load options'}
+        {slots?.errorFallback ?? labels.error}
       </div>
     );
   } else if (!options.length) {
     list = (
-      <div className="ov-scope-switcher__state" role="status">
-        {slots?.emptyFallback ??
-          (hasKeyword
-            ? (labels?.noMatch ?? labels?.empty ?? 'No matches')
-            : (labels?.empty ?? 'No options'))}
+      <div className="ov-scope-switcher__state">
+        {slots?.emptyFallback == null ? (
+          <Empty
+            size="compact"
+            illustration={hasKeyword ? 'search' : 'tray'}
+            title={hasKeyword ? labels.noMatch : labels.empty}
+          />
+        ) : (
+          <div role="status">{slots.emptyFallback}</div>
+        )}
       </div>
     );
   } else {

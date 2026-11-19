@@ -5,6 +5,7 @@
 import io
 from pathlib import Path
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,7 +21,9 @@ IMAGE_MAX_FILE_BYTES = 10 * 1024 * 1024
 def is_valid_image(image_bytes: bytes, source_path: Path) -> bool:
     """Return whether an extracted image is safe and useful to ingest."""
     if len(image_bytes) > IMAGE_MAX_FILE_BYTES:
-        logger.warning(f"[ImageValidation] Image exceeds 10MB, skipping: {source_path}")
+        logger.debug(
+            "Image exceeds size limit; skipping path=%s", safe_path_for_log(str(source_path))
+        )
         return False
 
     try:
@@ -29,29 +32,37 @@ def is_valid_image(image_bytes: bytes, source_path: Path) -> bool:
         with Image.open(io.BytesIO(image_bytes)) as image:
             width, height = image.size
     except Exception as exc:
-        logger.warning(
-            f"[ImageValidation] Cannot read image dimensions, skipping {source_path}: {exc}"
+        logger.debug(
+            "Image dimensions unreadable; skipping path=%s error_type=%s",
+            safe_path_for_log(str(source_path)),
+            type(exc).__name__,
         )
         return False
 
     if width <= IMAGE_MIN_SIDE or height <= IMAGE_MIN_SIDE:
-        logger.warning(
-            f"[ImageValidation] Image side too small ({width}x{height}), skipping: {source_path}"
+        logger.debug(
+            "Image side below minimum; skipping path=%s width=%d height=%d",
+            safe_path_for_log(str(source_path)),
+            width,
+            height,
         )
         return False
 
     pixels = width * height
     if pixels < IMAGE_MIN_PIXELS or pixels > IMAGE_MAX_PIXELS:
-        logger.warning(
-            f"[ImageValidation] Image pixel count out of range ({pixels}), skipping: {source_path}"
+        logger.debug(
+            "Image pixel count out of range; skipping path=%s pixels=%d",
+            safe_path_for_log(str(source_path)),
+            pixels,
         )
         return False
 
     aspect_ratio = width / height
     if aspect_ratio < IMAGE_MIN_ASPECT_RATIO or aspect_ratio > IMAGE_MAX_ASPECT_RATIO:
-        logger.warning(
-            f"[ImageValidation] Image aspect ratio out of range ({aspect_ratio:.4f}), "
-            f"skipping: {source_path}"
+        logger.debug(
+            "Image aspect ratio out of range; skipping path=%s ratio=%.4f",
+            safe_path_for_log(str(source_path)),
+            aspect_ratio,
         )
         return False
 
