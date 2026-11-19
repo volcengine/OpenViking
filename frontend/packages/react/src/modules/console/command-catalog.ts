@@ -64,6 +64,7 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
   'add-skill',
   'add-memory',
   'find',
+  'compile create',
   'compile',
 ] as const;
 
@@ -73,7 +74,7 @@ export function consoleQuickCommands(
   const guides = resolveConsoleLocale(locale).commandGuides;
   return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
     name,
-    value: name === 'compile' ? 'ov compile ' : guides[name].examples[0],
+    value: guides[name].examples[0],
   }));
 }
 
