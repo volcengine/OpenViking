@@ -6,6 +6,7 @@ import {
   type VikingBotLabels,
   type VikingBotProps,
 } from '../../components/viking-bot/index.js';
+import { resolveVikingBotLabels } from '../../components/viking-bot/labels.js';
 import {
   ErrorNotification,
   errorMessage,
@@ -32,7 +33,9 @@ export function ConsoleCollectionError({
       error={state.error}
       identity={state}
       locale={locale}
-      actions={<Button onClick={retry}>{labels.vikingBot.retry}</Button>}
+      actions={
+        <Button onClick={retry}>{resolveVikingBotLabels(locale).retry}</Button>
+      }
     >
       {errorMessage(state.error)}
     </ErrorNotification>
