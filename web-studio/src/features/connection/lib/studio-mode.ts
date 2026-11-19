@@ -67,7 +67,12 @@ export function canOpenManagement(input: {
   isRoleLoading: boolean
   serverMode: ServerMode
 }): boolean {
-  if (input.serverMode === 'dev') return false
+  if (input.serverMode === 'dev')
+    return (
+      input.provider === 'opensource' &&
+      !input.isRoleLoading &&
+      input.role === 'root'
+    )
   return resolveStudioManagementCapabilities({
     serviceProvider: input.provider,
     hasControlCredential: Boolean(input.connection.adminApiKey.trim()),

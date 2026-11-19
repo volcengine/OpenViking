@@ -108,6 +108,18 @@ it('does not mount management pages in development mode', () => {
   expect(screen.queryByTestId('configuration child')).toBeNull()
   expect(screen.getByText('states.managementRequired.title')).toBeTruthy()
 })
+it('keeps the embedded Gateway available in development mode', () => {
+  state.provider = 'opensource'
+  state.mode = 'dev'
+  state.role = 'root'
+  state.pathname = '/admin/gateway/keys'
+  render(
+    <StudioFeatureBoundary>
+      <span data-testid="gateway child" />
+    </StudioFeatureBoundary>,
+  )
+  expect(screen.getByTestId('gateway child')).toBeTruthy()
+})
 it('does not mount an incompatible extension or its effects through a deep link', () => {
   state.pathname = '/compile'
   state.capability = 'unavailable'

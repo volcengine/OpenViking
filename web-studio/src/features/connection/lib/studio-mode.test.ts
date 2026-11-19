@@ -74,7 +74,7 @@ it('never grants hosted connections open source administration', () => {
     }),
   ).toBe(false)
 })
-it('does not expose administration in development mode', () => {
+it('keeps Gateway administration available in development mode', () => {
   expect(
     canOpenManagement({
       connection: { ...connection, adminApiKey: '' },
@@ -83,7 +83,7 @@ it('does not expose administration in development mode', () => {
       serverMode: 'dev',
       isRoleLoading: false,
     }),
-  ).toBe(false)
+  ).toBe(true)
 })
 it('entry preferences cannot grant management or make a Root-only connection a data identity', () => {
   expect(

@@ -184,9 +184,12 @@ it('retains the Return to Management entry in the workbench', () => {
       .getAttribute('href'),
   ).toBe('/admin')
 })
-it('hides the management entry in development mode', () => {
+it('keeps the Gateway management entry in development mode', () => {
   mocks.serverMode = 'dev'
   render(<StudioModeSwitch managementMode={false} />)
-  expect(screen.queryByRole('link')).toBeNull()
-  expect(screen.queryByRole('button')).toBeNull()
+  expect(
+    screen
+      .getByRole('link', { name: 'modes.returnManagement' })
+      .getAttribute('href'),
+  ).toBe('/admin')
 })

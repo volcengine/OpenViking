@@ -57,7 +57,8 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
       role: connectionRole,
       serverMode,
     })
-    if (serverMode === 'dev') reason = 'managementRequired'
+    if (serverMode === 'dev' && feature.id !== 'gateway')
+      reason = 'managementRequired'
     else if (
       feature.id === 'gateway' &&
       service.provider === 'opensource' &&

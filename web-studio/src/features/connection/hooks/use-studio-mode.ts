@@ -17,8 +17,7 @@ export function useStudioMode() {
     canManage:
       studioMode === 'workbench'
         ? provider === 'opensource' &&
-          serverMode !== 'dev' &&
-          Boolean(connection.adminApiKey.trim())
+          (serverMode === 'dev' || Boolean(connection.adminApiKey.trim()))
         : canOpenManagement({
             provider,
             connection,
