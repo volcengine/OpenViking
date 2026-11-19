@@ -654,6 +654,11 @@ html.dark .ov-directory-tour {
   --ov-ui-tour-surface-default: var(--ov-ui-bg-1-default);
   --ov-ui-tour-border-default: var(--ov-ui-border-3-default);
   --ov-ui-tour-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-tour-illustration-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-memories-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-shared-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-experiences-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-peers-default: var(--ov-ui-bg-3-default);
 }
 
 /* Persistent notice surface from the console Arco theme (MIT). */
