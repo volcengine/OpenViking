@@ -71,35 +71,35 @@ for (const {
         document.querySelector('.ov-file-browser-search__scope-trigger'),
       );
       await click(
-        document.querySelector(
-          '.ov-file-browser-search__scope-menu button[title]',
-        ),
+        document.querySelector('.ov-file-browser-search__scope-row > button'),
       );
       const option = document.querySelector(
-        '.ov-file-browser-search__scope-menu > button[title]',
+        `.ov-file-browser-search__scope-menu label[title="${expectedTitle}"]`,
       );
       const observed = [
         {
           stage: 'candidate',
           title: option.title,
-          label: option.querySelector('span').textContent,
+          label: option.querySelector('.ov-checkbox__text > span').textContent,
         },
       ];
-      await click(option);
-      const current = document.querySelector(
-        '.ov-file-browser-search__scope-current button[title]',
+      await click(
+        option
+          .closest('.ov-file-browser-search__scope-row')
+          .querySelector('button'),
       );
-      observed.push({
-        stage: 'current',
-        title: current.title,
-        label: current.querySelector('span').textContent,
-      });
+      const current = option;
       assert.ok(
         fetch.calls.some(
           (call) => call.path === '/api/v1/fs/ls' && call.uri === uri,
         ),
       );
-      await click(current);
+      await click(current.querySelector('input'));
+      await click(
+        document.querySelector(
+          '.ov-file-browser-search__scope-actions button:last-child',
+        ),
+      );
       const selected = document.querySelector(
         '.ov-file-browser-search__scope-picker button[aria-pressed="true"]',
       );
@@ -164,16 +164,27 @@ test('the initial encoded root scope label is readable without changing its sele
       document.querySelector('.ov-file-browser-search__scope-trigger').click(),
     );
     const root = document.querySelector(
-      '.ov-file-browser-search__scope-menu button[title]',
+      '.ov-file-browser-search__scope-menu label[title]',
     );
     assert.equal(root.title, display);
-    assert.equal(root.querySelector('span').textContent, display);
-    await act(() => root.click());
+    assert.equal(
+      root.querySelector('.ov-checkbox__text > span').textContent,
+      display,
+    );
+    await act(() =>
+      root
+        .closest('.ov-file-browser-search__scope-row')
+        .querySelector('button')
+        .click(),
+    );
     await settle();
     assert.equal(fetch.calls.at(-1).uri, rootUri);
+    await act(() => root.querySelector('input').click());
     await act(() =>
       document
-        .querySelector('.ov-file-browser-search__scope-current button[title]')
+        .querySelector(
+          '.ov-file-browser-search__scope-actions button:last-child',
+        )
         .click(),
     );
     const input = document.querySelector('.ov-file-browser-search__input');

@@ -15,6 +15,7 @@ import { createFilePreviewAdapters } from './file-preview-handle-adapters.js';
 import { FilePreviewLoadingReporter } from './file-preview-loading-reporter.js';
 import { imagePreviewTarget } from './file-preview-markdown-images.js';
 import { sourceDeps, toFileSource } from './file-preview-source.js';
+import { isSessionMessagesSource } from './session-messages.js';
 import {
   LoadFailedState,
   LoadingState,
@@ -158,10 +159,12 @@ export function FilePreviewViewer({
   // 当依赖会每帧重建适配器、重启渲染管线。
   //
   // Keys on whether the capability exists, never the callback's identity.
+  const sessionMessages = isSessionMessagesSource(tab.source);
   const adapters = useMemo(
     () =>
       createFilePreviewAdapters({
         directoryLinks,
+        sessionMessages,
         onHandleChange: (handle) => {
           suppressed.current.handle = handle;
           if (reportsRef.current) callbacks.current.onHandleChange(handle);
@@ -187,7 +190,7 @@ export function FilePreviewViewer({
     // 只在能力出现或消失时重建；回调身份每帧都可能是新的。
     // Rebuilt only when the capability appears or goes away.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [Boolean(onLinkClick), directoryLinks],
+    [Boolean(onLinkClick), directoryLinks, sessionMessages],
   );
   // useEffect 必要性：补发要在 `reports` 变 true 的那次提交之后进行，此时句柄
   // 早已存在；渲染期间调用会更新父组件的 state，触发渲染阶段的状态更新警告。
