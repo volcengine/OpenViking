@@ -18,6 +18,10 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
+from openviking.observability.reporting.token_sources import (
+    bind_dashboard_token_source_type,
+    get_dashboard_token_source_type,
+)
 from openviking.parse.image_rewrite import (
     IMAGE_MAPPINGS_FILENAME,
     rewrite_image_uris,
@@ -472,6 +476,11 @@ class SemanticProcessor(DequeueHandlerBase):
             skip_vectorization=msg.skip_vectorization,
             changes=changes,
             generation_trigger="parent_refresh",
+            dashboard_source_type=(
+                msg.dashboard_source_type
+                or get_dashboard_token_source_type(generation_trigger=msg.generation_trigger)
+                or ""
+            ),
             # Directory refreshes must not supersede pending file indexing.
             coalesce_key=(
                 "directory|"
@@ -609,7 +618,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 return ProcessResult.requeued()
             collector = work.resolve_telemetry()
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
-            with telemetry_ctx:
+            with (
+                telemetry_ctx,
+                bind_dashboard_token_source_type(
+                    msg.dashboard_source_type
+                    or get_dashboard_token_source_type(generation_trigger=msg.generation_trigger)
+                ),
+            ):
                 root_attrs = create_root_span_attributes(
                     http_method="QUEUE",
                     http_route=msg.context_type or "/queuefs/semantic",

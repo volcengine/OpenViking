@@ -10,10 +10,12 @@ from openviking.core.namespace import (
     is_session_uri,
     may_include_hidden_actor_peers,
 )
+from openviking.resource.watch_runtime import WatchRuntime
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.exceptions import FailedPreconditionError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -70,6 +72,32 @@ class _FakeVikingFS:
             context["overview"] = overview
         context["is_leaf"] = is_leaf
         self.write_leases.append(lease_ref)
+
+
+@pytest.fixture
+def bootstrap_embeddings(monkeypatch):
+    # MockLocalAGFS does not implement the Watch scheduler's native leader election.
+    monkeypatch.setattr(
+        "openviking.service.core.WatchRuntime",
+        lambda manager, **_: WatchRuntime(manager, leader_enabled=False),
+    )
+    messages = []
+
+    async def capture(_manager, message):
+        messages.append(message)
+        return True
+
+    monkeypatch.setattr(VikingDBManager, "enqueue_embedding_msg", capture)
+    return messages
+
+
+@pytest.mark.asyncio
+async def test_new_collection_labels_preset_embeddings(bootstrap_embeddings, service):
+    preset = [
+        msg for msg in bootstrap_embeddings if msg.context_data["uri"] == "viking://resources"
+    ]
+    assert len(preset) == 2
+    assert {msg.dashboard_source_type for msg in preset} == {"create_collection"}
 
 
 @pytest.mark.asyncio

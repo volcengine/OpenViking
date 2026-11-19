@@ -161,7 +161,12 @@ class DirectoryParser(BaseParser):
             #      and lose the org prefix!
             if "_source_meta" not in kwargs:
                 await self._add_git_metadata(source_path, kwargs)
-            return await CodeRepositoryParser().parse(str(source_path), instruction, **kwargs)
+            from openviking.observability.reporting.token_sources import (
+                bind_dashboard_token_source_type,
+            )
+
+            with bind_dashboard_token_source_type("repository"):
+                return await CodeRepositoryParser().parse(str(source_path), instruction, **kwargs)
 
         dir_name = kwargs.get("source_name") or source_path.name
         warnings: List[str] = []

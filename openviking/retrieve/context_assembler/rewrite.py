@@ -13,6 +13,7 @@ import re
 from typing import Any, Collection, Dict, Literal, Optional, Tuple
 
 from openviking.config.vlm import VLMHandle
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.prompts import render_prompt
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
@@ -99,10 +100,11 @@ async def rewrite_context(
     )
     before = _usage_snapshot(planner)
     try:
-        response = await asyncio.wait_for(
-            planner.get_completion_async(prompt),
-            timeout=timeout,
-        )
+        with bind_dashboard_token_source_type("semantic_search"):
+            response = await asyncio.wait_for(
+                planner.get_completion_async(prompt),
+                timeout=timeout,
+            )
     except (asyncio.TimeoutError, TimeoutError):
         # Separate names before Python 3.11; catching only the builtin there
         # reports every timeout as a generic failure.

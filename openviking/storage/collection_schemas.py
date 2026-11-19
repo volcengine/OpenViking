@@ -764,11 +764,15 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                         _embed_t0 = _time.monotonic()
                         from openviking.observability.reporting.facts import bind_embedding_purpose
+                        from openviking.observability.reporting.token_sources import (
+                            bind_dashboard_token_source_type,
+                        )
 
                         purpose = embedding_msg.context_data.get("context_type", "unknown")
                         with (
                             bind_ingestion_source_type(embedding_msg.source_type),
                             bind_embedding_purpose(purpose),
+                            bind_dashboard_token_source_type(embedding_msg.dashboard_source_type),
                         ):
                             result = await embed_compat(
                                 embedder,

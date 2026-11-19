@@ -22,6 +22,10 @@ from openviking.config.vlm import VLMHandle, VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.observability.reporting.token_sources import (
+    bind_dashboard_token_source_type,
+    get_dashboard_token_source_type,
+)
 from openviking.privacy.reference import parse_privacy_field_reference
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
@@ -515,8 +519,9 @@ class SkillProcessor:
         }
         if self._vlm_resolver is None:
             raise RuntimeError("SkillProcessor requires a VLM resolver for account-owned work")
-        extraction_kwargs["vlm"] = await self._vlm_resolver.get_vlm(ctx.account_id)
-        extraction_result = await extract_skill_privacy_values(**extraction_kwargs)
+        with bind_dashboard_token_source_type(get_dashboard_token_source_type() or "add_skill"):
+            extraction_kwargs["vlm"] = await self._vlm_resolver.get_vlm(ctx.account_id)
+            extraction_result = await extract_skill_privacy_values(**extraction_kwargs)
         if not extraction_result.values:
             return prepared_skill, {}
 
