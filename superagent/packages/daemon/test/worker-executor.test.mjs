@@ -119,18 +119,46 @@ describe('WorkerExecutor', () => {
     assert.equal(first.argv[first.argv.indexOf('--session-id') + 1], '6d0f2a51-0000-4000-8000-000000000001', 'under the new task\'s own id');
   });
 
-  it('says whether a task\'s last Pi session can go on into a new round: kept, deleted or too large', (t) => {
-    const { config, task } = setup(t);
+  it('says whether a task\'s last session can go on into a new round, on every runtime: kept, deleted or too large', (t) => {
+    const { dir, config, task } = setup(t);
+    const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, CODEX_HOME: process.env.CODEX_HOME };
+    process.env.CLAUDE_CONFIG_DIR = path.join(dir, 'claude-home');
+    process.env.CODEX_HOME = path.join(dir, 'codex-home');
+    t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
     const executor = new WorkerExecutor({ config });
     const id = 'bbbbbbbb-0000-4000-8000-000000000001';
-    const current = task({ native_session: id, turns: 1 });
-    assert.equal(executor.sessionState(current), 'deleted', 'no file');
-    const dir = path.join(config.dataDir, 'workers', current.id);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `2026-11-18T10-00-00-000Z_${id}.jsonl`), '{"type":"session"}\n');
-    assert.equal(executor.sessionState(current), 'kept');
-    assert.equal(executor.sessionState(current, { maxBytes: 4 }), 'large');
-    assert.equal(executor.sessionState({ ...current, runtime: 'codex' }), 'kept', 'Codex and Claude Code keep their own sessions');
+    const files = {
+      pi: path.join(config.dataDir, 'workers', 't1', `2026-11-18T10-00-00-000Z_${id}.jsonl`),
+      claude: path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', '-srv-workspace-tasks-t1', `${id}.jsonl`),
+      codex: path.join(process.env.CODEX_HOME, 'sessions', '2026', '11', '18', `rollout-2026-11-18T10-00-00-${id}.jsonl`),
+    };
+    for (const [runtime, file] of Object.entries(files)) {
+      const current = task({ runtime, native_session: id, turns: 1 });
+      assert.equal(executor.sessionState(current), 'deleted', `${runtime}: no file`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, '{"type":"session"}\n');
+      assert.equal(executor.sessionState(current), 'kept', runtime);
+      assert.equal(executor.sessionState(current, { maxBytes: 4 }), 'large', runtime);
+    }
+    assert.equal(executor.sessionState(task({ runtime: 'claude', native_session: null })), 'kept', 'no checkpoint: nothing to judge');
+  });
+
+  it('says when the session a Claude Code or Codex turn resumed is gone, so the task starts a new one', async (t) => {
+    const { dir, config, task } = setup(t);
+    const cli = (name, lines, stderr, code) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, `#!/usr/bin/env node\nfor (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + '\\n');\nprocess.stderr.write(${JSON.stringify(stderr)});\nprocess.exit(${code});\n`, { mode: 0o755 });
+      return file;
+    };
+    config.claudeBin = cli('claude', [{ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0 }], 'No conversation found with session ID: x', 0);
+    config.codexBin = cli('codex', [], 'Error: thread/resume: thread/resume failed: no rollout found for thread id th_gone (code -32600)', 1);
+    const executor = new WorkerExecutor({ config });
+    const claude = await executor.start({ task: task({ runtime: 'claude', native_session: 'gone', turns: 2 }), prompt: 'p', authority: 'x' }).done;
+    const codex = await executor.start({ task: task({ runtime: 'codex', native_session: 'th_gone', turns: 2 }), prompt: 'p', authority: 'x' }).done;
+    assert.equal(claude.sessionLost, true);
+    assert.equal(codex.sessionLost, true);
+    const fresh = await executor.start({ task: task({ runtime: 'codex', native_session: null, turns: 0 }), prompt: 'p', authority: 'x' }).done;
+    assert.equal(fresh.sessionLost, undefined, 'only a turn that resumed a session lost it');
   });
 
   it('starts a task that follows a Claude Code or Codex task from a fork of that task\'s session, unless it is gone or too large', async (t) => {

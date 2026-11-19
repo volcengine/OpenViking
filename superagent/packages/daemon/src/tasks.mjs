@@ -1018,7 +1018,10 @@ export class TaskManager {
       status: result.error ? 'failed' : 'completed',
       metadata: { task: taskId, durationMs: this.now() - slot.startedAt, ...(result.usage ?? {}) },
     });
-    if (failed && result.transient && (this.retries.get(taskId) ?? 0) < TRANSIENT_RETRIES) {
+    // A passing failure runs the turn again; so does one whose resumed session
+    // was gone (its CLI cleaned it up): settleInputs dropped the checkpoint, so
+    // the next turn starts a new session from the task record.
+    if (failed && (result.transient || result.sessionLost) && (this.retries.get(taskId) ?? 0) < TRANSIENT_RETRIES) {
       this.retries.set(taskId, (this.retries.get(taskId) ?? 0) + 1);
       this.setStatus(taskId, 'queued');
       this.request(taskId);
@@ -1078,7 +1081,9 @@ export class TaskManager {
       AND handed_back_at_ms IS NULL`).get(task.id, task.round).n;
     if (Number(live) > 0) return false;
     const round = this.roundOf(task);
-    const last = this.db.prepare(`SELECT summary, draft FROM task_reports WHERE task_id = ? AND round < ? AND state != 'progress'
+    // The last real round's result: not one of an earlier round handed back too.
+    const last = this.db.prepare(`SELECT summary, draft FROM task_reports r WHERE task_id = ? AND round < ? AND state != 'progress'
+      AND NOT EXISTS (SELECT 1 FROM task_rounds x WHERE x.task_id = r.task_id AND x.round = r.round AND x.outcome = 'handed_back')
       ORDER BY id DESC LIMIT 1`).get(task.id, task.round);
     this.transaction(() => {
       for (const { id } of this.db.prepare("SELECT id FROM task_reports WHERE task_id = ? AND round = ? AND state != 'progress'").all(task.id, task.round)) {
@@ -1143,23 +1148,51 @@ export class TaskManager {
   }
 
   // The router answered for these tasks: by naming them (task_ids on a
-  // delivery or a silence: every report it was shown for them), or with a
-  // delivery or silence on a round's origin (the reports of that round).
-  // Reports it was shown are settled. An answer to a later input of a round
+  // delivery or a silence), or with a delivery or silence on a round's origin.
+  // The reports it was shown are settled, of the rounds that answer covers
+  // only: another round's report, asked elsewhere or still to be relayed,
+  // stays offered. An answer to a later input of a round, with no task named,
   // settles nothing: it may be an acknowledgement.
   settleReports({ taskIds = [], seqs = [], by = null, outboxId = null } = {}) {
-    const ids = new Set(taskIds.filter((id) => this.get(id)));
-    const rounds = seqs.filter((value) => value != null)
-      .flatMap((seq) => this.db.prepare('SELECT task_id, round FROM task_rounds WHERE origin_seq = ?').all(seq))
-      .filter((row) => !ids.has(row.task_id));
+    const decided = seqs.filter((value) => value != null);
+    const scopes = new Set(decided.map((seq) => {
+      try { return this.db.prepare('SELECT scope_key FROM connector_events WHERE seq = ?').get(seq)?.scope_key; } catch { return null; }
+    }).filter(Boolean));
+    const targets = [];
+    const named = new Set(taskIds.filter((id) => this.get(id)));
+    for (const id of named) for (const round of this.roundsAnswered(id, decided, scopes)) targets.push([id, round]);
+    for (const seq of decided) {
+      for (const row of this.db.prepare('SELECT task_id, round FROM task_rounds WHERE origin_seq = ?').all(seq)) {
+        if (!named.has(row.task_id)) targets.push([row.task_id, row.round]);
+      }
+    }
     let settled = 0;
-    const settle = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
+    const settleTask = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
       WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ?)`);
     const settleRound = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
       WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ? AND round = ?)`);
-    for (const id of ids) settled += Number(settle.run(this.now(), by, outboxId ?? null, id).changes);
-    for (const row of rounds) settled += Number(settleRound.run(this.now(), by, outboxId ?? null, row.task_id, row.round).changes);
+    for (const [id, round] of targets) {
+      settled += Number((round == null ? settleTask.run(this.now(), by, outboxId ?? null, id)
+        : settleRound.run(this.now(), by, outboxId ?? null, id, round)).changes);
+    }
     return settled;
+  }
+
+  // The rounds of a named task an answer covers: the round it was decided on
+  // (its origin, or another of its inputs); else the rounds asked where it
+  // went; else, an answer given somewhere no round was asked, every round.
+  roundsAnswered(taskId, seqs, scopes) {
+    const rounds = new Set();
+    for (const seq of seqs) {
+      const origin = this.db.prepare('SELECT round FROM task_rounds WHERE task_id = ? AND origin_seq = ?').get(taskId, seq);
+      if (origin) rounds.add(origin.round);
+      const input = this.db.prepare('SELECT round FROM task_inputs WHERE task_id = ? AND seq = ? ORDER BY id DESC LIMIT 1').get(taskId, seq);
+      if (input) rounds.add(input.round);
+    }
+    if (rounds.size === 0) {
+      for (const round of this.rounds(taskId)) if (round.origin_scope && scopes.has(round.origin_scope)) rounds.add(round.round);
+    }
+    return rounds.size ? [...rounds] : [null];
   }
 
   // Tasks among these whose last report is out of date: new input from the

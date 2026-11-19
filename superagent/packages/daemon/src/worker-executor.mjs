@@ -42,6 +42,10 @@ function codexTaskInputHookArgs() {
 export const WORKER_RUNTIMES = Object.freeze(['pi', 'codex', 'claude']);
 const MAX_OUTPUT_BYTES = 20_000_000;
 const TRANSIENT = /\b(429|5\d\d)\b|rate.?limit|overloaded|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up|timed? ?out|temporarily/i;
+// What Claude Code and Codex say when the session a turn resumes is gone
+// (`claude --resume`, `codex exec resume`): the task starts a new session
+// from its record instead of failing.
+const SESSION_LOST = /No conversation found with session ID|no rollout found for thread id/i;
 
 function tail(text, chars = 1_500) {
   const value = String(text ?? '').trim();
@@ -274,12 +278,14 @@ export class WorkerExecutor {
   }
 
   // Whether a task's last session can go on into a new round: 'kept',
-  // 'deleted' (no longer on disk) or 'large'. Only Pi's sessions are files
-  // the daemon keeps (and the sweep deletes); Codex and Claude Code keep their
-  // own, and a resume they cannot do fails the turn into a fresh session.
+  // 'deleted' (no longer on disk) or 'large'. Pi's sessions are files the
+  // daemon keeps (and the sweep deletes); Claude Code and Codex keep their own,
+  // and clean them up themselves (Claude Code after 30 days by default).
   sessionState(task, { maxBytes = FORK_MAX_BYTES } = {}) {
-    if (task.runtime !== 'pi' || !task.native_session) return 'kept';
-    const file = piSessionFile(this.config, task.id, task.native_session);
+    if (!task.native_session || !WORKER_RUNTIMES.includes(task.runtime)) return 'kept';
+    const file = task.runtime === 'claude' ? claudeSessionFile(process.env, task.native_session)
+      : task.runtime === 'codex' ? codexSessionFile(process.env, task.native_session)
+        : piSessionFile(this.config, task.id, task.native_session);
     if (!file) return 'deleted';
     try { return fs.statSync(file).size > maxBytes ? 'large' : 'kept'; } catch { return 'deleted'; }
   }
@@ -322,7 +328,8 @@ export class WorkerExecutor {
         // to close so the final result or model error is included.
         child.once('close', (code, signal) => {
           const failed = stopped ? 'stopped' : reader.state.error ?? (code === 0 ? null : `exit ${code ?? signal}: ${tail(stderr, 600)}`);
-          resolve({ ...reader.state, error: failed, transient: Boolean(failed && !stopped && TRANSIENT.test(failed)) });
+          const sessionLost = Boolean(failed && !stopped && task.native_session && SESSION_LOST.test(`${failed}\n${stderr}`));
+          resolve({ ...reader.state, error: failed, transient: Boolean(failed && !stopped && TRANSIENT.test(failed)), ...(sessionLost ? { sessionLost } : {}) });
         });
       });
     })();

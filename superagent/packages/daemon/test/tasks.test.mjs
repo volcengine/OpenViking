@@ -272,6 +272,77 @@ describe('TaskManager', () => {
     assert.match(executor.turns[2].prompt, /^\[task t1\] Round 3: /);
   });
 
+  it('settles only the rounds an answer covers: a reply in one thread leaves another round\'s report offered', async (t) => {
+    const { tasks, executor, db } = setup(t);
+    db.exec('ALTER TABLE connector_events ADD COLUMN scope_key TEXT');
+    const ingest = (input) => db.prepare('INSERT INTO connector_events(seq, message_id, scope_key) VALUES (?, ?, ?)').run(input.seq, input.message_id, input.scope_key);
+    const unsettled = () => db.prepare(`SELECT r.round FROM task_report_deliveries d JOIN task_reports r ON r.id = d.report_id
+      WHERE d.settled_at_ms IS NULL ORDER BY r.round`).all().map((row) => row.round);
+    const first = row({ thread_id: 'omt_A', content: '实现功能' });
+    ingest(first);
+    tasks.create({ rows: [first], title: 'PR', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: '功能已提交' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    // Before the router relays round 1, the work goes on from thread B.
+    const second = row({ thread_id: 'omt_B', content: '再补上测试' });
+    ingest(second);
+    tasks.route('t1', [second], 'owner');
+    tasks.report('t1', { state: 'done', draft: '测试已补齐并通过' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+    assert.deepEqual(unsettled(), [1, 2]);
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], seqs: [first.seq], by: 'reply_message' }), 1);
+    assert.deepEqual(unsettled(), [2], 'round 2, asked in thread B, is still to be relayed');
+    // Decided on another line of thread B (no input of the task): the thread says which round.
+    const chatter = row({ thread_id: 'omt_B', content: '辛苦' });
+    ingest(chatter);
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], seqs: [chatter.seq], by: 'reply_message' }), 1);
+    assert.deepEqual(unsettled(), []);
+  });
+
+  it('keeps the last real result when two rounds in a row are handed back', async (t) => {
+    const { tasks, executor } = setup(t);
+    tasks.create({ rows: [row({ content: '实现 slugify' })], title: 'slugify', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', summary: 'S1', draft: 'D1' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    for (const [index, content] of ['写份培训文档', '再做个演示视频'].entries()) {
+      const other = row({ content });
+      tasks.route('t1', [other], 'owner');
+      tasks.handBack('t1', tasks.inputsBySeq('t1', [other.seq]).map((input) => input.id), 'another result');
+      tasks.report('t1', { state: 'dropped', summary: `not mine ${index}`, draft: `不是这个任务 ${index}` });
+      executor.turns.at(-1).finish({ text: '' });
+      await settle();
+    }
+    const task = tasks.get('t1');
+    assert.deepEqual([task.status, task.summary, task.draft], ['done', 'S1', 'D1']);
+    assert.deepEqual(tasks.rounds('t1').map((round) => round.outcome), ['done', 'handed_back', 'handed_back']);
+  });
+
+  it('starts a new session from the task record when the session a round resumes is gone', async (t) => {
+    const { tasks, executor } = setup(t);
+    tasks.create({ rows: [row({ content: '实现 slugify' })], title: 'slugify', runtime: 'claude' });
+    tasks.report('t1', { state: 'done', summary: 'S1', draft: 'D1' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    tasks.route('t1', [row({ content: '改个名' })], 'owner');
+    const resumed = executor.turns[1];
+    assert.equal(resumed.task.native_session, tasks.get('t1').session_id, 'it tries the session first');
+    resumed.finish({ text: '', error: 'error_during_execution', sessionLost: true });
+    await settle();
+    assert.equal(executor.turns.length, 3, 'and runs again instead of failing');
+    const fresh = executor.turns[2];
+    assert.equal(fresh.task.native_session, null);
+    assert.notEqual(fresh.task.session_id, resumed.task.session_id);
+    assert.match(fresh.prompt, /^The previous worker session could not be safely resumed\. Check existing work before repeating any outside action\.\n\[task t1\] slugify\n/);
+    assert.match(fresh.prompt, /Round 2 \(now\), from unknown:\n\[chat=oc_a msg=om_\d+ event=e\d+\] 改个名/);
+    tasks.report('t1', { state: 'done', draft: '改好了' });
+    fresh.finish({ text: '' });
+    await settle();
+    assert.equal(tasks.get('t1').status, 'done');
+  });
+
   it('lets a report of an earlier round go out while the task works on the next', async (t) => {
     const { tasks, executor } = setup(t);
     tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });

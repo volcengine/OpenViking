@@ -187,18 +187,26 @@ pull request, a document), and it takes only what is about that result:
   stopped (work on it again is a new task that follows it). A round records
   where it was asked and by whom: its report says `round=N`, its origin is that
   round's message, so the answer goes there and an answer there settles that
-  round's report (an answer on another round's message settles nothing of
-  it). Reports of earlier rounds stay deliverable while the task works on the
-  next. The working task holds its directory again: what the sweep did to it
+  round's report. A delivery that names the task (`task_ids`) settles the
+  reports of the round it answers, never the task's other rounds: the round
+  it was decided on (its origin, or another input of it), else the rounds
+  asked where it went; only an answer given where no round was asked settles
+  every round. So when two rounds' reports wait, asked in two threads, the
+  reply in one leaves the other offered. Reports of earlier rounds stay
+  deliverable while the task works on the next. The working task holds its directory again: what the sweep did to it
   is undone where it can be (a removed directory is made again, empty, and its
   clean-up marks are cleared) and the brief says what is gone. The worker's
   session carries on when it is still there and under 4 MB; otherwise
-  (deleted with the directory, or too large) the round starts a fresh session
-  from the task record, round by round. A round may take the follow-up slot.
+  (deleted with the directory, cleaned up by Claude Code or Codex themselves,
+  or too large) the round starts a fresh session from the task record, round
+  by round. A turn whose CLI says the session it resumed is gone ("No
+  conversation found", "no rollout found") runs again the same way instead of
+  failing the task. A round may take the follow-up slot.
 - **A round that is not the task's never happened.** When the worker hands
   back every request line of a round, nothing of that round is relayed (a
   report it filed is kept, settled as handed back), and the task goes back to
-  how it ended, with the summary and answer of its last real round. The router
+  how it ended, with the summary and answer of its last real round (not of an
+  earlier round handed back too). The router
   decides on the handed-back lines as new inputs.
 - **One request, one live task.** `task_create` refuses a line a live task
   already holds as part of its request; `task_route` refuses lines from another
