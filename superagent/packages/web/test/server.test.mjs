@@ -83,7 +83,7 @@ describe('independent activity web server', { concurrency: false }, () => {
     const key = 'test-key-0123456789abcdef';
     daemon = await startHttpServer((incoming, response) => {
       assert.equal(incoming.headers.authorization, undefined);
-      response.end('{}');
+      response.end('{"connectors":"private"}');
     });
     web = new ActivityWebServer(config(daemon.address().port, { apiKey: key }));
     await web.start();
@@ -93,7 +93,10 @@ describe('independent activity web server', { concurrency: false }, () => {
     assert.equal((await request(port, '/api/instances')).status, 401);
     assert.equal((await request(port, '/api/activity', { headers: { authorization: 'Bearer wrong-key-0123456789' } })).status, 401);
     assert.equal((await request(port, '/api/activity', { headers: auth })).status, 200);
-    assert.equal((await request(port, '/ready')).status, 200);
+    const probe = await request(port, '/ready');
+    assert.equal(probe.status, 200);
+    assert.deepEqual(JSON.parse(probe.body), { ready: true });
+    assert.match((await request(port, '/ready', { headers: auth })).body, /private/);
   });
 
   it('serves only fixed static files even when the daemon is unavailable', async () => {
