@@ -3,7 +3,10 @@ import type { TrackedTask } from '../../shared/task-tracking/types.js';
 import { isTaskTerminal } from '../../shared/task-tracking/types.js';
 import type { Locale } from '../../shared/locale.js';
 import { resolveConsoleLocale } from './labels.js';
-import { readCommandConsoleProseUris } from '../../components/command-console/command-console-text.js';
+import {
+  getCommandConsoleSafeHref,
+  readCommandConsoleProseUris,
+} from '../../components/command-console/command-console-text.js';
 
 export function projectConsoleTasks(
   records: readonly ConsoleRecord[],
@@ -38,17 +41,17 @@ export function formatConsoleTaskResult(
       typeof line === 'string'
         ? readCommandConsoleProseUris(line)
         : line && typeof line === 'object' && 'uri' in line
-          ? [line.uri]
+          ? (getCommandConsoleSafeHref(line.uri) ?? [])
           : [],
     ),
   );
   for (const task of tasks ?? []) {
-    if (task.status !== 'completed' || !task.uri || uris.has(task.uri))
-      continue;
-    uris.add(task.uri);
+    const uri = getCommandConsoleSafeHref(task.uri);
+    if (task.status !== 'completed' || !uri || uris.has(uri)) continue;
+    uris.add(uri);
     lines.push({
       label: resolveConsoleLocale(locale).taskResult,
-      uri: task.uri,
+      uri,
     });
   }
   const result = { ...record, content: { ...content, lines } };
