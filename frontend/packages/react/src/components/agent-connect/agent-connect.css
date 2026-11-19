@@ -279,7 +279,7 @@
   line-height: 22px;
   overflow-wrap: anywhere;
 }
-.ov-agent-connect__copy {
+.ov-agent-connect__copy.ov-button {
   max-width: 100%;
   min-height: var(--ov-ui-button-height);
   height: auto;
