@@ -8,6 +8,9 @@ import { readFileContent } from './fs-read-content.js';
 import { parseWikiFileConflicts } from './wiki-conflicts.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
+
+export type WikiSaveStatus = 'saving' | 'success';
+
 /** Load the full file before editing; the preview can contain only its first page. */
 export function createFileEditing(
   client: OvClient,
@@ -16,7 +19,7 @@ export function createFileEditing(
   options: OvRequestOptions,
   onSave?: () => void,
   isWiki = false,
-  onWikiSaving?: (saving: boolean) => void,
+  onWikiSaveStatus?: (status?: WikiSaveStatus) => void,
 ): FilePreviewEditing | undefined {
   if (
     !EDITABLE_TEXT.test(name) ||
@@ -54,8 +57,9 @@ export function createFileEditing(
       };
     },
     save: async (content) => {
-      const notify = wiki ? onWikiSaving : undefined;
-      notify?.(true);
+      options.signal?.throwIfAborted();
+      const notify = wiki ? onWikiSaveStatus : undefined;
+      notify?.('saving');
       try {
         await client.request({
           method: 'POST',
@@ -69,9 +73,12 @@ export function createFileEditing(
           },
           options,
         });
-      } finally {
-        notify?.(false);
+        options.signal?.throwIfAborted();
+      } catch (error) {
+        notify?.();
+        throw error;
       }
+      notify?.('success');
     },
     onSave,
   };

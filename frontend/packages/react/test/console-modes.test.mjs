@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mount, ok } from './helpers/console-dom.mjs';
+import { act } from './helpers/command-console-dom.mjs';
 
 test('Console renders only enabled modes and sends no disabled chat requests', async () => {
   let lists = 0;
@@ -53,6 +54,38 @@ test('Console renders only enabled modes and sends no disabled chat requests', a
     await host.render({ ...props, modes: [] });
     assert.equal(host.container.querySelector('.ov-console__toolbar'), null);
     assert.equal(host.container.querySelector('.ov-console__panel'), null);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('Console preserves an unfinished clarification when switching tabs', async () => {
+  const host = await mount(async () => ok({}), {
+    defaultMode: 'conversation',
+    conversation: {
+      messages: [],
+      composer: false,
+      interaction: {
+        requestKey: 'task-name',
+        request: { kind: 'text', question: 'Task name', multiline: false },
+      },
+    },
+  });
+  try {
+    const input = host.container.querySelector('input[name="answer"]');
+    assert.ok(input);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      ).set.call(input, 'My weekly Wiki');
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    await host.press('Terminal');
+    assert.equal(input.closest('.ov-console__panel').hidden, true);
+    await host.press('VikingBot');
+    assert.equal(host.container.querySelector('input[name="answer"]'), input);
+    assert.equal(input.value, 'My weekly Wiki');
   } finally {
     await host.dispose();
   }

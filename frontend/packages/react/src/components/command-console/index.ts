@@ -27,5 +27,6 @@ export type {
   CommandConsoleStatusRow,
   CommandConsoleTextContent,
   CommandConsoleWriteResultContent,
+  CommandConsoleWriteResultUriLine,
   CommandConsoleQuickCommand,
 } from './types.js';

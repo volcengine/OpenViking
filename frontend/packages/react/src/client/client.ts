@@ -12,6 +12,7 @@ import {
   resolveRequestOptions,
 } from './options.js';
 import {
+  isRecord,
   normalizeTransportError,
   parseJson,
   readBlob,
@@ -177,6 +178,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
     return {
       result: ('result' in envelope ? envelope.result : body) as TResult,
       hasMore: envelope.has_more === true,
+      ...(isRecord(envelope.telemetry) && { telemetry: envelope.telemetry }),
     };
   }
 

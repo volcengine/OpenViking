@@ -12,9 +12,11 @@ from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
+from vikingbot.compile import simple
 from vikingbot.compile.file_ops import DocumentReader
-from vikingbot.compile.models import CompileLimits, SanitizedCompileRequest
+from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
+from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import TargetReader, agent_runner
@@ -229,6 +231,16 @@ async def test_file_worker_uses_existing_tools_without_emit(pipeline, agent_loop
             ],
         )
     ]
+    if ending == "success":
+        replies.insert(
+            0,
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest("assignment", "read_file", {"path": "assignment.json"}, 0)
+                ],
+            ),
+        )
     if ending != "budget":
         replies.extend(
             [
@@ -246,7 +258,14 @@ async def test_file_worker_uses_existing_tools_without_emit(pipeline, agent_loop
         pipeline.limits.model_copy(update={"subagent_iterations": 1 if ending == "budget" else 4}),
     )
     if ending == "success":
-        result = await pipeline.generate("map-0", "Generate Markdown", {"inputs": []}, [])
+        source_refs = [f"{index:064x}" for index in range(138)]
+        inputs = [{"payload": {"source_ranges": source_refs}}]
+        result = await pipeline.generate(
+            "reduce-0", "Generate Markdown", {"inputs": inputs}, source_refs
+        )
+        messages = pipeline.model.provider.chat.await_args_list[1].kwargs["messages"]
+        assignment = json.loads(next(msg["content"] for msg in messages if msg["role"] == "tool"))
+        assert assignment["inputs"] == inputs
         assert len(result) == 1 and result[0].path == "topic.md"
         assert (
             await pipeline.files.sandbox.read_file(result[0].workspace_path) == "# Topic\n\nFacts."
@@ -543,3 +562,163 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
     )
     assert outputs == [] and pipeline.status["input"] == "failed"
     assert pipeline.failures
+
+
+@pytest.mark.parametrize(
+    ("collision", "names"),
+    [
+        ("same_worker", ("topic/Retry.md", "TOPIC/retry.md")),
+        ("other_worker", ("topic/Café.md", "topic/Cafe\u0301.md")),
+    ],
+)
+async def test_alias_conflicts_retry_without_blocking_unrelated_publication(
+    pipeline, collision, names
+):
+    paths = ["a.md", "a.md"] + (["b.md", "b.md"] if collision == "other_worker" else [])
+    docs = [Document(path, f"candidate-{i}.md", [f"source-{i}"]) for i, path in enumerate(paths)]
+    unrelated = Document("unrelated.md", "unrelated.md", ["other-source"])
+    first = Document(names[0], "first.md")
+    alias = Document(names[1], "alias.md")
+    merged = Document("merged.md", "merged.md")
+    for doc in [unrelated, first, alias, merged]:
+        await pipeline.files.sandbox.write_file(doc.workspace_path, "# Facts\n\nPreserved.")
+    results = (
+        [[first], [alias], [merged]] if collision == "other_worker" else [[first, alias], [merged]]
+    )
+    worker = AsyncMock(side_effect=results)
+    pipeline.generate = pipeline.generate_once = worker
+    outputs = await reduce_op.resolve_files(pipeline, [*docs, unrelated])
+    assert pipeline.generate.await_count == len(results)
+    assert outputs == (
+        [unrelated, first, merged] if collision == "other_worker" else [unrelated, merged]
+    )
+    bundle = await finalize.run(pipeline, outputs)
+    assert {item["uri"] for item in bundle.operations} == {
+        pipeline.target + "/" + doc.path for doc in outputs
+    }
+    assert any(item["uri"].endswith("/unrelated.md") for item in bundle.operations)
+
+
+@pytest.mark.parametrize(
+    "content,expected_pattern",
+    [
+        (
+            "---\ntype: concept\ntitle: Rules\n description: leading space breaks YAML\n---\n\nBody\n",
+            r"invalid YAML frontmatter: .*mapping values are not allowed here \(line 4, column 13\)",
+        ),
+        (
+            "---\n type: concept\ntitle: Rules\n---\n\nBody\n",
+            r"invalid YAML frontmatter: .*line 3, column 1",
+        ),
+    ],
+)
+async def test_compile_write_tool_rejects_invalid_okf_frontmatter(content, expected_pattern):
+    from vikingbot.compile.simple import CompileWriteTool
+
+    client = SimpleNamespace(
+        read_raw=AsyncMock(side_effect=NotFoundError("not found")),
+        write=AsyncMock(),
+    )
+    tool = CompileWriteTool(client, "viking://resources/distill", AsyncMock())
+    ctx = ToolContext(session_key=SessionKey(type="cli", channel_id="test", chat_id="fm"))
+
+    with pytest.raises(ValueError, match=expected_pattern):
+        await tool.execute(ctx, path="selection-rules.md", content=content)
+    client.write.assert_not_awaited()
+    assert tool.outcomes == {}
+
+
+async def test_compile_write_tool_allows_valid_okf_frontmatter():
+    from vikingbot.compile.simple import CompileWriteTool
+
+    uri = "viking://resources/distill/selection-rules.md"
+    client = SimpleNamespace(
+        read_raw=AsyncMock(side_effect=NotFoundError("not found")),
+        write=AsyncMock(return_value={"uri": uri, "content_updated": True}),
+    )
+    tool = CompileWriteTool(client, "viking://resources/distill", AsyncMock())
+    ctx = ToolContext(session_key=SessionKey(type="cli", channel_id="test", chat_id="fm"))
+    valid = "---\ntype: concept\ntitle: Rules\ndescription: Valid YAML\n---\n\nBody\n"
+
+    outcome = await tool.execute(ctx, path="selection-rules.md", content=valid)
+    assert outcome == f"created: {uri}"
+    client.write.assert_awaited_once()
+
+
+async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
+    pipeline, agent_loop
+):
+    loop, session_key, _ = agent_loop
+    pipeline.client.write = AsyncMock()
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write",
+                        "openviking_write",
+                        {
+                            "path": "selection-rules.md",
+                            "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
+                        },
+                        0,
+                    )
+                ],
+            ),
+            LLMResponse(content="Done"),
+        ]
+    )
+
+    with pytest.raises(CompileFailure, match=r"selection-rules\.md.*line 4, column 13") as caught:
+        await simple.run(
+            loop,
+            pipeline.client,
+            pipeline.request,
+            pipeline.request.from_,
+            pipeline.skill,
+            session_key,
+            None,
+            AsyncMock(),
+            {},
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    pipeline.client.write.assert_not_awaited()
+
+
+async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
+    pipeline.evidence["input"] = {"uri": "viking://resources/source/a.md"}
+    pipeline.status["input"] = "prepared"
+    valid_draft = "__compile_staging__/drafts/valid/valid.md"
+    invalid_draft = "__compile_staging__/drafts/invalid/selection-rules.md"
+    await pipeline.files.sandbox.write_file_bytes(
+        valid_draft,
+        b"---\ntype: concept\ntitle: Valid\ndescription: Clean YAML\n---\n\nBody\n",
+    )
+    await pipeline.files.sandbox.write_file_bytes(
+        invalid_draft,
+        b"---\ntype: concept\ntitle: Rules\n description: leading space\n---\n\nBody\n",
+    )
+
+    bundle = await finalize.run(
+        pipeline,
+        [
+            Document("valid.md", valid_draft, ["input"]),
+            Document("selection-rules.md", invalid_draft, ["input"]),
+        ],
+    )
+    assert [op["uri"] for op in bundle.operations] == ["viking://resources/wiki/valid.md"]
+    assert bundle.created == ["viking://resources/wiki/valid.md"]
+    assert len(pipeline.warnings) == 1
+    assert "selection-rules.md" in pipeline.warnings[0]
+    assert "mapping values are not allowed here (line 4, column 13)" in pipeline.warnings[0]
+
+    pipeline.warnings.clear()
+    empty_bundle = await finalize.run(
+        pipeline,
+        [Document("selection-rules.md", invalid_draft, ["input"])],
+    )
+    assert empty_bundle.operations == []
+    assert len(pipeline.warnings) == 1
+    assert "selection-rules.md" in pipeline.warnings[0]

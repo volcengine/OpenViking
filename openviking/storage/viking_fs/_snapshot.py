@@ -633,6 +633,7 @@ class _SnapshotMixin:
         Returns ``oid`` (blob ID), ``size``, ``bytes``, ``commit_oid``, and
         ``commit_time_seconds`` (committer Unix seconds, not file modification time).
         Access is checked before resolving the ref; missing commits or paths propagate.
+        A missing tree path carries whether it was a file in the first parent.
         """
         real_ctx = self._ctx_or_default(ctx)
         await self._ensure_access(path, real_ctx)
@@ -643,12 +644,19 @@ class _SnapshotMixin:
         )
         # Pin moving refs so the content and timestamp always describe the same commit.
         commit_oid = commit["oid"]
-        resp = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=commit_oid,
-            path=tree_path,
-        )
+        try:
+            resp = await self._async_agfs.run(
+                "git_show",
+                account=account,
+                target_ref=commit_oid,
+                path=tree_path,
+            )
+        except AGFSPathNotFoundError as exc:
+            first_parent = next(iter(commit["parents"]), None)
+            exc.deleted_file = first_parent is not None and await self._async_agfs.run(
+                "git_path_is_file", account=account, commit_oid=first_parent, path=tree_path
+            )
+            raise
         if not isinstance(resp, dict) or "bytes" not in resp:
             raise TypeError(
                 f"git_show returned unexpected shape for blob path: {type(resp).__name__}"

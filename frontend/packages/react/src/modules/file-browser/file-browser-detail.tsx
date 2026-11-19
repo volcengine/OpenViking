@@ -10,6 +10,7 @@ import { useCallback, useRef, type ReactNode } from 'react';
 import { FilePreviewEditContext } from '../../components/file-preview/file-preview-edit-context.js';
 import { dashboardKey } from './dashboard-model.js';
 import { isEditableText } from './preview-policy.js';
+import { openPreviewLink } from './preview-links.js';
 
 import type { FileBrowserLabels } from './types.js';
 
@@ -26,6 +27,7 @@ export interface FileBrowserDetailProps {
   actions?: FilePreviewActionSource;
   canEditConflict: boolean;
   onActiveKeyChange: (key: string) => void;
+  onOpenUri: (uri: string) => Promise<boolean>;
   onSave?: () => void;
 }
 
@@ -42,14 +44,16 @@ export function FileBrowserDetail({
   actions,
   canEditConflict,
   onActiveKeyChange,
+  onOpenUri,
   onSave,
 }: FileBrowserDetailProps) {
-  const pendingEdit = useRef<string | null>(null);
+  const pendingEdit = useRef<{ key: string; matchText: string } | null>(null);
   const onFileReady = useCallback(
-    (key: string, startEditing?: () => void) => {
-      if (pendingEdit.current !== key) return;
+    (key: string, startEditing?: (matchText?: string) => void) => {
+      const pending = pendingEdit.current;
+      if (pending?.key !== key) return;
       pendingEdit.current = null;
-      if (canEditConflict) startEditing?.();
+      if (canEditConflict) startEditing?.(pending.matchText);
     },
     [canEditConflict],
   );
@@ -63,8 +67,8 @@ export function FileBrowserDetail({
       )
     : undefined;
   const editFile = conflictFile
-    ? () => {
-        pendingEdit.current = conflictFile.key;
+    ? (matchText: string) => {
+        pendingEdit.current = { key: conflictFile.key, matchText };
         onActiveKeyChange(conflictFile.key);
       }
     : null;
@@ -80,6 +84,7 @@ export function FileBrowserDetail({
               readOnly,
               previewSlots,
               actions,
+              onOpenUri,
               onSave,
             ) as [FilePreviewTab, ...FilePreviewTab[]]
           }
@@ -104,6 +109,7 @@ function decorateTabs(
   readOnly?: boolean,
   previewSlots?: FilePreviewHeaderSlots,
   actions?: FilePreviewActionSource,
+  onOpenUri?: (uri: string) => Promise<boolean>,
   onSave?: () => void,
 ): readonly FilePreviewTab[] {
   return tabs.map((tab) => {
@@ -133,6 +139,14 @@ function decorateTabs(
           }
         : {}),
       actions: actions ?? tab.actions,
+      operations: {
+        ...tab.operations,
+        openUri:
+          tab.operations?.openUri ??
+          (onOpenUri && tab.kind === 'directory'
+            ? (target) => openPreviewLink(tab, target, onOpenUri)
+            : undefined),
+      },
       slots: {
         ...tab.slots,
         actions:

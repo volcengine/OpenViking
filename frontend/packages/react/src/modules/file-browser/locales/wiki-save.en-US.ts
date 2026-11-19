@@ -1,4 +1,9 @@
 export default {
-  title: 'Processing Wiki changes',
-  content: 'Saving. Please wait.',
+  saving: {
+    title: 'Processing Wiki changes',
+    content: 'Saving. Please wait.',
+  },
+  success: {
+    content: 'Saved successfully.',
+  },
 };

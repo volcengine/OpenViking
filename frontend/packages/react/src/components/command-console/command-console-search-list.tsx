@@ -143,6 +143,7 @@ function SearchRow({
             <CommandConsoleUriText
               text={item.metaLabel}
               mode="prose"
+              wholeUri={item.metaLabel === item.uri}
               onOpenUri={onOpenUri}
             />
           </span>

@@ -130,13 +130,10 @@ async def test_user_memory_policy_prefers_user_setting_and_falls_back_to_server_
         "self": {"enabled": True},
         "peer": {"enabled": True},
         "memory_types": ["profile"],
+        "working_memory": {"enabled": False},
     }
 
     viking_fs.read_file = AsyncMock(
         return_value=json.dumps({"memory_policy": {"memory_types": ["events"]}})
     )
-    assert await service._get_user_memory_policy(ctx) == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "memory_types": ["events"],
-    }
+    assert await service._get_user_memory_policy(ctx) == {"memory_types": ["events"]}

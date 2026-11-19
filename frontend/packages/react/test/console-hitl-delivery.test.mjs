@@ -50,3 +50,22 @@ test('HITL closes when the bot resumes and stays closed if that reply later fail
     await view.unmount();
   }
 });
+
+test('cancel closes the group without sending; disabled and host-owned conversations stay inert', async () => {
+  for (const disabled of [false, true]) {
+    const view = await mountHitl([card('compile_name', 'Name')], {
+      hitl: disabled ? false : undefined,
+    });
+    try {
+      await view.start();
+      if (disabled) assert.equal(view.props.interaction, undefined);
+      else await act(async () => view.props.interaction.onCancel());
+      assert.equal(view.props.interaction, undefined);
+      assert.equal(view.requests.length, 1);
+      await view.rerender({ controlled: true });
+      assert.deepEqual(view.props.messages, []);
+    } finally {
+      await view.unmount();
+    }
+  }
+});
