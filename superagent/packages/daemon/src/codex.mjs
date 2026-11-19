@@ -17,6 +17,7 @@ import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { codexConfigFile, codexIsolationArgs } from './ov-isolation.mjs';
+import { routerToolHookArgs } from './router-tool-hook.mjs';
 
 const CODEX_RUNTIME = getRuntimeDefinition('codex');
 const CODEX_APP_SERVER_CONFIG_ARGS = Object.freeze([
@@ -917,6 +918,7 @@ export class CodexAgent {
         'app-server', '--listen', 'stdio://',
         ...(this._usesRpcInstructions() ? [] : ['-c', `developer_instructions=${tomlString(this.developerInstructionsText)}`]),
         ...this.appServerConfigArgs,
+        ...(this.config.scheduler === 'workers' ? routerToolHookArgs() : []),
         ...this.ovIsolationArgs(),
       ];
       // The daemon's agent tools ride along as an MCP stdio adapter to the Core.
@@ -1004,7 +1006,12 @@ export class CodexAgent {
       cwd: this.config.workspace,
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
-      ...(this.turnStartEffort && this.effort ? { config: { model_reasoning_effort: this.effort } } : {}),
+      ...((this.turnStartEffort && this.effort) || this.config.scheduler === 'workers' ? { config: {
+        ...(this.turnStartEffort && this.effort ? { model_reasoning_effort: this.effort } : {}),
+        // Headless sessions cannot approve the daemon-installed hook interactively.
+        // App-server reads this override on both thread/start and thread/resume.
+        ...(this.config.scheduler === 'workers' ? { bypass_hook_trust: true } : {}),
+      } } : {}),
       ...(this.model ? { model: this.model } : {}),
     };
   }

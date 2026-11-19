@@ -150,7 +150,7 @@ async function waitFor(predicate, timeoutMs = 500) {
   throw new Error('timed out waiting for condition');
 }
 
-function harness({ loggedIn = true, store = makeStore(), agentOptions = {}, help = helpFlags } = {}) {
+function harness({ config = baseConfig, loggedIn = true, store = makeStore(), agentOptions = {}, help = helpFlags } = {}) {
   const calls = [];
   const persistent = [];
   const spawn = (_bin, args, options) => {
@@ -174,7 +174,7 @@ function harness({ loggedIn = true, store = makeStore(), agentOptions = {}, help
     return child;
   };
   const failures = [];
-  const agent = new ClaudeAgent(baseConfig, store, quietLogger, {
+  const agent = new ClaudeAgent(config, store, quietLogger, {
     spawn,
     startTimeoutMs: 100,
     startStabilityMs: 1,
@@ -811,3 +811,16 @@ it('Claude owns the bounded-argv prompt file and removes it with its runtime fil
     assert.equal(fs.existsSync(directory), false);
   }
 });
+
+for (const scheduler of ['workers', 'legacy']) {
+  it(`Claude installs the router hook only for workers scheduling (${scheduler})`, async () => {
+    const { agent, calls } = harness({ config: { ...baseConfig, scheduler } });
+    try {
+      await agent.start();
+      const args = calls.at(-1).args;
+      const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+      assert.equal(Boolean(settings.hooks?.PreToolUse), scheduler === 'workers');
+      assert.equal(settings.enabledPlugins['openviking-memory@openviking'], false);
+    } finally { await agent.stop(); }
+  });
+}

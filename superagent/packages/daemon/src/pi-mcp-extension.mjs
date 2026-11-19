@@ -6,11 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
 import { PI_MCP_STATUS } from './pi-runtime.mjs';
+import { RouterToolBudget } from './router-tool-budget.mjs';
 
 // Loaded explicitly only by the daemon's Pi process. Nothing is written to
 // ~/.pi or the workspace, and no tools are reimplemented in this extension.
 // Pi's own tools that do work, as against the Core tools a router routes with.
-const WORK_TOOLS = new Set(['bash', 'read', 'edit', 'write', 'grep', 'find', 'ls']);
 // A worker's working directory as its system prompt names it: the same for
 // every task, so that one task's session copied into another keeps its prefix.
 export const WORKER_CWD = 'the task directory your brief names ("Your directory: …"); your shell and file tools start there';
@@ -28,16 +28,12 @@ export default function personalAgentMcp(pi) {
   // command alone does not stop many short ones in a row.
   const shellLimit = Number(process.env.PERSONAL_AGENT_SHELL_LIMIT_S);
   const workBudget = Number(process.env.PERSONAL_AGENT_WORK_TOOL_BUDGET);
-  let workUsed = 0;
+  const budget = new RouterToolBudget(workBudget);
   if (shellLimit > 0) {
-    pi.on('agent_start', () => { workUsed = 0; });
+    pi.on('agent_start', () => { budget.reset(); });
     pi.on('tool_call', (event) => {
-      if (workBudget > 0 && WORK_TOOLS.has(event.toolName)) {
-        workUsed += 1;
-        if (workUsed > workBudget) {
-          return { block: true, reason: `You have used your own tools ${workBudget} times in this turn: what still needs work is a task. Hand it to a worker with task_create, tell the requester once, and go on with your other inputs.` };
-        }
-      }
+      const reason = budget.check(event.toolName);
+      if (reason) return { block: true, reason };
       if (event.toolName !== 'bash' || !event.input) return undefined;
       if (/(^|[\s;&|(`])sleep\s/.test(String(event.input.command ?? ''))) {
         return { block: true, reason: 'Your own shell may not sleep or wait; hand work that waits to a task (task_create).' };

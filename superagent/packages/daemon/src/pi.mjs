@@ -21,6 +21,8 @@ import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runt
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
 
+import { ROUTER_SHELL_LIMIT_S, ROUTER_WORK_TOOL_BUDGET } from './router-tool-budget.mjs';
+
 const MAX_LINE_BYTES = 5_000_000;
 const START_TIMEOUT_MS = 15_000;
 const RECONNECT_BASE_MS = 1_000;
@@ -28,10 +30,7 @@ const RECONNECT_CAP_MS = 30_000;
 const RPC_TIMEOUT_MS = 8_000;
 
 const PI_RUNTIME = getRuntimeDefinition('pi');
-// Seconds a router's own shell command may run (workers scheduler).
-export const ROUTER_SHELL_LIMIT_S = 30;
-// Calls of its own work tools (shell, files) a router run gets.
-export const ROUTER_WORK_TOOL_BUDGET = 6;
+export { ROUTER_SHELL_LIMIT_S, ROUTER_WORK_TOOL_BUDGET } from './router-tool-budget.mjs';
 export const PI_EFFORTS = PI_RUNTIME.efforts;
 
 // Pi events the daemon can lose when one is too long for MAX_LINE_BYTES. They

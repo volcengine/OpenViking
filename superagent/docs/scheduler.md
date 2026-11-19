@@ -426,13 +426,17 @@ the reply text, so a rewritten reply is a new message).
 - **OnIt.** The router acknowledges a task with a temporary OnIt. A turn's end
   takes OnIt reactions down except in a scope where a task is still `queued` or
   `running`; the relayed result takes those down.
-- **Router tools.** On Pi the router's own bash commands are capped at 30
-  seconds and may not `sleep`, and each run gets six calls of its own work
-  tools (`bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`); past them the
-  call is refused with a pointer to `task_create` (a `tool_call` handler in
-  `pi-mcp-extension.mjs`). A per-command cap alone did not stop a router from
-  investigating with many short commands. Core reads are not counted. On Codex,
-  TraeX and Claude Code this is policy text only.
+- **Router tools.** With workers scheduling, each router turn gets six native
+  work-tool calls (shell commands, file reads/edits and searches). The shared
+  `router-tool-budget.mjs` counter refuses later calls with a pointer to
+  `task_create`. Pi uses its `tool_call` handler; Codex, TraeX and Claude Code
+  use `PreToolUse` hooks backed by the daemon's authenticated action socket.
+  Parallel calls share the budget. Turn completion, failure or cancellation
+  resets it; steering new input into an active turn does not. Workers, Core
+  MCP tools and transport wrappers do not consume the budget, so routing and
+  replying remain available. Codex's hosted web search does not pass through
+  PreToolUse and is outside this limit. Pi additionally caps router bash at
+  30 seconds and disallows `sleep`; those shell-specific rules remain Pi-only.
 - **Restart.** Tasks, inputs and reports are in SQLite. A turn cut by a
   shutdown is not reported; at start its task runs again from the persisted
   request history, told to check what it already did before repeating an outside
