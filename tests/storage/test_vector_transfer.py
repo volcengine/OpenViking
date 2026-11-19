@@ -236,6 +236,11 @@ class _RealAclMemoryTransferBackend(_MemoryTransferBackend):
         self.acl_manager = AclManager(self, _EnabledAclConfig())
         self.scroll_output_fields = []
 
+    async def _get_backend_for_context(self, ctx):
+        backend = await super()._get_backend_for_context(ctx)
+        backend.delete_by_filter = self.delete_by_filter
+        return backend
+
     async def scroll(
         self,
         filter=None,
@@ -257,6 +262,16 @@ class _RealAclMemoryTransferBackend(_MemoryTransferBackend):
         page = ordered[offset : offset + limit]
         next_cursor = str(offset + limit) if offset + limit < len(ordered) else None
         return page, next_cursor
+
+    async def delete_by_filter(self, filter):
+        ids = [
+            record_id
+            for record_id, record in self.records.items()
+            if _matches_filter(filter, record)
+        ]
+        for record_id in ids:
+            del self.records[record_id]
+        return len(ids)
 
     async def _strict_transfer_count(self, ctx, filter):
         del ctx

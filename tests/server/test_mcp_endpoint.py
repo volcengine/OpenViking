@@ -2378,6 +2378,7 @@ async def test_add_resource_neither_path_nor_temp_file_id(service):
     assert "path" in result.lower() or "temp_file_id" in result.lower()
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
     captured = {}
 
@@ -2475,6 +2476,7 @@ async def test_add_resource_declared_add_type_rejects_parent(service):
     assert result == "Error: add_type cannot be combined with parent."
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_remote_tags_are_forwarded(service, monkeypatch):
     captured = {}
 
@@ -2547,6 +2549,7 @@ async def test_add_resource_temp_file_id_ingest_error_is_surfaced(
     assert "Resource added" not in result
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_watch_without_to_is_forwarded(service, monkeypatch):
     """watch_interval > 0 may omit `to`; the service binds to the created root_uri."""
     captured = {}
