@@ -532,7 +532,6 @@ describe('the workers scheduler', () => {
     assert.match(workers, /A report marked `undelivered=1` was shown to you before/);
     assert.match(workers, /A `\[task report\]` line is a worker's result for one task, not an input from a person\./);
     assert.match(workers, /for `dropped`, tell the requester in one line why nothing needed doing/);
-    assert.match(workers, /a command is cut off after 30 seconds and may not sleep, and a turn gets a few calls of them/);
     assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
     assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
   });

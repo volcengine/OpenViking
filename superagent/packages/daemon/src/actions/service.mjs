@@ -24,6 +24,7 @@ import {
 import { resolveContent } from './content.mjs';
 import { unsendableVideoError } from '../lark-video.mjs';
 import { TOOLS, publicTool, toolDefinition, validateInput } from './tools.mjs';
+import { RouterToolBudget } from '../router-tool-budget.mjs';
 
 const NO_ACTION = 'No action was taken.';
 // Replies to bot messages in one chat/thread with no person writing there,
@@ -174,6 +175,8 @@ export class ActionService {
     // by resetLoopGuard() at every turn end.
     this.duplicateCounts = new Map();
     this.loopBroken = false;
+    this.routerToolBudget = new RouterToolBudget();
+    this.routerBudgetAuthority = null;
     // One temporary working reaction per conversation, removed by the next
     // final delivery there.
     this.temporaryReactions = new Map();
@@ -537,6 +540,21 @@ export class ActionService {
   resetLoopGuard() {
     this.duplicateCounts.clear();
     this.loopBroken = false;
+    this.routerToolBudget.reset();
+  }
+
+  // Internal hook endpoint, not an MCP tool: the model cannot reset the
+  // counter. The event loop serializes checks from parallel tool hooks.
+  checkRouterTool({ tool }, { authority } = {}) {
+    this.assertAuthority(authority);
+    if (this.config.scheduler !== 'workers' || this.workerTask(authority)) return { reason: null };
+    if (this.routerBudgetAuthority !== authority) {
+      this.routerToolBudget.reset();
+      this.routerBudgetAuthority = authority;
+    }
+    const reason = this.routerToolBudget.check(tool);
+    if (reason) this.logger.warn('router_tool_budget_exceeded', { tool, used: this.routerToolBudget.used });
+    return { reason };
   }
 
   // Daemon-authored reply (slash command result, failure notice) on an event's

@@ -20,6 +20,7 @@ import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runt
 import { getRuntimeDefinition, isModelUnavailableError } from './runtime-catalog.mjs';
 import { claudeIsolationSettings, isOpenViking } from './ov-isolation.mjs';
 import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
+import { routerToolHooks } from './router-tool-hook.mjs';
 
 const MAX_LINE_BYTES = 5_000_000;
 const START_TIMEOUT_MS = 5_000;
@@ -326,7 +327,8 @@ export class ClaudeAgent {
         // personal_agent. OpenViking's plugin and servers do not: OpenViking SuperAgent owns
         // OpenViking (ov-isolation.mjs).
         '--mcp-config', mcpConfigPath,
-        '--settings', JSON.stringify(claudeIsolationSettings({ env: process.env, workspace: this.config.workspace })),
+        '--settings', JSON.stringify({ ...claudeIsolationSettings({ env: process.env, workspace: this.config.workspace }),
+          ...(this.config.scheduler === 'workers' ? { hooks: routerToolHooks() } : {}) }),
         '--disallowed-tools', 'EnterPlanMode,ExitPlanMode',
         ...this._systemPromptArgs(),
         '--no-chrome',
