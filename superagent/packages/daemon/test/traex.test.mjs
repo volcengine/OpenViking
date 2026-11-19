@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
+import { CodexAgent } from '../src/codex.mjs';
 import { TraexAgent } from '../src/traex.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -232,4 +233,17 @@ describe('TraexAgent app-server backend', () => {
 
     assert.match(activities.at(-1).eventKey, /^traex:th-traex-1:turn-1:agent\.turn_completed:/);
   });
+});
+
+it('passes TraeX completion policy through the actual router constructor and handshake', async () => {
+  const { agent, children, spawnCalls } = newAgent(makeStore(), {}, { ...baseConfig, scheduler: 'workers' });
+  try {
+    assert.match(agent.systemPrompt, /always end with a short, non-empty final answer/);
+    const child = await handshake(agent, children);
+    const transmitted = JSON.stringify({ args: spawnCalls[0].args, requests: child.sent() });
+    assert.match(transmitted, /always end with a short, non-empty final answer/);
+    assert.match(transmitted, /after a silent decision or a worker task report/);
+    const codex = new CodexAgent(baseConfig, makeStore(), quietLogger);
+    assert.doesNotMatch(codex.systemPrompt, /## Internal turn completion/);
+  } finally { await agent.stop(); }
 });

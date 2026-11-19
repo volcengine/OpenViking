@@ -238,7 +238,7 @@ export class CodexAgent {
     this.allowResume = options.allowResume !== false;
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, { runtime: this.runtime });
     this.developerInstructionsText = this.systemPrompt;
     // Persisted slash-command settings win on normal startup. Provider switch
     // paths pass options.model deliberately, while first boot only passes
