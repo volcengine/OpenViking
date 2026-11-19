@@ -648,9 +648,11 @@ async fn killing_outer_job_stops_redirected_background_worker() {
 
     let dir = tempfile::tempdir().unwrap();
     let _ = privacy(dir.path(), "http://127.0.0.1:1");
+    let empty_path_dir = dir.path().join("empty_path");
+    fs::create_dir_all(&empty_path_dir).unwrap();
     fs::write(
         dir.path().join("service.sh"),
-        "printf '%s\\n' \"$$\" > service.pid\nexec sleep 5\n",
+        "printf '%s\\n' \"$$\" > service.pid\nexec /bin/sleep 5\n",
     )
     .unwrap();
     fs::write(
@@ -659,7 +661,8 @@ async fn killing_outer_job_stops_redirected_background_worker() {
     )
     .unwrap();
 
-    // Normal outer exit must preserve a background service started under a redirected file.
+    // Normal outer exit must preserve a background service started under a redirected file,
+    // even when PATH lacks standard system tools.
     let mut service_outer = Command::new("/bin/sh");
     service_outer
         .current_dir(dir.path())
@@ -667,9 +670,10 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         .env("USERPROFILE", dir.path())
         .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
         .env("OPENVIKING_LANG", "en")
+        .env("PATH", &empty_path_dir)
         .args([
             "-c",
-            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./service.sh &' >service.log 2>&1; while [ ! -s service.pid ]; do sleep 0.02; done"#,
+            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./service.sh &' >service.log 2>&1; while [ ! -s service.pid ]; do /bin/sleep 0.02; done"#,
             "sh",
             env!("CARGO_BIN_EXE_ov"),
         ])
@@ -793,6 +797,143 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         );
         tokio::time::sleep(Duration::from_millis(650)).await;
         assert!(!worker_done.exists());
+    }
+
+    // Outer SIGTERM must reach a background worker cleanly so it can flush checkpoints before exiting.
+    fs::write(
+        dir.path().join("graceful.sh"),
+        "trap ': > graceful.noticed; /bin/sleep 0.05; printf checkpoint > graceful.saved; exit 0' TERM\nprintf '%s\\n' \"$$\" > graceful.ready\n/bin/sleep 5 &\nwait\n",
+    )
+    .unwrap();
+    let graceful_ready = dir.path().join("graceful.ready");
+    let graceful_outer_marker = dir.path().join("graceful.outer");
+    let graceful_noticed = dir.path().join("graceful.noticed");
+    let graceful_saved = dir.path().join("graceful.saved");
+    let mut graceful_outer = Command::new("/bin/sh");
+    graceful_outer
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
+        .env("OPENVIKING_LANG", "en")
+        .args([
+            "-c",
+            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./graceful.sh >graceful.log 2>&1 &'; : > graceful.outer; exec /bin/sleep 10"#,
+            "sh",
+            env!("CARGO_BIN_EXE_ov"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        graceful_outer.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut graceful_child = graceful_outer.spawn().unwrap();
+    let graceful_outer_pgid = graceful_child.id().unwrap() as i32;
+    timeout(Duration::from_secs(5), async {
+        while fs::read_to_string(&graceful_ready)
+            .map(|text| text.trim().is_empty())
+            .unwrap_or(true)
+            || !graceful_outer_marker.exists()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("graceful background worker did not start");
+    let graceful_pid: i32 = fs::read_to_string(&graceful_ready)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(posix::kill(-graceful_outer_pgid, posix::SIGTERM), 0);
+    graceful_child.wait().await.unwrap();
+    for _ in 0..25 {
+        if process_stopped(graceful_pid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        process_stopped(graceful_pid),
+        "graceful background worker {graceful_pid} did not exit after SIGTERM"
+    );
+    assert!(
+        graceful_noticed.exists(),
+        "background worker did not receive outer SIGTERM"
+    );
+    assert_eq!(fs::read_to_string(&graceful_saved).unwrap(), "checkpoint");
+
+    // A short background worker that finishes naturally must not leave running helper processes.
+    let natural_done = dir.path().join("natural.done");
+    let mut natural_outer = privacy(dir.path(), "http://127.0.0.1:1");
+    natural_outer
+        .args([
+            "run",
+            "--",
+            "/bin/sh",
+            "-c",
+            "(/bin/sleep 0.1; : > natural.done) >/dev/null 2>&1 &",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        natural_outer.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut natural_child = natural_outer.spawn().unwrap();
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    let natural_sid = natural_child.id().unwrap() as i32;
+    assert_eq!(natural_child.wait().await.unwrap().code(), Some(0));
+    timeout(Duration::from_secs(5), async {
+        while !natural_done.exists() {
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+    })
+    .await
+    .expect("natural background worker did not finish");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    #[cfg(target_os = "linux")]
+    {
+        let mut live_in_session = Vec::new();
+        for entry in fs::read_dir("/proc").unwrap().flatten() {
+            let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+                continue;
+            };
+            let Some((_, tail)) = stat.rsplit_once(") ") else {
+                continue;
+            };
+            let mut fields = tail.split_whitespace();
+            let (Some(state), Some(_ppid), Some(_pgrp), Some(sid)) = (
+                fields.next(),
+                fields.next(),
+                fields.next(),
+                fields.next().and_then(|s| s.parse::<i32>().ok()),
+            ) else {
+                continue;
+            };
+            if sid == natural_sid && !matches!(state, "Z" | "X" | "x") {
+                live_in_session.push(stat);
+            }
+        }
+        assert!(
+            live_in_session.is_empty(),
+            "helper processes stayed alive after natural background exit: {live_in_session:?}"
+        );
     }
 }
 
