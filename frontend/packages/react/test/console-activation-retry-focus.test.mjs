@@ -50,9 +50,14 @@ for (const [outcome, ownsFocus] of [
       assert.ok(retry);
       await act(() => (ownsFocus ? retry : outside).focus());
       retrying = true;
-      await click(retry);
+      // The click helper focuses Retry; a programmatic retry preserves external focus.
+      if (ownsFocus) await click(retry);
+      else await act(() => retry.click());
       assert.equal(retry.isConnected, false);
-      assert.equal(document.activeElement, ownsFocus ? panel : outside);
+      assert.equal(
+        document.activeElement === (ownsFocus ? panel : outside),
+        true,
+      );
       assert.match(panel.textContent, /Checking VikingBot status/);
 
       if (outcome === 'error')
@@ -65,13 +70,16 @@ for (const [outcome, ownsFocus] of [
         const input = host.container.querySelector(
           'textarea.ov-command-console__input',
         );
-        assert.equal(document.activeElement, ownsFocus ? input : outside);
+        assert.equal(
+          document.activeElement === (ownsFocus ? input : outside),
+          true,
+        );
       } else {
         assert.equal(panel.isConnected, true);
-        assert.equal(document.activeElement, panel);
+        assert.equal(document.activeElement === panel, true);
         if (outcome === 'error') {
           assert.ok(host.button('Retry'));
-          assert.notEqual(host.button('Retry'), retry);
+          assert.equal(host.button('Retry') === retry, false);
         } else assert.ok(host.container.querySelector('.ov-viking-bot'));
       }
     } finally {
