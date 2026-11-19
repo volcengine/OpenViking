@@ -27,12 +27,15 @@ The default OpenViking benchmark setup is local and does not require an API key.
 
 ## Agentic RAG baseline
 
-The runner embeds windows of up to four consecutive dialogue turns with one
-turn of overlap, retaining timestamps, speakers and the dataset's visual
-captions. Each lookup searches only the assigned sample and returns up to five
-raw passages. Hermes writes the first query and can reformulate it after seeing
-the results. The index contains only conversation data. QA answers and evidence
-annotations stay with the evaluator and judge.
+By default, the runner embeds windows of up to four consecutive dialogue turns
+with one turn of overlap. Set `LOCOMO_RAG_CHUNK_CHARS=512` to build windows of up
+to 512 Unicode characters including the session header, with up to 64
+characters of overlap. Both modes keep the dialog text, timestamps and visual
+captions within session boundaries. Each lookup searches only the assigned
+sample and returns up to five raw passages. Hermes writes the first query and
+can reformulate it after seeing the results. The index contains only
+conversation data. QA answers and evidence annotations stay with the evaluator
+and judge.
 
 Start a dedicated Hermes gateway with an empty profile. Install the benchmark
 plugin into that profile so the gateway can load it.
@@ -67,6 +70,8 @@ and the benchmark runner. Use the same file path from both processes.
 | `LOCOMO_RAG_EMBEDDING_MODEL` | Embedding model ID or deployment ID usable by the endpoint. |
 | `LOCOMO_RAG_EMBEDDING_URL` | OpenAI-compatible base URL, or the full ModelArk `/embeddings/multimodal` URL for the 1024-dimensional Doubao vision embedding model. |
 | `LOCOMO_RAG_EMBEDDING_KEY` | Credential for the embedding endpoint. |
+| `LOCOMO_RAG_CHUNK_CHARS` | Optional maximum character count per chunk, including the session header. Use a distinct index path when changing it. |
+| `LOCOMO_RAG_EMBEDDING_WORKERS` | ModelArk embedding concurrency during indexing. Defaults to 4. |
 | `HERMES_URL`, `HERMES_TOKEN` | Dedicated Hermes API URL and matching gateway key. The gateway separately needs the API key for its QA model backend. |
 | `JUDGE_BASE_URL`, `JUDGE_MODEL`, `JUDGE_TOKEN` | Judge endpoint, model and credential. |
 
@@ -84,7 +89,7 @@ cd benchmark/locomo/hermes
 ```
 
 The first run embeds the entire input dataset. `--sample` and `--count` limit QA.
-For additional runs with the same dataset and embedding model, reuse the index.
+For additional runs with the same dataset, embedding model and chunk size, reuse the index.
 Use a new result directory or `--force-eval` after rebuilding it.
 
 The existing judge and stats pipeline scores the same questions as the other

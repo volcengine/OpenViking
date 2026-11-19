@@ -34,7 +34,7 @@ def _embedding_tokens(body: dict) -> int | None:
     return usage.get("prompt_tokens", usage.get("total_tokens"))
 
 
-def embed(texts: list[str]) -> tuple[list[list[float]], int | None]:
+def embed(texts: list[str], *, workers: int = 4) -> tuple[list[list[float]], int | None]:
     url = os.environ["LOCOMO_RAG_EMBEDDING_URL"].rstrip("/")
     if url.endswith("/embeddings/multimodal"):
         # ModelArk's multimodal API returns one vector per request.
@@ -44,7 +44,7 @@ def embed(texts: list[str]) -> tuple[list[list[float]], int | None]:
         if len(texts) == 1:
             responses = [embed_text(texts[0])]
         else:
-            with ThreadPoolExecutor(max_workers=4) as pool:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
                 responses = list(pool.map(embed_text, texts))
         embeddings = [body["data"]["embedding"] for body in responses]
         counts = [_embedding_tokens(body) for body in responses]

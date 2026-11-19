@@ -16,15 +16,35 @@ from locomo_rag import INDEX_VERSION, embed, embedding_model, read_index
 WINDOW_SIZE = 4
 STRIDE = 3
 BATCH_SIZE = 32
+CHAR_OVERLAP = 64
 
 
-def raw_chunks(conversation: dict) -> list[dict]:
+def raw_chunks(conversation: dict, chunk_chars: int | None = None) -> list[dict]:
     chunks = []
     for session_key in _session_keys(conversation):
         messages = conversation[session_key]
         header = _session_header_lines(
             conversation, session_key, conversation.get(f"{session_key}_date_time", "")
         )
+        if chunk_chars is not None:
+            prefix = "\n".join(header) + "\n"
+            transcript = "\n".join(line for message in messages for line in _message_lines(message))
+            body_chars = chunk_chars - len(prefix)
+            if body_chars <= 0:
+                raise ValueError(f"--chunk-chars leaves no room for transcript in {session_key}")
+            overlap = min(CHAR_OVERLAP, body_chars // 4)
+            for start in range(0, len(transcript), body_chars - overlap):
+                end = min(start + body_chars, len(transcript))
+                chunks.append(
+                    {
+                        "id": f"{session_key}:chars:{start + 1}-{end}",
+                        "text": prefix + transcript[start:end],
+                    }
+                )
+                if end == len(transcript):
+                    break
+            continue
+
         for start in range(0, len(messages), STRIDE):
             end = min(start + WINDOW_SIZE, len(messages))
             lines = [*header]
@@ -41,7 +61,23 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True, help="Path to LoCoMo JSON")
     parser.add_argument("--index", type=Path, required=True, help="Path shared with the Hermes plugin")
     parser.add_argument("--force", action="store_true", help="Replace the existing index")
+    parser.add_argument(
+        "--chunk-chars",
+        type=int,
+        default=os.getenv("LOCOMO_RAG_CHUNK_CHARS") or None,
+        help="Maximum Unicode characters per chunk, including session metadata",
+    )
+    parser.add_argument(
+        "--embedding-workers",
+        type=int,
+        default=os.getenv("LOCOMO_RAG_EMBEDDING_WORKERS") or 4,
+        help="Concurrent ModelArk embedding requests during indexing",
+    )
     args = parser.parse_args()
+    if args.chunk_chars is not None and args.chunk_chars <= 0:
+        parser.error("--chunk-chars must be positive")
+    if args.embedding_workers <= 0:
+        parser.error("--embedding-workers must be positive")
 
     source = args.input.read_bytes()
     source_hash = hashlib.sha256(source).hexdigest()
@@ -49,15 +85,19 @@ def main() -> None:
     path = args.index.resolve()
     if path.exists() and not args.force:
         index = read_index(path)
-        if index["dataset_sha256"] != source_hash or index["embedding_model"] != model:
-            parser.error("Existing index uses a different dataset or model. Choose a new index path.")
+        if (
+            index["dataset_sha256"] != source_hash
+            or index["embedding_model"] != model
+            or index.get("chunk_chars") != args.chunk_chars
+        ):
+            parser.error("Existing index uses a different dataset, model, or chunk size.")
         print(f"Reusing LoCoMo RAG index at {path}")
         return
 
     samples = {}
     for item in json.loads(source):
         sample_id = item["sample_id"]
-        chunks = raw_chunks(item["conversation"])
+        chunks = raw_chunks(item["conversation"], args.chunk_chars)
         if not chunks or sample_id in samples:
             parser.error(f"Empty history or duplicate sample ID: {sample_id}")
         samples[sample_id] = {"scope": secrets.token_hex(8), "chunks": chunks}
@@ -67,9 +107,12 @@ def main() -> None:
     chunks = [chunk for sample in samples.values() for chunk in sample["chunks"]]
     dimensions = set()
     usage = []
-    for start in range(0, len(chunks), BATCH_SIZE):
-        batch = chunks[start : start + BATCH_SIZE]
-        vectors, tokens = embed([chunk["text"] for chunk in batch])
+    batch_size = BATCH_SIZE
+    if os.environ["LOCOMO_RAG_EMBEDDING_URL"].rstrip("/").endswith("/embeddings/multimodal"):
+        batch_size = max(batch_size, args.embedding_workers * 4)
+    for start in range(0, len(chunks), batch_size):
+        batch = chunks[start : start + batch_size]
+        vectors, tokens = embed([chunk["text"] for chunk in batch], workers=args.embedding_workers)
         usage.append(tokens)
         for chunk, vector in zip(batch, vectors, strict=True):
             dimensions.add(len(vector))
@@ -81,6 +124,7 @@ def main() -> None:
         "version": INDEX_VERSION,
         "dataset_sha256": source_hash,
         "embedding_model": model,
+        "chunk_chars": args.chunk_chars,
         "embedding_tokens": sum(usage) if all(tokens is not None for tokens in usage) else None,
         "samples": samples,
     }

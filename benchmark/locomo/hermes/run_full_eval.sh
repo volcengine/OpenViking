@@ -54,6 +54,7 @@ Environment:
   E2E_PREFLIGHT, SKIP_IMPORT, IMPORT_CSV_OVERRIDE
   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_API_KEY
   LOCOMO_RAG_INDEX, LOCOMO_RAG_EMBEDDING_URL, LOCOMO_RAG_EMBEDDING_MODEL, LOCOMO_RAG_EMBEDDING_KEY
+  LOCOMO_RAG_CHUNK_CHARS, LOCOMO_RAG_EMBEDDING_WORKERS
 
 Dataset:
   By default this expects ../data/locomo10.json from benchmark/locomo/hermes.
@@ -757,6 +758,8 @@ write_run_command() {
         if [[ "$SUITE_LABEL" == "agentic-rag" ]]; then
             printf 'LOCOMO_RAG_INDEX=%q LOCOMO_RAG_EMBEDDING_MODEL=%q ' \
                 "$LOCOMO_RAG_INDEX" "${LOCOMO_RAG_EMBEDDING_MODEL:-}"
+            printf 'LOCOMO_RAG_CHUNK_CHARS=%q LOCOMO_RAG_EMBEDDING_WORKERS=%q ' \
+                "${LOCOMO_RAG_CHUNK_CHARS:-}" "${LOCOMO_RAG_EMBEDDING_WORKERS:-4}"
         fi
         printf './run_full_eval.sh --suite %q' "$SUITE_LABEL"
         [[ "$CHECKPOINT_OPENVIKING" == "1" ]] && printf ' -cp'

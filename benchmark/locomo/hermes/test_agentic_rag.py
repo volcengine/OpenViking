@@ -29,6 +29,26 @@ class TestAgenticRag(unittest.TestCase):
         self.assertNotIn("turn 5", chunks[0]["text"])
         self.assertIn("caption: a bicycle", chunks[2]["text"])
 
+    def test_character_chunks_include_metadata_in_limit(self):
+        chunks = raw_chunks(
+            {
+                "session_1": [{"speaker": "A", "text": "历史" * 280}],
+                "session_1_date_time": "1:00 pm on 1 January, 2024",
+                "session_2": [{"speaker": "B", "text": "另一段对话"}],
+            },
+            chunk_chars=512,
+        )
+        first, second, other = chunks
+        self.assertEqual(len(first["text"]), 512)
+        self.assertTrue(all(len(chunk["text"]) <= 512 for chunk in chunks))
+        self.assertTrue(all("2024-01-01 13:00" in chunk["text"] for chunk in chunks[:2]))
+        first_end = int(first["id"].rsplit("-", 1)[1])
+        next_start = int(second["id"].rsplit(":", 1)[1].split("-", 1)[0])
+        self.assertEqual(first_end - next_start + 1, 64)
+        self.assertTrue(other["id"].startswith("session_2:"))
+        self.assertNotIn("另一段对话", first["text"])
+        self.assertIn("另一段对话", other["text"])
+
     def test_search_is_scoped_and_trace_preserves_follow_up(self):
         index = {
             "version": INDEX_VERSION,
