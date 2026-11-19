@@ -38,7 +38,11 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
-from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
+from openviking.pyagfs.exceptions import (
+    AGFSAlreadyExistsError,
+    AGFSNotADirectoryError,
+    AGFSNotFoundError,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
@@ -355,6 +359,49 @@ class FSService:
             source_offset += len(entries)
         return ListingPage(entries=result[:node_limit], has_more=len(result) > node_limit)
 
+    async def _list_directory_or_file(
+        self,
+        uri: str,
+        read_directory: Callable[[], Awaitable[List[Dict[str, Any]]]],
+        *,
+        ctx: RequestContext,
+        offset: int,
+        node_limit: Optional[int],
+        recursive: bool = False,
+        directories_only: bool = False,
+        file_formatter: Optional[
+            Callable[[List[Dict[str, Any]]], Awaitable[List[Dict[str, Any]]]]
+        ] = None,
+    ) -> List[Dict[str, Any]]:
+        """Accept file targets at the public boundary, preserving core directory reads."""
+        retry_directory = False
+        try:
+            entries = await read_directory()
+        except (AGFSNotADirectoryError, NotADirectoryError):
+            entries = []
+            retry_directory = True
+        if entries or node_limit == 0:
+            return entries
+
+        # Object stores can return an empty list for a file target. Probe only
+        # empty public results so internal directory operations add no stat.
+        viking_fs = self._ensure_initialized()
+        entry = dict(
+            await viking_fs.stat(uri, ctx=ctx, skip_count=True, include_vector_fields=False)
+        )
+        if entry.get("isDir", True):
+            return await read_directory() if retry_directory else entries
+        if (
+            offset > 0
+            or directories_only
+            or any(is_storage_internal_name(part) for part in uri_parts(uri))
+        ):
+            return []
+        entry.setdefault("name", uri_leaf_name(uri))
+        if recursive:
+            entry["rel_path"] = entry["name"]
+        return await file_formatter([entry]) if file_formatter is not None else [entry]
+
     async def ls(
         self,
         uri: str,
@@ -415,7 +462,9 @@ class FSService:
             include_overview = False
         use_simple_paths = simple and not extra_fields
 
-        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+        async def fetch_directory_page(
+            page_offset: int, page_limit: Optional[int]
+        ) -> List[Dict[str, Any]]:
             """Fetch and return one pre-tag page."""
             if recursive:
                 return await viking_fs.tree(
@@ -448,6 +497,16 @@ class FSService:
                 sort_by=sort_by,
                 sort_order=sort_order,
                 extra_fields=None,
+            )
+
+        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+            return await self._list_directory_or_file(
+                uri,
+                partial(fetch_directory_page, page_offset, page_limit),
+                ctx=ctx,
+                offset=page_offset,
+                node_limit=page_limit,
+                recursive=recursive,
             )
 
         if tags:
@@ -1439,7 +1498,22 @@ class FSService:
             include_abstract = False
             include_overview = False
 
-        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+        async def format_file_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            return await viking_fs._finalize_listing_entries(
+                entries,
+                "original" if tags else output,
+                abs_limit,
+                None if tags else extra_fields,
+                True,
+                ctx=ctx,
+                include_abstract=None if tags else include_abstract,
+                include_overview=False if tags else include_overview is True,
+                overview_limit=overview_limit,
+            )
+
+        async def fetch_directory_page(
+            page_offset: int, page_limit: Optional[int]
+        ) -> List[Dict[str, Any]]:
             """Fetch and return one pre-tag tree page."""
             return await viking_fs.tree(
                 uri,
@@ -1455,6 +1529,18 @@ class FSService:
                 level_limit=level_limit,
                 extra_fields=None if tags else extra_fields,
                 offset=page_offset,
+            )
+
+        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+            return await self._list_directory_or_file(
+                uri,
+                partial(fetch_directory_page, page_offset, page_limit),
+                ctx=ctx,
+                offset=page_offset,
+                node_limit=page_limit,
+                recursive=True,
+                directories_only=directories_only,
+                file_formatter=format_file_entries,
             )
 
         if tags:

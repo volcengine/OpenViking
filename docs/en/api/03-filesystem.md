@@ -38,9 +38,14 @@ Explicitly requested hidden files are returned without `show_all_hidden=true`;
 storage-internal names remain hidden. Missing files and denied reads retain the
 existing errors.
 
+File target compatibility is provided by the filesystem service for HTTP, SDK,
+CLI, and MCP calls. Internal `VikingFS.ls/tree` retain their directory listing
+behavior, so synchronization and OVPack operations keep their existing contract
+and do not add file-target probes.
+
 Directory reads are attempted first. A Not-a-directory error falls back to file
 metadata. Empty directory results also check the target type because some object
-storage backends return an empty list for file targets. Nonempty directory
+storage backends return an empty list for file targets. Nonempty public directory
 listings do not add a type-check request.
 
 **Parameters**

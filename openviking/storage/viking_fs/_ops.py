@@ -9,8 +9,7 @@ import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from functools import partial
-from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -24,7 +23,6 @@ from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
-    AGFSNotADirectoryError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
@@ -1838,44 +1836,6 @@ class _OpsMixin:
             await self._batch_fetch_overviews(visible_entries, overview_limit, ctx=ctx)
         return result
 
-    async def _list_directory_or_file(
-        self,
-        uri: str,
-        read_directory: Callable[[], Awaitable[List[Dict[str, Any]]]],
-        *,
-        ctx: Optional[RequestContext],
-        offset: int,
-        node_limit: Optional[int],
-        recursive: bool = False,
-        directories_only: bool = False,
-    ) -> List[Dict[str, Any]]:
-        """Keep directory reads first, then list an explicitly requested file."""
-        retry_directory = False
-        try:
-            entries = await read_directory()
-        except (AGFSNotADirectoryError, NotADirectoryError):
-            entries = []
-            retry_directory = True
-        if entries or node_limit == 0:
-            return entries
-
-        # S3 directory reads can return an empty page for a file instead of
-        # NotADirectory. Check only empty results so nonempty listings stay fast.
-        entry = dict(await self.stat(uri, ctx=ctx, skip_count=True, include_vector_fields=False))
-        if entry.get("isDir", True):
-            # The target may have changed type between the directory read and stat.
-            return await read_directory() if retry_directory else entries
-        if (
-            offset > 0
-            or directories_only
-            or any(is_storage_internal_name(part) for part in self._safe_uri_parts(uri))
-        ):
-            return []
-        entry.setdefault("name", uri_parts(uri)[-1])
-        if recursive:
-            entry["rel_path"] = entry["name"]
-        return [entry]
-
     async def tree(
         self,
         uri: str = "viking://",
@@ -1895,7 +1855,7 @@ class _OpsMixin:
         overview_limit: int = 4000,
     ) -> List[Dict[str, Any]]:
         """
-        List a directory's descendants or a file itself (includes rel_path).
+        Recursively list all contents (includes rel_path).
 
         Args:
             uri: Viking URI
@@ -1919,25 +1879,16 @@ class _OpsMixin:
         extra_fields = extra_fields or []
         if output not in {"original", "agent"}:
             raise ValueError(f"Invalid output format: {output}")
-        entries = await self._list_directory_or_file(
+        entries = await self._tree_original(
             uri,
-            partial(
-                self._tree_original,
-                uri,
-                show_all_hidden=show_all_hidden,
-                directories_only=directories_only,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                offset=offset,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                ctx=ctx,
-            ),
-            ctx=ctx,
-            offset=offset,
-            node_limit=node_limit,
-            recursive=True,
+            show_all_hidden=show_all_hidden,
             directories_only=directories_only,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            ctx=ctx,
         )
         return await self._finalize_listing_entries(
             entries,
@@ -2384,7 +2335,7 @@ class _OpsMixin:
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """
-        List a directory's children or an explicitly requested file.
+        List directory contents (URI version).
 
         Args:
             uri: Viking URI
@@ -2414,20 +2365,13 @@ class _OpsMixin:
             raise ValueError("sort_order must be 'asc' or 'desc'")
         if output not in {"original", "agent"}:
             raise ValueError(f"Invalid output format: {output}")
-        entries = await self._list_directory_or_file(
+        entries = await self._ls_original(
             uri,
-            partial(
-                self._ls_original,
-                uri,
-                show_all_hidden,
-                node_limit,
-                offset=offset,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                ctx=ctx,
-            ),
+            show_all_hidden,
+            node_limit,
             offset=offset,
-            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
             ctx=ctx,
         )
         return await self._finalize_listing_entries(
