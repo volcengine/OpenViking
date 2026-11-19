@@ -910,7 +910,70 @@ def test_filter_scan_waits_for_store_and_index_to_share_a_snapshot(adapter, monk
     assert [(g["entity_id"], g["candidate_members_count"]) for g in groups] == [("B", 1)]
 
 
-def test_semantic_item_scan_retries_if_store_fields_change_after_recall(adapter, monkeypatch):
+@pytest.mark.parametrize("finish_during_recall", [False, True])
+def test_semantic_item_scan_ignores_another_accounts_write(
+    adapter, monkeypatch, finish_during_recall
+):
+    root = "viking://resources/item-a"
+    declare_adapter_item(adapter, root, "A", [])
+    record = {"id": "a-member", "account_id": "a", "uri": f"{root}/member", "level": 2}
+    adapter.upsert([{**record, "vector": [1, 0, 0, 0]}])
+    local = adapter.get_collection()._Collection__collection
+    index = local.indexes.get("default")
+    original_upsert, original_search = index.upsert_data, index.search
+    store_committed, release_writer, writer_finished = (threading.Event() for _ in range(3))
+    recalls = 0
+
+    def pause_after_store_commit(deltas):
+        store_committed.set()
+        assert release_writer.wait(5)
+        return original_upsert(deltas)
+
+    def search(*args, **kwargs):
+        nonlocal recalls
+        result = original_search(*args, **kwargs)
+        recalls += 1
+        if finish_during_recall:
+            release_writer.set()
+            assert writer_finished.wait(5)
+        return result
+
+    def write():
+        try:
+            adapter.upsert(
+                [
+                    {
+                        "id": "b-member",
+                        "account_id": "b",
+                        "uri": "viking://resources/b.md",
+                        "level": 2,
+                        "vector": [1, 0, 0, 0],
+                    }
+                ]
+            )
+        finally:
+            writer_finished.set()
+
+    monkeypatch.setattr(index, "upsert_data", pause_after_store_commit)
+    monkeypatch.setattr(index, "search", search)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer = pool.submit(write)
+        try:
+            assert store_committed.wait(5)
+            groups = pool.submit(
+                adapter.search_item_groups, query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a")
+            ).result(timeout=5)["groups"]
+        finally:
+            release_writer.set()
+        writer.result(timeout=5)
+    assert [(g["entity_id"], g["entity_score"]) for g in groups] == [("A", 1.0)]
+    assert recalls == 1
+
+
+@pytest.mark.parametrize("filter_by_attrs", [False, True])
+def test_semantic_item_scan_retries_if_store_fields_change_after_recall(
+    adapter, monkeypatch, filter_by_attrs
+):
     root = "viking://resources/items"
     for name in ("A", "B"):
         declare_adapter_item(adapter, f"{root}/{name}", name, [f"kind={name}"])
@@ -938,18 +1001,24 @@ def test_semantic_item_scan_retries_if_store_fields_change_after_recall(adapter,
         return result
 
     monkeypatch.setattr(index, "search", pause_after_recall)
+    scope = Eq("account_id", "a")
+    condition = And([scope, Eq("item_attrs", "kind=A")]) if filter_by_attrs else scope
     with ThreadPoolExecutor(max_workers=1) as pool:
         reader = pool.submit(
             adapter.search_item_groups,
             query_vector=[1, 0, 0, 0],
-            filter=And([Eq("account_id", "a"), Eq("item_attrs", "kind=A")]),
+            filter=condition,
         )
         try:
             assert recalled.wait(5)
-            adapter.upsert([{**record, "uri": f"{root}/B/member"}])
+            adapter.upsert([{**record, "uri": f"{root}/B/member", "vector": [0, 1, 0, 0]}])
         finally:
             updated.set()
-        assert reader.result(timeout=5)["groups"] == []
+        groups = reader.result(timeout=5)["groups"]
+    if filter_by_attrs:
+        assert groups == []
+    else:
+        assert [(g["entity_id"], g["entity_score"]) for g in groups] == [("B", 0.5)]
     assert calls == 2
 
 
