@@ -16,7 +16,9 @@ from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
 class _LimitedConnection(sqlite3.Connection):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 64)
+        # Python 3.10 keeps the native limit; setlimit was added in Python 3.11.
+        if hasattr(self, "setlimit"):
+            self.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 64)
 
 
 async def _seed(store, task_ids, *, account="account", user="user", active=False):
@@ -115,8 +117,9 @@ async def test_scoped_deletion_exceeds_variable_limit_and_preserves_other_owners
                 {f"p{i}": i for i in range(65)},
             )
 
-    with pytest.raises(OperationalError, match="too many SQL variables"):
-        await scoped_store._sql_runtime.run(exceed_limit)
+    if hasattr(sqlite3.Connection, "setlimit"):
+        with pytest.raises(OperationalError, match="too many SQL variables"):
+            await scoped_store._sql_runtime.run(exceed_limit)
 
     result = await scoped_store.delete_tasks(**kwargs)
     assert result.accepted and not result.blockers
