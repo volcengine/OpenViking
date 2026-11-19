@@ -748,7 +748,9 @@ Submit module groups in order and refresh from upstream before starting each gro
 | 5 | Parsing, ingestion, and connectors | Merged in #7899 |
 | 6 | Storage and queues, including Watch | Merged in #7933 |
 | 7 | Retrieval, core, and utilities | Merged in #7937 |
-| 8 | Sessions, memory, compilation, CLI, and Gateway | Implemented; independent PR |
+| 8 | Sessions, memory, compilation, CLI, and Gateway | Merged in #7961 |
+
+A follow-up audit found residual logs beyond the remediated call sites. The first follow-up fixes privacy sanitizer output, memory-field parsing diagnostics, and session auto-commit/expiry logs. Remaining confirmed fixes cover TTL/Expiry scheduling, configuration and server boundaries, observability/reporting, ingest, and native storage; submit these module groups after the preceding group merges. The Ruff `G` rules are not yet enabled globally.
 
 The priority inventory below is the original policy backlog. Apply existing-log remediation within the module batches above; new audit capabilities remain outside this rollout.
 
