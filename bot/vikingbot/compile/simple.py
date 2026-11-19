@@ -246,7 +246,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         if not call["execute_success"]:
             warning = str(call["result"])[:300]
             result.warnings.append(warning)
-            if name == writer.name and not write_error:
+            if name == writer.name:
                 write_error = warning
             continue
         args = call["resolved_args"]
@@ -268,9 +268,12 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         raise CompileFailure("COMPILE_INCOMPLETE", result.warnings[0], stage="agent")
     if final is None:
         if not count:
+            message = "Iteration limit reached without confirmed output."
+            if write_error:
+                message = f"{message} Last write error: {write_error}"
             raise CompileFailure(
                 "COMPILE_INCOMPLETE",
-                "Iteration limit reached without confirmed output.",
+                message,
                 stage="agent",
             )
         result.warnings.append(
@@ -278,7 +281,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
             "Incremental compilation may skip unprocessed, unchanged sources. "
             "Request full compilation to scan all sources again."
         )
-    elif not writer.outcomes and not (incremental and inspected_source):
+    elif not writer.outcomes and (write_error or not (incremental and inspected_source)):
         raise CompileFailure(
             "COMPILE_INCOMPLETE",
             write_error or "No output or verified incremental no-change result.",
