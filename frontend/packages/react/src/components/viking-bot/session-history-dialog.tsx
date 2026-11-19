@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Input } from '../../shared/primitives/input/input.js';
 import { Modal } from '../../shared/primitives/modal/modal.js';
@@ -30,6 +30,30 @@ export function SessionHistoryDialog({
   const [name, setName] = useState(session.title);
   const [pending, setPending] = useState(false);
   const busy = useRef(false);
+  const restoreTarget = useRef<HTMLButtonElement | null>(null);
+  // Menu items may unmount before FocusLock can return focus to them. After its
+  // cleanup, restore the original history trigger only if focus fell to the body.
+  useEffect(
+    () => () => {
+      const target = restoreTarget.current;
+      if (!target) return;
+      const { ownerDocument } = target;
+      ownerDocument.defaultView?.requestAnimationFrame(() => {
+        if (
+          triggerRef.current === target &&
+          target.isConnected &&
+          ownerDocument.activeElement === ownerDocument.body
+        ) {
+          target.focus({ preventScroll: true });
+        }
+      });
+    },
+    [triggerRef],
+  );
+  const close = () => {
+    restoreTarget.current = triggerRef.current;
+    onClose();
+  };
   const [failure, setFailure] = useState<{
     kind: 'required' | 'request';
     message?: string;
@@ -49,7 +73,7 @@ export function SessionHistoryDialog({
         ? await sessions.onRename?.(session.id, value)
         : await sessions.onRemove?.(session.id);
       if (result === false) setFailure({ kind: 'request' });
-      else onClose();
+      else close();
     } catch (cause) {
       setFailure({
         kind: 'request',
@@ -73,7 +97,7 @@ export function SessionHistoryDialog({
       title={heading}
       triggerRef={triggerRef}
       locale={locale}
-      onClose={pending ? undefined : onClose}
+      onClose={pending ? undefined : close}
       className="ov-viking-bot__session-dialog"
     >
       <form
@@ -117,12 +141,19 @@ export function SessionHistoryDialog({
           <Button
             type="outline"
             disabled={pending}
-            onClick={onClose}
+            onClick={close}
             data-autofocus={!renaming || undefined}
           >
             {labels.cancelSessionAction}
           </Button>
-          <Button type="primary" htmlType="submit" loading={pending}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            loading={pending}
+            className={
+              renaming ? undefined : 'ov-viking-bot__session-confirm-delete'
+            }
+          >
             {renaming ? labels.saveSessionName : labels.confirmSessionRemoval}
           </Button>
         </div>

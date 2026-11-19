@@ -24,6 +24,21 @@ import type {
 
 export type ConsoleMode = 'conversation' | 'command';
 
+/** Whether the Bot runtime is ready for an eligible library. */
+export type ConsoleBotActivationStatus = 'not-started' | 'ready';
+
+/** Optional lifecycle managed by the host for the current library and identity. */
+export interface ConsoleBotActivation {
+  /** Confirm whether the current scope allows Bot access. Only true enables its tab. */
+  isEligible(signal: AbortSignal): Promise<boolean>;
+  /** Read runtime readiness after the library has allowed access. */
+  getStatus(signal: AbortSignal): Promise<ConsoleBotActivationStatus>;
+  /** Start the Bot after the user selects Enable. Console checks status again after it resolves. */
+  start(signal: AbortSignal): Promise<void>;
+  /** Optional introduction media. Console renders an illustration by default. */
+  media?: ReactNode;
+}
+
 export interface ConsoleCommandGuide {
   description: string;
   examples: readonly [string, ...string[]];
@@ -63,7 +78,11 @@ export type ConsoleChatOptions = Omit<
   'enabled' | 'sessionId' | 'initialMessages'
 > & {
   service?: VikingBotChatService & VikingBotSessionService;
+  /** Gate chat on a host-managed Bot lifecycle. Keep the adapter stable for the current scope. */
+  activation?: ConsoleBotActivation;
   hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
+  /** Set false to hide the built-in session commit action. */
+  memoryCommit?: false;
   /** Control selected references while Console loads the picker tree and search. The host clears sent references; Console clears selection when resetting the conversation. */
   referenceSelection?: Pick<VikingBotReferences, 'selected' | 'onChange'>;
 };
@@ -100,6 +119,12 @@ export interface ConsoleCommandOptions {
   onPackImported?: (uri: string) => void;
 }
 
+export interface ConsoleHistoryEntry {
+  id: string;
+  command: string;
+  createdAtMs: number;
+}
+
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
   /** Task queries use native HTTP by default; hosts can adapt another backend. */
@@ -113,6 +138,8 @@ export interface ConsoleOptions {
   defaultMode?: ConsoleMode;
   /** Change with the identity when using dynamic credential/identity functions. */
   scopeKey?: string;
+  /** Opt in to browser-local command history. Provide a stable, credential-free key for the environment, library, and user. */
+  commandHistoryKey?: string;
   onModeChange?: (mode: ConsoleMode) => void;
   requestOptions?: OvRequestOptions;
 }
@@ -146,9 +173,10 @@ export interface ConsoleProps
   labels?: ConsoleLabels;
 }
 
-/** Local state. Records and drafts are never persisted by the module. */
+/** Terminal state with recall history separate from execution records. */
 export interface ConsoleState {
   records: readonly CommandConsoleRecord[];
+  history: readonly ConsoleHistoryEntry[];
   command: string;
   conversationDraft: string;
   isExecuting: boolean;

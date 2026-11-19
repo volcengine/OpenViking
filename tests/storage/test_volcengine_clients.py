@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 import requests
 from volcengine.base.Request import Request
@@ -762,31 +764,6 @@ def test_volcengine_api_key_collection_date_time_filter_is_idempotent(monkeypatc
     }
 
 
-def test_volcengine_adapter_update_data_returns_ids():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-1", "name": "updated"}]
-            return {"updated": 1, "primary_keys": ["doc-1"]}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
-
-    assert result == ["doc-1"]
-
-
 @pytest.mark.parametrize("operation", ["upsert", "update_data"])
 def test_volcengine_adapter_truncates_abstract_at_remote_string_limit(operation):
     adapter = VolcengineCollectionAdapter(
@@ -865,7 +842,19 @@ def test_local_adapter_does_not_apply_remote_abstract_limit():
     assert normalized["abstract"] == abstract
 
 
-def test_volcengine_adapter_update_data_returns_batch_primary_keys():
+@pytest.mark.parametrize(
+    ("response", "expected_ids"),
+    [
+        ({"updated": 2, "primary_keys": ["stored-2", "stored-1"]}, ["stored-2", "stored-1"]),
+        ({"updated": 2, "ids": ["stored-1", "stored-2"]}, ["stored-1", "stored-2"]),
+        ({"updated": 2}, ["doc-1", "doc-2"]),
+        ({"updated": 2, "ids": "invalid", "primary_keys": "invalid"}, ["doc-1", "doc-2"]),
+        ({"updated": 0}, []),
+        ({"status": "ok"}, []),
+    ],
+    ids=["primary-keys", "ids", "count-only", "malformed-ids", "zero-updates", "no-update-count"],
+)
+def test_volcengine_adapter_update_data_returns_updated_ids(response, expected_ids):
     adapter = VolcengineCollectionAdapter(
         ak="test-ak",
         sk="test-sk",
@@ -877,291 +866,11 @@ def test_volcengine_adapter_update_data_returns_batch_primary_keys():
         collection_name="context",
         index_name="default",
     )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [
-                {"id": "doc-1", "name": "updated-1"},
-                {"id": "doc-2", "name": "updated-2"},
-            ]
-            return {"updated": 2, "primary_keys": ["doc-1", "doc-2"]}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data(
-        [
-            {"id": "doc-1", "name": "updated-1"},
-            {"id": "doc-2", "name": "updated-2"},
-        ]
-    )
-
-    assert result == ["doc-1", "doc-2"]
-
-
-def test_volcengine_adapter_update_data_returns_ids_from_ids_key():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-1", "name": "updated"}]
-            return {"updated": 1, "ids": ["doc-1"]}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
-
-    assert result == ["doc-1"]
-
-
-def test_volcengine_adapter_update_data_returns_batch_ids_from_ids_key():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [
-                {"id": "doc-1", "name": "updated-1"},
-                {"id": "doc-2", "name": "updated-2"},
-            ]
-            return {"updated": 2, "ids": ["doc-1", "doc-2"]}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data(
-        [
-            {"id": "doc-1", "name": "updated-1"},
-            {"id": "doc-2", "name": "updated-2"},
-        ]
-    )
-
-    assert result == ["doc-1", "doc-2"]
-
-
-def test_volcengine_adapter_update_data_falls_back_to_request_ids_when_backend_omits_them():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-1", "name": "updated"}]
-            return {"updated": 1}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
-
-    assert result == ["doc-1"]
-
-
-def test_volcengine_adapter_update_data_falls_back_to_batch_request_ids_when_backend_omits_them():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [
-                {"id": "doc-1", "name": "updated-1"},
-                {"id": "doc-2", "name": "updated-2"},
-            ]
-            return {"updated": 2}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data(
-        [
-            {"id": "doc-1", "name": "updated-1"},
-            {"id": "doc-2", "name": "updated-2"},
-        ]
-    )
-
-    assert result == ["doc-1", "doc-2"]
-
-
-def test_volcengine_adapter_update_data_falls_back_when_ids_key_is_not_a_list():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-1", "name": "updated"}]
-            return {"updated": 1, "ids": "doc-1"}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
-
-    assert result == ["doc-1"]
-
-
-def test_volcengine_adapter_update_data_falls_back_when_primary_keys_is_not_a_list():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-1", "name": "updated"}]
-            return {"updated": 1, "primary_keys": "doc-1"}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
-
-    assert result == ["doc-1"]
-
-
-def test_volcengine_adapter_update_data_returns_empty_when_backend_reports_zero_updates():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-404", "name": "updated"}]
-            return {"updated": 0}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-404", "name": "updated"}])
-
-    assert result == []
-
-
-def test_volcengine_adapter_update_data_returns_empty_when_backend_dict_has_no_ids_or_updated_count():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-404", "name": "updated"}]
-            return {"status": "ok"}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-404", "name": "updated"}])
-
-    assert result == []
-
-
-def test_volcengine_adapter_update_data_skips_records_without_id_in_fallback():
-    adapter = VolcengineCollectionAdapter(
-        ak="test-ak",
-        sk="test-sk",
-        region="cn-beijing",
-        session_token=None,
-        api_key=None,
-        host=None,
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-1", "name": "updated"}, {"name": "missing-id"}]
-            return {"updated": 2}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}, {"name": "missing-id"}])
-
-    assert result == ["doc-1"]
-
-
-def test_volcengine_adapter_update_data_supports_api_key_mode():
-    adapter = VolcengineCollectionAdapter(
-        ak=None,
-        sk=None,
-        region="cn-beijing",
-        session_token=None,
-        api_key="vk-test-token",
-        host="api-vikingdb.vikingdb.cn-beijing.volces.com",
-        project_name="default",
-        collection_name="context",
-        index_name="default",
-    )
-
-    class _Collection:
-        def update_data(self, data_list):
-            assert data_list == [{"id": "doc-1", "name": "updated"}]
-            return {"updated": 1, "primary_keys": ["doc-1"]}
-
-    adapter._collection = _Collection()
-
-    result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
-
-    assert result == ["doc-1"]
+    adapter._collection = SimpleNamespace(update_data=lambda rows: response)
+    records = [{"id": "doc-1", "name": "first"}, {"id": "doc-2", "name": "second"}]
+    records.append({"name": "missing-id"})
+
+    assert adapter.update_data(records) == expected_ids
 
 
 def test_http_collection_update_and_fetch_data(monkeypatch):

@@ -6,9 +6,11 @@ import {
   mount,
   target,
   rootUri,
+  act,
   ok,
   click,
 } from './helpers/preview-native-dom.mjs';
+import { deferred } from './helpers/module-dom.mjs';
 
 const concept = `${target}/concept`;
 const deep = `${concept}/deep`;
@@ -27,6 +29,45 @@ const pending = (name) =>
   );
 const toggle = async (name) =>
   click(row(name)?.querySelector('[data-role="toggle"]'));
+
+for (const [label, hasConflict] of [
+  ['Open Wiki dashboard', false],
+  ['View pending Wiki conflicts', true],
+]) {
+  test(`${label} shows the directory name while the preview is loading`, async () => {
+    const summary = deferred();
+    const fetch = fixture(
+      target,
+      true,
+      ({ path, uri }) => {
+        if (path.endsWith('/fs/ls') && uri === rootUri)
+          return ok([
+            directory(target, [
+              'compile_target=true',
+              `has_conflict=${hasConflict}`,
+            ]),
+          ]);
+        if (uri === target && /\/content\/(abstract|overview)$/.test(path))
+          return summary.promise.then(ok);
+      },
+      [{ to: target }],
+    );
+    const view = await mount(tree(fetch, undefined));
+    const tabTitle = () =>
+      document.querySelector(
+        `[role="tab"][data-key="${target}"] .ov-file-preview__tab-title`,
+      )?.textContent;
+    try {
+      await click(row('wiki')?.querySelector(`[aria-label="${label}"]`));
+      assert.ok(fetch.calls.some(({ path }) => path.endsWith('/abstract')));
+      assert.equal(tabTitle(), 'wiki');
+      await act(async () => summary.resolve('Summary'));
+      assert.equal(tabTitle(), 'wiki');
+    } finally {
+      await view.unmount();
+    }
+  });
+}
 
 test('descendant conflicts mark every collapsed Wiki ancestor across pages and clear after refresh', async () => {
   let conflicts = true;

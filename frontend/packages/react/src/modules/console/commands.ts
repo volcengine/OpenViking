@@ -15,6 +15,16 @@ import { formatResult } from './results.js';
 import { browserCommandFiles, type CommandExecution } from './command-files.js';
 import type { ConsoleCommandOptions } from './types.js';
 
+const commandSpecsBySpecificity = [...COMMAND_SPECS].sort(
+  (a, b) => b.name.length - a.name.length,
+);
+
+export function resolveCommandSpec(tokens: ReturnType<typeof tokenize>) {
+  return commandSpecsBySpecificity.find((spec) =>
+    spec.name.split(' ').every((part, index) => tokens[index]?.value === part),
+  );
+}
+
 export async function executeCommand(
   input: string,
   client: OvClient,
@@ -22,15 +32,12 @@ export async function executeCommand(
   locale: Locale,
   onTasks?: (tasks: readonly TaskReference[]) => void,
   commandOptions?: ConsoleCommandOptions,
-): Promise<CommandConsoleRecordContent> {
+): Promise<{
+  content: CommandConsoleRecordContent;
+  telemetry?: Record<string, unknown>;
+}> {
   const tokens = tokenize(input);
-  const spec = [...COMMAND_SPECS]
-    .sort((a, b) => b.name.length - a.name.length)
-    .find((item) =>
-      item.name
-        .split(' ')
-        .every((part, index) => tokens[index]?.value === part),
-    );
+  const spec = resolveCommandSpec(tokens);
   if (!spec) throw new ConsoleCommandError('unknownCommand');
   if (spec.admin && !commandOptions?.allowAdminCommands)
     throw new ConsoleCommandError('unavailableCommand', spec.name);
@@ -50,7 +57,7 @@ export async function executeCommand(
     throw error;
   }
   if (!spec.request && !spec.execute)
-    return createCommandHelp(locale, commandOptions);
+    return { content: createCommandHelp(locale, commandOptions) };
   const execution: CommandExecution = {
     signal: options.signal,
     files: commandOptions?.files ?? browserCommandFiles,
@@ -61,9 +68,22 @@ export async function executeCommand(
       return client.request<T>({ ...spec, options });
     },
   };
-  const data = spec.execute
-    ? await spec.execute(values, execution.request, execution)
-    : await execution.request(spec.request!(values));
+  let data: unknown;
+  let telemetry: Record<string, unknown> | undefined;
+  if (spec.execute) {
+    data = await spec.execute(values, execution.request, execution);
+  } else {
+    const request = spec.request!(values);
+    if (spec.name.startsWith('session ') && values.telemetry) {
+      options.signal?.throwIfAborted();
+      ({ result: data, telemetry } = await client.requestEnvelope({
+        ...request,
+        options,
+      }));
+    } else {
+      data = await execution.request(request);
+    }
+  }
   onTasks?.(readTaskReferences(spec.name, data));
-  return formatResult(spec.name, data, values);
+  return { content: formatResult(spec.name, data, values), telemetry };
 }

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from starlette.routing import Match, Route
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.server.config import get_server_url_from_server_data
 from openviking_cli.utils import get_logger
 
@@ -31,11 +32,10 @@ def default_storage_path(workspace: str) -> str:
     current = Path(workspace).expanduser() / "gateway"
     legacy = Path(LEGACY_STORAGE_PATH).expanduser()
     if not (current / "kernel.sqlite3").exists() and (legacy / "kernel.sqlite3").exists():
-        logger.warning(
-            "Using legacy gateway storage %s; the default is now %s. Copy the directory there "
-            "or set gateway.storage_path to keep this location.",
-            legacy,
-            current,
+        logger.info(
+            "legacy gateway storage selected legacy_path=%s default_path=%s",
+            safe_path_for_log(str(legacy)),
+            safe_path_for_log(str(current)),
         )
         return str(legacy)
     return str(current)

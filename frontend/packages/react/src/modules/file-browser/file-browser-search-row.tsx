@@ -1,5 +1,6 @@
 import type { SearchHit } from './search-types.js';
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { decodePathLabel } from '../../shared/path-label.js';
 import { fileTypeIcon } from './fs-icon.js';
 
 /**
@@ -12,7 +13,10 @@ function resultLocation(hit: SearchHit) {
     ? hit.uri.slice('viking://'.length).split('/').filter(Boolean)
     : [];
   const parent = path.length > 2 ? path.at(-2) : undefined;
-  const label = parent ? `${parent}/${name}` : name;
+  const displayName = decodePathLabel(name);
+  const label = parent
+    ? `${decodePathLabel(parent)}/${displayName}`
+    : displayName;
   return {
     name: hit.line === undefined ? label : `${label}:${hit.line}`,
     uri: parent ? `viking://${path[0]}/.../${name}` : hit.uri,

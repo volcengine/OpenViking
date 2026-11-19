@@ -144,10 +144,12 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| branch | str | 否 | `main` | 要回溯的分支 |
+| branch | str | 否 | `main` | 回溯起点，可传分支或提交 ID |
 | limit | int | 否 | 20 | 最多返回的提交数量。HTTP 接口限制范围为 1–500 |
 | offset | int | 否 | 0 | 跳过前多少条匹配的提交，必须为非负整数。例如每页 10 条，第二页传 `offset=10` |
 | paths | List[str] | 否 | null | 只返回修改了任一指定 `viking://` URI 的提交；USER/ADMIN 必须显式传入。本地 ROOT 模式可省略以查询全局历史。最多接受 32 条路径，每条 account-relative 路径最多包含 64 个层级。HTTP 接口通过重复 `paths` 查询参数传入多个 URI |
+
+对于 `paths` 中的每个 URI，服务端比较当前提交树和 `parents[0]` 提交树中该精确路径的条目。合并提交也只与首个父提交比较。没有父提交时与空树比较。
 
 路径过滤和提交去重发生在 `offset`、`limit` 之前。
 `paths=[X]`、`offset=10`、`limit=10` 表示返回与 X 有关的第 11–20 条提交。
@@ -302,6 +304,8 @@ curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=3f2a1b9c&path
 - `X-Snapshot-Time-Seconds`：该 commit 的 `committer.time_seconds`，整数 Unix 秒时间戳
 
 时间戳表示请求的快照提交时间，不是文件最后修改时间或 run 完成时间。分支和标签只解析一次，确保正文与 commit 响应头对应同一快照。`raw=false` 时也返回 commit 响应头，去除记忆字段仅影响正文及其字节数。
+
+如果提交树中没有请求的文件路径，服务端返回 HTTP 404，并设置 `error.code: "NOT_FOUND"`、`error.details.type: "git_blob"` 和 `error.details.reason: "path_not_found"`。如果首个父提交（`parents[0]`）中同一精确路径存在文件，布尔字段 `error.details.deleted_file` 为 `true`。如果首个父提交中的该路径是目录或没有条目，或当前提交没有父提交，该字段为 `false`。请求的文件在底层存储中缺少对象时，不会返回 `path_not_found`。网关可通过透传错误详情保留这些区别。
 
 **CLI**
 

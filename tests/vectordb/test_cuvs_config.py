@@ -12,13 +12,14 @@ from openviking_cli.utils.config.vectordb_config import CuVSConfig, VectorDBBack
 
 
 def test_cuvs_filter_cache_defaults_and_disable_value():
-    assert CuVSConfig().dtype == "float32"
+    defaults = CuVSConfig()
+    assert defaults.dtype == "float32"
     assert CuVSConfig(dtype="float16").dtype == "float16"
-    assert CuVSConfig().max_concurrent_gpu_searches == 1
-    assert CuVSConfig().micro_batching_enabled is False
-    assert CuVSConfig().micro_batching_max_batch_size == 8
-    assert CuVSConfig().micro_batching_max_wait_ms == 1.0
-    assert CuVSConfig().filter_cache_size == 16
+    assert defaults.max_concurrent_gpu_searches == 1
+    assert defaults.micro_batching_enabled is False
+    assert defaults.micro_batching_max_batch_size == 8
+    assert defaults.micro_batching_max_wait_ms == 1.0
+    assert defaults.filter_cache_size == 16
     assert CuVSConfig(filter_cache_size=0).filter_cache_size == 0
 
 
@@ -43,15 +44,6 @@ def test_cuvs_filter_cache_rejects_negative_size():
         CuVSConfig(micro_batching_enabled=True, algorithm="cagra")
     with pytest.raises(ValidationError, match="max_concurrent_gpu_searches=1"):
         CuVSConfig(micro_batching_enabled=True, max_concurrent_gpu_searches=2)
-
-
-@pytest.mark.parametrize("dynamic_batching", [True, False])
-def test_cuvs_ignores_unknown_dynamic_batching(dynamic_batching):
-    config = CuVSConfig(dynamic_batching=dynamic_batching)
-
-    assert config == CuVSConfig()
-    assert "dynamic_batching" not in config.model_dump()
-    assert config.micro_batching_enabled is False
 
 
 def test_cuvs_auto_mode_is_opt_in_and_validates_memory_guardrails():

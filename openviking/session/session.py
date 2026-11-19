@@ -37,6 +37,7 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import TextPart, ToolPart
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_extractor import extract_and_store_session_privacy
@@ -174,7 +175,7 @@ def _publish_telemetry_summary_best_effort(snapshot: Any) -> None:
 
         TelemetryBridgeEventDataSource.record_summary(snapshot.summary)
     except Exception:
-        logger.debug("failed to publish session telemetry summary to metrics bridge", exc_info=True)
+        logger.debug("failed to publish session telemetry summary to metrics bridge")
 
 
 def _enabled_memory_types() -> set[str]:
@@ -1045,6 +1046,7 @@ class Session:
                     created_at=created_at,
                     turn_id=turn_id,
                     message_kind=message_kind,
+                    interrupted=role == "assistant" and spec.get("interrupted") is True,
                     source_message_ids=(
                         list(source_message_ids) if source_message_ids is not None else None
                     ),
@@ -1431,7 +1433,9 @@ class Session:
             await self._rebuild_pending_tokens()
             await self._save_meta()
             await self._write_phase1_ready_marker(archive_uri)
-            logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
+            logger.info(
+                "interrupted session publication recovered uri=%s", safe_uri_for_log(archive_uri)
+            )
             return True
 
     def commit(
@@ -1598,11 +1602,12 @@ class Session:
                 agent_evolution_enabled=agent_evolution_enabled,
                 effective_memory_types=set(effective_memory_types),
             )
-        logger.info(
-            f"[TRACER] session_commit started, trace_id={trace_id}, "
-            f"keep_recent_count={keep_recent_count}, retention_mode={retention_mode}, "
-            f"keep_recent_turn_count={effective_keep_turns}, "
-            f"retained_message_token_budget={effective_token_budget}"
+        logger.debug(
+            "session commit planned keep_recent_count=%s retention_mode=%s keep_recent_turn_count=%s retained_token_budget=%s",
+            keep_recent_count,
+            retention_mode,
+            effective_keep_turns,
+            effective_token_budget,
         )
 
         # ===== Phase 1: authoritative snapshot + split (path-lock protected) =====
@@ -1863,15 +1868,20 @@ class Session:
                     except Exception:
                         self._meta.last_idle_commit_accepted_at = previous_accepted_at
                         self._meta.updated_at = previous_updated_at
-                        logger.warning(
-                            "Failed to record idle commit time for %s",
-                            self.session_id,
-                            exc_info=True,
+                        logger.info(
+                            "idle commit time update failed; continuing session commit session_hash=%s",
+                            short_hash(str(self.session_id)),
+                            extra={"degraded": True},
                         )
                 if reset_context:
                     await self._append_context_reset_archive()
             except Exception as e:
-                logger.error(f"[commit] Failed during {phase1_stage}: {e}")
+                logger.debug(
+                    "session publication failed stage=%s error_type=%s",
+                    phase1_stage,
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 # Whether the queue write failed or a queued Phase 1 stopped
                 # before publication, a terminal marker makes archive raw
                 # logically live and prevents a permanent pending directory.
@@ -1882,9 +1892,8 @@ class Session:
                         error=str(e),
                     )
                 except Exception:
-                    logger.exception(
-                        "Failed to mark archive after Phase 1 persistence failure: %s",
-                        archive_uri,
+                    logger.error(
+                        "archive failure marker write failed uri=%s", safe_uri_for_log(archive_uri)
                     )
                 self._messages = original_messages
                 self._compression.compression_index -= 1
@@ -1892,9 +1901,10 @@ class Session:
                     try:
                         await self._viking_fs._async_agfs.pathlock_release(publication_lease)
                     except Exception:
-                        logger.exception(
-                            "Failed to release archive publication lease: %s",
-                            archive_uri,
+                        logger.info(
+                            "archive publication lease release failed uri=%s",
+                            safe_uri_for_log(archive_uri),
+                            extra={"degraded": True},
                         )
                     publication_lease = None
                 raise
@@ -1902,9 +1912,11 @@ class Session:
         # metadata are durable before Task-store or QueueFS latency.
 
         self._compression.original_count += len(messages_to_archive)
-        logger.info(f"Archived: {len(messages_to_archive)} messages → {archive_uri}/")
-
-        # Registration and enqueue must not hold the session lock or roll back
+        logger.debug(
+            "session messages archived total=%d uri=%s",
+            len(messages_to_archive),
+            safe_uri_for_log(archive_uri),
+        )  # Registration and enqueue must not hold the session lock or roll back
         # published Phase 1. Task must exist before middleware registers Queue Work.
         tracker = get_task_tracker()
         try:
@@ -1947,7 +1959,7 @@ class Session:
                         user_id=self.ctx.user.user_id,
                     )
                 except Exception:
-                    logger.exception("Failed to persist Task failure: %s", task_id)
+                    logger.error("session task failure persistence failed task_id=%s", task_id)
                 error = map_exception(exc) or InternalError(str(exc))
                 error.details.update(
                     task_id=task_id,
@@ -1961,9 +1973,10 @@ class Session:
                 try:
                     await self._viking_fs._async_agfs.pathlock_release(publication_lease)
                 except Exception:
-                    logger.exception(
-                        "Failed to release archive publication lease: %s",
-                        archive_uri,
+                    logger.info(
+                        "archive publication lease release failed uri=%s",
+                        safe_uri_for_log(archive_uri),
+                        extra={"degraded": True},
                     )
                 publication_lease = None
 
@@ -2540,9 +2553,8 @@ class Session:
         if not batches:
             return []
 
-        logger.info(
-            "Processing Phase 2 long-term memory extraction in %s planned batches "
-            "for %s estimated tokens",
+        logger.debug(
+            "long-term memory extraction planned batches=%d estimated_tokens=%d",
             len(batches),
             estimate_extraction_message_tokens(messages),
         )
@@ -2674,10 +2686,10 @@ class Session:
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
                     extraction_batch_limits = resolve_extraction_batch_limits(auto_commit_policy)
                     enable_working_memory = effective_policy.enable_working_memory
-                    logger.info(
-                        "Session commit task=%s archive=%s enable_working_memory=%s",
+                    logger.debug(
+                        "session commit processing task_id=%s archive=%s working_memory=%s",
                         task_id,
-                        archive_uri,
+                        safe_uri_for_log(archive_uri),
                         enable_working_memory,
                     )
                     checkpoint_requests = (
@@ -2708,9 +2720,8 @@ class Session:
 
                     async def _run_archive_summary() -> None:
                         if not enable_working_memory:
-                            logger.info(
-                                "Working Memory summary skipped "
-                                "(memory_policy.working_memory.enabled=false)"
+                            logger.debug(
+                                "working Memory summary skipped (memory_policy.working_memory.enabled=false)"
                             )
                             return
                         summary_kwargs: Dict[str, Any] = {
@@ -2876,10 +2887,7 @@ class Session:
                         and bool(long_term_messages)
                     )
                     if enable_working_memory or (self._session_compressor and long_term_has_work):
-                        logger.info(
-                            "Starting post-commit extraction from %s archived messages",
-                            len(messages),
-                        )
+                        logger.debug("post-commit extraction messages=%d", len(messages))
 
                         extraction_tasks: List[Any] = []
                         extraction_labels: List[str] = []
@@ -2944,11 +2952,11 @@ class Session:
                         extraction_error: Optional[BaseException] = None
                         for label, result in zip(extraction_labels, _results, strict=True):
                             if isinstance(result, Exception):
-                                logger.error(
-                                    "Phase 2 step %s failed: %s",
+                                logger.debug(
+                                    "session extraction step failed stage=%s error_type=%s",
                                     label,
-                                    result,
-                                    exc_info=result,
+                                    type(result).__name__,
+                                    extra={"error_type": type(result).__name__},
                                 )
                                 if extraction_error is None:
                                     extraction_error = result
@@ -2966,8 +2974,8 @@ class Session:
                             else:
                                 target_contexts = list(result or [])
                                 target_skills = []
-                            logger.info(
-                                "Extracted %s memories for %s",
+                            logger.debug(
+                                "memory extraction completed total=%d stage=%s",
                                 len(target_contexts),
                                 label,
                             )
@@ -2981,16 +2989,15 @@ class Session:
                         if total_extracted:
                             self._stats.memories_extracted += total_extracted
                         if extracted_skill_results:
-                            logger.info(
-                                "Extracted %s session skills",
+                            logger.debug(
+                                "session skill extraction completed total=%d",
                                 len(extracted_skill_results),
                             )
                         get_current_telemetry().set("memory.extracted", total_extracted)
                     else:
                         if self._session_compressor:
-                            logger.info(
-                                "Memory and session skill extraction skipped "
-                                "(disabled by config or memory_policy)"
+                            logger.debug(
+                                "memory and session skill extraction skipped (disabled by config or memory_policy)"
                             )
                         await _run_archive_summary()
 
@@ -3017,10 +3024,11 @@ class Session:
                                         if isinstance(item, dict)
                                     )
                             except Exception as exc:
-                                logger.warning(
-                                    "Failed to read skipped memory operations from %s: %s",
-                                    candidate_memory_diff_uri,
-                                    exc,
+                                logger.info(
+                                    "skipped memory operations unavailable; continuing commit uri=%s error_type=%s",
+                                    safe_uri_for_log(candidate_memory_diff_uri),
+                                    type(exc).__name__,
+                                    extra={"degraded": True, "error_type": type(exc).__name__},
                                 )
 
                 try:
@@ -3036,10 +3044,8 @@ class Session:
                         "DEADLINE_EXCEEDED",
                         str(exc),
                     )
-                    logger.warning(
-                        "Timed out waiting for request-scoped queues for "
-                        "telemetry_id=%s after %.1fs; continuing phase2 completion",
-                        telemetry.telemetry_id,
+                    logger.info(
+                        "queue wait timed out; continuing phase2 completion timeout_seconds=%.1f",
                         _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
                     )
             finally:
@@ -3114,7 +3120,10 @@ class Session:
                 ),
             )
 
-            logger.info(f"Session {self.session_id} memory extraction completed")
+            logger.debug(
+                "session memory extraction completed session_hash=%s",
+                short_hash(str(self.session_id)),
+            )
         except asyncio.CancelledError:
             telemetry.set_error("session.commit.phase2", "CANCELLED", "session commit cancelled")
             snapshot = telemetry.finish("cancelled")
@@ -3145,7 +3154,12 @@ class Session:
             await tracker.fail(
                 task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
             )
-            logger.exception(f"Memory extraction failed for session {self.session_id}")
+            logger.error(
+                "session memory extraction failed session_hash=%s error_type=%s",
+                short_hash(str(self.session_id)),
+                type(e).__name__,
+                extra={"error_type": type(e).__name__},
+            )
 
     async def _write_done_file(
         self,
@@ -3230,19 +3244,20 @@ class Session:
         merged_messages = budgeted.messages
         message_tokens = budgeted.estimated_tokens
         if budgeted.dropped_message_ids or budgeted.truncated_message_ids:
-            logger.info(
-                "[get_session_context] active budget applied: session_id=%s, "
-                "budget=%s, dropped=%s, truncated=%s",
-                self.session_id,
+            logger.debug(
+                "session context budget applied session_hash=%s budget=%s dropped=%d truncated=%d",
+                short_hash(str(self.session_id)),
                 token_budget,
                 len(budgeted.dropped_message_ids),
                 len(budgeted.truncated_message_ids),
             )
 
         # 精简日志：只打印关键信息
-        logger.info(
-            f"[get_session_context] session_id={self.session_id}, "
-            f"messages={len(merged_messages)}, tokens={message_tokens}"
+        logger.debug(
+            "session context assembled session_hash=%s messages=%d tokens=%s",
+            short_hash(str(self.session_id)),
+            len(merged_messages),
+            message_tokens,
         )
 
         # pre_archive_abstracts: 保留字段返回空数组，保持 API 向下兼容
@@ -3382,9 +3397,10 @@ class Session:
                 # A required overview that is missing or unreadable still keeps
                 # the archive terminal here; the warning is emitted by the full
                 # scan used for Phase 2 bookkeeping.
-                logger.warning(
-                    "Completed archive has no readable overview: %s",
-                    terminal["archive_uri"],
+                logger.info(
+                    "completed archive overview unavailable; retaining live context uri=%s",
+                    safe_uri_for_log(terminal["archive_uri"]),
+                    extra={"degraded": True},
                 )
                 failed_archives = 1
         elif terminal is not None:
@@ -3398,9 +3414,9 @@ class Session:
             except Exception as exc:
                 if not _is_storage_not_found(exc):
                     raise
-                logger.warning(
-                    "Skipping pending archive %s because messages.jsonl is missing",
-                    archive["archive_uri"],
+                logger.info(
+                    "pending archive messages missing; skipping context uri=%s",
+                    safe_uri_for_log(archive["archive_uri"]),
                 )
 
         merged_messages = self._archives.stable_deduplicate_messages(
@@ -3460,10 +3476,9 @@ class Session:
                 timeout_secs=0.0,
             )
         except Exception:
-            logger.debug(
-                "Predecessor archive is still being published; requeueing: %s",
-                predecessor_uri,
-                exc_info=True,
+            logger.info(
+                "predecessor archive still publishing; requeueing uri=%s",
+                safe_uri_for_log(predecessor_uri),
             )
             return False
 
@@ -3483,9 +3498,10 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            logger.warning(
-                "Skipped orphaned Session archive without QueueFS work: %s",
-                predecessor_uri,
+            logger.info(
+                "orphaned session archive skipped uri=%s",
+                safe_uri_for_log(predecessor_uri),
+                extra={"degraded": True},
             )
             return True
         finally:
@@ -3525,11 +3541,11 @@ class Session:
             try:
                 latest_meta = await self._read_commit_meta()
             except Exception as exc:
-                reason = f"{type(exc).__name__}: {exc}"
-                logger.warning(
-                    "Session %s extraction completed without updating statistics: %s",
-                    self.session_id,
-                    reason,
+                logger.info(
+                    "session extraction statistics update failed session_hash=%s error_type=%s",
+                    short_hash(str(self.session_id)),
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
                 )
                 return None
 
@@ -3633,9 +3649,8 @@ class Session:
             )
 
         material_limit = max(1, int(session_window_context * 0.7))
-        logger.info(
-            "Processing Phase 2 Working Memory rolling summary for %s estimated "
-            "message tokens with material_limit=%s",
+        logger.debug(
+            "working memory rolling summary estimated_tokens=%d material_limit=%s",
             estimate_extraction_message_tokens(messages),
             material_limit,
         )
@@ -3690,9 +3705,8 @@ class Session:
                 batch_tokens += message_tokens
                 if batch_tokens >= chunk_limit:
                     break
-            logger.info(
-                "Processing Phase 2 Working Memory rolling summary segment %s "
-                "messages=%s chunk_tokens=%s summary_tokens=%s material_limit=%s",
+            logger.debug(
+                "working memory summary segment=%d messages=%d chunk_tokens=%s summary_tokens=%s material_limit=%s",
                 segment_index,
                 len(batch_messages),
                 batch_tokens,
@@ -3804,7 +3818,11 @@ class Session:
         except Exception as e:
             if checkpoint_requests:
                 raise RuntimeError("Prompt module is required to generate checkpoints") from e
-            logger.warning(f"Prompt module unavailable: {e}")
+            logger.info(
+                "archive summary prompt unavailable; using built-in prompt error_type=%s",
+                type(e).__name__,
+                extra={"degraded": True, "error_type": type(e).__name__},
+            )
             turn_count = len([m for m in messages if is_user_query(m)])
             return (
                 f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
@@ -3848,12 +3866,12 @@ class Session:
             if actual_tokens <= summary_budget_tokens:
                 return overview
 
-            logger.warning(
-                "Working Memory summary exceeded budget; retrying compact summary "
-                "actual_tokens=%s summary_budget_tokens=%s overage_tokens=%s",
+            logger.info(
+                "working memory summary exceeded budget; retrying actual_tokens=%s budget_tokens=%s overage_tokens=%s",
                 actual_tokens,
                 summary_budget_tokens,
                 actual_tokens - summary_budget_tokens,
+                extra={"degraded": True},
             )
             second_system = (
                 "The previous Working Memory exceeded the hard summary budget.\n\n"
@@ -3881,20 +3899,18 @@ class Session:
             actual_tokens = estimate_text_tokens(second)
             if actual_tokens <= summary_budget_tokens:
                 logger.info(
-                    "Working Memory summary budget retry succeeded "
-                    "actual_tokens=%s summary_budget_tokens=%s",
+                    "working memory compact retry succeeded actual_tokens=%s budget_tokens=%s",
                     actual_tokens,
                     summary_budget_tokens,
                 )
                 return second
 
-            logger.warning(
-                "Working Memory summary budget retry still exceeded budget; "
-                "using final fallback actual_tokens=%s summary_budget_tokens=%s "
-                "overage_tokens=%s",
+            logger.info(
+                "working memory compact retry exceeded budget; using final fallback actual_tokens=%s budget_tokens=%s overage_tokens=%s",
                 actual_tokens,
                 summary_budget_tokens,
                 actual_tokens - summary_budget_tokens,
+                extra={"degraded": True},
             )
             third_system = (
                 f"Final fallback: write at most {summary_budget_tokens} tokens. Drop details. "
@@ -3940,19 +3956,19 @@ class Session:
             )
             third_tokens = estimate_text_tokens(third)
             if third_tokens > summary_budget_tokens:
-                logger.warning(
-                    "Working Memory summary final fallback exceeded budget "
-                    "actual_tokens=%s summary_budget_tokens=%s overage_tokens=%s",
+                logger.info(
+                    "working memory final fallback exceeded budget actual_tokens=%s budget_tokens=%s overage_tokens=%s",
                     third_tokens,
                     summary_budget_tokens,
                     third_tokens - summary_budget_tokens,
+                    extra={"degraded": True},
                 )
             else:
                 logger.info(
-                    "Working Memory summary final fallback succeeded "
-                    "actual_tokens=%s summary_budget_tokens=%s",
+                    "working memory final fallback succeeded actual_tokens=%s budget_tokens=%s",
                     third_tokens,
                     summary_budget_tokens,
+                    extra={"degraded": True},
                 )
             return third
 
@@ -4056,7 +4072,7 @@ class Session:
         if not has_tc:
             if checkpoint_requests:
                 raise ValueError("Working Memory update returned no tool call for checkpoints")
-            logger.warning("WM update: LLM returned no tool_call; falling back to creation prompt")
+            logger.info("wM update: LLM returned no tool_call; falling back to creation prompt")
             fallback = await self._fallback_generate_wm_creation(
                 formatted,
                 messages,
@@ -4155,8 +4171,7 @@ class Session:
                     f"{[(k, v.get('op')) for k, v in salvaged.items()]}"
                 )
                 logger.info(
-                    "WM update: regex recovery salvaged %d/%d sections; "
-                    "proceeding with partial ops",
+                    "working memory argument recovery used partial operations recovered=%d total=%d",
                     len(salvaged),
                     len(WM_SEVEN_SECTIONS),
                 )
@@ -4165,10 +4180,10 @@ class Session:
                     input_material=f"{latest_archive_overview}\n\n{formatted}",
                 )
             wm.wm_debug("regex recovery salvaged 0 sections; falling back to creation prompt")
-            logger.warning(
-                "WM update: tool_call arguments parse failed (%s); "
-                "regex recovery found nothing; falling back to creation prompt",
-                e,
+            logger.info(
+                "working memory arguments invalid; using creation prompt error_type=%s",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__},
             )
             fallback = await self._fallback_generate_wm_creation(
                 formatted,

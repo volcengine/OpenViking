@@ -1,6 +1,6 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { isHomeResourceUri } from './fs-uri.js';
+import { isHomeResourceUri } from '../../shared/resource-uri.js';
 
 /** Native stat resolves the home alias in the authenticated request scope. */
 export async function readDashboardStat(

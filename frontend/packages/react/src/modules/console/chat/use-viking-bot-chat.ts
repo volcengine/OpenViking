@@ -16,7 +16,7 @@ export function useVikingBotChat(
 ): VikingBotChatResult {
   const monitoring = useMonitoringBinding();
   const analytics = useAnalyticsRef();
-  const { service: native, signal } = useBotService(options);
+  const { service: native, signal, hasProvider } = useBotService(options);
   const locale = useLocale(options.locale);
   const { track, tasks, source } = useTaskTracking(options);
   const {
@@ -41,6 +41,7 @@ export function useVikingBotChat(
       signal,
       analytics,
       monitoring,
+      hasProvider ? native.commitSession : undefined,
     );
   }, [
     native,
@@ -53,6 +54,7 @@ export function useVikingBotChat(
     scopeKey,
     analytics,
     monitoring,
+    hasProvider,
   ]);
   // Effect necessity: history requests and live Bot streams belong to this
   // session/identity. Events cannot observe navigation or unmount; cleanup aborts
@@ -111,6 +113,7 @@ export function useVikingBotChat(
     messages,
     canInterrupt: Boolean(service.interrupt),
     canSteer: Boolean(service.steer),
+    commitSession: controller.commitSession,
     error,
     send: controller.send,
     abort: controller.abort,

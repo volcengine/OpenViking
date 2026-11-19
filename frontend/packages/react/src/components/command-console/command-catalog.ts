@@ -40,6 +40,8 @@ export interface CommandConsoleCommandDefinition {
   inputText?: string;
   aliases?: readonly string[];
   group?: string;
+  /** 保留输入识别，从候选列表隐藏。Keeps input matching while hiding suggestions. */
+  hiddenFromSuggestions?: boolean;
   description: string;
   usage: string;
   summary?: string;
@@ -51,7 +53,20 @@ export interface CommandConsoleCommandDefinition {
     documentation?: { label: string; href: string };
     steps: readonly { description: string; command?: string }[];
   };
+  /** 覆盖引导面板的用法和参数，输入补全仍使用本命令的参数。Help-only syntax and parameters. */
+  parameterDetails?: {
+    usage: string;
+    options?: readonly CommandConsoleCommandOption[];
+    extra?: {
+      description: string;
+      options: readonly CommandConsoleCommandOption[];
+    };
+  };
   skeleton?: CommandConsoleSkeletonKind;
+  /** Resolves URI values and their character ranges in the text after the command prefix. */
+  resolveUriArguments?: (
+    text: string,
+  ) => readonly { start: number; end: number; uri: string }[];
 }
 
 export interface CommandConsoleParsedCommandInput {

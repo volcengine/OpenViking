@@ -1,3 +1,4 @@
+import { compileHelp } from './compile-help.js';
 import { transferErrors, transferSession } from './transfer-session.en-US.js';
 import { coreParameters } from './core-parameters.js';
 import filesystemParameters from './filesystem-parameters.js';
@@ -9,8 +10,8 @@ const commands = {
   'add-resource': 'Add a resource from a URL',
   'add-skill': 'Install a Skill',
   'add-memory': 'Add memory directly',
-  compile: 'Compile material with a Skill',
-  'compile create': 'Create a compile configuration',
+  compile: 'Run compilation',
+  'compile create': 'Create a configuration to run with compile',
 
   grep: 'Match text in resources',
   glob: 'Match resource paths',
@@ -56,6 +57,19 @@ const messages = {
       | 'quickStart'
     >
   >,
+  telemetryResult: (value: string) => `Telemetry: ${value}`,
+  memoryCommit: {
+    idle: 'Commit session',
+    pending: 'Committing session',
+    submitted: 'Committing session',
+    success: 'Session committed',
+    empty: 'There are no new messages to extract memories from.',
+    skipped: 'No new memories were generated.',
+    failed: 'Could not submit the session',
+    completed: 'Memory extraction completed.',
+    saved: 'Memories were generated and saved.',
+    view: 'View memory',
+  },
   taskCompletion: {
     title: 'Task complete',
     description: 'Background task completed.',
@@ -102,46 +116,10 @@ const messages = {
         'Search for relevant resources, memories, and skills in the current context.',
       examples: ['ov find "What is the value of OpenViking?"'],
     },
-    'compile create': {
-      description:
-        'Save sources, destination, and Skill without starting compilation.',
-      examples: [
-        'ov compile create --compile-name demo-wiki --from viking://resources/source --to viking://resources/wiki --skill viking://system/compile/example-skills/llm-wiki',
-      ],
-    },
-    compile: {
-      description: 'Run a saved compilation configuration by name.',
-      examples: ['ov compile --compile-name demo-wiki'],
-      quickStart: {
-        documentation: {
-          label: 'Compilation guide',
-          href: 'https://docs.openviking.ai/en/context-compilation/01-overview',
-        },
-        steps: [
-          {
-            description:
-              'Verify that OpenViking is configured to run compilation.',
-          },
-          { description: 'Import the source material with add-resource.' },
-          {
-            description:
-              'Save the sources, destination, and Skill as a named configuration.',
-            command:
-              'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
-          },
-          {
-            description:
-              'Run the saved configuration with its sources, destination, Skill, instructions, model, and schedule.',
-            command: 'ov compile --compile-name <name>',
-          },
-          {
-            description: 'Check the run status with the returned task ID.',
-            command: 'ov task status <task_id>',
-          },
-        ],
-      },
-    },
+    'compile create': compileHelp['en-US'].createGuide,
+    compile: compileHelp['en-US'].runGuide,
   } satisfies Partial<Record<keyof typeof commands, ConsoleCommandGuide>>,
+  compileArgsHelp: compileHelp['en-US'].args,
   parameters: {
     path: 'Remote path or URL to import',
     to: 'Destination URI',
@@ -150,13 +128,17 @@ const messages = {
     reason: 'Reason for importing',
     args: 'Parser options as a JSON object',
     'compile-args':
-      'JSON object for model_name, auto_update, and update_schedule',
+      'Valid JSON object for model and scheduling settings. Field names are case-sensitive.',
     'target-uri': 'Destination skills root',
     content: 'Plain text to remember',
     'session-id': 'Session to append and commit',
     limit: 'Maximum number of results',
     'compile-name':
-      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters.',
+      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters. Names must be unique per user and cannot be renamed.',
+    'compile-from':
+      'At least one existing readable source directory. Individual files are unsupported. Repeat --from or separate URIs with commas. Duplicate URIs are removed.',
+    'compile-to':
+      'Writable output directory. The server can create it if needed.',
     from: 'Existing source directory URIs. Repeat --from or separate URIs with commas',
     skill: 'Compiler Skill URI',
     instruction: 'Additional compilation instructions',

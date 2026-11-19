@@ -281,6 +281,12 @@ export interface CommandConsoleStatusContent {
   title?: string;
 }
 
+/** 带完整资源目标的结果行。A result line with an explicit resource target. */
+export interface CommandConsoleWriteResultUriLine {
+  label: string;
+  uri: string;
+}
+
 /** 写入结果。A write result. */
 export interface CommandConsoleWriteResultContent {
   /**
@@ -289,10 +295,10 @@ export interface CommandConsoleWriteResultContent {
    */
   variant: 'write-result';
   /**
-   * 结果行，由宿主渲染。
-   * Result lines, rendered by the host.
+   * 结果行，可明确指定完整 URI。
+   * Result lines, optionally with an explicit URI.
    */
-  lines: readonly ReactNode[];
+  lines: readonly (ReactNode | CommandConsoleWriteResultUriLine)[];
   /**
    * 卡片标题。
    * Card title.
@@ -407,6 +413,8 @@ export interface CommandConsoleRecord {
  * Replaceable interface copy, following locale.
  */
 export interface CommandConsoleLabels {
+  /** Hint for entering a value that contains spaces. */
+  quoteArguments?: string;
   /** Cancelled task label. */
   cancelled?: string;
   /**
@@ -481,6 +489,8 @@ export interface CommandConsoleLabels {
   quickStart?: string;
   /** 无返回结果时的提示。Message for an empty command result. */
   noResult?: string;
+  /** 代码输出滚动区域的无障碍名称。Accessible name for the code output scroll region. */
+  codeOutput?: string;
   /** 刚刚发送的时间文案。Time label for a just-sent record. */
   justNow?: string;
   /** 命令帮助的标题与操作提示。Command-help heading and hint. */
@@ -537,6 +547,8 @@ export interface CommandConsoleProps extends Omit<
    * Controlled input value.
    */
   value: string;
+  /** Keyboard recall entries in submission order. Defaults to the displayed records. */
+  history?: readonly Pick<CommandConsoleRecord, 'command'>[];
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**

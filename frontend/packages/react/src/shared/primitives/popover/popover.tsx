@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useViewActive } from '../../view-activity.js';
 import { useModalFocusShard } from '../modal/focus-shards.js';
 import { useOverlayPosition } from '../overlay/use-overlay-position.js';
 import type { PopoverProps } from './types.js';
@@ -80,8 +81,9 @@ export function Popover({
   style,
   onOpenChange,
 }: PopoverProps) {
+  const active = useViewActive();
   const [localOpen, setOpen] = useState(false);
-  const open = !disabled && (controlledOpen ?? localOpen);
+  const open = active && !disabled && (controlledOpen ?? localOpen);
   const triggerRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
   // 用 state 而不是 ref 持有浮层节点：定位 effect 要在节点挂载后重跑，
@@ -140,13 +142,13 @@ export function Popover({
   }, [open, registerFocusShard]);
 
   // `disabled` 变真时立即收起，避免浮层留在屏幕上。
-  // Collapse as soon as `disabled` turns true.
+  // Collapse and release browser timers when disabled or the owner view is hidden.
   useEffect(() => {
-    if (disabled) {
+    if (disabled || !active) {
       clearTimer();
       setOpen(false);
     }
-  }, [disabled, clearTimer]);
+  }, [active, disabled, clearTimer]);
 
   // useEffect 必要性：`click` 触发时要响应浮层外的按下与 Esc，这是文档级
   // 事件，只有挂到 document 才能捕获；浮层渲染在 portal 里，DOM 上不是触发
@@ -177,7 +179,7 @@ export function Popover({
   }, [change, open, surfaceNode, trigger]);
 
   const show = () => {
-    if (disabled) return;
+    if (disabled || !active) return;
     if (trigger === 'click') {
       if (!open || clickToClose) change(!open);
       return;

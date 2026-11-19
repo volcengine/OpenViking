@@ -143,6 +143,27 @@
 .ov-viking-bot__message-actions {
   margin-top: 10px;
 }
+.ov-viking-bot__message-action--pill.ov-button {
+  height: 36px;
+  gap: 4px;
+  border: 0;
+  border-radius: 24px;
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  padding: 0 16px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 400;
+}
+.ov-viking-bot__message-action--pill.ov-button:hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-7, var(--ov-ui-bg-7-default));
+}
+.ov-viking-bot__message-action--pill.ov-button:disabled {
+  opacity: 1;
+}
+.ov-viking-bot__message-action--pill.ov-button--loading {
+  cursor: wait;
+}
 .ov-viking-bot__activity {
   width: min(88%, 960px);
   font-family: inherit;

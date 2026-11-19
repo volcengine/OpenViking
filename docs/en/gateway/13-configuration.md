@@ -28,7 +28,7 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `host` | Standalone | `127.0.0.1` | | Listen address |
 | `port` | Standalone | `1935` | 1–65,535 | Listen port |
 | `workers` | Standalone | `1` | 1–64 | Worker processes |
-| `log_path` | Standalone | empty | File path | Write the application log as JSON lines to this rotating file (256 MiB, four old files) instead of text on stderr; needs `workers: 1`. See [Monitoring](../guides/22-gateway-operations.md#monitoring) |
+| `log_path` | Standalone | empty | File path | Write the application log using the common UTC text format to this rotating file (256 MiB, four old files) instead of stderr; needs `workers: 1`. See [Monitoring](../guides/22-gateway-operations.md#monitoring) |
 | `keep_alive_seconds` | Standalone | `75` | More than 0 | Seconds to keep an idle HTTP connection open between requests; set it above the load balancer's backend idle timeout |
 | `public_url` | Both | empty | HTTP(S) URL, without `/gateway` | The external address clients use; the gateway appends `/gateway` itself. When empty, an embedded gateway uses the server's public address; with neither, setup guides use the request's origin, and MCP file uploads and downloads do not work unless `mcp_file_links` is `direct`. See [Public address](../guides/22-gateway-operations.md#public-address) |
 | `mcp_file_links` | Both | `proxy` | `proxy`, `direct` | How links from the MCP upload and download tools reach the client. `proxy` rewrites them to `public_url` plus `/gateway/uploads` or `/gateway/downloads` and needs `public_url`. `direct` passes OpenViking's links through unchanged and needs the server's `OPENVIKING_PUBLIC_BASE_URL` (or `server.public_base_url`) to be reachable by the client |
@@ -42,9 +42,9 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `default_upstreams` | Both | `{}` | Object mapping stable IDs to [upstream settings](#upstream-settings) | Upstreams for OpenViking keys when the account stores none; see [Deployment default upstreams](07-upstreams.md#deployment-default-upstreams) |
 | `default_profile` | Both | Built-in profile defaults | [Context profile settings](#context-profile-settings) | Used when the account has no profile with the ID `default`; also the initial profile seeded in embedded dev mode |
 | `min_server_version` | Both | `0.4.16` | Version string | Lowest OpenViking Server version a standalone gateway accepts |
-| `session_ttl_seconds` | Both | `2592000` (30 days) | 3600 or more | Seconds of inactivity before a conversation expires; also the fixed lifetime of cached OpenViking keys and their user records. |
+| `session_ttl_seconds` | Both | `86400` (1 day) | 3600 or more | Seconds of inactivity before a conversation expires; also the fixed lifetime of cached OpenViking keys and their user records. [Retention](11-security-and-data.md#retention) says what a conversation continued after that loses. |
 | `response_ttl_seconds` | Both | `2592000` (30 days) | 60 or more | Seconds to remember which upstream created a Responses response |
-| `request_log_sink` | Both | `store` | `store`, `stdout`, `file` | Write request and background saving logs to storage, as one flushed JSON line per record on stdout, or as the same lines to `request_log_path` from a background thread; see [Monitoring](../guides/22-gateway-operations.md#monitoring). The `file` sink needs one worker process: `workers: 1` standalone, one server worker embedded |
+| `request_log_sink` | Both | `store` | `store`, `stdout`, `file` | Write request logs to storage, as one flushed JSON line per record on stdout, or as the same lines to `request_log_path` from a background thread; see [Monitoring](../guides/22-gateway-operations.md#monitoring). The `file` sink needs one worker process: `workers: 1` standalone, one server worker embedded |
 | `request_log_path` | Both | empty | File path | File for the `file` sink; required with it |
 | `request_log_max_bytes` | Both | `268435456` (256 MiB) | 1,048,576 or more | Size at which the `file` sink rotates its file; four old files are kept |
 | `snapshot_interval_seconds` | Both | `0` | 0 or more | Seconds between [status lines](../guides/22-gateway-operations.md#status-line) with this process's counters. `0` writes none |
@@ -58,9 +58,8 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `openviking_breaker_failures` | Both | `0` | 0 or more | Consecutive unanswered OpenViking calls for one account after which its requests skip OpenViking for `openviking_breaker_seconds`; then one trial call decides. `0` turns this off |
 | `openviking_breaker_seconds` | Both | `30` | More than 0 | How long an account's OpenViking calls are skipped before a trial call |
 | `health_interval_seconds` | Both | `60` | 1 or more | Seconds between OpenViking status checks |
-| `capture_concurrency` | Both | `1` | 1 or more | Concurrent conversation deliveries per process; shutdown stops new claims and gives in-flight deliveries up to 100 seconds to finish |
+| `openviking_auto_commit` | Both | `false` | `true`, `false` | Leave committing saved conversations to OpenViking's session auto-commit instead of the gateway; its idle commit needs `memory.session_auto_commit.enabled: true` on the OpenViking server. See [Save conversations](08-context-profiles.md#save-conversations) |
 | `max_inflight_requests` | Both | `0` | 0 or more | Model requests one process serves at once; a request above it gets HTTP 503 `gateway_overloaded`. `0` sets no limit; see [Scaling](../guides/22-gateway-operations.md#scaling) |
-| `capture_delivery_records` | Both | `false` | `true`, `false` | Write a [saving record](../api/25-gateway.md#capture-records) for every delivery, commit and failed attempt, not only for status changes. With the `store` sink these rows share each account's stored record history with requests (Redis keeps the latest 10,000 rows per account), so the Requests page and Overview cover a shorter period; meant for the `stdout` and `file` sinks |
 | `client_rules` | Both | `{}` (packaged rules only) | See [Client rules](#client-rules) | Text added to or removed from what the gateway recognizes as housekeeping requests and client-inserted messages |
 
 For example, a standalone `gateway.conf` can route OpenViking keys before any account is configured:
@@ -146,7 +145,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `tenancy` | `key` requires `management_api: false`; it has no effect when `openviking_keys` is off |
 | `client_rules` | Every added pattern must be a valid Python regular expression; added tag names start with an ASCII letter and use only ASCII letters, digits, `_`, `.`, `:` and `-` |
 | Unknown fields | Fail validation |
-| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
+| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), `capture_concurrency`, `capture_delivery_records`, and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
 
 ## Client rules {#client-rules}
 
@@ -171,7 +170,7 @@ In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrappe
 
 | List | Entries | What a match does |
 | --- | --- | --- |
-| `auxiliary_patterns` | Regular expressions, ignoring case | Each is matched separately against the Messages `system` field, the Responses `instructions` and the latest user message. A match makes the request **Housekeeping**. System and developer messages inside Chat Completions `messages` or Responses `input` are not checked, so for those clients match text in the user message. |
+| `auxiliary_patterns` | Regular expressions, ignoring case | Each is matched separately against the Messages `system` field, the Responses `instructions`, the latest user message and text a client appended after the last tool result. A match makes the request **Housekeeping**. System and developer messages inside Chat Completions `messages` or Responses `input` are not checked, so for those clients match text in the user message. |
 | `noise_patterns` | Regular expressions, case-sensitive | Ignored when the gateway reads the conversation: left out of request classification, the memory search and saved messages and tool results, but still sent to the model unchanged. A user message left empty is not a new user message, so the request continues the turn. |
 | `noise_tags` | Tag names | `<tag …>…</tag>` blocks, in any letter case, handled the same way as `noise_patterns`. |
 | `plugin_tags` | Tag names | A complete `<tag>…</tag>` block outside code, in the system prompt or a client message, marks an OpenViking memory plugin in the client. For the rest of that conversation the gateway only forwards requests: no memory, no OpenViking tools, nothing saved (see [When both are in use](../guides/15-gateway.md#when-both-are-in-use)). Add only a tag the plugin itself writes. |
@@ -192,6 +191,7 @@ Explained in [Recall memory](08-context-profiles.md#recall-memory).
 | --- | --- | --- | --- | --- |
 | Recall memory | `recall` | `true` | | Search memory for each new user message. |
 | User profile at conversation start | `profile` | `true` | | Provide the user profile when a conversation starts, independently of recall. |
+| Soul at conversation start | `soul` | `true` | | Provide the user's `memories/soul.md` when a conversation starts and tell the model to follow it, independently of recall. It is added whole, outside the opening context budget. |
 | Opening context budget | `profile_max_tokens` | `4000` | 0–32,000 | Separate budget for the profile and catalogs; 0 leaves them out. Catalogs need the OpenViking `read` tool (`openviking_read`). |
 | Show recall summary | `show_recall` | `false` | | Start the reply with a summary of what OpenViking added, or why recall failed. The model never sees it. |
 | Sources | `context_types` | `memory`, `resource`, `skill` | At least one while recall is on (checked by Studio only) | What to search: memories, resources, skills. |
@@ -207,17 +207,17 @@ The management API saves `context_types` and the `quotas` keys without checking 
 
 ### Save conversations {#profile-saving}
 
-Explained in [Save conversations](08-context-profiles.md#save-conversations).
+Explained in [Save conversations](08-context-profiles.md#save-conversations). With `openviking_auto_commit: true`, OpenViking commits by these values: the gateway gives them to OpenViking as the session's `auto_commit_policy` when it first saves to the session, and again on its first save after the setting changes.
 
 | Studio label | API name | Default | Range | Meaning |
 | --- | --- | --- | --- | --- |
 | Save conversations | `capture` | `true` | | Save finished turns to OpenViking. |
-| Save the latest reply after | `idle_seconds` | `600` (seconds) | 1 or more | Quiet time before the last turn is saved and the session committed. |
-| Commit after | `commit_tokens` | `20000` | 1 or more | Tokens waiting in the session that trigger a commit. |
-| Keep recent messages | `keep_recent_messages` | `10` | 0–1,000 | Messages left in the session after a commit. |
+| Commit when idle for | `idle_seconds` | `600` (seconds) | 1 or more; with `openviking_auto_commit`, values below 300 count as 300 | Time after the conversation's last finished turn at which everything left in the session is committed. With `openviking_auto_commit`, needs `memory.session_auto_commit.enabled: true` on the OpenViking server. |
+| Commit after | `commit_tokens` | `20000` | 1 or more; with `openviking_auto_commit`, values above 1,000,000 count as 1,000,000 | Uncommitted tokens at the end of a turn at which the session is committed at once. |
+| Keep recent messages | `keep_recent_messages` | `10` | 0–1,000 | Latest messages a **Commit after** commit leaves in the session. |
 | (API only) | `capture_memory_types` | `null` (inherit the user's policy on Server 0.5.0+) | Memory type names, such as `preferences` or `events`; `[]` extracts none | Memory types OpenViking extracts from saved conversations. An explicit list sets a session policy. |
 
-The management API saves `capture_memory_types` without checking the names. OpenViking rejects a name it does not know, or a type it has disabled, when the gateway creates the conversation's OpenViking session: nothing from the conversation is saved, and saving shows **Retrying**, then **Paused**, with the reason `openviking_http_400`. A corrected profile reaches only conversations that start afterwards. `cases` and `trajectories` are extracted only together with `experiences`: listing `experiences` adds both, and without it they are dropped, so a list of only those two extracts nothing.
+The management API saves `capture_memory_types` without checking the names. OpenViking rejects a name it does not know, or a type it has disabled, when the gateway creates the conversation's OpenViking session: nothing from the conversation is saved, and every request that ends a turn shows **Failed** with the reason `openviking_http_400`. A corrected profile reaches only conversations that start afterwards. `cases` and `trajectories` are extracted only together with `experiences`: listing `experiences` adds both, and without it they are dropped, so a list of only those two extracts nothing.
 
 ### Long conversations {#profile-long-conversations}
 

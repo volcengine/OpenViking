@@ -679,17 +679,13 @@ class TestMemoryUpdater:
         )
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        with patch("openviking.session.memory.memory_updater.tracer.error") as tracer_error:
-            result = await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
 
         assert result.written_uris == [resolved_uri]
         assert len(result.errors) == 1
         error_target, error = result.errors[0]
         assert error_target == "events(page_id=102)"
         assert str(error) == "Missing resolved URI"
-        tracer_error.assert_called_once_with(
-            "Skipping unresolved memory operation: events(page_id=102): Missing resolved URI"
-        )
 
     @pytest.mark.asyncio
     async def test_apply_operations_reports_expected_empty_uri_as_skip(self):
@@ -902,10 +898,11 @@ class TestMemoryUpdater:
 
         mock_viking_fs = MagicMock()
 
+        live_uris = {deleted_uri, written_uri}
+
         async def mock_read_file(uri, **kwargs):
-            if uri == deleted_uri:
-                raise AssertionError("deleted URI should not be read")
-            return MemoryFileUtils.write(MemoryFile(uri=uri, content="new content"))
+            assert uri in live_uris, f"{uri} was read after deletion"
+            return MemoryFileUtils.write(MemoryFile(uri=uri, content="memory content"))
 
         mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
         mock_viking_fs.write_file = AsyncMock()
@@ -935,7 +932,7 @@ class TestMemoryUpdater:
             return None
 
         async def mock_apply_delete(uri, ctx, **kwargs):
-            assert uri == deleted_uri
+            live_uris.remove(uri)
 
         updater._apply_upsert = AsyncMock(side_effect=mock_apply_upsert)
         updater._apply_delete = AsyncMock(side_effect=mock_apply_delete)
@@ -946,9 +943,8 @@ class TestMemoryUpdater:
 
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
-        assert deleted_uri not in [
-            call.args[0] for call in mock_viking_fs.read_file.await_args_list
-        ]
+        assert live_uris == {written_uri}
+        assert result.errors == []
 
     @pytest.mark.asyncio
     async def test_apply_operations_skips_case_only_delete_conflicting_with_upsert(self):

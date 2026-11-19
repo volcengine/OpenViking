@@ -34,6 +34,9 @@ async def test_first_import_and_trigger_allow_http_connector_data_callback(monke
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     monkeypatch.setattr(connector_delegate_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(external_task_module, "get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.external_task_processor.get_task_tracker", lambda: tracker
+    )
     ctx = RequestContext(
         user=UserIdentifier("default", "default"), role=Role.ROOT, api_key="test-key"
     )
@@ -82,10 +85,10 @@ async def test_first_import_and_trigger_allow_http_connector_data_callback(monke
     async def execute_round(submit):
         submission = asyncio.create_task(submit)
         try:
-            await asyncio.wait_for(published.wait(), 5)
-            published.clear()
-            # The public receipt must not wait for a monitoring worker to dequeue.
+            # The receipt must be available before a monitoring worker dequeues.
             receipt = await asyncio.wait_for(submission, 5)
+            assert published.is_set(), receipt
+            published.clear()
             task_id = receipt["task_id"] if isinstance(receipt, dict) else receipt.task_id
             record = await tracker.get(task_id, **OWNER)
             stored_auth = await tracker.get_task_auth(record.task_id, **OWNER)
@@ -98,6 +101,9 @@ async def test_first_import_and_trigger_allow_http_connector_data_callback(monke
             recovered.register(resources._connector)
             queue.set_dequeue_handler(ExternalTaskProcessor(recovered))
             await asyncio.wait_for(queue.dequeue(), 5)
+            terminal = await tracker.get(task_id, **OWNER)
+            assert terminal is not None and terminal.is_terminal(), terminal
+            assert terminal.error is None
             return receipt
         finally:
             if not submission.done():

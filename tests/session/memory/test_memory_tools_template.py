@@ -1,30 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from pathlib import Path
-
-import pytest_asyncio
 import yaml
 
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def _drain_background_tasks():
-    """Keep this pure template test independent from session client fixtures."""
-    yield
+from openviking.system_assets import builtin_memory_templates_dir
 
 
 def _tools_content_template() -> str:
-    template_path = (
-        Path(__file__).resolve().parents[3]
-        / "openviking"
-        / "prompts"
-        / "templates"
-        / "memory"
-        / "tools.yaml"
-    )
+    template_path = builtin_memory_templates_dir() / "tools.yaml"
     return yaml.safe_load(template_path.read_text(encoding="utf-8"))["content_template"]
 
 
