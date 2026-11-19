@@ -168,7 +168,7 @@ export function useDirectoryTree({
   useReportExpansion(
     session,
     isReady &&
-      !isInitializing &&
+      (!isInitializing || expansion.edited) &&
       (!root?.error || (expansion.edited && root.entries.length > 0)) &&
       (!unresolved.size || expansion.edited),
     rootUri,
