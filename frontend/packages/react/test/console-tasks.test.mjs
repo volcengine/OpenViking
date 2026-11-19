@@ -45,8 +45,8 @@ for (const [command, status, recordStatus] of [
         1,
       );
       assert.equal(calls.at(-1).headers['x-openviking-user'], 'task-user');
-      assert.equal(document.querySelector('.ov-notification'), null);
-      assert.equal(document.querySelector('.ov-toast'), null);
+      assert.ok(document.querySelector('.ov-notification') === null);
+      assert.ok(document.querySelector('.ov-toast') === null);
       await act(() =>
         finish(
           ok({
@@ -62,8 +62,8 @@ for (const [command, status, recordStatus] of [
       );
       if (status === 'failed')
         assert.match(host.records[0].textContent, /Parsing failed/);
-      assert.equal(document.querySelector('.ov-notification'), null);
-      assert.equal(document.querySelector('.ov-toast'), null);
+      assert.ok(document.querySelector('.ov-notification') === null);
+      assert.ok(document.querySelector('.ov-toast') === null);
     } finally {
       await host.dispose();
     }
@@ -124,7 +124,7 @@ test('a completed resource import keeps its output and opens the final URI witho
     await host.execute('ov add-resource https://example.com/resource');
     await tick();
     assert.equal(host.records[0].dataset.status, 'pending');
-    assert.equal(document.querySelector('.ov-notification'), null);
+    assert.ok(document.querySelector('.ov-notification') === null);
     await act(() =>
       finish(
         ok({
@@ -137,7 +137,7 @@ test('a completed resource import keeps its output and opens the final URI witho
     );
     const record = host.records[0];
     assert.equal(record.dataset.status, 'success');
-    assert.equal(record.querySelector('.ov-task-status'), null);
+    assert.ok(record.querySelector('.ov-task-status') === null);
     assert.deepEqual(
       [...record.querySelectorAll('.ov-command-console__write-line')].map(
         (line) => line.textContent,
@@ -156,7 +156,7 @@ test('a completed resource import keeps its output and opens the final URI witho
     assert.ok(finalLink);
     await act(() => finalLink.click());
     assert.deepEqual(opened, [rootUri, finalUri]);
-    assert.equal(document.querySelector('.ov-notification'), null);
+    assert.ok(document.querySelector('.ov-notification') === null);
   } finally {
     await host.dispose();
   }
@@ -181,14 +181,14 @@ test('CLI task query failures stay inline without cancelling tracking', async ()
     await host.execute('ov add-skill https://example.com/skill');
     await tick();
     assert.equal(typeof rejectTask, 'function');
-    assert.equal(document.querySelector('.ov-notification'), null);
+    assert.ok(document.querySelector('.ov-notification') === null);
     assert.equal(taskSignal.aborted, false);
     await act(() => rejectTask(new Error('Task query unavailable')));
     await tick();
     assert.equal(host.records[0].dataset.status, 'pending');
     assert.match(host.records[0].textContent, /Task query unavailable/);
     assert.equal(document.querySelectorAll('.ov-notification').length, 0);
-    assert.equal(document.querySelector('.ov-toast'), null);
+    assert.ok(document.querySelector('.ov-toast') === null);
     assert.equal(taskSignal.aborted, false);
   } finally {
     await host.dispose();
