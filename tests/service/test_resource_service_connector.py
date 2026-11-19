@@ -1558,7 +1558,10 @@ async def test_connector_import_logs_http_error_response(
         )
     )
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
-    caplog.set_level(logging.INFO, logger=connector_delegate_module.__name__)
+
+    logger = connector_delegate_module.logger
+    caplog.set_level(logging.INFO, logger=logger.name)
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
 
     with pytest.raises(ExternalTaskError, match="bad request"):
         await service.add_resource(
@@ -1567,9 +1570,10 @@ async def test_connector_import_logs_http_error_response(
             to="viking://resources/imports",
         )
 
-    assert "http_status=400 retrying=False" in caplog.text
-    assert "invalid path_prefix" not in caplog.text
-    assert "secret-value" not in caplog.text
+    logs = caplog.text
+    assert "http_status=400 retrying=False" in logs
+    assert "invalid path_prefix" not in logs
+    assert "secret-value" not in logs
 
 
 @pytest.mark.asyncio
@@ -2855,7 +2859,10 @@ async def test_connector_provider_logs_http_error_response(
             ]
         )
     )
-    caplog.set_level(logging.INFO, logger=connector_delegate_module.__name__)
+
+    logger = connector_delegate_module.logger
+    caplog.set_level(logging.INFO, logger=logger.name)
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
 
     provider = ConnectorDelegate(viking_fs=None)
     monkeypatch.setattr(provider, "_client", lambda _account_id: client)
@@ -2867,8 +2874,9 @@ async def test_connector_provider_logs_http_error_response(
     )
 
     assert snapshot.status == "running"
-    assert "http_status=503 retrying=True" in caplog.text
-    assert "secret-value" not in caplog.text
+    logs = caplog.text
+    assert "http_status=503 retrying=True" in logs
+    assert "secret-value" not in logs
 
 
 @pytest.mark.asyncio
