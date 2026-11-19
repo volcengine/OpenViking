@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
+from contextlib import closing
 from unittest.mock import patch
+
+import pytest
 
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
@@ -122,6 +125,37 @@ async def test_append_batch_confirms_cursor_and_marks_needs_commit(tmp_path):
     assert rec.cursor.value["offset"] == 99  # confirmed cursor
     assert rec.needs_commit is True
     assert fake.committed == []  # append does not commit
+
+
+@pytest.mark.parametrize("after_append", [True, False], ids=["confirmed-batch", "first-read"])
+async def test_watch_shutdown_after_read_error(tmp_path, monkeypatch, after_append):
+    (tmp_path / "s1.jsonl").write_text('{"role": "user", "content": "hello"}\n')
+    config = IngestHarnessConfig(enabled=True, paths=[str(tmp_path)])
+    source = HermesSource(config, fallback_user="test")
+    ref = next(iter(source.discover_sessions()))
+    messages, confirmed_cursor = source.read_messages(ref, None)
+    fake = _FakeReplay(pending=1)
+    with closing(CursorStore(tmp_path / "state")) as store:
+        poller = IngestPoller([("hermes", config, source)], SessionReplayer(fake, store))
+
+        def read_until_error(_ref, cursor, _limit):
+            if after_append and cursor is None:
+                return messages, confirmed_cursor
+            poller.stop()
+            raise OSError("source unavailable")
+
+        monkeypatch.setattr(source, "read_messages", read_until_error)
+        await poller.run()
+
+        record = store.get("hermes", ref.native_session_id)
+        if after_append:
+            assert record is not None
+            assert record.cursor == confirmed_cursor
+            assert fake.committed == ["import__hermes__s1"]
+            assert not record.needs_commit
+        else:
+            assert record is None
+            assert fake.committed == []
 
 
 async def test_reconcile_defers_replay_then_confirms_landed_batch(tmp_path):
