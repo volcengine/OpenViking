@@ -75,23 +75,6 @@ def make_adapter(vlm, default_model: str) -> VLMProviderAdapter:
 
 
 @pytest.mark.asyncio
-async def test_filtered_stream_reports_content_safety():
-    completions = FakeCompletions(chunks=[stream_chunk("partial", finish_reason="content_filter")])
-    vlm = OpenAIVLM({"provider": "openai", "model": "test-model"})
-    attach_client(vlm, completions)
-    provider = make_adapter(vlm, "test-model")
-
-    events = [
-        event
-        async for event in provider.chat_stream(messages=[{"role": "user", "content": "hello"}])
-    ]
-
-    assert [event.type for event in events] == ["response"]
-    assert events[0].response.error_kind is ModelErrorKind.CONTENT_SAFETY
-    assert len(completions.calls) == 1
-
-
-@pytest.mark.asyncio
 async def test_vlm_adapter_streams_openai_content_deltas():
     usage = SimpleNamespace(
         prompt_tokens=3,

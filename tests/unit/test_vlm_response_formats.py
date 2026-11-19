@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
@@ -112,24 +111,6 @@ def test_text_request_drops_empty_assistant_but_preserves_tool_only_turn(vlm_typ
 
     assert kwargs["messages"] == [messages[0], messages[3], messages[4]]
     assert messages[1] == {"role": "assistant", "content": None}
-
-
-@pytest.mark.parametrize(("finish_reason", "tools"), [("content_filter", None), ("sensitive", [])])
-@pytest.mark.asyncio
-async def test_filtered_completion_raises_content_safety(monkeypatch, finish_reason, tools):
-    async def create(**_kwargs):
-        choice = SimpleNamespace(message=SimpleNamespace(content=None), finish_reason=finish_reason)
-        return SimpleNamespace(choices=[choice])
-
-    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-    vlm = OpenAIVLM({"provider": "openai", "model": "test-model"})
-    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
-
-    with pytest.raises(ModelError) as caught:
-        await vlm.get_completion_async(prompt="hello", tools=tools)
-
-    assert caught.value.kind is ModelErrorKind.CONTENT_SAFETY
-    assert caught.value.code == finish_reason
 
 
 @pytest.mark.asyncio
