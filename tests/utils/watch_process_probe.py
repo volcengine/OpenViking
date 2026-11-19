@@ -33,10 +33,9 @@ async def main():
         try:
             candidate = await store.get_candidate(config["watch_id"])
             run = await store.begin_run(candidate) if candidate else None
-            print(json.dumps({"won": run is not None}))
+            return {"won": run is not None}
         finally:
             await store.close()
-        return
 
     root = Path(material)
     fs = local_viking_fs(root / "agfs")
@@ -69,7 +68,7 @@ async def main():
         task.next_execution_time = task.calculate_next_execution_time()
         await service.store.create_task(task)
         receipt = await service.trigger(task.task_id)
-        print(json.dumps({"watch_id": task.task_id, "task_id": receipt.task_id}))
+        result = {"watch_id": task.task_id, "task_id": receipt.task_id}
     else:
         tasks = await service.get_all_tasks("default", "default", "root")
         state = await service.store.get_state(tasks[0].task_id)
@@ -83,20 +82,17 @@ async def main():
             await runtime.sweep()
             tasks = await service.get_all_tasks("default", "default", "root")
             state = await service.store.get_state(tasks[0].task_id)
-            print(
-                json.dumps(
-                    {
-                        "submitted": seen,
-                        "current_run_id": state.current_run_id,
-                        "last_task_id": state.task.last_task_id,
-                        "status": state.task.last_status,
-                    }
-                )
-            )
+            result = {
+                "submitted": seen,
+                "current_run_id": state.current_run_id,
+                "last_task_id": state.task.last_task_id,
+                "status": state.task.last_status,
+            }
         finally:
             await runtime.stop()
     await service.close()
+    return result
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("WATCH_PROBE_RESULT " + json.dumps(asyncio.run(main())), flush=True)

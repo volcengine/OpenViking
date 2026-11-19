@@ -38,6 +38,9 @@ _PACKAGES = {
         "ae5e88a2cf464e5a2dde7c8898c2d5c71cc24d03cac6396bf7509456bde0b9fb",
     ),
 }
+# Needed on Python 3.14 for OpenViking < 0.5.4; later releases pin LiteLLM themselves.
+_LITELLM_ON_PYTHON_314 = 'litellm==1.83.7; python_version >= "3.14"'
+_PINS_LITELLM_SINCE = Version("0.5.4")
 
 
 def install_requirements(*, allow_source_build=False):
@@ -69,9 +72,29 @@ def install_requirements(*, allow_source_build=False):
             OPENVIKING_REQUIREMENT,
             f"llama-cpp-python @ {_CPP}{cpp_path}#sha256={cpp_hash}",
         ]
-    # The PM resolver otherwise chooses a LiteLLM release that excludes Python
-    # 3.14. This constraint belongs only to OpenViking's private environment.
-    return [*requirements, 'litellm==1.83.7; python_version >= "3.14"']
+    return [*requirements, _LITELLM_ON_PYTHON_314]
+
+
+def runtime_requirements(*, allow_source_build=False):
+    """Requirements of the private environment, for the release setup selects."""
+    requirements = install_requirements(allow_source_build=allow_source_build)
+    requirements[0] = resolve_server_requirement(allow_source_build=allow_source_build)
+    version = _server_version(requirements[0])
+    if version is not None and version >= _PINS_LITELLM_SINCE:
+        requirements = [value for value in requirements if value != _LITELLM_ON_PYTHON_314]
+    return requirements
+
+
+def _server_version(requirement):
+    """The release a resolved server requirement names, if it names exactly one."""
+    try:
+        parsed = Requirement(requirement)
+        if parsed.url:
+            return parse_wheel_filename(Path(urlparse(parsed.url).path).name)[1]
+        versions = [Version(item.version) for item in parsed.specifier if item.operator == "=="]
+    except (InvalidWheelFilename, InvalidVersion, ValueError):
+        return None
+    return versions[0] if len(versions) == 1 else None
 
 
 def resolve_server_requirement(*, allow_source_build=False):

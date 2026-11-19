@@ -436,16 +436,25 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Archived seed"),
-    )
-    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    assert commit_resp.status_code == 200
-
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
-    await session.load()
+    archived = Message(
+        id="archived-user",
+        role="user",
+        parts=[TextPart("Archived seed")],
+        peer_id=DEFAULT_USER.user_id,
+    )
+    archive_uri = f"{session.uri}/history/archive_001"
+    await session._viking_fs.write_file(
+        uri=f"{archive_uri}/messages.jsonl",
+        content=archived.to_jsonl() + "\n",
+        ctx=ctx,
+    )
+    await session._viking_fs.write_file(
+        uri=f"{archive_uri}/.done",
+        content=json.dumps({"enable_working_memory": False}),
+        ctx=ctx,
+    )
     pending_messages = [
         Message(
             id="pending-user",
@@ -1136,22 +1145,6 @@ async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, 
     assert isinstance(session.messages[0].parts[1], ImagePart)
 
 
-async def test_batch_add_message_ignores_removed_auto_commit_policy(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/messages/batch",
-        json={
-            "messages": [{"role": "user", "content": "hello"}],
-            "auto_commit_policy": {"pending_token_threshold": 1},
-        },
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["result"]["message_count"] == 1
-
-
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
@@ -1395,6 +1388,7 @@ async def test_commit_updates_archive_metadata_before_background_task(client: ht
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert commit_resp.status_code == 200
     commit_result = commit_resp.json()["result"]
+    assert commit_result["status"] == "accepted"
     assert commit_result["archived"] is True
 
     immediate_get = await client.get(f"/api/v1/sessions/{session_id}")

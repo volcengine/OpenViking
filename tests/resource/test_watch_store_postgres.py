@@ -770,6 +770,8 @@ async def test_postgres_initialization_checks_usable_index_definitions(
     if store.provider != "postgres":
         pytest.skip("PostgreSQL schema index initialization contract")
     monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
+    # Capture once even when the application enables propagation to root.
+    monkeypatch.setattr(logger, "propagate", False)
     caplog.set_level(logging.WARNING, logger=logger.name)
     await store.close()
     await store.initialize()

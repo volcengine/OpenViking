@@ -606,10 +606,9 @@ async def test_scan_pages_do_not_lose_due_or_running_watches(store):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["mysql", "postgres"], indirect=True)
 async def test_mysql_running_scan_does_not_decrypt_private_state(make_store):
     first = await make_store()
-    if first.provider == "file":
-        pytest.skip("SQL encryption contract")
     task = await create(
         first,
         due=True,
@@ -702,10 +701,9 @@ async def test_move_rejects_incomplete_explicit_task_selection(store):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["mysql"], indirect=True)
 async def test_service_names_partition_rows(make_store):
     first = await make_store()
-    if first.provider == "file":
-        pytest.skip("the file store belongs to one deployment")
     other = await make_store("other-service")
     task = await create(first, initial_run_id="run-1")
 

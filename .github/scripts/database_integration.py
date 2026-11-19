@@ -18,6 +18,7 @@ GROUPS = (
     "task_work_postgres",
     "watch_mysql",
     "watch_postgres",
+    "watch_runtime_mysql",
     "watch_process_mysql",
     "watch_process_postgres",
 )
@@ -104,10 +105,11 @@ def database_group(case):
     if "mysql" in parameters:
         if module == "tests.service.test_task_work_contract":
             return "task_work_mysql"
-        if module == "tests.resource.test_watch_store":
-            return "watch_mysql"
-        if module == "tests.resource.test_watch_process":
-            return "watch_process_mysql"
+        return {
+            "tests.resource.test_watch_store": "watch_mysql",
+            "tests.resource.test_watch_main_integration": "watch_runtime_mysql",
+            "tests.resource.test_watch_process": "watch_process_mysql",
+        }.get(module)
     if "postgres" in parameters:
         if module in {
             "tests.resource.test_watch_store",

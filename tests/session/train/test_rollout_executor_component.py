@@ -754,7 +754,6 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
 
 @pytest.mark.asyncio
 async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_actions(monkeypatch):
-    from vikingbot.providers.base import LLMResponse, ToolCallRequest
 
     import benchmark.tau2.train.rollout_executor_vikingbot as module
 
@@ -816,22 +815,6 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
             )
             return messages
 
-    class FakeProvider:
-        async def chat(self, messages, tools=None, **kwargs):
-            observed["llm_messages"] = list(messages)
-            return LLMResponse(
-                content=None,
-                tool_calls=[ToolCallRequest("call-1", "done", {}, 0)],
-            )
-
-        async def chat_stream(self, **kwargs):
-            from vikingbot.providers.base import LLMStreamEvent
-
-            yield LLMStreamEvent(type="response", response=await self.chat(**kwargs))
-
-        def get_default_model(self):
-            return "fake"
-
     class FakeAgent:
         def __init__(self):
             from vikingbot.agent.tools.filesystem import ReadFileTool
@@ -841,43 +824,10 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
             self.context = FakeContextBuilder(Path("/tmp/fake-workspace"))
             self.tools = ToolRegistry()
             self.tools.register(ReadFileTool())
-            self.tools.register(_DoneTool())
-            self.provider = FakeProvider()
-            self.model = "fake"
-            self.temperature = None
-            self.max_iterations = 1
 
-        _chat_with_stream_events = real_imports["AgentLoop"]._chat_with_stream_events
-        _run_agent_loop = real_imports["AgentLoop"]._run_agent_loop
-
-    class _DoneTool:
-        @property
-        def name(self):
-            return "done"
-
-        @property
-        def description(self):
-            return "done"
-
-        @property
-        def parameters(self):
-            return {"type": "object", "properties": {}}
-
-        def to_schema(self):
-            return {
-                "type": "function",
-                "function": {
-                    "name": self.name,
-                    "description": self.description,
-                    "parameters": self.parameters,
-                },
-            }
-
-        def validate_params(self, params):
-            return []
-
-        async def execute(self, tool_context, **kwargs):
-            return ""
+        async def _run_agent_loop(self, *, messages, **kwargs):
+            observed["llm_messages"] = list(messages)
+            return "done", None, [], {}, 1
 
     monkeypatch.setattr(
         module,

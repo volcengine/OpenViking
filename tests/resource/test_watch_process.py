@@ -39,8 +39,12 @@ async def probe(mode, material):
         await process.wait()
         raise
     assert process.returncode == 0, stderr.decode()
-    # Queued log handlers can flush after the probe's JSON result.
-    results = [line for line in stdout.decode().splitlines() if line.startswith("{")]
+    lines = stdout.decode().splitlines()
+    results = [
+        line.removeprefix("WATCH_PROBE_RESULT ")
+        for line in lines
+        if line.startswith("WATCH_PROBE_RESULT ")
+    ]
     assert len(results) == 1, stdout.decode()
     return json.loads(results[0])
 
@@ -60,10 +64,9 @@ async def test_file_restart_retries_due_watch_without_persisting_occupancy(tmp_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["mysql", "postgres"], indirect=True)
 async def test_mysql_start_is_exclusive_across_processes(make_store):  # noqa: F811
     store = await make_store()
-    if store.provider == "file":
-        pytest.skip("multiprocess claims require SQL; File is single-process")
     material = MYSQL_PARAMS if store.provider == "mysql" else POSTGRES_PARAMS
     task = await create(store, due=True)
     config = {

@@ -6,6 +6,7 @@ from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.renderer import (
     RenderedBundle,
+    output_path_key,
     validate_declared_okf_markdown,
     validate_relative_file_path,
 )
@@ -22,9 +23,10 @@ async def run(runtime, documents):
     seen_paths: set[str] = set()
     for document in documents:
         path = validate_relative_file_path(document.path)
-        if path in seen_paths:
+        key = output_path_key(path)
+        if key in seen_paths:
             raise ValueError(f"Multiple output writers claim {path}")
-        seen_paths.add(path)
+        seen_paths.add(key)
         content = (await runtime.files.sandbox.read_file_bytes(document.workspace_path)).decode(
             "utf-8"
         )

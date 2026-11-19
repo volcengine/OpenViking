@@ -26,6 +26,21 @@ import '@openviking/react/modules/console/style.css';
 
 ## 代码演示
 
+### 等待可用模式
+
+宿主确认可用模式期间，可渲染 `ConsoleSkeleton`。通过 `aria-label` 提供加载状态说明，并把骨架放在与 Console 相同的、有明确高度的面板中。
+
+```tsx
+import { Console, ConsoleSkeleton } from '@openviking/react/modules/console';
+import '@openviking/react/modules/console/style.css';
+
+const panel = loading ? (
+  <ConsoleSkeleton aria-label="正在加载 Console" />
+) : (
+  <Console modes={modes} />
+);
+```
+
 ### 基础用法
 
 面板默认进入对话模式；切换到「终端」，输入 `ov ls viking://resources/demo` 或 `ov read viking://resources/demo/notes.md`，点击结果里的资源链接，面板下方会显示 `onOpenUri` 收到的 URI。
