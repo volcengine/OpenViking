@@ -111,6 +111,18 @@ async def test_list_mode_forwards_keywords_search_type():
 
 
 @pytest.mark.asyncio
+async def test_list_mode_forwards_validated_keyword_args():
+    with pytest.raises(_SearchCalled) as excinfo:
+        await mcp_endpoint.search(
+            query="anything",
+            search_type="keywords",
+            args={"bm25_b": 0.2},
+        )
+
+    assert excinfo.value.kwargs["args"] == {"bm25_b": 0.2}
+
+
+@pytest.mark.asyncio
 async def test_context_mode_still_accepts_them():
     # The guard is list-mode only; reaching assemble_context (which this stub service
     # cannot satisfy) is enough to show the arguments were not refused up front.

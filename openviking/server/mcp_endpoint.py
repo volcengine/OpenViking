@@ -988,6 +988,7 @@ async def search(
         context_types=[ContextType(value) for value in resolve_context_types(context_type)],
         level=level,
         events_time_decay_protection=events_time_decay_protection,
+        args=args,
     )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
