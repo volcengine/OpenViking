@@ -37,6 +37,8 @@ export function isSessionMessagesSource(source: FilePreviewSource): boolean {
 function partText(part: unknown): string | undefined {
   if (!record(part)) return undefined;
   if (part.type === 'text') return string(part.text);
+  if (part.type === 'image_url' || part.type === 'context')
+    return referencePartText(part);
   if (part.type !== 'tool') return undefined;
   for (const key of ['tool_name', 'toolName', 'tool_status', 'toolStatus'])
     if (part[key] !== undefined && typeof part[key] !== 'string')
@@ -54,6 +56,39 @@ function partText(part: unknown): string | undefined {
         : JSON.stringify(output, null, 2),
   ]
     .filter((value) => value !== undefined)
+    .join('\n');
+}
+
+/** Reference metadata stays readable without loading images or opening resources. */
+function referencePartText(part: Record<string, unknown>): string | undefined {
+  if (part.type === 'image_url') {
+    const image = part.image_url;
+    if (typeof image === 'string') {
+      if (!image.trim()) return;
+    } else if (
+      !record(image) ||
+      !string(image.url)?.trim() ||
+      (image.detail !== undefined && typeof image.detail !== 'string')
+    )
+      return;
+  } else {
+    if (
+      ['uri', 'context_type', 'abstract'].some(
+        (key) => part[key] !== undefined && typeof part[key] !== 'string',
+      ) ||
+      (part.context_type !== undefined &&
+        !['memory', 'resource', 'skill'].includes(
+          string(part.context_type) ?? '',
+        ))
+    )
+      return;
+  }
+  return Object.entries(part)
+    .map(([key, value]) => {
+      const text =
+        typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      return `${key}: ${text ?? ''}`;
+    })
     .join('\n');
 }
 

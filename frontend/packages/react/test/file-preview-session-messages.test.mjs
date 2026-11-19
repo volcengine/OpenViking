@@ -95,12 +95,6 @@ test('unsupported or malformed records fall back as a whole without losing lines
 test('mixed unsupported parts and legacy content never hide part payloads', () => {
   const text = { type: 'text', text: 'Visible text' };
   for (const part of [
-    { type: 'image_url', image_url: { url: 'image.png' } },
-    {
-      type: 'context',
-      uri: 'viking://resources/guide.md',
-      abstract: 'Context',
-    },
     { type: 'text', text: 42 },
     { type: 'unknown', text: 'Unsupported' },
     { type: 'tool', tool_name: 42 },
@@ -142,7 +136,7 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
       document.querySelector(`#${id} .ov-file-preview__session`);
     await waitFor(() => transcript('inline') && transcript('remote'));
     const messages = transcript('inline').querySelectorAll('article');
-    assert.equal(messages.length, 2);
+    assert.equal(messages.length, 4);
     assert.match(messages[0].className, /--user$/);
     assert.match(messages[1].className, /--assistant$/);
     assert.equal(messages[0].querySelector('time').dateTime, native.created_at);
@@ -157,6 +151,14 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
       /Reply <script>safe text<\/script>/,
     );
     assert.equal(transcript('remote').querySelector('script'), null);
+    assert.match(messages[2].textContent, /context_type: resource/);
+    assert.match(messages[2].textContent, /viking:\/\/resources\/guide.md/);
+    assert.match(
+      messages[3].textContent,
+      /https:\/\/images.example\/figure.png/,
+    );
+    assert.match(messages[3].textContent, /"detail": "high"/);
+    assert.equal(transcript('inline').querySelector('img'), null);
 
     const viewSwitch = (label) =>
       [...document.querySelectorAll('#inline button')].find(

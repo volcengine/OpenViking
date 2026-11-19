@@ -14,6 +14,28 @@ const messages = [
     parts: [{ type: 'text', text: 'Reply <script>safe text</script>' }],
     created_at: '2026-11-14T03:29:20Z',
   },
+  {
+    id: 'msg-context',
+    role: 'user',
+    parts: [
+      {
+        type: 'context',
+        uri: 'viking://resources/guide.md',
+        context_type: 'resource',
+        abstract: 'Referenced guide\nSecond line',
+      },
+    ],
+  },
+  {
+    id: 'msg-image',
+    role: 'user',
+    parts: [
+      {
+        type: 'image_url',
+        image_url: { url: 'https://images.example/figure.png', detail: 'high' },
+      },
+    ],
+  },
 ];
 const content = messages.map((message) => JSON.stringify(message)).join('\n');
 const path = 'viking://user/default/sessions/session-1/messages.jsonl';
@@ -46,9 +68,8 @@ createRoot(document.getElementById('root')!).render(
                               parts: [
                                 { type: 'text', text: 'Keep generic JSON' },
                                 {
-                                  type: 'context',
-                                  uri: 'viking://resources/guide.md',
-                                  abstract: 'Context',
+                                  type: 'future_part',
+                                  payload: 'Unsupported future content',
                                 },
                               ],
                             })

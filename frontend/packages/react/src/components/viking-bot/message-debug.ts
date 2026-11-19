@@ -1,4 +1,5 @@
 import type { VikingBotMessage } from './model.js';
+import { messageTimestampSource } from './message-timestamp-source.js';
 
 /** 宿主提供的排查标识，不传入凭据。Host diagnostic identifiers, without credentials. */
 export interface VikingBotDebugContext {
@@ -75,10 +76,7 @@ export function createMessageDebugText({
         mode: identifier(context?.mode),
         is_streaming: isStreaming,
       },
-      // Merged display rows retain their first source id; use that source's timestamp.
-      message: metadata(
-        messages.find((item) => item.id === message.id) ?? message,
-      ),
+      message: metadata(messageTimestampSource(message)),
       ...(loadedSession
         ? { scope: 'loaded_messages', messages: messages.map(metadata) }
         : {}),

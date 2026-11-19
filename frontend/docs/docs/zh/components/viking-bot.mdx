@@ -705,7 +705,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 - 待确认交互是宿主状态，不是后端暂停：宿主根据自己的流生成问题，答案发回后清除 `interaction`。组件只渲染表单，并通过 `onSubmit` 上报答案。
 - 内置待确认表单在对应字段下方显示校验提示，修改输入会清除本地校验错误和提交错误；`error` prop 由宿主清除。
 - 消息列表和输入区在首次渲染时才加载 `@ark-design/ui`，加载期间先显示空容器。导入 VikingBot 本身不会加载它，因此模块在没有 `window` 的环境中也能导入。
-- 单击消息日期，或聚焦后按 Enter、空格，可复制排查 JSON。助手日期复制消息标识、角色、时间和生成状态；用户日期复制**当前已加载消息**的这些元数据，不是完整会话导出。JSON 同时包含复制时间、时区及明确传入的 `debugContext` 字段，不含消息正文、请求配置、请求头或页面 URL，也不发起取数。设置了 `onCopy` 时由其执行复制，否则使用内置剪贴板及降级复制；日期复制会显示本地化的成功或失败反馈。
+- 单击消息日期，或聚焦后按 Enter、空格，可复制排查 JSON。助手日期复制消息标识、角色、时间和生成状态；合并回复使用提供展示日期的原始消息，确保 ID 与时间成对。用户日期复制**当前已加载消息**的这些元数据，不是完整会话导出。JSON 同时包含复制时间、时区及明确传入的 `debugContext` 字段，不含消息正文、请求配置、请求头或页面 URL，也不发起取数。设置了 `onCopy` 时由其执行复制，否则使用内置剪贴板及降级复制；日期复制会显示本地化的成功或失败反馈。
 - `VikingBotComposer`、`VikingBotMessageList` 和 `VikingBotSessionActions` 可以单独使用，例如把 `VikingBotSessionActions` 放进自己的顶栏。
 - `groupMessages`、`groupByActivity` 和 `messageText` 与内置消息列表使用同一套规则，自定义 `messageList` 时可以直接使用。
 - `DEFAULT_LABELS` 和 `DEFAULT_INTERACTION_LABELS` 是内置的英文文案，列出了各自 `labels` 的全部键。
