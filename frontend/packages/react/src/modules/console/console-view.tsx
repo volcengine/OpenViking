@@ -114,6 +114,7 @@ export function ConsoleView(props: ConsoleProps) {
               mode={state.mode}
               modes={visibleModes}
               panelId={id}
+              commandPanelRef={commandPanel}
               locale={locale}
               labels={labels}
               history={state.history}
@@ -144,6 +145,7 @@ export function ConsoleView(props: ConsoleProps) {
         {showConversation ? (
           <ConsoleConversationPanel
             id={`${id}-conversation`}
+            commandPanelRef={commandPanel}
             active={state.mode === 'conversation' || state.mode === undefined}
             activation={activation}
             media={chatOptions?.activation?.media}
@@ -161,6 +163,7 @@ export function ConsoleView(props: ConsoleProps) {
             id={`${id}-command`}
             ref={commandPanel}
             className="ov-console__panel"
+            tabIndex={-1}
             hidden={state.mode !== 'command'}
           >
             <ErrorBoundary

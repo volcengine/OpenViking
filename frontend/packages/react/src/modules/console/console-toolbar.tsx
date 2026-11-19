@@ -1,17 +1,19 @@
 import { Button } from '../../shared/primitives/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import { useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { ConsoleIcon } from '../../icons/console-icons.js';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import { ConsoleHistory } from './console-history.js';
 import type { ConsoleHistoryEntry, ConsoleMode } from './types.js';
 import type { consoleLabels } from './labels.js';
+import { useConsoleFocusRecovery } from './use-console-focus-recovery.js';
 
 export function ConsoleToolbar({
   mode,
   modes,
   panelId,
+  commandPanelRef,
   locale,
   labels,
   history,
@@ -25,6 +27,7 @@ export function ConsoleToolbar({
   mode: ConsoleMode;
   modes: readonly ConsoleMode[];
   panelId: string;
+  commandPanelRef: RefObject<HTMLDivElement | null>;
   locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
   history: readonly ConsoleHistoryEntry[];
@@ -36,10 +39,12 @@ export function ConsoleToolbar({
   conversationActions?: ReactNode;
 }) {
   const [sessionVersion, setSessionVersion] = useState(0);
+  const modeControlsRef = useConsoleFocusRecovery(commandPanelRef);
   return (
     <div className="ov-console__toolbar">
       {modes.length > 1 ? (
         <div
+          ref={modeControlsRef}
           className="ov-console__modes"
           role="group"
           aria-label={labels.mode}

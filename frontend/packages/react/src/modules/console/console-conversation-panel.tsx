@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type ReactNode, type RefObject } from 'react';
 import { ViewActivity } from '../../shared/view-activity.js';
 import { NotificationScope } from '../../shared/feedback/notification-scope.js';
 import {
@@ -17,10 +17,12 @@ import {
 } from './activation-card/activation-card.js';
 import { consoleLabels } from './labels.js';
 import type { useBotActivation } from './use-bot-activation.js';
+import { useConsoleFocusRecovery } from './use-console-focus-recovery.js';
 
 export function ConsoleConversationPanel({
   id,
   active,
+  commandPanelRef,
   activation,
   media,
   conversation,
@@ -33,6 +35,7 @@ export function ConsoleConversationPanel({
 }: {
   id: string;
   active: boolean;
+  commandPanelRef: RefObject<HTMLDivElement | null>;
   activation: ReturnType<typeof useBotActivation>;
   media?: ReactNode;
   conversation: Partial<VikingBotProps>;
@@ -44,6 +47,7 @@ export function ConsoleConversationPanel({
   labels: VikingBotLabels;
 }) {
   const { state } = activation;
+  const recoverFocus = useConsoleFocusRecovery(commandPanelRef);
   const [visited, setVisited] = useState(active);
   if (active && !visited) setVisited(true);
   const failed =
@@ -53,10 +57,16 @@ export function ConsoleConversationPanel({
   return (
     <div
       id={id}
+      ref={recoverFocus}
       className="ov-console__panel ov-console__panel--conversation"
       hidden={!active}
     >
-      <ConsoleActivationStatus status={state.status} locale={locale} />
+      <ConsoleActivationStatus
+        status={state.status}
+        identity={state}
+        active={active}
+        locale={locale}
+      />
       {visited && state.status === 'ready' ? (
         <ViewActivity active={active}>
           <NotificationScope active={active} locale={locale}>
@@ -96,15 +106,17 @@ export function ConsoleConversationPanel({
           locale={locale}
         />
       ) : null}
-      {active && failed ? (
-        <ErrorNotification
-          title={consoleLabels(locale).conversation}
-          error={state.error}
-          identity={state}
-          locale={locale}
-        >
-          {errorMessage(state.error)}
-        </ErrorNotification>
+      {failed ? (
+        <NotificationScope active={active} locale={locale}>
+          <ErrorNotification
+            title={consoleLabels(locale).conversation}
+            error={state.error}
+            identity={state}
+            locale={locale}
+          >
+            {errorMessage(state.error)}
+          </ErrorNotification>
+        </NotificationScope>
       ) : null}
     </div>
   );

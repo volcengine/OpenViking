@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { useCallback, useId, useRef, type ReactNode } from 'react';
 import {
   ArrowRightIcon,
   DocumentIcon,
@@ -21,9 +21,13 @@ interface ConsoleActivationCardProps {
 
 export function ConsoleActivationStatus({
   status,
+  active,
+  identity,
   locale: localeProp,
 }: {
   status: BotActivationState['status'];
+  active: boolean;
+  identity: object;
   locale?: Locale;
 }) {
   const locale = useLocale(localeProp);
@@ -35,14 +39,35 @@ export function ConsoleActivationStatus({
     ready: labels.ready,
     'not-started': labels.inactive,
   };
+  const message = messages[status] ?? '';
+  const frame = useRef<number | undefined>(undefined);
+  // The live region must exist and be exposed before its text is inserted.
+  // A ref owns that DOM work; replacing it cancels stale status/locale frames.
+  const announce = useCallback(
+    (element: HTMLSpanElement | null) => {
+      // A new request can have the same status and translated message.
+      void identity;
+      if (frame.current !== undefined)
+        window.cancelAnimationFrame(frame.current);
+      frame.current = undefined;
+      if (!element) return;
+      element.textContent = '';
+      if (!active || !message) return;
+      frame.current = window.requestAnimationFrame(() => {
+        frame.current = undefined;
+        if (element.isConnected && !element.closest('[hidden]'))
+          element.textContent = message;
+      });
+    },
+    [active, message, identity],
+  );
   return (
     <span
+      ref={announce}
       className="ov-console-activation__announcement"
       role="status"
       aria-atomic="true"
-    >
-      {messages[status] ?? ''}
-    </span>
+    />
   );
 }
 

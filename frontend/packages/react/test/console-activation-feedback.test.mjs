@@ -23,6 +23,11 @@ const mountActivation = (activation) =>
   );
 const announcement = (host) =>
   host.container.querySelector('.ov-console-activation__announcement');
+const announceFrame = () =>
+  act(
+    () =>
+      new Promise((resolve) => window.requestAnimationFrame(() => resolve())),
+  );
 
 test('eligibility failure has one error notification and a retry without a duplicate card alert', async () => {
   let failing = true;
@@ -69,6 +74,7 @@ test('the status announcement stays mounted outside busy content from checking t
     const status = announcement(host);
     assert.ok(status);
     assert.equal(status.getAttribute('role'), 'status');
+    await announceFrame();
     assert.match(status.textContent, /Checking VikingBot status/);
     assert.equal(status.closest('[aria-busy="true"]'), null);
     await act(() => eligible.resolve(true));
@@ -77,6 +83,7 @@ test('the status announcement stays mounted outside busy content from checking t
     assert.equal(status.closest('[aria-busy="true"]'), null);
     await act(() => ready.resolve('ready'));
     await tick();
+    await announceFrame();
     assert.equal(announcement(host), status);
     assert.equal(status.isConnected, true);
     assert.equal(status.textContent, 'VikingBot is ready.');
@@ -107,6 +114,7 @@ test('Enabling describes the start request and Checking describes its readiness 
   try {
     await tick();
     await host.press('Enable VikingBot');
+    await announceFrame();
     assert.equal(starts, 1);
     assert.match(
       host.container.querySelector('.ov-console-activation').textContent,
@@ -115,6 +123,7 @@ test('Enabling describes the start request and Checking describes its readiness 
     assert.match(announcement(host).textContent, /Enabling VikingBot/);
     await act(() => started.resolve());
     await tick();
+    await announceFrame();
     const card = host.container.querySelector('.ov-console-activation');
     assert.match(card.textContent, /Checking VikingBot status/);
     assert.doesNotMatch(card.textContent, /Enabling VikingBot/);
@@ -123,6 +132,7 @@ test('Enabling describes the start request and Checking describes its readiness 
     assert.equal(reads, 2);
     await act(() => ready.resolve('ready'));
     await tick();
+    await announceFrame();
     assert.equal(announcement(host).textContent, 'VikingBot is ready.');
   } finally {
     await host.dispose();
