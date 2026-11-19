@@ -174,11 +174,12 @@ def agent_runner(loop, session_key, connection, limits):
             messages=[
                 {
                     "role": "system",
-                    "content": system + "\nRead assignment.json and all assigned evidence. "
-                    "Write only deliverable Markdown at publication-relative paths. "
-                    "Reply Done once required writes succeed. "
-                    "Reopen files only to resolve a specific issue. "
-                    f"Budget: {limits.subagent_iterations} rounds.",
+                    "content": system + "\nRead assignment.json with read_file, then read all "
+                    "assigned evidence. Reuse evidence and Skill rules already in context. "
+                    "Check each page against its evidence and the applicable Skill rules before "
+                    "writing it. Write only deliverable Markdown at publication-relative paths. "
+                    "Read more or edit a written page to resolve a specific remaining issue. "
+                    "Finish with a brief completion message after all required writes succeed.",
                 },
                 {
                     "role": "user",
