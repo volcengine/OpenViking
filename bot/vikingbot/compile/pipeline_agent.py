@@ -130,7 +130,7 @@ def agent_runner(loop, session_key, connection, limits):
             registry.register(scoped)
         child = copy(loop)
         child.provider = ChildProvider(model, stage)
-        child.preview_hook = complete_tool_result
+        child._preview_tool_result = complete_tool_result
         final, _, _, _, _ = await child._run_agent_loop(
             messages=[
                 {
