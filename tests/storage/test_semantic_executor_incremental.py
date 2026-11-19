@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import re
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,6 +12,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
     freshness_metadata,
     parse_abstract_overview,
+    parse_overview_file_summaries,
     render_abstract_overview,
 )
 from openviking.storage.errors import LockAcquisitionError
@@ -18,6 +20,14 @@ from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
+
+
+@pytest.fixture(autouse=True)
+def _semantic_config(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
 
 
 class _FakeVikingFS:
@@ -935,13 +945,19 @@ async def test_semantic_generate_hashes_read_content_when_manifest_md5_is_missin
 
 
 @pytest.mark.asyncio
-async def test_pending_refresh_rebuilds_every_file_summary(monkeypatch):
+async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monkeypatch):
     root_uri = "viking://resources/wide"
-    file_names = [f"file-{idx:03}.txt" for idx in range(40)]
+    file_names = ["indexed.txt", "overview.txt", "missing.txt", "changed.txt"]
     file_paths = [f"{root_uri}/{name}" for name in file_names]
-    changed_path = f"{root_uri}/file-020.txt"
-    old_overview = "FILES:\n" + "\n".join(f"- {name}: old-summary" for name in file_names)
-    metadata = {"freshness": freshness_metadata(40, 4, pending=4)}
+    changed_path = f"{root_uri}/changed.txt"
+    missing_path = f"{root_uri}/missing.txt"
+    old_overview = (
+        "### indexed.txt\nold indexed summary\n"
+        "### overview.txt\nold overview summary\n"
+        "### missing.txt\n\n"
+        "### changed.txt\nold changed summary\n"
+    )
+    metadata = {"freshness": freshness_metadata(4, 4, pending=4)}
     fake_fs = _FakeVikingFS(
         tree={
             root_uri: [{"name": name, "isDir": False} for name in file_names],
@@ -959,8 +975,18 @@ async def test_pending_refresh_rebuilds_every_file_summary(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
+    fake_fs.read_file = AsyncMock(wraps=fake_fs.read_file)
+    fake_fs.read_file_bytes = AsyncMock(wraps=fake_fs.read_file_bytes)
 
-    processor = _FakeProcessor(fake_fs)
+    processor = _FakeProcessor(
+        fake_fs,
+        transfer_summaries={
+            f"{root_uri}/indexed.txt": "current indexed summary",
+            f"{root_uri}/overview.txt": "   ",
+            changed_path: "current changed summary",
+        },
+    )
+    monkeypatch.setattr(processor, "_parse_overview_md", parse_overview_file_summaries)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -971,14 +997,27 @@ async def test_pending_refresh_rebuilds_every_file_summary(monkeypatch):
         target_uri=root_uri,
         recursive=False,
         changes={"modified": [changed_path]},
-        file_abstracts={changed_path: "summary"},
+        generation_trigger="parent_refresh",
     )
 
     await executor.run(root_uri)
 
-    assert set(processor.summarized_files) == set(file_paths)
-    assert processor.vectorized_files == [changed_path]
+    assert processor.summarized_files == [missing_path]
+    fake_fs.read_file_bytes.assert_awaited_once_with(missing_path, ctx=ctx)
+    # Pending snapshot and writeback already read each sidecar four times;
+    # reusing the captured overview must not add another storage read.
+    assert [call.args[0] for call in fake_fs.read_file.await_args_list].count(
+        f"{root_uri}/.overview.md"
+    ) == 4
+    assert processor.vectorized_files == []
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
+    assert set(overview.body.splitlines()) == {
+        "FILES:",
+        "- indexed.txt: current indexed summary",
+        "- overview.txt: old overview summary",
+        "- missing.txt: summary",
+        "- changed.txt: current changed summary",
+    }
     assert overview.metadata["freshness"]["pending_child_changes"] == 0
 
 
@@ -1163,7 +1202,7 @@ async def test_recursive_transfer_rebuild_generates_subtree_vectors(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_content_copy_loads_all_existing_summaries(monkeypatch):
+async def test_content_copy_loads_only_sampled_existing_summaries(monkeypatch):
     root_uri = "viking://resources/archive"
     file_paths = [f"{root_uri}/{name}.txt" for name in "abcde"]
     fake_fs = _FakeVikingFS(
@@ -1176,6 +1215,10 @@ async def test_content_copy_loads_all_existing_summaries(monkeypatch):
     processor = _FakeProcessor(
         fake_fs,
         transfer_summaries={path: f"summary-{path.rsplit('/', 1)[-1]}" for path in file_paths},
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=2)),
     )
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -1191,12 +1234,13 @@ async def test_content_copy_loads_all_existing_summaries(monkeypatch):
 
     await executor.run(root_uri)
 
-    assert processor.transfer_summary_calls == [file_paths]
+    assert processor.transfer_summary_calls == [[file_paths[0], file_paths[-1]]]
     assert processor.summarized_files == []
-    overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
-    assert "a.txt" in overview
-    assert "e.txt" in overview
-    assert "c.txt" in overview
+    overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
+    assert "a.txt" in overview.body
+    assert "e.txt" in overview.body
+    assert "c.txt" not in overview.body
+    assert overview.metadata["freshness"] == freshness_metadata(5, 2)
 
 
 @pytest.mark.asyncio

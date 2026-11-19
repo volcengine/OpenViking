@@ -16,6 +16,7 @@ from typing import List, Optional, Union
 
 from PIL import Image
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.output import create_parse_artifact_writer
 from openviking.parse.parsers.base_parser import BaseParser
@@ -204,7 +205,12 @@ class ImageParser(BaseParser):
                 # budgets. The preview + tiles are the canonical representation. The
                 # `original_filename` metadata field records the original name for reference
                 # but the corresponding file is not persisted.
-                logger.debug(f"Processing large image {original_filename}: {width}x{height}")
+                logger.debug(
+                    "Processing large image path=%s width=%d height=%d",
+                    safe_path_for_log(str(original_filename)),
+                    width,
+                    height,
+                )
 
                 # Save low-res preview (original is too large to store)
                 await writer.write_bytes(

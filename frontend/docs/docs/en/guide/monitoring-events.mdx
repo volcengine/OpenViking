@@ -1,0 +1,416 @@
+# Monitoring event catalogue
+
+Each event identifies one target and one outcome. See [frontend monitoring](./monitoring) for integration, switches, component attribution and tracing. Field groups describe `params`; derive public types with `OpenVikingMonitoringEventMap[EventName]['params']`.
+
+{/* monitoring-events:start */}
+
+## Render failures
+
+| Event                                      | source.component           | region         | params group  | Occurrence                                                                                                                                                                                                          |
+| ------------------------------------------ | -------------------------- | -------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_browser_action_bar_render_error`     | `FileBrowserActionBar`     | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by FileBrowserActionBar; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.     |
+| `file_tree_render_error`                   | `FileTree`                 | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by FileTree; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.                 |
+| `context_picker_render_error`              | `ContextPicker`            | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by ContextPicker; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.            |
+| `file_preview_render_error`                | `FilePreview`              | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by FilePreview; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.              |
+| `command_console_render_error`             | `CommandConsole`           | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by CommandConsole; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.           |
+| `scope_switcher_render_error`              | `ScopeSwitcher`            | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by ScopeSwitcher; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.            |
+| `scope_selector_render_error`              | `ScopeSelector`            | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by ScopeSelector; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.            |
+| `agent_connect_render_error`               | `AgentConnect`             | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by AgentConnect; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.             |
+| `viking_bot_render_error`                  | `VikingBot`                | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by VikingBot; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.                |
+| `directory_tour_render_error`              | `DirectoryTour`            | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by DirectoryTour; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.            |
+| `wiki_dashboard_render_error`              | `WikiDashboard`            | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by WikiDashboard; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.            |
+| `experience_dashboard_render_error`        | `ExperienceDashboard`      | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by ExperienceDashboard; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.      |
+| `email_login_form_render_error`            | `EmailLoginForm`           | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by EmailLoginForm; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.           |
+| `api_key_login_form_render_error`          | `ApiKeyLoginForm`          | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by ApiKeyLoginForm; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.          |
+| `password_reset_request_form_render_error` | `PasswordResetRequestForm` | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by PasswordResetRequestForm; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks. |
+| `password_setup_form_render_error`         | `PasswordSetupForm`        | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by PasswordSetupForm; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.        |
+| `login_method_selector_render_error`       | `LoginMethodSelector`      | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by LoginMethodSelector; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.      |
+| `invitation_confirmation_render_error`     | `InvitationConfirmation`   | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by InvitationConfirmation; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.   |
+| `file_browser_render_error`                | `FileBrowser`              | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by FileBrowser; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.              |
+| `console_render_error`                     | `Console`                  | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by Console; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.                  |
+| `scope_cascade_render_error`               | `ScopeCascade`             | `Owned region` | `RenderFault` | The nearest library boundary catches a render failure in the region owned by ScopeCascade; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.             |
+
+## Code and visual resources
+
+| Event                                    | source.component | region          | params group | Occurrence                                                                                                                                                                                          |
+| ---------------------------------------- | ---------------- | --------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_preview_viewer_load_ready`         | `FilePreview`    | `viewer-loader` | `CodeReady`  | The current import attempt yields usable preview viewer code exports; time from import invocation to usable exports, excluding content rendering.                                                   |
+| `file_preview_viewer_load_fail`          | `FilePreview`    | `viewer-loader` | `CodeFault`  | The current preview viewer code load rejects or lacks the required export; a later boundary capture reuses this incident.                                                                           |
+| `file_preview_editor_load_ready`         | `FilePreview`    | `editor-loader` | `CodeReady`  | The current import attempt yields usable code editor code exports; time from import invocation to usable exports, excluding content rendering.                                                      |
+| `file_preview_editor_load_fail`          | `FilePreview`    | `editor-loader` | `CodeFault`  | The current code editor code load rejects or lacks the required export; a later boundary capture reuses this incident.                                                                              |
+| `viking_bot_composer_load_ready`         | `VikingBot`      | `composer`      | `CodeReady`  | The current import attempt yields usable composer code exports; time from import invocation to usable exports, excluding content rendering.                                                         |
+| `viking_bot_composer_load_fail`          | `VikingBot`      | `composer`      | `CodeFault`  | The current composer code load rejects or lacks the required export; a later boundary capture reuses this incident.                                                                                 |
+| `viking_bot_message_list_load_ready`     | `VikingBot`      | `message-list`  | `CodeReady`  | The current import attempt yields usable message list code exports; time from import invocation to usable exports, excluding content rendering.                                                     |
+| `viking_bot_message_list_load_fail`      | `VikingBot`      | `message-list`  | `CodeFault`  | The current message list code load rejects or lacks the required export; a later boundary capture reuses this incident.                                                                             |
+| `file_preview_image_load_ready`          | `FilePreview`    | `image`         | `MediaReady` | The active inline preview image is available (load). Time from assigning the active source; verify cached element readiness.                                                                        |
+| `file_preview_image_load_fail`           | `FilePreview`    | `image`         | `MediaFault` | The active inline preview image element reports an error. Exclude closed dialogs, background transition layers and stale sources; do not infer HTTP status.                                         |
+| `file_preview_video_metadata_load_ready` | `FilePreview`    | `video`         | `MediaReady` | The active video metadata is available (loadedmetadata). Time from assigning the active source; verify cached element readiness. Video metadata does not establish continuous playback readiness.   |
+| `file_preview_video_metadata_load_fail`  | `FilePreview`    | `video`         | `MediaFault` | The active video metadata element reports an error. Exclude closed dialogs, background transition layers and stale sources; do not infer HTTP status.                                               |
+| `file_preview_image_dialog_ready`        | `FilePreview`    | `image-dialog`  | `MediaReady` | The active dialog image is available (complete && naturalWidth > 0). Time from dialog activation; verify cached element readiness. Video metadata does not establish continuous playback readiness. |
+| `file_preview_image_dialog_fail`         | `FilePreview`    | `image-dialog`  | `MediaFault` | The active dialog image element reports an error. Exclude closed dialogs, background transition layers and stale sources; do not infer HTTP status.                                                 |
+
+## Frontend requests
+
+| Event                    | source.component | region         | params group   | Occurrence                                                                                                                                                                                                       |
+| ------------------------ | ---------------- | -------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client_request_success` | `ComponentName`  | `Owned region` | `RequestReady` | A Provider-owned non-streaming Client attempt finishes body consumption and existing business-error checks. JSON/envelope/blob share one attempt; fetch resolution alone is insufficient.                        |
+| `client_request_fail`    | `ComponentName`  | `Owned region` | `RequestFault` | The attempt fails during configuration, transport, body consumption or existing business-envelope checks, including HTTP 200 error envelopes. Exclude aborts; do not newly reject legitimate non-JSON responses. |
+
+## Stream connection and reading
+
+| Event                         | source.component | region         | params group         | Occurrence                                                                                                                                                              |
+| ----------------------------- | ---------------- | -------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client_stream_connect_ready` | `ComponentName`  | `Owned region` | `StreamConnectReady` | The SSE response passes HTTP, error-envelope, Content-Type and body checks. Time from stream invocation to a readable connection; neither first content nor completion. |
+| `client_stream_connect_fail`  | `ComponentName`  | `Owned region` | `StreamConnectFault` | Connection fails or violates the existing stream contract; exclude deliberate cancellation.                                                                             |
+| `client_stream_read_complete` | `ComponentName`  | `Owned region` | `StreamReadReady`    | The consumer reads to a normal EOF. Time from first iteration to EOF includes consumer backpressure. Do not fabricate EOF after the consumer stops on a terminal event. |
+| `client_stream_read_fail`     | `ComponentName`  | `Owned region` | `StreamReadFault`    | An established stream throws a non-cancellation read error; distinct from connection failure.                                                                           |
+
+## Background polling
+
+| Event                     | source.component | region         | params group        | Occurrence                                                                                                                                               |
+| ------------------------- | ---------------- | -------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task_poll_request_fail`  | `ComponentName`  | `Owned region` | `PollRequestFault`  | Record the first request-failure category in a contiguous polling outage; aggregate repeated failures of that category rather than reporting every poll. |
+| `task_poll_protocol_fail` | `ComponentName`  | `Owned region` | `PollProtocolFault` | A returned task ID mismatches or status violates the existing protocol; once per category per outage, without rewriting task status.                     |
+| `task_poll_recovered`     | `ComponentName`  | `Owned region` | `PollRecovered`     | The first valid response after a polling outage; recovery applies even if the task is still running.                                                     |
+
+## Block and content processing
+
+| Event                                           | source.component | region                 | params group        | Occurrence                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------- | ---------------- | ---------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_browser_directory_load_ready`             | `FileBrowser`    | `directory`            | `DirectoryReady`    | Initial or expanded directory is ready; measure from when a real directory load begins until the current directory is normalized and its first rows or empty state commit to the matching FileTree.                                                                        |
+| `file_browser_directory_load_fail`              | `FileBrowser`    | `directory`            | `OperationFault`    | Initial or expanded directory has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                  |
+| `file_browser_preview_load_ready`               | `FileBrowser`    | `preview`              | `PreviewReady`      | Resource preview is ready; measure from when a resource-open operation is accepted until content is fetched and the foreground FilePreview is ready.                                                                                                                       |
+| `file_browser_preview_load_fail`                | `FileBrowser`    | `preview`              | `OperationFault`    | Resource preview has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                               |
+| `file_browser_search_find_ready`                | `FileBrowser`    | `search`               | `SearchReady`       | Find search is ready; measure from when a find query starts until current find results normalize and commit; zero results are valid.                                                                                                                                       |
+| `file_browser_search_find_fail`                 | `FileBrowser`    | `search`               | `OperationFault`    | Find search has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                    |
+| `file_browser_search_query_ready`               | `FileBrowser`    | `search`               | `SearchReady`       | Contextual search is ready; measure from when a contextual query starts until current contextual search results normalize and commit.                                                                                                                                      |
+| `file_browser_search_query_fail`                | `FileBrowser`    | `search`               | `OperationFault`    | Contextual search has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                              |
+| `file_browser_search_grep_ready`                | `FileBrowser`    | `search`               | `SearchReady`       | Grep search is ready; measure from when a grep query starts until current grep results normalize and commit.                                                                                                                                                               |
+| `file_browser_search_grep_fail`                 | `FileBrowser`    | `search`               | `OperationFault`    | Grep search has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                    |
+| `file_browser_search_glob_ready`                | `FileBrowser`    | `search`               | `SearchReady`       | Glob search is ready; measure from when a glob query starts until current glob matches normalize and commit.                                                                                                                                                               |
+| `file_browser_search_glob_fail`                 | `FileBrowser`    | `search`               | `OperationFault`    | Glob search has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                    |
+| `file_browser_wiki_dashboard_load_ready`        | `FileBrowser`    | `wiki-dashboard`       | `DashboardReady`    | Wiki dashboard is ready; measure from when the current Wiki dashboard query starts until reads, existing format checks and dashboard commit finish.                                                                                                                        |
+| `file_browser_wiki_dashboard_load_fail`         | `FileBrowser`    | `wiki-dashboard`       | `OperationFault`    | Wiki dashboard has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                 |
+| `file_browser_experience_dashboard_load_ready`  | `FileBrowser`    | `experience-dashboard` | `DashboardReady`    | Experience dashboard is ready; measure from when the current experience dashboard query starts until directory or individual-experience results and statistics commit.                                                                                                     |
+| `file_browser_experience_dashboard_load_fail`   | `FileBrowser`    | `experience-dashboard` | `OperationFault`    | Experience dashboard has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                           |
+| `file_browser_experience_trajectory_load_ready` | `FileBrowser`    | `trajectory`           | `TrajectoryReady`   | Experience trajectory is ready; measure from when the selected experience trajectory query starts until the trajectory normalizes and commits to the current trajectory view.                                                                                              |
+| `file_browser_experience_trajectory_load_fail`  | `FileBrowser`    | `trajectory`           | `OperationFault`    | Experience trajectory has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                          |
+| `console_session_list_load_ready`               | `Console`        | `sessions`             | `SessionListReady`  | Session list is ready; measure from when session listing starts until the current session list or empty state commits.                                                                                                                                                     |
+| `console_session_list_load_fail`                | `Console`        | `sessions`             | `OperationFault`    | Session list has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                   |
+| `console_session_create_success`                | `Console`        | `sessions`             | `SessionReady`      | Session creation completes; measure from when the internal session-create call starts until creation succeeds under the service contract and current session identity is installed; no later refresh is required.                                                          |
+| `console_session_create_fail`                   | `Console`        | `sessions`             | `OperationFault`    | Session creation has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                               |
+| `console_session_history_load_ready`            | `Console`        | `sessions`             | `HistoryReady`      | Session history is ready; measure from when a session switch starts history loading until the current session history normalizes and commits.                                                                                                                              |
+| `console_session_history_load_fail`             | `Console`        | `sessions`             | `OperationFault`    | Session history has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                |
+| `console_session_delete_success`                | `Console`        | `sessions`             | `SessionReady`      | Session deletion completes; measure from when the internal session-delete call starts until deletion succeeds under the service contract and local list handling finishes; later refresh errors do not reverse success.                                                    |
+| `console_session_delete_fail`                   | `Console`        | `sessions`             | `OperationFault`    | Session deletion has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                               |
+| `scope_cascade_libraries_load_ready`            | `ScopeCascade`   | `libraries`            | `OptionsReady`      | Library options is ready; measure from when loadLibraries is invoked until library options or an empty list commit for the current ancestor scope.                                                                                                                         |
+| `scope_cascade_libraries_load_fail`             | `ScopeCascade`   | `libraries`            | `OperationFault`    | Library options has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                |
+| `scope_cascade_spaces_load_ready`               | `ScopeCascade`   | `spaces`               | `OptionsReady`      | Space options is ready; measure from when loadSpaces is invoked until space options or an empty list commit for the current library.                                                                                                                                       |
+| `scope_cascade_spaces_load_fail`                | `ScopeCascade`   | `spaces`               | `OperationFault`    | Space options has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                  |
+| `scope_cascade_users_load_ready`                | `ScopeCascade`   | `users`                | `OptionsReady`      | User options is ready; measure from when loadUsers is invoked until user options or an empty list commit for the current library and space.                                                                                                                                |
+| `scope_cascade_users_load_fail`                 | `ScopeCascade`   | `users`                | `OperationFault`    | User options has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                                                   |
+| `file_preview_content_prepare_ready`            | `FilePreview`    | `content \| source`    | `ContentReady`      | Foreground preview content preparation is ready; measure from when the current valid source enters content rendering until the foreground layer explicitly becomes ready and its loading overlay ends; empty files qualify, errors, unsupported states and cleanup do not. |
+| `file_preview_content_prepare_fail`             | `FilePreview`    | `content \| source`    | `OperationFault`    | Foreground preview content preparation has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.                                                         |
+| `console_chat_first_content_ready`              | `Console`        | `chat`                 | `FirstContentReady` | Time from accepted send to the first normalized nonempty text/reasoning/tool content, including first content carried by complete. Once per reply; not browser paint.                                                                                                      |
+| `console_chat_reply_complete`                   | `Console`        | `chat`                 | `ReplyReady`        | A protocol complete terminal is received and the reply is reconciled. Time from accepted send; persistence is independent and empty replies do not fabricate a first-content sample.                                                                                       |
+| `console_chat_reply_fail`                       | `Console`        | `chat`                 | `ReplyFault`        | Session preparation, event conversion or reply protocol fails, including EOF before a terminal. Link existing transport incidents. Exclude deliberate cancellation and interrupted terminals.                                                                              |
+| `console_chat_history_save_fail`                | `Console`        | `persistence`          | `PersistenceFault`  | History persistence fails at a library-observed persistence boundary. A completed reply stays complete. Do not infer failures inside opaque host persistence.                                                                                                              |
+
+## params field groups
+
+`Ready` contains `durationMs` in milliseconds and `visibility`. `Fault` contains `errorKind`, its matching `code`, `observedAt`, `incidentId`, `faultRole`, `causeEventId`, `elapsedMs` and `traceSnapshot`. See [frontend monitoring](./monitoring) for shared fields.
+
+### Ready
+
+```ts
+{
+  readonly durationMs: number;
+  readonly visibility: 'visible' | 'hidden';
+};
+```
+
+### RenderFault
+
+```ts
+Fault<'render'>;
+```
+
+### CodeReady
+
+```ts
+Ready & {
+  readonly cacheState: 'cached' | 'uncached' | 'unknown';
+};
+```
+
+### CodeFault
+
+```ts
+Fault<'resource-load' | 'configuration' | 'unknown'>;
+```
+
+### MediaReady
+
+```ts
+Ready & {
+  readonly cacheState: 'cached' | 'uncached' | 'unknown';
+};
+```
+
+### MediaFault
+
+```ts
+Fault<'resource-load' | 'unknown'>;
+```
+
+### OperationFault
+
+```ts
+Fault<ErrorKind>;
+```
+
+### DirectoryReady
+
+```ts
+Ready & {
+  readonly entryCount: number;
+  readonly empty: boolean;
+};
+```
+
+### PreviewReady
+
+```ts
+Ready & {
+  readonly contentKind: 'text' | 'image' | 'video' | 'document' | 'other';
+  readonly empty: boolean;
+};
+```
+
+### SearchReady
+
+```ts
+Ready & {
+  readonly resultCount: number;
+  readonly hasMore: boolean | null;
+};
+```
+
+### DashboardReady
+
+```ts
+Ready & { readonly empty: boolean };
+```
+
+### TrajectoryReady
+
+```ts
+Ready & { readonly itemCount: number };
+```
+
+### SessionListReady
+
+```ts
+Ready & { readonly sessionCount: number };
+```
+
+### SessionReady
+
+```ts
+Ready;
+```
+
+### HistoryReady
+
+```ts
+Ready & { readonly messageCount: number };
+```
+
+### OptionsReady
+
+```ts
+Ready & { readonly optionCount: number };
+```
+
+### ContentReady
+
+```ts
+Ready & {
+  readonly empty: boolean;
+  readonly viewMode: 'source' | 'preview';
+};
+```
+
+### FirstContentReady
+
+```ts
+Ready & {
+  readonly contentKind: 'text' | 'reasoning' | 'tool';
+};
+```
+
+### ReplyReady
+
+```ts
+Ready & { readonly firstContentObserved: boolean };
+```
+
+### ReplyFault
+
+```ts
+Fault<
+  | 'configuration'
+  | 'network'
+  | 'http'
+  | 'business'
+  | 'response-read'
+  | 'protocol'
+  | 'host-service'
+  | 'renderer'
+  | 'unknown'
+>;
+```
+
+### PersistenceFault
+
+```ts
+Fault<'storage' | 'host-service' | 'unknown'>;
+```
+
+### RequestSummary
+
+```ts
+{
+  readonly method:
+    'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+  readonly routeKey: NativeRouteKey | 'custom';
+  readonly requestAttemptId: string;
+  readonly requestId: string | null;
+  readonly httpStatus: number | null;
+  readonly nativeEventId?: string;
+};
+```
+
+### RequestReady
+
+```ts
+Ready &
+  RequestSummary & {
+    readonly httpStatus: number;
+    readonly responseType: 'json' | 'blob';
+  };
+```
+
+### RequestFault
+
+```ts
+Fault<
+  | 'configuration'
+  | 'network'
+  | 'http'
+  | 'business'
+  | 'response-read'
+  | 'unknown'
+> &
+  RequestSummary & {
+    readonly phase:
+      'resolve-config' | 'send' | 'read-body' | 'business-envelope';
+    readonly responseType: 'json' | 'blob';
+  };
+```
+
+### StreamConnectReady
+
+```ts
+Ready &
+  RequestSummary & { readonly httpStatus: number };
+```
+
+### StreamConnectFault
+
+```ts
+Fault<
+  'configuration' | 'network' | 'http' | 'business' | 'protocol' | 'unknown'
+> &
+  RequestSummary & {
+    readonly phase: 'resolve-config' | 'send' | 'validate-response';
+  };
+```
+
+### StreamReadReady
+
+```ts
+Ready &
+  RequestSummary & { readonly frameCount: number; readonly bytesRead: number };
+```
+
+### StreamReadFault
+
+```ts
+Fault<'network' | 'response-read' | 'unknown'> & RequestSummary;
+```
+
+### PollFields
+
+```ts
+{
+  readonly taskRef: string;
+  readonly outageId: string;
+  readonly queryAttempt: number;
+  readonly consecutiveFailures: number;
+};
+```
+
+### PollRequestFault
+
+```ts
+Fault<
+  | 'network'
+  | 'http'
+  | 'business'
+  | 'configuration'
+  | 'response-read'
+  | 'host-service'
+  | 'unknown'
+> & PollFields;
+```
+
+### PollProtocolFault
+
+```ts
+Fault<'protocol'> & PollFields;
+```
+
+### PollRecovered
+
+```ts
+Ready &
+  Omit<PollFields, 'consecutiveFailures'> & {
+    readonly consecutiveFailures: 0;
+    readonly outageDurationMs: number;
+    readonly failureCount: number;
+    readonly failedCategories: readonly ('request' | 'protocol')[];
+  };
+```
+
+### ErrorCodeByKind
+
+```ts
+{
+  render: 'RENDER_ERROR';
+  network: 'NETWORK_ERROR';
+  http: 'HTTP_ERROR';
+  business: 'BUSINESS_ERROR';
+  configuration: 'REQUEST_CONFIG_ERROR' | 'RESOURCE_EXPORT_INVALID';
+  'response-read': 'RESPONSE_READ_ERROR';
+  protocol:
+    'STREAM_PROTOCOL_ERROR' | 'TASK_RESPONSE_INVALID' | 'DATA_RESPONSE_INVALID';
+  'resource-load': 'RESOURCE_LOAD_ERROR';
+  renderer: 'RENDERER_ERROR';
+  'host-service': 'HOST_SERVICE_ERROR';
+  storage: 'STORAGE_ERROR';
+  unknown: 'UNKNOWN_ERROR';
+};
+```
+
+{/* monitoring-events:end */}

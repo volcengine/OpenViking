@@ -1456,11 +1456,12 @@ pub async fn handle_write(
     from_file: Option<String>,
     mode: String,
     wait: bool,
+    use_snapshot: bool,
     processing_mode: String,
+    defer_processing: bool,
     tags: Vec<String>,
     tag_mode: String,
     acl: Option<Value>,
-    edit_source: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1480,11 +1481,12 @@ pub async fn handle_write(
         &payload,
         &mode,
         wait,
+        use_snapshot,
         &processing_mode,
+        defer_processing,
         tags,
         &tag_mode,
         acl,
-        &edit_source,
         ctx.output_format,
         ctx.compact,
     )
@@ -1502,6 +1504,26 @@ pub async fn handle_set_tags(
     commands::content::set_tags(
         &client,
         &uri,
+        tags,
+        &mode,
+        recursive,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+pub async fn handle_batch_set_tags(
+    uris: Vec<String>,
+    tags: Vec<String>,
+    mode: String,
+    recursive: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::batch_set_tags(
+        &client,
+        &uris,
         tags,
         &mode,
         recursive,

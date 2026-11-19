@@ -145,9 +145,7 @@ class HTMLParser(BaseParser):
             from bs4 import BeautifulSoup
 
             soup = BeautifulSoup(html, "html.parser")
-            texts = [
-                node.get_text(" ", strip=True) for node in soup.find_all("noscript")
-            ]
+            texts = [node.get_text(" ", strip=True) for node in soup.find_all("noscript")]
             return "\n\n".join(text for text in texts if text)
         except Exception:
             return ""
@@ -169,7 +167,10 @@ class HTMLParser(BaseParser):
                 or ""
             )
         except Exception as exc:
-            logger.debug("[HTMLParser] trafilatura extraction failed: %s", exc)
+            logger.info(
+                "HTML extraction failed; using alternate extraction error_type=%s",
+                type(exc).__name__,
+            )
             return ""
 
     @staticmethod
@@ -182,7 +183,10 @@ class HTMLParser(BaseParser):
             if metadata and metadata.title:
                 return str(metadata.title).strip()
         except Exception as exc:
-            logger.debug("[HTMLParser] trafilatura title extraction failed: %s", exc)
+            logger.info(
+                "HTML title extraction failed; using alternate title error_type=%s",
+                type(exc).__name__,
+            )
         return ""
 
     @staticmethod

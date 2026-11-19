@@ -268,3 +268,91 @@ async fn query_index_gc_removes_expired_members_after_change_threshold() {
         vec![fresh_bucket]
     );
 }
+
+/// Verifies the shared-Redis TTL uniformly overrides query bucket retention.
+#[test]
+fn shared_redis_ttl_applies_to_all_query_buckets() {
+    let cached = CachedFileSystem::with_runtime(
+        Box::new(MemFileSystem::new()),
+        CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new())),
+        SERVICE_NAME,
+    )
+    .with_shared_redis_ttl(Some(Duration::from_secs(60)));
+
+    assert_eq!(cached.query_ttl_ms(), 60_000);
+
+    let default = CachedFileSystem::with_runtime(
+        Box::new(MemFileSystem::new()),
+        CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new())),
+        SERVICE_NAME,
+    );
+
+    assert_eq!(default.query_ttl_ms(), 300_000);
+}
+
+/// Verifies the shared-Redis TTL reaches the provider as the bucket expiration.
+#[tokio::test]
+async fn shared_redis_ttl_reaches_the_query_bucket_expiration() {
+    let backend = MemFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.txt", b"a", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let provider = Arc::new(MemoryMockProvider::new());
+    let runtime = CacheRuntime::memory_with_provider(Arc::clone(&provider));
+    let cached = CachedFileSystem::with_runtime(Box::new(backend), runtime, SERVICE_NAME)
+        .with_shared_redis_ttl(Some(Duration::from_secs(60)));
+
+    cached
+        .read_dir("/docs", None, None, None, None)
+        .await
+        .unwrap();
+
+    let bucket_key = query_bucket_key(SERVICE_NAME, "/docs", "read_dir");
+    let remaining = provider
+        .expiration_remaining(&bucket_key)
+        .await
+        .expect("the read_dir bucket should carry an expiration");
+    assert!(
+        remaining <= Duration::from_secs(60),
+        "the shared TTL must not exceed 60s, got {remaining:?}"
+    );
+    assert!(
+        remaining >= Duration::from_secs(55),
+        "the shared TTL should be close to 60s, got {remaining:?}"
+    );
+}
+
+/// Verifies query buckets keep the provider TTL when no shared override is configured.
+#[tokio::test]
+async fn query_bucket_ttl_stays_on_the_provider_default() {
+    let backend = MemFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend
+        .write("/docs/a.txt", b"a", 0, WriteFlag::Create)
+        .await
+        .unwrap();
+    let provider = Arc::new(MemoryMockProvider::new());
+    let runtime = CacheRuntime::memory_with_provider(Arc::clone(&provider));
+    let cached = CachedFileSystem::with_runtime(Box::new(backend), runtime, SERVICE_NAME);
+
+    cached
+        .read_dir("/docs", None, None, None, None)
+        .await
+        .unwrap();
+
+    let bucket_key = query_bucket_key(SERVICE_NAME, "/docs", "read_dir");
+    let remaining = provider
+        .expiration_remaining(&bucket_key)
+        .await
+        .expect("the read_dir bucket should carry an expiration");
+    assert!(
+        remaining <= Duration::from_secs(300),
+        "the provider default TTL must stay at 300s, got {remaining:?}"
+    );
+    assert!(
+        remaining >= Duration::from_secs(295),
+        "the provider default TTL should be close to 300s, got {remaining:?}"
+    );
+}

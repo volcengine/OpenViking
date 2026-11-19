@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode } from 'react';
 
 /**
@@ -373,8 +374,8 @@ export interface ScopeSwitcherScrollMetrics {
 }
 
 /**
- * 可替换文案，组件内置英文默认值。
- * Replaceable copy; the component ships English defaults.
+ * 可替换文案，组件内置中英文文案。
+ * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface ScopeSwitcherLabels {
   /** Loading status text / 加载提示。 */
@@ -402,8 +403,11 @@ export interface ScopeSwitcherLabels {
   error?: string;
 }
 
-/** Layout only: each child owns its state and data subscription. */
-export type ScopeSwitcherProps = HTMLAttributes<HTMLDivElement>;
+/** Layout and language scope: each child owns its state and data subscription. */
+export interface ScopeSwitcherProps extends HTMLAttributes<HTMLDivElement> {
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
+}
 
 /**
  * 两种层级共有的入参：身份与触发器内容。
@@ -416,6 +420,8 @@ export interface ScopeSelectorBaseProps {
    * Level identity: stable key, accessible name and trailing marker.
    */
   identity: ScopeSwitcherIdentity;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 触发器展示的当前值文本与图标。不传时从 `data.options` 里按 `data.selectedId`
    * 取对应项；固定层级没有 `data`，因此固定层级需要在这里给出 `label`。
@@ -426,8 +432,8 @@ export interface ScopeSelectorBaseProps {
    */
   trigger?: ScopeSwitcherTrigger;
   /**
-   * 可替换文案，缺省为英文。
-   * Replaceable copy; English by default.
+   * 可替换文案，未提供的项使用当前 locale 的内置文案。
+   * Replaceable copy; omitted fields follow locale.
    */
   labels?: ScopeSwitcherLabels;
 }

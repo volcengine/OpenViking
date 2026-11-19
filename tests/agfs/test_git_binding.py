@@ -42,6 +42,9 @@ author_email = "test@example.com"
 
 [git.local]
 base_dir = "{git_root}"
+
+[git.snapshot.log]
+provider = "none"
 """
     )
 
@@ -143,6 +146,30 @@ def test_commit_then_show_commit_metadata(client):
     assert meta["oid"] == resp["commit_oid"]
     assert meta["parents"] == []
     assert meta["author"]["name"] == "alice"
+
+
+def test_git_path_is_file_checks_exact_tree_entry_at_commit(client):
+    account = "acct1"
+    path = "resources/proj/a.md"
+    _write(client, account, path, b"tracked file")
+    commit = client.git_commit(
+        account=account,
+        branch="main",
+        message="initial",
+        author_name="alice",
+        author_email="a@e.com",
+        paths=[path],
+    )
+    commit_oid = commit["commit_oid"]
+    assert client.git_path_is_file(account=account, commit_oid=commit_oid, path=path)
+    assert not client.git_path_is_file(
+        account=account, commit_oid=commit_oid, path="resources/proj"
+    )
+    assert not client.git_path_is_file(
+        account=account, commit_oid=commit_oid, path="resources/absent"
+    )
+    with pytest.raises(ValueError, match="full commit OID"):
+        client.git_path_is_file(account=account, commit_oid="main", path=path)
 
 
 def test_restore_roundtrip(client):

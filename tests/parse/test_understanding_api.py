@@ -4,7 +4,7 @@ import json
 import zipfile
 from email.parser import BytesParser
 from email.policy import default
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -283,9 +283,6 @@ async def test_parse_failure_preserves_observed_remote_ids(monkeypatch, tmp_path
     api._video_exts = {"mp4"}
     api._audio_exts = {"mp3"}
     api._image_exts = {"png"}
-    warning = Mock()
-    monkeypatch.setattr("openviking.parse.understanding_api.logger.warning", warning)
-
     monkeypatch.setattr(api, "_create_file", AsyncMock(return_value={"id": "file-1"}))
     monkeypatch.setattr(
         api,
@@ -311,11 +308,6 @@ async def test_parse_failure_preserves_observed_remote_ids(monkeypatch, tmp_path
     }
     assert str(exc_info.value) == "remote parse failed"
     assert isinstance(exc_info.value, RuntimeError)
-    warning.assert_called_once_with(
-        "[UnderstandingAPI] Parse failed: %s; meta=%s",
-        str(exc_info.value),
-        exc_info.value.meta,
-    )
 
 
 async def _return(value):

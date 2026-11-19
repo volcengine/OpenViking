@@ -12,6 +12,7 @@ import yaml
 
 from openviking.core.namespace import user_space_fragment
 from openviking.prompts.manager import PromptManager
+from openviking.session.memory.constants import RETIRED_MEMORY_TYPES
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
@@ -94,6 +95,10 @@ class MemoryTypeRegistry:
                     loaded,
                     memory_templates_dir,
                 )
+
+        # Deployment overrides must not revive the retired automatic agent memories.
+        for name in RETIRED_MEMORY_TYPES:
+            self._types.pop(name, None)
 
     def register(self, memory_type: MemoryTypeSchema) -> None:
         """Register a memory type. Raises error if already exists."""
@@ -314,7 +319,10 @@ class MemoryTypeRegistry:
 
             # Write the file
             try:
-                await viking_fs.write_file(file_uri, full_content, ctx=ctx)
+                from openviking.observability.reporting.facts import bind_memory_type
+
+                with bind_memory_type(schema.memory_type):
+                    await viking_fs.write_file(file_uri, full_content, ctx=ctx)
                 logger.info(f"[MemoryTypeRegistry] Initialized memory file: {file_uri}")
             except Exception:
                 pass

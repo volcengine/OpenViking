@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking_cli.exceptions import FailedPreconditionError, UnimplementedError
 from openviking_cli.utils import get_logger
 
@@ -50,8 +51,7 @@ def _validate_distributed_environment(conn) -> None:
             )
         if not reference_function_exists:
             logger.info(
-                "opengauss_adapter: CN has no create_reference_table; metadata tables "
-                "will use spq hash distribution"
+                "opengauss_adapter: CN has no create_reference_table; metadata tables will use spq hash distribution"
             )
 
         cursor.execute(
@@ -196,7 +196,10 @@ def _try_make_distributed_table(
     _validate_identifier(distribution_column, kind="openGauss distribution column name")
     if _is_table_already_distributed(conn, table_name):
         _verify_distributed_table_kind(conn, table_name, "distributed")
-        logger.info("opengauss_adapter: table '%s' is already distributed, skipping", table_name)
+        logger.info(
+            "opengauss_adapter: table '%s' is already distributed, skipping",
+            short_hash(str(table_name)),
+        )
         return
     cur = conn.cursor()
     try:
@@ -207,9 +210,9 @@ def _try_make_distributed_table(
         conn.commit()
         _verify_distributed_table_kind(conn, table_name, "distributed")
         logger.info(
-            "opengauss_adapter: distributed table '%s' created with %d shards",
-            table_name,
-            shard_count,
+            "opengauss_adapter: distributed table '%s' created with %s shards",
+            short_hash(str(table_name)),
+            type(shard_count).__name__,
         )
     except Exception as error:
         conn.rollback()
@@ -309,7 +312,11 @@ def _create_collection_table(
         if capability["state"] != "available":
             raise FailedPreconditionError(
                 f"Native BM25 is unavailable: {capability['state']}",
-                details={"backend": "opengauss", "capability": "bm25", "state": capability["state"]},
+                details={
+                    "backend": "opengauss",
+                    "capability": "bm25",
+                    "state": capability["state"],
+                },
             )
     col_ddls = []
     has_vector = False
@@ -366,7 +373,9 @@ def _create_collection_table(
             )
             cur.execute(_BM25_INDEX_CATALOG_SQL, (name, spec["name"]))
             if not _matches_bm25_index(cur.fetchall(), spec):
-                raise FailedPreconditionError("Native BM25 index failed physical catalog validation")
+                raise FailedPreconditionError(
+                    "Native BM25 index failed physical catalog validation"
+                )
         conn.commit()
         if fulltext:
             meta["_fulltext_index"] = spec

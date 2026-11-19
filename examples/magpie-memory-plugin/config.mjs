@@ -49,6 +49,12 @@ function loadClientCredentialFiles(env = process.env) {
   return { cliFile: { ...file, actor_peer_id: file.actor_peer_id ?? file.agent_id }, cliPath: path, cliPathCandidate: path, ovFile: {}, ovPath: "" };
 }
 
+/** Global client-file switch shared by memory hooks and model management. */
+export function pluginEnabled(env = process.env) {
+  try { return loadClientCredentialFiles(env).cliFile.plugin?.enabled !== false; }
+  catch (error) { if (error.code === "unconfigured") return true; throw error; }
+}
+
 /** Match the CLI's explicit LDAP/OIDC authorization without exposing secrets. */
 function clientAuthorization(file) {
   if (file.auth_mode === "ldap") {
@@ -60,6 +66,7 @@ function clientAuthorization(file) {
 
 /** Magpie pins one client snapshot; host defaults do not alter other plugins. */
 export async function loadConfig(env = process.env, options = {}) {
+  if (options.memoryEnabled !== undefined && typeof options.memoryEnabled !== "boolean") throw Object.assign(new Error("OpenViking: invalid"), { code: "invalid" });
   const files = loadClientCredentialFiles(env);
   const file = files.cliFile;
   const scoped = file.plugin?.magpie;
@@ -90,7 +97,7 @@ export async function loadConfig(env = process.env, options = {}) {
   const version = readManifestVersion(new URL("./package.json", import.meta.url));
   const config = {
     ...settings,
-    enabled: file.plugin?.enabled !== false && settings.enabled,
+    enabled: options.memoryEnabled !== false && file.plugin?.enabled !== false && settings.enabled,
     baseUrl: connection.baseUrl, apiKey: connection.apiKey,
     account: connection.account, user: connection.user, peerId,
     authMode: authorization ? file.auth_mode : connection.authMode,
@@ -100,7 +107,9 @@ export async function loadConfig(env = process.env, options = {}) {
     recallRewrite: normalizeRewriteMode(settings.recallCompress),
     extraHeaders: file.extra_headers || {}, path: files.cliPath,
     explicitMcpOptIn: options.mcpEnabled === true || (options.mcpEnabled === undefined && scoped?.mcpEnabled === true),
-    nativeAgents,
+    // Requests from the model adapter already belong to OV / VikingBot.
+    // Never recall or capture their own processing through the memory gateway.
+    nativeAgents: [...new Set([...nativeAgents, "openviking-models"])],
   };
   for (const knob of KNOBS.filter((knob) => knob.sendOnlyWhenConfigured)) {
     config[`${knob.name}Configured`] = configured.has(knob.name);

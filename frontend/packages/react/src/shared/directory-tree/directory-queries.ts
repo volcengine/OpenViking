@@ -1,0 +1,205 @@
+import { bindingOf } from '../monitoring/client.js';
+import { QueryObservation } from '../monitoring/query-observation.js';
+import { InfiniteQueryObserver, type InfiniteData } from '@tanstack/query-core';
+import type { DirState } from './types.js';
+import { toError } from '../request/fs-errors.js';
+import { directoryOptions, type DirectoryPage } from './directory-query.js';
+import type { QueryRequest } from '../request/use-query-scope.js';
+
+type Pages = InfiniteData<DirectoryPage>;
+type Observer = InfiniteQueryObserver<
+  DirectoryPage,
+  Error,
+  Pages,
+  ReturnType<typeof directoryOptions>['queryKey'],
+  number
+>;
+
+/** Only subscriptions live here. All server pages remain in QueryClient. */
+export class DirectoryQueries {
+  private observers = new Map<
+    string,
+    {
+      observer: Observer;
+      unsubscribe?: () => void;
+      paused?: boolean;
+      adoptedFrom?: string;
+      retryCause?: WeakRef<Error>;
+      monitoring: QueryObservation<'file_browser_directory_load'>;
+    }
+  >();
+  private listeners = new Set<() => void>();
+  private snapshot: Record<string, DirState> = {};
+  readonly dirs = { current: this.snapshot };
+  constructor(
+    private request: QueryRequest,
+    root: string,
+    private cacheScopeKey?: string,
+  ) {
+    this.observe(root);
+  }
+  private publish = () => {
+    this.snapshot = Object.fromEntries(
+      [...this.observers].map(([uri, { observer, monitoring, paused }]) => {
+        const result = observer.getCurrentResult();
+        if (paused || !this.listeners.size) monitoring.cancel();
+        else monitoring.observe(result, observer.getCurrentQuery());
+        const pages = result.data?.pages ?? [];
+        const entries = new Map(
+          pages
+            .flatMap((page) => page.entries)
+            .map((entry) => [entry.uri, entry]),
+        );
+        return [
+          uri,
+          {
+            monitoring: monitoring.operations(observer.getCurrentQuery()),
+            ready: result.isFetched,
+            entries: [...entries.values()],
+            hasMore: result.hasNextPage,
+            loading: result.isFetching || result.isPending,
+            error: result.error ? toError(result.error) : null,
+          },
+        ];
+      }),
+    );
+    this.dirs.current = this.snapshot;
+    this.listeners.forEach((listener) => listener());
+  };
+  private observe(uri: string) {
+    let item = this.observers.get(uri);
+    if (!item) {
+      const options = directoryOptions(
+        this.request,
+        uri,
+        this.cacheScopeKey,
+        () => {
+          const error = item?.retryCause?.deref();
+          if (item) item.retryCause = undefined;
+          return error;
+        },
+      );
+      item = {
+        monitoring: new QueryObservation(
+          this.request.client,
+          'file_browser_directory_load',
+        ),
+        observer: new InfiniteQueryObserver(this.request.queryClient, options),
+      };
+      this.observers.set(uri, item);
+      if (this.listeners.size)
+        item.unsubscribe = item.observer.subscribe(this.publish);
+      this.publish();
+    }
+    if (item.paused) {
+      item.paused = false;
+      if (this.listeners.size)
+        item.unsubscribe = item.observer.subscribe(this.publish);
+    }
+    return item;
+  }
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    for (const item of this.observers.values())
+      if (!item.paused)
+        item.unsubscribe ??= item.observer.subscribe(this.publish);
+    this.publish();
+    return () => {
+      this.listeners.delete(listener);
+      if (!this.listeners.size)
+        for (const item of this.observers.values()) {
+          item.unsubscribe?.();
+          item.unsubscribe = undefined;
+        }
+    };
+  };
+  getSnapshot = () => this.snapshot;
+  load = async (
+    uri: string,
+    offset: number,
+    signal?: AbortSignal,
+    refresh = false,
+  ) => {
+    this.request.signal?.throwIfAborted();
+    signal?.throwIfAborted();
+    const item = this.observe(uri);
+    const { observer } = item;
+    const binding = bindingOf(this.request.client);
+    const error = observer.getCurrentResult().error;
+    item.retryCause =
+      error && binding?.controller.options && binding.active()
+        ? new WeakRef(error)
+        : undefined;
+    let rejectAbort!: (reason: unknown) => void;
+    const aborted = new Promise<never>((_, reject) => (rejectAbort = reject));
+    const abort = () => {
+      rejectAbort(signal?.reason);
+      if (this.observers.get(uri) !== item) return;
+      item.paused = true;
+      item.unsubscribe?.();
+      item.unsubscribe = undefined;
+      observer.updateResult();
+      this.publish();
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      const pending =
+        offset > 0
+          ? observer.fetchNextPage({ cancelRefetch: false })
+          : refresh
+            ? observer.refetch({ cancelRefetch: false })
+            : this.request.queryClient
+                .fetchInfiniteQuery(
+                  directoryOptions(this.request, uri, this.cacheScopeKey),
+                )
+                .catch(() => undefined);
+      await (signal ? Promise.race([pending, aborted]) : pending);
+      signal?.throwIfAborted();
+      if (this.observers.get(uri) !== item) return;
+      this.publish();
+      return this.snapshot[uri];
+    } finally {
+      signal?.removeEventListener('abort', abort);
+    }
+  };
+  /** Hand off a verified equivalent listing without evicting shared cache data. */
+  adoptListing = (uri: string, previousUri: string, retirePrevious = false) => {
+    if (uri === previousUri || this.request.signal?.aborted) return;
+    const target = this.observers.get(uri);
+    if (target?.adoptedFrom !== previousUri) {
+      const { queryClient } = this.request;
+      const key = (value: string) =>
+        directoryOptions(this.request, value, this.cacheScopeKey).queryKey;
+      const previous = queryClient.getQueryState<Pages>(key(previousUri));
+      const queryKey = key(uri);
+      const current = queryClient.getQueryState(queryKey);
+      if (
+        previous?.data?.pages.length &&
+        current?.fetchStatus !== 'fetching' &&
+        (!current?.data || current.dataUpdatedAt < previous.dataUpdatedAt)
+      )
+        queryClient.setQueryData(queryKey, previous.data, {
+          updatedAt: previous.dataUpdatedAt,
+        });
+      this.observe(uri).adoptedFrom = previousUri;
+      if (!target || current?.error)
+        void this.load(uri, 0, undefined, true).catch(() => undefined);
+    }
+    const previous = this.observers.get(previousUri);
+    if (!retirePrevious || !previous) return;
+    this.observers.delete(previousUri);
+    previous.unsubscribe?.();
+    previous.monitoring.cancel();
+    this.publish();
+  };
+
+  refresh = async () => {
+    if (this.request.signal?.aborted) return;
+    await Promise.all(
+      [...this.observers.values()].map(({ observer }) =>
+        observer.refetch({ cancelRefetch: false }),
+      ),
+    );
+    this.publish();
+  };
+}

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
-import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -77,6 +76,7 @@ class VLMBase(ABC):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.cost_bearer = config.get("cost_bearer")
         self.provider = config.get("provider", "openai")
         self.model = config.get("model")
         self.api_key = config.get("api_key")
@@ -272,14 +272,11 @@ class VLMBase(ABC):
             )
         except Exception as e:
             # Telemetry must never break model inference.
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "vlm.update_token_usage telemetry emit failed provider=%s model_name=%s err=%s: %s",
-                    provider,
-                    model_name,
-                    type(e).__name__,
-                    e,
-                )
+            logger.info(
+                "vlm telemetry unavailable; continuing without observation error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
 
         # Record the VLM call in Prometheus metrics (if enabled).
         try:
@@ -297,17 +294,15 @@ class VLMBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
+                cost_bearer=self.cost_bearer,
             )
         except Exception as e:
             # Metrics must never break model inference.
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "vlm.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
-                    provider,
-                    model_name,
-                    type(e).__name__,
-                    e,
-                )
+            logger.info(
+                "vlm metrics unavailable; continuing without observation error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
 
     def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
         """Record one failed provider request attempt without token usage."""
@@ -323,17 +318,15 @@ class VLMBase(ABC):
                 prompt_tokens=0,
                 completion_tokens=0,
                 error_code=extract_metric_error_code(error),
+                cost_bearer=self.cost_bearer,
                 account_id=root_context.account_id if root_context is not None else None,
             )
         except Exception as metrics_error:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "vlm failed-call metrics emit failed provider=%s model_name=%s err=%s: %s",
-                    self.provider,
-                    self.model,
-                    type(metrics_error).__name__,
-                    metrics_error,
-                )
+            logger.info(
+                "vlm metrics unavailable; continuing without observation error_type=%s degraded=true",
+                type(metrics_error).__name__,
+                extra={"error_type": type(metrics_error).__name__, "degraded": True},
+            )
 
     @property
     def token_tracker(self):
@@ -471,7 +464,7 @@ class FailoverVLM(VLMBase):
 
         self.primary = primary
         self.backup = backup
-        self._logger = logging.getLogger(__name__)
+        self._logger = get_logger(__name__)
         self._switcher = PrimaryBackupSwitcher(
             failback_timeout_seconds=failback_timeout_seconds,
             failback_request_count=failback_request_count,
@@ -521,7 +514,6 @@ class FailoverVLM(VLMBase):
         except Exception as e:
             _annotate_vlm_error(e, self.backup)
             last_error = e
-            self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
 
     async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
@@ -565,7 +557,6 @@ class FailoverVLM(VLMBase):
         except Exception as e:
             _annotate_vlm_error(e, self.backup)
             last_error = e
-            self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
 
     async def stream_with_failover(
@@ -604,7 +595,6 @@ class FailoverVLM(VLMBase):
         except Exception as exc:
             _annotate_vlm_error(exc, self.backup)
             last_error = exc
-            self._logger.error(f"Backup VLM also failed with error: {exc}")
             raise last_error
 
     def get_completion(
@@ -856,7 +846,7 @@ class MultiCredentialVLM(VLMBase):
 
         self._vlm_instances = vlm_instances
         self._credential_ids = credential_ids
-        self._logger = logging.getLogger(__name__)
+        self._logger = get_logger(__name__)
         self._switcher = OrderedCredentialSwitcher(
             n=len(vlm_instances),
             failback_timeout_seconds=failback_timeout_seconds,
@@ -912,10 +902,13 @@ class MultiCredentialVLM(VLMBase):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
 
-                self._logger.warning(
-                    "Credential %s failed with %s, trying next credential",
-                    credential_id,
+                self._logger.info(
+                    "vlm credential attempt failed credential_index=%d attempt=%d/%d error_code=%s",
+                    idx,
+                    offset + 1,
+                    n,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -960,10 +953,13 @@ class MultiCredentialVLM(VLMBase):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
 
-                self._logger.warning(
-                    "Credential %s failed with %s, trying next credential",
-                    credential_id,
+                self._logger.info(
+                    "vlm credential attempt failed credential_index=%d attempt=%d/%d error_code=%s",
+                    idx,
+                    offset + 1,
+                    n,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -1003,10 +999,13 @@ class MultiCredentialVLM(VLMBase):
                 if self._switcher.is_fail_fast(kind):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
-                self._logger.warning(
-                    "Credential %s failed with %s, trying next credential",
-                    credential_id,
+                self._logger.info(
+                    "vlm credential attempt failed credential_index=%d attempt=%d/%d error_code=%s",
+                    idx,
+                    offset + 1,
+                    n,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -1153,10 +1152,11 @@ class MultiCredentialVLM(VLMBase):
                 if self._switcher.is_fail_fast(kind):
                     raise
                 errors.append((credential_id, kind, error, idx))
-                self._logger.warning(
-                    "Credential %s failed media understanding with %s, trying next credential",
-                    credential_id,
+                self._logger.info(
+                    "media credential attempt failed credential_index=%d error_code=%s",
+                    idx,
                     kind.value,
+                    extra={"error_code": kind.value},
                 )
 
         if attempted:

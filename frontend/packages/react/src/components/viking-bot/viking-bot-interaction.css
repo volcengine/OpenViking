@@ -1,0 +1,147 @@
+@import '../../shared/feedback/style.css';
+@import '../context-picker/style.css';
+@import '../../shared/error-boundary/error-boundary.css';
+@import '../../theme.css';
+@import '../../shared/primitives/input/input.css';
+@import '../../shared/primitives/form-field/form-field.css';
+@import '../../shared/primitives/button/button.css';
+@import '../../shared/primitives/radio/radio.css';
+@import '../../shared/primitives/select/style.css';
+@import '../../shared/primitives/time-picker/style.css';
+@import '../../shared/primitives/popover/popover.css';
+@import './interaction/interaction-fields.css';
+@import '../../shared/primitives/modal/modal.css';
+@import '../file-tree/style.css';
+@import './interaction/directory-picker.css';
+
+.ov-viking-bot__interaction {
+  display: flex;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  overflow-y: auto;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-viking-bot__interaction-steps {
+  min-width: 0;
+  min-height: 0;
+  flex: 0 1 auto;
+  overflow-y: auto;
+}
+.ov-viking-bot__interaction-card {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 16px 20px 12px;
+  border: 0.5px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 16px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  box-shadow: 0 2px 6px
+    var(--ov-ui-color-shadow-control, var(--ov-ui-shadow-control-default));
+}
+.ov-viking-bot__interaction-title {
+  margin: 0;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__interaction-fields {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.ov-viking-bot__interaction-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-block: 4px;
+}
+.ov-viking-bot__interaction-action.ov-button {
+  min-height: 32px;
+  height: 32px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+.ov-viking-bot__interaction-action.ov-button--outline {
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-viking-bot__interaction-card[aria-busy='true']
+  .ov-button--primary:disabled {
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-viking-bot__interaction-card--options {
+  padding: 0 0 12px;
+}
+.ov-viking-bot__interaction-card--options .ov-viking-bot__interaction-title {
+  padding: 16px 24px;
+}
+.ov-viking-bot__interaction-card--options .ov-viking-bot__interaction-fields {
+  margin-top: 0;
+  padding-inline: 12px;
+}
+.ov-viking-bot__interaction-card--options .ov-viking-bot__interaction-footer {
+  margin-top: 12px;
+  padding: 4px 12px;
+}
+.ov-viking-bot__interaction-progress,
+.ov-viking-bot__interaction-description {
+  margin: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__interaction-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+.ov-viking-bot__answer-summary {
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+.ov-viking-bot__answer-summary dt {
+  overflow-wrap: anywhere;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__answer-summary dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ov-viking-bot__message--answers {
+  padding-left: 0;
+}
+.ov-viking-bot__user-message-group--answers {
+  width: 100%;
+}

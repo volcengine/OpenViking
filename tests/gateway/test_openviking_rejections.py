@@ -32,7 +32,9 @@ async def test_existing_keys_respect_refusals_and_degrade_only_when_unconfirmed(
     )
     if status in {402, 403}:
         assert response.status_code == status, response.text
-        assert response.json()["reason"] == f"openviking_http_{status}"
+        assert response.json()["reason"] == (
+            "openviking_not_ordered" if status == 402 else "openviking_forbidden"
+        )
         assert len(captured) == before
         if status == 402:
             assert "not ordered" in response.json()["detail"]

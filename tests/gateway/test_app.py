@@ -1,6 +1,5 @@
 import asyncio
 import json
-import time
 from pathlib import Path
 
 import orjson
@@ -8,7 +7,6 @@ import pytest
 from aiohttp import web
 from conftest import MCP_TOOLS, TEXT, mcp_tool
 
-from openviking_gateway.capture import ready_at
 from openviking_gateway.protocols import normalize
 from openviking_gateway.tool_loop import REFUSED
 
@@ -101,18 +99,13 @@ async def test_recorded_client_prefixes(running_gateway, client_name, session_he
             assert upstream[1][field_name] == fixture["requests"][1]["body"][field_name]
 
     # A client retry and simultaneous duplicate requests must reuse the same
-    # injection and must not capture the confirmed first turn more than once.
+    # injection and must not capture a saved turn again.
     repeated = await asyncio.gather(
         *(client.post(recorded["path"], headers=headers, json=body) for _ in range(3))
     )
     assert all(r.status_code == 200 for r in repeated)
     forwarded = [raw for path, raw, _ in seen if path == recorded["path"]][-3:]
     assert all(orjson.loads(raw) == upstream[1] for raw in forwarded)
-    for _ in range(20):
-        await app.state.worker.once()
-        if writes:
-            break
-        await asyncio.sleep(0.01)
     source_ids = [
         source_id
         for batch in writes
@@ -1282,80 +1275,73 @@ async def test_overview_counts_model_requests_recalls_and_capture_issues(running
     app, client, admin, _, _, _ = running_gateway
     # Oldest first: the store returns the newest record first.
     for record in [
-        {"kind": "user", "session": "a", "protocol": "chat", "capture_status": "retrying"},
-        {"kind": "capture", "session": "b", "protocol": "chat", "capture_status": "paused"},
-        {"kind": "capture", "session": "a", "protocol": "chat", "capture_status": "active"},
+        {"kind": "user", "session": "a", "protocol": "chat", "capture_status": "failed"},
+        {"kind": "user", "session": "b", "protocol": "chat", "capture_status": "failed"},
+        # A later turn that saved clears the failure; a request that saved nothing does not.
+        {
+            "kind": "continuation",
+            "session": "a",
+            "protocol": "chat",
+            "capture_status": "active",
+            "capture_messages": 4,
+        },
+        {"kind": "auxiliary", "session": "b", "protocol": "chat", "capture_status": "active"},
         {"kind": "user", "recall_reason": "recalled", "recall_ms": 30, "recall_count": 2},
         {"kind": "user", "recall_reason": "empty", "recall_ms": 10},
         {"kind": "user", "recall_reason": "disabled", "recall_ms": 0},
-        {"kind": "continuation", "session": "c", "protocol": "chat", "capture_status": "retrying"},
-        {"kind": "capture", "session": "c", "protocol": "anthropic", "capture_status": "paused"},
+        {"kind": "continuation", "session": "c", "protocol": "chat", "capture_status": "failed"},
+        {"kind": "user", "session": "c", "protocol": "anthropic", "capture_status": "failed"},
     ]:
         await app.state.management.log("tenant", record)
     overview = (await client.get("/admin/overview", headers=admin)).json()
     logs = (await client.get("/admin/logs", headers=admin)).json()
-    newest_request = next(log for log in logs if log["kind"] != "capture")
-    assert overview["requests"] == 5
-    assert overview["last_request_at"] == newest_request["time"]
+    assert overview["requests"] == 9
+    assert overview["last_request_at"] == logs[0]["time"]
     assert overview["recall_requests"] == 2 and overview["recall_ms"] == 20
     assert overview["recall_count"] == 2
-    assert overview["capture_issues"] == {"retrying": 1, "paused": 2}
+    assert overview["capture_issues"] == {"failed": 3}
     assert overview["log_retention_days"] == 30
 
 
-async def test_overview_counts_capture_recovered_during_a_request(running_gateway):
-    app, client, admin, key, _, _ = running_gateway
-    store = app.state.store
-    headers = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "recovering"}
+async def test_failed_save_is_recorded_until_a_later_turn_saves(running_gateway):
+    app, client, admin, key, _, writes = running_gateway
+    failing = [True]
+
+    async def handler(request):
+        if request.path.endswith("/messages/batch") and failing[0]:
+            return web.json_response({"status": "error"}, status=503)
+        return None
+
+    app.state.test_backend["handler"] = handler
+    headers = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "outage"}
     history = [{"role": "user", "content": "Question"}]
     response = await client.post(
         "/v1/chat/completions", headers=headers, json={"model": "model", "messages": history}
     )
     assert response.status_code == 200, response.text
-    with store.connect() as c:
-        ((scope, session),) = list(c.execute("SELECT scope,session FROM capture"))
-    retry = {"attempts": 1, "reason": "openviking_http_503", "retry_at": time.time() + 3600}
-    old = await store.capture.get(scope, session)
-    value = {**old.value, "error": retry}
-    assert await store.capture.swap(scope, session, old, value, ready_at(value))
-
-    async def recover(request):
-        # The worker's retry succeeds while this request is still upstream.
-        if request.path == "/v1/chat/completions":
-            old = await store.capture.get(scope, session)
-            value = {**old.value, "error": {}}
-            assert await store.capture.swap(scope, session, old, value, ready_at(value))
-            await app.state.worker.log(
-                {"session": session}, old.value, "active", "delivery_recovered"
-            )
-
-    app.state.test_backend["handler"] = recover
+    (log,) = (await client.get("/admin/logs", headers=admin)).json()
+    assert log["capture_status"] == "failed" and log["capture_reason"] == "openviking_http_503"
+    assert "capture_messages" not in log and "openviking_session" not in log
+    overview = (await client.get("/admin/overview", headers=admin)).json()
+    assert overview["capture_issues"] == {"failed": 1}
+    failing[0] = False
     history += [{"role": "assistant", "content": "hello"}, {"role": "user", "content": "Next"}]
     response = await client.post(
         "/v1/chat/completions", headers=headers, json={"model": "model", "messages": history}
     )
     assert response.status_code == 200, response.text
+    log = (await client.get("/admin/logs", headers=admin)).json()[0]
+    assert log["capture_status"] == "active" and log["capture_reason"] == ""
+    # The turn that failed is written with the one that saved.
+    assert log["capture_messages"] == 4
+    assert [len(batch["messages"]) for batch in writes] == [4]
+    store = app.state.store
+    with store.connect() as c:
+        ((scope, session),) = list(c.execute("SELECT scope,session FROM capture"))
+    state = (await store.capture.get(scope, session)).value
+    assert log["openviking_session"] == state["ov_session"]
     overview = (await client.get("/admin/overview", headers=admin)).json()
-    assert overview["capture_issues"] == {"retrying": 0, "paused": 0}
-
-
-async def test_capture_status_refresh_failure_still_logs_request(running_gateway, monkeypatch):
-    _, client, admin, key, _, _ = running_gateway
-
-    class Broken:
-        @staticmethod
-        def model_validate(_):
-            raise RuntimeError("refresh failed")
-
-    monkeypatch.setattr("openviking_gateway.proxy.Policy", Broken)
-    response = await client.post(
-        "/v1/chat/completions",
-        headers={"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "s"},
-        json={"model": "model", "messages": [{"role": "user", "content": "Question"}]},
-    )
-    assert response.status_code == 200, response.text
-    logs = (await client.get("/admin/logs", headers=admin)).json()
-    assert [log["capture_status"] for log in logs if log["kind"] == "user"] == ["active"]
+    assert overview["capture_issues"] == {"failed": 0}
 
 
 async def test_overview_without_model_requests(running_gateway):
@@ -1363,7 +1349,7 @@ async def test_overview_without_model_requests(running_gateway):
     overview = (await client.get("/admin/overview", headers=admin)).json()
     assert overview["requests"] == 0 and overview["last_request_at"] is None
     assert overview["recall_ms"] == 0 and overview["recall_requests"] == 0
-    assert overview["capture_issues"] == {"retrying": 0, "paused": 0}
+    assert overview["capture_issues"] == {"failed": 0}
 
 
 async def test_user_and_account_data_deletion_routes(running_gateway):

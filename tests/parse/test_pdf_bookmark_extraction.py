@@ -16,6 +16,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pdfminer.pdftypes import PDFObjRef
+from pdfminer.psparser import LIT
 
 from openviking.parse.parsers.pdf import PDFParser
 
@@ -132,7 +134,7 @@ class TestExtractBookmarks:
         self.parser = PDFParser()
 
     def test_extract_bookmarks_with_outlines(self):
-        """Bookmarks are extracted from PDF outlines with correct levels and page mapping."""
+        """Local Dest and GoTo outlines map to pages; remote GoToR does not."""
         # Mock pdfplumber PDF object
         mock_pdf = MagicMock()
 
@@ -142,20 +144,27 @@ class TestExtractBookmarks:
         # Mock page reference objects for bookmark destinations
         mock_ref1 = _make_ref(100)  # Points to page 1
         mock_ref2 = _make_ref(200)  # Points to page 2
+        mock_pdf.doc.getobj.return_value = {
+            "S": LIT("GoTo"),
+            "D": [mock_ref2, LIT("Fit")],
+        }
 
         # Mock document outlines: (level, title, dest, action, structelem)
         mock_pdf.doc.get_outlines.return_value = [
-            (1, "Chapter 1", [mock_ref1, "/Fit"], None, None),
-            (2, "Section 1.1", [mock_ref1, "/Fit"], None, None),
-            (1, "Chapter 2", [mock_ref2, "/Fit"], None, None),
+            (1, "Chapter 1", [mock_ref1, LIT("Fit")], None, None),
+            (2, "Section 1.1", None, {"S": LIT("GoTo"), "D": [mock_ref1, LIT("Fit")]}, None),
+            (1, "Chapter 2", None, PDFObjRef(mock_pdf.doc, 300), None),
+            (1, "External", None, {"S": LIT("GoToR"), "D": [0, LIT("Fit")]}, None),
         ]
 
         bookmarks = self.parser._extract_bookmarks(mock_pdf)
 
-        assert len(bookmarks) == 3
-        assert bookmarks[0] == {"title": "Chapter 1", "level": 1, "page_num": 1}
-        assert bookmarks[1] == {"title": "Section 1.1", "level": 2, "page_num": 1}
-        assert bookmarks[2] == {"title": "Chapter 2", "level": 1, "page_num": 2}
+        assert bookmarks == [
+            {"title": "Chapter 1", "level": 1, "page_num": 1},
+            {"title": "Section 1.1", "level": 2, "page_num": 1},
+            {"title": "Chapter 2", "level": 1, "page_num": 2},
+            {"title": "External", "level": 1, "page_num": None},
+        ]
 
     def test_extract_bookmarks_falls_back_to_objid_mapping(self):
         """Objid-based mapping remains supported for tests and alternate backends."""
@@ -272,6 +281,30 @@ class TestExtractBookmarks:
 
 class TestConvertLocalBookmarks:
     """Test bookmark injection behavior in local PDF conversion."""
+
+    @pytest.mark.asyncio
+    async def test_convert_local_keeps_multiline_cells_in_one_table_row(self):
+        parser = PDFParser()
+        page = _FakePage("Product Quantity")
+        fake_pdf = SimpleNamespace(pages=[page])
+        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+
+        with (
+            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
+            patch.object(
+                page,
+                "extract_tables",
+                return_value=[[["Product\nname", "Quantity"], ["Widget | kit\nSecond line", "3"]]],
+            ),
+        ):
+            markdown, meta = await parser._convert_local(
+                "dummy.pdf", storage=MagicMock(), resource_name="dummy"
+            )
+
+        assert meta["tables_extracted"] == 1
+        assert (
+            "| Product<br>name | Quantity |\n| --- | --- |\n| Widget \\| kit<br>Second line | 3 |"
+        ) in markdown
 
     @pytest.mark.asyncio
     async def test_convert_local_skips_unresolved_bookmarks(self):

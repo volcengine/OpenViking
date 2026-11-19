@@ -19,6 +19,21 @@ fn default_ttl_comes_from_redis_provider_config() {
     assert_eq!(runtime.default_ttl(), None);
 }
 
+/// Verifies closed runtimes reject script registration as well as provider operations.
+#[tokio::test]
+async fn close_rejects_script_registration() {
+    let runtime = CacheRuntime::memory();
+    runtime.close().await.unwrap();
+
+    assert!(matches!(
+        runtime.register_script(
+            "ragfs.test.closed.v1".to_string(),
+            "return 1".to_string(),
+        ),
+        Err(CacheError::Closed)
+    ));
+}
+
 /// Verifies the HASH, ZSET, and UNLINK primitives needed by query cache.
 #[tokio::test]
 async fn query_cache_primitives_store_scan_and_unlink() {

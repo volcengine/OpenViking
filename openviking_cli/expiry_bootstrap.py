@@ -7,9 +7,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import os
 import signal
+import sys
 from pathlib import Path
 
 
@@ -22,9 +22,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def load_expiry_config(path: Path):
     from openviking.server.config import TTLAdapterConfig
+    from openviking_cli.utils.config.config_loader import expand_config_environment
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
-    raw = json.loads(os.path.expandvars(path.expanduser().read_text(encoding="utf-8-sig")))
+    raw = json.loads(expand_config_environment(path.expanduser().read_text(encoding="utf-8-sig")))
     config = OpenVikingConfig.from_dict(raw)
     ttl = TTLAdapterConfig.model_validate(raw.get("server", {}).get("ttl_adapter") or {})
     if not (config.uses_redis_expiry() or ttl.writer_enabled):
@@ -92,8 +93,14 @@ async def run_publisher(config, stop: asyncio.Event, startup_status: Path) -> No
 
 def main(argv: list[str] | None = None) -> int:
     startup_status: Path | None = None
+    from openviking_cli.utils.logger import configure_server_logging
+
+    configure_server_logging(bootstrap=True)
     try:
         args = parse_args(argv)
+        from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
+
+        os.environ[OPENVIKING_CONFIG_ENV] = str(args.config)
         current_startup_status: Path = args.startup_status
         startup_status = current_startup_status
         try:
@@ -102,8 +109,13 @@ def main(argv: list[str] | None = None) -> int:
             # Validation errors are already safely formatted. Avoid emitting
             # chained validation tracebacks containing raw configuration input.
             write_startup_status(current_startup_status, "failed", str(exc))
-            logging.error("Expiry publisher configuration failed: %s", exc)
+            print(
+                f"Expiry publisher configuration failed ({type(exc).__name__}).",
+                file=sys.stderr,
+                flush=True,
+            )
             return 1
+        configure_server_logging()
         write_startup_status(current_startup_status, "starting")
 
         async def runner() -> None:
@@ -121,7 +133,11 @@ def main(argv: list[str] | None = None) -> int:
                 write_startup_status(startup_status, "failed", str(exc))
             except Exception:
                 pass
-        logging.exception("Expiry publisher failed")
+        print(
+            f"Expiry publisher failed ({type(exc).__name__}).",
+            file=sys.stderr,
+            flush=True,
+        )
         return 1
 
 

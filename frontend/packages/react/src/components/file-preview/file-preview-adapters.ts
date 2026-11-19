@@ -1,3 +1,4 @@
+import { fenceMarkdownFrontmatter } from '../../shared/markdown/preview-frontmatter.js';
 import { code } from '@ark-design/ui/file-viewer/adapters/code';
 import { diff } from '@ark-design/ui/file-viewer/adapters/diff';
 import { html } from '@ark-design/ui/file-viewer/adapters/html';
@@ -13,6 +14,12 @@ import { text } from '@ark-design/ui/file-viewer/adapters/text';
 import { word } from '@ark-design/ui/file-viewer/adapters/word';
 import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
 
+import {
+  originalImageTarget,
+  preserveVikingImages,
+  recoverImportedMarkdownImages,
+} from './file-preview-markdown-images.js';
+
 /**
  * 组件内置的格式集合：文本、文档、图片与音视频。
  *
@@ -22,7 +29,7 @@ import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
  * CAD 与 3D 需要额外的引擎与伴随资源，不放进公共组件。
  *
  * 本模块会静态引入底座，因此只能被懒加载的正文模块引用，不能进入包的顶层
- * 导入链——底座会静态引入浏览器专用组件，顶层导入会破坏服务端渲染。
+ * 导入链，减少控制台首屏加载体积。
  *
  * The formats the component ships: text, documents, images and media. The image
  * adapter reads content while the media adapter reads a reference; the base
@@ -35,6 +42,7 @@ import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
  */
 export function createFilePreviewAdapterList({
   onLinkClick,
+  resolveImage,
 }: {
   /**
    * Markdown 正文里的链接被点击时调用。传入后由回调接管导航，底座不再自行
@@ -45,12 +53,54 @@ export function createFilePreviewAdapterList({
    * Markdown adapter supports this; other formats ignore it.
    */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
+  resolveImage?: (src: string) => Promise<string>;
 } = {}): FileViewerCoreProps['adapters'] {
   return [
     code({ showLineNumbers: true }),
     text({ showLineNumbers: true }),
     json({ defaultExpandDepth: 4 }),
-    markdown({ onLinkClick }),
+    markdown({
+      onLinkClick,
+      rendererProps: {
+        // Parse raw HTML, then keep Ark's sanitizer in charge of tags and attributes.
+        parsing: { enabledHtmlTags: true },
+        sourcePlugins: (current) => [
+          ...current,
+          {
+            name: 'ov-yaml-frontmatter',
+            config: { priority: -1 },
+            modifier: ({ source }) => fenceMarkdownFrontmatter(source),
+            before: () => {},
+            after: () => {},
+            beforeEach: () => {},
+            afterEach: () => {},
+          },
+        ],
+        astPlugins: (current) => [
+          ...current,
+          {
+            name: 'ov-viking-images',
+            config: { priority: 2 },
+            modifier: (root) => {
+              recoverImportedMarkdownImages(root);
+              preserveVikingImages(root);
+            },
+            before: () => {},
+            after: () => {},
+            beforeEach: () => {},
+            afterEach: () => {},
+          },
+        ],
+        imageOptions: {
+          processSrcBeforeLoad: resolveImage
+            ? (src) => resolveImage(originalImageTarget(src))
+            : undefined,
+          forceHttps: false,
+          objectFit: 'contain',
+          responsiveNaturalSize: true,
+        },
+      },
+    }),
     html(),
     table(),
     pdf({ initialFit: 'fit-width' }),

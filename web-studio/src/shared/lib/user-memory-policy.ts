@@ -33,6 +33,7 @@ export function buildMemoryPolicy(preset: MemoryPreset): UserMemoryPolicy {
 export function identifyMemoryPreset(
   policy: UserMemoryPolicy,
 ): MemoryPreset | 'custom' {
+  policy = normalizeMemoryPolicy(policy)
   return (
     memoryPresets.find((preset) => {
       const expected = buildMemoryPolicy(preset)
@@ -52,12 +53,7 @@ export function identifyMemoryPreset(
   )
 }
 
-export const defaultMemoryTypes = [
-  ...personalMemoryTypes,
-  ...agentMemoryTypes,
-  'identity',
-  'soul',
-]
+export const defaultMemoryTypes = [...personalMemoryTypes, ...agentMemoryTypes]
 export const builtinMemoryTypes = [...defaultMemoryTypes, 'skills', 'tools']
 
 export function normalizeMemoryPolicy(
@@ -65,6 +61,8 @@ export function normalizeMemoryPolicy(
 ): UserMemoryPolicy {
   if (!policy.memory_types) return policy
   const types = new Set(policy.memory_types)
+  types.delete('soul')
+  types.delete('identity')
   if (types.has('experiences'))
     agentMemoryTypes.forEach((type) => types.add(type))
   else agentMemoryTypes.forEach((type) => types.delete(type))

@@ -30,6 +30,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Union
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.output import create_parse_artifact_writer
 from openviking.parse.parsers.base_parser import BaseParser
@@ -212,15 +213,15 @@ class AudioParser(BaseParser):
                 result.source_path = source_path
             return result
         except Exception as e:
-            logger.exception("Failed to parse audio content: %s", e)
+            logger.info("Audio content rejected error_type=%s", type(e).__name__)
             raise ValueError(f"Invalid audio content: {str(e)}") from e
         finally:
             if temp_file_path and os.path.exists(temp_file_path):
                 try:
                     os.remove(temp_file_path)
                 except Exception as cleanup_error:
-                    logger.warning(
-                        "Failed to cleanup temporary parse file %s: %s",
-                        temp_file_path,
-                        cleanup_error,
+                    logger.info(
+                        "Temporary audio file cleanup failed path=%s error_type=%s",
+                        safe_path_for_log(str(temp_file_path)),
+                        type(cleanup_error).__name__,
                     )

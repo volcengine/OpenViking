@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.project.project_group import get_or_create_project_group
 from openviking.storage.vectordb.service.app_models import (
     ApiResponse,
@@ -27,7 +28,9 @@ from openviking.storage.vectordb.service.app_models import (
 )
 from openviking.storage.vectordb.service.code import ErrorCode
 from openviking.storage.vectordb.utils import data_utils
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # Helper functions for responses
@@ -69,7 +72,8 @@ class VikingDBException(Exception):
 PERSIST_PATH = os.environ.get("VIKINGDB_PERSIST_PATH", "./vikingdb_data/")
 
 logger.info(
-    f"Initializing ProjectGroup with path: {PERSIST_PATH if PERSIST_PATH else 'volatile mode'}"
+    "Initializing ProjectGroup with path: %s",
+    type(PERSIST_PATH if PERSIST_PATH else "volatile mode").__name__,
 )
 project_group = get_or_create_project_group(path=PERSIST_PATH)
 logger.info("ProjectGroup initialized successfully")
@@ -147,15 +151,19 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
         "Fields": fields,
     }
 
-    logger.info(f"Creating collection: {collection_name} in project: {project_name}")
-    logger.debug(f"Collection meta_data: {meta_data}")
+    logger.debug(
+        "Creating collection: %s in project: %s",
+        short_hash(str(collection_name)),
+        short_hash(str(project_name)),
+    )
+    logger.debug("Collection creation prepared metadata_type=%s", type(meta_data).__name__)
 
     try:
         project.create_collection(collection_name, meta_data)
-        logger.info(f"Collection created successfully: {collection_name}")
+        logger.debug("Collection created successfully: %s", short_hash(str(collection_name)))
         return success_response("create collection success", request=req)
     except Exception as e:
-        logger.error(f"Failed to create collection: {e}")
+        logger.error("Failed to create collection: %s", type(e).__name__)
         return error_response(str(e), ErrorCode.INTERNAL_ERR.value, request=req)
 
 
@@ -234,7 +242,9 @@ async def upsert_data(request: DataUpsertRequest, req: Request):
         ttl = request.ttl or 0
         data_list = data_utils.convert_dict(request.fields)
 
-        logger.debug(f"Upserting {len(data_list)} records to {request.collection_name}")
+        logger.debug(
+            "Upserting %s records to %s", len(data_list), short_hash(str(request.collection_name))
+        )
         result = collection.upsert_data(data_list=data_list, ttl=ttl)
         if not result or not result.ids:
             return error_response("upsert data err", ErrorCode.INTERNAL_ERR.value, request=req)
@@ -251,7 +261,9 @@ async def update_data(request: DataUpsertRequest, req: Request):
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
         data_list = data_utils.convert_dict(request.fields)
 
-        logger.debug(f"Updating {len(data_list)} records in {request.collection_name}")
+        logger.debug(
+            "Updating %s records in %s", len(data_list), short_hash(str(request.collection_name))
+        )
         result = collection.update_data(data_list=data_list)
         return success_response("update data success", result, request=req)
     except VikingDBException as e:
@@ -318,7 +330,11 @@ async def create_index(request: IndexCreateRequest, req: Request):
         if description:
             meta_data["Description"] = description
 
-        logger.info(f"Creating index: {index_name} in collection: {request.CollectionName}")
+        logger.debug(
+            "Creating index: %s in collection: %s",
+            short_hash(str(index_name)),
+            type(request.CollectionName).__name__,
+        )
         collection.create_index(index_name, meta_data)
         return success_response("create index success", request=req)
     except VikingDBException as e:
@@ -530,7 +546,7 @@ async def search_by_multimodal(request: SearchByMultiModalRequest, req: Request)
             )
             return success_response("search success", asdict(result), request=req)
         except Exception as e:
-            logger.error(f"Multimodal search error: {e}")
+            logger.error("Multimodal search error: %s", type(e).__name__)
             return error_response(str(e), ErrorCode.INTERNAL_ERR.value, request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
@@ -661,9 +677,7 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
                 query=query,
                 mode=request.mode,
                 fields=(
-                    data_utils.convert_dict(request.fields)
-                    if request.fields is not None
-                    else None
+                    data_utils.convert_dict(request.fields) if request.fields is not None else None
                 ),
                 limit=limit,
                 offset=offset,
@@ -672,7 +686,7 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
             )
             return success_response("search success", asdict(result), request=req)
         except Exception as e:
-            logger.error(f"Keywords search error: {e}")
+            logger.error("Keywords search error: %s", type(e).__name__)
             return error_response(str(e), ErrorCode.INTERNAL_ERR.value, request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)

@@ -119,6 +119,38 @@ The model-facing surface is the OpenViking MCP tool set, reached through the sam
 
 A filesystem tool call whose path is a `viking://` URI is blocked with a hint pointing at the right OpenViking tool. For a write or edit under a skill directory such as `viking://~/skills/<name>/`, that tool is `mcp__openviking__add_skill`, which creates or replaces a whole skill from its `SKILL.md` text. A shell command that carries a `viking://` URI still runs, and the model gets a notice suggesting the OpenViking tools, which it can ignore when the URI is intentional data.
 
+### Client-side recall compression
+
+Compression stays off by default. To use DSH's configured model instead of the
+server query planner, merge this into `~/.openviking/ovcli.conf` and restart DSH:
+
+```json
+{"plugin":{"dsh":{"recallCompress":"client","recallCompressTimeoutMs":10000}}}
+```
+
+The plugin makes one tool-free `ctx.llm.stream()` call using the agent's
+`options.provider` and `options.model`. `recallCompressModel` optionally selects
+another model on that same provider; `recallCompressThinking` supplies a
+provider-supported reasoning effort. Credentials and endpoints belong to DSH's
+provider configuration, not OpenViking's server credentials. DSH does not use
+`recallCompressBaseUrl` or the CLI compressor detection settings. “Client-side”
+means the call runs through DSH; inference is on-device only if that DSH provider
+points to a local model service. Model switches implemented solely by host request
+middleware are not inferred from `agent.options`; configure the compressor model
+explicitly or restart with the intended model.
+
+`client` never requests server rewrite. `auto` prefers the host compressor when
+its model/service are available, otherwise retains server `rewrite: "auto"`.
+`server` and `off` keep their existing behavior. An unavailable host compressor in
+`client` mode leaves the retrieved context uncompressed. Short input skips the
+model call; the shared input limit, cited-digest handling and fallback still apply.
+Timeouts, unsuccessful streams and invalid digests fall back to budgeted original
+fragments; an explicitly irrelevant result injects nothing. Cancellation stops
+waiting and signals the adapter. An adapter that ignores abort may continue its
+request, but cannot inject its late result. Auxiliary messages are not appended
+to the session or captured as memories. Digest caches are separated by connection,
+identity, session and model. Shared compression status is logged through DSH.
+
 <details>
 <summary><b>Configuration</b></summary>
 

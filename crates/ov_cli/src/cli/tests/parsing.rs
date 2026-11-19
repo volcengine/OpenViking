@@ -457,14 +457,12 @@ fn cli_parses_clear_tag_mode_without_tags() {
         "content",
         "--tag-mode",
         "clear",
-        "--edit-source",
-        "compile",
     ])
-    .expect("write clear mode with Compile source should parse");
+    .expect("write clear mode should parse");
     assert!(matches!(
         write.command,
-        Commands::Write { tag_mode, tags, edit_source, .. }
-            if tag_mode == "clear" && tags.is_empty() && edit_source == "compile"
+        Commands::Write { tag_mode, tags, .. }
+            if tag_mode == "clear" && tags.is_empty()
     ));
 
     let reindex = Cli::try_parse_from([
@@ -780,4 +778,66 @@ fn append_time_filter_params_only_emits_after_and_before() {
     handlers::append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
 
     assert_eq!(params, vec!["--after 7d", "--before 2026-03-12"]);
+}
+
+#[test]
+fn compile_creation_and_named_execution_are_distinct() {
+    assert!(Cli::try_parse_from(["ov", "compile", "--compile-name=-demo"]).is_err());
+    assert!(Cli::try_parse_from(["ov", "compile", "--compile-name", &"汉".repeat(33)]).is_err());
+    for name in ["research-summary", "_summary", &"𠀀".repeat(32)] {
+        let parsed = Cli::try_parse_from(["ov", "compile", "--compile-name", name]).unwrap();
+        assert!(
+            matches!(parsed.command, Commands::Compile { compile_name: Some(value), .. } if value == name)
+        );
+        assert!(
+            Cli::try_parse_from(["ov", "compile", "--compile-name", name, "--skill", "memory"])
+                .is_err()
+        );
+        let parsed = Cli::try_parse_from([
+            "ov",
+            "compile",
+            "create",
+            "--compile-name",
+            name,
+            "--from",
+            "viking://resources/a",
+            "--to",
+            "viking://resources/b",
+            "--skill",
+            "viking://agent/skills/wiki",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            Commands::Compile {
+                command: Some(CompileCommands::Create { compile_name, .. }),
+                ..
+            } if compile_name == name
+        ));
+    }
+}
+
+#[test]
+fn compile_creation_requires_a_name() {
+    for args in [
+        vec!["ov", "compile", "create"],
+        vec![
+            "ov",
+            "compile",
+            "create",
+            "--from",
+            "viking://resources/a",
+            "--to",
+            "viking://resources/b",
+            "--skill",
+            "viking://agent/skills/wiki",
+        ],
+    ] {
+        let error = Cli::try_parse_from(args).err().expect("name is required");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(error.to_string().contains("--compile-name"));
+    }
 }

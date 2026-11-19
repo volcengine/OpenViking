@@ -1,0 +1,171 @@
+.ov-context-picker .ov-modal__panel {
+  --ov-ui-modal-width: 684px;
+  border-radius: 16px;
+}
+.ov-context-picker .ov-modal__body {
+  display: flex;
+  max-height: calc(100dvh - 48px);
+  min-height: 0;
+  padding: 0;
+  flex-direction: column;
+}
+.ov-context-picker__title {
+  margin: 0;
+  padding: 20px 64px 20px 24px;
+  flex-shrink: 0;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+}
+.ov-context-picker__content {
+  display: flex;
+  min-height: 0;
+  padding: 0 24px;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+.ov-context-picker__selection {
+  display: flex;
+  min-height: 36px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  border-radius: 6px;
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 13px;
+  line-height: 22px;
+}
+.ov-context-picker__selected-entry {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-context-picker__selected-entry > svg {
+  flex-shrink: 0;
+}
+.ov-context-picker__selected-entry > span,
+.ov-context-picker__selected-entry > .ov-button {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-context-picker__tree-panel {
+  display: flex;
+  height: var(
+    --ov-ui-context-picker-tree-height,
+    var(--ov-ui-context-picker-tree-height-default, 416px)
+  );
+  min-height: 160px;
+  padding: 12px;
+  flex-shrink: 1;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 12px;
+}
+.ov-context-picker--multiple {
+  --ov-ui-context-picker-tree-height-default: 544px;
+}
+.ov-context-picker__tree-panel > .ov-input {
+  flex-shrink: 0;
+}
+.ov-context-picker .ov-file-tree {
+  min-height: 0;
+  flex: 1;
+}
+.ov-context-picker .ov-file-tree__body {
+  overflow: auto;
+}
+.ov-context-picker .ov-file-tree__row {
+  min-height: 32px;
+}
+.ov-context-picker__check {
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+.ov-context-picker__check .ov-checkbox__mask {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+}
+.ov-context-picker__check .ov-checkbox__text {
+  display: contents;
+}
+.ov-context-picker__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.ov-context-picker__checked {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-context-picker__footer {
+  display: flex;
+  min-height: 72px;
+  padding: 20px 24px;
+  flex-shrink: 0;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.ov-context-picker__footer-start {
+  min-width: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 13px;
+}
+.ov-context-picker__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 13px;
+}
+.ov-context-picker__error {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+  font-size: 13px;
+}
+@media (max-width: 480px) {
+  .ov-context-picker {
+    padding: 16px;
+  }
+  .ov-context-picker__title {
+    padding-left: 16px;
+  }
+  .ov-context-picker__content {
+    padding: 0 16px;
+  }
+  .ov-context-picker__footer {
+    padding: 16px;
+    flex-wrap: wrap;
+  }
+  .ov-context-picker__actions {
+    margin-left: auto;
+  }
+}
+
+.ov-context-picker__tree-panel
+  input[type='search']::-webkit-search-cancel-button {
+  appearance: none;
+}
+.ov-context-picker__clear.ov-button {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+}
+/* The input's focus-within ring also represents its clear action. */
+.ov-context-picker__clear.ov-button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}

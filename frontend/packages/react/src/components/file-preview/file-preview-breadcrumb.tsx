@@ -11,6 +11,7 @@ const OVERFLOW_BUTTON_WIDTH = 36;
 const SHIFT_DURATION = 160;
 
 export interface FilePreviewBreadcrumbProps {
+  hiddenPathLabel: string;
   segments: readonly PathSegment[];
   title: string;
   canOpen: boolean;
@@ -20,10 +21,7 @@ export interface FilePreviewBreadcrumbProps {
 
 /** 判断是否应跳过动画：用户要求减少动效时不做位移。 */
 function prefersReducedMotion() {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  );
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 /**
@@ -72,6 +70,7 @@ function measureAvailable(root: HTMLElement) {
  * too, leaving the trailing name alone.
  */
 export function FilePreviewBreadcrumb({
+  hiddenPathLabel,
   segments,
   title,
   canOpen,
@@ -186,6 +185,7 @@ export function FilePreviewBreadcrumb({
   );
   const menu = hiddenSegments.length ? (
     <FilePreviewBreadcrumbMenu
+      hiddenPathLabel={hiddenPathLabel}
       segments={hiddenSegments}
       canOpen={canOpen}
       disabled={disabled}
@@ -204,17 +204,21 @@ export function FilePreviewBreadcrumb({
       ref={rootRef}
     >
       <div
-        className="ov-file-preview__breadcrumb-measure"
-        ref={measureRef}
+        className="ov-file-preview__breadcrumb-measure-clip"
         aria-hidden="true"
       >
-        {segments.map((segment) => (
-          <span key={segment.uri} className="ov-file-preview__breadcrumb-part">
-            <span>{segment.isFirst ? `${segment.uri}` : segment.label}</span>
-            <span className="ov-file-preview__breadcrumb-separator">/</span>
-          </span>
-        ))}
-        <span>{title}</span>
+        <div className="ov-file-preview__breadcrumb-measure" ref={measureRef}>
+          {segments.map((segment) => (
+            <span
+              key={segment.uri}
+              className="ov-file-preview__breadcrumb-part"
+            >
+              <span>{segment.isFirst ? `${segment.uri}` : segment.label}</span>
+              <span className="ov-file-preview__breadcrumb-separator">/</span>
+            </span>
+          ))}
+          <span>{title}</span>
+        </div>
       </div>
       {rootHidden && menu ? (
         <span className="ov-file-preview__breadcrumb-part">

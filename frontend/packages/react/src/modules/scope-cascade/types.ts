@@ -1,3 +1,5 @@
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
+import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes } from 'react';
 import type {
   ScopeSwitcherLabels,
@@ -43,13 +45,23 @@ export interface ScopeCascadeController {
     ScopeCascadeLevel,
   ];
 }
-export interface ScopeCascadeProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  'children'
-> {
-  controller: ScopeCascadeController;
+export interface ScopeCascadeProps
+  extends
+    Omit<HTMLAttributes<HTMLDivElement>, 'children' | 'onChange'>,
+    ScopeCascadeApi {
+  /** Optional locale; inherits the nearest module or Provider. */
+  locale?: Locale;
   /** Accessible names and placeholders, in library / space / user order. */
   levelNames?: readonly [string, string, string];
   retryLabel?: string;
+  onChange?: (selection: ScopeCascadeSelection | null) => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   labels?: ScopeSwitcherLabels;
+}
+
+export interface ScopeCascadeSelection {
+  libraryId: string;
+  spaceId: string;
+  userId: string;
 }

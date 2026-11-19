@@ -14,10 +14,12 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonical_user_root
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
@@ -44,6 +46,7 @@ from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
+from openviking.storage.queuefs.compile_target_tag_processor import CompileTargetTagProcessor
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
@@ -116,6 +119,7 @@ class OpenVikingService:
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._user_config_defaults = UserConfigDefaults()
         self._system_asset_synchronizer: Optional[SystemAssetSynchronizer] = None
         self._watch_manager: Optional[WatchManager] = None
         self._watch_runtime: Optional[WatchRuntime] = None
@@ -222,7 +226,7 @@ class OpenVikingService:
                 max_concurrent_external_task=max_concurrent_external_task,
             )
         else:
-            logger.warning("RAGFS client not initialized, skipping queue manager")
+            logger.info("RAGFS client not initialized; skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
         self._vikingdb_manager = VikingDBManager(
@@ -283,6 +287,18 @@ class OpenVikingService:
         """Set the legacy server value used as the cluster startup baseline."""
         self._agent_evolution_base_config = config.model_copy(deep=True)
         self._session_service.set_agent_evolution_config(config)
+
+    @property
+    def user_config_defaults(self) -> UserConfigDefaults:
+        """Deployment defaults shared with user workspace initialization."""
+        return self._user_config_defaults
+
+    @user_config_defaults.setter
+    def user_config_defaults(self, config: UserConfigDefaults) -> None:
+        self._user_config_defaults = config
+        # create_app also accepts a service whose storage is already initialized.
+        if self._directory_initializer is not None:
+            self._directory_initializer.user_config_defaults = config
 
     async def apply_agent_evolution_config(self) -> None:
         """Apply the legacy server value to an already initialized manager."""
@@ -364,10 +380,9 @@ class OpenVikingService:
 
             self._data_dir_lock_path = acquire_data_dir_lock(storage.workspace)
         else:
-            logger.warning(
-                "Skipping workspace process lock for '%s'; multi-process access may corrupt "
-                "embedded vector storage",
-                storage.workspace,
+            logger.info(
+                "Workspace process lock disabled; concurrent access may corrupt embedded vector storage",
+                extra={"target_id": safe_path_for_log(storage.workspace)},
             )
         self._data_dir_lock_acquired = True
 
@@ -567,6 +582,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
             system_asset_synchronizer=system_asset_synchronizer,
+            user_config_defaults=self.user_config_defaults,
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
@@ -611,7 +627,6 @@ class OpenVikingService:
         self._watch_runtime = WatchRuntime(
             self._watch_manager,
             leader_enabled=self._config.enable_watch_scheduler,
-            leader_provider=self._config.watch_leader_provider,
         )
 
         # Wire up sub-services
@@ -713,19 +728,11 @@ class OpenVikingService:
             self._compile_scheduler = CompileScheduler(
                 self._compile_service,
                 compile_store,
-                self._viking_fs,
             )
             self._compile_scheduler.credential_encryptor = (
                 self._external_task_service.credential_encryptor
             )
-            self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
-            self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule
-            self._compile_service.lifecycle.save_credential = (
-                self._compile_scheduler.save_credential
-            )
-        self._fs_service.compile_versions = self._compile_service.lifecycle.versions
-        self._fs_service.compile_lifecycle = self._compile_service.lifecycle
-        self._resource_service.compile_versions = self._compile_service.lifecycle.versions
+            self._compile_service.configure_scheduler(self._compile_scheduler)
 
         if self._queue_manager:
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
@@ -754,6 +761,11 @@ class OpenVikingService:
             self._queue_manager.get_queue(
                 self._queue_manager.CONTENT_WRITE,
                 dequeue_handler=ContentWriteProcessor(self._viking_fs, self._vikingdb_manager),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.COMPILE_TARGET_TAG,
+                dequeue_handler=CompileTargetTagProcessor(self._fs_service),
                 allow_create=True,
             )
             self._queue_manager.get_queue(
@@ -838,13 +850,17 @@ class OpenVikingService:
         if should_preflight_mineru and pdf_config.mineru_endpoint:
             try:
                 await wait_for_mineru_ready(pdf_config.mineru_endpoint)
-                logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
+                logger.info(
+                    "MinerU preflight passed",
+                    extra={"target_id": safe_uri_for_log(pdf_config.mineru_endpoint)},
+                )
             except RuntimeError as exc:
                 if pdf_config.strategy == "mineru":
                     await self._stop_expiry()
                     raise
-                logger.warning(
-                    "MinerU preflight failed (fallback will retry on first parse): %s", exc
+                logger.info(
+                    "MinerU preflight failed; fallback will retry on first parse",
+                    extra={"error_type": type(exc).__name__, "degraded": True},
                 )
 
         if self._runtime_config_manager is not None:
@@ -870,7 +886,7 @@ class OpenVikingService:
         try:
             await runtime.close()
         except Exception as exc:
-            logger.exception("Expiry shutdown failed")
+            logger.error("Expiry shutdown failed", extra={"error_type": type(exc).__name__})
             if getattr(exc, "code", None) == "shard_not_stopped":
                 # Retain the runtime and leave QueueFS/AGFS open for still-running
                 # callbacks. The caller can retry close after they terminate.

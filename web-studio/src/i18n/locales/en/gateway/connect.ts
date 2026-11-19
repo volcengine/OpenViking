@@ -240,7 +240,7 @@ const connect = {
     description:
       "A client can change its key's context profile for a new conversation by sending the profile fields to change as a JSON object in this header.",
     tools:
-      '`{"disabled_tools":[]}` offers every OpenViking tool, including the ones that change data.',
+      '`{"disabled_tools":["forget","set_acl"]}` withholds those two tools for the conversation.',
     scope:
       'The settings a conversation starts with stay for the rest of it. Profiles with “Let clients override settings” turned off reject the header.',
   },

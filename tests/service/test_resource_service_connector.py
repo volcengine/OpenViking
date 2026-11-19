@@ -64,6 +64,16 @@ class _FakeResourceProcessor:
         return None
 
 
+class _RoutingVFS(SimpleNamespace):
+    """Connector routing fixture with allowed access and no indexed directory tags."""
+
+    async def _ensure_access(self, *_args, **_kwargs):
+        return None
+
+    def _get_vector_store(self):
+        return None
+
+
 @pytest.fixture
 def connector_config(monkeypatch):
     import openviking_cli.utils.config.open_viking_config as config_module
@@ -118,7 +128,7 @@ def service():
     # pre-check tests build their own service with a missing parent.
     return ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(exists=AsyncMock(return_value=True)),
+        viking_fs=_RoutingVFS(exists=AsyncMock(return_value=True)),
         resource_processor=_FakeResourceProcessor(),
         skill_processor=object(),
     )
@@ -286,7 +296,7 @@ async def watch_service(watch_store, watch_vfs, watch_tracker):
     """Connector imports with real Watch and Task persistence."""
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(
+        viking_fs=_RoutingVFS(
             exists=AsyncMock(return_value=True),
             _encryptor=_FakeEncryptor(),
         ),
@@ -1045,6 +1055,28 @@ async def test_one_off_connector_import_leaves_existing_watch_untouched(
 
 
 @pytest.mark.asyncio
+async def test_native_one_off_import_does_not_pause_connector_watch(ctx, watch_service):
+    service = watch_service
+    watch_manager = service._get_watch_manager()
+    to_uri = "viking://resources/x/y"
+    existing = await watch_manager.create_task(
+        path="https://git.example/org/repo",
+        account_id="acct",
+        user_id="alice",
+        original_role=str(Role.USER),
+        to_uri=to_uri,
+        watch_interval=5,
+        auth_state={"provider": "connector_encrypted", "ciphertext": "unused"},
+    )
+
+    await service._handle_watch_task_cancellation(to_uri, ctx)
+
+    existing = await watch_manager.get_task(existing.task_id)
+    assert existing.is_active is True
+    assert existing.path == "https://git.example/org/repo"
+
+
+@pytest.mark.asyncio
 async def test_connector_watch_keeps_running_when_target_is_missing(watch_service, watch_vfs):
     """A Connector target only exists once the plugin writes into it: an empty
     first round (or a deleted target) must not deactivate the watch."""
@@ -1582,7 +1614,7 @@ async def test_connector_requires_existing_parent_unless_create_parent(
     ctx,
     request_kwargs,
 ):
-    viking_fs = SimpleNamespace(exists=AsyncMock(return_value=False))
+    viking_fs = _RoutingVFS(exists=AsyncMock(return_value=False))
     service = ResourceService(
         vikingdb=object(),
         viking_fs=viking_fs,
@@ -1607,7 +1639,7 @@ async def test_connector_create_parent_false_accepts_existing_parent(
     connector_config,
     ctx,
 ):
-    viking_fs = SimpleNamespace(exists=AsyncMock(return_value=True))
+    viking_fs = _RoutingVFS(exists=AsyncMock(return_value=True))
     service = ResourceService(
         vikingdb=object(),
         viking_fs=viking_fs,
@@ -3193,11 +3225,20 @@ def _feishu_oauth_reference(**changes):
     return {
         "account_id": "external",
         "user_id": "owner",
+        "resource_id": "ov-resource",
+        "openviking_account_id": "kernel",
         "ov_user_id": "alice",
         "type": "oauth",
         "platform": "feishu_doc",
         **changes,
     }
+
+
+def _legacy_feishu_oauth_reference(**changes):
+    reference = _feishu_oauth_reference(**changes)
+    reference.pop("resource_id")
+    reference.pop("openviking_account_id")
+    return reference
 
 
 def _feishu_request_context():
@@ -3209,20 +3250,26 @@ def _feishu_request_context():
 
 
 @pytest.mark.asyncio
-async def test_document_auth_resolves_token_and_retains_only_private_reference(monkeypatch):
+@pytest.mark.parametrize(
+    "reference_factory", [_feishu_oauth_reference, _legacy_feishu_oauth_reference]
+)
+async def test_document_auth_resolves_token_and_retains_only_private_reference(
+    monkeypatch, reference_factory
+):
     provider = Mock(get_token=Mock(return_value="token"))
     factory = Mock(return_value=provider)
     monkeypatch.setattr(auth, "ExternalFeishuToken", factory)
-    args = {"openviking_oauth_ref": _feishu_oauth_reference()}
+    reference = reference_factory()
+    args = {"openviking_oauth_ref": reference}
 
     resolved = await auth.document_auth_config(args, _feishu_request_context())
 
     assert resolved == {
         "lark_access_token": "token",
-        "openviking_oauth_ref": _feishu_oauth_reference(),
+        "openviking_oauth_ref": reference,
     }
-    factory.assert_called_once_with(_feishu_oauth_reference(), "key")
-    assert args == {"openviking_oauth_ref": _feishu_oauth_reference()}
+    factory.assert_called_once_with(reference, "key")
+    assert args == {"openviking_oauth_ref": reference}
 
 
 @pytest.mark.asyncio

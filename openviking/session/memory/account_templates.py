@@ -61,8 +61,6 @@ EDITABLE_MEMORY_TEMPLATE_FIELDS = {
     "events": ("event_name", "summary"),
     "preferences": ("topic", "content"),
     "entities": ("category", "name", "content"),
-    "soul": ("core_truths", "boundaries", "vibe", "continuity"),
-    "identity": ("creature", "name", "vibe", "avatar", "emoji", "introduction"),
 }
 _EDITABLE_CONTENT_TEMPLATES = set(CONTENT_TEMPLATE_FIELDS)
 

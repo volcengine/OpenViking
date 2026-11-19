@@ -51,8 +51,7 @@ fields:
     type: string
     required: false
     description: |
-      The experience_name of an existing experience that this one supersedes.
-      Set ONLY when this experience replaces a narrower existing experience with a DIFFERENT name.
-      The system will automatically delete the old experience and inherit its trajectory history.
-      Leave empty for a new experience or when updating an experience with the same name.
+      The experience_name of a narrower existing experience this one proposes to replace.
+      Use only when the new name is different and broader; leave empty otherwise.
+      Deletion is decided by the final merge.
     merge_op: replace

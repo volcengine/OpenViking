@@ -1,12 +1,14 @@
-import { forwardRef, useImperativeHandle, useRef } from 'react';
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
+import { useLocale } from '../../shared/locale-context.js';
+import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
 
+import { orderContextRoots } from '../../shared/context-tree-root-order.js';
+import { resolveFileTreeLabels } from './file-tree-labels.js';
 import { FileTreeBody } from './file-tree-body.js';
 import { handleRowKeyDown } from './file-tree-keyboard.js';
-import type {
-  FileTreeRowContext,
-  ResolvedLabels,
-} from './file-tree-row-context.js';
-import { useRowTooltip } from './file-tree-tooltip.js';
+import type { FileTreeRowContext } from './file-tree-row-context.js';
+import { FileTreeToolbar } from './file-tree-toolbar.js';
 import type {
   FileTreeComponent,
   FileTreeHandle,
@@ -16,10 +18,10 @@ import { FILE_TREE_ROW_ATTRIBUTE } from './types.js';
 import { useFileTreeActions } from './use-file-tree-actions.js';
 
 export { FileTreeSpinner } from './file-tree-spinner.js';
+export { splitVikingUri } from '../../shared/viking-uri.js';
 export {
   resolveFileTreeInfoKey,
   showsInlineDescription,
-  splitVikingUri,
 } from './file-tree-info.js';
 export {
   DEFAULT_INFO_LABELS,
@@ -45,16 +47,6 @@ export type {
   FileTreeSlots,
 } from './types.js';
 
-const DEFAULT_LABELS: ResolvedLabels = {
-  empty: 'No files yet',
-  error: 'Failed to load',
-  retry: 'Retry',
-  loadMore: 'Load more',
-  loading: 'Loading…',
-  expand: 'Expand {name}',
-  collapse: 'Collapse {name}',
-};
-
 /** 按行 id 找到行元素。Finds a row element by id. */
 function findRow(root: HTMLElement | null, id: string) {
   return (
@@ -72,14 +64,22 @@ function findRow(root: HTMLElement | null, id: string) {
  * component renders it, handles keyboard interaction and reports successful
  * operations.
  */
-export const FileTree: FileTreeComponent = forwardRef<
+const FileTreeView: FileTreeComponent = forwardRef<
   FileTreeHandle,
   FileTreeProps
 >(function FileTree(
   {
     rows,
+    rootOrder = 'input',
+    locale: localeProp,
     operations,
     selectedId,
+    selectedIds,
+    renderRowLeading,
+    rowTrailingPosition = 'viewport-end',
+    search = true,
+    refresh = true,
+    loading = false,
     isReady = true,
     loadingFallback,
     errorFallback,
@@ -87,7 +87,7 @@ export const FileTree: FileTreeComponent = forwardRef<
     slots,
     labels,
     getRowAttributes,
-    renderDashboard,
+    renderRowTrailing,
     renderRowTooltip,
     renderRowIcon,
     onSelect,
@@ -95,18 +95,21 @@ export const FileTree: FileTreeComponent = forwardRef<
     onLoadMore,
     onRetry,
     onOpenRetentionSettings,
+    onSearch,
+    onRefresh,
     className,
     ...rest
   },
   ref,
 ) {
+  const locale = useLocale(localeProp);
+  const exposure = useExposure('file_tree_show');
   const rootRef = useRef<HTMLDivElement>(null);
-  const text: ResolvedLabels = {
-    ...DEFAULT_LABELS,
-    ...labels,
-    info: labels?.info ?? DEFAULT_LABELS.info,
-  };
-  const tooltip = useRowTooltip();
+  const visibleRows = useMemo(
+    () => (rootOrder === 'context' ? orderContextRoots(rows) : rows),
+    [rootOrder, rows],
+  );
+  const text = resolveFileTreeLabels(locale, labels);
   const actions = useFileTreeActions({
     operations,
     onSelect,
@@ -114,6 +117,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     onLoadMore,
     onRetry,
     onOpenRetentionSettings,
+    onSearch,
+    onRefresh,
   });
 
   useImperativeHandle(
@@ -132,11 +137,13 @@ export const FileTree: FileTreeComponent = forwardRef<
 
   const ctx: FileTreeRowContext = {
     text,
-    infoLabels: labels?.info,
+    infoLabels: text.info,
     selectedId,
-    tooltipRowId: tooltip.tooltipRowId,
+    selectedIds,
+    renderRowLeading,
+    rowTrailingPosition,
     getRowAttributes,
-    renderDashboard,
+    renderRowTrailing,
     renderRowTooltip,
     renderRowIcon,
     renderSpinner: slots?.spinner ? () => slots.spinner : undefined,
@@ -148,26 +155,37 @@ export const FileTree: FileTreeComponent = forwardRef<
         onSelect: actions.onSelect,
         onToggleExpand: actions.onToggleExpand,
       }),
-    onRowEnter: tooltip.show,
-    onRowLeave: tooltip.hide,
   };
 
   return (
     <div
       {...rest}
-      ref={rootRef}
+      ref={(node) => {
+        rootRef.current = node;
+        exposure?.(node);
+      }}
       className={['ov-file-tree', className].filter(Boolean).join(' ')}
     >
       {slots?.toolbar ? (
         <div className="ov-file-tree__toolbar">{slots.toolbar}</div>
       ) : null}
+      <FileTreeToolbar
+        search={search}
+        refresh={refresh}
+        loading={loading}
+        text={text}
+        refreshing={actions.refreshing}
+        onSearch={actions.onSearch}
+        onRefresh={actions.onRefresh}
+      />
       <div
         role="tree"
+        aria-multiselectable={selectedIds ? true : undefined}
         aria-label={rest['aria-label']}
         className="ov-file-tree__body"
       >
         <FileTreeBody
-          rows={rows}
+          rows={visibleRows}
           isReady={isReady}
           text={text}
           loadingFallback={loadingFallback}
@@ -179,3 +197,5 @@ export const FileTree: FileTreeComponent = forwardRef<
     </div>
   );
 });
+
+export const FileTree = withMonitoring(FileTreeView, 'FileTree');

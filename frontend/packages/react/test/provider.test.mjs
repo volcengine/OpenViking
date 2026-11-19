@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 
 import { OpenVikingProvider } from '@openviking/react/client';
 import { mergeProviderConfig } from '../src/client/options.ts';
 
 test('the Provider renders its children', () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(
       OpenVikingProvider,
       { baseURL: 'https://ov.test' },
@@ -24,7 +24,7 @@ test('mounting the Provider sends no request', () => {
     called = true;
     throw new Error('should not be called');
   };
-  renderToStaticMarkup(
+  renderMarkup(
     createElement(
       OpenVikingProvider,
       { baseURL: 'https://ov.test', fetch },
@@ -39,6 +39,7 @@ test('a nested Provider inherits the address and credential it does not declare'
     baseURL: 'https://ov.test/gateway',
     apiKey: 'outer-key',
     accountId: 'acc_1',
+    credentials: 'omit',
   });
 
   const inner = mergeProviderConfig(outer, { userId: 'other-user' });
@@ -51,6 +52,12 @@ test('a nested Provider inherits the address and credential it does not declare'
   assert.equal(inner.identity.apiKey, 'outer-key', 'credential is inherited');
   assert.equal(inner.identity.accountId, 'acc_1');
   assert.equal(inner.identity.userId, 'other-user', 'only userId changes');
+  assert.equal(inner.credentials, 'omit', 'cookie policy is inherited');
+  assert.equal(
+    mergeProviderConfig(outer, { credentials: 'include' }).credentials,
+    'include',
+    'an explicit inner cookie policy wins',
+  );
 });
 
 test('an explicit empty value clears the inherited field', () => {
