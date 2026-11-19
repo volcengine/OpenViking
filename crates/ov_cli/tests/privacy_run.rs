@@ -1006,4 +1006,80 @@ async fn preserves_regular_file_stdout_and_merged_stream_order() {
         fs::read_to_string(&shared_log).unwrap(),
         format!("AGENT LOG HEADER\n1\n2:{TOKEN}\n")
     );
+
+    use std::io::Write;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let concurrent_log = dir.path().join("concurrent.log");
+    let log_file = fs::File::create(&concurrent_log).unwrap();
+    let mut writer_file = log_file.try_clone().unwrap();
+    let started = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer_started = Arc::clone(&started);
+    let writer_stop = Arc::clone(&stop);
+    let writer = std::thread::spawn(move || -> u64 {
+        let mut count = 0u64;
+        while !writer_stop.load(Ordering::Acquire) {
+            writer_file.write_all(&count.to_ne_bytes()).unwrap();
+            count += 1;
+            if count == 64 {
+                writer_started.store(true, Ordering::Release);
+            }
+        }
+        count
+    });
+    timeout(Duration::from_secs(5), async {
+        while !started.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("concurrent writer did not start");
+
+    for _ in 0..6 {
+        let (url, server) = resolver([(TOKEN, Some("secret-log".into()))]).await;
+        let mut command = privacy(dir.path(), &url);
+        command
+            .args([
+                "run",
+                "--env",
+                &format!("TOKEN={TOKEN}"),
+                "--",
+                "/bin/sh",
+                "-c",
+                ":",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log_file.try_clone().unwrap()))
+            .stderr(Stdio::from(log_file.try_clone().unwrap()));
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                if posix::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let status = command.status().await.unwrap();
+        assert_eq!(status.code(), Some(0));
+        server.await.unwrap();
+    }
+    stop.store(true, Ordering::Release);
+    let total_records = writer.join().unwrap();
+    drop(log_file);
+
+    let data = fs::read(&concurrent_log).unwrap();
+    let (chunks, remainder) = data.as_chunks::<8>();
+    assert!(remainder.is_empty());
+    assert_eq!(chunks.len(), total_records as usize);
+    for (index, chunk) in chunks.iter().enumerate() {
+        assert_eq!(
+            chunk,
+            &(index as u64).to_ne_bytes(),
+            "shared log corrupted at record {index}"
+        );
+    }
 }

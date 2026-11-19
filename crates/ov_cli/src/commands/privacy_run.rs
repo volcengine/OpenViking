@@ -131,22 +131,17 @@ fn is_pipe_or_socket(fd: impl std::os::fd::AsFd) -> bool {
 
 #[cfg(unix)]
 fn shared_non_tty_outputs() -> bool {
-    use std::io::{IsTerminal, Seek, SeekFrom};
-    use std::os::fd::AsFd;
+    use std::io::IsTerminal;
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
     if std::io::stdout().is_terminal() {
         return false;
     }
-    let Ok(out_dup) = std::io::stdout().as_fd().try_clone_to_owned() else {
+    let Some(out) = fd_metadata(std::io::stdout()) else {
         return false;
     };
-    let Ok(err_dup) = std::io::stderr().as_fd().try_clone_to_owned() else {
-        return false;
-    };
-    let mut out_file = std::fs::File::from(out_dup);
-    let mut err_file = std::fs::File::from(err_dup);
-    let (Ok(out), Ok(err)) = (out_file.metadata(), err_file.metadata()) else {
+    let Some(err) = fd_metadata(std::io::stderr()) else {
         return false;
     };
     if out.ino() == 0 || out.dev() != err.dev() || out.ino() != err.ino() {
@@ -156,24 +151,96 @@ fn shared_non_tty_outputs() -> bool {
     if kind.is_fifo() || kind.is_socket() {
         return true;
     }
-    if !kind.is_file() {
+    kind.is_file()
+        && same_regular_file_description(
+            std::io::stdout().as_raw_fd(),
+            std::io::stderr().as_raw_fd(),
+        )
+}
+
+#[cfg(unix)]
+fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
+    unsafe extern "C" {
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    }
+    const F_GETFL: i32 = 3;
+
+    // SAFETY: F_GETFL takes no variadic arguments and only reads descriptor status flags.
+    let (out_flags, err_flags) = unsafe { (fcntl(out_fd, F_GETFL), fcntl(err_fd, F_GETFL)) };
+    if out_flags < 0 || out_flags != err_flags {
         return false;
     }
-    // Separate open() calls to the same regular file keep independent offsets and O_APPEND;
-    // merge only when stdout and stderr share one open file description (such as `2>&1`).
-    let (Ok(out_pos), Ok(err_pos)) = (out_file.stream_position(), err_file.stream_position())
-    else {
-        return false;
-    };
-    let Some(probe_pos) = out_pos.checked_add(1).filter(|_| out_pos == err_pos) else {
-        return false;
-    };
-    if out_file.seek(SeekFrom::Start(probe_pos)).is_err() {
-        return false;
+    // Never call lseek(SEEK_CUR): XNU writes back fg_offset and races with concurrent writers.
+    #[cfg(target_os = "macos")]
+    {
+        #[repr(C)]
+        struct VnodeFdInfo {
+            openflags: u32,
+            status: u32,
+            offset: i64,
+            _vnode: [u8; 160],
+        }
+        unsafe extern "C" {
+            fn proc_pidfdinfo(
+                pid: i32,
+                fd: i32,
+                flavor: i32,
+                buffer: *mut VnodeFdInfo,
+                buffersize: i32,
+            ) -> i32;
+        }
+        const PROC_PIDFDVNODEINFO: i32 = 1;
+        const PROC_FP_SHARED: u32 = 1;
+
+        let pid = std::process::id() as i32;
+        let size = std::mem::size_of::<VnodeFdInfo>() as i32;
+        let mut out_info = std::mem::MaybeUninit::<VnodeFdInfo>::zeroed();
+        let mut err_info = std::mem::MaybeUninit::<VnodeFdInfo>::zeroed();
+        // SAFETY: Both buffers match sizeof(struct vnode_fdinfo) (176 bytes on macOS) and are
+        // read only when proc_pidfdinfo reports it filled the full struct.
+        unsafe {
+            if proc_pidfdinfo(
+                pid,
+                out_fd,
+                PROC_PIDFDVNODEINFO,
+                out_info.as_mut_ptr(),
+                size,
+            ) != size
+                || proc_pidfdinfo(
+                    pid,
+                    err_fd,
+                    PROC_PIDFDVNODEINFO,
+                    err_info.as_mut_ptr(),
+                    size,
+                ) != size
+            {
+                return false;
+            }
+            let (out_info, err_info) = (out_info.assume_init(), err_info.assume_init());
+            (out_info.status & PROC_FP_SHARED) != 0
+                && (err_info.status & PROC_FP_SHARED) != 0
+                && out_info.openflags == err_info.openflags
+                && out_info.offset == err_info.offset
+        }
     }
-    let shared = err_file.stream_position().ok() == Some(probe_pos);
-    let _ = out_file.seek(SeekFrom::Start(out_pos));
-    shared
+    #[cfg(target_os = "linux")]
+    {
+        let fd_pos = |fd: i32| {
+            std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}"))
+                .ok()?
+                .lines()
+                .find_map(|line| line.strip_prefix("pos:"))
+                .map(|value| value.trim().to_owned())
+        };
+        match (fd_pos(out_fd), fd_pos(err_fd)) {
+            (Some(out_pos), Some(err_pos)) => out_pos == err_pos,
+            _ => true,
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        true
+    }
 }
 
 #[cfg(unix)]
