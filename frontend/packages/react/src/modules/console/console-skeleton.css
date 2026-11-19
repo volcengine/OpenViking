@@ -1,0 +1,156 @@
+.ov-console-skeleton {
+  --ov-ui-console-skeleton-ink: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default)
+  );
+  --ov-ui-console-skeleton-fill: color-mix(
+    in srgb,
+    var(--ov-ui-console-skeleton-ink) 6%,
+    transparent
+  );
+  --ov-ui-console-skeleton-surface: color-mix(
+    in srgb,
+    var(--ov-ui-console-skeleton-ink) 2%,
+    transparent
+  );
+
+  block-size: 100%;
+  container: ov-console-skeleton / size;
+}
+
+.ov-console-skeleton__layout {
+  box-sizing: border-box;
+  display: grid;
+  block-size: 100%;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 16px;
+}
+
+.ov-console-skeleton__body {
+  inline-size: 100%;
+  max-inline-size: 440px;
+  justify-self: center;
+  overflow: auto;
+  padding-block-start: clamp(36px, 11cqh, 88px);
+}
+
+.ov-console-skeleton__heading,
+.ov-console-skeleton__subtitle,
+.ov-console-skeleton__action-icon,
+.ov-console-skeleton__action-label,
+.ov-console-skeleton__action-detail,
+.ov-console-skeleton__prompt,
+.ov-console-skeleton__send {
+  border-radius: 5px;
+  background: var(--ov-ui-console-skeleton-fill);
+}
+
+.ov-console-skeleton__heading {
+  inline-size: 46%;
+  block-size: 22px;
+}
+
+.ov-console-skeleton__subtitle {
+  inline-size: 66%;
+  block-size: 10px;
+  margin-block-start: 12px;
+}
+
+.ov-console-skeleton__actions {
+  display: grid;
+  gap: 8px;
+  margin-block-start: 32px;
+}
+
+.ov-console-skeleton__action {
+  display: grid;
+  min-block-size: 42px;
+  grid-template-columns: 16px minmax(0, 4fr) minmax(0, 5fr);
+  align-items: center;
+  gap: 10px;
+  border-radius: 12px;
+  padding-inline: 12px;
+  background: var(--ov-ui-console-skeleton-surface);
+}
+
+.ov-console-skeleton__action-icon {
+  block-size: 16px;
+}
+
+.ov-console-skeleton__action-label,
+.ov-console-skeleton__action-detail,
+.ov-console-skeleton__prompt {
+  block-size: 8px;
+}
+
+.ov-console-skeleton__action-label {
+  inline-size: 75%;
+}
+
+.ov-console-skeleton__action-detail {
+  inline-size: 90%;
+}
+
+.ov-console-skeleton__action:nth-child(2) .ov-console-skeleton__action-detail {
+  inline-size: 72%;
+}
+
+.ov-console-skeleton__action:nth-child(3) .ov-console-skeleton__action-detail {
+  inline-size: 56%;
+}
+
+.ov-console-skeleton__composer {
+  display: flex;
+  min-block-size: 50px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 16px;
+  padding-inline: 12px;
+}
+
+.ov-console-skeleton__prompt {
+  inline-size: 48%;
+}
+
+.ov-console-skeleton__send {
+  inline-size: 24px;
+  block-size: 24px;
+  flex: none;
+  border-radius: 8px;
+}
+
+@container ov-console-skeleton (max-height: 360px) {
+  .ov-console-skeleton__layout {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .ov-console-skeleton__body {
+    padding-block-start: 12px;
+  }
+
+  .ov-console-skeleton__heading {
+    block-size: 18px;
+  }
+
+  .ov-console-skeleton__subtitle {
+    block-size: 8px;
+    margin-block-start: 8px;
+  }
+
+  .ov-console-skeleton__actions {
+    gap: 6px;
+    margin-block-start: 16px;
+  }
+
+  .ov-console-skeleton__action {
+    min-block-size: 32px;
+  }
+
+  .ov-console-skeleton__composer {
+    min-block-size: 40px;
+  }
+}

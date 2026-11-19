@@ -26,6 +26,21 @@ Conversation mode uses [VikingBot](../components/viking-bot), which depends on t
 
 ## Examples
 
+### Waiting for available modes
+
+Render `ConsoleSkeleton` while the host determines which Console modes are available. Give its live status an accessible label and place it in the same explicitly sized panel as the Console.
+
+```tsx
+import { Console, ConsoleSkeleton } from '@openviking/react/modules/console';
+import '@openviking/react/modules/console/style.css';
+
+const panel = loading ? (
+  <ConsoleSkeleton aria-label="Loading Console" />
+) : (
+  <Console modes={modes} />
+);
+```
+
 ### Basic usage
 
 The panel opens in conversation mode. Switch to Terminal, run `ov ls viking://resources/demo` or `ov read viking://resources/demo/notes.md`, and click a resource link to see the URI that `onOpenUri` receives below the panel.
