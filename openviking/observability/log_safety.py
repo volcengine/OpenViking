@@ -1,6 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Field allowlist shared by log and trace adapters."""
+"""Field allowlist shared by log and trace adapters.
+
+Content safety policy:
+https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md
+"""
 
 import hashlib
 import math

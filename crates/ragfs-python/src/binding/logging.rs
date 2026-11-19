@@ -247,6 +247,9 @@ where
 }
 
 /// Initialize Rust tracing once for the embedded ragfs binding process.
+///
+/// Logging policy:
+/// https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md
 fn init_tracing(log_level: &str, log_output: &str) -> PyResult<()> {
     let max_level = parse_tracing_level(log_level).map_err(PyValueError::new_err)?;
     let configuration = (max_level.to_string(), log_output.to_owned());
