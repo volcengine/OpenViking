@@ -118,7 +118,7 @@ for (const actualStatus of ['ready', 'disabled']) {
       await settle();
       assert.equal(host.lifecycle.state.status, 'start-error');
       await act(async () => host.lifecycle.retry());
-      assert.equal(host.lifecycle.state.status, 'starting');
+      assert.equal(host.lifecycle.state.status, 'checking');
       assert.equal(starts, 1);
       await act(async () => refreshed.resolve(actualStatus));
       await settle();
