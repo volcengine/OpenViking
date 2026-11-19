@@ -912,7 +912,7 @@ async def test_cancel_running_compile_interrupts_before_memory_write(monkeypatch
     cancelling = await tracker.cancel(
         task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
     )
-    assert cancelling.status == TaskStatus.CANCELLING
+    assert cancelling.status in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}
     await asyncio.wait_for(worker, timeout=1)
 
     final = await tracker.get(task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)

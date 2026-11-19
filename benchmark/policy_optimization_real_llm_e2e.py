@@ -1,13 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+"""Live-model regression. Run with pytest benchmark/policy_optimization_real_llm_e2e.py."""
+
 from __future__ import annotations
 
 import json
 from types import SimpleNamespace
 
 import pytest
-from test_fakes import InMemoryVikingFS
 
 from openviking.message import Message
 from openviking.models.vlm.llm import parse_json_from_response
@@ -33,6 +34,7 @@ from openviking.session.train.components.gradient_estimator import ExperienceGra
 from openviking.telemetry import start_current_span, tracer
 from openviking.telemetry.tracer import init_tracer_from_server_config
 from openviking_cli.utils.config import get_openviking_config
+from tests.session.train.test_fakes import InMemoryVikingFS
 
 
 @pytest.fixture(scope="module", autouse=True)

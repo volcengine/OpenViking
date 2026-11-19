@@ -6,22 +6,15 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryField, MemoryFile
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.experience_lineage import experience_source_tag
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
 from openviking.session.memory.merge_op import MergeOp
-from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking.utils.ingest_options import IngestOptions
-
-
-class TestMemoryFieldSchema:
-    def test_memory_field_no_longer_has_searchable(self):
-        field = MemoryField(name="test", field_type=FieldType.STRING, description="test")
-        assert not hasattr(field, "searchable")
 
 
 class TestEmbeddingTemplateYamlParsing:

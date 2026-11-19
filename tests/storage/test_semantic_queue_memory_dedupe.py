@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for memory-context semantic enqueue deduplication (#769)."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -302,6 +303,7 @@ async def test_memory_directory_summarizes_all_files_but_samples_overview(monkey
     processor = _processor(max_concurrent_llm=4)
     summaries = []
     summarized_files = []
+    active = peak = 0
     file_names = [f"file-{index:03}.md" for index in range(40)]
     fake_fs = _FakeMemoryDirFS()
     monkeypatch.setattr(
@@ -310,6 +312,11 @@ async def test_memory_directory_summarizes_all_files_but_samples_overview(monkey
 
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
         del llm_sem, ctx
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
         name = file_path.rsplit("/", 1)[-1]
         summarized_files.append(name)
         return {"name": name, "summary": f"summary:{name}"}
@@ -351,6 +358,7 @@ async def test_memory_directory_summarizes_all_files_but_samples_overview(monkey
     )
 
     assert sorted(summarized_files) == file_names
+    assert peak == 4
     assert len(summaries) == 32
     assert summaries[0]["name"] == file_names[0]
     assert summaries[-1]["name"] == file_names[-1]

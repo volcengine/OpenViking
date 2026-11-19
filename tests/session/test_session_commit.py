@@ -25,6 +25,7 @@ from openviking.session.memory.memory_updater import (
     MemoryUpdateError,
     MemoryUpdateResult,
 )
+from openviking.session.memory.streaming_memory_updater import StreamingMemoryUpdaterConfig
 from openviking.utils.time_utils import parse_iso_datetime
 
 
@@ -696,16 +697,65 @@ class TestCommit:
             },
         ]
 
-    async def test_commit_archives_messages(self, wm_session_with_messages: Session):
-        """Test commit archives messages"""
-        initial_message_count = len(wm_session_with_messages.messages)
-        assert initial_message_count > 0
+    async def test_successive_commits_write_their_own_memories(self, session, monkeypatch):
+        user = session.ctx.user.user_id
+        preferences = {"editor": "I use Neovim for Go", "terminal": "I use tmux on servers"}
 
-        result = await wm_session_with_messages.commit_async()
+        async def extract_preferences(*, messages, **_kwargs):
+            conversation = next(
+                message["content"]
+                for message in messages
+                if message["role"] == "user" and "**Session Time:**" in message["content"]
+            )
+            [(topic, preference)] = [
+                (topic, preference)
+                for topic, preference in preferences.items()
+                if preference in conversation
+            ]
+            return (
+                f"sdk.create_preferences(user={user!r}, topic={topic!r}, content={preference!r})\n"
+                "sdk.commit()"
+            )
 
-        assert result.get("archived") is True
-        # Current message list should be cleared after commit
-        assert len(wm_session_with_messages.messages) == 0
+        vlm = SimpleNamespace(
+            model="local-test", max_tokens=4096, get_completion_async=extract_preferences
+        )
+        compressor = session._session_compressor
+        monkeypatch.setattr(compressor.vlm_resolver, "get_vlm", AsyncMock(return_value=vlm))
+        # Give this test a fresh updater that flushes each write immediately.
+        monkeypatch.setattr(
+            "openviking.session.memory.streaming_memory_updater._streaming_memory_updater_registry",
+            {},
+        )
+        monkeypatch.setattr(
+            compressor,
+            "streaming_memory_updater_config",
+            StreamingMemoryUpdaterConfig(max_operations_per_update=1),
+        )
+        # The session fixture persists files but does not process index work.
+        monkeypatch.setattr(compressor, "vikingdb", None)
+        monkeypatch.setattr(
+            "openviking.utils.embedding_utils.vectorize_directory_meta", AsyncMock()
+        )
+
+        archive_uris = []
+        for preference in preferences.values():
+            message = await session.add_message_async("user", [TextPart(preference)])
+            commit = await session.commit_async(memory_policy={"memory_types": ["preferences"]})
+            task = await _wait_for_task(commit["task_id"])
+            assert task["status"] == "completed", task
+            assert sum(task["result"]["memories_extracted"].values()) == 1
+            archive_uri = commit["archive_uri"]
+            archive_uris.append(archive_uri)
+            archive = await session.get_session_archive(archive_uri.rsplit("/", 1)[-1])
+            assert [item["id"] for item in archive["messages"]] == [message.id]
+
+        assert len(set(archive_uris)) == 2
+        root = f"viking://user/{user}/memories/preferences/{user}"
+        for topic, preference in preferences.items():
+            content = await session._viking_fs.read_file(f"{root}/{topic}.md", ctx=session.ctx)
+            assert preference in content
+        assert session.messages == []
 
     async def test_commit_empty_session(self, session: Session):
         """Test committing empty session"""
@@ -857,7 +907,9 @@ class TestCommit:
         assert seen["summary"] == previous_overview
         assert seen["extract"] == previous_overview
 
-    async def test_commit_failed_after_long_term_extraction_failure_does_not_block(self, client):
+    async def test_commit_failed_after_long_term_extraction_failure_does_not_block(
+        self, client, monkeypatch
+    ):
         """Binary archive outcome: if long-term extraction fails (after retries),
         the whole archive is marked .failed.json and skipped — there is no
         partial state — but a failed archive must not block the next commit.
@@ -865,11 +917,10 @@ class TestCommit:
         session = client(session_id="failed_archive_does_not_block_commit")
         await session.ensure_exists()
 
-        async def failing_extract(*args, **kwargs):
-            del args, kwargs
-            raise RuntimeError("synthetic extraction failure")
-
-        session._session_compressor.extract_long_term_memories = failing_extract
+        extract = AsyncMock(
+            return_value=[], side_effect=RuntimeError("synthetic extraction failure")
+        )
+        monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", extract)
 
         session.add_message("user", [TextPart("First round message")])
         result = await session.commit_async()
@@ -891,8 +942,11 @@ class TestCommit:
         assert failed_payload.get("skipped") is True
         assert "synthetic extraction failure" in failed_payload["error"]
 
-        # A failed archive is a skippable terminal state and must not block the
-        # next commit (this previously raised FailedPreconditionError).
-        session.add_message("user", [TextPart("Second round message")])
+        extract.side_effect = None
+        message = await session.add_message_async("user", [TextPart("Second round message")])
         second = await session.commit_async()
-        assert second["status"] == "accepted"
+        second_task = await _wait_for_task(second["task_id"])
+        assert second_task["status"] == "completed", second_task
+        assert second["archive_uri"] != archive_uri
+        archive = await session.get_session_archive(second["archive_uri"].rsplit("/", 1)[-1])
+        assert [item["id"] for item in archive["messages"]] == [message.id]

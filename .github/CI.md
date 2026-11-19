@@ -236,15 +236,15 @@ need DDL privileges to create and drop isolated Task/Work and Watch tables.
 
 The executed suites cover account-store initialization and distributed
 authentication, Redis/MySQL credential snapshots and cache invalidation,
-Task/Work lifecycle and concurrency, and Watch persistence and cross-instance
-ownership. File variants of Task/Work and Watch also run for comparison.
+Task/Work lifecycle and concurrency, and Watch persistence, refresh, restart
+and cross-instance ownership. File variants of Task/Work and Watch also run
+for comparison.
 PostgreSQL account-store tests are not included because that backend is not yet
 on this branch's `main` baseline.
 
 `database_integration.py verify` rejects skipped/failed database cases, missing
-account contracts, and any backend suite with zero passing cases. The two
-Watch file-only skips are expected. GitHub publishes database case counts in
-the job summary and retains `database-integration-results` JUnit XML for seven
+account contracts, and any backend suite with zero passing cases. GitHub
+publishes database case counts in the job summary and retains `database-integration-results` JUnit XML for seven
 days, including failed runs.
 
 To reproduce against **fresh, disposable** local databases, set `OV_TEST_MYSQL`
@@ -261,7 +261,10 @@ uv run --no-sync python -m pytest -q -o addopts='' \
   tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
   tests/server/test_redis_mysql_account_store.py \
   tests/service/test_task_work_contract.py \
+  tests/service/test_task_store_postgres.py \
   tests/resource/test_watch_store.py \
+  tests/resource/test_watch_main_integration.py \
+  tests/resource/test_watch_process.py \
   --junitxml=database-integration.xml
 uv run --no-sync python .github/scripts/database_integration.py verify database-integration.xml
 python3 -m pytest --noconftest -q -o addopts='' tests/misc/test_database_integration_ci.py

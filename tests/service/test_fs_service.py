@@ -1451,7 +1451,7 @@ async def test_resource_mv_watch_write_failure_preserves_existing_target_files(
     if target_preexisting:
         await viking_fs.write_file(target + "/keep.txt", "keep", ctx=request_context)
     watch = await manager.create_task("source", to_uri=source + "/doc")
-    write = viking_fs.write_file
+    write = viking_fs.write_file_bytes
     failure = OSError("Watch metadata write failed")
 
     async def fail_watch_write(uri, *args, **kwargs):
@@ -1459,7 +1459,7 @@ async def test_resource_mv_watch_write_failure_preserves_existing_target_files(
             raise failure
         return await write(uri, *args, **kwargs)
 
-    monkeypatch.setattr(viking_fs, "write_file", fail_watch_write)
+    monkeypatch.setattr(viking_fs, "write_file_bytes", fail_watch_write)
     with pytest.raises(OSError) as raised:
         await service.mv(source, target, ctx=request_context)
     assert raised.value is failure
