@@ -225,14 +225,15 @@ class LinkRenderer:
         # Character spans already covered by an existing [text](target) link. A match
         # inside one is already linked, so wrapping it again would produce a broken
         # nested link like "[[Frank](..) Ocean](..)"; skip those candidates.
-        linked_spans = protected_spans or [
-            (link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)
-        ]
+        if protected_spans is None:
+            protected_spans = [
+                (link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)
+            ]
 
         def _overlaps_protected_span(start: int, end: int) -> bool:
             return any(
                 not (end <= span_start or start >= span_end)
-                for span_start, span_end in linked_spans
+                for span_start, span_end in protected_spans
             )
 
         if LinkRenderer._contains_cjk(match_text):
@@ -278,9 +279,12 @@ class LinkRenderer:
         match_text: str,
         source_uri: str,
         target_uri: str,
+        *,
+        protected_spans: Optional[List[tuple[int, int]]] = None,
     ) -> bool:
-        """Return whether rendering can insert or preserve the requested link."""
-        protected_spans = LinkRenderer.protected_markdown_spans(content)
+        """Return whether the link is insertable or present, reusing spans for this content."""
+        if protected_spans is None:
+            protected_spans = LinkRenderer.protected_markdown_spans(content)
         if LinkRenderer._find_match_span(content, match_text, protected_spans) is not None:
             return True
 
@@ -317,9 +321,13 @@ class LinkRenderer:
 
     @staticmethod
     def render_links_with_count(
-        content: str, source_uri: str, links: List[Dict]
+        content: str,
+        source_uri: str,
+        links: List[Dict],
+        *,
+        protected_spans: Optional[List[tuple[int, int]]] = None,
     ) -> tuple[str, int]:
-        """Render links outside protected Markdown spans and return the inserted count."""
+        """Render links and count insertions, optionally reusing spans for this content."""
         eligible = [l for l in links if l.get("match_text")]
         if not eligible:
             return content, 0
@@ -327,7 +335,8 @@ class LinkRenderer:
         eligible.sort(key=lambda l: l.get("weight", 0), reverse=True)
 
         replacements: List[tuple] = []  # (start, end, replacement_text)
-        protected_spans = LinkRenderer.protected_markdown_spans(content)
+        if protected_spans is None:
+            protected_spans = LinkRenderer.protected_markdown_spans(content)
         for link in eligible:
             match_text = link["match_text"]
             to_uri = link["to_uri"]
