@@ -302,30 +302,32 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
                     kill(-pid, SIGKILL);
                 }
                 if let Some(mut guard) = guard {
-                    if let Some(mut stdin) = guard.stdin.take() {
+                    if let Some(stdin) = guard.stdin.take() {
                         // If background workers remain in the child's group (e.g. `worker >job.log 2>&1 &`),
                         // hand the guard pipe to a sentinel in caller_pgrp: normal outer exit leaves the
                         // sentinel and service alive, whereas outer group SIGKILL/SIGTERM closes the pipe
                         // before zombie creation and triggers `kill -KILL -$pid`.
-                        if status.is_ok() && kill(-pid, 0) == 0 {
-                            let handed_off = std::process::Command::new("/bin/sh")
+                        let mut pipe = std::fs::File::from(std::os::fd::OwnedFd::from(stdin));
+                        if status.is_ok()
+                            && kill(-pid, 0) == 0
+                            && let Ok(sentinel_out) = pipe.try_clone()
+                            && std::process::Command::new("/bin/sh")
                                 .args([
                                     "-c",
-                                    "while kill -0 -$1 2>/dev/null; do sleep 0.2 2>/dev/null || sleep 1; done; echo done",
+                                    "s=0.1; sleep 0.1 >&- 2>/dev/null; rc=$?; [ \"$rc\" -gt 128 ] && exit 1; [ \"$rc\" -ne 0 ] && s=1; while kill -0 -$1 2>/dev/null; do sleep \"$s\" >&- 2>/dev/null || exit 1; done; echo done",
                                     "ov-sentinel",
                                     &pid.to_string(),
                                 ])
                                 .stdin(Stdio::null())
-                                .stdout(Stdio::from(stdin))
+                                .stdout(Stdio::from(sentinel_out))
                                 .stderr(Stdio::null())
                                 .spawn()
-                                .is_ok();
-                            if handed_off {
-                                return Ok(status?);
-                            }
-                        } else {
-                            let _ = stdin.write_all(b"done\n");
+                                .is_ok()
+                        {
+                            return Ok(status?);
                         }
+                        let _ = pipe.write_all(b"done\n");
+                        drop(pipe);
                     }
                     let _ = guard.wait();
                 }

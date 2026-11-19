@@ -655,7 +655,7 @@ async fn killing_outer_job_stops_redirected_background_worker() {
     .unwrap();
     fs::write(
         dir.path().join("worker.sh"),
-        "printf '%s\\n' \"$$\" > worker.ready\nsleep 0.35\n: > worker.done\n",
+        "printf '%s\\n' \"$$\" > worker.ready\nsleep 0.6\n: > worker.done\n",
     )
     .unwrap();
 
@@ -767,6 +767,7 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         })
         .await
         .expect("outer script did not start redirected worker and advance");
+        tokio::time::sleep(Duration::from_millis(80)).await;
         let worker_pid: i32 = fs::read_to_string(&worker_ready)
             .unwrap()
             .trim()
@@ -790,7 +791,7 @@ async fn killing_outer_job_stops_redirected_background_worker() {
             process_stopped(worker_pid),
             "redirected background worker {worker_pid} outlived outer job (inner_redirect={inner_redirect})"
         );
-        tokio::time::sleep(Duration::from_millis(450)).await;
+        tokio::time::sleep(Duration::from_millis(650)).await;
         assert!(!worker_done.exists());
     }
 }
