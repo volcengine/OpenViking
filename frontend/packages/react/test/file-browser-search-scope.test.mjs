@@ -66,10 +66,16 @@ test('switching accounts cancels the previous search and rejects its late result
 
 test('choosing a subdirectory limits the search and clearing restores the root', async () => {
   const rootUri = 'viking://resources/project';
-  const child = `${rootUri}/docs`;
+  const child = `${rootUri}/%E4%B8%AD%E6%96%87%E7%9B%AE%E5%BD%95`;
+  const childDisplay = `${rootUri}/中文目录`;
+  const encodedSlashChild = `${rootUri}/%E9%A1%B9%E7%9B%AE%2F%E5%BD%92%E6%A1%A3`;
+  const encodedSlashDisplay = `${rootUri}/项目%2F归档`;
   const fetch = recordingFetch(({ path, uri }) => {
     if (path === '/api/v1/fs/ls' && uri === rootUri)
-      return ok([{ uri: child, isDir: true }]);
+      return ok([
+        { uri: child, isDir: true },
+        { uri: encodedSlashChild, isDir: true },
+      ]);
     if (path === '/api/v1/search/find') return ok({ resources: [] });
     return ok([]);
   });
@@ -114,8 +120,17 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     const menu = () =>
       modal().querySelector('.ov-file-browser-search__scope-menu');
     await click(menu().querySelector(`[title="${rootUri}"]`));
-    await click(menu().querySelector(`[title="${child}"]`));
-    await click(menu().querySelector(`[title="${child}"][aria-pressed]`));
+    assert.ok(menu().querySelector(`[title="${encodedSlashDisplay}"]`));
+    assert.equal(menu().querySelector(`[title="${rootUri}/项目/归档"]`), null);
+    await click(menu().querySelector(`[title="${childDisplay}"]`));
+    await click(
+      menu().querySelector(`[title="${childDisplay}"][aria-pressed]`),
+    );
+    const selectedScope = modal().querySelector(
+      `.ov-file-browser-search__options [title="${childDisplay}"]`,
+    );
+    assert.equal(selectedScope?.textContent, childDisplay);
+    assert.equal(selectedScope?.getAttribute('title'), childDisplay);
     assert.deepEqual(targets().at(-1), [child]);
     const filterToggle = () =>
       modal().querySelector('.ov-file-browser-search__advanced-toggle');

@@ -7,6 +7,7 @@ import type { OvRequestOptions } from '../../client/types.js';
 import { useLocale } from '../../shared/locale-context.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import { displayNameFromUri } from '../../shared/directory-tree/rows.js';
+import { formatVikingUriLabel } from '../../shared/path-label.js';
 import { useSearchScopePage } from './use-search-scope-page.js';
 import type { ScopeOption } from './search-types.js';
 
@@ -95,10 +96,10 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 aria-pressed="true"
-                title={item}
+                title={formatVikingUriLabel(item)}
                 onClick={() => onSelect(item)}
               >
-                <span>{item}</span>
+                <span>{formatVikingUriLabel(item)}</span>
               </button>
             </li>
           ))}
@@ -125,7 +126,7 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 aria-pressed={value.includes(uri)}
-                title={uri}
+                title={formatVikingUriLabel(uri)}
                 onClick={() => {
                   onSelect(uri);
                   close();
@@ -143,7 +144,7 @@ function ScopePicker({
               key={directory}
               type="button"
               className="ov-file-browser-search__scope-choice"
-              title={directory}
+              title={formatVikingUriLabel(directory)}
               onClick={() => browse(directory)}
             >
               <FolderIcon aria-hidden="true" />
