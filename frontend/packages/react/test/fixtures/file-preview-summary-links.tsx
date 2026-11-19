@@ -38,7 +38,7 @@ const content = [
   '[Phone reference](tel:+12025550123)',
   '[Same document](#details)',
   '[Malformed fragment](#broken%)',
-  '<span id="details">Details</span>',
+  '<h2 id="details">Details</h2>',
   '[Cross document](other/.overview.md#details)',
   '[Queried resource](viking://resources/guide.md?view=preview#details)',
   '[Unsafe](javascript:alert(1))',

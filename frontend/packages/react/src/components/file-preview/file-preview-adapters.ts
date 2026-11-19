@@ -13,6 +13,7 @@ import { table } from '@ark-design/ui/file-viewer/adapters/table';
 import { text } from '@ark-design/ui/file-viewer/adapters/text';
 import { word } from '@ark-design/ui/file-viewer/adapters/word';
 import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
+import { DirectoryHeading } from './directory-heading.js';
 
 import {
   originalImageTarget,
@@ -65,6 +66,7 @@ export function createFilePreviewAdapterList({
       allowedLinkProtocols:
         directoryLinks === 'resources' ? ['viking'] : undefined,
       rendererProps: {
+        slots: directoryLinks ? { Header: DirectoryHeading } : undefined,
         linkPolicy: directoryLinks
           ? (target) => {
               const url = target.trim();

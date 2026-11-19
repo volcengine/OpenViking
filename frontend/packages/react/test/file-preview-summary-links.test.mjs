@@ -70,10 +70,18 @@ test('summary links navigate through FileBrowser and standalone directory operat
       ['Phone reference', 'tel:+12025550123'],
     ];
     for (const [index, [label, target]] of hostLinks.entries()) {
-      link('file', label).click();
+      const event = new dom.window.MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      });
+      link('file', label).dispatchEvent(event);
+      assert.equal(event.defaultPrevented, true);
       await waitFor(() => evidence().file.length === index + 1);
       assert.equal(evidence().file[index], target);
     }
+    const heading = document.querySelector('#anchor-only h2[id$="details"]');
+    assert.equal(heading?.textContent, 'Details');
     const scrollsBeforeAnchor = evidence().scrolled.length;
     link('anchor-only', 'Same document').click();
     await waitFor(() => evidence().scrolled.length > scrollsBeforeAnchor);

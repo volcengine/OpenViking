@@ -398,7 +398,8 @@ export interface FilePreviewOperations {
    * 打开 Markdown 链接，参数为原始目标，完成后返回；地址解析由宿主负责。
    * 文件页签传入后由宿主接管所有链接，包括外链，组件阻止默认跳转。
    * 目录摘要只将 Viking URI 和相对资源链接交给宿主；HTTP(S)、mailto、tel 和
-   * // 外链保留浏览器原生行为。同文档锚点始终在目录预览内定位，无需此回调。
+   * // 外链保留浏览器原生行为。指向显式 HTML id 的同文档锚点在目录预览内定位，
+   * 无需此回调；普通 Markdown 标题不会自动生成 ID。
    *
    * 目前只有 Markdown 正文会触发：其它格式的渲染器不提供链接点击回调。
    *
@@ -406,8 +407,9 @@ export interface FilePreviewOperations {
    * the original target. In file tabs, supplying it takes over all links, including
    * external links, and prevents default navigation. Directory summaries only pass
    * Viking URIs and relative resource links to the host; HTTP(S), mailto, tel and //
-   * external links retain native behavior. Same-document anchors always scroll
-   * within the directory preview, without requiring this callback.
+   * external links retain native behavior. Same-document anchors targeting explicit
+   * HTML IDs scroll within the directory preview without this callback; plain
+   * Markdown headings do not generate IDs.
    *
    * Only Markdown bodies fire this today: the other renderers expose no link-click
    * callback.
