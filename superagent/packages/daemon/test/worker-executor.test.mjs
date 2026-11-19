@@ -119,6 +119,58 @@ describe('WorkerExecutor', () => {
     assert.equal(first.argv[first.argv.indexOf('--session-id') + 1], '6d0f2a51-0000-4000-8000-000000000001', 'under the new task\'s own id');
   });
 
+  it('says whether a task\'s last Pi session can go on into a new round: kept, deleted or too large', (t) => {
+    const { config, task } = setup(t);
+    const executor = new WorkerExecutor({ config });
+    const id = 'bbbbbbbb-0000-4000-8000-000000000001';
+    const current = task({ native_session: id, turns: 1 });
+    assert.equal(executor.sessionState(current), 'deleted', 'no file');
+    const dir = path.join(config.dataDir, 'workers', current.id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `2026-11-18T10-00-00-000Z_${id}.jsonl`), '{"type":"session"}\n');
+    assert.equal(executor.sessionState(current), 'kept');
+    assert.equal(executor.sessionState(current, { maxBytes: 4 }), 'large');
+    assert.equal(executor.sessionState({ ...current, runtime: 'codex' }), 'kept', 'Codex and Claude Code keep their own sessions');
+  });
+
+  it('starts a task that follows a Claude Code or Codex task from a fork of that task\'s session, unless it is gone or too large', async (t) => {
+    const { dir, config, task } = setup(t);
+    const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, CODEX_HOME: process.env.CODEX_HOME };
+    process.env.CLAUDE_CONFIG_DIR = path.join(dir, 'claude-home');
+    process.env.CODEX_HOME = path.join(dir, 'codex-home');
+    t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+    const parent = 'cccccccc-0000-4000-8000-000000000003';
+    const claudeFile = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', '-srv-workspace-tasks-t3', `${parent}.jsonl`);
+    const codexFile = path.join(process.env.CODEX_HOME, 'sessions', '2026', '11', '19', `rollout-2026-11-19T03-24-10-${parent}.jsonl`);
+    for (const file of [claudeFile, codexFile]) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '{}\n'); }
+    config.claudeBin = fakeCli(dir, 'claude', [{ type: 'result', result: 'ok', is_error: false }]);
+    config.codexBin = fakeCli(dir, 'codex', [{ type: 'thread.started', thread_id: 'th_child' }]);
+    const executor = new WorkerExecutor({ config, settings: () => ({ runtime: null, model: null, effort: null }) });
+    const run = async (runtime, fields = {}, fork = { taskId: 't3', runtime, sessionId: parent }) => {
+      await executor.start({ task: task({ runtime, turns: 0, ...fields }), prompt: 'p', authority: 'x', fork }).done;
+    };
+    await run('claude');
+    await run('claude', { native_session: task().session_id, turns: 1 });
+    await run('claude', {}, { taskId: 't3', runtime: 'claude', sessionId: 'missing' });
+    await run('codex');
+    await run('codex', { native_session: 'th_child', turns: 1 });
+    await run('codex', {}, { taskId: 't3', runtime: 'codex', sessionId: 'missing' });
+    fs.writeFileSync(claudeFile, Buffer.alloc(FORK_MAX_BYTES + 1));
+    fs.writeFileSync(codexFile, Buffer.alloc(FORK_MAX_BYTES + 1));
+    await run('claude');
+    await run('codex');
+    const claude = calls(dir, 'claude').map((call) => call.argv.slice(call.argv.indexOf('--no-chrome') + 1, -1));
+    assert.deepEqual(claude, [
+      ['--resume', parent, '--fork-session', '--session-id', task().session_id],
+      ['--resume', task().session_id],
+      ['--session-id', task().session_id],
+      ['--session-id', task().session_id],
+    ], 'a fork under its own id on the first turn only, of a session that is there and not too large');
+    const codex = calls(dir, 'codex').map((call) => call.argv.slice(call.argv.lastIndexOf('-c') + 2, -1));
+    assert.deepEqual(codex, [['fork', parent], ['resume', 'th_child'], [], []]);
+    assert.ok(calls(dir, 'codex').every((call) => call.argv.includes('-C')), 'in its own directory');
+  });
+
   it('reports a failed turn, and whether it is worth another try', async (t) => {
     const { dir, config, task } = setup(t);
     config.piBin = fakeCli(dir, 'pi', [], 1);

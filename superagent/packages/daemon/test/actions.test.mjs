@@ -2029,9 +2029,11 @@ describe('workers scheduler', () => {
     await assert.rejects(call('task_create', { trigger_ids: ['message:om_neverSeen12345'], title: 'x' }), (error) => error.code === 'unknown_decision');
   });
 
-  it('starts more work on an ended task as a task that follows it, and keeps one request in one live task', async (t) => {
+  it('reopens an ended task for a new round of work on its result, answered where that round was asked; separate work follows it', async (t) => {
     const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
     const { tasks, turns } = attachTasks(service, store, workspace);
+    const reports = () => store.db.prepare('SELECT item_json FROM inbox_pending ORDER BY id').all()
+      .map((row) => JSON.parse(row.item_json).text).filter((text) => text.startsWith('[task report]'));
     store.ingest(chatEvent({ messageId: 'om_followOrigin12', chatType: 'group', content: '查一下 X 为什么慢' }));
     await call('task_create', { trigger_ids: ['message:om_followOrigin12'], title: '查 X' });
     await assert.rejects(call('task_create', { trigger_ids: ['message:om_followOrigin12'], title: '查 X 2' }),
@@ -2039,14 +2041,34 @@ describe('workers scheduler', () => {
     tasks.report('t1', { state: 'done', summary: 'X 慢在索引', draft: 'X 慢是因为缺索引' });
     turns[0].finish({ text: '' });
     await new Promise((resolve) => setImmediate(resolve));
+    await call('reply_message', { message_id: 'om_followOrigin12', markdown: 'X 慢是因为缺索引', decision_id: 'message:om_followOrigin12', task_ids: ['t1'] });
     store.ingest(chatEvent({ messageId: 'om_followMore1234', chatType: 'group', content: '那你提个 PR 修一下' }));
-    await assert.rejects(call('task_route', { task_id: 't1', trigger_ids: ['message:om_followMore1234'], role: 'owner' }),
-      (error) => error.code === 'task_ended' && /task_create with follows=t1/.test(error.message));
-    const created = await call('task_create', { trigger_ids: ['message:om_followMore1234'], title: '修 X', follows: 't1' });
+    const routed = await call('task_route', { task_id: 't1', trigger_ids: ['message:om_followMore1234'], role: 'owner' });
+    assert.match(routed.text, /^Reopened t1 for round 2: its worker takes this request on in its own session and directory\./);
+    assert.equal(routed.data.round, 2);
+    assert.equal(tasks.get('t1').status, 'running');
+    assert.match(turns[1].prompt, /^\[task t1\] Round 2: a new request on this task, from /);
+    tasks.report('t1', { state: 'done', draft: 'PR 已提' });
+    turns[1].finish({ text: '' });
+    await new Promise((resolve) => setImmediate(resolve));
+    const [report] = reports().slice(-1);
+    assert.match(report, /^\[task report\] task=t1 round=2 state=done /);
+    assert.match(report, /\norigin: chat=\S+ source=lark msg=om_followMore1234 event=message:om_followMore1234\n/);
+    await call('reply_message', { message_id: 'om_followMore1234', markdown: 'PR 已提', decision_id: 'message:om_followMore1234' });
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM task_report_deliveries WHERE settled_at_ms IS NULL').get().n, 0,
+      'answering where the round was asked settles its report');
+    store.ingest(chatEvent({ messageId: 'om_followChat1234', chatType: 'group', content: '这个修得好' }));
+    await assert.rejects(call('task_route', { task_id: 't1', trigger_ids: ['message:om_followChat1234'], role: 'context' }),
+      (error) => error.code === 'task_ended' && /a context line does not reopen it/.test(error.message));
+    store.ingest(chatEvent({ messageId: 'om_followDoc12345', chatType: 'group', content: '基于这个分析写份 oncall 手册' }));
+    const created = await call('task_create', { trigger_ids: ['message:om_followDoc12345'], title: '写 oncall 手册', follows: 't1' });
     assert.match(created.text, /^Created t2, following t1: a worker is on it\./);
-    assert.match(turns[1].prompt, /This task follows t1 "查 X" \(done\)[\s\S]*What that work found:\n\| X 慢在索引[\s\S]*Its last answer to the requester:\n\| X 慢是因为缺索引/);
-    await assert.rejects(call('task_create', { trigger_ids: ['message:om_followMore1234'], title: 'x', follows: 't9' }),
+    assert.match(turns[2].prompt, /This task follows t1 "查 X" \(done\)[\s\S]*Its last request, round 2:\n\| line \d+[\s\S]*Its last answer to the requester:\n\| PR 已提/);
+    await assert.rejects(call('task_create', { trigger_ids: ['message:om_followDoc12345'], title: 'x', follows: 't9' }),
       (error) => ['task_exists', 'unknown_task'].includes(error.code));
+    await call('task_stop', { task_id: 't2' });
+    await assert.rejects(call('task_route', { task_id: 't2', trigger_ids: ['message:om_followChat1234'], role: 'owner' }),
+      (error) => error.code === 'task_ended' && /t2 was stopped\. Work on it again is a new task: task_create with follows=t2/.test(error.message));
   });
 
   it('routes lines from another chat to a task only when the owner wrote them', async (t) => {

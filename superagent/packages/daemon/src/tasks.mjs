@@ -23,17 +23,21 @@ import { emptyTrash, formatBytes, isDirectory, isDirectoryWithin, moveToTrash, s
 // append-only list of reports. Nothing depends on the worker's native session
 // surviving: a lost session is started again from the task record.
 //
-// A task is one piece of work, not a conversation. Only inputs that change or
-// answer the work it is doing reach it, and an ended task takes none: more
-// work on it is a new task that follows it (parent_id), whose worker starts
-// from what the earlier one produced. A worker hands back what it is given
-// that is not its task, and a task that ends with inputs it never saw hands
-// those back too: nothing routed is dropped.
+// A task is one piece of work someone keeps pushing forward (an answer, a
+// fix, a pull request, a document), not a conversation. Only inputs about
+// that work reach it. Each request on it is a round: the one that created
+// it, and each one that reopens it after it ended (task_rounds), in its own
+// session and directory, the answer going where that round was asked. Work
+// for another result is a new task, which may follow this one (parent_id) and
+// start from what it produced. A worker hands back what it is given that is
+// not its task (a round it hands back entirely never happened), and a task
+// that ends with inputs it never saw hands those back too: nothing routed is
+// dropped.
 //
 // A report is settled when the router answers for its task (a delivery or a
-// silence naming it with task_ids, or made on its origin), not when the router
-// was shown it: one the router was shown and left is offered again, so a
-// report is neither lost to a failed router turn nor sent twice.
+// silence naming it with task_ids, or made on its round's origin), not when
+// the router was shown it: one the router was shown and left is offered again,
+// so a report is neither lost to a failed router turn nor sent twice.
 //
 // Each task works in its own directory, <workspace>/tasks/<id>. What ended
 // tasks leave there is deleted in stages (sweepDirs): dependency folders
@@ -60,6 +64,10 @@ const TRANSIENT_RETRIES = 2;
 const SUMMARY_CHARS = 600;
 const REPORT_RETRY_MS = 1_000;
 const CANDIDATES = 3;
+// Tasks of one thread an input's hint may draw on past the working set.
+const THREAD_TASKS = 10;
+// How much of a nearby task's current request its hint shows.
+const HINT_REQUEST_CHARS = 40;
 // Ended tasks' directories: dependency folders are deleted this many days
 // after the task ended, the whole directory and its worker's sessions after
 // DIR_REMOVE_DAYS, and past the budget the directories of the tasks that ended
@@ -147,7 +155,42 @@ const SCHEMA = `
     pruned_at_ms INTEGER,
     removed_at_ms INTEGER
   );
+  -- A task's rounds: the request that created it (round 1) and each one that
+  -- reopened it after it ended. A round's origin is where its answer goes and
+  -- who asked. first_turn: the task's turn the round started with;
+  -- reopened_from: the status it ended with before; workdir_state and
+  -- session_state: what the round found of its directory (kept, pruned,
+  -- removed) and of its worker's session (kept, deleted, large, none);
+  -- outcome: how it ended, or handed_back when its worker handed back every
+  -- request line of it.
+  CREATE TABLE IF NOT EXISTS task_rounds (
+    task_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    origin_seq INTEGER,
+    origin_event TEXT,
+    origin_instance TEXT,
+    origin_scope TEXT,
+    origin_chat TEXT,
+    origin_thread TEXT,
+    origin_message TEXT,
+    origin_chat_type TEXT,
+    origin_source TEXT,
+    requester_id TEXT,
+    requester_name TEXT,
+    first_turn INTEGER NOT NULL DEFAULT 1,
+    reopened_from TEXT,
+    workdir_state TEXT,
+    session_state TEXT,
+    opened_at_ms INTEGER NOT NULL,
+    ended_at_ms INTEGER,
+    outcome TEXT,
+    PRIMARY KEY (task_id, round)
+  );
+  CREATE INDEX IF NOT EXISTS task_rounds_origin ON task_rounds(origin_seq);
 `;
+
+const ORIGIN = ['origin_seq', 'origin_event', 'origin_instance', 'origin_scope', 'origin_chat', 'origin_thread', 'origin_message',
+  'origin_chat_type', 'origin_source', 'requester_id', 'requester_name'];
 
 // Columns added after the first release of this schema.
 const COLUMNS = [
@@ -163,7 +206,25 @@ const COLUMNS = [
   ['task_report_deliveries', 'while_working', 'INTEGER NOT NULL DEFAULT 0'],
   // A claim its worker had taken when it filed a final report this turn.
   ['task_input_claims', 'reported', 'INTEGER NOT NULL DEFAULT 0'],
+  // The task's current round, and the round each input and report belongs to.
+  ['tasks', 'round', 'INTEGER NOT NULL DEFAULT 1'],
+  ['task_inputs', 'round', 'INTEGER NOT NULL DEFAULT 1'],
+  ['task_reports', 'round', 'INTEGER NOT NULL DEFAULT 1'],
 ];
+
+// Lookups on every input line, so that they cost the same with ten thousand
+// tasks as with ten: the working set by end time, a message's task, the tasks
+// asked in a thread. Created after COLUMNS (outbox_id is a later column).
+const INDEXES = `
+  CREATE INDEX IF NOT EXISTS tasks_ended ON tasks(ended_at_ms);
+  CREATE INDEX IF NOT EXISTS task_inputs_seq ON task_inputs(seq);
+  CREATE INDEX IF NOT EXISTS task_report_deliveries_outbox ON task_report_deliveries(outbox_id);
+  CREATE INDEX IF NOT EXISTS task_rounds_thread ON task_rounds(origin_chat, origin_thread);
+`;
+
+// A session larger than this is not carried on into a new round: the round
+// starts a fresh one from the task record, as when the session was lost.
+export const ROUND_SESSION_MAX_BYTES = 4 * 1024 * 1024;
 
 const RECEIPT = /^task-report:([0-9]+)$/;
 
@@ -222,6 +283,12 @@ export class TaskManager {
       // Reports an older daemon put in the inbox counted as delivered there.
       if (column === 'settled_at_ms') this.db.exec('UPDATE task_report_deliveries SET settled_at_ms = created_at_ms WHERE inbox_id IS NOT NULL');
     }
+    this.db.exec(INDEXES);
+    // Tasks from before rounds had one: the request that created them.
+    this.db.exec(`INSERT OR IGNORE INTO task_rounds(task_id, round, ${ORIGIN.join(', ')}, opened_at_ms, ended_at_ms, outcome)
+      SELECT id, 1, ${ORIGIN.join(', ')}, created_at_ms, ended_at_ms,
+        CASE WHEN status IN ('done', 'dropped', 'failed', 'stopped') THEN status END
+      FROM tasks WHERE round = 1 AND id NOT IN (SELECT task_id FROM task_rounds)`);
     // Worker authority tokens: token -> task id, for the turn that holds it.
     this.tokens = new Map();
     // Tasks with a turn to run, in the order they asked for it.
@@ -261,18 +328,43 @@ export class TaskManager {
 
   // The working set the router is shown: every live task and the most recent
   // ended ones. Older tasks stay in the table for task_list and exact links.
+  // A task has an end time exactly while it is ended (setStatus, stop,
+  // openRound, runTurn keep that), so both reads walk the end-time index
+  // instead of every task.
   workingSet() {
-    const live = this.db.prepare(`SELECT * FROM tasks WHERE status NOT IN ('done', 'dropped', 'failed', 'stopped')
-      ORDER BY created_at_ms`).all();
-    const ended = this.db.prepare(`SELECT * FROM tasks WHERE status IN ('done', 'dropped', 'failed', 'stopped')
-      ORDER BY ended_at_ms DESC LIMIT ?`).all(RECENT_ENDED);
+    const live = this.db.prepare(`SELECT * FROM tasks WHERE ended_at_ms IS NULL
+      AND status NOT IN ('done', 'dropped', 'failed', 'stopped') ORDER BY created_at_ms`).all();
+    const ended = this.db.prepare(`SELECT * FROM tasks WHERE ended_at_ms IS NOT NULL
+      AND status IN ('done', 'dropped', 'failed', 'stopped') ORDER BY ended_at_ms DESC LIMIT ?`).all(RECENT_ENDED);
     return [...live, ...ended];
   }
 
-  // Scopes where a task is still at work: its OnIt stays up there.
+  // Tasks asked in a thread, any round, the latest first: the exact signal
+  // reaches past the working set.
+  threadTasks(chatId, threadId) {
+    if (!chatId || !threadId) return [];
+    return this.db.prepare(`SELECT task_id, MAX(opened_at_ms) AS at FROM task_rounds WHERE origin_chat = ? AND origin_thread = ?
+      GROUP BY task_id ORDER BY at DESC LIMIT ?`).all(chatId, threadId, THREAD_TASKS).map((row) => row.task_id);
+  }
+
+  // One round of a task (its current one by default): where it was asked and
+  // by whom. A task without the row (never, after the backfill) answers for
+  // its round 1 with its own origin.
+  roundOf(task, round = task.round ?? 1) {
+    const row = this.db.prepare('SELECT * FROM task_rounds WHERE task_id = ? AND round = ?').get(task.id, round);
+    if (row) return row;
+    return Object.fromEntries([['task_id', task.id], ['round', round], ['first_turn', 1], ...ORIGIN.map((key) => [key, task[key] ?? null])]);
+  }
+
+  rounds(taskId) {
+    return this.db.prepare('SELECT * FROM task_rounds WHERE task_id = ? ORDER BY round').all(taskId);
+  }
+
+  // Scopes where a task is still at work on a round: its OnIt stays up there.
   liveScopes() {
-    return new Set(this.db.prepare(`SELECT origin_scope FROM tasks WHERE status IN ('queued', 'running')`).all()
-      .map((row) => row.origin_scope).filter(Boolean));
+    return new Set(this.db.prepare(`SELECT COALESCE(r.origin_scope, t.origin_scope) AS scope FROM tasks t
+      LEFT JOIN task_rounds r ON r.task_id = t.id AND r.round = t.round WHERE t.status IN ('queued', 'running')`).all()
+      .map((row) => row.scope).filter(Boolean));
   }
 
   // The live task that holds this input line as part of its request, if any.
@@ -289,11 +381,14 @@ export class TaskManager {
   card(task, { detail = false } = {}) {
     const where = task.origin_chat ? `chat=${chatTag(metadataTag(task.origin_chat), task.origin_thread)}` : `source=${task.origin_source}`;
     const delivery = this.delivery(task);
-    const head = `${task.id} [${task.status}] "${oneLine(task.title)}" for ${task.requester_name ?? 'unknown'} in ${where}${task.parent_id ? ` (follows ${task.parent_id})` : ''}${this.progressNote(task, delivery)}`;
+    const rounds = task.round > 1 ? ` (${task.round} rounds)` : '';
+    const head = `${task.id} [${task.status}] "${oneLine(task.title)}" for ${task.requester_name ?? 'unknown'} in ${where}${rounds}${task.parent_id ? ` (follows ${task.parent_id})` : ''}${this.progressNote(task, delivery)}`;
     if (!detail) return head;
     const sent = delivery?.sent;
     return [head,
       `origin: msg=${metadataTag(task.origin_message ?? '')} event=${metadataTag(task.origin_event ?? '')}`,
+      ...(task.round > 1 ? this.rounds(task.id).slice(1).map((round) => `round ${round.round}: from ${round.requester_name ?? 'unknown'}`
+        + ` msg=${metadataTag(round.origin_message ?? '')} event=${metadataTag(round.origin_event ?? '')}${round.outcome ? ` (${round.outcome})` : ''}`) : []),
       ...(task.summary ? [`summary: ${oneLine(clip(task.summary, SUMMARY_CHARS))}`] : []),
       ...(task.question ? [`question waiting: ${oneLine(clip(task.question, SUMMARY_CHARS))}`] : []),
       ...(JSON.parse(task.artifacts_json).length ? [`artifacts: ${JSON.parse(task.artifacts_json).map(oneLine).join(', ')}`] : []),
@@ -328,11 +423,14 @@ export class TaskManager {
 
   // What became of a task's latest final report: sent (when, as which
   // message, what it said), answered with silence, never relayed, or still on
-  // its way. 'settled' is a report settled before this was recorded.
+  // its way. 'settled' is a report settled before this was recorded. A round
+  // its worker handed back has no result.
   delivery(task) {
     const row = this.db.prepare(`SELECT r.id, r.state, r.created_at_ms, d.inbox_id, d.settled_at_ms, d.settled_by, d.outbox_id
       FROM task_reports r LEFT JOIN task_report_deliveries d ON d.report_id = r.id
-      WHERE r.task_id = ? AND r.state != 'progress' ORDER BY r.id DESC LIMIT 1`).get(task.id);
+      WHERE r.task_id = ? AND r.state != 'progress' AND NOT EXISTS (SELECT 1 FROM task_rounds x
+        WHERE x.task_id = r.task_id AND x.round = r.round AND x.outcome = 'handed_back')
+      ORDER BY r.id DESC LIMIT 1`).get(task.id);
     if (!row) return null;
     const state = row.settled_at_ms == null ? (row.inbox_id != null ? 'offered' : 'pending')
       : row.settled_by === 'stay_silent' ? 'silent' : row.settled_by === 'unrelayed' ? 'unrelayed' : row.settled_by ? 'sent' : 'settled';
@@ -351,17 +449,19 @@ export class TaskManager {
     return { reportId: row.id, reportState: row.state, createdAt: row.created_at_ms, state, at: row.settled_at_ms, sent };
   }
 
-  // requester: { id, chatId, direct } lists what one person asked for, ended
-  // tasks included: in a group only what was asked in that chat, in a direct
-  // chat everything they asked for.
+  // requester: { id, chatId, direct } lists what one person asked for (a
+  // round of theirs counts), ended tasks included, the latest at work first:
+  // in a group only what was asked in that chat, in a direct chat everything
+  // they asked for.
   list({ taskId = null, query = '', includeEnded = false, requester = null } = {}) {
     if (taskId) {
       const task = this.get(taskId);
       return task ? [this.card(task, { detail: true })] : [];
     }
     let rows = requester
-      ? this.db.prepare(`SELECT * FROM tasks WHERE requester_id = ?${requester.direct ? '' : ' AND origin_chat = ?'}
-          ORDER BY created_at_ms DESC, rowid DESC LIMIT ?`).all(...[requester.id, ...(requester.direct ? [] : [requester.chatId]), ASKER_TASKS])
+      ? this.db.prepare(`SELECT * FROM tasks WHERE id IN (SELECT task_id FROM task_rounds
+            WHERE requester_id = ?${requester.direct ? '' : ' AND origin_chat = ?'})
+          ORDER BY updated_at_ms DESC, rowid DESC LIMIT ?`).all(...[requester.id, ...(requester.direct ? [] : [requester.chatId]), ASKER_TASKS])
       : includeEnded ? this.db.prepare('SELECT * FROM tasks ORDER BY created_at_ms DESC LIMIT 200').all() : this.workingSet();
     if (query) {
       const grams = bigrams(query);
@@ -372,14 +472,19 @@ export class TaskManager {
   }
 
   // Message ids that belong to a task: its routed inputs and what the router
-  // sent for it (outbox rows attributed to its origin).
+  // sent for it: outbox rows attributed to the origin of one of its rounds, and
+  // the message that relayed one of its reports (the delivery that settled it,
+  // whatever input the router decided it on).
   taskForMessage(messageId) {
     if (!messageId) return null;
     const viaInput = this.db.prepare(`SELECT i.task_id FROM task_inputs i JOIN connector_events e ON e.seq = i.seq
       WHERE e.message_id = ? ORDER BY i.id DESC LIMIT 1`).get(messageId);
     if (viaInput) return viaInput.task_id;
-    return this.db.prepare(`SELECT t.id FROM tasks t JOIN outbox o ON o.inbound_seq = t.origin_seq
-      WHERE o.remote_message_id = ? ORDER BY t.created_at_ms DESC LIMIT 1`).get(messageId)?.id ?? null;
+    const viaOrigin = this.db.prepare(`SELECT r.task_id AS id FROM task_rounds r JOIN outbox o ON o.inbound_seq = r.origin_seq
+      WHERE o.remote_message_id = ? ORDER BY r.opened_at_ms DESC LIMIT 1`).get(messageId)?.id;
+    if (viaOrigin) return viaOrigin;
+    return this.db.prepare(`SELECT r.task_id AS id FROM task_report_deliveries d JOIN task_reports r ON r.id = d.report_id
+      JOIN outbox o ON o.id = d.outbox_id WHERE o.remote_message_id = ? ORDER BY d.settled_at_ms DESC LIMIT 1`).get(messageId)?.id ?? null;
   }
 
   // Tasks an incoming line may belong to, with why. Exact signals first; word
@@ -394,12 +499,27 @@ export class TaskManager {
     };
     const replyTask = this.taskForMessage(event.parentId);
     const query = bigrams(event.content);
-    for (const task of this.workingSet()) {
-      const sameChat = task.origin_chat && task.origin_chat === event.chatId;
+    // The working set, and past it the tasks an exact signal names: the one
+    // this line replies to and those asked in its thread, however long ago.
+    const pool = this.workingSet();
+    const known = new Set(pool.map((task) => task.id));
+    for (const id of [replyTask, ...this.threadTasks(event.chatId, event.threadId)]) {
+      if (!id || known.has(id)) continue;
+      const task = this.get(id);
+      if (task) { pool.push(task); known.add(id); }
+    }
+    for (const task of pool) {
+      // Where any of its rounds was asked; who it waits for is its round's.
+      const rounds = this.rounds(task.id);
+      const asked = rounds.length ? rounds : [this.roundOf(task, 1)];
+      const current = asked.find((round) => round.round === task.round) ?? asked.at(-1);
+      const sameChat = asked.some((round) => round.origin_chat && round.origin_chat === event.chatId);
       if (!owner && !sameChat && replyTask !== task.id) continue;
       if (replyTask === task.id) add(task, 'replies to its message', 5);
-      if (sameChat && event.threadId && task.origin_thread === event.threadId) add(task, 'same thread', 4);
-      if (task.status === 'waiting' && task.requester_id === event.senderId && task.origin_scope === event.scopeKey) {
+      if (event.threadId && asked.some((round) => round.origin_chat === event.chatId && round.origin_thread === event.threadId)) {
+        add(task, 'same thread', 4);
+      }
+      if (task.status === 'waiting' && current.requester_id === event.senderId && current.origin_scope === event.scopeKey) {
         add(task, 'waiting for this person', 4);
       }
       // Similar words only rank what an exact signal found, or point the
@@ -411,22 +531,37 @@ export class TaskManager {
   }
 
   // What a task is doing, as the router needs it to route: working, waiting
-  // for whom, or ended and how long ago.
+  // for whom, or ended and how long ago, and how many rounds it had.
   state(task) {
-    if (task.status === 'running' || task.status === 'queued') return 'working';
-    if (task.status === 'waiting') return `waiting for ${task.requester_name ?? 'the requester'}`;
-    if (!ENDED.has(task.status)) return task.status;
-    const minutes = Math.max(0, Math.round((this.now() - (task.ended_at_ms ?? task.updated_at_ms)) / 60_000));
-    return `${task.status} ${minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`} ago`;
+    const rounds = task.round > 1 ? `, ${task.round} rounds` : '';
+    if (task.status === 'running' || task.status === 'queued') return `working${rounds}`;
+    if (task.status === 'waiting') return `waiting for ${this.roundOf(task).requester_name ?? task.requester_name ?? 'the requester'}${rounds}`;
+    if (!ENDED.has(task.status)) return `${task.status}${rounds}`;
+    return `${task.status} ${this.ago(task.ended_at_ms ?? task.updated_at_ms)} ago${rounds}`;
   }
 
   // The daemon line an input carries when tasks may relate to it: facts about
-  // where the input is and what each task is doing. Whether it belongs to one
-  // is the router's call, made on what the input asks for.
+  // where the input is and what each task is doing, with the request of its
+  // current round (or its last, once it ended): a title is written when a task
+  // is created and says nothing of the rounds since. Whether the input belongs
+  // to one is the router's call, made on what the input asks for.
   hintFor(event, options) {
     const hits = this.candidatesFor(event, options);
     if (hits.length === 0) return '';
-    return `[daemon tasks] near this input: ${hits.map(({ task, reasons }) => `${task.id} [${this.state(task)}] "${oneLine(clip(task.title, 60))}" (${reasons.join(', ')})`).join(' · ')}`;
+    return `[daemon tasks] near this input: ${hits.map(({ task, reasons }) => {
+      const asked = this.roundRequest(task);
+      return `${task.id} [${this.state(task)}] "${oneLine(clip(task.title, 60))}"${asked ? ` ${ENDED.has(task.status) ? 'last asked' : 'now on'}: "${asked}"` : ''} (${reasons.join(', ')})`;
+    }).join(' · ')}`;
+  }
+
+  // The start of what a task's current round asked, without the line's metadata.
+  roundRequest(task) {
+    const round = this.roundOf(task);
+    const row = this.db.prepare(`SELECT text FROM task_inputs WHERE task_id = ? AND round = ? AND role = 'owner'
+      AND handed_back_at_ms IS NULL ORDER BY (seq = ?) DESC, id LIMIT 1`).get(task.id, task.round ?? 1, round.origin_seq ?? -1);
+    // The words after the line's metadata and any leading @mentions.
+    const text = oneLine(String(row?.text ?? '').replace(/^\[[^\]]*\]\s*/, '').replace(/@_user_\d+\s*/g, '')).replace(/^(?:@\S+\s+)+/, '').trim();
+    return text ? clip(text, HINT_REQUEST_CHARS).replace(/"/g, "'") : '';
   }
 
   // ---- router commands ------------------------------------------------------
@@ -454,45 +589,86 @@ export class TaskManager {
         origin.thread_id ?? null, origin.message_id ?? null, origin.chat_type ?? null, origin.source, origin.sender_id ?? null,
         requester, clip(note, 400), runtime, randomUUID(), workdir, parent, time, time,
       );
-      for (const row of rows) this.addInput(id, row, 'owner');
+      this.insertRound(id, 1, origin, requester, { firstTurn: 1 });
+      for (const row of rows) this.addInput(id, row, 'owner', 1);
     });
     this.recordActivity('task.created', { summary: `${id} ${title}`, inboundSeq: origin.seq, metadata: { task: id, ...(parent ? { parent } : {}) } });
     this.request(id);
     return this.get(id);
   }
 
-  addInput(taskId, row, role) {
+  addInput(taskId, row, role, round = this.get(taskId)?.round ?? 1) {
     const text = this.lineFor(row);
-    this.db.prepare('INSERT INTO task_inputs(task_id, seq, role, text, created_at_ms) VALUES (?, ?, ?, ?, ?)')
-      .run(taskId, row.seq ?? null, role, text, this.now());
+    this.db.prepare('INSERT INTO task_inputs(task_id, seq, role, text, created_at_ms, round) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(taskId, row.seq ?? null, role, text, this.now(), round);
   }
 
-  // A follow-up to a live task: `owner` inputs change or answer the work it is
-  // doing and reach its worker while it works (or wake a waiting one);
-  // `context` ones are background. An ended task takes nothing.
-  route(taskId, rows, role) {
+  insertRound(taskId, round, origin, requester, { firstTurn, reopenedFrom = null, workdir = null, session = null }) {
+    this.db.prepare(`INSERT INTO task_rounds(task_id, round, ${ORIGIN.join(', ')}, first_turn, reopened_from, workdir_state,
+      session_state, opened_at_ms) VALUES (${['?', '?', ...ORIGIN.map(() => '?'), '?', '?', '?', '?', '?'].join(', ')})`).run(
+      taskId, round, origin.seq ?? null, origin.event_id ?? null, origin.connector_instance ?? null, origin.scope_key ?? null,
+      origin.chat_id ?? null, origin.thread_id ?? null, origin.message_id ?? null, origin.chat_type ?? null, origin.source ?? null,
+      origin.sender_id ?? null, requester, firstTurn, reopenedFrom, workdir, session, this.now(),
+    );
+  }
+
+  // Input for a task: `owner` inputs change or answer the work it is doing
+  // and reach its worker while it works (or wake a waiting one); `context`
+  // ones are background. An owner input to a task that ended is a new
+  // request on the same work: it reopens the task for a round of its own
+  // (openRound). A stopped task stays stopped, and background reopens nothing.
+  route(taskId, rows, role, { requester = null } = {}) {
     const task = this.get(taskId);
     if (!task) throw new Error(`no task ${taskId}`);
-    if (ENDED.has(task.status)) {
-      throw Object.assign(new Error(`${taskId} has ended (${task.status}). More work on it is a new task: task_create with follows=${taskId}`), { code: 'task_ended' });
+    const ended = ENDED.has(task.status);
+    if (task.status === 'stopped') {
+      throw Object.assign(new Error(`${taskId} was stopped. Work on it again is a new task: task_create with follows=${taskId}`), { code: 'task_ended' });
+    }
+    if (ended && role !== 'owner') {
+      throw Object.assign(new Error(`${taskId} has ended (${task.status}): a context line does not reopen it`), { code: 'task_ended' });
     }
     const known = new Set(this.db.prepare('SELECT seq FROM task_inputs WHERE task_id = ? AND seq IS NOT NULL').all(taskId).map((row) => row.seq));
     rows = rows.filter((row) => !known.has(row.seq));
     if (rows.length === 0) return task;
-    this.transaction(() => {
-      for (const row of rows) this.addInput(taskId, row, role);
+    const opened = this.transaction(() => {
+      const round = ended ? this.openRound(task, rows[0], requester) : null;
+      for (const row of rows) this.addInput(taskId, row, role, round?.round ?? task.round);
       this.touch(taskId);
       if (role === 'owner' && (task.status === 'waiting' || task.status === 'blocked')) this.setStatus(taskId, 'queued');
+      return round;
     });
+    if (opened) {
+      this.recordActivity('task.reopened', { summary: `${taskId} round ${opened.round}`, inboundSeq: rows[0].seq ?? null,
+        metadata: { task: taskId, round: opened.round, from: task.status, workdir: opened.workdir_state, session: opened.session_state } });
+    }
     if (role === 'owner') this.request(taskId);
     return this.get(taskId);
+  }
+
+  // A task that ended takes a new request: the next round, asked by origin.
+  // Its directory is made whole again (the sweep may have pruned or removed
+  // it; a live task's is never touched after this), and its session is
+  // carried on only when it is still there and not too large: otherwise the
+  // round starts a fresh session from the task record (brief).
+  openRound(task, origin, requester) {
+    const number = (task.round ?? 1) + 1;
+    const dir = this.dirState(task.workdir);
+    const workdir = dir?.removed_at_ms != null || !isDirectory(task.workdir) ? 'removed' : dir?.pruned_at_ms != null ? 'pruned' : 'kept';
+    fs.mkdirSync(task.workdir, { recursive: true });
+    this.db.prepare('DELETE FROM task_workdirs WHERE path = ?').run(task.workdir);
+    const session = !task.native_session ? (workdir === 'removed' ? 'deleted' : 'none')
+      : this.executor.sessionState?.(task, { maxBytes: ROUND_SESSION_MAX_BYTES }) ?? 'kept';
+    this.insertRound(task.id, number, origin, requester, { firstTurn: task.turns + 1, reopenedFrom: task.status, workdir, session });
+    this.db.prepare(`UPDATE tasks SET round = ?, status = 'queued', ended_at_ms = NULL, updated_at_ms = ?,
+      native_session = ? WHERE id = ?`).run(number, this.now(), session === 'kept' ? task.native_session : null, task.id);
+    return this.roundOf({ ...task, round: number });
   }
 
   note(taskId, text) {
     const task = this.get(taskId);
     if (!task) throw new Error(`no task ${taskId}`);
-    this.db.prepare('INSERT INTO task_inputs(task_id, seq, role, text, created_at_ms) VALUES (?, NULL, ?, ?, ?)')
-      .run(taskId, 'note', `[note from the agent] ${oneLine(clip(text, 600))}`, this.now());
+    this.db.prepare('INSERT INTO task_inputs(task_id, seq, role, text, created_at_ms, round) VALUES (?, NULL, ?, ?, ?, ?)')
+      .run(taskId, 'note', `[note from the agent] ${oneLine(clip(text, 600))}`, this.now(), task.round ?? 1);
   }
 
   stop(taskId, reason = '') {
@@ -503,6 +679,7 @@ export class TaskManager {
     const slot = this.running.get(taskId);
     slot?.handle?.stop?.();
     this.db.prepare("UPDATE tasks SET status = 'stopped', ended_at_ms = ?, updated_at_ms = ? WHERE id = ?").run(this.now(), this.now(), taskId);
+    this.endRound(task, 'stopped');
     this.recordActivity('task.ended', { summary: `${taskId} stopped${reason ? `: ${reason}` : ''}`, metadata: { task: taskId, status: 'stopped' } });
     this.handBackUnseen(taskId, 'the task was stopped before its worker saw them');
     return this.get(taskId);
@@ -563,6 +740,13 @@ export class TaskManager {
   setStatus(taskId, status) {
     this.db.prepare('UPDATE tasks SET status = ?, updated_at_ms = ?, ended_at_ms = ? WHERE id = ?')
       .run(status, this.now(), ENDED.has(status) ? this.now() : null, taskId);
+    if (ENDED.has(status)) this.endRound(this.get(taskId), status);
+  }
+
+  endRound(task, outcome) {
+    if (!task) return;
+    this.db.prepare('UPDATE task_rounds SET ended_at_ms = ?, outcome = ? WHERE task_id = ? AND round = ?')
+      .run(this.now(), outcome, task.id, task.round ?? 1);
   }
 
   touch(taskId) {
@@ -622,8 +806,8 @@ export class TaskManager {
     if (!REPORT_STATES.includes(state)) throw new Error(`state must be one of ${REPORT_STATES.join(', ')}`);
     const task = this.get(taskId);
     if (!task) throw new Error(`no task ${taskId}`);
-    this.db.prepare(`INSERT INTO task_reports(task_id, state, summary, draft, question, structured, created_at_ms)
-      VALUES (?, ?, ?, ?, ?, 1, ?)`).run(taskId, state, clip(summary, 4_000), clip(draft, 20_000), clip(question, 2_000), this.now());
+    this.db.prepare(`INSERT INTO task_reports(task_id, state, summary, draft, question, structured, created_at_ms, round)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?)`).run(taskId, state, clip(summary, 4_000), clip(draft, 20_000), clip(question, 2_000), this.now(), task.round ?? 1);
     const known = JSON.parse(task.artifacts_json);
     const merged = [...new Set([...known, ...artifacts.map((item) => clip(item, 300))])].slice(0, 50);
     this.db.prepare(`UPDATE tasks SET summary = ?, question = ?, draft = ?, artifacts_json = ?, updated_at_ms = ? WHERE id = ?`)
@@ -661,27 +845,50 @@ export class TaskManager {
   }
 
   brief(task, inputs) {
+    const round = (task.round ?? 1) > 1 ? this.roundOf(task) : null;
+    // The first turn of a round that reopened the task.
+    const opening = Boolean(round) && task.turns + 1 === round.first_turn;
     const recovery = task.turns > 0 && !task.native_session;
+    const lost = opening && recovery && ['deleted', 'large'].includes(round.session_state);
     const prefix = task.recovering
       ? ['The daemon restarted while you were working on this task. Check your directory and what you already did (files, commits, issues, comments) before repeating any outside action.']
+      : lost ? [round.session_state === 'large'
+        ? 'Your session from the earlier rounds of this task grew too long to carry on: you start a fresh one from this brief, rebuilt from the task record.'
+        : 'Your session from the earlier rounds of this task was deleted to save disk some days after it ended: this brief is rebuilt from the task record.']
       : recovery ? ['The previous worker session could not be safely resumed. Check existing work before repeating any outside action.'] : [];
-    if (recovery) inputs = this.db.prepare('SELECT * FROM task_inputs WHERE task_id = ? ORDER BY id').all(task.id);
+    if (recovery) inputs = this.db.prepare('SELECT * FROM task_inputs WHERE task_id = ? AND handed_back_at_ms IS NULL ORDER BY id').all(task.id);
     const owner = inputs.filter((row) => row.role === 'owner');
     const context = inputs.filter((row) => row.role !== 'owner');
+    const dirNote = opening ? this.roundDirBrief(task, round) : [];
     if (task.turns === 0 || recovery) {
+      const where = `${task.origin_chat ? ` in chat=${chatTag(metadataTag(task.origin_chat), task.origin_thread)}` : ''} (source=${task.origin_source})`;
       return [
         ...prefix,
         `[task ${task.id}] ${task.title}`,
-        `Requested by ${task.requester_name ?? 'unknown'}${task.origin_chat ? ` in chat=${chatTag(metadataTag(task.origin_chat), task.origin_thread)}` : ''} (source=${task.origin_source}). The request, as the agent received it:`,
-        ...owner.map((row) => row.text),
+        ...(round
+          ? [`Requested by ${task.requester_name ?? 'unknown'}${where}. This task has had ${task.round} rounds, each a request on the same work, answered in turn; the last is the one to do now. The requests, as the agent received them:`,
+            ...this.roundLines(task, owner)]
+          : [`Requested by ${task.requester_name ?? 'unknown'}${where}. The request, as the agent received it:`, ...owner.map((row) => row.text)]),
         ...(context.length ? ['Context:', ...context.map((row) => row.text)] : []),
         ...(task.note ? [`Routing note from the agent: ${task.note}`] : []),
         ...this.parentBrief(task),
         `Your directory: ${task.workdir}`,
-        ...(recovery && task.summary ? ['Previous work summary (may be incomplete):', quoted(task.summary)] : []),
-        ...(recovery && task.draft ? ['Previous draft (may be incomplete):', quoted(task.draft)] : []),
+        ...dirNote,
+        ...(recovery && task.summary ? [opening ? 'What your earlier rounds found:' : 'Previous work summary (may be incomplete):', quoted(task.summary)] : []),
+        ...(recovery && task.draft ? [opening ? 'Your answer to the previous round (the requester has it):' : 'Previous draft (may be incomplete):', quoted(task.draft)] : []),
         ...(recovery && task.artifacts_json !== '[]' ? [`Previous artifacts: ${task.artifacts_json}`] : []),
-        'Work on this request, then finish with task_report. You cannot message anyone: the agent replies to the requester from your report.',
+        round
+          ? `Work on the request of round ${task.round}, then finish with task_report: its result answers that request. You cannot message anyone: the agent replies to the requester from your report.`
+          : 'Work on this request, then finish with task_report. You cannot message anyone: the agent replies to the requester from your report.',
+      ].join('\n');
+    }
+    if (opening) {
+      return [
+        `[task ${task.id}] Round ${task.round}: a new request on this task, from ${round.requester_name ?? 'the requester'}. Your result for the previous round went to the requester; this is more work on the same task.`,
+        ...owner.map((row) => row.text),
+        ...(context.length ? ['Context only (act on it only if it changes your task):', ...context.map((row) => row.text)] : []),
+        ...dirNote,
+        'Before you start, check the state of your directory and of what you changed outside it (a branch may have moved or been merged since). Finish with task_report: its result answers this request.',
       ].join('\n');
     }
     const unsent = (this.catchUp.get(task.id) ?? 0) > 0;
@@ -695,16 +902,40 @@ export class TaskManager {
     ].join('\n');
   }
 
+  // A rebuilt brief's requests, round by round. Rounds handed back entirely
+  // were never this task's.
+  roundLines(task, owner) {
+    return this.rounds(task.id).filter((round) => round.outcome !== 'handed_back').flatMap((round) => [
+      `Round ${round.round}${round.round === task.round ? ' (now)' : ''}, from ${round.requester_name ?? 'unknown'}${round.round !== task.round && round.outcome ? ` (${round.outcome})` : ''}:`,
+      ...owner.filter((row) => (row.round ?? 1) === round.round).map((row) => row.text),
+    ]);
+  }
+
+  // What a round found of its directory when it reopened the task.
+  roundDirBrief(task, round) {
+    if (round.workdir_state === 'removed') {
+      return [`Your directory (${task.workdir}) was deleted to save disk some days after the task ended, and is empty again: start from your results (artifacts, branches, pull requests, documents) and set up again only what this request needs.`];
+    }
+    if (round.workdir_state === 'pruned') {
+      return ['The dependency folders in your directory (node_modules, virtual environments, build caches) were deleted to save disk after the task ended: install again only what you need.'];
+    }
+    return [];
+  }
+
   // What a task that follows another starts from: that work's request and
   // results, and where its files are.
   parentBrief(task) {
     const parent = task.parent_id ? this.get(task.parent_id) : null;
     if (!parent) return [];
-    const request = this.db.prepare("SELECT text FROM task_inputs WHERE task_id = ? AND role = 'owner' ORDER BY id LIMIT 3").all(parent.id);
+    const lines = (round) => this.db.prepare(`SELECT text FROM task_inputs WHERE task_id = ? AND role = 'owner' AND round = ?
+      AND handed_back_at_ms IS NULL ORDER BY id LIMIT 3`).all(parent.id, round);
+    // With several rounds, its last request says where that work stands.
+    const last = this.rounds(parent.id).filter((round) => round.round > 1 && round.outcome !== 'handed_back').at(-1);
     const artifacts = JSON.parse(parent.artifacts_json);
     return [
       `This task follows ${parent.id} "${oneLine(clip(parent.title, 80))}" (${parent.status}), earlier work it builds on. Its request:`,
-      ...request.map((row) => quoted(clip(row.text, 600))),
+      ...lines(1).map((row) => quoted(clip(row.text, 600))),
+      ...(last ? [`Its last request, round ${last.round}:`, ...lines(last.round).map((row) => quoted(clip(row.text, 600)))] : []),
       ...(parent.summary ? ['What that work found:', quoted(clip(parent.summary, SUMMARY_CHARS))] : []),
       ...(parent.draft ? ['Its last answer to the requester:', quoted(clip(parent.draft, PARENT_DRAFT_CHARS))] : []),
       ...(artifacts.length ? [`Its artifacts: ${artifacts.map(oneLine).join(', ')}`] : []),
@@ -794,14 +1025,15 @@ export class TaskManager {
       return;
     }
     this.retries.delete(taskId);
+    if (this.voidRound(task)) return;
     let report = final;
     if (!report) {
       // No final report: the worker's last words are its answer, marked as
       // such; a failed turn reports the failure.
       const state = result.error ? 'failed' : 'done';
-      const id = this.db.prepare(`INSERT INTO task_reports(task_id, state, summary, draft, question, structured, created_at_ms)
-        VALUES (?, ?, ?, ?, '', 0, ?)`).run(taskId, state, clip(result.error ?? structured?.summary ?? '', 4_000),
-        clip(result.error ? '' : result.text, 20_000), this.now()).lastInsertRowid;
+      const id = this.db.prepare(`INSERT INTO task_reports(task_id, state, summary, draft, question, structured, created_at_ms, round)
+        VALUES (?, ?, ?, ?, '', 0, ?, ?)`).run(taskId, state, clip(result.error ?? structured?.summary ?? '', 4_000),
+        clip(result.error ? '' : result.text, 20_000), this.now(), task.round ?? 1).lastInsertRowid;
       report = this.db.prepare('SELECT * FROM task_reports WHERE id = ?').get(id);
       if (!result.error && result.text) this.db.prepare('UPDATE tasks SET draft = ? WHERE id = ?').run(clip(result.text, 20_000), taskId);
     }
@@ -835,10 +1067,42 @@ export class TaskManager {
     }
   }
 
+  // A round of a task that reopened, whose every request line its worker
+  // handed back: the request was not this task's, and the router decides on
+  // it anew. Nothing of the round is relayed (a report its worker filed is
+  // kept for the record, settled as handed back), and the task is as it was
+  // before: its status, and the summary and answer of its last round.
+  voidRound(task) {
+    if ((task.round ?? 1) < 2) return false;
+    const live = this.db.prepare(`SELECT COUNT(*) AS n FROM task_inputs WHERE task_id = ? AND round = ? AND role = 'owner'
+      AND handed_back_at_ms IS NULL`).get(task.id, task.round).n;
+    if (Number(live) > 0) return false;
+    const round = this.roundOf(task);
+    const last = this.db.prepare(`SELECT summary, draft FROM task_reports WHERE task_id = ? AND round < ? AND state != 'progress'
+      ORDER BY id DESC LIMIT 1`).get(task.id, task.round);
+    this.transaction(() => {
+      for (const { id } of this.db.prepare("SELECT id FROM task_reports WHERE task_id = ? AND round = ? AND state != 'progress'").all(task.id, task.round)) {
+        this.db.prepare(`INSERT OR IGNORE INTO task_report_deliveries(report_id, created_at_ms, settled_at_ms, settled_by)
+          VALUES (?, ?, ?, 'handed_back')`).run(id, this.now(), this.now());
+      }
+      this.db.prepare(`UPDATE tasks SET status = ?, ended_at_ms = ?, updated_at_ms = ?, summary = ?, draft = ?, question = '' WHERE id = ?`)
+        .run(ENDED.has(round.reopened_from) ? round.reopened_from : 'done', this.now(), this.now(),
+          last?.summary ?? task.summary, last?.draft ?? task.draft, task.id);
+      this.endRound(task, 'handed_back');
+    });
+    this.catchUp.delete(task.id);
+    this.recordActivity('task.round_handed_back', { summary: `${task.id} round ${task.round} was handed back entirely`,
+      metadata: { task: task.id, round: task.round } });
+    return true;
+  }
+
   reportText(task, report, { again = false, working = false } = {}) {
+    // The answer goes where the report's round was asked.
+    const origin = this.roundOf(task, report.round ?? 1);
+    const round = (report.round ?? 1) > 1 || task.round > 1 ? ` round=${report.round ?? 1}` : '';
     return [
-      `[task report] task=${task.id} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}${working ? ' working=1' : ''}${again ? ' undelivered=1' : ''}`,
-      `origin: ${task.origin_chat ? `chat=${chatTag(metadataTag(task.origin_chat), task.origin_thread)} ` : ''}source=${task.origin_source} msg=${metadataTag(task.origin_message ?? '')} event=${metadataTag(task.origin_event ?? '')}`,
+      `[task report] task=${task.id}${round} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(origin.requester_name ?? task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}${working ? ' working=1' : ''}${again ? ' undelivered=1' : ''}`,
+      `origin: ${origin.origin_chat ? `chat=${chatTag(metadataTag(origin.origin_chat), origin.origin_thread)} ` : ''}source=${origin.origin_source} msg=${metadataTag(origin.origin_message ?? '')} event=${metadataTag(origin.origin_event ?? '')}`,
       ...(working ? [`The requester kept adding to ${task.id} while its worker wrote this, and the worker is on their latest input now: relay this as the result so far with task_ids=["${task.id}"], and say the rest follows in a later [task report].`] : []),
       ...(again ? [`You were shown this report before and have not answered for ${task.id}: relay it now with task_ids=["${task.id}"], or, if a reply you already sent covers it, call stay_silent on its origin event= with task_ids=["${task.id}"].`] : []),
       ...(report.summary ? ['summary:', quoted(clip(report.summary, SUMMARY_CHARS))] : []),
@@ -848,18 +1112,19 @@ export class TaskManager {
   }
 
   relayReport(task, report) {
+    const origin = this.roundOf(task, report.round ?? 1);
     const item = {
       text: '',
       seq: null,
       // Runtimes report which of these a router turn held when it ends.
       receiptId: `task-report:${report.id}`,
-      scopeKey: task.origin_scope,
+      scopeKey: origin.origin_scope,
       chatType: 'p2p',
-      scope: { kind: 'task', key: task.origin_scope },
+      scope: { kind: 'task', key: origin.origin_scope },
     };
     const meta = {
-      chatId: task.origin_chat, threadId: task.origin_thread, source: task.origin_source, instance: task.origin_instance,
-      kind: 'task.report', chatType: task.origin_chat_type, from: `task ${task.id}`,
+      chatId: origin.origin_chat, threadId: origin.origin_thread, source: origin.origin_source, instance: origin.origin_instance,
+      kind: 'task.report', chatType: origin.origin_chat_type, from: `task ${task.id}`,
     };
     const entry = this.transaction(() => {
       const delivery = this.db.prepare('SELECT * FROM task_report_deliveries WHERE report_id = ?').get(report.id);
@@ -878,28 +1143,39 @@ export class TaskManager {
   }
 
   // The router answered for these tasks: by naming them (task_ids on a
-  // delivery or a silence), or with a delivery or silence on a task's origin.
-  // Reports it was shown for them are settled. An answer to a later input of
-  // a task settles nothing: it may be an acknowledgement.
+  // delivery or a silence: every report it was shown for them), or with a
+  // delivery or silence on a round's origin (the reports of that round).
+  // Reports it was shown are settled. An answer to a later input of a round
+  // settles nothing: it may be an acknowledgement.
   settleReports({ taskIds = [], seqs = [], by = null, outboxId = null } = {}) {
     const ids = new Set(taskIds.filter((id) => this.get(id)));
-    for (const seq of seqs.filter((value) => value != null)) {
-      for (const row of this.db.prepare('SELECT id FROM tasks WHERE origin_seq = ?').all(seq)) ids.add(row.id);
-    }
+    const rounds = seqs.filter((value) => value != null)
+      .flatMap((seq) => this.db.prepare('SELECT task_id, round FROM task_rounds WHERE origin_seq = ?').all(seq))
+      .filter((row) => !ids.has(row.task_id));
     let settled = 0;
     const settle = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
       WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ?)`);
+    const settleRound = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
+      WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ? AND round = ?)`);
     for (const id of ids) settled += Number(settle.run(this.now(), by, outboxId ?? null, id).changes);
+    for (const row of rounds) settled += Number(settleRound.run(this.now(), by, outboxId ?? null, row.task_id, row.round).changes);
     return settled;
   }
 
   // Tasks among these whose last report is out of date: new input from the
   // requester's side came in and their worker is on it again. Not one whose
   // report went out past the catch-up turns: that one is the result so far.
+  // Nor one with a report of an earlier round still to relay: that report
+  // answers its own round's request while the task works on the next one.
   working(taskIds = []) {
     const ahead = this.db.prepare(`SELECT 1 FROM task_report_deliveries d JOIN task_reports r ON r.id = d.report_id
       WHERE r.task_id = ? AND d.while_working = 1 AND d.settled_at_ms IS NULL LIMIT 1`);
-    return taskIds.filter((id) => ['queued', 'running'].includes(this.get(id)?.status) && !ahead.get(id));
+    const earlier = this.db.prepare(`SELECT 1 FROM task_report_deliveries d JOIN task_reports r ON r.id = d.report_id
+      WHERE r.task_id = ? AND r.round < ? AND d.settled_at_ms IS NULL AND d.inbox_id IS NOT NULL LIMIT 1`);
+    return taskIds.filter((id) => {
+      const task = this.get(id);
+      return ['queued', 'running'].includes(task?.status) && !ahead.get(id) && !earlier.get(id, task.round ?? 1);
+    });
   }
 
   // A router turn ended. A report it was shown and did not settle is offered
@@ -1079,7 +1355,10 @@ export class TaskManager {
       }
       this.markDir(dir, 'removed_at_ms');
       // Its worker's sessions: a task that follows it now starts from its
-      // summary instead of a copy of its session.
+      // summary instead of a copy of its session, and a round that reopens it
+      // from the task record.
+      this.db.prepare(`UPDATE tasks SET native_session = NULL WHERE workdir = ?
+        AND status IN ('done', 'dropped', 'failed', 'stopped')`).run(dir);
       if (this.config.dataDir) {
         for (const { id } of this.db.prepare('SELECT id FROM tasks WHERE workdir = ?').all(dir)) {
           const sessions = path.join(this.config.dataDir, 'workers', id);
@@ -1163,6 +1442,7 @@ export class TaskManager {
       reports: this.db.prepare(`SELECT r.*, d.inbox_id, d.settled_at_ms, d.settled_by, d.offers FROM task_reports r
         LEFT JOIN task_report_deliveries d ON d.report_id = r.id WHERE r.task_id = ? ORDER BY r.id`).all(task.id),
       children: this.db.prepare('SELECT id, title, status FROM tasks WHERE parent_id = ? ORDER BY created_at_ms').all(task.id),
+      rounds: this.rounds(task.id),
       dir: this.dirState(task.workdir),
       lastError,
     };

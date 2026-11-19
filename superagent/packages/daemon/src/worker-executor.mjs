@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn as nodeSpawn, spawnDetached } from './platform/index.mjs';
 import { terminateProcessTree } from './process-utils.mjs';
@@ -68,18 +69,64 @@ function jsonLines(stream, onLine) {
 
 // A task that follows another starts from a copy of that task's own session
 // (its whole conversation, and so the provider's prefix cache) unless the
-// session is this large; then the brief's summary of it is the start.
+// session is this large or gone; then the brief's summary of it is the start.
+// Pi copies the file (--fork), Claude Code forks a session it keeps
+// (--resume --fork-session), Codex a thread it keeps (exec fork). Claude Code
+// records the new directory as an update after the copied history; for Pi,
+// whose providers may fold that update into the first system message, the
+// worker's system prompt names one directory for every task
+// (pi-mcp-extension.mjs). Codex keys its prompt cache by thread, so a fork
+// there starts with the copied history uncached; resuming a task's own
+// thread (a later turn or round) does not.
 export const FORK_MAX_BYTES = 4 * 1024 * 1024;
 
-// The session file of the task a new one follows, when it can be forked.
-export function forkableSession(config, fork) {
-  if (!fork?.taskId || !fork.sessionId) return null;
-  const dir = path.join(config.dataDir, 'workers', fork.taskId);
+// A Pi worker session's file in its task's session directory, if it is there.
+function piSessionFile(config, taskId, sessionId) {
   let names;
-  try { names = fs.readdirSync(dir); } catch { return null; }
-  const name = names.find((entry) => entry.endsWith(`_${fork.sessionId}.jsonl`));
-  if (!name) return null;
-  const file = path.join(dir, name);
+  try { names = fs.readdirSync(path.join(config.dataDir, 'workers', taskId)); } catch { return null; }
+  const name = names.find((entry) => entry.endsWith(`_${sessionId}.jsonl`));
+  return name ? path.join(config.dataDir, 'workers', taskId, name) : null;
+}
+
+// Claude Code keeps a session as projects/<its directory, encoded>/<id>.jsonl.
+function claudeSessionFile(env, sessionId) {
+  const root = path.join(env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), '.claude'), 'projects');
+  let dirs;
+  try { dirs = fs.readdirSync(root); } catch { return null; }
+  for (const dir of dirs) {
+    const file = path.join(root, dir, `${sessionId}.jsonl`);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+// Codex keeps a thread as sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl.
+function codexSessionFile(env, threadId) {
+  const root = path.join(env.CODEX_HOME || path.join(env.HOME || os.homedir(), '.codex'), 'sessions');
+  const suffix = `-${threadId}.jsonl`;
+  const walk = (dir, depth) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const entry of entries) {
+      const file = path.join(dir, entry.name);
+      if (depth === 0 && entry.isFile() && entry.name.endsWith(suffix)) return file;
+      if (depth > 0 && entry.isDirectory()) {
+        const found = walk(file, depth - 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  return walk(root, 3);
+}
+
+// The session file of the task a new one follows, when it can be forked.
+export function forkableSession(config, fork, env = process.env) {
+  if (!fork?.taskId || !fork.sessionId) return null;
+  const file = fork.runtime === 'claude' ? claudeSessionFile(env, fork.sessionId)
+    : fork.runtime === 'codex' ? codexSessionFile(env, fork.sessionId)
+      : piSessionFile(config, fork.taskId, fork.sessionId);
+  if (!file) return null;
   try { return fs.statSync(file).size <= FORK_MAX_BYTES ? file : null; } catch { return null; }
 }
 
@@ -139,7 +186,9 @@ const RUNTIMES = {
     },
   },
   codex: {
-    async command({ config, task, prompt, authority, model, effort, policy }) {
+    async command({ config, task, prompt, authority, model, effort, policy, fork }) {
+      // The first turn of a task that follows a Codex task forks that task's thread.
+      const forked = !task.native_session && fork?.runtime === 'codex' && forkableSession(config, fork) ? fork.sessionId : null;
       const tools = agentToolServer(config, authority);
       const args = [
         'exec', '--json', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '-C', task.workdir,
@@ -154,7 +203,7 @@ const RUNTIMES = {
         ...(model ? ['-m', model] : []),
         ...(effort ? ['-c', `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
         // The thread id is Codex's own; the first turn reports it.
-        ...(task.native_session ? ['resume', task.native_session] : []),
+        ...(task.native_session ? ['resume', task.native_session] : forked ? ['fork', forked] : []),
         prompt,
       ];
       return { command: config.codexBin, args, env: sanitizeCodexEnv(process.env, config.profile, agentToolEnv(config, authority), config) };
@@ -177,7 +226,10 @@ const RUNTIMES = {
     },
   },
   claude: {
-    async command({ config, task, prompt, authority, model, effort, policyFile, scratch }) {
+    async command({ config, task, prompt, authority, model, effort, policyFile, scratch, fork }) {
+      // The first turn of a task that follows a Claude Code task forks that
+      // task's session under this task's own id.
+      const forked = !task.native_session && fork?.runtime === 'claude' && forkableSession(config, fork) ? fork.sessionId : null;
       const mcpConfig = path.join(scratch, 'mcp-config.json');
       fs.writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { personal_agent: agentToolServer(config, authority) } }), { mode: 0o600 });
       const args = [
@@ -189,7 +241,8 @@ const RUNTIMES = {
         '--no-chrome',
         ...(effort ? ['--effort', effort] : []),
         ...(model ? ['--model', model] : []),
-        ...(task.native_session ? ['--resume', task.native_session] : ['--session-id', task.session_id]),
+        ...(task.native_session ? ['--resume', task.native_session]
+          : forked ? ['--resume', forked, '--fork-session', '--session-id', task.session_id] : ['--session-id', task.session_id]),
         prompt,
       ];
       return { command: config.claudeBin, args, env: sanitizeClaudeEnv(process.env, config.profile, agentToolEnv(config, authority), config) };
@@ -218,6 +271,17 @@ export class WorkerExecutor {
 
   supports(runtime) {
     return WORKER_RUNTIMES.includes(runtime);
+  }
+
+  // Whether a task's last session can go on into a new round: 'kept',
+  // 'deleted' (no longer on disk) or 'large'. Only Pi's sessions are files
+  // the daemon keeps (and the sweep deletes); Codex and Claude Code keep their
+  // own, and a resume they cannot do fails the turn into a fresh session.
+  sessionState(task, { maxBytes = FORK_MAX_BYTES } = {}) {
+    if (task.runtime !== 'pi' || !task.native_session) return 'kept';
+    const file = piSessionFile(this.config, task.id, task.native_session);
+    if (!file) return 'deleted';
+    try { return fs.statSync(file).size > maxBytes ? 'large' : 'kept'; } catch { return 'deleted'; }
   }
 
   // The model and effort of the router's runtime, when the task runs on it.

@@ -50,7 +50,7 @@ function where(task) {
 
 function state(task, now) {
   if (task.status === 'running') {
-    return `运行 ${task.turnStartedAt ? since(task.turnStartedAt, now) : ''}（第 ${task.turns} 轮）`.replace(' （', '（');
+    return `运行 ${task.turnStartedAt ? since(task.turnStartedAt, now) : ''}（第 ${task.turns} 次运行）`.replace(' （', '（');
   }
   if (task.status === 'queued') return `排队 ${since(task.updated_at_ms, now)}`;
   if (task.status === 'waiting') return `等 ${task.requester_name ?? '请求人'} 回复 ${since(task.updated_at_ms, now)}`;
@@ -61,7 +61,7 @@ function state(task, now) {
 function line(task, now) {
   const delivery = task.report?.delivery && ['done', 'dropped', 'failed', 'waiting', 'blocked'].includes(task.status)
     ? ` · 结果${DELIVERY[task.report.delivery]}` : '';
-  return `${task.id} ${state(task, now)}「${oneLine(task.title, 40)}」${task.requester_name ?? '未知'} · ${where(task)}${task.parent_id ? ` · 跟进 ${task.parent_id}` : ''}${delivery}`;
+  return `${task.id} ${state(task, now)}「${oneLine(task.title, 40)}」${task.requester_name ?? '未知'} · ${where(task)}${task.round > 1 ? ` · ${task.round} 次请求` : ''}${task.parent_id ? ` · 跟进 ${task.parent_id}` : ''}${delivery}`;
 }
 
 // The one line /status adds when there are tasks at work.
@@ -98,7 +98,9 @@ function detailText(tasks, taskId, now) {
   if (!task) return { ok: false, text: `没有任务 ${taskId}。\n${USAGE}` };
   const owner = task.inputs.filter((input) => input.role === 'owner');
   const request = owner.filter((input) => input.seq === task.origin_seq);
-  const followUps = task.inputs.filter((input) => input.seq !== task.origin_seq || input.role !== 'owner');
+  // A later round's request is listed with its round, not as a follow-up.
+  const reopenedBy = new Set(task.rounds.filter((round) => round.round > 1).map((round) => round.origin_seq));
+  const followUps = task.inputs.filter((input) => (input.seq !== task.origin_seq && !reopenedBy.has(input.seq)) || input.role !== 'owner');
   const lines = [
     `${task.id}「${task.title}」`,
     `状态：${state(task, now)}`,
@@ -109,6 +111,15 @@ function detailText(tasks, taskId, now) {
     '请求：',
     ...request.map((input) => `  ${oneLine(said(input.text), 200)}`),
   ];
+  const later = task.rounds.filter((round) => round.round > 1);
+  if (later.length) {
+    lines.push(`之后的请求（${later.length}）：`);
+    for (const round of later.slice(-10)) {
+      const text = task.inputs.find((input) => input.seq === round.origin_seq && input.role === 'owner')?.text;
+      const outcome = round.outcome === 'handed_back' ? '已退回' : round.outcome ? STATUS[round.outcome] ?? round.outcome : '进行中';
+      lines.push(`  ${clock(round.opened_at_ms)} 第 ${round.round} 次 · ${round.requester_name ?? '未知'}（${outcome}）：${oneLine(said(text), 80)}`);
+    }
+  }
   if (followUps.length) {
     lines.push(`追加（${followUps.length}）：`);
     for (const input of followUps.slice(-10)) {
@@ -129,7 +140,7 @@ function detailText(tasks, taskId, now) {
   if (artifacts.length) lines.push(`产出：${artifacts.slice(0, 5).join('、')}`);
   if (task.lastError) lines.push(`最近一次失败（${clock(task.lastError.occurred_at_ms)}）：${oneLine(task.lastError.summary, 160)}`);
   const dir = task.dir?.removed_at_ms ? '（已清理）' : task.dir?.pruned_at_ms ? '（依赖目录已清理）' : '';
-  lines.push(`worker 轮数：${task.turns} · 目录：${task.workdir}${dir}`);
+  lines.push(`worker 运行次数：${task.turns} · 目录：${task.workdir}${dir}`);
   return { ok: true, text: lines.join('\n') };
 }
 

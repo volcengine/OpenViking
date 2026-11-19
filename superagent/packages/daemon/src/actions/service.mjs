@@ -266,10 +266,19 @@ export class ActionService {
       throw blocked('other_chat', `Not routed: ${foreign.map((row) => `event=${row.event_id}`).join(', ')} is from another chat than ${target.id}, and only the owner's lines may join a task across chats. Decide on it where it was written. ${NO_ACTION}`);
     }
     let task;
-    try { task = tasks.route(input.task_id, rows, input.role); } catch (error) {
+    const before = target?.round ?? 1;
+    try {
+      task = tasks.route(input.task_id, rows, input.role, { requester: senderLabel(this.store.inboundBySeq(rows[0].seq)) });
+    } catch (error) {
       throw blocked(error.code ?? 'unknown_task', `${error.message}. ${NO_ACTION}`);
     }
     this.routedDecisions(rows);
+    if ((task.round ?? 1) > before) {
+      return {
+        text: `Reopened ${task.id} for round ${task.round}: its worker takes this request on in its own session and directory. Tell the requester once that you are on it; the result comes back as a [task report] input with round=${task.round}.`,
+        data: { task_id: task.id, status: task.status, round: task.round },
+      };
+    }
     return {
       text: `Routed ${rows.length} input(s) to ${task.id} as ${input.role}; status ${task.status}.`,
       data: { task_id: task.id, status: task.status },

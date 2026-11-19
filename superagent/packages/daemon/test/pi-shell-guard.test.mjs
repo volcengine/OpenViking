@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import personalAgentMcp from '../src/pi-mcp-extension.mjs';
+import personalAgentMcp, { WORKER_CWD } from '../src/pi-mcp-extension.mjs';
 
 // The extension's handlers, as Pi would register them.
 function load(env) {
@@ -126,6 +126,15 @@ describe('Pi worker task inputs', () => {
     assert.deepEqual({ ...result.entries[0], content: undefined }, { type: 'custom_message', customType: 'task_input', display: true, content: undefined });
     assert.match(result.entries[0].content, /^\[task input\] New inputs for your task, oldest first:\n\[chat=oc_a msg=om_2 event=e2\] 只看上周\nHandle what changes or answers your task; hand back with task_handback what does not belong to it\.$/);
     assert.deepEqual(calls.map((call) => [call.tool, call.authority]), [['task_check', 'worker-token'], ['task_check', 'worker-token']]);
+  });
+
+  it('names one working directory in every worker\'s system prompt, so a forked session keeps its prefix', () => {
+    const start = load({ PERSONAL_AGENT_TASK_INPUTS: '1' }).get('before_agent_start');
+    const event = { systemPromptOptions: { cwd: '/srv/workspace/tasks/t2', appendSystemPrompt: 'policy' } };
+    start(event);
+    assert.deepEqual(event.systemPromptOptions, { cwd: WORKER_CWD, appendSystemPrompt: 'policy' });
+    assert.match(WORKER_CWD, /the task directory your brief names \("Your directory: …"\); your shell and file tools start there/);
+    assert.equal(load({ PERSONAL_AGENT_TASK_INPUTS: undefined }).has('before_agent_start'), false, 'a router keeps its own');
   });
 
   it('is off for the router and when the daemon cannot be reached', async () => {
