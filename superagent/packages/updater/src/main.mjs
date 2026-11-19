@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 
+import { onShutdown } from '../../daemon/src/platform/index.mjs';
 import { createUpdaterServer } from './server.mjs';
 
 const updater = await createUpdaterServer();
@@ -15,3 +16,5 @@ async function stop() {
 
 process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
+// Windows PM2 stops a process by sending a shutdown message, not a signal.
+onShutdown(stop);

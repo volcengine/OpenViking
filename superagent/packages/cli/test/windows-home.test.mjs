@@ -13,8 +13,8 @@ test('manifest and release helpers use the same explicit HOME override', () => {
   const targets = new URL('../../updater/src/targets.mjs', import.meta.url).href;
   const script = `
     import { superagentHome, manifestPath } from ${JSON.stringify(manifest)};
-    import { defaultReleaseLink, defaultSocketPath } from ${JSON.stringify(targets)};
-    console.log(JSON.stringify([superagentHome(), manifestPath(), defaultReleaseLink(), defaultSocketPath()]));
+    import { defaultReleaseLink, defaultUpdaterEndpoint } from ${JSON.stringify(targets)};
+    console.log(JSON.stringify([superagentHome(), manifestPath(), defaultReleaseLink(), defaultUpdaterEndpoint()]));
   `;
   const env = { ...process.env, HOME: home, USERPROFILE: profile };
   delete env.OV_SUPERAGENT_CONFIG;

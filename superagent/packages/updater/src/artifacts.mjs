@@ -35,6 +35,18 @@ export function artifactName(version, id) {
   return `superagent-${version}-${id}.tar.gz`;
 }
 
+// How a published build reaches a machine. `release` downloads the tar.gz the
+// updater publishes itself; `installer` hands the platform's own installer the
+// job, because a Windows release is a ZIP that only that installer can verify,
+// unpack and switch the release links for (see windows-installer.mjs).
+export function updaterMode(id = hostPlatformId) {
+  const mode = PLATFORMS[id]?.updater;
+  if (mode !== 'release' && mode !== 'installer') {
+    throw new Error(`no automatic upgrade path for ${id}`);
+  }
+  return mode;
+}
+
 // Every downloaded file is checked against a SHA-256 that came from elsewhere.
 
 export async function download(url, target, { fetchImpl = globalThis.fetch, headers = {} } = {}) {

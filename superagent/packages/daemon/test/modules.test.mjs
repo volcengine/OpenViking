@@ -149,7 +149,13 @@ describe('module boundaries', () => {
     );
     if (capabilities.updater) {
       assert.match(updater.script, /packages\/updater\/src\/main\.mjs$/);
-      assert.match(updater.env.OV_SUPERAGENT_UPDATER_SOCKET, /updater\.sock$/);
+      // POSIX names a socket file; Windows has none, so the same install
+      // directory maps to one stable named pipe the CLI derives too.
+      assert.ok(
+        updater.env.OV_SUPERAGENT_UPDATER_SOCKET === path.join('/Users/test', '.ov-superagent', 'updater.sock')
+        || updater.env.OV_SUPERAGENT_UPDATER_SOCKET.startsWith('\\\\.\\pipe\\superagent-updater-'),
+        updater.env.OV_SUPERAGENT_UPDATER_SOCKET,
+      );
       assert.equal(updater.env.OV_SUPERAGENT_CONFIG, manifestPath);
       assert.equal(updater.env.OV_SUPERAGENT_LOG_LEVEL, 'debug');
       assert.equal(updater.env.ARK_API_KEY, 'system-only-secret');

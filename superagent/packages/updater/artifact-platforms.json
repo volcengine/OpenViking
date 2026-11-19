@@ -4,30 +4,35 @@
     "arch": "x64",
     "node": "win-x64",
     "larkCli": "windows-amd64",
-    "sourceOnly": true
+    "sourceOnly": true,
+    "updater": "installer"
   },
   "linux-x64": {
     "os": "linux",
     "arch": "x64",
     "node": "linux-x64",
-    "larkCli": "linux-amd64"
+    "larkCli": "linux-amd64",
+    "updater": "release"
   },
   "linux-arm64": {
     "os": "linux",
     "arch": "arm64",
     "node": "linux-arm64",
-    "larkCli": "linux-arm64"
+    "larkCli": "linux-arm64",
+    "updater": "release"
   },
   "darwin-x64": {
     "os": "darwin",
     "arch": "x64",
     "node": "darwin-x64",
-    "larkCli": "darwin-amd64"
+    "larkCli": "darwin-amd64",
+    "updater": "release"
   },
   "darwin-arm64": {
     "os": "darwin",
     "arch": "arm64",
     "node": "darwin-arm64",
-    "larkCli": "darwin-arm64"
+    "larkCli": "darwin-arm64",
+    "updater": "release"
   }
 }

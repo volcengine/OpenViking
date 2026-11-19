@@ -215,20 +215,20 @@ ov-superagent pi                                        # Open bundled Pi, e.g. 
 
 ## Upgrade and rollback
 
-On Windows, `ov-superagent upgrade` and the automatic updater are not supported yet. Stop OpenViking SuperAgent with `ov-superagent stop`, rerun the PowerShell installer from [One-command installation](#one-command-installation), then run `ov-superagent restart`. The installer retains the previous release for [manual rollback](windows-preview.md#configure-and-test).
-
-On macOS / Linux:
+`ov-superagent upgrade` works on macOS, Linux and Windows:
 
 ```bash
 ov-superagent upgrade <instance-id>
 ov-superagent upgrade all        # Also rolls shared Web and removes instances deleted from the manifest
 ```
 
-The command asks `superagent-updater` to read the release host's `latest`, download the platform archive, verify manifest SHA-256 and size, and smoke-test bundled Node, managed Pi, and `ov-superagent --version`. Only then does it switch `~/.ov-superagent/current`, retaining the previous version as `~/.ov-superagent/rollback`. It restarts target instances one at a time and waits for `/ready`; failed instances revert to their previous release. The updater restarts itself last. User machines do not run `npm ci` or tests and need no git; packaging already ran tests. Repeating an upgrade to the same version reuses it. This flow requires a published `latest` endpoint; the pinned preview above does not make that endpoint available.
+On macOS / Linux the command asks `superagent-updater` to read the release host's `latest`, download the platform archive, verify manifest SHA-256 and size, and smoke-test bundled Node, managed Pi, and `ov-superagent --version`. Only then does it switch `~/.ov-superagent/current`, retaining the previous version as `~/.ov-superagent/rollback`. It restarts target instances one at a time and waits for `/ready`; failed instances revert to their previous release. The updater restarts itself last. User machines do not run `npm ci` or tests and need no git; packaging already ran tests. Repeating an upgrade to the same version reuses it. This flow requires a published `latest` endpoint; the pinned preview above does not make that endpoint available.
+
+On Windows, releases are ZIP previews with their own channel (`.../superagent/windows-preview/latest`), so the updater does not fetch them itself: it runs the `install-preview.ps1` that ships inside the installed release, with `-NoSetup`. That installer verifies the ZIP SHA-256, rejects unsafe archive entries, checks the bundled runtime, unpacks into `~\.ov-superagent\releases\<version>`, and moves `current`/`rollback` with recovery, so a failed download, verification or unpack leaves the running release untouched. The updater then restarts the target instances one at a time and waits for `/ready`. If a release installs but an instance cannot start, the publication is switched back to the previous version and the instances that had already moved are restarted from it, so `current`, `rollback` and the next `restart` all name the release that was working. Windows follows the preview channel: `upgrade` installs the newest Windows preview, not the stable macOS/Linux `latest`. The installer keeps every installed release under `~\.ov-superagent\releases`, and the deployment lock is the installer's own, so a manual install and an upgrade never overlap.
 
 The updater is a separate process, so it can finish even when the bot's own process restarts.
 
-Rollback: `ln -sfn "$(readlink ~/.ov-superagent/rollback)" ~/.ov-superagent/current && ov-superagent restart`.
+Rollback on macOS / Linux: `ln -sfn "$(readlink ~/.ov-superagent/rollback)" ~/.ov-superagent/current && ov-superagent restart`. On Windows, rerun the installer with the version named by `~\.ov-superagent\rollback`: `& ([scriptblock]::Create((irm https://ovrelease.tos-cn-beijing.volces.com/superagent/install.ps1))) -Version <version> -NoSetup`, then `ov-superagent restart`.
 
 ```bash
 ov-superagent status

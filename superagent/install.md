@@ -71,7 +71,7 @@ Open `http://127.0.0.1:3737` to view activity. Send a specific task in a direct 
 
 - Add or edit instances and channels, or remove an instance: `ov-superagent setup`.
 - Renew expired authentication: `ov-superagent login <channel> [instance]`.
-- Upgrade on macOS / Linux: `ov-superagent upgrade primary`. On Windows, stop OpenViking SuperAgent, rerun the PowerShell installer, then run `ov-superagent restart`; automatic upgrades are not supported yet. See [upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback).
+- Upgrade: `ov-superagent upgrade primary`. It works on macOS / Linux and on Windows, where it installs the newest Windows preview through the PowerShell installer the release ships. See [upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback).
 - Enable startup at login: `ov-superagent autostart enable`. On Linux, use `loginctl enable-linger` if the service must continue after logout; on Windows it adds a per-user Startup-folder entry, with no service or administrator.
 - Change the interface language: `ov-superagent --lang zh` or `ov-superagent --lang en`.
 

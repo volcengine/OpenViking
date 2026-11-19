@@ -726,8 +726,9 @@ if ($Isolated) {
 Cleanup
 
 $configFile = if ($env:OV_SUPERAGENT_CONFIG) { $env:OV_SUPERAGENT_CONFIG } else { Join-Path $SuperAgentHome 'config.json' }
-# Only the next step differs from install.sh: this preview has no updater, and an
-# isolated copy is not reachable by `ov-superagent`, so it names its own start command.
+# Only the next step differs from install.sh: an isolated copy is not reachable by
+# `ov-superagent`, so it names its own start command. A default install is managed
+# by `ov-superagent`, whose updater runs this same installer with -NoSetup.
 if ($Isolated) {
     $isolatedStart = Short (Join-Path $Place 'superagent-preview.ps1')
     Note (M "下一步：按 docs\windows-preview.md 写好 manifest，然后运行 $isolatedStart -Action start" "next: write the manifest as docs\windows-preview.md describes, then run $isolatedStart -Action start")

@@ -106,10 +106,15 @@ export function execFile(command, args, options, callback) {
 // Random for each daemon process: only the returned endpoint is passed to clients.
 // This reduces guessing/squatting; Node does not expose pipe-owner verification.
 const pipeNonce = randomBytes(24).toString('hex');
-export function localSocketPath(directory, name = 'actions') {
-  const identity = path.win32.resolve(directory).toLowerCase() + '\0' + os.homedir();
+// `shared` names the endpoint from the install directory alone, so a client and
+// the process serving it can agree on it without passing the name (the updater
+// outlives any one CLI call). A same-named pipe already bound by another process
+// makes listen fail instead of being reused; it cannot cross the Windows user
+// boundary, since the default pipe DACL stays within the creating user.
+export function localSocketPath(directory, name = 'actions', { shared = false } = {}) {
+  const identity = path.win32.resolve(directory).toLowerCase() + (shared ? '' : `\0${os.homedir()}`);
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 24);
-  return `\\\\.\\pipe\\superagent-${name}-${digest}-${pipeNonce}`;
+  return `\\\\.\\pipe\\superagent-${name}-${digest}${shared ? '' : `-${pipeNonce}`}`;
 }
 
 export function isNamedPipe(value) {
