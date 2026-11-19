@@ -106,12 +106,19 @@ export function outputDirectories(
   const generated = path
     ? [`viking://resources${path}`, `${personal}${path}`]
     : [];
+  const personalAlias = userId
+    ? `viking://user/${encodeURIComponent(userId)}/`
+    : undefined;
+  const comparisonLabel = (uri: string) =>
+    formatCompileUriLabel(
+      personalAlias && uri.startsWith('viking://~/')
+        ? personalAlias + uri.slice('viking://~/'.length)
+        : uri,
+    );
   const candidates = existing
     ? [
         ...generated.map((uri) =>
-          formatCompileUriLabel(uri) === formatCompileUriLabel(existing)
-            ? existing
-            : uri,
+          comparisonLabel(uri) === comparisonLabel(existing) ? existing : uri,
         ),
         existing,
       ]

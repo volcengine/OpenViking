@@ -112,6 +112,37 @@ test('generated suggestions reuse an existing encoded target with the same reada
   }
 });
 
+test('generated suggestions reuse a current-user alias for an existing encoded target', async () => {
+  const existing =
+    'viking://~/resources/%E7%A0%94%E5%8F%91%E5%91%A8%E6%8A%A5_wiki';
+  const view = await mountHitl(
+    [
+      card('compile_name', 'Name'),
+      card('compile_output_type', 'Output', {
+        options: [{ value: 'wiki', label: 'Wiki' }],
+      }),
+      card('compile_target', 'Target', { suggested_value: existing }),
+    ],
+    { userId: 'alice' },
+  );
+  try {
+    await view.start();
+    await input(view.container.querySelector('[name=answer]'), '研发周报');
+    await submit(view);
+    await click(view.container.querySelector('input[value=wiki]'));
+    await submit(view);
+    const values = [
+      ...view.container.querySelectorAll(
+        '.ov-viking-bot__interaction-option input',
+      ),
+    ].map((item) => item.value);
+    assert.ok(values.includes(existing));
+    assert.ok(!values.includes('viking://user/alice/resources/研发周报_wiki'));
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('userId alone scopes same-origin output validation without a Provider', async () => {
   const fetch = recordingFetch(({ path, uri, init }) => {
     assert.equal(path, '/api/v1/fs/stat');
