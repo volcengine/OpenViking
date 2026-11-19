@@ -67,9 +67,13 @@ test('JSON indentation preserves exact numeric tokens, negative zero, exponents,
   const document = render({ variant: 'text', text });
   const output = document.querySelector(
     '.ov-command-console__code-content',
-  ).textContent;
-  assert.equal(output.replace(/\s+/g, ''), text);
-  assert.match(output, /\n {2}"big":/);
+  );
+  assert.equal(output.getAttribute('tabindex'), '0');
+  assert.equal(output.getAttribute('role'), 'region');
+  assert.equal(output.getAttribute('aria-label'), 'Command output');
+  const outputText = output.textContent;
+  assert.equal(outputText.replace(/\s+/g, ''), text);
+  assert.match(outputText, /\n {2}"big":/);
   assert.equal(
     render({ variant: 'text', text: '{invalid}' }).querySelector(
       '.ov-command-console__plain',

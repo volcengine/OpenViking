@@ -435,8 +435,7 @@
   overflow: auto;
   margin: 0;
   padding-inline-end: 36px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 13px;
   line-height: 20px;
