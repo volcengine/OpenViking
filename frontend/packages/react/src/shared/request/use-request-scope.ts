@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { scopeKeyOf, type RequestScope } from './fs-scope.js';
@@ -76,9 +76,11 @@ export function useRequestScope(
     scopeRef.current = { key: scopeKey, controller: new AbortController() };
   }, [scopeKey]);
 
-  // Unmount retires in-flight transport during layout too. Replace the controller
-  // after cleanup so Strict Mode's next setup can accept new requests.
-  useLayoutEffect(
+  // Passive cleanup retires transport on unmount and Strict Mode replay. Suspense
+  // also cleans up layout effects when hiding a mounted tree, so using layout here
+  // would abort navigation whose scope is unchanged. Replace the controller so
+  // Strict Mode's next setup can accept new requests.
+  useEffect(
     () => () => {
       scopeRef.current.controller.abort();
       scopeRef.current = {

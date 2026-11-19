@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { suspenseNavigation } from './helpers/user-root-suspense.mjs';
 import { transitionNavigation } from './helpers/user-root-transition.mjs';
 import { act } from 'react';
 import {
@@ -113,6 +114,23 @@ for (const [before, after] of [
       oldChildren: [],
       newResult: true,
       childVisible: true,
+    });
+  });
+}
+
+for (const mode of ['all', 'current']) {
+  test(`a temporary Suspense fallback preserves ${mode} mode navigation until recovery`, async (context) => {
+    const observed = await suspenseNavigation(mode);
+    context.diagnostic(JSON.stringify(observed));
+    assert.deepEqual(observed, {
+      pendingBeforeHide: true,
+      fallbackShown: true,
+      abortedWhileHidden: false,
+      restored: true,
+      clientPreserved: true,
+      result: true,
+      childVisible: true,
+      childRequests: ['viking://user/alice', 'viking://user/alice/docs'],
     });
   });
 }
