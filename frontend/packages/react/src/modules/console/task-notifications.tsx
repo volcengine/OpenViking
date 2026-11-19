@@ -34,8 +34,8 @@ export function ConsoleTaskNotifications({
         .getSnapshot()
         .filter(
           (task) =>
-            task.origin !== 'command' &&
-            ((task.kind !== 'resource' && task.origin !== 'memory-commit') ||
+            task.origins.some((origin) => origin !== 'command') &&
+            ((task.kind !== 'resource' && task.origins.includes('tool')) ||
               isTaskTerminal(task.status) ||
               task.queryError),
         );
@@ -51,7 +51,7 @@ export function ConsoleTaskNotifications({
       for (const task of tasks) {
         if (hidden.current.has(task.key)) continue;
         const memoryCompleted =
-          task.status === 'completed' && task.origin === 'memory-commit';
+          task.status === 'completed' && task.origins.includes('memory-commit');
         const target =
           memoryCompleted &&
           task.result &&
