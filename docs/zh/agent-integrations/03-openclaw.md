@@ -1,6 +1,6 @@
 # OpenClaw
 
-> **推荐通过 [OpenViking 网关](../guides/15-gateway.md) 接入。** 关掉下面的插件，把模型的 Base URL 指向网关、API Key 换成网关密钥，网关会为新用户消息召回记忆并保存对话。[上游](../gateway/07-upstreams.md#upstreams)要自带服务商 API Key，订阅登录无法走网关。配置见[把客户端接入网关](../gateway/03-connect-clients.md#openclaw-and-hermes)，从零开始见[快速开始](../gateway/02-quickstart.md)，两种方式的取舍见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)，官网介绍见 [openviking.ai/gateway](https://openviking.ai/gateway)。
+> **推荐通过 [OpenViking 网关](../guides/15-gateway.md) 接入。** 关掉下面的插件，把模型的 Base URL 指向网关、API Key 换成网关密钥，网关会为新用户消息召回记忆并保存对话。[上游](../gateway/07-upstreams.md#upstreams)要自带服务商 API Key，订阅登录无法走网关。配置见[把客户端接入 OpenViking 网关](../gateway/03-connect-clients.md#openclaw-and-hermes)，从零开始见[网关快速上手](../gateway/02-quickstart.md)，两种方式的取舍见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)，官网介绍见 [openviking.ai/gateway](https://openviking.ai/gateway)。
 
 为 [OpenClaw](https://github.com/openclaw/openclaw) 添加长效记忆。安装完成后，OpenClaw 会自动记住对话中的重要信息，并在每次回复前召回相关上下文。
 

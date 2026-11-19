@@ -294,11 +294,38 @@ Next, [check the connection](#check-the-connection).
 
 ## OpenClaw and Hermes {#openclaw-and-hermes}
 
-OpenClaw and Hermes each have their own OpenViking plugin (see [OpenClaw](../agent-integrations/03-openclaw.md) and [Hermes](../agent-integrations/05-hermes.md)). To use gateway memory with one of them, turn its plugin off and add the gateway as a model provider in the agent's own settings, as for any [chat client](#chat-clients-and-sdks): `https://ov.example.com/gateway/v1` for OpenAI Chat Completions, or `https://ov.example.com/gateway` for Anthropic Messages, with a gateway key as the API key. The [upstream](07-upstreams.md#upstreams) needs its own provider API key, so a subscription login cannot be used.
+OpenClaw and Hermes each have their own OpenViking plugin (see [OpenClaw](../agent-integrations/03-openclaw.md) and [Hermes](../agent-integrations/05-hermes.md)). To use gateway memory with one of them, turn its plugin off and add the gateway as a model provider in the agent's own settings: the base URL `https://ov.example.com/gateway/v1` for Chat Completions, or `https://ov.example.com/gateway` for Anthropic Messages, with a gateway key as the provider API key. The [upstream](07-upstreams.md#upstreams) must have its own provider API key, so a subscription login cannot be used.
+
+In OpenClaw, add an entry under `models.providers` and make it the agent's model (full schema: [OpenClaw custom providers](https://docs.openclaw.ai/concepts/model-providers/custom-providers)):
+
+```json5
+{
+  models: {
+    providers: {
+      openviking: {
+        baseUrl: "https://ov.example.com/gateway/v1",
+        api: "openai-completions",
+        apiKey: "<gateway-key>",
+        models: [{ id: "<model>" }],
+      },
+    },
+  },
+  agents: { defaults: { model: { primary: "openviking/<model>" } } },
+}
+```
+
+In Hermes, add the provider to the profile's `config.yaml` and select `openviking` as the model provider (full schema: [Hermes model configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuring-models)):
+
+```yaml
+providers:
+  openviking:
+    api: "https://ov.example.com/gateway/v1"
+    api_key: "<gateway-key>"
+```
 
 If the plugin is still installed, the gateway [steps aside](../guides/15-gateway.md#when-both-are-in-use) for those conversations. Use one or the other.
 
-The gateway has no session header for these agents, so it matches their conversations by the request history, as described in [How conversations are recognized](#how-conversations-are-recognized); send `X-OpenViking-Session` if the agent lets you add a request header. It also skips their background prompts, such as a memory flush, a heartbeat, a skill review, a cron event or a sub-agent wake-up, and does not save them as conversation turns.
+The gateway has no session header for these agents, so it matches their conversations by the request history, as described in [How conversations are recognized](#how-conversations-are-recognized); send `X-OpenViking-Session` if the agent lets you add a request header (in Hermes, through `extra_headers` on the provider), and `X-OpenViking-Actor-Peer` when one key serves several people (see [Tell memory apart by peer](#peer)). It also skips their background prompts, such as a memory flush, a heartbeat, a skill review, a cron event or a sub-agent wake-up, and does not save them as conversation turns.
 
 Next, [check the connection](#check-the-connection).
 

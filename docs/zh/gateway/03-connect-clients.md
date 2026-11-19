@@ -294,11 +294,38 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 
 ## OpenClaw 和 Hermes {#openclaw-and-hermes}
 
-OpenClaw 和 Hermes 各自有 OpenViking 插件（见 [OpenClaw](../agent-integrations/03-openclaw.md) 和 [Hermes](../agent-integrations/05-hermes.md)）。要用网关接管记忆，先关掉插件，再在 Agent 自己的模型设置里把网关加为模型服务，做法和[聊天客户端](#chat-clients-and-sdks)一样：OpenAI Chat Completions 用 `https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`，API Key 填网关密钥。[上游](07-upstreams.md#upstreams)要自带服务商 API Key，订阅登录不能用。
+OpenClaw 和 Hermes 各自有 OpenViking 插件（见 [OpenClaw](../agent-integrations/03-openclaw.md) 和 [Hermes](../agent-integrations/05-hermes.md)）。要用网关接管记忆，先关掉插件，再在 Agent 自己的模型设置里把网关加为模型服务：Chat Completions 用 `https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`，API Key 填网关密钥。[上游](07-upstreams.md#upstreams)要自带服务商 API Key，订阅登录不能用。
+
+OpenClaw 在 `models.providers` 下加一项，并把它设为 Agent 使用的模型（完整字段见 [OpenClaw 自定义服务商](https://docs.openclaw.ai/concepts/model-providers/custom-providers)）：
+
+```json5
+{
+  models: {
+    providers: {
+      openviking: {
+        baseUrl: "https://ov.example.com/gateway/v1",
+        api: "openai-completions",
+        apiKey: "<gateway-key>",
+        models: [{ id: "<model>" }],
+      },
+    },
+  },
+  agents: { defaults: { model: { primary: "openviking/<model>" } } },
+}
+```
+
+Hermes 在 profile 的 `config.yaml` 里加一项，再选 `openviking` 作为模型服务（完整字段见 [Hermes 模型配置](https://hermes-agent.nousresearch.com/docs/user-guide/configuring-models)）：
+
+```yaml
+providers:
+  openviking:
+    api: "https://ov.example.com/gateway/v1"
+    api_key: "<gateway-key>"
+```
 
 插件还装着的话，网关会为这些对话[让路](../guides/15-gateway.md#when-both-are-in-use)，两者选一个用。
 
-网关没有针对这两个 Agent 的会话请求头，因此按请求历史识别对话，规则见[网关如何识别对话](#how-conversations-are-recognized)；能加请求头的话，自己带上 `X-OpenViking-Session`。它们的心跳、记忆刷写、技能复盘、定时任务、子 Agent 唤醒等后台请求会被网关跳过，不会当成对话轮次保存。
+网关没有针对这两个 Agent 的会话请求头，因此按请求历史识别对话，规则见[网关如何识别对话](#how-conversations-are-recognized)；能加请求头的话，自己带上 `X-OpenViking-Session`（Hermes 通过服务商的 `extra_headers` 添加）；一把密钥服务多个人时，再带上 `X-OpenViking-Actor-Peer`（见[按 Peer 区分记忆](#peer)）。它们的心跳、记忆刷写、技能复盘、定时任务、子 Agent 唤醒等后台请求会被网关跳过，不会当成对话轮次保存。
 
 然后[检查接入是否生效](#check-the-connection)。
 
