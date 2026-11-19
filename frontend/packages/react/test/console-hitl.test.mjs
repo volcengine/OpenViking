@@ -157,6 +157,63 @@ test('HITL waits for completion, validates each card and sends one ordered respo
   }
 });
 
+test('the first skill picker opening loads system children for a preselected llm-wiki', async () => {
+  const system = 'viking://system';
+  const compile = `${system}/compile`;
+  const examples = `${compile}/example-skills`;
+  const skill = `${examples}/llm-wiki`;
+  const source = 'viking://resources';
+  const directories = new Map([
+    ['viking://', [source, system]],
+    [system, [compile, `${system}/memory`]],
+    [compile, [examples]],
+    [examples, [skill]],
+  ]);
+  const fetch = recordingFetch(({ path, uri }) => {
+    assert.equal(path, '/api/v1/fs/ls');
+    return ok(
+      (directories.get(uri) ?? []).map((uri) => ({ uri, isDir: true })),
+    );
+  });
+  const view = await mountHitl(
+    [
+      card('compile_source', 'Source'),
+      card('compile_skill', 'Skill', {
+        candidates: [{ uri: skill, label: 'llm-wiki' }],
+      }),
+    ],
+    { fetch },
+  );
+  const picker = () => document.querySelector('.ov-context-picker');
+  const directory = (name) =>
+    picker().querySelector(`[role=treeitem][aria-label="${name}"]`);
+  const systemRequests = () => fetch.calls.filter(({ uri }) => uri === system);
+
+  try {
+    await view.start();
+    // The source picker loads the root listing into the shared query cache.
+    await click(view.container.querySelector('[aria-haspopup=dialog]'));
+    await settle();
+    await click(directory('resources').querySelector('input'));
+    await click(
+      picker().querySelector('.ov-context-picker__actions button:last-child'),
+    );
+    await submit(view);
+
+    await click(view.container.querySelector(`input[value="${skill}"]`));
+    assert.equal(systemRequests().length, 0);
+    await click(view.container.querySelector('[aria-haspopup=dialog]'));
+    await settle();
+
+    assert.equal(systemRequests().length, 1);
+    assert.equal(directory('system')?.getAttribute('aria-expanded'), 'true');
+    assert.ok(directory('compile'));
+    assert.ok(directory('memory'));
+  } finally {
+    await view.unmount();
+  }
+});
+
 for (const terminal of ['interrupted', 'truncated']) {
   test(`${terminal} streams never activate HITL`, async () => {
     const view = await mountHitl([card('compile_name', 'Name')], { terminal });
