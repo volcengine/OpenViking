@@ -4,6 +4,9 @@
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
@@ -23,7 +26,19 @@ from .token_usage import TokenUsageTracker
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
 
+_usage_error_code: ContextVar[str] = ContextVar("vlm_usage_error_code", default="OK")
+
 ToolResultMediaMode = Literal["native", "user_message"]
+
+
+@contextmanager
+def bind_vlm_usage_error(error: Exception | None) -> Iterator[None]:
+    """Make the call outcome available to metrics through legacy usage hooks."""
+    token = _usage_error_code.set(extract_metric_error_code(error) if error is not None else "OK")
+    try:
+        yield
+    finally:
+        _usage_error_code.reset(token)
 
 
 def _common_tool_result_media_mode(backends: List["VLMBase"]) -> ToolResultMediaMode | None:
@@ -242,7 +257,6 @@ class VLMBase(ABC):
         duration_seconds: float = 0.0,
         prompt_cached_tokens: int = 0,
         completion_reasoning_tokens: int = 0,
-        error_code: str = "OK",
     ) -> None:
         """Update token usage
 
@@ -254,7 +268,6 @@ class VLMBase(ABC):
             duration_seconds: Wall-clock duration of the VLM call in seconds
             prompt_cached_tokens: Number of cached prompt tokens from provider usage details
             completion_reasoning_tokens: Number of reasoning completion tokens from provider usage details
-            error_code: Provider outcome recorded with the billed tokens
         """
         self._token_tracker.update(
             model_name=model_name,
@@ -297,7 +310,7 @@ class VLMBase(ABC):
                 duration_seconds=float(duration_seconds),
                 prompt_tokens=int(prompt_tokens),
                 completion_tokens=int(completion_tokens),
-                error_code=error_code,
+                error_code=_usage_error_code.get(),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
                 cost_bearer=self.cost_bearer,
@@ -364,16 +377,17 @@ class VLMBase(ABC):
             tracer.info(f"response.usage={usage}")
             prompt_details = getattr(usage, "prompt_tokens_details", None)
             completion_details = getattr(usage, "completion_tokens_details", None)
-            self.update_token_usage(
-                model_name=self.model or self._default_usage_model,
-                provider=self.provider,
-                prompt_tokens=usage.prompt_tokens,
-                completion_tokens=usage.completion_tokens,
-                duration_seconds=duration_seconds,
-                prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
-                completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
-                error_code=extract_metric_error_code(error) if error else "OK",
-            )
+            with bind_vlm_usage_error(error):
+                self.update_token_usage(
+                    model_name=self.model or self._default_usage_model,
+                    provider=self.provider,
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    duration_seconds=duration_seconds,
+                    prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
+                    completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0)
+                    or 0,
+                )
         elif error:
             self.record_failed_call(duration_seconds=duration_seconds, error=error)
         if error:
