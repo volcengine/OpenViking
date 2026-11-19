@@ -74,6 +74,17 @@ it('never grants hosted connections open source administration', () => {
     }),
   ).toBe(false)
 })
+it('keeps Gateway administration available in development mode', () => {
+  expect(
+    canOpenManagement({
+      connection: { ...connection, adminApiKey: '' },
+      role: 'root',
+      provider: 'opensource',
+      serverMode: 'dev',
+      isRoleLoading: false,
+    }),
+  ).toBe(true)
+})
 it('entry preferences cannot grant management or make a Root-only connection a data identity', () => {
   expect(
     resolveStudioEntry({
@@ -174,4 +185,13 @@ it('honors explicit administration preference while development defaults to data
   ).toBe('/home')
 })
 
-it('retains a connection entry preference while management and workbench use different Accounts', () => { savePreferredMode(connection, 'management', 'profile-1'); expect(readPreferredMode({ ...connection, accountId: 'other-account' }, 'profile-1')).toBe('management'); expect(readPreferredMode(connection, 'profile-2')).toBeNull() })
+it('retains a connection entry preference while management and workbench use different Accounts', () => {
+  savePreferredMode(connection, 'management', 'profile-1')
+  expect(
+    readPreferredMode(
+      { ...connection, accountId: 'other-account' },
+      'profile-1',
+    ),
+  ).toBe('management')
+  expect(readPreferredMode(connection, 'profile-2')).toBeNull()
+})

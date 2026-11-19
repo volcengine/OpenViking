@@ -5,6 +5,7 @@ import type { DirState } from './types.js';
 import { toError } from '../request/fs-errors.js';
 import { directoryOptions, type DirectoryPage } from './directory-query.js';
 import type { QueryRequest } from '../request/use-query-scope.js';
+import type { UserRootMode } from './user-root-context.js';
 
 type Pages = InfiniteData<DirectoryPage>;
 type Observer = InfiniteQueryObserver<
@@ -34,8 +35,13 @@ export class DirectoryQueries {
     private request: QueryRequest,
     root: string,
     private cacheScopeKey?: string,
+    private userRootMode: UserRootMode = 'all',
   ) {
     this.observe(root);
+  }
+  private options(uri: string, retryError?: () => unknown) {
+    const { request, cacheScopeKey, userRootMode: mode } = this;
+    return directoryOptions(request, uri, cacheScopeKey, retryError, mode);
   }
   private publish = () => {
     this.dirs.current = Object.fromEntries(
@@ -67,16 +73,11 @@ export class DirectoryQueries {
   private observe(uri: string) {
     let item = this.observers.get(uri);
     if (!item) {
-      const options = directoryOptions(
-        this.request,
-        uri,
-        this.cacheScopeKey,
-        () => {
-          const error = item?.retryCause?.deref();
-          if (item) item.retryCause = undefined;
-          return error;
-        },
-      );
+      const options = this.options(uri, () => {
+        const error = item?.retryCause?.deref();
+        if (item) item.retryCause = undefined;
+        return error;
+      });
       item = {
         monitoring: new QueryObservation(
           this.request.client,
@@ -146,9 +147,7 @@ export class DirectoryQueries {
           : refresh
             ? item.observer.refetch({ cancelRefetch: false })
             : this.request.queryClient
-                .fetchInfiniteQuery(
-                  directoryOptions(this.request, uri, this.cacheScopeKey),
-                )
+                .fetchInfiniteQuery(this.options(uri))
                 .catch(() => undefined);
       await (signal ? Promise.race([pending, aborted]) : pending);
       signal?.throwIfAborted();
@@ -165,8 +164,7 @@ export class DirectoryQueries {
     const target = this.observers.get(uri);
     if (target?.adoptedFrom !== previousUri) {
       const { queryClient } = this.request;
-      const key = (value: string) =>
-        directoryOptions(this.request, value, this.cacheScopeKey).queryKey;
+      const key = (value: string) => this.options(value).queryKey;
       const previous = queryClient.getQueryState<Pages>(key(previousUri));
       const queryKey = key(uri);
       const current = queryClient.getQueryState(queryKey);

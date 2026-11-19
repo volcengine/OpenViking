@@ -876,6 +876,7 @@ impl HttpClient {
         tags: Option<Vec<String>>,
         read_content: bool,
         events_time_decay_protection: Option<String>,
+        args: Option<&Map<String, Value>>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -896,6 +897,7 @@ impl HttpClient {
             "tags": tags,
             "read_content": read_content.then_some(true),
             "events_time_decay_protection": events_time_decay_protection,
+            "args": args,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -2604,6 +2606,7 @@ mod tests {
                 None,
                 false,
                 None,
+                None,
             )
             .await
             .expect("list search should succeed");
@@ -2639,6 +2642,7 @@ mod tests {
                 Some(vec!["project=openviking".to_string()]),
                 false,
                 Some("7d".to_string()),
+                None,
             )
             .await
             .expect("context search should succeed");

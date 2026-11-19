@@ -29,7 +29,10 @@ export type ConsoleBotActivationStatus = 'not-started' | 'ready';
 
 /** Optional lifecycle managed by the host for the current library and identity. */
 export interface ConsoleBotActivation {
-  /** Confirm whether the current scope allows Bot access. Only true enables its tab. */
+  /**
+   * Confirm whether the current scope allows Bot use. The tab stays visible while
+   * checking or on failure; false hides it, while true proceeds to runtime readiness.
+   */
   isEligible(signal: AbortSignal): Promise<boolean>;
   /** Read runtime readiness after the library has allowed access. */
   getStatus(signal: AbortSignal): Promise<ConsoleBotActivationStatus>;

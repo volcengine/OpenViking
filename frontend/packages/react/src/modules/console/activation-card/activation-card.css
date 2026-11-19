@@ -203,8 +203,7 @@
 }
 
 .ov-console-activation__description,
-.ov-console-activation__checking,
-.ov-console-activation__error {
+.ov-console-activation__checking {
   margin: 0;
   color: var(--ov-ui-console-muted);
   font-size: 13px;
@@ -214,6 +213,7 @@
 
 .ov-console-activation__checking {
   display: flex;
+  margin-block: auto;
   align-items: center;
   gap: 8px;
 }

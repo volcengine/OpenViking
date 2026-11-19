@@ -298,64 +298,6 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
         if self._distributed:
             _try_make_metadata_table_distributed(self._conn, idx_table, "index_name")
 
-    def _save_index_meta(self, index_name: str, meta: Dict[str, Any]):
-        self._ensure_index_meta_table()
-        idx_table = _quote_identifier(
-            self._index_catalog_table(), kind="openGauss index metadata table"
-        )
-        meta_json = json.dumps(meta)
-        # Use UPDATE -> INSERT for distributed compatibility
-        with self._lock:
-            cur = self._cursor()
-            try:
-                cur.execute(
-                    f"UPDATE {idx_table} SET meta_json = %s WHERE index_name = %s",
-                    (meta_json, index_name),
-                )
-                if cur.rowcount == 0:
-                    cur.execute(
-                        f"INSERT INTO {idx_table} (index_name, meta_json) VALUES (%s, %s)",
-                        (index_name, meta_json),
-                    )
-                self._conn.commit()
-            except Exception as error:
-                self._conn.rollback()
-                if getattr(error, "pgcode", None) != "23505":
-                    raise
-                retry_cursor = self._cursor()
-                try:
-                    retry_cursor.execute(
-                        f"UPDATE {idx_table} SET meta_json = %s WHERE index_name = %s",
-                        (meta_json, index_name),
-                    )
-                    if retry_cursor.rowcount != 1:
-                        raise RuntimeError(
-                            f"openGauss index metadata race recovery failed for {index_name!r}"
-                        ) from error
-                    self._conn.commit()
-                except Exception:
-                    self._conn.rollback()
-                    raise
-                finally:
-                    retry_cursor.close()
-            finally:
-                cur.close()
-
-    def _delete_index_meta(self, index_name: str):
-        idx_table = _quote_identifier(
-            self._index_catalog_table(), kind="openGauss index metadata table"
-        )
-        try:
-            self._execute(
-                f"DELETE FROM {idx_table} WHERE index_name = %s",
-                (index_name,),
-            )
-        except Exception as error:
-            # Nothing to delete when the metadata table was never created.
-            if _is_undefined_table_error(error):
-                return
-            raise
-
     def _get_all_columns(self) -> List[str]:
         """Return all non-system column names of the collection table."""
         rows = self._execute(
@@ -1483,11 +1425,16 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         if mode not in (None, "bm25"):
             raise ValueError("openGauss keyword search mode must be bm25")
         if fields is not None and fields != ["content"]:
             raise ValueError("openGauss keyword search supports the content field only")
+        if bm25_k1 is not None or bm25_b is not None or advance is not None:
+            raise ValueError("openGauss keyword search does not support advanced args")
         return OpenGaussFulltextMixin.search_by_keywords(
             self,
             index_name,

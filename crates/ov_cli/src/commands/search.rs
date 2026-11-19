@@ -4,7 +4,7 @@ use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
 use crate::theme;
 use colored::Colorize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::io::IsTerminal;
 use unicode_width::UnicodeWidthStr;
 
@@ -203,6 +203,7 @@ pub async fn search(
     tags: Option<Vec<String>>,
     read_content: bool,
     events_time_decay_protection: Option<String>,
+    args: Option<Map<String, Value>>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -224,6 +225,7 @@ pub async fn search(
             tags,
             read_content,
             events_time_decay_protection,
+            args.as_ref(),
         )
         .await?;
     if mode == "context" {

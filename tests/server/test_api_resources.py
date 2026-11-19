@@ -478,37 +478,24 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
 @pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_business_error_uses_error_envelope(
     client: httpx.AsyncClient,
-    service,
-    monkeypatch,
+    upload_temp_dir,
 ):
-    async def fail_during_ingestion(**kwargs):
-        return {
-            "status": "error",
-            "errors": ["Parse error: boom"],
-            "source_path": kwargs["path"],
-        }
-
-    monkeypatch.setattr(
-        service.resources,
-        "_execute_resource_ingestion",
-        fail_during_ingestion,
+    upload = upload_temp_dir / "broken.png"
+    # PNG with an invalid IDAT checksum.
+    upload.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
+            "0000000c49444154789c636060f80f00010301000889c2ed0000000049454e44ae426082"
+        )
     )
 
     resp = await client.post(
         "/api/v1/resources",
-        json={
-            "path": "https://example.com/bad.md",
-            "reason": "test resource",
-            "wait": True,
-        },
+        json={"temp_file_id": upload.name, "wait": True},
     )
 
-    assert resp.status_code == 500
-    body = resp.json()
-    assert body["status"] == "error"
-    assert "result" not in body
-    assert body["error"]["code"] == "PROCESSING_ERROR"
-    assert body["error"]["message"] == "Parse error: boom"
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_add_skill_business_error_uses_error_envelope(
