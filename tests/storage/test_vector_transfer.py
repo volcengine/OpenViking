@@ -86,7 +86,7 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
 
     async def _get_backend_for_context(self, ctx):
         del ctx
-        return SimpleNamespace(_mode=self.mode, strict_query=self._query)
+        return SimpleNamespace(strict_query=self._query)
 
     async def _query(
         self, *, filter, limit=10, offset=0, output_fields=None, order_by=None, order_desc=False
@@ -584,40 +584,19 @@ async def test_transfer_scan_emits_supported_aggregate_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend_kind", ["vikingdb", "volcengine-aksk", "volcengine-api-key"])
-async def test_cloud_manifest_transfer_uses_adapter_query_and_fetch(monkeypatch, backend_kind):
-    source = "viking://resources/source/a.md"
+async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeypatch):
+    source = "viking://resources/source.md"
     backend = _MemoryTransferBackend([])
-    meta = {"ProjectName": "test", "CollectionName": "context"}
-    if backend_kind == "vikingdb":
-        adapter = VikingDBPrivateCollectionAdapter(
-            host="unused.invalid",
-            headers=None,
-            project_name="test",
-            collection_name="context",
-            index_name="default",
-        )
-        collection = VikingDBCollection(host="unused.invalid", meta_data=meta)
-    else:
-        credentials = (
-            {"api_key": "test", "host": "unused.invalid"}
-            if backend_kind.endswith("api-key")
-            else {"ak": "test", "sk": "test", "region": "cn-beijing"}
-        )
-        adapter = VolcengineCollectionAdapter.from_config(
-            VectorDBBackendConfig(
-                backend="volcengine",
-                name="context",
-                dimension=2,
-                project_name="test",
-                volcengine=VolcengineConfig(**credentials),
-            )
-        )
-        collection = (
-            VolcengineApiKeyCollection(**credentials, meta_data=meta)
-            if backend_kind.endswith("api-key")
-            else VolcengineCollection(**credentials, meta_data=meta)
-        )
+    adapter = VikingDBPrivateCollectionAdapter(
+        host="unused.invalid",
+        headers=None,
+        project_name="test",
+        collection_name="context",
+        index_name="default",
+    )
+    collection = VikingDBCollection(
+        host="unused.invalid", meta_data={"ProjectName": "test", "CollectionName": "context"}
+    )
     adapter._collection = Collection(collection)
     account_backend = _SingleAccountBackend(VectorDBBackendConfig(), "acct", shared_adapter=adapter)
     monkeypatch.setattr(
@@ -631,15 +610,12 @@ async def test_cloud_manifest_transfer_uses_adapter_query_and_fetch(monkeypatch,
     adapter._dimension = 2
     paths = []
 
-    def data_post(path, data, **kwargs):
+    def data_post(path, data):
         paths.append(path)
         if path == "/api/vikingdb/data/search/vector":
             assert data["limit"] == 100 and data["offset"] == 0
             assert len(data["dense_vector"]) == 2
             assert "field" not in data and "order" not in data
-            queried_uri = data["filter"]["conds"][1]["conds"][1]["conds"][0]
-            if queried_uri == "/resources/target/a.md":
-                return {"data": []}
             assert data["filter"] == {
                 "op": "and",
                 "conds": [
@@ -651,7 +627,7 @@ async def test_cloud_manifest_transfer_uses_adapter_query_and_fetch(monkeypatch,
                             {
                                 "op": "must",
                                 "field": "uri",
-                                "conds": ["/resources/source/a.md"],
+                                "conds": ["/resources/source.md"],
                                 "para": "-d=0",
                             },
                         ],
@@ -660,8 +636,8 @@ async def test_cloud_manifest_transfer_uses_adapter_query_and_fetch(monkeypatch,
             }
             return {
                 "data": [
-                    {"id": "file", "fields": {"uri": "/resources/source/a.md"}},
-                    {"id": "gone", "fields": {"uri": "/resources/source/a.md"}},
+                    {"id": "file", "fields": {"uri": "/resources/source.md"}},
+                    {"id": "gone", "fields": {"uri": "/resources/source.md"}},
                 ]
             }
         if path == "/api/vikingdb/data/fetch_in_collection":
@@ -671,7 +647,7 @@ async def test_cloud_manifest_transfer_uses_adapter_query_and_fetch(monkeypatch,
                     {
                         "id": "file",
                         "fields": {
-                            "uri": "/resources/source/a.md",
+                            "uri": "/resources/source.md",
                             "account_id": "acct",
                             "vector": [0.1, 0.2],
                         },
@@ -682,19 +658,11 @@ async def test_cloud_manifest_transfer_uses_adapter_query_and_fetch(monkeypatch,
         raise AssertionError(f"Legacy reads must not use aggregate or scalar search: {path}")
 
     monkeypatch.setattr(collection, "_data_post", data_post)
-    records, _, _ = await backend._prepare_uri_transfer(
-        _ctx(),
-        "viking://resources/source",
-        "viking://resources/target",
-        recursive=True,
-        source_uris=[source],
+    records, _ = await backend._read_uri_transfer_entries(
+        _ctx(), [source], include_full_records=True
     )
     assert [(r["id"], r["uri"], r["vector"]) for r in records] == [("file", source, [0.1, 0.2])]
-    assert paths == [
-        "/api/vikingdb/data/search/vector",
-        "/api/vikingdb/data/fetch_in_collection",
-        "/api/vikingdb/data/search/vector",
-    ]
+    assert paths == ["/api/vikingdb/data/search/vector", "/api/vikingdb/data/fetch_in_collection"]
 
 
 @pytest.mark.asyncio
@@ -2076,11 +2044,9 @@ async def test_transfer_fetch_keeps_legacy_duplicate_and_unrelated_record_filter
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend_mode", ["local", "volcengine", "vikingdb"])
-async def test_manifest_transfer_propagates_fetch_backend_failure(monkeypatch, backend_mode):
+async def test_manifest_transfer_propagates_fetch_backend_failure(monkeypatch):
     source = "viking://resources/source/a.md"
     backend = _RealAclMemoryTransferBackend([_record("source", source)])
-    backend.backend_mode = backend_mode
     monkeypatch.setattr(
         backend, "_strict_transfer_get", AsyncMock(side_effect=RuntimeError("backend unavailable"))
     )
@@ -2235,66 +2201,107 @@ async def test_manifest_transfer_recovers_records_after_page_deletion(monkeypatc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend_mode", ["volcengine", "vikingdb"])
-@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
-async def test_cloud_directory_transfer_uses_parallel_legacy_queries(
-    monkeypatch, backend_mode, operation
+@pytest.mark.parametrize("backend_kind", ["vikingdb", "volcengine-aksk", "volcengine-api-key"])
+async def test_cloud_transfer_keeps_timestamp_prefix_scan_and_batched_fetch(
+    monkeypatch, backend_kind
 ):
-    import asyncio
-
-    source, target = "viking://resources/source", "viking://resources/target"
-    source_records = [_record(f"source-{i}", f"{source}/{i}.md") for i in range(32)]
-    old_records = [_record(f"old-{i}", f"{target}/{i}.md") for i in range(32)]
-    keep = _record("keep", target + "/keep.md")
-    backend = _RealAclMemoryTransferBackend([*source_records, *old_records, keep])
-    backend.acl_manager = None
-    original_query, original_get = backend._query, backend._strict_transfer_get
-    active_queries = active_gets = peak_queries = peak_gets = 0
-
-    async def query(**kwargs):
-        nonlocal active_queries, peak_queries
-        if kwargs.get("order_by"):
-            raise RuntimeError("scalar sort requires an indexed int64 or float32 field")
-        active_queries += 1
-        peak_queries = max(peak_queries, active_queries)
-        try:
-            await asyncio.sleep(0)
-            return await original_query(**kwargs)
-        finally:
-            active_queries -= 1
-
-    async def get(ctx, ids):
-        nonlocal active_gets, peak_gets
-        active_gets += 1
-        peak_gets = max(peak_gets, active_gets)
-        try:
-            await asyncio.sleep(0)
-            return await original_get(ctx, ids)
-        finally:
-            active_gets -= 1
-
-    # The account's adapter, rather than the facade default, determines support.
+    backend = _MemoryTransferBackend([])
+    meta = {"ProjectName": "test", "CollectionName": "context"}
+    if backend_kind == "vikingdb":
+        adapter = VikingDBPrivateCollectionAdapter(
+            host="unused.invalid",
+            headers=None,
+            project_name="test",
+            collection_name="context",
+            index_name="default",
+        )
+        collection = VikingDBCollection(host="unused.invalid", meta_data=meta)
+    else:
+        credentials = (
+            {"api_key": "test", "host": "unused.invalid"}
+            if backend_kind.endswith("api-key")
+            else {"ak": "test", "sk": "test", "region": "cn-beijing"}
+        )
+        adapter = VolcengineCollectionAdapter.from_config(
+            VectorDBBackendConfig(
+                backend="volcengine",
+                name="context",
+                dimension=2,
+                project_name="test",
+                volcengine=VolcengineConfig(**credentials),
+            )
+        )
+        collection = (
+            VolcengineApiKeyCollection(**credentials, meta_data=meta)
+            if backend_kind.endswith("api-key")
+            else VolcengineCollection(**credentials, meta_data=meta)
+        )
+    adapter._collection = Collection(collection)
+    adapter._dimension = 2
+    account = _SingleAccountBackend(VectorDBBackendConfig(), "acct", shared_adapter=adapter)
+    monkeypatch.setattr(backend, "_get_backend_for_context", AsyncMock(return_value=account))
     monkeypatch.setattr(
         backend,
-        "_get_backend_for_context",
-        AsyncMock(return_value=SimpleNamespace(_mode=backend_mode, strict_query=query)),
+        "_strict_transfer_get",
+        VikingVectorIndexBackend._strict_transfer_get.__get__(backend),
     )
-    monkeypatch.setattr(backend, "_strict_transfer_get", get)
-    count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
-    monkeypatch.setattr(backend, "_strict_transfer_count", count)
-    result = await getattr(backend, operation)(
+    paths = []
+
+    def data_post(path, data, **kwargs):
+        paths.append(path)
+        if path == "/api/vikingdb/data/search/scalar":
+            assert data["field"] == "updated_at" and data["order"] == "asc"
+            assert data["limit"] == 100 and data["offset"] == 0
+            scope = data["filter"]["conds"][1]["conds"][1]
+            if scope.get("para") == "-d=-1":
+                assert scope["conds"] == ["/resources/source"]
+                return {
+                    "data": [
+                        {
+                            "id": "file",
+                            "fields": {
+                                "uri": "/resources/source/a.md",
+                                "updated_at": "2026-01-01T00:00:00Z",
+                            },
+                        }
+                    ]
+                }
+            assert scope == {
+                "op": "must",
+                "field": "uri",
+                "conds": ["/resources/target/a.md"],
+                "para": "-d=0",
+            }
+            return {"data": []}
+        if path == "/api/vikingdb/data/fetch_in_collection":
+            assert data["ids"] == ["file"]
+            return {
+                "fetch": [
+                    {
+                        "id": "file",
+                        "fields": {
+                            "uri": "/resources/source/a.md",
+                            "account_id": "acct",
+                            "level": 2,
+                            "vector": [0.1, 0.2],
+                        },
+                    }
+                ]
+            }
+        raise AssertionError(f"Expected scalar inventory or ID fetch, got {path}")
+
+    monkeypatch.setattr(collection, "_data_post", data_post)
+    records, batches, _ = await backend._prepare_uri_transfer(
         _ctx(),
-        source,
-        target,
+        "viking://resources/source",
+        "viking://resources/target",
         recursive=True,
-        source_uris=[source, *[record["uri"] for record in source_records]],
+        source_uris=["viking://resources/source/a.md"],
     )
-    assert result.written == 32
-    assert peak_queries == peak_gets == 8
-    assert backend.records["keep"] == keep
-    assert not set(backend.records).intersection(record["id"] for record in old_records)
-    assert all(
-        order_by is None and limit == 100 and offset == 0
-        for _, limit, offset, order_by in backend.query_calls
-    )
-    count.assert_not_awaited()
+    assert batches == 1
+    assert [(record["id"], record["vector"]) for record in records] == [("file", [0.1, 0.2])]
+    assert paths == [
+        "/api/vikingdb/data/search/scalar",
+        "/api/vikingdb/data/fetch_in_collection",
+        "/api/vikingdb/data/search/scalar",
+    ]

@@ -2796,9 +2796,9 @@ class VikingVectorIndexBackend:
         Backend failures still propagate, unlike the legacy fail-open query API.
         """
         backend = await self._get_backend_for_context(ctx)
+        records: Dict[str, Dict[str, Any]] = {}
         entries = sorted(set(entry_uris))
-
-        async def read_entry(uri: str) -> List[Dict[str, Any]]:
+        for uri in entries:
             page = await backend.strict_query(
                 filter=self._uri_transfer_filter(ctx, uri, recursive=False),
                 limit=100,
@@ -2811,16 +2811,11 @@ class VikingVectorIndexBackend:
             ]
             if include_full_records and ids:
                 page = await self._strict_transfer_get(ctx, ids)
-            return [
-                record
+            records.update(
+                (str(record["id"]), record)
                 for record in page
                 if record.get("uri") == uri and str(record.get("id")) in ids
-            ]
-
-        pages = await bounded_map(entries, read_entry, concurrency=FILE_TASK_CONCURRENCY)
-        records: Dict[str, Dict[str, Any]] = {}
-        for page in pages:
-            records.update((str(record["id"]), record) for record in page)
+            )
         return list(records.values()), len(entries)
 
     async def _read_transfer_inventory(
@@ -3059,10 +3054,6 @@ class VikingVectorIndexBackend:
         }
         use_entry_queries = source_uris is not None or not recursive
         use_manifest_scan = recursive and source_uris is not None
-        if use_manifest_scan:
-            backend = await self._get_backend_for_context(ctx)
-            # VikingDB excludes date_time fields from its sortable scalar index.
-            use_manifest_scan = backend._mode not in {"volcengine", "vikingdb"}
         if use_manifest_scan:
             inventory = await self._read_transfer_inventory(
                 ctx,
