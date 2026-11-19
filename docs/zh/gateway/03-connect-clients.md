@@ -24,7 +24,7 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 | [OpenCode](#opencode) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1` | OpenCode 的会话请求头 |
 | [pi](#pi) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 使用 Responses 时用 pi 的会话请求头，否则根据对话历史匹配 |
 | [DSH](#dsh) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 使用 Responses 时用 DSH 的会话请求头，否则根据对话历史匹配 |
-| [OpenClaw 和 Hermes](#openclaw-and-hermes) | Chat Completions 或 Anthropic Messages | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 根据对话历史匹配 |
+| [OpenClaw 和 Hermes](#openclaw-and-hermes) | Chat Completions 或 Anthropic Messages | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 默认根据对话历史匹配；Hermes 设置 `session_affinity_header` 后会在 `X-OpenViking-Session` 里带上本段对话的 ID |
 | [火山方舟与 BytePlus 方舟 SDK](#volcano-engine-ark-and-byteplus-modelark-sdks) | 三种均可 | `https://ov.example.com/gateway/api/v3` 或 `https://ov.example.com/gateway/api/compatible` | 取决于客户端发送的请求头 |
 
 最后一列的含义见[网关如何识别对话](#how-conversations-are-recognized)。
@@ -321,11 +321,12 @@ providers:
   openviking:
     api: "https://ov.example.com/gateway/v1"
     api_key: "<gateway-key>"
+    session_affinity_header: X-OpenViking-Session
 ```
 
 插件还装着的话，网关会为这些对话[让路](../guides/15-gateway.md#when-both-are-in-use)，两者选一个用。
 
-网关没有针对这两个 Agent 的会话请求头，因此按请求历史识别对话，规则见[网关如何识别对话](#how-conversations-are-recognized)；能加请求头的话，自己带上 `X-OpenViking-Session`（Hermes 通过服务商的 `extra_headers` 添加）；一把密钥服务多个人时，再带上 `X-OpenViking-Actor-Peer`（见[按 Peer 区分记忆](#peer)）。它们的心跳、记忆刷写、技能复盘、定时任务、子 Agent 唤醒等后台请求会被网关跳过，不会当成对话轮次保存。
+网关没有针对这两个 Agent 的会话请求头，默认按请求历史识别对话，规则见[网关如何识别对话](#how-conversations-are-recognized)。Hermes 在服务商配置里加 `session_affinity_header: X-OpenViking-Session`，每个请求就会带上本段对话自己的会话 ID；`extra_headers` 会给所有请求发同一个固定值，不能用来传会话 ID，只适合静态头，例如一把密钥服务多个人时的 `X-OpenViking-Actor-Peer`（见[按 Peer 区分记忆](#peer)）。它们的心跳、记忆刷写、技能复盘、定时任务、子 Agent 唤醒等后台请求会被网关跳过，不会当成对话轮次保存。
 
 然后[检查接入是否生效](#check-the-connection)。
 

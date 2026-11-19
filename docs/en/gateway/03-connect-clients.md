@@ -24,7 +24,7 @@ The gateway address is the server's address followed by `/gateway`. In Studio, i
 | [OpenCode](#opencode) | Chat Completions, Anthropic Messages or Responses | `https://ov.example.com/gateway/v1` | OpenCode's session header |
 | [pi](#pi) | Chat Completions, Anthropic Messages or Responses | `https://ov.example.com/gateway/v1` (Anthropic Messages: `https://ov.example.com/gateway`) | pi's session header over Responses, otherwise matched from the conversation history |
 | [DSH](#dsh) | Chat Completions, Anthropic Messages or Responses | `https://ov.example.com/gateway/v1` (Anthropic Messages: `https://ov.example.com/gateway`) | DSH's session header over Responses, otherwise matched from the conversation history |
-| [OpenClaw and Hermes](#openclaw-and-hermes) | Chat Completions or Anthropic Messages | `https://ov.example.com/gateway/v1` (Anthropic Messages: `https://ov.example.com/gateway`) | Matched from the conversation history |
+| [OpenClaw and Hermes](#openclaw-and-hermes) | Chat Completions or Anthropic Messages | `https://ov.example.com/gateway/v1` (Anthropic Messages: `https://ov.example.com/gateway`) | Matched from the conversation history; Hermes sends each conversation's ID in `X-OpenViking-Session` when `session_affinity_header` is set |
 | [Volcano Engine Ark and BytePlus ModelArk SDKs](#volcano-engine-ark-and-byteplus-modelark-sdks) | Any of the three | `https://ov.example.com/gateway/api/v3` or `https://ov.example.com/gateway/api/compatible` | Depends on the headers the client sends |
 
 The last column is explained in [How conversations are recognized](#how-conversations-are-recognized).
@@ -321,11 +321,12 @@ providers:
   openviking:
     api: "https://ov.example.com/gateway/v1"
     api_key: "<gateway-key>"
+    session_affinity_header: X-OpenViking-Session
 ```
 
 If the plugin is still installed, the gateway [steps aside](../guides/15-gateway.md#when-both-are-in-use) for those conversations. Use one or the other.
 
-The gateway has no session header for these agents, so it matches their conversations by the request history, as described in [How conversations are recognized](#how-conversations-are-recognized); send `X-OpenViking-Session` if the agent lets you add a request header (in Hermes, through `extra_headers` on the provider), and `X-OpenViking-Actor-Peer` when one key serves several people (see [Tell memory apart by peer](#peer)). It also skips their background prompts, such as a memory flush, a heartbeat, a skill review, a cron event or a sub-agent wake-up, and does not save them as conversation turns.
+The gateway has no session header for these agents, so by default it matches their conversations by the request history, as described in [How conversations are recognized](#how-conversations-are-recognized). In Hermes, add `session_affinity_header: X-OpenViking-Session` to the provider so every request carries that conversation's own ID; `extra_headers` sends one fixed value on every request, so never put the session there, and use it only for static values such as `X-OpenViking-Actor-Peer` when one key serves several people (see [Tell memory apart by peer](#peer)). The gateway also skips their background prompts, such as a memory flush, a heartbeat, a skill review, a cron event or a sub-agent wake-up, and does not save them as conversation turns.
 
 Next, [check the connection](#check-the-connection).
 
