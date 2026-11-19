@@ -45,6 +45,10 @@ import '@openviking/react/components/file-preview/style.css';
 
 示例使用固定的模拟数据；「空文件」和「图片失败」演示对应的状态。
 
+### 会话记录
+
+完整内容可读、`source.fileName` 为 `messages.jsonl`，且 `source.path` 指向 `viking://user/<user>/sessions/<session>/` 或 `viking://~/sessions/<session>/` 下的原生会话文件（含归档）时，预览模式按角色展示消息气泡、时间和 ID。支持原生 `parts` 中的文本、工具结果、图片和上下文引用，以及旧格式字符串 `content`，保留原文和换行。图片和上下文引用以可读文本展示原始字段，包括 URL、detail、URI、引用类型和摘要，不自动加载图片或打开资源。源码模式仍展示原始 JSONL。大文件或已截断文件保留原有准入行为，其他 JSONL 文件、不支持或内容冲突的记录继续使用普通 JSON 预览，不丢弃其中的 part。
+
 ### 注入操作
 
 通过 `actions` 注入宿主操作：一个操作显示为按钮，多个操作收进「…」菜单。切换操作布局，勾选「模拟失败」查看失败提示，其余复选框控制内置入口的显隐。

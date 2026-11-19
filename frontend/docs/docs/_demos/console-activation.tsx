@@ -9,6 +9,7 @@ import { useLang } from '@rspress/core/runtime';
 import { useMemo, useState } from 'react';
 
 type Scenario = 'enabled' | 'disabled' | 'start-failure';
+type Intro = 'default' | 'text' | 'custom' | 'hidden';
 
 const service = botDemoService('commercial');
 const transport = consoleTransport();
@@ -63,14 +64,15 @@ function mockActivation(scenario: Scenario): ConsoleBotActivation {
 export default function ConsoleActivation() {
   const zh = useLang() === 'zh';
   const [scenario, setScenario] = useState<Scenario>('enabled');
+  const [intro, setIntro] = useState<Intro>('default');
   const activation = useMemo(() => mockActivation(scenario), [scenario]);
   return (
     <>
       <label>
         {zh ? '模拟库状态 ' : 'Simulated library state '}
-        <Select
+        <Select<Scenario>
           value={[scenario]}
-          onChange={([value]) => {
+          onChange={([value]: Scenario[]) => {
             if (value) setScenario(value);
           }}
         >
@@ -85,12 +87,59 @@ export default function ConsoleActivation() {
           </SelectOption>
         </Select>
       </label>
+      <label>
+        {zh ? '介绍区域 ' : 'Introduction '}
+        <Select<Intro>
+          value={[intro]}
+          onChange={([value]: Intro[]) => {
+            if (value) setIntro(value);
+          }}
+        >
+          <SelectOption value="default">{zh ? '默认' : 'Default'}</SelectOption>
+          <SelectOption value="text">
+            {zh ? '覆盖文案' : 'Custom text'}
+          </SelectOption>
+          <SelectOption value="custom">
+            {zh ? '替换整块' : 'Custom content'}
+          </SelectOption>
+          <SelectOption value="hidden">
+            {zh ? '隐藏介绍' : 'Hide introduction'}
+          </SelectOption>
+        </Select>
+      </label>
       <OpenVikingProvider fetch={transport}>
         <div style={{ height: 560 }}>
           <Console
             locale={zh ? 'zh-CN' : 'en-US'}
             scopeKey={scenario}
             chatOptions={{ activation, service }}
+            labels={
+              intro === 'text'
+                ? {
+                    activationTitle: zh
+                      ? '为你的团队启用知识助手'
+                      : 'Enable a knowledge assistant for your team',
+                    activationDescription: zh
+                      ? '由宿主提供介绍文案，保留内置的媒体和启用操作。'
+                      : 'Host-provided copy with the built-in media and activation action.',
+                  }
+                : undefined
+            }
+            slots={{
+              activationIntro:
+                intro === 'hidden' ? null : intro === 'custom' ? (
+                  <div style={{ textAlign: 'center' }}>
+                    <h2>
+                      {zh ? '你的专属知识空间' : 'Your own knowledge workspace'}
+                    </h2>
+                    <p>
+                      {zh
+                        ? '这整块介绍由宿主渲染，下面的启用操作仍由 Console 管理。'
+                        : 'The host renders this introduction; Console still manages the activation action below.'}
+                    </p>
+                  </div>
+                ) : undefined,
+            }}
           />
         </div>
       </OpenVikingProvider>

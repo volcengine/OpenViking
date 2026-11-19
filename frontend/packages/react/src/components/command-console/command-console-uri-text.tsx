@@ -5,6 +5,7 @@ import {
   getCommandConsoleSafeHref,
   COMMAND_CONSOLE_URI_PATTERN,
   COMMAND_CONSOLE_PROSE_URI_PATTERN,
+  trimCommandConsoleProseUri,
 } from './command-console-text.js';
 
 export interface CommandConsoleUriTextProps {
@@ -103,9 +104,7 @@ export function CommandConsoleUriText({
       (quoted === undefined ? 0 : (matched.groups?.field?.length ?? 0) + 1);
     const display =
       quoted ??
-      (mode === 'prose'
-        ? matched[0].replace(/[.!?；;:：！？]+$/u, '')
-        : matched[0]);
+      (mode === 'prose' ? trimCommandConsoleProseUri(matched[0]) : matched[0]);
     const uri =
       quoted === undefined ? display : (JSON.parse(`"${quoted}"`) as string);
     if (index > cursor) parts.push(plain(text.slice(cursor, index), cursor));
