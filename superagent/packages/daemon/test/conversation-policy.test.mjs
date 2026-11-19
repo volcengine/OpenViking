@@ -549,6 +549,9 @@ describe('the workers scheduler', () => {
     assert.match(text, /a `Round N` input is a new request on the same work[\s\S]*When a whole round asks for something your task is not, hand its lines back and finish with task_report state `dropped`: that report is not relayed\./);
     assert.match(text, /## Role\n/);
     assert.doesNotMatch(text, /## Decisions and delivery|stay_silent|message_check|## Inbox/);
+    assert.match(assembleWorkerPolicy({ ...base, scheduler: 'workers' }, { runtime: 'traex' }),
+      /- A shell command is stopped after 60 minutes: a build, test run or install must finish within that/);
+    assert.doesNotMatch(assembleWorkerPolicy({ ...base, scheduler: 'workers' }, { runtime: 'codex' }), /stopped after 60 minutes/);
   });
 });
 

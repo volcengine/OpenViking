@@ -121,9 +121,10 @@ describe('WorkerExecutor', () => {
 
   it('says whether a task\'s last session can go on into a new round, on every runtime: kept, deleted or too large', (t) => {
     const { dir, config, task } = setup(t);
-    const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, CODEX_HOME: process.env.CODEX_HOME };
+    const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, CODEX_HOME: process.env.CODEX_HOME, TRAE_HOME: process.env.TRAE_HOME };
     process.env.CLAUDE_CONFIG_DIR = path.join(dir, 'claude-home');
     process.env.CODEX_HOME = path.join(dir, 'codex-home');
+    process.env.TRAE_HOME = path.join(dir, 'trae-home');
     t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
     const executor = new WorkerExecutor({ config });
     const id = 'bbbbbbbb-0000-4000-8000-000000000001';
@@ -131,6 +132,7 @@ describe('WorkerExecutor', () => {
       pi: path.join(config.dataDir, 'workers', 't1', `2026-11-18T10-00-00-000Z_${id}.jsonl`),
       claude: path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', '-srv-workspace-tasks-t1', `${id}.jsonl`),
       codex: path.join(process.env.CODEX_HOME, 'sessions', '2026', '11', '18', `rollout-2026-11-18T10-00-00-${id}.jsonl`),
+      traex: path.join(process.env.TRAE_HOME, 'cli', 'sessions', '2026', '11', '18', `rollout-2026-11-18T10-00-00-${id}.jsonl`),
     };
     for (const [runtime, file] of Object.entries(files)) {
       const current = task({ runtime, native_session: id, turns: 1 });
@@ -152,11 +154,14 @@ describe('WorkerExecutor', () => {
     };
     config.claudeBin = cli('claude', [{ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0 }], 'No conversation found with session ID: x', 0);
     config.codexBin = cli('codex', [], 'Error: thread/resume: thread/resume failed: no rollout found for thread id th_gone (code -32600)', 1);
+    config.traexBin = cli('traex', [], 'Error: thread/resume: thread/resume failed: no rollout found for thread id th_gone (code -32600)', 1);
     const executor = new WorkerExecutor({ config });
     const claude = await executor.start({ task: task({ runtime: 'claude', native_session: 'gone', turns: 2 }), prompt: 'p', authority: 'x' }).done;
     const codex = await executor.start({ task: task({ runtime: 'codex', native_session: 'th_gone', turns: 2 }), prompt: 'p', authority: 'x' }).done;
     assert.equal(claude.sessionLost, true);
     assert.equal(codex.sessionLost, true);
+    const traex = await executor.start({ task: task({ runtime: 'traex', native_session: 'th_gone', turns: 2 }), prompt: 'p', authority: 'x' }).done;
+    assert.equal(traex.sessionLost, true);
     const fresh = await executor.start({ task: task({ runtime: 'codex', native_session: null, turns: 0 }), prompt: 'p', authority: 'x' }).done;
     assert.equal(fresh.sessionLost, undefined, 'only a turn that resumed a session lost it');
   });
@@ -270,12 +275,48 @@ describe('WorkerExecutor', () => {
     assert.equal(one.shellDefault, null);
     assert.match(one.argv.join(' '), /mcp_servers\.personal_agent\.args=\[.*"--authority","tok"\]/);
     assert.deepEqual(two.argv.slice(-3), ['resume', 'th_123', 'second']);
+    assert.ok(!one.argv.includes('--shell-tool-timeout'), 'Codex returns a long command\'s output and lets it run');
     assert.ok(two.argv.includes('gpt-6-astra'));
     // New task inputs reach the running worker through this run's own hooks.
     assert.ok(one.argv.includes('--dangerously-bypass-hook-trust'));
     for (const event of ['PostToolUse', 'Stop']) {
       assert.ok(one.argv.some((value) => value.startsWith(`hooks.${event}=[{hooks=[{type="command",command=`) && value.includes('task-input-hook.mjs')), event);
     }
+  });
+
+  it('runs TraeX as it runs Codex, with its own binary, config and home: exec --json, resume, and a fork for a task that follows', async (t) => {
+    const { dir, config, task } = setup(t);
+    const saved = process.env.TRAE_HOME;
+    process.env.TRAE_HOME = path.join(dir, 'trae-home');
+    t.after(() => { if (saved === undefined) delete process.env.TRAE_HOME; else process.env.TRAE_HOME = saved; });
+    const parent = '01a1f268-2f50-78b0-b6a2-41ac7404f260';
+    const rollout = path.join(process.env.TRAE_HOME, 'cli', 'sessions', '2026', '11', '19', `rollout-2026-11-19T06-04-36-${parent}.jsonl`);
+    fs.mkdirSync(path.dirname(rollout), { recursive: true });
+    fs.writeFileSync(rollout, '{}\n');
+    config.traexBin = fakeCli(dir, 'traex', [
+      { type: 'thread.started', thread_id: 'th_traex' },
+      { type: 'item.completed', item: { type: 'agent_message', text: '做完了' } },
+      { type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 8, output_tokens: 2 } },
+    ]);
+    const executor = new WorkerExecutor({ config, settings: () => ({ runtime: 'traex', model: 'DeepSeek-V4.1-Flash', effort: 'low' }) });
+    assert.ok(executor.supports('traex'));
+    const first = await executor.start({ task: task({ runtime: 'traex', turns: 0 }), prompt: 'first', authority: 'tok' }).done;
+    assert.deepEqual([first.nativeSession, first.text, first.usage], ['th_traex', '做完了', { inputTokens: 10, cachedInputTokens: 8, outputTokens: 2 }]);
+    await executor.start({ task: task({ runtime: 'traex', native_session: 'th_traex', turns: 1 }), prompt: 'second', authority: 'tok' }).done;
+    const fork = { taskId: 't3', runtime: 'traex', sessionId: parent };
+    await executor.start({ task: task({ runtime: 'traex', turns: 0 }), prompt: 'third', authority: 'tok', fork }).done;
+    await executor.start({ task: task({ runtime: 'traex', turns: 0 }), prompt: 'fourth', authority: 'tok', fork: { ...fork, sessionId: 'gone' } }).done;
+    const [one, two, three, four] = calls(dir, 'traex');
+    assert.deepEqual(one.argv.slice(0, 4), ['exec', '--json', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox']);
+    assert.equal(one.argv[one.argv.indexOf('-C') + 1], task().workdir);
+    assert.match(one.argv.join(' '), /developer_instructions="## Worker/);
+    assert.match(one.argv.join(' '), /mcp_servers\.personal_agent\.args=\[.*"--authority","tok"\]/);
+    assert.ok(one.argv.includes('--dangerously-bypass-hook-trust') && one.argv.some((arg) => /^hooks\.Stop=/.test(arg)), 'new task inputs reach it through hooks');
+    assert.equal(one.argv[one.argv.indexOf('--shell-tool-timeout') + 1], '3600s', 'a command that never ends cannot hold the task');
+    assert.deepEqual([one.argv[one.argv.indexOf('-m') + 1], one.argv.find((arg) => arg.startsWith('model_reasoning_effort='))], ['DeepSeek-V4.1-Flash', 'model_reasoning_effort="low"']);
+    assert.deepEqual(two.argv.slice(-3), ['resume', 'th_traex', 'second']);
+    assert.deepEqual(three.argv.slice(-3), ['fork', parent, 'third']);
+    assert.ok(!four.argv.includes('fork'), 'no fork of a thread that is gone');
   });
 
   it('runs Claude Code with --print, resuming its session after the first turn', async (t) => {

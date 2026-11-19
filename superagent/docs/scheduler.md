@@ -197,7 +197,7 @@ pull request, a document), and it takes only what is about that result:
   is undone where it can be (a removed directory is made again, empty, and its
   clean-up marks are cleared) and the brief says what is gone. The worker's
   session carries on when it is still there and under 4 MB; otherwise
-  (deleted with the directory, cleaned up by Claude Code or Codex themselves,
+  (deleted with the directory, cleaned up by Claude Code, Codex or TraeX themselves,
   or too large) the round starts a fresh session from the task record, round
   by round. A turn whose CLI says the session it resumed is gone ("No
   conversation found", "no rollout found") runs again the same way instead of
@@ -217,12 +217,12 @@ pull request, a document), and it takes only what is about that result:
   model step or tool call and when the run is about to end, and adds them to the
   session; at the second point the run goes on instead of ending.
   - Pi: `pi-mcp-extension.mjs` on `turn_end` and `agent_before_settle`.
-  - Claude Code and Codex: `task-input-hook.mjs` as a `PostToolUse` hook
+  - Claude Code, Codex and TraeX: `task-input-hook.mjs` as a `PostToolUse` hook
     (`additionalContext`) and a `Stop` hook (`decision: block`), the hook format
-    both CLIs share. Claude Code gets them in the worker's `--settings`; Codex as
-    `-c hooks.<event>=[…]` overrides for that run, which need
+    the three CLIs share. Claude Code gets them in the worker's `--settings`;
+    Codex and TraeX as `-c hooks.<event>=[…]` overrides for that run, which need
     `--dangerously-bypass-hook-trust` (worker runs already bypass approvals and
-    the sandbox). Nothing is written to `~/.codex` or `~/.claude`.
+    the sandbox). Nothing is written to `~/.codex`, `~/.trae` or `~/.claude`.
   Both points are where Pi's own `steer` delivers too; a long tool call still
   finishes first.
 - **Workers hand back what is not theirs.** `task_handback` (worker) returns
@@ -253,6 +253,7 @@ mode, resuming the task's own session (`worker-executor.mjs`):
 |---|---|---|
 | Pi | `pi --mode json -p --session-id <task> ...` | `--fork <its session file>` |
 | Codex | `codex exec --json ...`, then `codex exec resume <thread>` | `codex exec ... fork <its thread>` |
+| TraeX | `traex exec --json ...`, then `traex exec resume <thread>` | `traex exec ... fork <its thread>` |
 | Claude Code | `claude --print --output-format stream-json --session-id/--resume <task>` | `--resume <its session> --fork-session --session-id <task>` |
 
 A task that follows another starts from a copy of that task's session when the
@@ -271,14 +272,18 @@ directory, measured:
   the worker's shell and file tools start there.
 - **Claude Code: the whole copy.** It appends the change of directory after
   the copied history.
+- **TraeX: 98% cached.** Its exec is Codex's (the same flags, events, hooks
+  and thread files, in `~/.trae/cli/sessions`), but the copy keeps its cache;
+  measured through the daemon's executor, a follows task's first turn into
+  another task's directory.
 - **Codex: only its fixed prefix** (system prompt and tools, about 12k
   tokens). Codex keys the prompt cache by thread (`prompt_cache_key`), which a
   fork changes, and nothing sets it. Resuming a task's own thread, as each
   later turn and round does, is 99% cached.
 
 No process runs between turns, so an idle task holds nothing; Durable,
-OpenCode, TraeX and Ark have no worker mode, and `task_create` tells the router
-to handle the request itself there. A task keeps the runtime it started on.
+OpenCode and Ark have no worker mode, and `task_create` tells the router to
+handle the request itself there. A task keeps the runtime it started on.
 Three turns run at once, plus one slot only a follow-up to an existing task may
 take. Each task works in a directory under `<workspace>/tasks/` (see Task
 directories).
@@ -288,7 +293,10 @@ wait. Pi's `bash` alone has no default timeout, so a Pi worker's command
 without a `timeout` is stopped after 300 seconds and none may ask for more than
 3600; the worker's policy says so, for builds and test runs that need longer.
 Codex returns a long command's output after at most 30 seconds and lets it run
-on; Claude Code gives a command 2 minutes unless it asks for up to 10.
+on; Claude Code gives a command 2 minutes unless it asks for up to 10. TraeX
+waits for a command to end, so a TraeX worker's commands are stopped after an
+hour (`--shell-tool-timeout`), the longest a Pi worker's may run, and its
+policy says so.
 Every worker is told to search with the bundled `rg` rather than `grep -r`, in
 its own directory first, and never over a whole home directory, `/`, or the
 OpenViking SuperAgent installation and data. Its working directory is its task
@@ -354,8 +362,8 @@ being deleted, and the trash is emptied after. A round that reopens a task
 makes it live again in that step's sense: what was already moved away is gone
 (the round is told so), nothing more is. A directory a task used while
 it was being measured waits for the next sweep. `/tasks` shows how much the
-task directories took at the last sweep. Claude Code and Codex keep their own
-session files in their homes; those are not swept.
+task directories took at the last sweep. Claude Code, Codex and TraeX keep
+their own session files in their homes; those are not swept.
 
 ### What the router sees
 
@@ -423,8 +431,8 @@ the reply text, so a rewritten reply is a new message).
   tools (`bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`); past them the
   call is refused with a pointer to `task_create` (a `tool_call` handler in
   `pi-mcp-extension.mjs`). A per-command cap alone did not stop a router from
-  investigating with many short commands. Core reads are not counted. On Codex
-  and Claude Code this is policy text only.
+  investigating with many short commands. Core reads are not counted. On Codex,
+  TraeX and Claude Code this is policy text only.
 - **Restart.** Tasks, inputs and reports are in SQLite. A turn cut by a
   shutdown is not reported; at start its task runs again from the persisted
   request history, told to check what it already did before repeating an outside

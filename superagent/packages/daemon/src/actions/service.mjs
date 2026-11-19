@@ -233,7 +233,7 @@ export class ActionService {
     const tasks = this.requireTasks();
     const runtime = this.taskRuntime();
     if (!this.taskRuntimeSupported(runtime)) {
-      throw blocked('unsupported', `Workers run on pi, codex or claude; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
+      throw blocked('unsupported', `Workers run on pi, codex, traex or claude; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
     }
     const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
     // One request, one task: a line a live task already holds as its request

@@ -1974,7 +1974,7 @@ describe('workers scheduler', () => {
     };
     const inbox = new MessageInbox({ db: store.db, runtime: { snapshot: () => ({ work: { turnInProgress: true } }) } });
     const tasks = new TaskManager({ db: store.db, config: { workspace }, executor, inbox, lineFor: (row) => `line ${row.seq}` });
-    service.attachTasks(tasks, { runtime: () => runtime, supports: (id) => ['pi', 'codex', 'claude'].includes(id) });
+    service.attachTasks(tasks, { runtime: () => runtime, supports: (id) => ['pi', 'codex', 'traex', 'claude'].includes(id) });
     return { tasks, turns };
   }
 
@@ -2180,6 +2180,6 @@ describe('workers scheduler', () => {
     attachTasks(service, store, workspace, 'durable');
     store.ingest(chatEvent({ messageId: 'om_durableTask123', chatType: 'group' }));
     await assert.rejects(call('task_create', { trigger_ids: ['message:om_durableTask123'], title: 'x' }),
-      (error) => error.code === 'unsupported' && /Workers run on pi, codex or claude; this runtime is durable/.test(error.message));
+      (error) => error.code === 'unsupported' && /Workers run on pi, codex, traex or claude; this runtime is durable/.test(error.message));
   });
 });
