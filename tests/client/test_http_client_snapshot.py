@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List
 
+import httpx
 import pytest
 
 from openviking_cli.client.http import AsyncHTTPClient
@@ -29,7 +30,11 @@ def _client_with_fake() -> tuple[AsyncHTTPClient, _FakeHTTPClient]:
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake = _FakeHTTPClient()
     client._http = fake
-    client._handle_response = lambda response: {"commit_oid": "a" * 40, "result": "created", "changed": 1}
+    client._handle_response = lambda response: {
+        "commit_oid": "a" * 40,
+        "result": "created",
+        "changed": 1,
+    }
     return client, fake
 
 
@@ -109,19 +114,6 @@ async def test_git_restore_includes_project_dir_when_provided():
     }
 
 
-class _FakeBinaryResponse:
-    """Mimics enough of httpx.Response for the show-blob branch."""
-
-    def __init__(self, content: bytes, oid: str, size: int):
-        self.content = content
-        self.status_code = 200
-        self.headers = {
-            "content-type": "application/octet-stream",
-            "x-snapshot-oid": oid,
-            "x-snapshot-size": str(size),
-        }
-
-
 async def test_git_show_metadata_uses_handle_response():
     client, fake = _client_with_fake()
     client._handle_response = lambda resp: {"oid": "c" * 40, "tree": "t" * 40, "message": "m"}
@@ -141,7 +133,15 @@ async def test_git_show_blob_returns_envelope_from_headers():
     fake = _FakeHTTPClient()
     client._http = fake
 
-    fake.next_response = _FakeBinaryResponse(b"hello\n", oid="b" * 40, size=6)
+    fake.next_response = httpx.Response(
+        200,
+        content=b"hello\n",
+        headers={
+            "content-type": "application/octet-stream",
+            "x-snapshot-oid": "b" * 40,
+            "x-snapshot-size": "6",
+        },
+    )
 
     result = await client.git_show(target_ref="c" * 40, path="viking://resources/x.txt")
 
@@ -155,25 +155,19 @@ async def test_git_show_blob_handles_case_insensitive_headers():
     Confirm the client reads x-snapshot-* correctly even when the server
     capitalises them (FastAPI may send X-Snapshot-Oid as-is).
     """
-    import httpx
-
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake = _FakeHTTPClient()
     client._http = fake
 
-    class _CaseyResponse:
-        def __init__(self, content: bytes, oid: str, size: int):
-            self.content = content
-            self.status_code = 200
-            self.headers = httpx.Headers(
-                {
-                    "Content-Type": "application/octet-stream",
-                    "X-Snapshot-Oid": oid,
-                    "X-Snapshot-Size": str(size),
-                }
-            )
-
-    fake.next_response = _CaseyResponse(b"\x00\x01\x02", oid="e" * 40, size=3)
+    fake.next_response = httpx.Response(
+        200,
+        content=b"\x00\x01\x02",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Snapshot-Oid": "e" * 40,
+            "X-Snapshot-Size": "3",
+        },
+    )
     result = await client.git_show(target_ref="ref", path="viking://resources/bin.dat")
     assert result == {"oid": "e" * 40, "size": 3, "bytes": b"\x00\x01\x02"}
 
@@ -187,13 +181,9 @@ async def test_git_show_blob_missing_headers_degrades_gracefully():
     fake = _FakeHTTPClient()
     client._http = fake
 
-    class _NoHeadersResponse:
-        def __init__(self, content: bytes):
-            self.content = content
-            self.status_code = 200
-            self.headers = {"content-type": "application/octet-stream"}
-
-    fake.next_response = _NoHeadersResponse(b"payload")
+    fake.next_response = httpx.Response(
+        200, content=b"payload", headers={"content-type": "application/octet-stream"}
+    )
     result = await client.git_show(target_ref="r", path="viking://resources/x")
     assert result["bytes"] == b"payload"
     assert result["oid"] == ""
