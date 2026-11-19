@@ -3,6 +3,7 @@ import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?
 import { Button } from '../../shared/primitives/button/button.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
+import { isOvClientError } from '../../client/errors.js';
 import type { SearchHit } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
@@ -70,11 +71,21 @@ export function FileBrowserSearchResults({
     );
   }
 
+  const invalidPattern =
+    isOvClientError(error) &&
+    error.code === 'INVALID_ARGUMENT' &&
+    error.message.startsWith('Invalid grep pattern:');
   const failure = error ? (
     <>
       <div role="alert" className="ov-file-browser-search__error">
         <p>{text.searchFailed}</p>
-        <p>{error.message}</p>
+        <p>{invalidPattern ? text.searchInvalidPattern : error.message}</p>
+        {invalidPattern ? (
+          <details>
+            <summary>{text.searchErrorDetails}</summary>
+            <p>{error.message}</p>
+          </details>
+        ) : null}
       </div>
       <Button size="small" disabled={loading} onClick={onRetry}>
         {text.retry}

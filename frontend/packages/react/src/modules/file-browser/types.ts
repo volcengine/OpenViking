@@ -90,6 +90,10 @@ export interface FileBrowserLabels {
   searchEmpty?: string;
   /** 搜索请求失败的结论，原因由服务端返回。Conclusion when the search request fails; the reason comes from the server. */
   searchFailed?: string;
+  /** Grep 正则无效时的语法说明。Syntax guidance when a Grep expression is invalid. */
+  searchInvalidPattern?: string;
+  /** 展开服务端原始错误的入口。Disclosure label for the original server error. */
+  searchErrorDetails?: string;
   /** 各检索方式的输入提示。Input placeholder of each retrieval mode. */
   searchModePlaceholders?: Record<SearchMode, string>;
   /** 各检索方式的说明。One-line description of each retrieval mode. */

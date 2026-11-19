@@ -266,6 +266,8 @@ import '@openviking/react/modules/file-browser/style.css';
 | searchLoading           | 搜索进行中的提示                                                                              | `string`                             | `'搜索中…'`                              |
 | searchEmpty             | 搜索没有结果时的提示                                                                          | `string`                             | `'没有匹配的资源'`                       |
 | searchFailed            | 搜索失败的结论，原因显示服务端返回的消息                                                      | `string`                             | `'搜索失败'`                             |
+| searchInvalidPattern    | Grep 正则无效时的语法说明                                                                     | `string`                             | 见内置文案                               |
+| searchErrorDetails      | 展开服务端原始错误的入口                                                                      | `string`                             | `'错误详情'`                             |
 | searchModePlaceholders  | 各检索方式的输入提示，按 `find` / `search` / `grep` / `glob` 逐项覆盖                         | `Record<SearchMode, string>`         | 见内置文案                               |
 | searchModeHints         | 各检索方式下拉里的说明                                                                        | `Record<SearchMode, string>`         | 见内置文案                               |
 | searchAdvanced          | 高级筛选面板的标题                                                                            | `string`                             | `'高级选项'`                             |
@@ -283,7 +285,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | searchIgnoreCase        | 忽略大小写                                                                                    | `string`                             | `'忽略大小写'`                           |
 | searchFilterUnsupported | 某个筛选在当前检索方式下不可用的原因                                                          | `string`                             | `'当前检索方式不支持此筛选'`             |
 | searchResultCount       | 检索结果数量，参数为条数                                                                      | `(count: number) => string`          | `'检索到 N 条结果'`                      |
-| searchVia               | 模式 chip 之后的检索方式说明                                                                  | `string`                             | `'向量检索方式'`                         |
+| searchVia               | 模式 chip 之后的检索方式说明                                                                  | `string`                             | `'检索方式'`                             |
 | searchSwitchMode        | 切换检索方式的入口                                                                            | `string`                             | `'切换'`                                 |
 | searchAdvancedLabel     | 高级筛选按钮的无障碍名称                                                                      | `string`                             | `'高级筛选'`                             |
 | previewMode             | 「预览 / 源码」切换里的「预览」                                                               | `string`                             | `'预览'`                                 |
