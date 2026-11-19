@@ -393,6 +393,28 @@ class SemanticTreeExecutor:
                 started_at=perf_counter()
             )
         self._scheduler = get_semantic_tree_scheduler(self._node_concurrency)
+        if self._semantic_plan is None and await self._root_is_file(root_uri):
+            # A message can root at a file URI (for example a single-file
+            # content write). Listing it as a directory raises
+            # AGFSNotADirectoryError, which the directory dispatcher records as
+            # a failed dispatch and acknowledges, so the file summary and L2
+            # vector were never produced. Run the file work directly instead.
+            self._stats.total_nodes = 1
+            self._stats.in_progress_nodes = 1
+            previous_incremental = self._incremental_update
+            self._incremental_update = False
+            try:
+                with (
+                    bind_ingestion_source_type(self._source_type),
+                    bind_dashboard_token_source_type(self._dashboard_source_type),
+                ):
+                    await self._file_summary_task(root_uri, root_uri)
+            finally:
+                self._incremental_update = previous_incremental
+            self._root_write_result = AbstractOverviewWriteResult(
+                wrote=True, abstract_body_changed=True
+            )
+            return
         if self._semantic_plan is not None:
             from openviking.storage.context_update_plan import (
                 SemanticAction,
@@ -966,6 +988,19 @@ class SemanticTreeExecutor:
             transfer_inputs_ready=not candidates or bool(selected),
             dispatched=True,
         )
+
+    async def _root_is_file(self, root_uri: str) -> bool:
+        """Report whether a planless semantic root points at a file rather than a directory."""
+        try:
+            stat = await self._viking_fs.stat(root_uri, ctx=self._ctx, skip_count=True)
+        except Exception as exc:
+            logger.debug(
+                "Could not stat semantic root %s: %s",
+                safe_uri_for_log(str(root_uri)),
+                type(exc).__name__,
+            )
+            return False
+        return isinstance(stat, dict) and not stat.get("isDir", False)
 
     async def _list_dir(self, uri: str, from_hint: str) -> tuple[list[str], list[str]]:
         """List directory entries and return (child_dirs, file_paths)."""
