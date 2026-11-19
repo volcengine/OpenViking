@@ -71,7 +71,6 @@ async def resolve_files(runtime, documents):
         """Resolve one path and reserve its chosen output names without an intervening await."""
         path, items = item
         refs = sorted({ref for doc in items for ref in doc.source_refs})
-        previous_attempt = None
         try:
             for attempt in range(MAX_JOB_ATTEMPTS):
                 try:
@@ -93,15 +92,12 @@ async def resolve_files(runtime, documents):
                             "inputs": [{"payload": {"source_ranges": refs}}],
                         },
                         refs,
-                        previous_attempt=previous_attempt,
                     )
-                except IncompleteWorkerOutput as error:
+                except IncompleteWorkerOutput:
                     if attempt + 1 == MAX_JOB_ATTEMPTS:
                         raise
-                    previous_attempt = error if error.output_root else None
                     runtime.metrics["repairs"] += 1
                     continue
-                previous_attempt = None
                 if not outputs:
                     raise ValueError(f"No Markdown outputs resolve {path}")
                 keys = [output_path_key(doc.path) for doc in outputs]
