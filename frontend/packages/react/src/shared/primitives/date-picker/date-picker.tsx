@@ -53,9 +53,6 @@ export interface DatePickerProps {
   /** 上一月、下一月的无障碍名称。Accessible names for the month navigation. */
   prevLabel?: string;
   nextLabel?: string;
-  /** 上一年、下一年的无障碍名称。Accessible names for year navigation. */
-  prevYearLabel?: string;
-  nextYearLabel?: string;
   /** 清空按钮的无障碍名称。Accessible name of the clear action. */
   clearLabel?: string;
   /**
@@ -91,8 +88,6 @@ export function DatePicker({
   locale: localeProp,
   prevLabel,
   nextLabel,
-  prevYearLabel,
-  nextYearLabel,
   clearLabel,
   calendarLabel,
   'aria-label': ariaLabel,
@@ -205,8 +200,8 @@ export function DatePicker({
             locale={locale}
             prevLabel={prevLabel ?? text.prevLabel}
             nextLabel={nextLabel ?? text.nextLabel}
-            prevYearLabel={prevYearLabel ?? text.prevYearLabel}
-            nextYearLabel={nextYearLabel ?? text.nextYearLabel}
+            prevYearLabel={text.prevYearLabel}
+            nextYearLabel={text.nextYearLabel}
             onShiftMonth={(delta) =>
               setView((current) =>
                 shiftMonth(current.year, current.month, delta),

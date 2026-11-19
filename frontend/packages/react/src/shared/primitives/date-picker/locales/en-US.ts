@@ -1,4 +1,5 @@
 import type { DatePickerProps } from '../date-picker.js';
+import type { DatePickerPopupProps } from '../date-picker-popup.js';
 
 export default {
   calendarLabel: 'Open calendar',
@@ -10,11 +11,7 @@ export default {
 } satisfies Required<
   Pick<
     DatePickerProps,
-    | 'calendarLabel'
-    | 'prevLabel'
-    | 'nextLabel'
-    | 'prevYearLabel'
-    | 'nextYearLabel'
-    | 'clearLabel'
+    'calendarLabel' | 'prevLabel' | 'nextLabel' | 'clearLabel'
   >
->;
+> &
+  Pick<DatePickerPopupProps, 'prevYearLabel' | 'nextYearLabel'>;

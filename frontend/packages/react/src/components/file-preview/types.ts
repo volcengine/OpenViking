@@ -343,9 +343,10 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
    */
   onActiveLevelChange?: (key: string) => void;
   /**
-   * 目录操作的执行能力，例如沿路径向上打开。省略对应方法时该操作不可用。
-   * Directory operation capabilities, for example opening an ancestor. Omitting a
-   * method makes its operation unavailable.
+   * 目录操作的执行能力，例如打开祖先目录或摘要中的资源链接。
+   * 省略对应方法时该操作不可用。
+   * Directory operation capabilities, such as opening an ancestor or a resource
+   * link in a summary. Omitting a method makes its operation unavailable.
    */
   operations?: FilePreviewOperations;
   /**
@@ -394,15 +395,19 @@ export interface FilePreviewOperations {
    */
   openParent?: (uri: string) => Promise<void>;
   /**
-   * 打开正文里被点击的链接，完成后返回。传入后由宿主接管导航，组件阻止默认
-   * 跳转；相对路径的解析也归宿主，组件给出的是 Markdown 里的原始目标。
+   * 打开文件正文或目录摘要里被点击的 Viking URI 和相对链接，完成后返回。
+   * 传入后组件阻止这些链接的默认跳转，并把 Markdown 里的原始目标交给宿主；
+   * 相对路径的解析也归宿主。HTTP(S)、mailto、tel 和 // 外链保留浏览器原生行为。
+   * 目录摘要里的同文档锚点在当前预览内定位。
    *
    * 目前只有 Markdown 正文会触发：其它格式的渲染器不提供链接点击回调。
    *
-   * Opens a link clicked inside the body and resolves on completion. Supplying it
-   * hands navigation to the host — the component prevents the default jump — and
-   * resolving relative paths is the host's job too; the component passes the raw
-   * target as written in the Markdown.
+   * Opens a Viking URI or relative link clicked in a file body or directory
+   * summary and resolves on completion. Supplying it prevents default navigation
+   * for those links and passes their raw Markdown targets to the host, which also
+   * resolves relative paths. HTTP(S), mailto, tel and // external links retain
+   * native browser behavior. Same-document anchors in directory summaries are
+   * located within the current preview.
    *
    * Only Markdown bodies fire this today: the other renderers expose no link-click
    * callback.
