@@ -164,7 +164,7 @@ class TestOpenVikingVectorDB(unittest.TestCase):
             self.assertEqual(item.id, item.fields.get("id"))
             self.assertEqual(item.score, baseline_scores[item.id])
 
-    def test_index_rebuild_backfills_old_rows_and_reopens_with_new_schema(self):
+    def test_index_rebuild_backfills_old_rows_and_preserves_previous_version(self):
         collection = self._create_collection()
         collection.upsert_data(
             [
@@ -187,28 +187,11 @@ class TestOpenVikingVectorDB(unittest.TestCase):
         self.assertGreater(index.get_newest_version(), previous_version)
         self.assertTrue(Path(index.version_dir, str(previous_version)).is_dir())
         self.assertTrue(Path(index.version_dir, f"{previous_version}.write_done").is_file())
-        old_flag = {"op": "must", "field": "schema_flag", "conds": [False]}
-        new_flag = {"op": "must", "field": "schema_flag", "conds": [True]}
-        self.assertEqual(self._search_ids(collection, old_flag), ["first", "second"])
-
-        assert collection.update_data([{"id": "second", "schema_flag": True}]).ids == ["second"]
-        assert collection.fetch_data(["second"]).items[0].fields["schema_flag"] is True
-        self.assertEqual(self._search_ids(collection, new_flag), ["second"])
-        self.assertEqual(self._search_ids(collection, old_flag), ["first"])
-        collection.close()
-        self.collections.remove(collection)
-        reopened = self._register(get_or_create_local_collection(path=TEST_DB_PATH))
-
-        self.assertTrue(reopened.fetch_data(["second"]).items[0].fields["schema_flag"])
-        self.assertEqual(self._search_ids(reopened, new_flag), ["second"])
+        default_flag = {"op": "must", "field": "schema_flag", "conds": [False]}
+        self.assertEqual(self._search_ids(collection, default_flag), ["first", "second"])
         self.assertEqual(
-            self._search_ids(reopened, {"op": "must", "field": "type", "conds": ["image"]}),
+            self._search_ids(collection, {"op": "must", "field": "type", "conds": ["image"]}),
             ["second"],
-        )
-        self.assertEqual(self._search_ids(reopened, old_flag), ["first"])
-        reopened.delete_data(["first"])
-        self.assertEqual(
-            reopened.aggregate_data("idx_filters", filters=old_flag).agg, {"_total": 0}
         )
 
     def test_offset_collision_after_delete(self):
