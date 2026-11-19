@@ -11,7 +11,10 @@ VECTORS_ONLY = "vectors_only"
 SEMANTIC_QUEUE_DISABLED = True
 
 ProcessingMode = Literal["semantic_and_vectors", "vectors_only"]
-DEFAULT_PROCESSING_MODE: ProcessingMode = SEMANTIC_AND_VECTORS
+# Temporary rollout default: callers that omit processing_mode do not enqueue
+# semantic/VLM work. Explicit values remain accepted for compatibility, while
+# the temporary semantic-queue guard below keeps this deployment vectors-only.
+DEFAULT_PROCESSING_MODE: ProcessingMode = VECTORS_ONLY
 SUPPORTED_PROCESSING_MODES = frozenset({SEMANTIC_AND_VECTORS, VECTORS_ONLY})
 
 
