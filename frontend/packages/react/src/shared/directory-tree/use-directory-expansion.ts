@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { RefObject, SetStateAction } from 'react';
 import {
   HOME_URI,
@@ -82,7 +89,12 @@ export function useDirectoryExpansion({
   const home = identifiedHome === HOME_URI ? undefined : identifiedHome;
   const state = useMemo(() => settleExpansionEdits(raw, home), [raw, home]);
   const current = useRef(state);
-  current.current = state;
+  // Event handlers and async restore callbacks read the committed expansion.
+  // A suspended render must not publish another scope or pending state.
+  // Each commit replaces the ref; there is no external subscription to dispose.
+  useLayoutEffect(() => {
+    current.current = state;
+  }, [state]);
 
   const update = useCallback(
     (change: (previous: ExpansionState) => ExpansionState) => {
@@ -92,7 +104,6 @@ export function useDirectoryExpansion({
           previous && previous.session === session ? previous.state : initial;
         const next = change(settleExpansionEdits(before, readHome()));
         if (next === before) return previous;
-        current.current = next;
         return { session, state: next };
       });
     },

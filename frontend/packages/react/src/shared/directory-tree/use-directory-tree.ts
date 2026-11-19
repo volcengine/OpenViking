@@ -2,7 +2,7 @@ import { tagData } from '../monitoring/data.js';
 import { useDirectoryMonitoring } from './use-directory-monitoring.js';
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
@@ -49,9 +49,9 @@ export function useDirectoryTree({
     session?.getSnapshot ?? emptySnapshot,
   );
   const activeSession = useRef(session);
-  // Publish committed query subscriptions for stable event callbacks. Abandoned
-  // renders must not replace the session used by the visible preview.
-  useEffect(() => {
+  // Publish the committed query scope before event or restore callbacks run.
+  // Layout publication ignores suspended renders. Each commit replaces the ref.
+  useLayoutEffect(() => {
     activeSession.current = session;
   }, [session]);
   const expansion = useDirectoryExpansion({

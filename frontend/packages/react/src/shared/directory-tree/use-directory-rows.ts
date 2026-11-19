@@ -89,7 +89,7 @@ export function useDirectoryRows({
           const isUserUri = isUserResourceUri(uri);
           const homePath = homeRelativePath(uri);
           const reopened = pendingEdits.some(
-            (edit) => edit.expanded && edit.uri === uri,
+            (edit) => edit.expanded && identifyUri(edit.uri) === key,
           );
           if (
             (isAlias && containsPath(foldedUserPaths, homePath)) ||

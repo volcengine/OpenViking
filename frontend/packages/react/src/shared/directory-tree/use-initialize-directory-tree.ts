@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { useDirectoryExpansion } from './use-directory-expansion.js';
 import type { DirectoryQueries } from './directory-queries.js';
+import { HOME_URI } from '../resource-uri.js';
 import { expandChain } from './fs-path.js';
 import {
   restoreDirectoryExpansion,
@@ -30,6 +31,7 @@ export function useInitializeDirectoryTree({
 }) {
   const {
     savedExpansion,
+    identifyUri,
     isExpanded,
     isDeferred,
     readHome,
@@ -64,6 +66,25 @@ export function useInitializeDirectoryTree({
       else current.retryQueued = false;
     });
   }, [session, savedExpansion]);
+  const homeUri = identifyUri(HOME_URI);
+  const previousHome = useRef<{
+    session: DirectoryQueries | undefined;
+    uri: string;
+  }>(undefined);
+  // Resume server listings when a verified home identity releases deferred
+  // folders; the lookup can finish without a user event. The retry queue waits
+  // for the active pass and ignores replaced sessions or aborted attempts.
+  useEffect(() => {
+    const previous = previousHome.current;
+    previousHome.current = { session, uri: homeUri };
+    if (
+      previous &&
+      previous.session === session &&
+      homeUri !== HOME_URI &&
+      previous.uri !== homeUri
+    )
+      retryExpansion();
+  }, [session, homeUri, retryExpansion]);
   const retryDirectory = useCallback(
     async (uri: string) => {
       const current = activeAttempt.current;
