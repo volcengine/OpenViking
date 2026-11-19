@@ -163,12 +163,13 @@ fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
     unsafe extern "C" {
         fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     }
-
+    if out_fd == err_fd {
+        return true;
+    }
     #[cfg(target_os = "linux")]
     {
-        const F_DUPFD_QUERY: i32 = 1027;
-        // SAFETY: F_DUPFD_QUERY takes one int argument and queries struct file equality.
-        let equal = unsafe { fcntl(out_fd, F_DUPFD_QUERY, err_fd) };
+        // SAFETY: F_DUPFD_QUERY (Linux >= 6.10) queries struct file equality without side effects.
+        let equal = unsafe { fcntl(out_fd, 1027, err_fd) };
         if equal >= 0 {
             return equal == 1;
         }
@@ -177,61 +178,85 @@ fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
             unsafe extern "C" {
                 fn syscall(num: std::ffi::c_long, ...) -> std::ffi::c_long;
             }
-            #[cfg(target_arch = "x86_64")]
-            const SYS_KCMP: std::ffi::c_long = 312;
-            #[cfg(target_arch = "aarch64")]
-            const SYS_KCMP: std::ffi::c_long = 272;
-            const KCMP_FILE: i32 = 0;
-
-            let pid = std::process::id() as i32;
-            // SAFETY: KCMP_FILE compares two descriptors in this process without mutating state.
-            return unsafe {
-                syscall(SYS_KCMP, pid, pid, KCMP_FILE, out_fd as u64, err_fd as u64) == 0
+            const SYS_KCMP: std::ffi::c_long = if cfg!(target_arch = "x86_64") {
+                312
+            } else {
+                272
             };
-        }
-        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-        {
-            false
+            let pid = std::process::id() as std::ffi::c_long;
+            // SAFETY: KCMP_FILE (0) compares two descriptors in this process without mutating state.
+            let cmp = unsafe {
+                syscall(
+                    SYS_KCMP,
+                    pid,
+                    pid,
+                    0 as std::ffi::c_long,
+                    out_fd as std::ffi::c_ulong,
+                    err_fd as std::ffi::c_ulong,
+                )
+            };
+            if cmp >= 0 {
+                return cmp == 0;
+            }
         }
     }
     #[cfg(target_os = "macos")]
     {
-        const F_GETFL: i32 = 3;
-        const O_APPEND: i32 = 0x0008;
-        const F_SETNOSIGPIPE: i32 = 73;
-        const F_GETNOSIGPIPE: i32 = 74;
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct Flock {
+            l_start: i64,
+            l_len: i64,
+            l_pid: i32,
+            l_type: i16,
+            l_whence: i16,
+        }
+        let mut lock = Flock {
+            l_start: (1_i64 << 62) - i64::from(std::process::id()),
+            l_len: 1,
+            l_pid: 0,
+            l_type: 3, // F_WRLCK
+            l_whence: 0,
+        };
+        // SAFETY: F_OFD_SETLK (90) / F_OFD_GETLK (92) probe a PID-unique byte on struct fileglob.
+        if unsafe { fcntl(out_fd, 90, &mut lock) } == 0 {
+            let mut query = lock;
+            let shared = unsafe { fcntl(err_fd, 92, &mut query) } == 0 && query.l_type == 2;
+            lock.l_type = 2; // F_UNLCK
+            unsafe { fcntl(out_fd, 90, &mut lock) };
+            return shared;
+        }
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        #[cfg(target_os = "linux")]
+        let (get_cmd, set_cmd, alt) = (9, 8, std::process::id() as i32); // F_GETOWN / F_SETOWN
+        #[cfg(target_os = "macos")]
+        let (get_cmd, set_cmd, alt) = (74, 73, 1); // F_GETNOSIGPIPE / F_SETNOSIGPIPE
 
-        // SAFETY: F_GETFL and F_GETNOSIGPIPE only read descriptor flags; F_SETNOSIGPIPE toggles
-        // FG_NOSIGPIPE on `struct fileglob` without touching file offsets or regular-file I/O.
+        // SAFETY: F_GETFL (3) and get_cmd read descriptor state; set_cmd toggles and restores a
+        // per-open-file-description attribute without touching file offsets or regular-file I/O.
         unsafe {
-            let (out_flags, err_flags) = (fcntl(out_fd, F_GETFL), fcntl(err_fd, F_GETFL));
-            if out_flags < 0 || out_flags != err_flags {
+            let flags = fcntl(out_fd, 3);
+            if flags < 0 || flags != fcntl(err_fd, 3) {
                 return false;
             }
-            if (out_flags & O_APPEND) != 0 {
-                return true;
-            }
-            let (out_nosig, err_nosig) =
-                (fcntl(out_fd, F_GETNOSIGPIPE), fcntl(err_fd, F_GETNOSIGPIPE));
-            if out_nosig < 0 || out_nosig != err_nosig {
+            let orig = fcntl(out_fd, get_cmd);
+            if orig != fcntl(err_fd, get_cmd) {
                 return false;
             }
-            let toggled = i32::from(out_nosig == 0);
-            if fcntl(out_fd, F_SETNOSIGPIPE, toggled) < 0 {
+            let probe = if orig == alt { 0 } else { alt };
+            if fcntl(out_fd, set_cmd, probe) < 0 {
                 return false;
             }
-            let shared = fcntl(err_fd, F_GETNOSIGPIPE) == toggled;
-            let _ = fcntl(out_fd, F_SETNOSIGPIPE, out_nosig);
+            let shared = fcntl(err_fd, get_cmd) == probe;
+            fcntl(out_fd, set_cmd, orig);
             shared
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (
-            out_fd,
-            err_fd,
-            fcntl as unsafe extern "C" fn(i32, i32, ...) -> i32,
-        );
+        let _ = fcntl as unsafe extern "C" fn(i32, i32, ...) -> i32;
         false
     }
 }

@@ -1178,6 +1178,53 @@ async fn preserves_regular_file_stdout_and_merged_stream_order() {
         format!("1\n2:{TOKEN}\n3\n4\n")
     );
 
+    use std::io::{Read, Seek, SeekFrom};
+    let append_cursor = dir.path().join("append_cursor.log");
+    fs::write(&append_cursor, "before\ncursor\n").unwrap();
+    let mut transcript = fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .open(&append_cursor)
+        .unwrap();
+    let diag = fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .open(&append_cursor)
+        .unwrap();
+    transcript
+        .seek(SeekFrom::Start("before\n".len() as u64))
+        .unwrap();
+    let (url, server) = resolver([(TOKEN, Some("secret-cursor".into()))]).await;
+    let mut cursor_cmd = privacy(dir.path(), &url);
+    cursor_cmd
+        .args([
+            "run",
+            "--env",
+            &format!("TOKEN={TOKEN}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"printf 'warn:%s\n' "$TOKEN" >&2"#,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(transcript.try_clone().unwrap()))
+        .stderr(Stdio::from(diag));
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        cursor_cmd.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let status = cursor_cmd.status().await.unwrap();
+    assert_eq!(status.code(), Some(0));
+    server.await.unwrap();
+    let mut delta = String::new();
+    transcript.read_to_string(&mut delta).unwrap();
+    assert_eq!(delta, format!("cursor\nwarn:{TOKEN}\n"));
+
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
