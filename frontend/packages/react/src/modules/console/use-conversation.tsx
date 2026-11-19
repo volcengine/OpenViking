@@ -17,6 +17,7 @@ import {
   useSessionSelection,
 } from './conversation-sessions.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
+import { withSessionDebugContext } from '../../components/viking-bot/message-debug.js';
 import type { ConsoleProps } from './types.js';
 
 /** Console owns chat requests and sessions. */
@@ -111,16 +112,19 @@ export function useConversation(
     locale: conversationLocale,
     options,
   });
+  const debugContext = withSessionDebugContext(
+    conversation?.debugContext,
+    enabled ? chat.sessionId : hostSessions?.currentId,
+  );
   if (!enabled) {
     const scoped = hostSessions && { ...hostSessions, scopeKey: sessionScope };
-    return scoped
-      ? { ...conversation, sessions: scoped }
-      : (conversation ?? {});
+    return { ...conversation, debugContext, sessions: scoped };
   }
   const isSending =
     switching || chat.status === 'streaming' || chat.status === 'loading';
   return {
     ...conversation,
+    debugContext,
     ...uploads.props,
     ...compileQuickInputProps({
       conversation,

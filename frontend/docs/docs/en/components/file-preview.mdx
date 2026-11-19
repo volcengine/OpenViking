@@ -45,6 +45,10 @@ The demo renders its own toolbar through `slots.actions` with controls from the 
 
 The demo uses fixed mock data; "Empty file" and "Image error" show those states.
 
+### Session transcripts
+
+When full content is readable, `source.fileName` is `messages.jsonl` and `source.path` identifies a native session file under `viking://user/<user>/sessions/<session>/` or `viking://~/sessions/<session>/` (including archives), preview mode shows role-labelled message bubbles with timestamps and IDs. Native `parts` containing text, tool results, image references and context references, and legacy string `content` are supported; text and line breaks are preserved. Image and context references show their original fields as readable text, including URL/detail and URI/context type/abstract; images are not loaded and resources are not opened automatically. Source mode retains the original JSONL. Large or truncated files retain normal admission behavior; other JSONL files and unsupported or conflicting records use the normal JSON preview without dropping parts.
+
 ### Injected actions
 
 Inject your own commands with `actions`: one command is an icon button, and several collapse into the "…" menu. Switch the action layout, tick "Simulate failure" to see the failure message, and use the other checkboxes to show or hide the built-in controls.

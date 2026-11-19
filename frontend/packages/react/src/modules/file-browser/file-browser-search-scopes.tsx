@@ -104,9 +104,17 @@ export function FileBrowserSearchScopes({
           <FileBrowserSearchScopePicker
             scopes={scopes}
             value={filters.scopes}
+            multiple={availability.scope === 'multi'}
             text={text}
             requestOptions={requestOptions}
-            onSelect={toggle}
+            onChange={(next) =>
+              onChange({
+                ...filters,
+                scopes: next
+                  .filter((uri) => isSearchScopeAllowed(scopes, uri))
+                  .slice(0, availability.scope === 'single' ? 1 : undefined),
+              })
+            }
           />
         </>
       )}

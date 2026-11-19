@@ -14,7 +14,7 @@ export function useSearchScopePage(
   requestOptions?: OvRequestOptions,
 ) {
   const userRootMode = useUserRootMode();
-  const { request, error, aborted } = useQueryScope(
+  const { request, error, aborted, retry } = useQueryScope(
     useOvClient('local'),
     requestOptions,
     'file_browser_directory_load',
@@ -55,7 +55,9 @@ export function useSearchScopePage(
   return {
     page,
     load: (next: string, previous?: { error?: boolean }) => {
+      if (aborted) return;
       if (next !== target) setTarget(next);
+      else if (!request && error) retry();
       else if (session)
         void session.load(
           next,

@@ -150,6 +150,9 @@ export function ConsoleView(props: ConsoleProps) {
             active={state.mode === 'conversation' || state.mode === undefined}
             activation={activation}
             media={chatOptions?.activation?.media}
+            activationIntro={slots?.activationIntro}
+            activationTitle={overrides?.activationTitle}
+            activationDescription={overrides?.activationDescription}
             conversation={conversationProps}
             draft={state.conversationDraft}
             onDraftChange={state.setConversationDraft}

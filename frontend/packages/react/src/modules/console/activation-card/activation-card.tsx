@@ -18,6 +18,9 @@ interface ConsoleActivationCardProps {
   locale?: Locale;
   onAction?: MouseEventHandler<HTMLButtonElement>;
   media?: ReactNode;
+  intro?: ReactNode;
+  title?: string;
+  description?: string;
 }
 
 export function ConsoleActivationStatus({
@@ -89,10 +92,16 @@ export function ConsoleActivationCard({
   locale: localeProp,
   onAction,
   media,
+  intro,
+  title,
+  description,
 }: ConsoleActivationCardProps) {
   const locale = useLocale(localeProp);
   const labels = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
   const titleId = useId();
+  const defaultIntro = intro === undefined;
+  const heading = title ?? labels.title;
+  const detail = description ?? labels.description;
 
   if (status === 'checking' || status === 'cancelled')
     return (
@@ -107,19 +116,41 @@ export function ConsoleActivationCard({
   const activating = status === 'activating';
   const failed = status === 'error';
   return (
-    <section className="ov-console-activation" aria-labelledby={titleId}>
-      <div className="ov-console-activation__main">
-        <div className="ov-console-activation__cover">
-          {media ?? <ActivationArtwork />}
-        </div>
-        <div className="ov-console-activation__copy">
-          <h2 className="ov-console-activation__title" id={titleId}>
-            {labels.title}
-          </h2>
-          <p className="ov-console-activation__description">
-            {labels.description}
-          </p>
-        </div>
+    <section
+      className="ov-console-activation"
+      aria-labelledby={defaultIntro && heading ? titleId : undefined}
+    >
+      <div
+        className={[
+          'ov-console-activation__main',
+          !defaultIntro &&
+            intro !== null &&
+            'ov-console-activation__main--custom-intro',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
+        {defaultIntro ? (
+          <>
+            <div className="ov-console-activation__cover">
+              {media ?? <ActivationArtwork />}
+            </div>
+            {heading || detail ? (
+              <div className="ov-console-activation__copy">
+                {heading ? (
+                  <h2 className="ov-console-activation__title" id={titleId}>
+                    {heading}
+                  </h2>
+                ) : null}
+                {detail ? (
+                  <p className="ov-console-activation__description">{detail}</p>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        ) : intro !== null ? (
+          <div className="ov-console-activation__intro">{intro}</div>
+        ) : null}
         <div className="ov-console-activation__actions">
           <Button
             type="primary"

@@ -59,6 +59,7 @@ export function VikingBotMessageRow({
   onMessageAction,
   renderMessage,
   showTime,
+  debugText,
   locale,
 }: {
   message: VikingBotMessage;
@@ -68,6 +69,7 @@ export function VikingBotMessageRow({
   onMessageAction?: (messageId: string, actionKey: string) => void;
   renderMessage?: (message: VikingBotMessage) => React.ReactNode;
   showTime?: boolean;
+  debugText?: () => string;
   locale?: string;
 }) {
   if (renderMessage) {
@@ -95,6 +97,7 @@ export function VikingBotMessageRow({
   const footer = (
     <MessageFooter
       message={message}
+      debugText={debugText}
       showTime={showTime || message.role === 'user'}
       labels={labels}
       locale={locale}

@@ -69,7 +69,7 @@ const panel = loading ? (
 
 ### 启用 VikingBot
 
-库决定 VikingBot 是否可用且由宿主启动运行时，可以传入 `chatOptions.activation`。示例模拟了允许启用、库未开启 Bot 和首次启用失败三种情况。
+库决定 VikingBot 是否可用且由宿主启动运行时，可以传入 `chatOptions.activation`。示例模拟了允许启用、库未开启 Bot 和首次启用失败三种情况，也可切换覆盖文案、ReactNode 整块替换和隐藏介绍。
 
 ```tsx file="../../_demos/console-activation.tsx" preview
 
@@ -86,6 +86,8 @@ const panel = loading ? (
 `isEligible` 返回 `true` 后，Console 通过 `getStatus` 查询 Bot 是否已就绪。尚未启动时，用户点击「启用 VikingBot」会触发宿主的 `start` 回调。Console 会再次确认状态，就绪后加载对话和会话历史。切换库或身份时，更新 `scopeKey` 或传入对应的 `activation`。模拟火山宿主适配器将 `GetOpenVikingCollection` 返回的 `EnableVikingBot === true` 映射为 `isEligible` 的布尔结果。
 
 当前库和身份不变时保持适配器引用稳定。三个回调都接收 `AbortSignal`，失败时应抛出错误。可通过 `media` 用介绍视频或封面替换默认插图。
+
+`labels.activationTitle` 和 `labels.activationDescription` 覆盖默认介绍文案，空字符串隐藏相应文案。`slots.activationIntro` 替换媒体、标题和描述整块介绍；`undefined` 保留默认介绍，`null` 隐藏介绍。启用、重试和生命周期状态仍由 Console 管理。切换这些展示配置不会重新查询启用状态或清空草稿。
 
 ### 待确认交互
 
@@ -213,15 +215,15 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 #### 内置卡片
 
-| card_type           | 默认表单字段                | 协议中的 value                                                 |
-| ------------------- | --------------------------- | -------------------------------------------------------------- |
-| compile_name        | `value`，文本               | `string`                                                       |
-| compile_output_type | `value`，单选               | 选项的 `value`                                                 |
-| compile_source      | `value`，多选目录           | 去空值、去重后的 `string[]`                                    |
-| compile_target      | `value`，推荐或自定义目录   | `string`                                                       |
-| compile_skill       | `value`，推荐或自定义 Skill | `string`                                                       |
-| compile_instruction | `value`，多行文本           | `string`                                                       |
-| compile_schedule    | `mode`、`time`、`weekday`   | `{ frequency: 'disabled' }` 或包含频率、时间、星期和时区的对象 |
+| card_type           | 默认表单字段                  | 协议中的 value                                                 |
+| ------------------- | ----------------------------- | -------------------------------------------------------------- |
+| compile_name        | `value`，文本                 | `string`                                                       |
+| compile_output_type | `value`，单选                 | 选项的 `value`                                                 |
+| compile_source      | `value`，多选目录             | 去空值、去重后的 `string[]`                                    |
+| compile_target      | `value`，推荐或自定义目录     | `string`                                                       |
+| compile_skill       | `value`，推荐或自定义 Skill   | `string`                                                       |
+| compile_instruction | `value`，可选多行文本，可留空 | `string`                                                       |
+| compile_schedule    | `mode`、`time`、`weekday`     | `{ frequency: 'disabled' }` 或包含频率、时间、星期和时区的对象 |
 
 工具结果支持直接 JSON、MCP `structuredContent` 或文本 `content`，`schema_version` 必须为 `'1.0'`。优先读取 `structuredContent`；一组中任一问题无效或未注册时，整组保留为工具结果。原生服务接受裸工具名及 `mcp_openviking-mcp_request_user_input`；自定义适配器应保留工具调用的唯一 `id`，将服务名设为 `openviking-mcp`、工具名设为 `request_user_input`。
 
@@ -329,29 +331,32 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 
 ### ConsoleSlots
 
-| 参数                | 说明                                                     | 类型                                              | 默认值 |
-| ------------------- | -------------------------------------------------------- | ------------------------------------------------- | ------ |
-| errorFallback       | 替换区块及内部失败区域的渲染错误展示                     | `ReactNode \| ((reset: () => void) => ReactNode)` | -      |
-| toolbar             | 工具栏里模式切换和操作按钮之间的内容，两种模式下都显示   | `ReactNode`                                       | -      |
-| conversationContext | 对话模式下输入区上方的内容，优先于 `conversation.footer` | `ReactNode`                                       | -      |
-| commandHelp         | 命令模式下命令控制台上方的内容                           | `ReactNode`                                       | -      |
+| 参数                | 说明                                                          | 类型                                              | 默认值   |
+| ------------------- | ------------------------------------------------------------- | ------------------------------------------------- | -------- |
+| errorFallback       | 替换区块及内部失败区域的渲染错误展示                          | `ReactNode \| ((reset: () => void) => ReactNode)` | -        |
+| toolbar             | 工具栏里模式切换和操作按钮之间的内容，两种模式下都显示        | `ReactNode`                                       | -        |
+| conversationContext | 对话模式下输入区上方的内容，优先于 `conversation.footer`      | `ReactNode`                                       | -        |
+| commandHelp         | 命令模式下命令控制台上方的内容                                | `ReactNode`                                       | -        |
+| activationIntro     | 替换启用页的媒体、标题和描述，保留操作和状态；`null` 隐藏介绍 | `ReactNode`                                       | 内置介绍 |
 
 ### ConsoleLabels
 
-| 参数               | 说明                                                                               | 类型                   | 默认值                    |
-| ------------------ | ---------------------------------------------------------------------------------- | ---------------------- | ------------------------- |
-| conversation       | 对话模式按钮的文案                                                                 | `string`               | `'VikingBot'`             |
-| command            | 命令模式按钮的文案                                                                 | `string`               | `'终端'`                  |
-| mode               | 模式切换区域的无障碍名称                                                           | `string`               | `'面板模式'`              |
-| description        | 对话模式欢迎区的说明，也是 `vikingBot.welcomeDescription` 的默认值                 | `string`               | 内置说明                  |
-| clear              | 命令模式下「新建会话」按钮的文案                                                   | `string`               | `'新建会话'`              |
-| history            | 命令模式下「命令历史」按钮的文案                                                   | `string`               | `'命令历史'`              |
-| emptyHistory       | 命令历史为空时的提示                                                               | `string`               | `'暂无命令历史'`          |
-| commandTitle       | 命令模式空态的标题，等同于 `commandConsole.emptyTitle`                             | `string`               | CommandConsole 的默认文案 |
-| commandDescription | 命令模式空态的说明，等同于 `commandConsole.emptyDescription`                       | `string`               | CommandConsole 的默认文案 |
-| quickStart         | 快捷入口上方的引导文案，等同于 `commandConsole.quickStart`                         | `string`               | CommandConsole 的默认文案 |
-| commandConsole     | CommandConsole 的文案，优先于 `commandTitle`、`commandDescription` 和 `quickStart` | `CommandConsoleLabels` | -                         |
-| vikingBot          | VikingBot 的文案，优先于 `description`，会被 `conversation.labels` 覆盖            | `VikingBotLabels`      | -                         |
+| 参数                  | 说明                                                                               | 类型                   | 默认值                    |
+| --------------------- | ---------------------------------------------------------------------------------- | ---------------------- | ------------------------- |
+| conversation          | 对话模式按钮的文案                                                                 | `string`               | `'VikingBot'`             |
+| command               | 命令模式按钮的文案                                                                 | `string`               | `'终端'`                  |
+| mode                  | 模式切换区域的无障碍名称                                                           | `string`               | `'面板模式'`              |
+| description           | 对话模式欢迎区的说明，也是 `vikingBot.welcomeDescription` 的默认值                 | `string`               | 内置说明                  |
+| activationTitle       | 启用页介绍标题，空字符串隐藏                                                       | `string`               | 内置本地化标题            |
+| activationDescription | 启用页介绍描述，空字符串隐藏                                                       | `string`               | 内置本地化描述            |
+| clear                 | 命令模式下「新建会话」按钮的文案                                                   | `string`               | `'新建会话'`              |
+| history               | 命令模式下「命令历史」按钮的文案                                                   | `string`               | `'命令历史'`              |
+| emptyHistory          | 命令历史为空时的提示                                                               | `string`               | `'暂无命令历史'`          |
+| commandTitle          | 命令模式空态的标题，等同于 `commandConsole.emptyTitle`                             | `string`               | CommandConsole 的默认文案 |
+| commandDescription    | 命令模式空态的说明，等同于 `commandConsole.emptyDescription`                       | `string`               | CommandConsole 的默认文案 |
+| quickStart            | 快捷入口上方的引导文案，等同于 `commandConsole.quickStart`                         | `string`               | CommandConsole 的默认文案 |
+| commandConsole        | CommandConsole 的文案，优先于 `commandTitle`、`commandDescription` 和 `quickStart` | `CommandConsoleLabels` | -                         |
+| vikingBot             | VikingBot 的文案，优先于 `description`，会被 `conversation.labels` 覆盖            | `VikingBotLabels`      | -                         |
 
 ## 命令
 

@@ -26,6 +26,9 @@ export function ConsoleConversationPanel({
   commandInputRef,
   activation,
   media,
+  activationIntro,
+  activationTitle,
+  activationDescription,
   conversation,
   draft,
   onDraftChange,
@@ -40,6 +43,9 @@ export function ConsoleConversationPanel({
   commandInputRef: RefObject<HTMLTextAreaElement | null>;
   activation: ReturnType<typeof useBotActivation>;
   media?: ReactNode;
+  activationIntro?: ReactNode;
+  activationTitle?: string;
+  activationDescription?: string;
   conversation: Partial<VikingBotProps>;
   draft: string;
   onDraftChange: (value: string) => void;
@@ -118,6 +124,9 @@ export function ConsoleConversationPanel({
             else activation.start();
           }}
           media={media}
+          intro={activationIntro}
+          title={activationTitle}
+          description={activationDescription}
           locale={locale}
         />
       ) : null}
