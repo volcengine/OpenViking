@@ -489,6 +489,8 @@ export interface CommandConsoleLabels {
   quickStart?: string;
   /** 无返回结果时的提示。Message for an empty command result. */
   noResult?: string;
+  /** 代码输出滚动区域的无障碍名称。Accessible name for the code output scroll region. */
+  codeOutput?: string;
   /** 刚刚发送的时间文案。Time label for a just-sent record. */
   justNow?: string;
   /** 命令帮助的标题与操作提示。Command-help heading and hint. */
