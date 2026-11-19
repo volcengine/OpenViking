@@ -3,6 +3,7 @@ import type { TrackedTask } from '../../shared/task-tracking/types.js';
 import { isTaskTerminal } from '../../shared/task-tracking/types.js';
 import type { Locale } from '../../shared/locale.js';
 import { resolveConsoleLocale } from './labels.js';
+import { readCommandConsoleProseUris } from '../../components/command-console/command-console-text.js';
 
 export function projectConsoleTasks(
   records: readonly ConsoleRecord[],
@@ -34,7 +35,11 @@ export function formatConsoleTaskResult(
   const lines = [...content.lines];
   const uris = new Set(
     lines.flatMap((line) =>
-      line && typeof line === 'object' && 'uri' in line ? [line.uri] : [],
+      typeof line === 'string'
+        ? readCommandConsoleProseUris(line)
+        : line && typeof line === 'object' && 'uri' in line
+          ? [line.uri]
+          : [],
     ),
   );
   for (const task of tasks ?? []) {
