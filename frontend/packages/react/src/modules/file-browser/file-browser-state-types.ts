@@ -1,3 +1,4 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
 import type { FileBrowserExpansionSnapshot } from './types.js';
 import type { DirectorySummaryLabels } from './file-browser-labels.js';
 import type { ReactNode } from 'react';
@@ -100,6 +101,7 @@ export interface UseFileBrowserOptions {
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   /** Overrides individual requests for the built-in experience dashboard. */
   experienceDataSource?: FileBrowserExperienceDataSource;
+  experienceDashboardSlots?: ExperienceDashboardProps['slots'];
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**
    * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时

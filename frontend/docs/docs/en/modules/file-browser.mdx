@@ -123,6 +123,7 @@ History dialogs reserve their content height and show a centred loading indicato
 | previewSlots              | Appends, replaces or hides the preview action area; dashboard tabs are unaffected, see `FileBrowserPreviewSlots` below                                                                      | `FileBrowserPreviewSlots`                                               | -                              |
 | dashboardKinds            | Enabled dashboard kinds; an empty array turns dashboards off, and `['experience']` also stops reading the compile configuration                                                             | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']`       |
 | experienceDataSource      | Overrides individual requests for the built-in experience dashboard and keeps its UI, paging, and retry behavior                                                                            | `FileBrowserExperienceDataSource`                                       | -                              |
+| experienceDashboardSlots  | Overrides sections of the built-in experience dashboard                                                                                                                                     | `ExperienceDashboardProps['slots']`                                     | -                              |
 | renderDashboard           | Customizes the content of the dashboard tab; return `null` or `undefined` to keep the built-in dashboard, see `FileBrowserDashboard` below                                                  | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                              |
 | slots                     | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                                                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`   | -                              |
 | labels                    | Overrides interface text, see `FileBrowserLabels` below                                                                                                                                     | `FileBrowserLabels`                                                     | -                              |
@@ -598,9 +599,10 @@ Directory listings needed to locate the target, or required home alias lookups, 
 
 ### Experience dashboard data source
 
-Pass host request functions through `experienceDataSource`. Omitted functions use the default OpenViking endpoints, except for `sourceGroups`, `trajectoryMessages`, and `tests`. Keep each callback reference stable and pass its `signal` to the underlying request. Reject on failure so the built-in dashboard can display the error and retry.
+Pass host request functions through `experienceDataSource`. Omitted functions use the default OpenViking endpoints, except for `effect`, `sourceGroups`, `trajectoryMessages`, and `tests`. Keep each callback reference stable and pass its `signal` to the underlying request. Reject on failure so the built-in dashboard can display the error and retry.
 
 - `list({ uri, offset, limit, signal })` returns `{ items, hasMore, total? }`, with one page of experience files in `items`. Resolve to `undefined` to use the default listing for that URI.
+- `effect({ uri, startDate, endDate, signal })` returns `{ injectionCount, recallCount, injectionRate }` for a single experience. The rate is a fraction from 0 to 1. Omit the loader to show dashes.
 - `outcomes({ uri, startDate, endDate, signal })` returns an array of `{ outcome, count }` entries.
 - `trajectories({ uri, offset, limit, startDate, endDate, signal })` returns `{ items, hasMore, total }`, with one page of injection trajectories in `items`.
 - `sources({ uri, signal })` returns an array of source trajectories.
@@ -608,6 +610,10 @@ Pass host request functions through `experienceDataSource`. Omitted functions us
 - `trajectoryMessages({ uri, signal })` receives a trajectory URI when its details open and returns `{ archiveUri?, items }`. FileBrowser reads the trajectory document.
 - `tests({ uri, offset, limit, signal })` returns `{ items, total }`, where `items` contains the test materials for that page. Supplying it enables the Test tab for an individual experience. The tab loads when opened.
 - The page `offset` starts at 0 and `limit` is 20. Dates use UTC `YYYY-MM-DD` and are omitted for the all-time range.
+
+### Experience dashboard sections
+
+Pass `experienceDashboardSlots.sections` to customize the built-in dashboard while using its data and request state. See [ExperienceDashboard sections](../components/experience-dashboard#section-slots).
 
 ### Failure states
 

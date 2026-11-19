@@ -13,7 +13,11 @@ function ExperienceDashboardView(props: ExperienceDashboardProps) {
       locale={props.locale}
       resetKeys={[props.uri]}
     >
-      <ExperienceDashboardContent key={props.uri} {...contentProps} />
+      <ExperienceDashboardContent
+        key={props.uri}
+        {...contentProps}
+        slots={slots}
+      />
     </ErrorBoundary>
   );
 }
