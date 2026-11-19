@@ -27,6 +27,7 @@ const messages: typeof enUS = {
     >
   >,
   telemetryResult: (value: string) => `遥测：${value}`,
+  taskResult: '任务结果',
   memoryCommit: {
     idle: '提交会话',
     pending: '会话提交中',
