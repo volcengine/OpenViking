@@ -10,7 +10,24 @@ import {
 } from './helpers/console-hitl.mjs';
 import { notificationError, toastContent } from './helpers/feedback-dom.mjs';
 
-for (const [keyword, patterns] of [
+const systemRoot = 'viking://system';
+const systemSkill = `${systemRoot}/compile/example-skills/llm-wiki/SKILL.md`;
+const relativePatterns = [
+  '**/*[lL][lL][mM]-[wW][iI][kK][iI]/[sS][kK][iI][lL][lL].[mM][dD]*/SKILL.md',
+  '**/*[lL][lL][mM]-[wW][iI][kK][iI]*/SKILL.md',
+];
+const skillSearchRoots = [
+  systemRoot,
+  'viking://~/skills',
+  'viking://agent/skills',
+];
+
+for (const [
+  keyword,
+  patterns,
+  roots = skillSearchRoots,
+  skill = systemSkill,
+] of [
   ['llm', ['**/*[lL][lL][mM]*/SKILL.md']],
   ['LLM', ['**/*[lL][lL][mM]*/SKILL.md']],
   ['SKILL.md', ['**/SKILL.md']],
@@ -21,10 +38,28 @@ for (const [keyword, patterns] of [
       '**/*[lL][lL][mM]*/SKILL.md',
     ],
   ],
+  ...[
+    [systemRoot, systemSkill],
+    ['viking://agent/skills', 'viking://agent/skills/llm-wiki/SKILL.md'],
+    [
+      'viking://user/alice/skills',
+      'viking://user/alice/skills/llm-wiki/SKILL.md',
+    ],
+  ].map(([root, skill]) => {
+    const patterns =
+      root === systemRoot
+        ? [
+            '**/*[cC][oO][mM][pP][iI][lL][eE]/[eE][xX][aA][mM][pP][lL][eE]-[sS][kK][iI][lL][lL][sS]/' +
+              relativePatterns[0].slice('**/*'.length),
+            '**/*[cC][oO][mM][pP][iI][lL][eE]/[eE][xX][aA][mM][pP][lL][eE]-[sS][kK][iI][lL][lL][sS]/' +
+              relativePatterns[1].slice('**/*'.length),
+          ]
+        : relativePatterns;
+    return [skill, patterns, [root], skill];
+  }),
 ]) {
-  test(`the compile Skill picker can select the system Skill when searching for ${keyword}`, async () => {
+  test(`the compile Skill picker can select the Skill when searching for ${keyword}`, async () => {
     const requests = [];
-    const skill = 'viking://system/compile/example-skills/llm-wiki/SKILL.md';
     const view = await mountHitl([card('compile_skill', 'Compile Skill')], {
       locale: 'en-US',
       fetch: async (url, options) => {
@@ -46,7 +81,7 @@ for (const [keyword, patterns] of [
           status: 'ok',
           result: {
             matches:
-              body.uri === 'viking://system' && body.pattern === patterns.at(-1)
+              body.uri === roots[0] && body.pattern === patterns.at(-1)
                 ? [skill]
                 : [],
           },
@@ -62,11 +97,7 @@ for (const [keyword, patterns] of [
 
       assert.deepEqual(
         requests,
-        [
-          'viking://system',
-          'viking://~/skills',
-          'viking://agent/skills',
-        ].flatMap((uri) =>
+        roots.flatMap((uri) =>
           patterns.map((pattern) => ({
             uri,
             pattern,

@@ -11,18 +11,13 @@ import type {
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import {
-  compileSkillPatterns,
+  compileSkillQueries,
   mentionPattern,
   mentionSearchRows,
   MENTION_ROOT,
 } from './mention-search.js';
 
 const emptyReferences: readonly VikingBotReference[] = [];
-const skillSearchRoots = [
-  'viking://system',
-  'viking://~/skills',
-  'viking://agent/skills',
-];
 
 export function useConversationReferences({
   enabled,
@@ -101,12 +96,16 @@ export function useConversationReferences({
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
   }, []);
   const [query, setQuery] = useState('');
-  const keyword = query
-    .trim()
+  const trimmedQuery = query.trim();
+  const keyword = trimmedQuery
     .replace(/^viking:\/\//i, '')
     .split('/')
     .filter(Boolean)
     .join('/');
+  const searchKey =
+    keyword && searchSkills && /^viking:\/\//i.test(trimmedQuery)
+      ? `${MENTION_ROOT}${keyword}`
+      : keyword;
   const opened = enabled && openCount > 0;
   const tree = useDirectoryTree({
     client: opened ? client : null,
@@ -116,7 +115,7 @@ export function useConversationReferences({
   });
   const [search, setSearch] = useState<{
     scope: typeof scope;
-    keyword: string;
+    key: string;
     rows?: ReturnType<typeof mentionSearchRows>;
     error?: string;
   }>();
@@ -127,23 +126,21 @@ export function useConversationReferences({
   }>();
   // Picker and scope changes cancel the old request, including its debounce.
   useEffect(() => {
-    if (!opened || !keyword) return;
+    if (!opened || !searchKey) return;
     const controller = new AbortController();
     const requestSignal = signal
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     const timer = setTimeout(() => {
-      const roots = searchSkills ? skillSearchRoots : [MENTION_ROOT];
-      const patterns = searchSkills
-        ? compileSkillPatterns(keyword)
-        : [mentionPattern(keyword)];
-      const queries = roots.flatMap((uri) =>
-        patterns.map((pattern) => ({
-          uri,
-          pattern,
-          node_limit: searchSkills ? 256 : 100,
-        })),
-      );
+      const queries = searchSkills
+        ? compileSkillQueries(searchKey)
+        : [
+            {
+              uri: MENTION_ROOT,
+              pattern: mentionPattern(searchKey),
+              node_limit: 100,
+            },
+          ];
       void Promise.all(
         queries.map(async (body) => {
           try {
@@ -172,13 +169,17 @@ export function useConversationReferences({
         .then((results) => {
           if (requestSignal.aborted) return;
           const matches = results.flat();
-          setSearch({ scope, keyword, rows: mentionSearchRows(matches) });
+          setSearch({
+            scope,
+            key: searchKey,
+            rows: mentionSearchRows(matches),
+          });
         })
         .catch((error: unknown) => {
           if (requestSignal.aborted) return;
           setSearch({
             scope,
-            keyword,
+            key: searchKey,
             error: error instanceof Error ? error.message : String(error),
           });
         });
@@ -187,11 +188,11 @@ export function useConversationReferences({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [opened, keyword, scope, signal, attempt, searchSkills]);
+  }, [opened, searchKey, scope, signal, attempt, searchSkills]);
   if (!enabled) return { references: undefined, clearReferences };
 
   const result =
-    search?.scope === scope && search.keyword === keyword ? search : undefined;
+    search?.scope === scope && search.key === searchKey ? search : undefined;
   const hidden = collapsed?.result === result ? collapsed?.uris : undefined;
   const expandDirectory = (uri: string) => {
     if (keyword) {
