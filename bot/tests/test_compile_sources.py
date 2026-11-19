@@ -44,6 +44,7 @@ from openviking.utils.image_input import (
     MAX_IMAGE_INPUT_DOWNLOAD_BYTES,
 )
 from openviking.utils.media_limits import DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION
+from openviking_cli.exceptions import NotFoundError
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -539,6 +540,48 @@ async def test_compile_resizes_when_full_resolution_encoding_exceeds_budget(
     assert len(data) <= budget
     with Image.open(BytesIO(data)) as preview:
         assert preview.size == (900, 500)
+
+
+async def test_simple_compile_multi_read_delivers_normalized_image(runtime):
+    from vikingbot.compile import simple
+
+    pipeline, _ = runtime
+    client = pipeline.client
+    with Image.new("RGB", (4096, 128), "white") as original, BytesIO() as output:
+        original.save(output, format="PNG")
+        source = output.getvalue()
+    client.stat.return_value = {"size": len(source)}
+    client.download_bytes.return_value = source
+    target = pipeline.target + "/findings.md"
+    client.read_raw.side_effect = NotFoundError("missing")
+    client.write = AsyncMock(return_value={"uri": target, "content_updated": True})
+
+    async def run_agent(*, tool_registry, **kwargs):
+        reader = tool_registry.get("openviking_multi_read")
+        result = await reader.execute(ToolContext(), uris=[URI])
+        assert isinstance(result, MultimodalToolResult)
+        assert URI in result.text and content_hash(source) in result.text
+        attachment = next(part for part in result.content if part["type"] == "image_url")
+        data = base64.b64decode(attachment["image_url"]["url"].split(",", 1)[1])
+        with Image.open(BytesIO(data)) as preview:
+            assert preview.size == (2048, 64)
+        writer = tool_registry.get("openviking_write")
+        await writer.execute(ToolContext(), path="findings.md", content=f"[Source]({URI})")
+        return "Done.", None, [], {}, 1
+
+    loop = SimpleNamespace(config=Config(), max_iterations=5, _run_agent_loop=run_agent)
+    result = await simple.run(
+        loop,
+        client,
+        pipeline.request,
+        pipeline.request.from_,
+        pipeline.skill,
+        None,
+        {},
+        AsyncMock(),
+        {},
+    )
+    assert result.created == [target]
 
 
 @pytest.mark.asyncio
