@@ -19,10 +19,7 @@ export type { AgentConnectProps } from './components/agent-connect/index.js';
 export { VikingBot } from './components/viking-bot/index.js';
 export type { VikingBotProps } from './components/viking-bot/index.js';
 export { FileBrowser } from './modules/file-browser/index.js';
-export type {
-  FileBrowserProps,
-  FileBrowserExpansionSnapshot,
-} from './modules/file-browser/index.js';
+export type { FileBrowserProps } from './modules/file-browser/index.js';
 export { Console } from './modules/console/index.js';
 export type { ConsoleProps } from './modules/console/index.js';
 export { ScopeCascade } from './modules/scope-cascade/index.js';
