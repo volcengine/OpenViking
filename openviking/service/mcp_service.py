@@ -1700,7 +1700,8 @@ class MCPService:
             timeout_seconds=timeout_seconds,
             require_read_only=True,
         )
-        return self._live_context_read_value(result, tool_uri)
+        live_content = self._live_context_read_value(result, tool_uri)
+        return f"{content}\n\n## Live Result\n\n{live_content}"
 
     @staticmethod
     def _live_context_read_value(

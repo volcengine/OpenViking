@@ -44,6 +44,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.core.namespace_policy import NamespaceProcessingMode, namespace_policy_for_uri
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
@@ -1208,8 +1209,9 @@ async def read(
     ] = None,
     offset: int = 0,
     limit: int = -1,
+    raw: bool = False,
 ) -> str | list[ContentBlock] | CallToolResult:
-    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. A complete read of an OpenViking Live Context node returns its evaluated text content; paginated reads only return stored descriptor text. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. A complete read of an OpenViking Live Context node returns its definition and guidance followed by the evaluated text under Live Result. Set raw=true to return stored text without memory-field cleanup or live tool execution; paginated reads also skip live execution. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
 
     # `uri` matches every other tool. Both names accept a string or a list, so a
@@ -1326,13 +1328,14 @@ async def read(
                     if is_image:
                         return _mcp_image_content(data, mime_type)
                     return _mcp_audio_content(data, mime_type)
-                content = await service.fs.read_visible(
+                read_text = service.fs.read if raw else service.fs.read_visible
+                content = await read_text(
                     resolved_uri,
                     ctx=ctx,
                     offset=offset,
                     limit=limit,
                 )
-                if offset == 0 and limit == -1:
+                if not raw and offset == 0 and limit == -1:
                     result = await service.mcps.read_live_context(content, ctx)
                     if result is not None:
                         return result
@@ -1514,7 +1517,7 @@ async def ls(
         sort_order: Ascending or descending order.
 
     Returns:
-        A line-oriented directory listing.
+        A line-oriented directory listing with available file and directory summaries.
     """
     if offset < 0:
         raise InvalidArgumentError("offset must be greater than or equal to 0")
@@ -1531,6 +1534,10 @@ async def ls(
         "ctx": ctx,
         "recursive": recursive,
         "output": "original",
+        "include_abstract": (
+            namespace_policy_for_uri(resolved_uri).processing_mode
+            is NamespaceProcessingMode.INDEXED
+        ),
         "tags": tags,
         "include_tags": include_tags,
     }
@@ -1560,6 +1567,11 @@ async def ls(
             f"[{'dir' if is_dir else 'file'}] {label}"
             + (_format_tags(entry_tags) if include_tags else "")
         )
+        abstract = _listing_abstract(
+            e if isinstance(e, dict) else {"uri": entry_uri, "abstract": getattr(e, "abstract", "")}
+        )
+        if abstract:
+            lines.append(f"  - {abstract}")
     if page.has_more:
         lines.append("(more entries available; use offset and limit to view the next page)")
     return "\n".join(lines)
@@ -1568,10 +1580,10 @@ async def ls(
 # -- tree ------------------------------------------------------------------
 
 # Long enough to keep a full skill description (the Agent Skills limit is 1024 chars).
-_TREE_ABSTRACT_LIMIT = 1024
+_TREE_ABSTRACT_LIMIT = 2000
 
 
-def _tree_abstract(entry: Dict[str, Any]) -> str:
+def _listing_abstract(entry: Dict[str, Any]) -> str:
     abstract = (entry.get("abstract") or "").strip()
     # A directory with no generated .abstract.md (a skill's scripts/, say) comes back as a
     # placeholder that carries no summary.
@@ -1608,7 +1620,7 @@ async def tree(
         uri: Directory URI to traverse.
         level_limit: Maximum traversal depth.
         node_limit: Existing default result limit.
-        include_abstract: Whether to include directory summaries (a skill directory's
+        include_abstract: Whether to include file and directory summaries (a skill directory's
             summary is its name and description).
         offset: Number of visible nodes to skip.
         limit: Optional result limit that overrides node_limit.
@@ -1665,7 +1677,7 @@ async def tree(
         else:
             label = f"{indent}{name} ({e.get('size', 0)} B)"
         lines.append(label + (_format_tags(e.get("tags")) if include_tags else ""))
-        abstract = _tree_abstract(e)
+        abstract = _listing_abstract(e)
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
     if page is not None and page.has_more:

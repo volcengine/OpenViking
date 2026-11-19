@@ -4,7 +4,7 @@ description: 接入远程 MCP Server，将工具挂载为实时上下文，并�
 
 # 实时上下文接入与编排
 
-实时上下文（Live Context）把远程 MCP Tool 挂载为 `viking://resources/...` 下的 Markdown 节点。Agent 不需要了解上游地址、鉴权方式和固定参数，只需像读取普通上下文一样读取节点；OpenViking 会执行绑定的 Tool，并透明返回上游结果。
+实时上下文（Live Context）把远程 MCP Tool 挂载为 `viking://resources/...` 下的 Markdown 节点。Agent 不需要了解上游地址、鉴权方式和固定参数，只需像读取普通上下文一样读取节点；OpenViking 会执行绑定的 Tool，返回节点定义并在其后追加上游结果。
 
 本页面向实现和维护上下文编排的开发者，说明 MCP 注册、Tool Catalog、实时节点、Agent Gateway、Studio 和 Context as Code（CaC）之间的关系。MCP 客户端连接方式和 OpenViking 内置 MCP Tool 的完整清单见 [MCP 工具与协议](06-mcp-integration.md)。
 
@@ -233,11 +233,11 @@ viking://agent/tools/<server>/<tool>.json
 
 - REST/CLI：`offset=0` 且 `limit=-1`。
 - MCP `read`：默认完整读取。
-- 返回值是上游 MCP Tool 结果，不附加节点 frontmatter 或额外标签。
+- 返回值保留节点定义，包括 YAML frontmatter、预设参数和正文指引，并在 `## Live Result` 下追加上游 MCP Tool 结果。
 - 未声明 annotations 的工具默认按只读处理。`readOnlyHint: false` 或 `destructiveHint: true` 的工具不会由 `read` 执行；错误会返回挂载 URI 和参数，供当前集成显式调用。
 - 分页读取只返回已存储的描述文件，不调用上游 Tool。
 - `find`、`search`、`list` 和 `tree` 不会隐式执行实时节点。
-- REST `read?raw=true` 返回原始描述文件，不执行 Tool。
+- REST `read?raw=true` 和 MCP `read(raw=true)` 返回原始描述文件，不执行 Tool。MCP 的单节点和批量读取均支持此选项。
 
 这些规则保证检索和目录浏览保持无副作用，同时允许把写工具挂载为 Agent 指引。Agent 应先通过检索定位节点，再调用 `read` 获取实时结果；写工具必须通过具备独立权限的 `invoke_mcp_tool` 调用。
 

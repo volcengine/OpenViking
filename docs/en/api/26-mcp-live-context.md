@@ -588,7 +588,7 @@ After mounting, use the regular content read API or `ov read`. OpenViking recogn
 ov read viking://resources/live/weather-beijing.md
 ```
 
-Live reads support MCP text results and `structuredContent`. Multiple text blocks are joined with newlines. A structured-only result becomes formatted JSON. An upstream `isError=true`, image/audio-only content, or a tool explicitly marked non-read-only or destructive causes a `PROCESSING_ERROR` on read. Direct `/invoke` calls can execute write-capable tools and still preserve native MCP content blocks.
+Live reads preserve the node definition (YAML frontmatter, preset arguments, and any body guidance), then append the evaluated result under `## Live Result`. They support MCP text results and `structuredContent`. Multiple text blocks are joined with newlines. A structured-only result becomes formatted JSON. REST `read?raw=true` and MCP `read(raw=true)` return only the stored definition without calling the tool; paginated reads also skip execution. An upstream `isError=true`, image/audio-only content, or a tool explicitly marked non-read-only or destructive causes a `PROCESSING_ERROR` on read. Direct `/invoke` calls can execute write-capable tools and still preserve native MCP content blocks.
 
 ### Remove mounts
 

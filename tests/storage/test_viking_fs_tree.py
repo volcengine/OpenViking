@@ -9,7 +9,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
-from openviking.storage.acl import AclLevel
+from openviking.storage.acl import AclAction, AclLevel
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
@@ -733,6 +733,8 @@ async def test_tree_agent_structure(monkeypatch, fs):
         side_effect=lambda uri, field, ctx: "L0 summary" if field == "abstract" else "L1 overview"
     )
     monkeypatch.setattr(fs, "_read_directory_summary", summary)
+    lookup = AsyncMock(return_value={"viking://resources/a": "File summary"})
+    fs.vector_store = SimpleNamespace(get_l2_abstracts_by_uris=lookup)
 
     result = await fs.tree("viking://resources", output="agent", ctx=_default_ctx())
 
@@ -743,7 +745,7 @@ async def test_tree_agent_structure(monkeypatch, fs):
             "isDir": False,
             "modTime": "2026-01-01T00:00:00.000Z",
             "rel_path": "a",
-            "abstract": "",
+            "abstract": "File summary",
             "access": "manage",
         },
         {
@@ -757,7 +759,9 @@ async def test_tree_agent_structure(monkeypatch, fs):
         },
     ]
     summary.assert_awaited_once_with("viking://resources/sub", "abstract", ctx=_default_ctx())
+    lookup.assert_awaited_once_with(["viking://resources/a"], ctx=_default_ctx())
     summary.reset_mock()
+    lookup.reset_mock()
 
     result = await fs.tree(
         "viking://resources",
@@ -770,6 +774,75 @@ async def test_tree_agent_structure(monkeypatch, fs):
     assert all("abstract" not in entry for entry in result)
     assert [entry["overview"] for entry in result] == ["", "L1 overview"]
     summary.assert_awaited_once_with("viking://resources/sub", "overview", ctx=_default_ctx())
+    lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["original", "agent"])
+@pytest.mark.parametrize(
+    ("abs_limit", "expected"),
+    [(0, ""), (2, ".."), (5, "Fi..."), (256, "File summary")],
+)
+async def test_listing_file_abstracts_respect_limits_and_access(
+    monkeypatch, fs, output, abs_limit, expected
+):
+    entries = [
+        {"uri": "viking://resources/docs", "isDir": True},
+        {"uri": "viking://resources/a.md", "isDir": False},
+        {"uri": "viking://resources/unindexed.md", "isDir": False},
+        {"uri": "viking://resources/denied.md", "isDir": False, "access": "denied"},
+        {"uri": "viking://resources/container", "isDir": True, "access": "container"},
+        {"uri": "viking://resources/excluded.md", "isDir": False},
+    ]
+    entries = [{"access": "read", **entry} for entry in entries]
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.GLOBAL,
+        data_access=SimpleNamespace(operation=AclAction.READ),
+    )
+    monkeypatch.setattr(fs, "_is_accessible", lambda uri, _ctx: not uri.endswith("/excluded.md"))
+    summary = AsyncMock(return_value="Directory summary")
+    monkeypatch.setattr(fs, "_read_directory_summary", summary)
+    lookup = AsyncMock(return_value={"viking://resources/a.md": "File summary"})
+    fs.vector_store = SimpleNamespace(get_l2_abstracts_by_uris=lookup)
+
+    result = await fs._finalize_listing_entries(
+        entries,
+        output,
+        abs_limit,
+        None,
+        False,
+        ctx=ctx,
+        include_abstract=True,
+        include_overview=True,
+    )
+
+    assert result[1]["abstract"] == expected
+    assert result[2]["abstract"] == ""
+    assert "abstract" not in result[3]
+    assert "overview" not in result[3]
+    assert result[4]["abstract"] == ""
+    assert result[5]["abstract"] == ""
+    assert all(result[index]["overview"] == "" for index in (1, 2, 4, 5))
+    lookup.assert_awaited_once_with(
+        ["viking://resources/a.md", "viking://resources/unindexed.md"], ctx=ctx
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_store", [False, True])
+async def test_listing_file_abstracts_unavailable_preserves_entries(monkeypatch, fs, has_store):
+    entry = {"uri": "viking://resources/a.md", "isDir": False, "size": 100}
+    lookup = AsyncMock(side_effect=RuntimeError("vector index unavailable"))
+    fs.vector_store = SimpleNamespace(get_l2_abstracts_by_uris=lookup) if has_store else None
+
+    result = await fs._finalize_listing_entries(
+        [entry], "original", 256, None, False, ctx=_default_ctx(), include_abstract=True
+    )
+
+    assert result == [{**entry, "abstract": ""}]
+    if has_store:
+        lookup.assert_awaited_once_with([entry["uri"]], ctx=_default_ctx())
 
 
 @pytest.mark.asyncio
@@ -872,6 +945,7 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
     assert "overview" not in result[1]
     assert result[2]["overview"] == "L1 overview"
     summary.assert_awaited_once_with("viking://resources/docs", "overview", ctx=_default_ctx())
+
 
 @pytest.mark.asyncio
 async def test_tree_filters_and_paginates_before_summary_reads(monkeypatch, fs):

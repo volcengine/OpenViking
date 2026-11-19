@@ -45,6 +45,7 @@ fn server_commands_require_existing_cli_config() {
             sort_by,
             sort_order,
             node_limit,
+            abs_limit,
             include_abstract,
             include_overview,
             overview_limit,
@@ -55,6 +56,7 @@ fn server_commands_require_existing_cli_config() {
             assert_eq!(sort_by.as_deref(), Some("mtime"));
             assert_eq!(sort_order.as_deref(), Some("desc"));
             assert_eq!(node_limit, 256);
+            assert_eq!(abs_limit, 2000);
             assert_eq!(include_abstract, Some(true));
             assert_eq!(include_overview, Some(false));
             assert_eq!(overview_limit, 512);
@@ -66,6 +68,7 @@ fn server_commands_require_existing_cli_config() {
             offset,
             limit,
             node_limit,
+            abs_limit,
             directories_only,
             include_abstract,
             include_overview,
@@ -75,6 +78,7 @@ fn server_commands_require_existing_cli_config() {
             assert_eq!(offset, 6);
             assert_eq!(limit, Some(7));
             assert_eq!(node_limit, 256);
+            assert_eq!(abs_limit, 2000);
             assert!(directories_only);
             assert_eq!(include_abstract, Some(true));
             assert_eq!(include_overview, Some(false));

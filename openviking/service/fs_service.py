@@ -362,7 +362,7 @@ class FSService:
         recursive: bool = False,
         simple: bool = False,
         output: str = "original",
-        abs_limit: int = 256,
+        abs_limit: int = 2000,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
@@ -384,7 +384,7 @@ class FSService:
             simple: Return only relative path list
             output: str = "original" or "agent"
             abs_limit: Maximum returned abstract length
-            include_abstract: Include directory L0 abstracts; defaults to the output format
+            include_abstract: Include file and directory abstracts; defaults to the output format
             include_overview: Include directory L1 overviews
             overview_limit: Maximum returned overview length
             show_all_hidden: bool = False (list all hidden files, like -a)
@@ -1405,7 +1405,7 @@ class FSService:
         uri: str,
         ctx: RequestContext,
         output: str = "original",
-        abs_limit: int = 128,
+        abs_limit: int = 2000,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,

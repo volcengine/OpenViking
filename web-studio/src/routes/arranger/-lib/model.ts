@@ -1,7 +1,5 @@
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
-export type ArrangerView = 'graph' | 'list'
-
 export type LiveContextMount = {
   node_uri: string
   tool_uri: string

@@ -1671,7 +1671,7 @@ class _OpsMixin:
         abs_limit: int,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Batch fetch abstracts for directory entries."""
+        """Load directory summaries and indexed L2 abstracts for visible files."""
         await self._batch_fetch_directory_summaries(
             entries,
             field="abstract",
@@ -1679,6 +1679,32 @@ class _OpsMixin:
             fallback="[.abstract.md is not ready]",
             ctx=ctx,
         )
+        real_ctx = self._ctx_or_default(ctx)
+        file_entries = [
+            entry
+            for entry in entries
+            if not entry.get("isDir", False)
+            and entry.get("access") not in {"denied", "container"}
+            and (real_ctx.data_access is None or self._is_accessible(entry["uri"], real_ctx))
+        ]
+        if not file_entries:
+            return
+        vector_store = self._get_vector_store()
+        if vector_store is None:
+            return
+        try:
+            abstracts = await vector_store.get_l2_abstracts_by_uris(
+                list(dict.fromkeys(entry["uri"] for entry in file_entries)),
+                ctx=real_ctx,
+            )
+        except Exception as exc:
+            logger.warning("Failed to load listing file abstracts: %s", exc)
+            return
+        for entry in file_entries:
+            abstract = abstracts.get(entry["uri"], "")
+            if len(abstract) > abs_limit:
+                abstract = "." * abs_limit if abs_limit <= 3 else abstract[: abs_limit - 3] + "..."
+            entry["abstract"] = abstract
 
     async def _batch_fetch_overviews(
         self,
@@ -1840,7 +1866,7 @@ class _OpsMixin:
         self,
         uri: str = "viking://",
         output: str = "original",
-        abs_limit: int = 256,
+        abs_limit: int = 2000,
         show_all_hidden: bool = False,
         node_limit: Optional[int] = 1000,
         level_limit: Optional[int] = 3,
@@ -1860,7 +1886,7 @@ class _OpsMixin:
         Args:
             uri: Viking URI
             output: str = "original" or "agent"
-            abs_limit: int = 256 (for agent output abstract truncation)
+            abs_limit: Maximum returned abstract length (default: 2000)
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int | None = 1000 (maximum number of nodes to list, None means unlimited)
             level_limit: int | None = 3 (maximum depth level to traverse, None means unlimited)
@@ -2322,7 +2348,7 @@ class _OpsMixin:
         self,
         uri: str,
         output: str = "original",
-        abs_limit: int = 256,
+        abs_limit: int = 2000,
         include_abstract: Optional[bool] = None,
         include_overview: bool = False,
         overview_limit: int = 4000,
@@ -2341,7 +2367,7 @@ class _OpsMixin:
             uri: Viking URI
             output: str = "original"
             abs_limit: Maximum returned abstract length
-            include_abstract: Include directory L0 abstracts; defaults to the output format
+            include_abstract: Include file and directory abstracts; defaults to the output format
             include_overview: Include directory L1 overviews
             overview_limit: Maximum returned overview length
             show_all_hidden: bool = False (list all hidden files, like -a)

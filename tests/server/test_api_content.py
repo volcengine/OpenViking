@@ -210,7 +210,8 @@ async def test_write_forwards_clear_without_tags_to_service(monkeypatch):
     assert seen["tag_mode"] == "clear"
 
 
-async def test_read_content(client, service, monkeypatch):
+@pytest.mark.parametrize("raw", [False, True])
+async def test_read_content(client, service, monkeypatch, raw):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     legacy_uri = "viking://resources/业务 域/章节 一.md"
     encoded_uri = "viking://resources/业务%20域/章节%20一.md"
@@ -235,8 +236,10 @@ async def test_read_content(client, service, monkeypatch):
     assert resp.json()["error"]["code"] == "NOT_FOUND"
 
     reader = AsyncMock(side_effect=[PermissionDeniedError("denied"), b"legacy content"])
+    # Deny both the text and bounded binary read paths without allowing a legacy fallback.
+    monkeypatch.setattr(service.viking_fs, "read_file", reader)
     monkeypatch.setattr(service.viking_fs, "read_file_bytes", reader)
-    resp = await client.get("/api/v1/content/read", params={"uri": encoded_uri})
+    resp = await client.get("/api/v1/content/read", params={"uri": encoded_uri, "raw": raw})
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
     reader.assert_awaited_once()

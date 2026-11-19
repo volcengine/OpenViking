@@ -28,8 +28,8 @@ API 不允许写入、追加、删除、移动或覆盖复制，也不能通过�
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
-| abs_limit | int | 否 | 256 | 返回的摘要最大长度 |
-| include_abstract | bool | 否 | 未设置 | 是否返回目录 L0 摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
+| abs_limit | int | 否 | 2000 | 返回的摘要最大字符数 |
+| include_abstract | bool | 否 | 未设置 | 是否返回文件和目录的摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
 | include_overview | bool | 否 | 未设置 | 是否返回目录 L1 概览。未设置时不返回 |
 | overview_limit | int | 否 | 4000 | 返回的概览最大长度 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
@@ -42,7 +42,7 @@ API 不允许写入、追加、删除、移动或覆盖复制，也不能通过�
 | include_tags | bool | 否 | False | 不按标签过滤时，也返回 tags |
 | tags | string[] | 否 | 未设置 | 仅返回同时匹配全部 `k=v` 检索标签的条目 |
 
-`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。摘要和概览只附加到分页选中的条目，不占用 `node_limit`。文件摘要读取向量库 L2 记录的 `abstract` 字段；未索引或没有摘要的文件返回空字符串，列举时不会现场生成摘要。目录摘要读取 `.abstract.md`；概览仍仅适用于目录，文件的 `overview` 为空。摘要按 `abs_limit` 截断。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
 
 **条目结构**
 
@@ -174,6 +174,9 @@ ov ls viking://resources/ [--simple] [--recursive] [--include-abstract[=true|fal
 ov tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
 ov glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 
+# 显示文件和目录的摘要
+ov list viking://resources/ --fields name,abstract
+
 # 在对齐的表格中显示名称和 tags
 ov ls viking://resources/ --fields name,tags
 
@@ -234,8 +237,8 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
-| abs_limit | int | 否 | HTTP：256；SDK：128 | 返回的摘要最大长度 |
-| include_abstract | bool | 否 | 未设置 | 是否返回目录 L0 摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
+| abs_limit | int | 否 | 2000 | 返回的摘要最大字符数 |
+| include_abstract | bool | 否 | 未设置 | 是否返回文件和目录的摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
 | include_overview | bool | 否 | 未设置 | 是否返回目录 L1 概览。未设置时不返回 |
 | overview_limit | int | 否 | 4000 | 返回的概览最大长度 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
@@ -248,7 +251,7 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 | include_tags | bool | 否 | False | 不按标签过滤时，也返回 tags |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
 
-目录过滤和 `tags` 均在 `offset`、`limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们。
+目录过滤和 `tags` 均在 `offset`、`limit` 前应用。摘要和概览不占用 `node_limit`。与 `ls` 一样，文件摘要读取向量库 L2 记录，缺失时为空；概览仍仅适用于目录。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们。
 
 
 **Python SDK (HTTP)**

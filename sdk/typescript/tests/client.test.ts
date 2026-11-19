@@ -711,6 +711,7 @@ describe("OpenVikingClient", () => {
       "id",
     ]);
     const defaultListUrl = new URL(String(fetcher.mock.calls[1]![0]));
+    expect(defaultListUrl.searchParams.get("abs_limit")).toBe("2000");
     expect(defaultListUrl.searchParams.has("include_abstract")).toBe(false);
     expect(defaultListUrl.searchParams.has("include_overview")).toBe(false);
     expect(defaultListUrl.searchParams.get("overview_limit")).toBe("4000");
@@ -721,6 +722,11 @@ describe("OpenVikingClient", () => {
       url.searchParams.get("level_limit"),
     );
     expect(treeLimits).toEqual(["2", "0", "3"]);
+    expect(treeUrls.map((url) => url.searchParams.get("abs_limit"))).toEqual([
+      "2000",
+      "2000",
+      "2000",
+    ]);
     expect(treeUrls[0]!.searchParams.get("offset")).toBe("6");
     expect(treeUrls[0]!.searchParams.get("directories_only")).toBe("true");
     expect(treeUrls[0]!.searchParams.get("include_abstract")).toBe("false");

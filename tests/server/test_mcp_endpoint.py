@@ -1813,6 +1813,95 @@ async def test_list_reports_more_entries(service):
     assert "(more entries available;" in result
 
 
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("as_object", [False, True])
+@pytest.mark.parametrize("include_tags", [False, True])
+@pytest.mark.parametrize("tags", [None, ["team=search"]])
+async def test_list_renders_summaries_and_preserves_page_options(
+    service, monkeypatch, recursive, as_object, include_tags, tags
+):
+    uri = "viking://resources/list_summaries"
+    entries = [
+        {"name": "guide", "uri": f"{uri}/guide", "isDir": True, "abstract": "Guide\n summary"},
+        {
+            "name": "note.md",
+            "uri": f"{uri}/guide/note.md",
+            "isDir": False,
+            "abstract": "File summary",
+        },
+        {"name": "missing.md", "uri": f"{uri}/missing.md", "isDir": False},
+        {
+            "name": "pending",
+            "uri": f"{uri}/pending",
+            "isDir": True,
+            "abstract": "[.abstract.md is not ready]",
+        },
+    ]
+    entries = [{**entry, "tags": ["team=search"]} for entry in entries]
+    if as_object:
+        entries = [SimpleNamespace(**{**entry, "is_dir": entry["isDir"]}) for entry in entries]
+    ls = AsyncMock(return_value=ListingPage(entries=entries, has_more=True))
+    monkeypatch.setattr(service.fs, "ls", ls)
+
+    result = await list_tool(
+        uri,
+        recursive=recursive,
+        offset=2,
+        limit=4,
+        sort_by="name",
+        sort_order="desc",
+        tags=tags,
+        include_tags=include_tags,
+    )
+
+    guide = f"{uri}/guide" if recursive else "guide"
+    note = f"{uri}/guide/note.md" if recursive else "note.md"
+    missing = f"{uri}/missing.md" if recursive else "missing.md"
+    pending = f"{uri}/pending" if recursive else "pending"
+    tag_suffix = ' tags=["team=search"]' if include_tags else ""
+    assert result == (
+        f"[dir] {guide}{tag_suffix}\n  - Guide summary\n"
+        f"[file] {note}{tag_suffix}\n  - File summary\n"
+        f"[file] {missing}{tag_suffix}\n[dir] {pending}{tag_suffix}\n"
+        "(more entries available; use offset and limit to view the next page)"
+    )
+    ls.assert_awaited_once_with(
+        uri,
+        ctx=DEFAULT_CTX,
+        recursive=recursive,
+        output="original",
+        include_abstract=True,
+        tags=tags,
+        include_tags=include_tags,
+        offset=2,
+        node_limit=4,
+        sort_by="name",
+        sort_order="desc",
+    )
+
+
+async def test_list_loads_directory_summary_with_default_length(service):
+    uri = "viking://resources/list_summary_limit"
+    await service.viking_fs.mkdir(f"{uri}/guide", ctx=DEFAULT_CTX, exist_ok=True)
+    await service.viking_fs.write_file(f"{uri}/guide/.abstract.md", "a" * 2100, ctx=DEFAULT_CTX)
+
+    result = await list_tool(uri)
+
+    assert result == f"[dir] guide\n  - {'a' * 1997}..."
+
+
+async def test_list_system_namespace_keeps_plain_listing(service, monkeypatch):
+    ls = AsyncMock(
+        return_value=ListingPage(entries=[{"name": "memory", "isDir": True}], has_more=False)
+    )
+    monkeypatch.setattr(service.fs, "ls", ls)
+
+    result = await list_tool("viking://system")
+
+    assert result == "[dir] memory"
+    assert ls.await_args.kwargs["include_abstract"] is False
+
+
 async def test_list_forwards_and_renders_tags(service, monkeypatch):
     captured = {}
 
@@ -2833,17 +2922,21 @@ async def test_write_and_live_context_read_roundtrip(service, monkeypatch):
         wait=True,
     )
 
-    assert json.loads(await read(uris=uri)) == {"temperature": 23}
+    definition = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
+    live_read = await read(uris=uri)
+    assert live_read.startswith(definition)
+    assert json.loads(live_read.split("\n\n## Live Result\n\n", 1)[1]) == {"temperature": 23}
     assert upstream.call_tool.await_count == 1
     assert upstream.call_tool.await_args.kwargs["arguments"] == {"city": "Beijing"}
     raw = await content_router.read(uri=uri, offset=0, limit=-1, raw=True, _ctx=DEFAULT_CTX)
     assert tool_uri in raw.result
+    assert await read(uri=uri, raw=True) == raw.result
     paged = await content_router.read(uri=uri, offset=1, limit=1, raw=False, _ctx=DEFAULT_CTX)
     assert paged.result == raw.result.splitlines(keepends=True)[1]
     assert await read(uris=uri, offset=1, limit=1) == paged.result
     assert upstream.call_tool.await_count == 1
     visible = await content_router.read(uri=uri, offset=0, limit=-1, raw=False, _ctx=DEFAULT_CTX)
-    assert json.loads(visible.result) == {"temperature": 23}
+    assert visible.result == live_read
 
     await service.fs.set_tags(uri, ["env=stg"], "replace", False, DEFAULT_CTX)
     mounts = await service.mcps.mounts("weather", None, DEFAULT_CTX, target_uri=tools_root)
@@ -3301,7 +3394,7 @@ async def test_tree_include_abstract_renders_directory_abstracts(service, monkey
     assert "\npr-review/\n  - name: pr-review description: Review a PR diff\n" in result
     assert "\n  SKILL.md (42 B)" in result
     assert captured["output"] == "agent"
-    assert captured["abs_limit"] == 1024
+    assert captured["abs_limit"] == 2000
 
 
 async def test_tree_include_abstract_skips_not_ready_placeholders(service, monkeypatch):
@@ -3392,3 +3485,58 @@ async def test_tree_with_tag_filter_prints_each_match_as_a_path(service, monkeyp
     result = await tree(uri="viking://user/test_user/memories", tags=["Team=Search"])
 
     assert result.splitlines()[1:] == ["events/2026/launch.md (12 B)", "entities/people/"]
+
+
+@pytest.mark.parametrize("tags", [None, ["team=search"]])
+@pytest.mark.parametrize("include_tags", [False, True])
+async def test_tree_renders_summaries_with_tags_and_pagination(
+    service, monkeypatch, tags, include_tags
+):
+    uri = "viking://resources"
+    tree_call = AsyncMock(
+        return_value=ListingPage(
+            entries=[
+                {
+                    "rel_path": "docs/guide.md",
+                    "isDir": False,
+                    "size": 12,
+                    "abstract": "File\nsummary",
+                    "tags": ["team=search"],
+                },
+                {
+                    "rel_path": "docs/examples",
+                    "isDir": True,
+                    "abstract": "Directory summary",
+                    "tags": ["team=search"],
+                },
+            ],
+            has_more=True,
+        )
+    )
+    monkeypatch.setattr(service.fs, "tree", tree_call)
+
+    result = await tree(
+        uri, include_abstract=True, tags=tags, include_tags=include_tags, offset=2, limit=2
+    )
+
+    indent = "" if tags else "  "
+    prefix = "docs/" if tags else ""
+    tag_suffix = ' tags=["team=search"]' if include_tags else ""
+    assert result.splitlines()[1:] == [
+        f"{indent}{prefix}guide.md (12 B){tag_suffix}",
+        f"{indent}  - File summary",
+        f"{indent}{prefix}examples/{tag_suffix}",
+        f"{indent}  - Directory summary",
+        "(truncated at node_limit=2; narrow the uri or raise node_limit to see more)",
+    ]
+    tree_call.assert_awaited_once_with(
+        uri,
+        ctx=DEFAULT_CTX,
+        output="agent",
+        abs_limit=2000,
+        node_limit=2,
+        level_limit=3,
+        tags=tags,
+        include_tags=include_tags,
+        offset=2,
+    )

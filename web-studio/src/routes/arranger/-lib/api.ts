@@ -273,7 +273,11 @@ export async function listDirectory(
   return {
     entries,
     hasMore: Boolean(response.data.has_more),
-    nextOffset: offset + entries.length,
+    nextOffset:
+      offset +
+      (Array.isArray(response.data.result)
+        ? response.data.result.length
+        : entries.length),
   }
 }
 
@@ -305,6 +309,19 @@ export async function readLiveContext(uri: string): Promise<unknown> {
         raw: false,
       },
     }),
+  )
+}
+
+export async function invokeMcpTool(
+  uri: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  return getOvResult<unknown>(
+    getOvClient().instance.post(
+      '/api/v1/mcps/invoke',
+      { uri: normalizeVikingUri(uri), arguments: args },
+      { baseURL: apiBaseUrl() },
+    ),
   )
 }
 
@@ -392,14 +409,33 @@ export async function copyResource(
   )
 }
 
+export async function moveResource(
+  source: string,
+  target: string,
+): Promise<void> {
+  await getOvResult(
+    getOvClient().instance.post(
+      '/api/v1/fs/mv',
+      {
+        from_uri: normalizeVikingUri(source),
+        to_uri: normalizeVikingUri(target),
+      },
+      { baseURL: apiBaseUrl() },
+    ),
+  )
+}
+
 export async function removeResource(
   uri: string,
   recursive: boolean,
+  wait = false,
 ): Promise<void> {
-  await getOvClient().instance.delete('/api/v1/fs', {
-    baseURL: apiBaseUrl(),
-    params: { uri: normalizeVikingUri(uri), recursive, wait: false },
-  })
+  await getOvResult(
+    getOvClient().instance.delete('/api/v1/fs', {
+      baseURL: apiBaseUrl(),
+      params: { uri: normalizeVikingUri(uri), recursive, wait },
+    }),
+  )
 }
 
 export async function loadLiveMounts(rootUri: string): Promise<LiveMountIndex> {
@@ -447,15 +483,20 @@ export async function loadLiveMounts(rootUri: string): Promise<LiveMountIndex> {
   }
 }
 
-export async function mountLiveContext(input: MountInput): Promise<void> {
-  await getOvClient().instance.post(
-    '/api/v1/mcps/mount',
-    {
-      ...input,
-      node_uri: normalizeVikingUri(input.node_uri),
-      wait: false,
-    },
-    { baseURL: apiBaseUrl() },
+export async function mountLiveContext(
+  input: MountInput,
+  wait = false,
+): Promise<void> {
+  await getOvResult(
+    getOvClient().instance.post(
+      '/api/v1/mcps/mount',
+      {
+        ...input,
+        node_uri: normalizeVikingUri(input.node_uri),
+        wait,
+      },
+      { baseURL: apiBaseUrl() },
+    ),
   )
 }
 
@@ -478,11 +519,16 @@ export async function batchMountLiveContexts(
   return response.data.result
 }
 
-export async function unmountLiveContext(nodeUri: string): Promise<void> {
-  await getOvClient().instance.delete('/api/v1/mcps/mount', {
-    baseURL: apiBaseUrl(),
-    params: { node_uri: normalizeVikingUri(nodeUri), wait: false },
-  })
+export async function unmountLiveContext(
+  nodeUri: string,
+  wait = false,
+): Promise<void> {
+  await getOvResult(
+    getOvClient().instance.delete('/api/v1/mcps/mount', {
+      baseURL: apiBaseUrl(),
+      params: { node_uri: normalizeVikingUri(nodeUri), wait },
+    }),
+  )
 }
 
 export async function batchUnmountLiveContexts(
