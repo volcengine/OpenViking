@@ -10,3 +10,10 @@ Consumers need no separate asset hosting.
 
 Display sizes are 212×70, 216×72, 223×72, 216×72, 216×72, and 252×84.
 The 72px illustration viewport clips the peers artwork.
+
+Matching `step-1-dark.webp` to `step-6-dark.webp` variants follow the host's
+`html.dark` theme. They were generated with imagegen using each light image as
+the edit reference, retaining its subjects, composition and lavender accents.
+The shared prompt requests a charcoal `#1b1d21` background, dark panel fills,
+soft light-gray outlines and subtle orbital lines in the existing flat style.
+The dark files use the same pixel dimensions and lossless WebP encoding.

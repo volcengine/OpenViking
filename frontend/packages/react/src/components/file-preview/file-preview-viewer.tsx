@@ -9,11 +9,12 @@ import type {
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
+import type { DirectoryLinkMode } from './file-preview-adapters.js';
 
 import { createFilePreviewAdapters } from './file-preview-handle-adapters.js';
 import { FilePreviewLoadingReporter } from './file-preview-loading-reporter.js';
 import { imagePreviewTarget } from './file-preview-markdown-images.js';
-import { toFileSource } from './file-preview-source.js';
+import { sourceDeps, toFileSource } from './file-preview-source.js';
 import {
   LoadFailedState,
   LoadingState,
@@ -22,31 +23,8 @@ import {
 import type {
   FilePreviewFileTab,
   FilePreviewLabels,
-  FilePreviewSource,
   FilePreviewViewMode,
 } from './types.js';
-
-/**
- * `source` 的 memo 依赖。逐项列出而不是取摘要：字符串按值比较，长度与首尾
- * 片段相同的两份正文会被摘要判成同一份，底座就会一直显示旧内容；`File`/`Blob`
- * 按对象身份比较，同名同路径换一个实例也能被认出来。
- *
- * The memo dependency for `source`. Every field is listed rather than hashed:
- * strings compare by value, and a digest built from length plus edges would treat
- * two same-length bodies with matching ends as identical, leaving the base on the
- * old content; `File`/`Blob` compare by identity, so a different instance under
- * the same name and path is still detected.
- */
-function sourceDeps(source: FilePreviewSource) {
-  return [
-    source.content,
-    source.file,
-    source.url,
-    source.fileName,
-    source.fileType,
-    source.path,
-  ] as const;
-}
 
 export interface FilePreviewViewerProps {
   tab: FilePreviewFileTab;
@@ -56,8 +34,9 @@ export interface FilePreviewViewerProps {
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
-  /** Markdown 正文里的链接被点击时调用；传入即由宿主接管导航。 */
+  /** Markdown 正文链接的点击回调；目录策略可限定接管范围。 */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
+  directoryLinks?: DirectoryLinkMode;
   /** 底座加载状态变化时调用；过渡层用它判断新内容何时就绪。 */
   /** Called when the base's load state changes; the transition uses it as the ready signal. */
   onStateChange?: (state: FileViewerState) => void;
@@ -94,6 +73,7 @@ export function FilePreviewViewer({
   onHandleChange,
   onViewModesChange,
   onLinkClick,
+  directoryLinks,
   onStateChange,
   reports = true,
   onLoadingChange,
@@ -181,6 +161,7 @@ export function FilePreviewViewer({
   const adapters = useMemo(
     () =>
       createFilePreviewAdapters({
+        directoryLinks,
         onHandleChange: (handle) => {
           suppressed.current.handle = handle;
           if (reportsRef.current) callbacks.current.onHandleChange(handle);
@@ -206,7 +187,7 @@ export function FilePreviewViewer({
     // 只在能力出现或消失时重建；回调身份每帧都可能是新的。
     // Rebuilt only when the capability appears or goes away.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [Boolean(onLinkClick)],
+    [Boolean(onLinkClick), directoryLinks],
   );
   // useEffect 必要性：补发要在 `reports` 变 true 的那次提交之后进行，此时句柄
   // 早已存在；渲染期间调用会更新父组件的 state，触发渲染阶段的状态更新警告。
