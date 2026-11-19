@@ -4,7 +4,6 @@ import {
   Dropdown,
   DropdownItem,
 } from '../../shared/primitives/dropdown/index.js';
-import { LoadingIcon } from '../../shared/primitives/loading-icon/loading-icon.js';
 import { Select } from '../../shared/primitives/select/index.js';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import type { Locale } from '../../shared/locale.js';
@@ -13,10 +12,9 @@ import type { VikingBotSessions } from './capabilities.js';
 import type { VikingBotLabels } from './model.js';
 import { SessionHistoryDialog } from './session-history-dialog.js';
 
-import {
-  renderSessionHistoryRows,
-  type SessionHistoryAction,
-} from './session-history-rows.js';
+import { SessionHistoryList } from './session-history-list.js';
+import type { SessionHistoryAction } from './session-history-rows.js';
+import { useSessionHistoryPaging } from './use-session-history-paging.js';
 
 const popupClass = 'ov-viking-bot__popover ov-viking-bot__history-popover';
 
@@ -54,6 +52,8 @@ export function SessionHistory({
     }
   }
   const managed = Boolean(sessions.onRename || sessions.onRemove);
+  const paging = useSessionHistoryPaging(open, sessions);
+  const loading = sessions.isLoading || paging.loading;
   const changeOpen = (next: boolean) => {
     setOpen(next);
     if (next) sessions.onOpenHistory?.();
@@ -70,57 +70,26 @@ export function SessionHistory({
       <VikingBotIcon name="history" />
     </Button>
   );
-  const hasSessions = sessions.items.length > 0;
-  const hasMore = sessions.hasMore && sessions.onLoadMore;
   const list = (
-    <div
-      className="ov-viking-bot__session-history"
-      aria-busy={sessions.isLoading}
-    >
-      {!hasSessions && !sessions.isLoading && !sessions.error ? (
-        <div role="status" className="ov-viking-bot__history-placeholder">
-          {labels.emptySessions}
-        </div>
-      ) : null}
-      {sessions.isLoading ? (
-        <div
-          role="status"
-          className={
-            hasSessions
-              ? 'ov-viking-bot__history-refreshing'
-              : 'ov-viking-bot__history-placeholder'
-          }
-        >
-          {hasSessions ? null : <LoadingIcon />}
-          {labels.loading}
-        </div>
-      ) : null}
-      {sessions.error ? (
-        <p
-          role="alert"
-          className={
-            hasSessions
-              ? 'ov-viking-bot__history-error'
-              : 'ov-viking-bot__history-placeholder'
-          }
-        >
-          {sessions.error}
-        </p>
-      ) : null}
-      {renderSessionHistoryRows({
-        sessions,
-        labels,
-        locale,
-        managed,
-        onSelect,
-        onAction: (next) =>
-          setAction({ ...next, scopeKey, callback: actionCallback(next.kind) }),
-      })}
-    </div>
+    <SessionHistoryList
+      sessions={{
+        ...sessions,
+        isLoading: loading,
+        error: sessions.error ?? paging.error,
+      }}
+      labels={labels}
+      locale={locale}
+      managed={managed}
+      onSelect={onSelect}
+      onAction={(next) => {
+        setOpen(false);
+        setAction({ ...next, scopeKey, callback: actionCallback(next.kind) });
+      }}
+    />
   );
   return (
     <>
-      <Tooltip content={labels.sessionHistory} disabled={open}>
+      <Tooltip content={labels.sessionHistory} disabled={open} focusVisibleOnly>
         <span className="ov-viking-bot__popover-anchor">
           {managed ? (
             <Dropdown
@@ -131,13 +100,14 @@ export function SessionHistory({
               trigger={historyTrigger}
             >
               {list}
-              {hasMore ? (
+              {paging.canLoad ? (
                 <DropdownItem
+                  className="ov-viking-bot__history-load-more"
                   closeOnClick={false}
-                  disabled={sessions.isLoading}
-                  onClick={sessions.onLoadMore}
+                  disabled={loading}
+                  onClick={paging.loadMore}
                 >
-                  {labels.loadMore}
+                  {paging.loading ? labels.loading : labels.loadMore}
                 </DropdownItem>
               ) : null}
             </Dropdown>
@@ -168,14 +138,15 @@ export function SessionHistory({
                 </Button>
               )}
               popupFooter={
-                hasMore ? (
+                paging.canLoad ? (
                   <Button
                     type="text"
                     size="small"
-                    disabled={sessions.isLoading}
-                    onClick={sessions.onLoadMore}
+                    className="ov-viking-bot__history-load-more"
+                    disabled={loading}
+                    onClick={paging.loadMore}
                   >
-                    {labels.loadMore}
+                    {paging.loading ? labels.loading : labels.loadMore}
                   </Button>
                 ) : undefined
               }

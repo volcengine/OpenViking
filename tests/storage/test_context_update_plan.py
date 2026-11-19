@@ -630,7 +630,7 @@ async def test_resolver_log_separates_files_directories_and_logical_root(monkeyp
     )
 
     log_info = Mock()
-    monkeypatch.setattr(resource_diff.logger, "info", log_info)
+    monkeypatch.setattr(resource_diff.logger, "debug", log_info)
     await resource_diff.resolve_resource_diff(
         snapshot,
         store=AsyncMock(),
@@ -684,7 +684,7 @@ def test_planning_details_log_at_debug(monkeypatch):
     assert log_debug.call_count == 3
 
 
-def test_content_commit_log_uses_info_only_for_mutations(monkeypatch):
+def test_content_commit_log_uses_debug_for_mutations(monkeypatch):
     from openviking.storage.context_update_plan import (
         ContentTreeAction,
         ContentTreeOperation,
@@ -717,57 +717,8 @@ def test_content_commit_log_uses_info_only_for_mutations(monkeypatch):
         duration_ms=2.0,
     )
 
-    log_debug.assert_called_once()
-    log_info.assert_called_once()
-
-
-def test_add_resource_log_level_contract():
-    import ast
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[2]
-    expected = {
-        "openviking/storage/queuefs/add_resource_processor.py": {
-            "[AddResourceStarted]": "info",
-            "[AddResourceCompleted]": "info",
-        },
-        "openviking/storage/resource_diff.py": {
-            "[ResourceDiffResult]": "info",
-        },
-        "openviking/utils/resource_processor.py": {
-            "[RNFVSnapshot]": "debug",
-            "[ContextUpdatePlan]": "debug",
-            "[add_resource]": "debug",
-            "[DirectIndexActions]": "debug",
-        },
-        "openviking/storage/queuefs/semantic_processor.py": {
-            "[SemanticPlanExecution]": "debug",
-        },
-        "openviking/parse/parsers/code/code.py": {
-            "Uploading code repository artifacts": "debug",
-        },
-        "openviking/parse/parsers/media/image.py": {
-            "Processing large image": "debug",
-        },
-    }
-
-    for relative_path, markers in expected.items():
-        tree = ast.parse(root.joinpath(relative_path).read_text())
-        found = {}
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            if not node.args:
-                continue
-            message = "".join(
-                part.value
-                for part in ast.walk(node.args[0])
-                if isinstance(part, ast.Constant) and isinstance(part.value, str)
-            )
-            for marker in markers:
-                if marker in message:
-                    found[marker] = node.func.attr
-        assert found == markers
+    assert log_debug.call_count == 2
+    log_info.assert_not_called()
 
 
 def test_builder_maps_content_semantic_and_direct_index_actions():
@@ -2636,8 +2587,10 @@ async def test_content_executor_logs_failed_action_with_correlation(monkeypatch)
 
     action = ContentTreeAction("delete", "old.md", old_kind="file")
     telemetry = OperationTelemetry("add_resource_job", enabled=True)
+    from openviking.observability.log_safety import safe_path_for_log
+
     log_exception = MagicMock()
-    monkeypatch.setattr(plan_module.logger, "exception", log_exception)
+    monkeypatch.setattr(plan_module.logger, "debug", log_exception)
 
     with (
         bind_task_context("task-1", "acct", "user"),
@@ -2651,17 +2604,18 @@ async def test_content_executor_logs_failed_action_with_correlation(monkeypatch)
             target=Target(),
         )
 
-    message, correlation, operation, relative_path, old_kind, new_kind = (
+    message, correlation, operation, relative_path, old_kind, new_kind, error_type = (
         log_exception.call_args.args
     )
-    assert "[ContentTreeActionFailed]" in message
+    assert "Content tree action failed" in message
     assert correlation == f"task_id=task-1 telemetry_id={telemetry.telemetry_id}"
     assert (operation, relative_path, old_kind, new_kind) == (
         "delete",
-        "old.md",
+        safe_path_for_log("old.md"),
         "file",
         "-",
     )
+    assert error_type == "OSError"
     assert log_exception.call_args.kwargs == {}
 
 

@@ -20,15 +20,15 @@ The **Overview** tab summarizes the latest 10,000 requests in the request log. U
 
 | Card | What it shows | Healthy value | If it looks wrong |
 | --- | --- | --- | --- |
-| **Requests** | The number of model requests (background saving events, shown as **Memory sync** in the log, are not counted), when the last one arrived, and their output tokens | Grows as clients send requests | [Check the connection](03-connect-clients.md#check-the-connection) |
+| **Requests** | The number of model requests, when the last one arrived, and their output tokens | Grows as clients send requests | [Check the connection](03-connect-clients.md#check-the-connection) |
 | **First-call cache hit rate** | The share of input tokens the provider served from its [prompt cache](01-how-it-works.md#replay) on the first model call of each new user message | Close to what the provider reaches without the gateway. This is the most important sign of a healthy gateway. | [The first-call cache hit rate dropped](12-troubleshooting.md#the-first-call-cache-hit-rate-dropped) |
 | **Within-turn cache hit rate** | The same share for later calls in a turn, such as tool steps and OpenViking tool rounds | Usually high | — |
 | **Memory entries recalled** | Memory entries added to new messages, and how long an OpenViking search took on average (counting only messages that searched) | Grows once the user has memories in OpenViking; 0 is expected on a brand-new account | [No memory is added](12-troubleshooting.md#no-memory-is-added) |
-| **OpenViking** | **Connected**, **Degraded** or **Starting**, the OpenViking version, and the reason when degraded. Its **Saving conversations** part counts conversations that are retrying or have paused saving. | **Connected**, and no saving problems in recent requests | [OpenViking is degraded](12-troubleshooting.md#openviking-is-degraded), [Conversations do not appear in OpenViking](12-troubleshooting.md#conversations-do-not-appear-in-openviking) |
+| **OpenViking** | **Connected**, **Degraded** or **Starting**, the OpenViking version, and the reason when degraded. Its **Saving conversations** part counts conversations whose latest record says a finished turn was not saved. | **Connected**, and no saving problems in recent requests | [OpenViking is degraded](12-troubleshooting.md#openviking-is-degraded), [Conversations do not appear in OpenViking](12-troubleshooting.md#conversations-do-not-appear-in-openviking) |
 | **Degraded requests** | How often each issue occurred, with an explanation and a suggested action | **No degraded requests** | [Issues on degraded requests](12-troubleshooting.md#issues-on-degraded-requests) |
 | **Recent requests** | The latest requests, with a link to the **Requests** tab | — | [Requests](#requests) |
 
-A clear drop in the first-call rate usually means the history the gateway sends no longer matches the previous request. While OpenViking is unreachable, requests still reach the model, just without memory, and saving is retried until OpenViking is back. When the **Saving conversations** part or the **Degraded requests** card reports a problem, **Show in Requests** opens the **Requests** tab filtered to **Issues**.
+A clear drop in the first-call rate usually means the history the gateway sends no longer matches the previous request. While OpenViking is unreachable, requests still reach the model, just without memory, and the turns that end meanwhile are not saved; the next turn that ends after OpenViking is back writes them. When the **Saving conversations** part or the **Degraded requests** card reports a problem, **Show in Requests** opens the **Requests** tab filtered to **Issues**.
 
 ### Long conversations missing the cache {#long-conversations-missing-the-cache}
 
@@ -55,7 +55,7 @@ Every model request is logged, including the ones the gateway refuses itself, su
 | **All** | Every record |
 | **New messages** | Requests that start a turn with a new user message |
 | **Tool steps** | Requests that continue a turn, for example with tool results |
-| **Issues** | Degraded requests, requests whose conversation saving is **Retrying** or **Paused**, and requests with HTTP 400 or above, from the provider (see [The upstream returned an error](12-troubleshooting.md#the-upstream-returned-an-error)) or from the gateway (see [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway)) |
+| **Issues** | Degraded requests, requests whose turn could not be saved (**Failed**), and requests with HTTP 400 or above, from the provider (see [The upstream returned an error](12-troubleshooting.md#the-upstream-returned-an-error)) or from the gateway (see [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway)) |
 | **Request type** | One of the [request types](#request-types) |
 
 Search matches the model, conversation ID, request ID, key name or prefix, and upstream name. The log stores only a hash of the conversation ID, so Studio hashes a pasted conversation ID in the browser before matching. This works only when Studio is opened over HTTPS or on localhost; over plain HTTP, searching by conversation ID finds nothing.
@@ -70,7 +70,7 @@ Search matches the model, conversation ID, request ID, key name or prefix, and u
 | **Status** | The HTTP status the client received: the provider's, or the gateway's own when the gateway refused or failed the request |
 | **Tokens** | Input tokens, the cached share and output tokens |
 | **Memory** | What [recall](../guides/15-gateway.md#key-terms) did in this request (see below) |
-| **Saving** | The conversation's [saving status](#saving-status); hover for the reason |
+| **Saving** | The request's [saving status](#saving-status); hover for the reason |
 | **Issue** | The issue, for a degraded request |
 
 The **Memory** column uses this notation:
@@ -89,7 +89,7 @@ Expand a row to see:
 - the token breakdown
 - the memory search result
 - context window use, and whether the history was compacted or the model started a new window
-- the saving status, with the next retry time
+- the saving status and, for a request that saved its turn, how many messages it wrote and the OpenViking session
 - OpenViking tool details, including why tools were not offered
 - the profile settings the client sent in `X-OpenViking-Context`, by name only; they take effect only on a conversation's first request
 
@@ -101,54 +101,45 @@ Every record has one type. The type decides whether the request searches memory 
 
 | Type | Meaning | Memory |
 | --- | --- | --- |
-| New message | A request whose last message is a new user message | Searched once, earlier memory replayed; the turn is saved |
-| Tool step | The same turn continuing, for example with tool results | Earlier memory replayed; saved with its turn |
-| Housekeeping | Title, summary, compaction, suggestion and permission-check requests; once a conversation has sent client tools, a separate request in it with neither tools nor earlier replies, such as Claude Code summarizing a fetched page. Operators can add a client's own requests in [Client rules](13-configuration.md#client-rules) | Earlier memory replayed; never saved |
+| New message | A request whose last message is a new user message | Searched once, earlier memory replayed; saves the turn when its reply ends it |
+| Tool step | The same turn continuing, for example with tool results | Earlier memory replayed; the one whose reply ends the turn saves all of it |
+| Housekeeping | Title, summary, compaction, suggestion and permission-check requests; once a conversation has sent client tools, a separate request in it with neither tools nor earlier replies, such as Claude Code summarizing a fetched page. Operators can add a client's own requests in [Client rules](13-configuration.md#client-rules) | Earlier memory replayed; never saved, but Claude Code's or Codex's compaction request inside a turn saves the history before it |
 | Sub-agent | Requests from a client's sub-agents | Earlier memory replayed; never saved |
 | Token count | Token-counting requests (`/gateway/v1/messages/count_tokens`) | Earlier memory replayed, so the count matches what is actually sent |
 | Forwarded | Requests passed through unchanged, without memory: other endpoints, Responses requests that rely on provider-side state, compressed or unreadable bodies | None |
-| Memory sync | Background saving events, not model requests | — |
 
 ## Saving status {#saving-status}
 
-The **Saving** column shows whether the gateway is [saving](../guides/15-gateway.md#key-terms) a conversation's finished turns to OpenViking. Normally it shows **On**.
+The **Saving** column shows whether the gateway [saves](../guides/15-gateway.md#key-terms) the conversation's finished turns to OpenViking, and whether this request's save worked. Normally it shows **On**.
 
 | Status | Meaning | What the gateway does |
 | --- | --- | --- |
-| **On** | Saving works normally. | — |
-| **Off** | The conversation's [context profile](08-context-profiles.md#save-conversations) does not save. | Nothing is saved. |
-| **Retrying** | OpenViking rejected a save or could not be reached. | Retries after 10, 20, 40 and 80 seconds; after at least a minute when OpenViking answered `429`, and after an hour when it answered `402`. |
-| **Paused** | Five attempts in a row failed. | Retries every 5 minutes until it succeeds. Unsaved turns are kept until they are saved or the conversation expires. |
-| **Retrying** with the reason `gateway_key_missing` | The record of the OpenViking key behind the conversation expired or was evicted, but OpenViking never rejected the key. | Retries every 5 minutes, for at most `session_ttl_seconds`, then pauses with `gateway_key_revoked`. Any request with that key writes the record again; one in this conversation resumes saving at once. |
-| **Paused** with the reason `gateway_key_revoked` | The conversation's gateway key was revoked or deleted, OpenViking rejected the user's OpenViking key, or an OpenViking key's record stayed missing for `session_ttl_seconds`. | Stops retrying. Saving resumes when the user next sends a request in this conversation with a valid key. |
-| **Lost** with the reason `stage_failed` | A finished turn could not be queued for saving, also when tried again 1, 5 and 25 seconds later; the gateway logs an error. | The conversation's next request sends the history again and queues the turn with it. If none follows, the turn is not saved. |
+| **On** (`active`) | Saving is on; if this request ended a turn, the turn was written to OpenViking. | The request whose reply ends a turn writes the turn to OpenViking. |
+| **Off** (`disabled`) | The conversation's [context profile](08-context-profiles.md#save-conversations) does not save. | Nothing is saved. |
+| **Failed** (`failed`) | This request ended a turn, but writing it to OpenViking failed or took longer than 30 seconds. Each turn is tried once. | Nothing retries it. The next turn that ends in this conversation writes what is missing, as long as the client resends the history unchanged. If no turn follows, this turn is not saved. |
 
-The expanded row and the **Saving** badge's tooltip show the reason for the latest change:
+The expanded row and the **Saving** badge's tooltip show the reason:
 
 | Reason shown | Code | Meaning |
 | --- | --- | --- |
 | OpenViking rejected the key. It may be wrong or revoked. | `openviking_http_401` | The user's OpenViking key is no longer valid. |
 | OpenViking is unreachable or didn't answer in time | `openviking_unavailable` | OpenViking is down or unreachable. |
 | OpenViking didn't answer in time | `openviking_timeout` | OpenViking is too slow. |
-| Saving to OpenViking failed | `delivery_failed` | A save failed for another reason; the gateway retries as above. |
-| Saving works again | `delivery_recovered` | A save succeeded after failures. |
-| The key's record is missing; saving retries until the user's next request | `gateway_key_missing` | See the table above. |
-| A finished turn couldn't be queued for saving | `stage_failed` | See the table above. |
-| Saved to OpenViking, Committed in OpenViking | `delivered`, `committed` | Only with `capture_delivery_records: true`: a record for each save and each commit. |
-| The conversation history changed, so saving continues in a new OpenViking session | `history_changed` | Normal: the client edited, regenerated or compacted the conversation, and the gateway continues saving the current history in a new OpenViking session. |
-| The history changed while saving, so saving continues in a new OpenViking session | `history_changed_during_delivery` | Normal: the same, while a save was in progress. |
-| A saved turn continued after a pause, so saving continues in a new OpenViking session | `continued_after_idle` | Normal: a turn already saved after **Save the latest reply after** continued. |
-| Resynced by an administrator | `manual_reset` | Someone used **Resync conversation…** (see below). |
+| OpenViking stopped answering for this account, so it was skipped for now | `openviking_circuit_open` | Recent calls for this account went unanswered; see [OpenViking is degraded](12-troubleshooting.md#openviking-is-degraded). |
+| OpenViking returned HTTP … or OpenViking reported error … | `openviking_http_<status>`, `openviking_<CODE>` | OpenViking refused the write, for example `402` (not subscribed), `429` (rate limited), or `400` for an unknown memory type in `capture_memory_types`. |
+| Saving to OpenViking timed out | `save_timeout` | Saving took longer than 30 seconds. |
+| Saving to OpenViking failed | `save_failed` | Another error; the gateway log has a "could not save a finished turn" warning with the traceback. |
+| Resynced by an administrator | `manual_reset` | Not a failure: someone used **Resync conversation…** (see below), the status stays **On**, and the conversation's later records keep showing it. |
 
-Earlier turns stay in the older OpenViking session. If saving stays at **Retrying** or **Paused**, see [Conversations do not appear in OpenViking](12-troubleshooting.md#conversations-do-not-appear-in-openviking).
+A conversation started under an earlier gateway version may keep showing the reason recorded then (for example `history_changed`); while the status is **On**, nothing needs to be done. If saving keeps failing, see [Conversations do not appear in OpenViking](12-troubleshooting.md#conversations-do-not-appear-in-openviking).
 
 ### Resync a conversation {#resync-a-conversation}
 
-Resync starts a new OpenViking session for a conversation, and the gateway writes the full history to it with the user's next message. Use it when a conversation stays paused after you fixed the cause, or when you want a clean copy of a conversation. What was already saved stays in the old session, so OpenViking may extract some memories twice.
+Resync starts a new OpenViking session for a conversation, and the gateway writes the full history to it when the conversation's next turn ends. Use it when saving kept failing and you want the whole conversation saved once the cause is fixed, or when you want a clean, complete copy of a conversation in a session of its own. What was already saved stays in the old session, so OpenViking may extract some memories twice.
 
 1. On the **Requests** tab, expand a record of the conversation. Resync needs the key shown on the record; if that key has been revoked, pick a newer record of the same conversation.
-2. Choose **Resync conversation…**, then **Resync**. You should see "The conversation will be saved again with its next message."
-3. Wait for the user's next message in that conversation. Nothing happens until it arrives; then the gateway saves the full history to the new session, and the conversation's records show the reason "Resynced by an administrator".
+2. Choose **Resync conversation…**, then **Resync**. You should see "The conversation will be saved again when its next turn ends."
+3. Wait for the next turn in that conversation to end. Nothing happens until then; then the gateway saves the full history to the new session, and the conversation's records show the reason "Resynced by an administrator".
 
 ## Next steps {#next-steps}
 

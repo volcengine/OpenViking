@@ -22,6 +22,7 @@ from openviking.config.generation import get_output_language_override
 from openviking.config.vlm import VLMResolver
 from openviking.core.peer_id import safe_peer_id
 from openviking.message import Message
+from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
@@ -933,14 +934,24 @@ async def merge_memory_operations(
             f"target_count={len(_unique_operation_uris(ops_list))} error={merge_result}",
             console=trace_console,
         )
-        logger.warning(
-            "[streaming_memory_updater] merge failed for %s (%s): %s",
-            memory_type,
-            peer_label,
-            merge_result,
+        logger.debug(
+            "memory merge failed type_hash=%s error_type=%s",
+            short_hash(str(memory_type)),
+            type(merge_result).__name__,
+            extra={"error_type": type(merge_result).__name__},
         )
         if strict_extract_errors or is_cross_extraction_group(ops_list):
             raise merge_result
+        logger.info(
+            "memory merge failed; keeping original operations total=%d error_type=%s",
+            len(ops_list),
+            type(merge_result).__name__,
+            extra={
+                "degraded": True,
+                "total": len(ops_list),
+                "error_type": type(merge_result).__name__,
+            },
+        )
         # Fallback: keep original operations and delete files for this group
         merged_upserts.extend(ops_list)
         fallback_deletes = delete_groups.get(group_key, [])
@@ -1302,10 +1313,11 @@ async def render_operation_after_file_content(
             )
         except Exception as exc:
             logger.debug(
-                "Failed to preview memory patch field: memory_type=%s field=%s",
-                op.memory_type,
-                field_def.name,
-                exc_info=True,
+                "memory patch field preview failed type_hash=%s field_hash=%s error_type=%s",
+                short_hash(str(op.memory_type)),
+                short_hash(str(field_def.name)),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
             )
             tracer.info(
                 "[streaming_memory_updater] skipping preview field update after merge_op failure "
@@ -1382,10 +1394,10 @@ async def classify_memory_merge_mode(
                 return True, "single_existing_content_unchanged"
         except Exception as exc:
             logger.debug(
-                "Failed to render memory patch preview for merge-mode classification: "
-                "memory_type=%s",
-                getattr(op, "memory_type", None),
-                exc_info=True,
+                "memory patch merge preview failed type_hash=%s error_type=%s",
+                short_hash(str(getattr(op, "memory_type", None) or "")),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
             )
             tracer.info(
                 "[streaming_memory_updater] merge-mode preview failed; falling back to "

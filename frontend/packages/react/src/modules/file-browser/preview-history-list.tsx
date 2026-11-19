@@ -1,6 +1,9 @@
 import { Switch } from '../../shared/primitives/switch/switch.js';
 import { Fragment, type ReactNode } from 'react';
-import { historyVersionLabel } from './preview-history-controls.js';
+import {
+  historyVersionBadge,
+  historyVersionLabel,
+} from './preview-history-controls.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { PreviewQueryState } from './preview-query-state.js';
@@ -15,6 +18,7 @@ export function PreviewHistoryList({
   query,
   showContent,
   selectedId,
+  deletedIds,
   compare,
   canCompare,
   comparison,
@@ -26,6 +30,7 @@ export function PreviewHistoryList({
   query: DashboardQuery<PreviewHistoryEntry[]>;
   showContent: boolean;
   selectedId?: string;
+  deletedIds: ReadonlySet<string>;
   compare: boolean;
   canCompare: boolean;
   comparison?: ReactNode;
@@ -63,6 +68,11 @@ export function PreviewHistoryList({
               ? `${text.version} ${entry.title}`
               : entry.title;
             const versionLabel = historyVersionLabel(entry, locale);
+            const badge = historyVersionBadge(
+              entry,
+              deletedIds.has(entry.id),
+              text,
+            );
             const label = (
               <>
                 <time
@@ -77,9 +87,9 @@ export function PreviewHistoryList({
                   {versionLabel}
                 </time>
                 {index === 0 ? <i>{text.latest}</i> : null}
-                {entry.restored ? (
+                {badge ? (
                   <span className="ov-file-history__version-badge">
-                    {text.rollbackBadge}
+                    {badge}
                   </span>
                 ) : null}
               </>
@@ -95,11 +105,11 @@ export function PreviewHistoryList({
                         : undefined
                     }
                     aria-label={
-                      entry.numbered
-                        ? entry.restored
-                          ? `${title} · ${text.rollbackBadge}`
-                          : title
-                        : undefined
+                      entry.numbered && badge
+                        ? `${title} · ${badge}`
+                        : entry.numbered
+                          ? title
+                          : undefined
                     }
                     aria-pressed={selectedId === entry.id}
                     onClick={() => {

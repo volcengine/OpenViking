@@ -13,7 +13,7 @@ import shutil
 import tempfile
 import time
 import zipfile
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -312,6 +312,7 @@ class SkillProcessor:
                 request_id=request_id,
                 before_hash=before_hash,
                 after_hash=after_hash,
+                lease_ref=lease_ref,
             )
             result.update(
                 {

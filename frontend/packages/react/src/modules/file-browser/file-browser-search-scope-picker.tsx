@@ -6,7 +6,7 @@ import treeZh from '../../components/file-tree/locales/zh-CN.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useLocale } from '../../shared/locale-context.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
-import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { displayNameFromUri } from '../../shared/directory-tree/rows.js';
 import { useSearchScopePage } from './use-search-scope-page.js';
 import type { ScopeOption } from './search-types.js';
 
@@ -131,7 +131,7 @@ function ScopePicker({
                   close();
                 }}
               >
-                <span>{nameFromUri(uri)}</span>
+                <span>{displayNameFromUri(uri)}</span>
               </button>
             </div>
           ) : null}
@@ -147,7 +147,7 @@ function ScopePicker({
               onClick={() => browse(directory)}
             >
               <FolderIcon aria-hidden="true" />
-              <span>{uri ? nameFromUri(directory) : directory}</span>
+              <span>{uri ? displayNameFromUri(directory) : directory}</span>
               <ChevronIcon aria-hidden="true" />
             </button>
           ))}

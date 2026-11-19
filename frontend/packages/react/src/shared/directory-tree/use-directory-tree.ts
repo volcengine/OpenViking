@@ -2,15 +2,17 @@ import { tagData } from '../monitoring/data.js';
 import { useDirectoryMonitoring } from './use-directory-monitoring.js';
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
 } from 'react';
 import { useRequestScope } from '../request/use-request-scope.js';
 import { expandChain } from './fs-path.js';
-import { flattenTree } from './rows.js';
+import { useInitializeDirectoryTree } from './use-initialize-directory-tree.js';
+import { useReportExpansion } from './use-report-expansion.js';
+import { useDirectoryExpansion } from './use-directory-expansion.js';
+import { useDirectoryRows } from './use-directory-rows.js';
 import { DirectoryQueries } from './directory-queries.js';
 import { useQueryScope } from '../request/use-query-scope.js';
 import type { DirState, UseDirectoryTreeOptions } from './types.js';
@@ -26,6 +28,10 @@ export function useDirectoryTree({
   rootUri,
   cacheScopeKey,
   defaultExpandedUri,
+  defaultExpandedUris,
+  defaultExpansionSnapshot,
+  onExpandedUrisChange,
+  onExpansionSnapshotChange,
   requestOptions,
 }: UseDirectoryTreeOptions) {
   const {
@@ -43,70 +49,38 @@ export function useDirectoryTree({
     session?.getSnapshot ?? emptySnapshot,
   );
   const activeSession = useRef(session);
-  // Publish committed query subscriptions for stable event callbacks. Abandoned
-  // renders must not replace the session used by the visible preview.
-  useEffect(() => {
+  // Publish the committed query scope before event or restore callbacks run.
+  // Layout publication ignores suspended renders. Each commit replaces the ref.
+  useLayoutEffect(() => {
     activeSession.current = session;
   }, [session]);
-  const [local, setLocal] = useState<{
-    session: typeof session;
-    expanded: ReadonlySet<string>;
-  }>();
-  const expanded = useMemo(
-    () =>
-      local && local.session === session ? local.expanded : new Set([rootUri]),
-    [local, session, rootUri],
-  );
-  const expandedRef = useRef(expanded);
-  expandedRef.current = expanded;
-  const [initialized, setInitialized] = useState<{
-    session: typeof session;
-    uri?: string;
-  }>();
-  const initialLoad = useRef<Promise<void> | undefined>(undefined);
+  const expansion = useDirectoryExpansion({
+    session,
+    activeSession,
+    request,
+    rootUri,
+    cacheScopeKey,
+    defaultExpandedUris,
+    defaultExpansionSnapshot,
+  });
+  const { expanded, isExpanded, edit } = expansion;
+  const {
+    initialLoad,
+    initializing,
+    unresolved,
+    retryDirectory,
+    retryExpansion,
+  } = useInitializeDirectoryTree({
+    session,
+    rootUri,
+    initialPath: expansion.savedExpansion ? undefined : defaultExpandedUri,
+    expansion,
+  });
   const scope = useRequestScope(
     request?.client ?? null,
     request?.options,
     rootUri,
   );
-  const setExpanded = useMemo(
-    () => (update: React.SetStateAction<ReadonlySet<string>>) => {
-      setLocal((previous) => {
-        const session = activeSession.current;
-        const current =
-          previous && previous.session === session
-            ? previous.expanded
-            : new Set([rootUri]);
-        const next = typeof update === 'function' ? update(current) : update;
-        expandedRef.current = next;
-        return { session, expanded: next };
-      });
-    },
-    [rootUri],
-  );
-  // Synchronize the initial/default path with directory subscriptions after commit.
-  // Navigation and identity can change without a click. Cleanup only invalidates
-  // this navigation; Query observers own shared request cancellation.
-  useEffect(() => {
-    if (!session) return;
-    const controller = new AbortController();
-    initialLoad.current = (async () => {
-      await session.load(rootUri, 0, controller.signal);
-      for (const uri of expandChain(rootUri, defaultExpandedUri)) {
-        if (controller.signal.aborted) return;
-        const page = await session.load(uri, 0, controller.signal);
-        if (page?.error) break;
-        if (!controller.signal.aborted)
-          setExpanded((previous) => new Set(previous).add(uri));
-      }
-    })()
-      .catch(() => undefined)
-      .finally(() => {
-        if (!controller.signal.aborted)
-          setInitialized({ session, uri: defaultExpandedUri });
-      });
-    return () => controller.abort();
-  }, [session, rootUri, defaultExpandedUri, setExpanded]);
   const fetchPage = useCallback(
     async (...args: Parameters<DirectoryQueries['load']>) => {
       try {
@@ -117,10 +91,17 @@ export function useDirectoryTree({
     },
     [],
   );
+  const expandForNavigation = useCallback(
+    (uri: string) => {
+      if (activeSession.current !== session || isExpanded(uri)) return;
+      edit(uri, true);
+    },
+    [session, isExpanded, edit],
+  );
   const state = useMemo(
     () => ({
       open: async (uri: string) => {
-        setExpanded((previous) => new Set(previous).add(uri));
+        edit(uri, true);
         await fetchPage(uri, 0);
       },
       openPath: async (uri: string) => {
@@ -128,39 +109,50 @@ export function useDirectoryTree({
         for (const parent of expandChain(rootUri, uri)) {
           if (scope.current() !== current || current.controller.signal.aborted)
             return;
-          setExpanded((previous) => new Set(previous).add(parent));
+          edit(parent, true);
           await fetchPage(parent, 0);
         }
       },
       toggleExpand: async (row: { uri: string; disabled?: boolean }) => {
         if (row.disabled) return;
-        const isOpen = expandedRef.current.has(row.uri);
-        setExpanded((previous) => {
-          const next = new Set(previous);
-          if (isOpen) next.delete(row.uri);
-          else next.add(row.uri);
-          return next;
-        });
+        const isOpen = isExpanded(row.uri);
+        edit(row.uri, !isOpen);
         if (!isOpen) await fetchPage(row.uri, 0);
       },
       loadMore: async (uri: string) => {
         await fetchPage(uri, 1);
       },
-      retry: async (uri: string) => {
-        if (activeSession.current) await fetchPage(uri, 0, undefined, true);
-        else retryScope();
-      },
+      retry: async (uri: string) =>
+        activeSession.current ? retryDirectory(uri) : retryScope(),
       refresh: async () => {
-        if (activeSession.current) await activeSession.current.refresh();
-        else retryScope();
+        const current = activeSession.current;
+        if (!current) return retryScope();
+        await current.refresh();
+        if (activeSession.current === current) retryExpansion();
       },
     }),
-    [scope, rootUri, setExpanded, fetchPage, retryScope],
+    [
+      scope,
+      rootUri,
+      isExpanded,
+      edit,
+      fetchPage,
+      retryScope,
+      retryDirectory,
+      retryExpansion,
+    ],
   );
-  const rows = useMemo(
-    () => flattenTree(rootUri, 0, dirs, expanded),
-    [rootUri, dirs, expanded],
-  );
+  const { rows, reconciling } = useDirectoryRows({
+    session,
+    rootUri,
+    dirs,
+    expanded,
+    collapsed: expansion.collapsed,
+    pendingEdits: expansion.pendingEdits,
+    identifyUri: expansion.identifyUri,
+    resolveHome: expansion.resolveHome,
+    initializing,
+  });
   const monitoring = useDirectoryMonitoring(
     dirs,
     dirs[rootUri]?.ready ?? false,
@@ -170,25 +162,40 @@ export function useDirectoryTree({
     rows,
     monitoring.map((operation) => operation.span),
   );
+  const isInitializing = !identityError && initializing;
+  const root = dirs[rootUri];
+  const isReady = root?.ready ?? false;
+  useReportExpansion(
+    session,
+    isReady &&
+      (!isInitializing || expansion.edited) &&
+      (!root?.error || (expansion.edited && root.entries.length > 0)) &&
+      (!unresolved.size || expansion.edited),
+    rootUri,
+    rows,
+    unresolved,
+    expansion,
+    reconciling,
+    onExpandedUrisChange,
+    onExpansionSnapshotChange,
+  );
   return {
     monitoring,
     rows,
-    isInitializing:
-      !identityError &&
-      (!session ||
-        initialized?.session !== session ||
-        initialized?.uri !== defaultExpandedUri),
-    isReady: dirs[rootUri]?.ready ?? false,
+    isInitializing,
+    isReady,
     error: identityError ?? dirs[rootUri]?.error ?? null,
     ...state,
     dirs,
     navigationInputs: {
-      request,
       scope,
       dirs: session?.dirs ?? emptyDirectoryRef,
       initialLoad,
+      isExpanded,
+      identifyUri: expansion.identifyUri,
+      resolveHome: expansion.resolveHome,
       fetchPage,
-      setExpanded,
+      expandForNavigation,
     },
   };
 }

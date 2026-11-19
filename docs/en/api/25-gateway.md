@@ -60,7 +60,7 @@ If OpenViking rejects the API key, the response is 401 `openviking_http_401`.
 
 ### Log records {#log-records}
 
-The log holds metadata only, never message content, keys or error messages. Every request to a model route (except `.../models`) writes exactly one record, whichever way it ends: answered, refused by the gateway, failed at the provider, cut off mid-stream, or abandoned by the client. A conversation's saving status change writes one too (`kind` is `capture`). With the default `request_log_sink: store`, a request that failed before its key was confirmed has no account and is not stored; the `stdout` and `file` sinks write it with `account` and `user_id` set to `null`. Fields are left out when they do not apply.
+The log holds metadata only, never message content, keys or error messages. Every request to a model route (except `.../models`) writes exactly one record, whichever way it ends: answered, refused by the gateway, failed at the provider, cut off mid-stream, or abandoned by the client. A request that saves its turn writes the record after the save. With the default `request_log_sink: store`, a request that failed before its key was confirmed has no account and is not stored; the `stdout` and `file` sinks write it with `account` and `user_id` set to `null`. Fields are left out when they do not apply.
 
 | Field | Meaning |
 | --- | --- |
@@ -68,7 +68,7 @@ The log holds metadata only, never message content, keys or error messages. Ever
 | `event`, `schema` | `request` and `2` for a request record |
 | `request_id` | The gateway's ID for the request; error bodies on model routes carry it too |
 | `received_at`, `method`, `endpoint` | When the gateway received the request (epoch seconds), its HTTP method, and `messages`, `count_tokens`, `chat`, `responses`, `responses_item` or `other` |
-| `kind` | `user`, `continuation`, `auxiliary`, `subagent`, `count`, `passthrough` or `capture`; see [Requests](../gateway/10-overview-and-requests.md#requests) |
+| `kind` | `user`, `continuation`, `auxiliary`, `subagent`, `count` or `passthrough`; see [Requests](../gateway/10-overview-and-requests.md#requests) |
 | `model`, `stream` | The model name the client sent, and whether it asked for a stream |
 | `status` | The HTTP status the client received: the provider's when the gateway relayed it, the gateway's own for a gateway error, `499` when the client left before any response |
 | `upstream_attempted`, `upstream_status` | Whether the gateway sent a request to the provider (a compaction summary call included), and the provider's HTTP status when it answered |
@@ -84,7 +84,8 @@ The log holds metadata only, never message content, keys or error messages. Ever
 | `session_source` | How the conversation was found: `header` (`X-OpenViking-Session`), `reply_match` (the history continues one conversation's reply) or `new` |
 | `recall_reason`, `recall_count`, `recall_ms` | Memory search result code, entries added and search time; see [No memory is added](../gateway/12-troubleshooting.md#no-memory-is-added) |
 | `replay_hits` | Earlier messages whose memory was replayed unchanged |
-| `capture_status`, `capture_reason`, `capture_retry_at` | Saving status (`active`, `disabled`, `retrying`, `paused`, or `lost` on a [saving record](#capture-records)), its reason, and the next retry in epoch seconds; see [Saving status](../gateway/10-overview-and-requests.md#saving-status) |
+| `capture_status`, `capture_reason` | Saving status: `active`, `disabled`, or `failed` when this request ended a turn and writing it to OpenViking failed. The reason is the failure's (an OpenViking reason such as `openviking_http_503`, `openviking_unavailable` or `openviking_circuit_open`, or `save_timeout` or `save_failed`), or else the reason stored with the conversation, such as `manual_reset`; see [Saving status](../gateway/10-overview-and-requests.md#saving-status) |
+| `capture_messages`, `openviking_session` | On a request that saved its turn: how many messages it wrote, and the OpenViking session it wrote them to |
 | `tool_skip_reason` | Why the request got no OpenViking tools; see [When tools are not offered](../gateway/04-openviking-tools.md#when-tools-are-not-offered) |
 | `tool_stop_reason` | `token_budget` when the tool token budget refused further calls; see [Limits](../gateway/04-openviking-tools.md#limits) |
 | `compaction_failed` | Why compaction failed (with `still_over_threshold` the summary was kept); see [Long conversations hit the context limit](../gateway/12-troubleshooting.md#long-conversations-hit-the-context-limit) |
@@ -94,23 +95,11 @@ The log holds metadata only, never message content, keys or error messages. Ever
 | `read_ms`, `auth_ms`, `route_ms`, `prepare_ms` | Time spent reading the body, checking the key (with OpenViking), choosing the upstream, and preparing memory (recall and compaction included) |
 | `added_ms`, `upstream_ttfb_ms`, `first_chunk_ms`, `total_ms` | Time from receipt until the provider request started, from that start until the provider's response headers, from receipt until the first streamed chunk reached the client, and from receipt until the record was written |
 | `compaction_ms` | Time spent on compaction, also when it failed |
-| `bookkeeping_failed` | Steps that failed after the reply was sent: `completed` (saving the turn), `responses` (remembering a Responses ID) or `capture_status` |
+| `bookkeeping_failed` | Steps that failed after the reply was sent: `completed` (recording the reply for later requests) or `responses` (remembering a Responses ID). A failed save is reported in `capture_status` instead |
 
 Fields that start with `first_upstream_` and `hidden_upstream_` split the token usage between the first provider call and the OpenViking tool rounds; the first-call cache hit rate uses the first group.
 
-`/overview` aggregates these records. Besides usage and cache figures, it returns `degradations` (issue code → count), `capture_issues` (conversations retrying or paused), `cache_alerts`, `openviking` (OpenViking's `status`, plus `reason` when degraded) and `log_retention_days`.
-
-### Saving records {#capture-records}
-
-A record with `kind` and `event` set to `capture` describes saving, not a request. It carries `session`, `protocol`, `credential_id`, `capture_status` and `capture_reason` ([Saving status](../gateway/10-overview-and-requests.md#saving-status)). One is written when a conversation's saving status changes, and with `capture_status: lost` and `capture_reason: stage_failed` when a finished turn could not be queued for saving. With `capture_delivery_records: true`, one is also written for every save (`delivered`), every commit (`committed`) and every failed attempt.
-
-| Field | Meaning |
-| --- | --- |
-| `attempts` | Consecutive failed attempts so far, on a failure record |
-| `turns`, `messages` | Turns and messages this save wrote, with `delivered` |
-| `lag_ms` | Time from when the oldest saved turn was queued until this save, with `delivered`. A reply first queued as the conversation's latest reply is queued again when the next request confirms it |
-| `request_id` | The request that queued the first saved turn, with `delivered`, when known. OpenViking receives each turn's request ID as `X-Request-ID` on the writes |
-| `openviking_session` | The OpenViking session written to, with `delivered` and `committed` |
+`/overview` aggregates these records. Besides usage and cache figures, it returns `degradations` (issue code → count), `capture_issues` (`{"failed": n}`: conversations whose latest record says a finished turn was not saved), `cache_alerts`, `openviking` (OpenViking's `status`, plus `reason` when degraded) and `log_retention_days`.
 
 ### Status line {#status-line}
 
@@ -127,8 +116,7 @@ With `snapshot_interval_seconds` above zero, each gateway process writes one JSO
  "records_unlogged": 0, "records_failed": 0, "records_dropped": 0,
  "store_errors": 1,
  "openviking": {"state": "ok", "reason": "", "open_circuits": 0},
- "capture": {"delivered": 18, "failed": 0, "due": 3, "scheduled": 41,
-             "oldest_due_age_s": 12.5, "workers": 4}}
+ "capture": {"delivered": 18, "failed": 0}}
 ```
 
 | Field | Meaning |
@@ -143,11 +131,8 @@ With `snapshot_interval_seconds` above zero, each gateway process writes one JSO
 | `store_errors` | Requests that failed or lost their memory on a state store error (`store_unavailable`, or the issue `memory_store_failure`) |
 | `openviking.state`, `openviking.reason` | The gateway's last OpenViking status check: `ok`, `degraded` or `starting`, and the reason when degraded |
 | `openviking.open_circuits` | OpenViking accounts whose calls are skipped right now because they stopped answering; see [OpenViking is degraded](../gateway/12-troubleshooting.md#openviking-is-degraded) |
-| `capture.delivered` | Conversations whose pending turns this process wrote to OpenViking in the interval |
-| `capture.failed` | Delivery attempts of this process that failed in the interval. `capture.delivered` and `capture.failed` are per process and can be summed across processes |
-| `capture.due`, `capture.scheduled` | Conversations whose saving is due now, and those with any saving scheduled. Left out, with `oldest_due_age_s`, when the store could not be read. They describe the shared store: read them from any one process (with Redis, summing them counts the backlog once per replica) |
-| `capture.oldest_due_age_s` | How long the oldest due saving with a scheduled time has waited; `0` when none. Describes the shared store, like `capture.due`. Neither grows while deliveries are retried, because a retry is scheduled in the future; watch `capture.failed` against `capture.delivered` for saving that is stuck |
-| `capture.workers` | Saving workers still running in this process; can be summed across processes |
+| `capture.delivered` | Finished turns this process wrote to OpenViking in the interval |
+| `capture.failed` | Finished turns whose write failed in this process in the interval. Both counts are per process and can be summed across processes |
 
 ## Upstreams and context profiles {#upstreams-and-context-profiles}
 
@@ -239,7 +224,7 @@ Each imported upstream gets the fixed ID `vlm-<credential id>`, so importing aga
 | GET | `/gateway/admin/keys/{identifier}` | Read one visible key |
 | POST | `/gateway/admin/keys` | Issue a key; `key` in the response is the only time the full secret is returned |
 | DELETE | `/gateway/admin/keys/{identifier}` | Revoke a key; user data is kept |
-| POST | `/gateway/admin/keys/{identifier}/capture/reset` | Start saving a conversation again |
+| POST | `/gateway/admin/keys/{identifier}/capture/reset` | Save a conversation again, to a new OpenViking session |
 | DELETE | `/gateway/admin/users/{user_id}/data` | Admin or root: revoke all of the user's keys and delete their conversation state and logs |
 | DELETE | `/gateway/admin/account/data` | Root: delete all of the account's gateway objects, keys, conversation state and logs |
 
@@ -287,9 +272,9 @@ Save the `key` from the response right away; the gateway keeps only its hash. `G
 
 When the user's OpenViking API key is regenerated or the user is deleted, the gateway keys bound to it stop working and are deleted; the user's data stays. See [Gateway keys](../gateway/09-gateway-keys.md#gateway-keys).
 
-**Resetting saving.** The body is `{"session":"<session header value or the session from the log>","protocol":"chat"}`, where `protocol` is `chat`, `anthropic` or `responses`. On success the response is `{"status":"ready","message":"…"}`, and on the conversation's next request the gateway writes the full history to a new OpenViking session. If the conversation is not found, the response is 404 `not_found`.
+**Resetting saving.** The body is `{"session":"<session header value or the session from the log>","protocol":"chat"}`, where `protocol` is `chat`, `anthropic` or `responses`. On success the response is `{"status":"ready","message":"…"}`, and when the conversation's next turn ends, the gateway writes the full history to a new OpenViking session. If the conversation is not found, the response is 404 `not_found`.
 
-**Deleting data.** Both delete endpoints remove conversation content the gateway has not yet saved, and logs. Sessions and memories already stored in OpenViking are not affected. Retention and the other ways data is deleted are described in [Security and data](../gateway/11-security-and-data.md).
+**Deleting data.** Both delete endpoints remove the conversation state the gateway keeps, and logs. Sessions and memories already stored in OpenViking are not affected. Retention and the other ways data is deleted are described in [Security and data](../gateway/11-security-and-data.md).
 
 ## Errors {#errors}
 

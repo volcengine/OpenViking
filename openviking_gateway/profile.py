@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Session-start profile and catalogs, matching the shared memory plugin."""
+"""Session-start soul, profile and catalogs; the last two match the shared memory plugin."""
 
 import asyncio
 import html
@@ -83,14 +83,18 @@ def format_listing(uri, entries, budget, more_hint):
     return (lines, used, dropped) if used <= budget else ([], 0, len(entries))
 
 
-def sanitize_inline(text):
-    text = neutralize(re.sub(r"\s+", " ", text).strip())
+def contained(text):
+    """``text`` with the gateway's envelopes and this block's own elements made inert."""
     return re.sub(
-        r"</?(?:available-skills|available-memories|user-profile|memory)\b[^>]*>",
+        r"</?(?:agent-soul|available-skills|available-memories|user-profile|memory)\b[^>]*>",
         lambda match: html.escape(match[0], quote=False),
-        text,
+        neutralize(text),
         flags=re.I,
     )
+
+
+def sanitize_inline(text):
+    return contained(re.sub(r"\s+", " ", text).strip())
 
 
 def skill_groups(result):
@@ -178,9 +182,9 @@ async def resolve_user_space(fetch):
     return spaces[0] if len(spaces) == 1 else fallback
 
 
-async def read_profile(fetch, uri):
+async def read_file(fetch, uri):
     result = await fetch("/api/v1/content/read", {"uri": uri}, "")
-    return neutralize(result.strip()) if isinstance(result, str) else ""
+    return contained(result.strip()) if isinstance(result, str) else ""
 
 
 async def ls_dir(fetch, uri):
@@ -202,8 +206,8 @@ async def ls_dir(fetch, uri):
             abstract = entry.get("abstract")
             entries.append(
                 {
-                    "name": neutralize(name),
-                    "abstract": neutralize(abstract.strip()) if isinstance(abstract, str) else "",
+                    "name": contained(name),
+                    "abstract": contained(abstract.strip()) if isinstance(abstract, str) else "",
                 }
             )
     return sorted(entries, key=lambda entry: entry["name"])
@@ -211,9 +215,11 @@ async def ls_dir(fetch, uri):
 
 async def build_profile(viking, key, policy, tools):
     names = {tool["function"]["name"] for tool in tools}
-    catalog = "openviking_read" in names
+    # The budget covers the profile and the catalogs; the soul is added whole.
     budget = policy.profile_max_tokens
-    if not budget or not (policy.profile or catalog):
+    profiled = policy.profile and bool(budget)
+    catalog = "openviking_read" in names and bool(budget)
+    if not (policy.soul or profiled or catalog):
         return {"text": "", "reason": "disabled", "parts": []}
     if viking.unavailable_reason:
         # Like recall, skip the profile while OV is down instead of waiting for its timeout.
@@ -239,6 +245,9 @@ async def build_profile(viking, key, policy, tools):
                     raise ValueError("invalid profile response")
                 return result
         except (VikingError, asyncio.TimeoutError, ValueError) as error:
+            if isinstance(error, VikingError) and error.status == 404:
+                # Nothing is saved there yet, such as a new user's profile.md.
+                return default
             reason = (
                 "profile_timeout"
                 if isinstance(error, asyncio.TimeoutError)
@@ -251,9 +260,10 @@ async def build_profile(viking, key, policy, tools):
         space = await resolve_user_space(fetch)
         root = f"viking://user/{space}/memories"
         paths, requests = [], []
-        if policy.profile:
-            paths.append("profile.md")
-            requests.append(read_profile(fetch, root + "/profile.md"))
+        for path, wanted in (("soul.md", policy.soul), ("profile.md", profiled)):
+            if wanted:
+                paths.append(path)
+                requests.append(read_file(fetch, root + "/" + path))
         if catalog:
             for path in ("preferences", "entities"):
                 paths.append(path)
@@ -268,6 +278,12 @@ async def build_profile(viking, key, policy, tools):
         return format_skill_catalog(skill_groups(result), budget // 4)
 
     (root, values), skill_text = await asyncio.gather(memories(), skills())
+    soul = values.get("soul.md", "")
+    soul_text = (
+        f'<agent-soul uri="{html.escape(root + "/soul.md", quote=True)}">\n{soul}\n</agent-soul>'
+        if soul
+        else ""
+    )
     remaining = budget - estimate_tokens(skill_text) - bool(skill_text)
     profile = values.get("profile.md", "")
     profile_text = ""
@@ -295,7 +311,12 @@ async def build_profile(viking, key, policy, tools):
         if pref or ent
         else ""
     )
-    produced = {"profile": profile_text, "memories": memory_text, "skills": skill_text}
+    produced = {
+        "soul": soul_text,
+        "profile": profile_text,
+        "memories": memory_text,
+        "skills": skill_text,
+    }
     text = "\n".join(part for part in produced.values() if part)
     reason = "injected" if text else "empty"
     if failures:

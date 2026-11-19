@@ -43,7 +43,9 @@ export function WikiDashboardPane({
         kind="file"
         data={query.data?.kind === 'file' ? query.data.data : undefined}
         onOpenUri={onOpenUri && (() => onOpenUri(uri))}
-        onEditConflict={editConflict}
+        onEditConflict={
+          editConflict && (({ matchText }) => editConflict(matchText))
+        }
       />
     );
   return (

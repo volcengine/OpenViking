@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from openviking.concurrency import bounded_map
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.storage.abstract_overview import parse_overview_file_summaries
 from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.resource_diff import ContentState, IndexState
@@ -1375,15 +1376,15 @@ async def execute_content_tree_actions(
     async def run_action(action: ContentTreeAction, operation: Any) -> None:
         try:
             await operation
-        except Exception:
-            logger.exception(
-                "[ContentTreeActionFailed] %s operation=%s relative_path=%s "
-                "old_kind=%s new_kind=%s",
+        except Exception as _log_error:
+            logger.debug(
+                "Content tree action failed %s operation=%s relative_path=%s old_kind=%s new_kind=%s error_type=%s",
                 log_correlation(),
                 action.operation.value,
-                action.relative_path,
+                safe_path_for_log(str(action.relative_path)),
                 action.old_kind or "-",
                 action.new_kind or "-",
+                type(_log_error).__name__,
             )
             raise
 

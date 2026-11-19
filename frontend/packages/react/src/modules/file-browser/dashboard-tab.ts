@@ -1,3 +1,4 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
 import { createElement, type ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
@@ -19,6 +20,7 @@ export function createDashboardTab(
     conflictRevision,
     isFile,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     onOpenUri,
     onOpenDashboard,
@@ -30,6 +32,7 @@ export function createDashboardTab(
     conflictRevision: number;
     isFile: boolean;
     experienceDataSource?: FileBrowserExperienceDataSource;
+    experienceDashboardSlots?: ExperienceDashboardProps['slots'];
     renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
     onOpenUri: (uri: string) => void;
     onOpenDashboard: (uri: string) => void;
@@ -54,6 +57,7 @@ export function createDashboardTab(
         ? createElement(ExperienceDashboardPane, {
             ...common,
             dataSource: experienceDataSource,
+            slots: experienceDashboardSlots,
             refreshGeneration: generation,
           })
         : createElement(WikiDashboardPane, {

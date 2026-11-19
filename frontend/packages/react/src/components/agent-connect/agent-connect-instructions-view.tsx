@@ -56,11 +56,11 @@ export function AgentConnectInstructionsView({
         <Button
           ref={exposure}
           size="mini"
-          type="text"
           className="ov-agent-connect__copy"
           htmlType="button"
           disabled={status === 'pending'}
           onClick={() => void copy()}
+          type="primary"
         >
           <CopyIcon aria-hidden="true" />
           {status === 'copied' ? labels.copied : copyLabel}

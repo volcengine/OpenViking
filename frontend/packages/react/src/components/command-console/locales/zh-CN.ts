@@ -2,6 +2,8 @@ import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ResolvedCommandConsoleLabels } from '../command-console-labels.js';
 
 const messages = {
+  quoteArguments:
+    '路径或文案含空格时，用引号包住整个值，例如 "release notes"。',
   placeholder: '>_ 输入 CLI 命令，如 ov find OpenViking',
   unavailableMessage: '当前无法执行命令。',
   send: '发送',

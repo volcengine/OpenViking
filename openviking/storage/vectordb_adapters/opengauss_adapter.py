@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.expr import FilterExpr, Or
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb_adapters.base import (
@@ -170,13 +171,7 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             self._conn = None
             self._pool = None
             raise
-        logger.info(
-            "opengauss_adapter: connected to %s:%s db=%s (distributed=%s)",
-            self._host,
-            self._port,
-            self._db_name,
-            self._distributed,
-        )
+        logger.info("openGauss connection established distributed=%s", self._distributed)
 
     # ------------------------------------------------------------------
     # CollectionAdapter: required overrides
@@ -304,10 +299,9 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
         self._collection = Collection(og_coll)
 
         if "content" not in og_coll._get_all_columns():
-            logger.warning(
-                "openGauss collection %s has no content column; keyword search is unavailable. "
-                "Existing schema is unchanged; grep engine=auto keeps the filesystem fallback.",
-                self._collection_name,
+            logger.info(
+                "openGauss collection %s has no content column; keyword search is unavailable. Existing schema is unchanged; grep engine=auto keeps the filesystem fallback.",
+                short_hash(str(self._collection_name)),
             )
 
     def create_collection(
@@ -349,10 +343,11 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             if partial_collection is not None:
                 try:
                     partial_collection.drop()
-                except Exception:
-                    logger.exception(
-                        "opengauss_adapter: failed to clean up partially created collection %s",
-                        name,
+                except Exception as _log_error:
+                    logger.info(
+                        "opengauss_adapter: failed to clean up partially created collection %s error_type=%s",
+                        short_hash(str(name)),
+                        type(_log_error).__name__,
                     )
             raise
         finally:
@@ -494,7 +489,7 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
             og_coll._pending_indexes.pop(self._index_name, None)
             logger.info(
                 "opengauss_adapter: recovered configured vector index %s",
-                normalized_meta["_pg_index_name"],
+                type(normalized_meta["_pg_index_name"]).__name__,
             )
             return
         og_coll.create_index(self._index_name, requested_meta)
@@ -601,11 +596,12 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
                         (self._collection_name,),
                     )
                     self._conn.commit()
-                except Exception:
+                except Exception as _log_error:
                     self._conn.rollback()
-                    logger.exception(
-                        "opengauss_adapter: failed to clean up orphan collection %s",
-                        self._collection_name,
+                    logger.info(
+                        "opengauss_adapter: failed to clean up orphan collection %s error_type=%s",
+                        short_hash(str(self._collection_name)),
+                        type(_log_error).__name__,
                     )
                 finally:
                     cursor.close()

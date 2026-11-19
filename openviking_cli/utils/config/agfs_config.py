@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field, model_validator
 
 from openviking_cli.utils.logger import get_logger
+
 from .cache_config import validate_cache_instance_name
 
 logger = get_logger(__name__)
@@ -221,7 +222,9 @@ class RedisCacheConfig(BaseModel):
     db: int = Field(default=0, description="Redis database number")
     pool_size: int = Field(default=32, description="Redis command concurrency")
     connect_timeout_ms: int = Field(default=10000, description="Redis connect timeout")
-    command_timeout_ms: int = Field(default=0, description="Redis command timeout; 0 disables command timeout")
+    command_timeout_ms: int = Field(
+        default=0, description="Redis command timeout; 0 disables command timeout"
+    )
     default_ttl_seconds: int = Field(default=300, description="Redis default cache TTL")
     tls_insecure_skip_verify: bool = Field(
         default=False, description="Skip Redis TLS certificate verification"
@@ -292,9 +295,9 @@ class AGFSPathLockConfig(BaseModel):
     def ignore_deprecated_lock_timeout(self):
         """Warn and force the deprecated timeout back to the fixed runtime value."""
         if "lock_timeout_secs" in self.model_fields_set:
-            logger.warning(
-                "AGFSPathLockConfig: 'storage.agfs.pathlock.lock_timeout_secs' is deprecated "
-                "and ignored; the runtime wait timeout is fixed at 0.0 seconds."
+            logger.info(
+                "'storage.agfs.pathlock.lock_timeout_secs' is deprecated and ignored; the runtime wait timeout is fixed at 0.0 seconds.",
+                extra={"degraded": True},
             )
             self.lock_timeout_secs = 0.0
         return self
@@ -513,9 +516,10 @@ class AGFSConfig(BaseModel):
         )
         for field_name in deprecated_fields:
             if field_name in self.model_fields_set:
-                logger.warning(
-                    "AGFSConfig: 'storage.agfs.%s' is deprecated and ignored after the RAGFS migration.",
+                logger.info(
+                    "deprecated AGFS configuration field ignored field=%s",
                     field_name,
+                    extra={"degraded": True},
                 )
 
         if self.backend not in ["local", "s3", "memory"]:
@@ -531,16 +535,15 @@ class AGFSConfig(BaseModel):
             self.s3.validate_config()
 
         if self.queue_db_path is not None and self.queuefs.db_path is None:
-            logger.warning(
-                "AGFSConfig: 'storage.agfs.queue_db_path' is deprecated; "
-                "prefer 'storage.agfs.queuefs.db_path'."
+            logger.info(
+                "'storage.agfs.queue_db_path' is deprecated; prefer 'storage.agfs.queuefs.db_path'."
             )
 
         if self.queuefs.backend == "memory":
             if self.queuefs.db_path is not None or self.queue_db_path is not None:
-                logger.warning(
-                    "AGFSConfig: QueueFS backend is 'memory'; "
-                    "db_path/queue_db_path will be ignored."
+                logger.info(
+                    "queueFS backend is 'memory'; db_path/queue_db_path will be ignored.",
+                    extra={"degraded": True},
                 )
 
         if self.backups is not None:

@@ -177,6 +177,8 @@ export interface VikingBotMessage {
   createdAt?: string;
   /** 该助手消息是否仍在生成中。Whether the assistant message is still being written. */
   streaming?: boolean;
+  /** 助手回复被中断。The assistant reply was interrupted before completion. */
+  interrupted?: boolean;
   /**
    * system 消息的语气，缺省为 `info`；`error` 用于连接中断等提示。
    * Tone of a system message, `info` by default; `error` for failures.
@@ -206,6 +208,12 @@ export interface VikingBotMessage {
     key: string;
     /** 动作文案。Action label. */
     label?: ReactNode;
+    /** 按钮样式，缺省为普通按钮。Button appearance, standard by default. */
+    appearance?: 'pill';
+    /** 按钮图标。Decorative button icon. */
+    icon?: ReactNode;
+    /** 显示加载图标并禁用按钮。Shows a spinner and disables the button. */
+    loading?: boolean;
     /** 动作状态。Action status. */
     status?: 'idle' | 'pending' | 'submitted' | 'success' | 'error';
     /** 不可用时的说明。Reason shown when unavailable. */
@@ -261,6 +269,12 @@ export interface VikingBotLabels {
   toolOutput?: string;
   similarity?: string;
   sessionHistory?: string;
+  /** 会话操作菜单名称。 Accessible name of a session’s action menu. */
+  sessionActions?: string;
+  /** 重命名菜单项。 Rename menu item. */
+  renameSessionAction?: string;
+  /** 删除菜单项。 Delete menu item. */
+  removeSessionAction?: string;
   session?: string;
   locateSession?: string;
   emptySessions?: string;

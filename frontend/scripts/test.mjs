@@ -41,6 +41,7 @@ try {
               'browser-search-results':
                 './src/modules/file-browser/file-browser-search-results.tsx',
               'fs-tree': './src/modules/file-browser/use-fs-tree.ts',
+              'directory-rows': './src/shared/directory-tree/rows.ts',
               'browser-preview-model': './src/modules/file-browser/fs-model.ts',
               'scope-page':
                 './src/modules/file-browser/use-search-scope-page.ts',
@@ -87,6 +88,9 @@ try {
               'console-hitl-summary': './src/modules/console/hitl/summary.ts',
               'console-conversation':
                 './src/modules/console/use-conversation.tsx',
+              'console-bot-activation':
+                './src/modules/console/use-bot-activation.ts',
+              'console-overlays': './test/fixtures/console-overlays.tsx',
               provider: './src/client/provider.tsx',
               'request-errors': './src/client/error-events.ts',
               'observe-errors': './src/client/observe-errors.ts',

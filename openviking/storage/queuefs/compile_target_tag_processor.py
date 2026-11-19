@@ -8,6 +8,7 @@ from typing import Any
 
 from async_timeout import timeout
 
+from openviking.observability.log_safety import safe_log_fields
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -163,9 +164,9 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
     def _warn(payload: dict, attempt: int, error: Exception) -> None:
         """Log the first failure and exponentially spaced repeats without raw errors."""
         if attempt == 0 or attempt & (attempt - 1) == 0:
-            logger.warning(
-                "Compile target tag retry task_id=%s attempt=%d error_type=%s",
-                payload.get("task_id"),
+            logger.info(
+                "Compile target tag retry attempt=%d error_type=%s",
                 attempt + 1,
                 type(error).__name__,
+                extra=safe_log_fields({"task_id": payload.get("task_id")}),
             )

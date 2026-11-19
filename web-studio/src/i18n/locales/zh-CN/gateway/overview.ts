@@ -133,18 +133,16 @@ const overview = {
     description: '为新消息检索记忆，并保存对话。',
     version: '版本',
     unreachable:
-      '连不上 OpenViking 期间，请求照常发给模型，只是不带记忆；保存对话会一直重试，直到 OpenViking 恢复。',
+      '连不上 OpenViking 期间，请求照常发给模型，只是不带记忆，这期间结束的轮次也存不进去；恢复后，每段对话的下一轮结束时会补存缺失的内容。',
     starting: '网关还没完成对 OpenViking 的首次检查，请稍后刷新。',
   },
   saving: {
     title: '保存对话',
     ok: '最近的请求中没有保存失败的对话。',
-    retrying_one: '有 {{count}} 段对话保存到 OpenViking 失败，正在重试。',
-    retrying_other: '有 {{count}} 段对话保存到 OpenViking 失败，正在重试。',
-    paused_one:
-      '有 {{count}} 段对话多次保存失败，已暂停保存；网关每 5 分钟重试一次。',
-    paused_other:
-      '有 {{count}} 段对话多次保存失败，已暂停保存；网关每 5 分钟重试一次。',
+    failed_one:
+      '有 {{count}} 段对话最近一轮没能保存到 OpenViking，下一轮结束时会补存缺失的内容。',
+    failed_other:
+      '有 {{count}} 段对话最近一轮没能保存到 OpenViking，下一轮结束时会补存缺失的内容。',
   },
   degraded: {
     title: '降级请求',

@@ -17,6 +17,7 @@ from openviking.models.embedder.base import (
     embedder_supports_multimodal,
 )
 from openviking.models.rerank import RerankClient
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.retrieve.rerank_scoring import RerankScores, finite_score, rerank_scores
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
@@ -91,13 +92,10 @@ class HierarchicalRetriever:
         # Initialize rerank client — all providers go through unified dispatch
         if rerank_config and rerank_config.is_available():
             self._rerank_client = RerankClient.from_config(rerank_config)
-            provider = rerank_config._effective_provider()
-            logger.info(
-                f"[HierarchicalRetriever] Rerank enabled (provider={provider}), threshold={self.rerank_threshold}"
-            )
+            logger.debug("retrieval rerank enabled threshold=%s", self.rerank_threshold)
         else:
             self._rerank_client = None
-            logger.info("[HierarchicalRetriever] Rerank not configured, using vector search only")
+            logger.debug("retrieval rerank not configured; using vector search only")
 
     async def retrieve(
         self,
@@ -156,9 +154,10 @@ class HierarchicalRetriever:
             has_explicit_target = bool(target_dirs)
 
         if not await vector_proxy.collection_exists_bound():
-            logger.warning(
-                "[HierarchicalRetriever] Collection %s does not exist",
-                vector_proxy.collection_name,
+            logger.info(
+                "retrieval collection missing; returning empty results collection_hash=%s",
+                short_hash(vector_proxy.collection_name),
+                extra={"degraded": True},
             )
             return QueryResult(
                 query=query,
@@ -316,6 +315,7 @@ class HierarchicalRetriever:
     ) -> List[MatchedContext]:
         """Convert candidates to contexts ordered by vector or rerank score."""
         results = []
+        failed_abstracts = 0
         for c in candidates:
             final_score = self._finite_score(c.get("_final_score", c.get("_score", 0.0)))
             level = c.get("level", 2)
@@ -330,7 +330,12 @@ class HierarchicalRetriever:
                 try:
                     abstract = body_for_preview(abstract)
                 except AbstractOverviewFormatError as exc:
-                    logger.warning("Malformed sidecar in retrieval result %s: %s", display_uri, exc)
+                    failed_abstracts += 1
+                    logger.debug(
+                        "retrieval sidecar malformed; using empty abstract uri=%s error_type=%s",
+                        safe_uri_for_log(display_uri),
+                        type(exc).__name__,
+                    )
                     abstract = ""
 
             results.append(
@@ -349,6 +354,13 @@ class HierarchicalRetriever:
                 )
             )
 
+        if failed_abstracts:
+            logger.info(
+                "retrieval previews degraded; using empty abstracts total=%d failed=%d",
+                len(candidates),
+                failed_abstracts,
+                extra={"degraded": True, "total": len(candidates), "failed": failed_abstracts},
+            )
         results.sort(key=lambda x: x.score, reverse=True)
         return results
 

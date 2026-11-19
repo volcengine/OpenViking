@@ -55,6 +55,7 @@
 .ov-auth,
 .ov-agent-connect,
 .ov-console,
+.ov-console-skeleton,
 .ov-divider,
 .ov-file-browser-action-bar,
 .ov-drawer,
@@ -226,6 +227,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-auth,
 .dark .ov-agent-connect,
 .dark .ov-console,
+.dark .ov-console-skeleton,
 .dark .ov-divider,
 .dark .ov-file-browser-action-bar,
 .dark .ov-drawer,
@@ -669,4 +671,14 @@ html.dark .ov-notification-stack {
 
 .ov-toast-stack {
   --ov-ui-toast-shadow-default: var(--ov-ui-overlay-shadow-default);
+}
+
+/* VikingBot activation cover, shown when the host supplies no tutorial media. */
+.ov-console {
+  --ov-ui-activation-preview-sky-default: #7ab7f6;
+  --ov-ui-activation-preview-haze-default: #dce1f6;
+}
+.dark .ov-console {
+  --ov-ui-activation-preview-sky-default: #315b92;
+  --ov-ui-activation-preview-haze-default: #292841;
 }

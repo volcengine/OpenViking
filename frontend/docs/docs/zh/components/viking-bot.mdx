@@ -128,19 +128,20 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### VikingBotMessage
 
-| 参数          | 说明                                                                                                | 类型                                                                                                                               | 默认值   |
-| ------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| id            | 消息的唯一标识                                                                                      | `string`                                                                                                                           | 必填     |
-| role          | 消息角色；`system` 显示为提示条，`tool` 用于独立的工具块                                            | `'user' \| 'assistant' \| 'system' \| 'tool'`                                                                                      | 必填     |
-| parts         | 消息内容，由多个片段组成                                                                            | `readonly VikingBotMessagePart[]`                                                                                                  | 必填     |
-| turnId        | 轮次标识；相邻的助手消息 `turnId` 相同或任一条未设置时，合并为一轮显示                              | `string`                                                                                                                           | -        |
-| createdAt     | 创建时间，ISO 时间字符串；用户消息和每轮最后一条含文本的助手回复在悬停或聚焦时显示，格式随 `locale` | `string`                                                                                                                           | -        |
-| streaming     | 该助手消息是否仍在生成；为 `true` 且没有片段时显示加载气泡                                          | `boolean`                                                                                                                          | -        |
-| tone          | `system` 消息的语气，`'error'` 显示淡红底、细边框的行内错误提示                                     | `'info' \| 'error'`                                                                                                                | `'info'` |
-| clientError   | 客户端失败原文，仅用于展示，不保存到会话或发送给模型                                                | `Error`                                                                                                                            | -        |
-| action        | 消息下方的动作按钮，点击后触发 `onMessageAction`                                                    | `{ key: string; label?: ReactNode; status?: 'idle' \| 'pending' \| 'submitted' \| 'success' \| 'error'; disabledReason?: string }` | -        |
-| answerSummary | 提交答案的可读标签和值，替换用户气泡及复制展示，保留 `parts` 原文                                   | `readonly { label: string; value: string }[]`                                                                                      | -        |
-| actions       | 合并同一轮助手消息后保留的动作清单，每项带原消息 ID；由组件生成，一般不需要设置                     | `readonly { messageId: string; action: NonNullable<VikingBotMessage['action']> }[]`                                                | -        |
+| 参数          | 说明                                                                                                | 类型                                                                                | 默认值   |
+| ------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------- |
+| id            | 消息的唯一标识                                                                                      | `string`                                                                            | 必填     |
+| role          | 消息角色；`system` 显示为提示条，`tool` 用于独立的工具块                                            | `'user' \| 'assistant' \| 'system' \| 'tool'`                                       | 必填     |
+| parts         | 消息内容，由多个片段组成                                                                            | `readonly VikingBotMessagePart[]`                                                   | 必填     |
+| turnId        | 轮次标识；相邻的助手消息 `turnId` 相同或任一条未设置时，合并为一轮显示                              | `string`                                                                            | -        |
+| createdAt     | 创建时间，ISO 时间字符串；用户消息和每轮最后一条含文本的助手回复在悬停或聚焦时显示，格式随 `locale` | `string`                                                                            | -        |
+| streaming     | 该助手消息是否仍在生成；为 `true` 且没有片段时显示加载气泡                                          | `boolean`                                                                           | -        |
+| interrupted   | 助手回复在完成前被中断                                                                              | `boolean`                                                                           | -        |
+| tone          | `system` 消息的语气，`'error'` 显示淡红底、细边框的行内错误提示                                     | `'info' \| 'error'`                                                                 | `'info'` |
+| clientError   | 客户端失败原文，仅用于展示，不保存到会话或发送给模型                                                | `Error`                                                                             | -        |
+| action        | 消息下方的动作按钮，点击后触发 `onMessageAction`                                                    | `VikingBotMessage['action']`                                                        | -        |
+| answerSummary | 提交答案的可读标签和值，替换用户气泡及复制展示，保留 `parts` 原文                                   | `readonly { label: string; value: string }[]`                                       | -        |
+| actions       | 合并同一轮助手消息后保留的动作清单，每项带原消息 ID；由组件生成，一般不需要设置                     | `readonly { messageId: string; action: NonNullable<VikingBotMessage['action']> }[]` | -        |
 
 ### VikingBotMessage.action
 
@@ -148,6 +149,9 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | -------------- | -------------------------------------------------- | ------------------------------------------------------------ | ------ |
 | key            | 动作标识，作为 `onMessageAction` 的第二个参数      | `string`                                                     | 必填   |
 | label          | 按钮文案，省略时显示 `key`                         | `ReactNode`                                                  | -      |
+| appearance     | 设为 `'pill'` 使用胶囊形按钮                       | `'pill'`                                                     | -      |
+| icon           | 按钮的装饰图标                                     | `ReactNode`                                                  | -      |
+| loading        | 显示加载图标并禁用按钮                             | `boolean`                                                    | false  |
 | status         | 动作状态；为 `'pending'` 或 `'success'` 时按钮禁用 | `'idle' \| 'pending' \| 'submitted' \| 'success' \| 'error'` | -      |
 | disabledReason | 设置后按钮禁用，原因作为悬停提示                   | `string`                                                     | -      |
 
@@ -284,21 +288,24 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### VikingBotSessions
 
-| 参数          | 说明                                                                              | 类型                                                                         | 默认值  |
-| ------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------- |
-| items         | 会话列表                                                                          | `readonly VikingBotSession[]`                                                | 必填    |
-| onSelect      | 选择历史会话时触发，参数为会话 ID                                                 | `(id: string) => void`                                                       | 必填    |
-| onNew         | 点击新建会话时触发                                                                | `() => void`                                                                 | 必填    |
-| scopeKey      | 会话作用域的稳定标识或对象引用。切换账号或服务时更新，关闭确认框。                | `string \| object`                                                           | -       |
-| currentId     | 当前会话 ID；设置后头部显示可复制的会话标识（过长时中间省略），历史列表中高亮该项 | `string`                                                                     | -       |
-| currentUri    | 当前会话对应的资源 URI；与 `onOpenUri` 一起设置时显示定位按钮                     | `string`                                                                     | -       |
-| isLoading     | 是否正在加载历史会话                                                              | `boolean`                                                                    | `false` |
-| error         | 历史会话的加载错误                                                                | `string`                                                                     | -       |
-| hasMore       | 是否还有更多历史会话；与 `onLoadMore` 一起设置时显示「加载更多」                  | `boolean`                                                                    | `false` |
-| onOpenHistory | 打开历史会话列表时触发                                                            | `() => void`                                                                 | -       |
-| onRename      | 保存会话标题，提供后可从历史列表重命名                                            | `(id: string, title: string) => Promise<boolean \| void> \| boolean \| void` | -       |
-| onRemove      | 确认后删除会话                                                                    | `(id: string) => Promise<boolean \| void> \| boolean \| void`                | -       |
-| onLoadMore    | 点击「加载更多」时触发                                                            | `() => void`                                                                 | -       |
+| 参数                 | 说明                                                                              | 类型                                                                         | 默认值  |
+| -------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------- |
+| items                | 会话列表                                                                          | `readonly VikingBotSession[]`                                                | 必填    |
+| onSelect             | 选择历史会话时触发，参数为会话 ID                                                 | `(id: string) => void`                                                       | 必填    |
+| onNew                | 点击新建会话时触发                                                                | `() => void`                                                                 | 必填    |
+| scopeKey             | 会话作用域的稳定标识或对象引用。切换账号或服务时更新，关闭确认框。                | `string \| object`                                                           | -       |
+| currentId            | 当前会话 ID；设置后头部显示可复制的会话标识（过长时中间省略），历史列表中高亮该项 | `string`                                                                     | -       |
+| currentUri           | 当前会话对应的资源 URI；与 `onOpenUri` 一起设置时显示定位按钮                     | `string`                                                                     | -       |
+| isLoading            | 是否正在加载历史会话                                                              | `boolean`                                                                    | `false` |
+| error                | 历史会话的加载错误                                                                | `string`                                                                     | -       |
+| hasMore              | 是否还有更多历史会话；提供任一分页回调时显示「加载更多」                          | `boolean`                                                                    | `false` |
+| onOpenHistory        | 打开历史会话列表时触发                                                            | `() => void`                                                                 | -       |
+| onRename             | 保存会话标题，提供后可从历史列表重命名                                            | `(id: string, title: string) => Promise<boolean \| void> \| boolean \| void` | -       |
+| onRemove             | 确认后删除会话                                                                    | `(id: string) => Promise<boolean \| void> \| boolean \| void`                | -       |
+| onLoadMore           | 无参加载下一页，可直接传入 TanStack Query 的 `fetchNextPage`                      | `() => void`                                                                 | -       |
+| onLoadMoreWithSignal | 可选的分页取消接口，优先于 `onLoadMore`                                           | `(signal: AbortSignal) => unknown`                                           | -       |
+
+当 `currentId` 不在已加载的记录中，打开历史面板会继续翻页，直到找到当前会话、到达末页或没有新的记录。请返回请求 Promise 或在加载期间设置 `isLoading`。关闭面板或切换账号、会话时，会取消 `onLoadMoreWithSignal` 收到的信号。面板会忽略两个回调在取消后返回的完成或错误状态。
 
 返回 `false` 或抛出错误时，对话框会保留，以便重试。
 

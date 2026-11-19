@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import ICollection
 from openviking.storage.vectordb.collection.result import (
@@ -20,7 +21,9 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApiWithApiKey,
 )
 from openviking.utils.search_filters import VALID_TIME_FIELDS
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class VolcengineApiKeyCollection(ICollection):
@@ -179,8 +182,12 @@ class VolcengineApiKeyCollection(ICollection):
         try:
             result = response.json()
             return result.get("result", {})
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON response from %s", path)
+        except json.JSONDecodeError as _log_error:
+            logger.info(
+                "Invalid JSON response from %s error_type=%s",
+                safe_path_for_log(str(path)),
+                type(_log_error).__name__,
+            )
             return {}
 
     def _data_get(self, path: str, params: Dict[str, Any]):
@@ -190,8 +197,12 @@ class VolcengineApiKeyCollection(ICollection):
         try:
             result = response.json()
             return result.get("result", {})
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON response from %s", path)
+        except json.JSONDecodeError as _log_error:
+            logger.info(
+                "Invalid JSON response from %s error_type=%s",
+                safe_path_for_log(str(path)),
+                type(_log_error).__name__,
+            )
             return {}
 
     def _parse_fetch_result(self, data: Dict[str, Any]) -> FetchDataInCollectionResult:

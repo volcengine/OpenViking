@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import re
 import sys
 from unittest.mock import AsyncMock, Mock, call
 
@@ -34,6 +36,7 @@ def probe(monkeypatch):
     ],
 )
 async def test_public_startup_waits_with_capped_backoff(probe, caplog, error):
+    caplog.set_level(logging.INFO, logger="openviking_gateway.standalone")
     health, sleep = probe
     ready = {"status": "ok", "auth_mode": "api_key"}
     health.side_effect = [error] * 7 + [ready]
@@ -44,7 +47,7 @@ async def test_public_startup_waits_with_capped_backoff(probe, caplog, error):
     assert health.await_args_list == [call(require_identity=False)] * 8
     assert sleep.await_args_list == [call(delay) for delay in (1, 2, 4, 8, 16, 30, 30)]
     assert len(caplog.records) == 7
-    assert all(record.levelno == logging.WARNING for record in caplog.records)
+    assert all(record.levelno == logging.INFO for record in caplog.records)
     assert error.reason in caplog.text
 
 
@@ -109,7 +112,7 @@ def test_main_passes_keep_alive_to_uvicorn(tmp_path, monkeypatch):
     assert run.call_args.kwargs["timeout_keep_alive"] == 90.5
 
 
-def test_log_path_writes_json_lines(tmp_path, monkeypatch):
+def test_log_path_uses_common_output(tmp_path, monkeypatch):
     from openviking_gateway.client import CALL, CallContext
     from openviking_gateway.sinks import configure_logging
 
@@ -136,15 +139,17 @@ def test_log_path_writes_json_lines(tmp_path, monkeypatch):
         for handler in saved[0]:
             root.addHandler(handler)
         root.setLevel(saved[1])
-    lines = [json.loads(line) for line in path.read_text().splitlines()]
-    assert [(r["level"], r["logger"], r["message"]) for r in lines] == [
-        ("WARNING", "openviking_gateway.test", "upstream chat failed"),
-        ("ERROR", "openviking_gateway.test", "request failed"),
-        ("INFO", "server.test", "Started server process"),
+    lines = path.read_text().splitlines()
+    headers = [line.split(" message=", 1)[0].split() for line in lines]
+    assert [(h[1], h[2]) for h in headers] == [
+        ("WARNING", "openviking_gateway.test"),
+        ("ERROR", "openviking_gateway.test"),
+        ("INFO", "server.test"),
     ]
-    assert [r.get("request_id") for r in lines] == ["req-1", "req-1", None]
-    assert "ValueError: boom" in lines[1]["exc"] and "exc" not in lines[0]
-    assert all(isinstance(r["time"], float) for r in lines)
+    assert [h[4] for h in headers] == ["request_id=req-1", "request_id=req-1", "request_id=-"]
+    assert all(h[3] == f"pid={os.getpid()}" and h[5] == "trace_id=-" for h in headers)
+    assert all(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", h[0]) for h in headers)
+    assert "boom" not in path.read_text() and "\x1b" not in path.read_text()
 
     # The host installs it in each worker and lets uvicorn's loggers reach it.
     config = tmp_path / "gateway.conf"
@@ -158,10 +163,10 @@ def test_log_path_writes_json_lines(tmp_path, monkeypatch):
     cli.main()
     assert run.call_args.kwargs["log_config"] is None
     cli.factory()
-    configure.assert_called_once_with(str(path))
+    assert configure.call_args.args == (str(path),)
 
 
-def test_no_log_path_keeps_uvicorn_logging(tmp_path, monkeypatch):
+def test_no_log_path_uses_common_uvicorn_logging(tmp_path, monkeypatch):
     config = tmp_path / "gateway.conf"
     config.write_text(json.dumps({"openviking_url": "http://ov.test"}))
     monkeypatch.setattr(sys, "argv", ["openviking-gateway", "--config", str(config)])
@@ -172,5 +177,5 @@ def test_no_log_path_keeps_uvicorn_logging(tmp_path, monkeypatch):
     monkeypatch.setattr("uvicorn.run", run)
     cli.main()
     cli.factory()
-    assert "log_config" not in run.call_args.kwargs
-    configure.assert_not_called()
+    assert run.call_args.kwargs["log_config"] is None
+    assert configure.call_args.args == ("",)

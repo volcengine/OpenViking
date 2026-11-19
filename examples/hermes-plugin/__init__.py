@@ -213,7 +213,8 @@ _INVALID_SETTING_WARNINGS_LOCK = threading.Lock()
 def _gateway_peer_id(platform: str, sender: Any) -> str:
     """Namespace transport IDs and encode path-like IDs without merging distinct senders."""
     platform, sender = str(platform or "").strip().lower(), str(sender or "").strip()
-    if not platform or not sender:
+    # The CLI reports its OS owner (uid:<n>) as user_id; that is the OpenViking user, not a sender.
+    if not platform or not sender or platform == "cli":
         return ""
     raw = f"{platform}.{sender}"
     if len(raw) <= 128 and re.fullmatch(r"[a-zA-Z0-9_.@-]+", raw) and raw.count("@") <= 1:

@@ -34,8 +34,8 @@ const fixed = {
 const documentBody = `${body}\n${fixedSentence}`;
 const fileContent = `${documentBody}\n<!-- CONFLICTS_CONTENT\n${JSON.stringify(pending)},\n${JSON.stringify(fixed)}\n-->`;
 
-function wikiSaveNotice() {
-  const card = document.querySelector('.ov-notification--loading');
+function wikiSaveNotice(type = 'loading') {
+  const card = document.querySelector(`.ov-notification--${type}`);
   return (
     card && {
       title: card.querySelector('.ov-notification__title')?.textContent,

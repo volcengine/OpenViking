@@ -1,5 +1,8 @@
+import type {
+  CommandConsoleCommandDefinition,
+  CommandConsoleCommandOption,
+} from './command-catalog.js';
 import { getCommandConsoleCommandInputText } from './command-input.js';
-import type { CommandConsoleCommandDefinition } from './command-catalog.js';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
 import { getCommandConsoleSafeHref } from './command-console-text.js';
 
@@ -17,19 +20,15 @@ export function CommandConsoleParamHint({
   const examples = command.examples?.map((example) =>
     typeof example === 'string' ? { value: example, label: example } : example,
   );
+  const details = command.parameterDetails;
   const params = [
     ...(command.params ?? []).map((param) => ({
-      name: param.label,
+      token: param.label,
       description: param.description,
       required: param.required ?? false,
       defaultValue: param.defaultValue,
     })),
-    ...(command.options ?? []).map((option) => ({
-      name: option.token,
-      description: option.description,
-      required: option.required ?? false,
-      defaultValue: option.defaultValue,
-    })),
+    ...(details?.options ?? command.options ?? []),
   ];
   return (
     <div className="ov-command-console__hint">
@@ -102,38 +101,65 @@ export function CommandConsoleParamHint({
         <div className="ov-command-console__hint-section-title">
           {labels.parameters}
         </div>
-        <code className="ov-command-console__hint-usage">{command.usage}</code>
+        <code className="ov-command-console__hint-usage">
+          {details?.usage ?? command.usage}
+        </code>
         {params.length ? (
-          <div className="ov-command-console__hint-table-frame">
-            <table className="ov-command-console__hint-table">
-              <thead>
-                <tr>
-                  <th>{labels.parameter}</th>
-                  <th>{labels.required}</th>
-                  <th>{labels.description}</th>
-                  <th>{labels.defaultValue}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {params.map((param) => (
-                  <tr key={param.name}>
-                    <td>
-                      <code>{param.name}</code>
-                    </td>
-                    <td>{param.required ? labels.yes : labels.no}</td>
-                    <td>{param.description}</td>
-                    <td>{param.defaultValue ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="ov-command-console__hint-desc">
+              {labels.quoteArguments}
+            </div>
+            <ParameterTable params={params} labels={labels} />
+          </>
         ) : (
           <div className="ov-command-console__hint-empty">
             {labels.noParameters}
           </div>
         )}
       </div>
+      {details?.extra && (
+        <div className="ov-command-console__hint-group">
+          <div className="ov-command-console__hint-desc">
+            {details.extra.description}
+          </div>
+          <ParameterTable params={details.extra.options} labels={labels} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ParameterTable({
+  params,
+  labels,
+}: {
+  params: readonly CommandConsoleCommandOption[];
+  labels: ResolvedCommandConsoleLabels;
+}) {
+  return (
+    <div className="ov-command-console__hint-table-frame">
+      <table className="ov-command-console__hint-table">
+        <thead>
+          <tr>
+            <th scope="col">{labels.parameter}</th>
+            <th scope="col">{labels.required}</th>
+            <th scope="col">{labels.description}</th>
+            <th scope="col">{labels.defaultValue}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {params.map((param) => (
+            <tr key={param.token}>
+              <td>
+                <code>{param.token}</code>
+              </td>
+              <td>{param.required ? labels.yes : labels.no}</td>
+              <td>{param.description}</td>
+              <td>{param.defaultValue ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
