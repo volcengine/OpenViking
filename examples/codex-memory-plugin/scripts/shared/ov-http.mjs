@@ -70,6 +70,9 @@ export function createOvHttp(cfg = {}, {
   return async function fetchJSON(path, init = {}, options = {}) {
     const timeoutMs = Math.max(MIN_TIMEOUT_MS, Number(options.timeoutMs) || Number(defaultTimeoutMs) || 0);
     const controller = new AbortController();
+    const callerAbort = () => controller.abort(init.signal.reason);
+    if (init.signal?.aborted) callerAbort();
+    else init.signal?.addEventListener("abort", callerAbort, { once: true });
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -123,14 +126,13 @@ export function createOvHttp(cfg = {}, {
       return { ok: true, status: response.status, result: body?.result ?? body ?? {}, traceId };
     } catch (error) {
       const message = error?.message || String(error);
-      // This module owns the controller, so it says a timeout was a timeout
-      // rather than leaving callers to guess it from whatever fetch threw.
-      const failure = timedOut
+      const failure = timedOut || init.signal?.aborted
         ? { name: "AbortError", aborted: true, message }
         : { message };
       return { ok: false, status: 0, result: null, error: failure };
     } finally {
       clearTimeout(timer);
+      init.signal?.removeEventListener("abort", callerAbort);
     }
   };
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -398,3 +398,24 @@ for (const [name, loader] of Object.entries(LOADERS)) {
     });
   });
 }
+
+
+test("readOnly config preserves effective values without cold identity cache writes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-config-readonly-"));
+  try {
+    for (const [name, contents] of [["absent", null], ["valid", '{"url":"http://localhost:1933","plugin":{"opencode":{"autoCapture":false}}}'], ["malformed", "{broken"]]) {
+      const cwd = join(dir, name);
+      const state = join(cwd, "state");
+      mkdirSync(join(cwd, ".openviking"), { recursive: true });
+      writeFileSync(join(cwd, ".openviking", "config.json"), '{"version":1,"peer":{"id":"fixture"}}');
+      const cliPath = join(cwd, "ovcli.conf");
+      if (contents !== null) writeFileSync(cliPath, contents);
+      const env = { OPENVIKING_CLI_CONFIG_FILE: cliPath, OPENVIKING_CONFIG_FILE: join(cwd, "absent-ov.conf"), OPENVIKING_STATE_DIR: state, HOME: cwd };
+      const readonly = buildPluginConfig("opencode", { cwd, env, deriveEffectivePeer: true, readOnly: true });
+      assert.equal(existsSync(state), false, name);
+      const normal = buildPluginConfig("opencode", { cwd, env, deriveEffectivePeer: true });
+      assert.deepEqual(readonly, normal, name);
+      assert.ok(readdirSync(state).some((file) => file.startsWith("ws-identity-")), name);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

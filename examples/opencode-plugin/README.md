@@ -267,3 +267,61 @@ Registry failures stop the workflow instead of treating an unavailable registry 
 an unused version. Only upstream `main` can publish the official npm `latest` tag.
 Manual dispatch on `main` retries a failed release using the existing npm credentials
 or Trusted Publishing configuration.
+
+## Read-only diagnostics (OpenCode V2)
+
+Run `node scripts/ov-memory-doctor.mjs --json` from the installed plugin directory.
+Use `--offline` to skip server probes. The CLI resolves the same OpenViking configuration
+as the plugin, reads capture metadata without transcript bodies, and reuses the shared
+memory doctor's authenticated HTTP/MCP probes and verdicts. It never repairs configuration,
+replays pending writes, or commits a session. Native plugin/MCP/skill inventories require
+an active OpenCode host; the standalone CLI labels them `unsupported`.
+
+The V2 server registers RPC `openviking.controls` for a native TUI/client consumer:
+
+| Method | Input | Result |
+| --- | --- | --- |
+| `status`, `doctor` | `{ "offline": true }` (optional boolean) | `schemaVersion: 1`, installation, MCP, skills, connection, capture, effective config, findings (`sections`), `text`, `exitCode` |
+| `recall` | `{ "sessionID": "<current OpenCode session>" }` | Stored OpenViking prompt context with source references, where available |
+| `commit` | `{ "sessionID": "<current OpenCode session>" }` | `status`, `traceId` when available, `extraction` |
+
+Read methods return only selected configuration fields and redact credentials. Inventory
+states distinguish disabled, unsupported, missing and failed registration. In particular,
+connected MCP with missing bundled native skills is a diagnostic failure. Capture timestamps
+record local activity and commit acceptance; they do not prove completed extraction.
+
+Commit is an intentional write. The caller must pass its current OpenCode session ID,
+never an OpenViking session ID. The server checks location ownership, respects capture and
+child-session privacy settings, waits for serialized capture, sends current-session messages
+before committing, and refuses to overtake queued capture. `pending_capture` requires normal
+recovery before retrying. Auth/network errors remain failures (`operation_failed` over RPC),
+and HTTP acceptance returns `extraction: "not_verified"`, never completed extraction.
+Automatic lifecycle commits retain their existing retry behavior.
+
+### Terminal companion (OpenCode V2)
+
+The package exports an optional `./tui` part. OpenCode loads it alongside the server
+part in its terminal UI. Headless clients use the server entrypoint without UI imports.
+OpenCode supplies the Solid/OpenTUI runtime.
+
+Select `/ov` from slash completion in the full terminal UI, or search for
+**OpenViking controls** in the command palette. The picker offers **Doctor**
+(Esc cancels a pending check), **View saved recall** (newest first), and
+**Commit current session…** (requires confirmation in that session).
+Diagnostics are not added to chat history.
+
+The recall inspector reads saved prompt metadata or the plugin's replay ledger when
+available. It exposes at most ten recent records, bounded text and source references.
+Stored context can be absent or incomplete and does not prove what reached a model.
+Live pending requests, wait budgets and runtime errors are unavailable here.
+
+To disable just the terminal companion, add the following filter to OpenCode's `cli.json`:
+
+```json
+{ "plugins": ["*", "-openviking.tui"] }
+```
+
+The packaged `./tui` entry uses OpenCode's OpenTUI Solid runtime directly. Run
+`pnpm run check:tui` to check the export and `pnpm test` for command/RPC coverage.
+After packaging changes, install the package in a clean OpenCode home and open
+`/ov` → **Doctor** to verify the terminal client can render the dialog.
