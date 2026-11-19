@@ -44,13 +44,25 @@ impl PathLockManager {
     }
 }
 
-struct WaitingCountGuard<'a>(Option<&'a AtomicUsize>);
+struct WaitingCountGuard {
+    account: Arc<AccountLockMetrics>,
+    entered: bool,
+}
 
-impl Drop for WaitingCountGuard<'_> {
+impl WaitingCountGuard {
+    fn enter(&mut self) {
+        if !self.entered {
+            self.entered = true;
+            self.account.waiting.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+    }
+}
+
+impl Drop for WaitingCountGuard {
     /// Undo the waiting increment on every exit path.
     fn drop(&mut self) {
-        if let Some(counter) = self.0 {
-            counter.fetch_sub(1, AtomicOrdering::Relaxed);
+        if self.entered {
+            self.account.waiting.fetch_sub(1, AtomicOrdering::Relaxed);
         }
     }
 }
@@ -231,7 +243,11 @@ impl PathLockManager {
         debug!(owner_id = %owner_id, requests = ?requests, normalized_requests = ?sorted, timeout_ms = timeout.as_millis() as u64, "pathlock acquire batch start");
 
         let start = Instant::now();
-        let mut waiting = WaitingCountGuard(None);
+        let account_metrics = self.current_account_metrics();
+        let mut waiting = WaitingCountGuard {
+            account: account_metrics.clone(),
+            entered: false,
+        };
         let mut retry_attempt: u32 = 0;
         let mut first_attempt = true;
         let mut conflicting_owner = None;
@@ -241,11 +257,9 @@ impl PathLockManager {
                 Ok(owner_registry) => (owner_registry, true),
                 Err(_) => {
                     conflicting_owner = None;
-                    if waiting.0.is_none() {
+                    if !waiting.entered {
                         debug!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, "pathlock acquire batch waiting for owner state");
-                        waiting.0 = Some(&self.waiting_lock_count);
-                        self.waiting_lock_count
-                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        waiting.enter();
                     }
                     let remaining = timeout.saturating_sub(start.elapsed());
                     if remaining.is_zero() {
@@ -294,11 +308,9 @@ impl PathLockManager {
                         break Err(err);
                     }
 
-                    if waiting.0.is_none() {
+                    if !waiting.entered {
                         debug!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, error = %err, "pathlock acquire batch entered wait state");
-                        waiting.0 = Some(&self.waiting_lock_count);
-                        self.waiting_lock_count
-                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        waiting.enter();
                     }
                     if let PathLockError::Conflict {
                         lock_path,
@@ -306,14 +318,12 @@ impl PathLockManager {
                         kind,
                     } = err
                     {
-                        self.metrics
-                            .write()
-                            .await
-                            .record_conflict(PathLockConflict {
-                                lock_path,
-                                conflicting_owner: owner.clone(),
-                                conflicting_kind: kind,
-                            });
+                        let conflict = PathLockConflict {
+                            lock_path,
+                            conflicting_owner: owner.clone(),
+                            conflicting_kind: kind,
+                        };
+                        account_metrics.record_conflict(conflict, &self.conflict_sequence);
                         conflicting_owner = Some(owner);
                     } else {
                         conflicting_owner = None;
@@ -398,12 +408,12 @@ impl PathLockManager {
         match result {
             Ok(owned) => {
                 let elapsed_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
-                let _ = self.wait_duration_ns.fetch_update(
-                    AtomicOrdering::Relaxed,
-                    AtomicOrdering::Relaxed,
-                    |total| Some(total.saturating_add(elapsed_ns)),
-                );
-                if waiting.0.is_some() {
+                {
+                    let mut counters = account_metrics.counters();
+                    counters.wait_duration_ns =
+                        counters.wait_duration_ns.saturating_add(elapsed_ns);
+                }
+                if waiting.entered {
                     debug!(lease_ref = %owned.lease.lease_ref, owner_id = %owned.lease.owner_id, lock_paths = ?owned.lease.lock_paths, covered_paths = ?owned.lease.covered_paths, wait_ms = start.elapsed().as_millis() as u64, "pathlock acquire batch succeeded after waiting");
                 }
                 Ok(owned)
@@ -435,7 +445,9 @@ impl PathLockManager {
         {
             Ok(Some(result)) => {
                 if result.stale_tokens_removed != 0 {
-                    self.metrics.write().await.stale_tokens_removed += result.stale_tokens_removed;
+                    self.current_account_metrics()
+                        .counters()
+                        .stale_tokens_removed += result.stale_tokens_removed;
                 }
                 return Ok(result.acquisitions);
             }

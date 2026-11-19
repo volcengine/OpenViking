@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::core::internal_names::{EXACT_LOCK_FILE_PREFIX, PATH_LOCK_FILE};
 use crate::core::{FileSystem, FsContextView};
 
-use super::metrics::LockMetrics;
+use super::metrics::{LockMetrics, MAX_RECENT_CONFLICTS};
 use super::path::normalize_logical_path;
 use super::provider::{
     validate_handoff_source, AcquisitionChange, AtomicAcquisition, PathLockHandleMode,
@@ -96,11 +96,53 @@ pub struct PathLockManager {
     lease_registry: Arc<LeaseRegistry>,
     config: PathLockConfig,
     metrics: Arc<RwLock<LockMetrics>>,
-    waiting_lock_count: AtomicUsize,
-    wait_duration_ns: AtomicU64,
+    account_metrics: StdMutex<HashMap<Option<String>, Arc<AccountLockMetrics>>>,
+    conflict_sequence: AtomicU64,
+}
+
+#[derive(Default)]
+struct AccountLockMetrics {
+    waiting: AtomicUsize,
+    counters: StdMutex<AcquisitionCounters>,
+}
+
+#[derive(Default)]
+struct AcquisitionCounters {
+    stale_tokens_removed: usize,
+    wait_duration_ns: u64,
+    conflict_count: usize,
+    recent_conflicts: Vec<(u64, PathLockConflict)>,
+}
+
+impl AccountLockMetrics {
+    fn counters(&self) -> MutexGuard<'_, AcquisitionCounters> {
+        self.counters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn record_conflict(&self, conflict: PathLockConflict, sequence: &AtomicU64) {
+        let mut counters = self.counters();
+        counters.conflict_count += 1;
+        if counters.recent_conflicts.len() >= MAX_RECENT_CONFLICTS {
+            counters.recent_conflicts.remove(0);
+        }
+        counters
+            .recent_conflicts
+            .push((sequence.fetch_add(1, AtomicOrdering::Relaxed), conflict));
+    }
 }
 
 impl PathLockManager {
+    fn current_account_metrics(&self) -> Arc<AccountLockMetrics> {
+        self.account_metrics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(FsContextView::current().account_id().map(str::to_owned))
+            .or_default()
+            .clone()
+    }
+
     /// Return the actual provider's lease handle representation.
     pub fn handle_mode(&self) -> PathLockHandleMode {
         self.provider.handle_mode()
@@ -189,8 +231,8 @@ impl PathLockManager {
             lease_registry: registry,
             config,
             metrics,
-            waiting_lock_count: AtomicUsize::new(0),
-            wait_duration_ns: AtomicU64::new(0),
+            account_metrics: StdMutex::new(HashMap::new()),
+            conflict_sequence: AtomicU64::new(0),
         }
     }
 
