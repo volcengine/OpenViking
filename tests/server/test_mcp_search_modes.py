@@ -103,15 +103,7 @@ async def test_list_mode_is_unchanged_without_context_only_arguments():
 
 
 @pytest.mark.asyncio
-async def test_list_mode_forwards_keywords_search_type():
-    with pytest.raises(_SearchCalled) as excinfo:
-        await mcp_endpoint.search(query="anything", search_type="keywords")
-
-    assert excinfo.value.kwargs["search_type"] == "keywords"
-
-
-@pytest.mark.asyncio
-async def test_list_mode_forwards_validated_keyword_args():
+async def test_list_mode_forwards_keyword_search_and_args():
     with pytest.raises(_SearchCalled) as excinfo:
         await mcp_endpoint.search(
             query="anything",
@@ -119,7 +111,9 @@ async def test_list_mode_forwards_validated_keyword_args():
             args={"bm25_b": 0.2},
         )
 
-    assert excinfo.value.kwargs["args"] == {"bm25_b": 0.2}
+    forwarded = excinfo.value.kwargs
+    assert forwarded["search_type"] == "keywords"
+    assert forwarded["args"] == {"bm25_b": 0.2}
 
 
 @pytest.mark.asyncio

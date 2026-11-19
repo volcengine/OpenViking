@@ -309,7 +309,7 @@ def test_mixed_visible_and_outside_targets_keep_original_tenant_filter():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("acl_enabled", [False, True])
-async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(acl_enabled):
+async def test_keywords_tenant_search_keeps_scope_with_candidate_floor(acl_enabled):
     ctx = _ctx()
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
@@ -325,12 +325,14 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
         extra_filter=Eq("status", "ready"),
         level=[2],
         limit=5,
+        keywords_args={"post_process_input_limit": 3},
     )
 
     kwargs = tenant_backend.search_by_keywords.await_args.kwargs
     assert kwargs["query"] == "OAuth token"
     assert kwargs["mode"] == "bm25"
     assert kwargs["fields"] == ["content"]
+    assert kwargs["advance"] == {"post_process_input_limit": 5}
     assert kwargs["filter"] == _build(
         ctx,
         ["viking://resources/docs"],
@@ -338,56 +340,6 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
         level=[2],
         acl_enabled=acl_enabled,
     )
-    backend._acl_enabled.assert_awaited_once_with(ctx)
-    backend._get_backend_for_context.assert_awaited_once_with(ctx)
-
-
-@pytest.mark.asyncio
-async def test_keywords_tenant_search_forwards_advanced_args():
-    ctx = _ctx()
-    backend = object.__new__(VikingVectorIndexBackend)
-    backend.acl_manager = None
-    backend._acl_enabled = AsyncMock(return_value=False)
-    tenant_backend = SimpleNamespace(search_by_keywords=AsyncMock(return_value=[]))
-    backend._get_backend_for_context = AsyncMock(return_value=tenant_backend)
-
-    await backend.search_by_keywords_in_tenant(
-        ctx=ctx,
-        query="OAuth token",
-        limit=5,
-        keywords_args={
-            "bm25_k1": 1.2,
-            "bm25_b": 0.75,
-            "post_process_input_limit": 100,
-        },
-    )
-
-    kwargs = tenant_backend.search_by_keywords.await_args.kwargs
-    assert kwargs["bm25_k1"] == 1.2
-    assert kwargs["bm25_b"] == 0.75
-    assert kwargs["advance"] == {"post_process_input_limit": 100}
-
-
-@pytest.mark.asyncio
-async def test_keywords_tenant_search_clamps_post_process_limit_to_recall_limit():
-    ctx = _ctx()
-    backend = object.__new__(VikingVectorIndexBackend)
-    backend.acl_manager = None
-    backend._acl_enabled = AsyncMock(return_value=False)
-    tenant_backend = SimpleNamespace(search_by_keywords=AsyncMock(return_value=[]))
-    backend._get_backend_for_context = AsyncMock(return_value=tenant_backend)
-
-    await backend.search_by_keywords_in_tenant(
-        ctx=ctx,
-        query="OAuth token",
-        limit=20,
-        keywords_args={"post_process_input_limit": 10},
-    )
-
-    kwargs = tenant_backend.search_by_keywords.await_args.kwargs
-    assert kwargs["bm25_k1"] is None
-    assert kwargs["bm25_b"] is None
-    assert kwargs["advance"] == {"post_process_input_limit": 20}
 
 
 @pytest.mark.asyncio

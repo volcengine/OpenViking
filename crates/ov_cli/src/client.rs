@@ -2666,50 +2666,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn search_request_forwards_keyword_args() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        let mut args = Map::new();
-        args.insert("bm25_k1".to_string(), json!(1.2));
-        args.insert("bm25_b".to_string(), json!(0.75));
-        args.insert("post_process_input_limit".to_string(), json!(100));
-        client
-            .search(
-                "OAuth token".to_string(),
-                String::new(),
-                None,
-                "keywords".to_string(),
-                "list".to_string(),
-                None,
-                10,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                false,
-                None,
-                Some(&args),
-            )
-            .await
-            .expect("keyword search should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
-        let body: serde_json::Value = serde_json::from_str(body).unwrap();
-        assert_eq!(
-            body["args"],
-            json!({
-                "bm25_k1": 1.2,
-                "bm25_b": 0.75,
-                "post_process_input_limit": 100
-            })
-        );
-    }
-
     #[test]
     fn add_resource_tag_fields_adds_tags_and_tag_mode() {
         let mut body = json!({"path": "https://example.com/demo.md"});

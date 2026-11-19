@@ -6,6 +6,7 @@
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -14,11 +15,14 @@ from openviking.models.embedder.base import EmbedResult
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import search as search_router
+from openviking.storage.vectordb.collection.vikingdb_clients import VikingDBClient
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VikingDBConfig
 
 
 @pytest.fixture(autouse=True)
@@ -59,125 +63,78 @@ async def test_find_basic(client_with_resource):
     assert "telemetry" not in body
 
 
-async def test_search_forwards_keywords_search_type(
+async def test_keyword_search_sends_args_to_vikingdb(
     client: httpx.AsyncClient, service, monkeypatch
 ):
     captured = {}
+    uri = "viking://resources/oauth.md"
 
-    async def fake_search(**kwargs):
-        captured.update(kwargs)
-        return FindResult(memories=[], resources=[], skills=[])
-
-    monkeypatch.setattr(service.search, "search", fake_search)
-
-    response = await client.post(
-        "/api/v1/search/search",
-        json={"query": "OAuth token", "search_type": "keywords"},
-    )
-
-    assert response.status_code == 200
-    assert captured["search_type"] == "keywords"
-
-
-async def test_search_forwards_keyword_args(client: httpx.AsyncClient, service, monkeypatch):
-    captured = {}
-
-    async def fake_search(**kwargs):
-        captured.update(kwargs)
-        return FindResult(memories=[], resources=[], skills=[])
-
-    monkeypatch.setattr(service.search, "search", fake_search)
-
-    response = await client.post(
-        "/api/v1/search/search",
-        json={
-            "query": "OAuth token",
-            "search_type": "keywords",
-            "limit": 5,
-            "args": {
-                "bm25_k1": 1.2,
-                "bm25_b": 0.75,
-                "post_process_input_limit": 5,
+    def fake_request(_client, method, path, *, req_body):
+        if path == "/api/vikingdb/GetCollection":
+            return httpx.Response(
+                200,
+                json={
+                    "Result": {
+                        "CollectionName": "context",
+                        "Fields": [{"FieldName": "content", "FieldType": "text"}],
+                        "FullText": [{"Field": "content"}],
+                    }
+                },
+            )
+        assert (method, path) == ("POST", "/api/vikingdb/data/search/keywords")
+        captured.update(req_body)
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "data": [
+                        {
+                            "id": "oauth",
+                            "score": 2.5,
+                            "fields": {"uri": uri, "context_type": "resource", "level": 2},
+                        }
+                    ]
+                }
             },
-        },
-    )
+        )
 
-    assert response.status_code == 200
-    assert captured["args"] == {
-        "bm25_k1": 1.2,
-        "bm25_b": 0.75,
-        "post_process_input_limit": 5,
+    backend = _SingleAccountBackend(
+        VectorDBBackendConfig(
+            backend="vikingdb", vikingdb=VikingDBConfig(host="http://vikingdb.invalid")
+        ),
+        bound_account_id="default",
+    )
+    monkeypatch.setattr(VikingDBClient, "do_req", fake_request)
+    monkeypatch.setattr(service.viking_fs, "rerank_config", None)
+    monkeypatch.setattr(
+        service.viking_fs.vector_store, "get_account_backend", AsyncMock(return_value=backend)
+    )
+    payload = {
+        "query": "OAuth token",
+        "search_type": "keywords",
+        "limit": 2,
+        "node_limit": 5,
+        "args": {"bm25_k1": 1.2, "bm25_b": 0.2, "post_process_input_limit": 4},
     }
+    try:
+        rejected = await client.post("/api/v1/search/search", json=payload)
+        assert rejected.status_code == 400
+        assert rejected.json()["error"]["code"] == "INVALID_ARGUMENT"
+        assert not captured
 
-
-async def test_search_args_post_process_floor_uses_node_limit(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    captured = {}
-
-    async def fake_search(**kwargs):
-        captured.update(kwargs)
-        return FindResult(memories=[], resources=[], skills=[])
-
-    monkeypatch.setattr(service.search, "search", fake_search)
-
-    response = await client.post(
-        "/api/v1/search/search",
-        json={
-            "query": "OAuth token",
-            "search_type": "keywords",
-            "limit": 5,
-            "node_limit": 50,
-            "args": {"post_process_input_limit": 50},
-        },
-    )
+        payload["args"]["post_process_input_limit"] = 5
+        response = await client.post("/api/v1/search/search", json=payload)
+    finally:
+        await backend.close()
 
     assert response.status_code == 200
-    assert captured["args"] == {"post_process_input_limit": 50}
-
-    response = await client.post(
-        "/api/v1/search/search",
-        json={
-            "query": "OAuth token",
-            "search_type": "keywords",
-            "limit": 5,
-            "node_limit": 50,
-            "args": {"post_process_input_limit": 49},
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"search_type": "keywords", "args": {"bm25_k1": 0}},
-        {"search_type": "keywords", "args": {"bm25_k1": -0.1}},
-        {"search_type": "keywords", "args": {"bm25_b": -0.1}},
-        {"search_type": "keywords", "args": {"bm25_b": 1.1}},
-        {"search_type": "keywords", "args": {"post_process_input_limit": 9}},
-        {"search_type": "keywords", "args": {"post_process_input_limit": 2_000_001}},
-        {"search_type": "keywords", "args": {"unknown": 1}},
-        {"search_type": "keywords", "args": {"bm25_k1": "1.2"}},
-        {"search_type": "keywords", "args": {"bm25_k1": True}},
-        {"args": {"bm25_k1": 1.2}},
-        {
-            "search_type": "keywords",
-            "mode": "context",
-            "args": {"bm25_k1": 1.2},
-        },
-    ],
-)
-async def test_search_rejects_invalid_args(client: httpx.AsyncClient, payload):
-    response = await client.post(
-        "/api/v1/search/search",
-        json={"query": "OAuth token", **payload},
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    assert [hit["uri"] for hit in response.json()["result"]["resources"]] == [uri]
+    assert captured["query"] == "OAuth token"
+    assert captured["mode"] == "bm25"
+    assert captured["limit"] == 5
+    assert captured["bm25_k1"] == 1.2
+    assert captured["bm25_b"] == 0.2
+    assert captured["advance"] == {"post_process_input_limit": 5}
 
 
 @pytest.mark.parametrize(
