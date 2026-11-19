@@ -4,23 +4,23 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 from loguru import logger
 
 from openviking.core.namespace import classify_uri
-from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
+from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile.hashing import content_hash, digest
-from vikingbot.compile.models import COMPILE_DRAFT_ROOT, CompileFailure, has_directory_plan, utc_now
+from vikingbot.compile.models import CompileFailure, has_directory_plan, utc_now
 from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.ops import map as map_op
 from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
-from vikingbot.compile.pipeline_io import JsonModel, TaskFiles, bounded_jobs
+from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, JsonModel, TaskFiles, bounded_jobs
 from vikingbot.compile.plan import PLANNING_RULES, PlanProposal, parse_plan
-from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
-from vikingbot.compile.results import Document, Source
+from vikingbot.compile.renderer import RenderedBundle
+from vikingbot.compile.results import Document, IncompleteWorkerOutput, Source
 from vikingbot.compile.review import run as review_stage
 from vikingbot.compile.skill_resources import SkillResources
 
@@ -81,7 +81,17 @@ class Pipeline:
         return text
 
     async def generate(self, stage, instructions, data, source_refs):
-        """Run one file worker and collect only its completed Markdown output directory."""
+        """Recover unfinished workers within one bounded stage budget."""
+        for attempt in range(MAX_JOB_ATTEMPTS):
+            try:
+                return await self.generate_once(stage, instructions, data, source_refs)
+            except IncompleteWorkerOutput:
+                if attempt + 1 == MAX_JOB_ATTEMPTS:
+                    raise
+                self.metrics["repairs"] += 1
+
+    async def generate_once(self, stage, instructions, data, source_refs):
+        """Run one worker; its natural-completion callback validates the files once."""
         if self.model.agent_runner is None:
             raise ValueError("Compile requires a file-tool agent runner")
         system = (
@@ -92,13 +102,21 @@ class Pipeline:
             f"Skill:\n{self.skill}\nUser instruction:\n{self.request.instruction}\n"
             f"Stage task:\n{instructions}\n{self.output_instructions}"
         )
+        if data.get("documents"):
+            system += (
+                "\nThe assigned draft documents define this merge job's scope. "
+                "Use original source evidence to verify, correct and complete their topics. "
+                "Do not re-extract unrelated topics from the source ranges or regenerate pages "
+                "owned by other groups. Related-page links do not assign those pages to this job. "
+                "Splitting or combining the assigned content is allowed when the Skill requires it.\n"
+            )
         if self.changes:
             system += (
                 "\nSelected inputs may omit unchanged sources. Absence is not deletion. "
                 "Preserve unrelated target content and existing facts from unchanged sources. "
                 "Read existing target files before updating them.\n"
             )
-        root = await self.model.agent_runner(
+        outputs = await self.model.agent_runner(
             system,
             {
                 **data,
@@ -110,22 +128,7 @@ class Pipeline:
             stage=stage,
             runtime=self,
         )
-        root = sanitize_relative_viking_path(root)
-        if not root.startswith(COMPILE_DRAFT_ROOT + "/") or not root.endswith("/output"):
-            raise ValueError("Invalid private worker output directory")
-        documents = []
-        for entry in await self.files.sandbox.list_files(root, max_entries=None):
-            prefix = root + "/"
-            if not entry.path.startswith(prefix):
-                raise ValueError("Worker output is outside its private output directory")
-            path = validate_relative_file_path(entry.path[len(prefix) :])
-            content = (await self.files.sandbox.read_file_bytes(entry.path)).decode("utf-8")
-            if not path.lower().endswith(".md") or not content.strip():
-                raise ValueError(f"Output must be nonempty Markdown: {path}")
-            documents.append(Document(path, entry.path, list(source_refs)))
-        if not documents and not (has_directory_plan(self.changes) and self.changes.get("head")):
-            raise ValueError(f"{stage}: worker completed without Markdown files")
-        return documents
+        return [replace(document, source_refs=list(source_refs)) for document in outputs]
 
     async def run(self, batches) -> RenderedBundle:
         """Prepare inputs, validate a plan, execute selected stages, and retain honest diagnostics."""
