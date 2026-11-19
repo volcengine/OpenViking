@@ -16,6 +16,7 @@ from vikingbot.compile import simple
 from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
+from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import TargetReader, agent_runner
@@ -544,6 +545,41 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
     )
     assert outputs == [] and pipeline.status["input"] == "failed"
     assert pipeline.failures
+
+
+@pytest.mark.parametrize(
+    ("collision", "names"),
+    [
+        ("same_worker", ("topic/Retry.md", "TOPIC/retry.md")),
+        ("other_worker", ("topic/Café.md", "topic/Cafe\u0301.md")),
+    ],
+)
+async def test_alias_conflicts_retry_without_blocking_unrelated_publication(
+    pipeline, collision, names
+):
+    paths = ["a.md", "a.md"] + (["b.md", "b.md"] if collision == "other_worker" else [])
+    docs = [Document(path, f"candidate-{i}.md", [f"source-{i}"]) for i, path in enumerate(paths)]
+    unrelated = Document("unrelated.md", "unrelated.md", ["other-source"])
+    first = Document(names[0], "first.md")
+    alias = Document(names[1], "alias.md")
+    merged = Document("merged.md", "merged.md")
+    for doc in [unrelated, first, alias, merged]:
+        await pipeline.files.sandbox.write_file(doc.workspace_path, "# Facts\n\nPreserved.")
+    results = (
+        [[first], [alias], [merged]] if collision == "other_worker" else [[first, alias], [merged]]
+    )
+    worker = AsyncMock(side_effect=results)
+    pipeline.generate = pipeline.generate_once = worker
+    outputs = await reduce_op.resolve_files(pipeline, [*docs, unrelated])
+    assert pipeline.generate.await_count == len(results)
+    assert outputs == (
+        [unrelated, first, merged] if collision == "other_worker" else [unrelated, merged]
+    )
+    bundle = await finalize.run(pipeline, outputs)
+    assert {item["uri"] for item in bundle.operations} == {
+        pipeline.target + "/" + doc.path for doc in outputs
+    }
+    assert any(item["uri"].endswith("/unrelated.md") for item in bundle.operations)
 
 
 @pytest.mark.parametrize(

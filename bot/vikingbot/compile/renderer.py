@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import posixpath
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -374,6 +375,11 @@ def validate_relative_file_path(path: str) -> str:
     if COMPILE_STAGING_ROOT.casefold() in (segment.casefold() for segment in segments):
         raise ValueError(f"reserved staging directory in output path: {path}")
     return relative
+
+
+def output_path_key(path: str) -> str:
+    """Identify case and Unicode aliases before writing to portable storage."""
+    return unicodedata.normalize("NFC", validate_relative_file_path(path)).casefold()
 
 
 def is_reserved_wiki_page_uri(uri: str) -> bool:
