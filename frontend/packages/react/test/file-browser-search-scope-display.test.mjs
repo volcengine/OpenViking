@@ -11,10 +11,14 @@ const { resolveLabels } = await import(`${hooks}/browser-labels.js`);
 
 const cases = [
   { leaf: '%E4%B8%AD%E6%96%87%E7%9B%AE%E5%BD%95', label: '中文目录' },
-  { leaf: 'folder%2Fchild', label: 'folder%2Fchild' },
+  {
+    leaf: 'folder%2Fchild',
+    label: 'folder/child',
+    titleLeaf: 'folder%2Fchild',
+  },
   { leaf: 'discount-50%', label: 'discount-50%' },
   { leaf: 'broken-%E4%B8', label: 'broken-%E4%B8' },
-  { leaf: 'literal-%252F', label: 'literal-%2F' },
+  { leaf: 'literal-%252F', label: 'literal-%2F', titleLeaf: 'literal-%252F' },
   {
     rootUri: 'viking://resources/discount-50%',
     leaf: '%E4%B8%AD%E6%96%87',
@@ -22,10 +26,15 @@ const cases = [
   },
 ];
 
-for (const { leaf, label, rootUri = 'viking://resources' } of cases) {
+for (const {
+  leaf,
+  label,
+  titleLeaf = label,
+  rootUri = 'viking://resources',
+} of cases) {
   test(`search directory labels decode safely while preserving request URI: ${leaf}`, async () => {
     const uri = `${rootUri}/${leaf}`;
-    const expectedTitle = `${rootUri}/${label}`;
+    const expectedTitle = `${rootUri}/${titleLeaf}`;
     const fetch = recordingFetch(({ path, uri: listed }) =>
       ok(
         path === '/api/v1/fs/ls' && listed === rootUri
