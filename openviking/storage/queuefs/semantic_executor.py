@@ -1601,7 +1601,6 @@ class SemanticTreeExecutor:
             if aggregation := self._parent_aggregation_stats.get(dir_uri):
                 aggregation.status = "failed"
             self._record_skill_failure(dir_uri, e)
-            raise
         else:
             slots = {}
             if self._semantic_plan is not None:

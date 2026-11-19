@@ -30,20 +30,7 @@ class DirectoryGeneration:
     preset_abstract: bool = False
 
 
-def _render_overview_body(
-    dir_uri: str, summary: str, navigation: str, *, partial: bool, chinese: bool
-) -> str:
-    template = _OVERVIEW_TEMPLATES.get_template("directory_overview.md.j2")
-    return template.render(
-        title=dir_uri.rstrip("/").rsplit("/", 1)[-1],
-        abstract=summary,
-        navigation=navigation,
-        partial=partial,
-        chinese=chinese,
-    )
-
-
-def render_directory_overview(
+def _render_directory_overview(
     dir_uri: str,
     directory_summary: str,
     entries: Mapping[str, Mapping[str, str]],
@@ -52,23 +39,30 @@ def render_directory_overview(
     language: str,
     total_entries: int,
     navigation_renderer: Callable[[list[str]], str] | None = None,
-) -> str:
-    """Render the full directory summary and fit navigation into the remaining space."""
+) -> tuple[str, str]:
+    """Return the overview and the directory summary that fits in it."""
     chinese = language.lower().startswith("zh")
+    title = dir_uri.rstrip("/").rsplit("/", 1)[-1]
+    template = _OVERVIEW_TEMPLATES.get_template("directory_overview.md.j2")
+    overview_limit = max(0, config.overview_max_chars)
     directory_summary = directory_summary.strip()
 
-    def render(navigation: str, *, partial: bool) -> str:
-        return _render_overview_body(
-            dir_uri, directory_summary, navigation, partial=partial, chinese=chinese
+    def render(navigation: str, *, partial: bool, summary: str) -> str:
+        return template.render(
+            title=title, abstract=summary, navigation=navigation, partial=partial, chinese=chinese
         )
 
     ordered = sorted(entries.items(), key=lambda item: (item[1]["kind"] != "directory", item[0]))
     candidates = ordered[: config.overview_sample_limit]
     partial = len(candidates) < total_entries
     if navigation_renderer is not None:
-        overview = render(navigation_renderer([name for name, _ in candidates]), partial=partial)
-        if len(overview) <= config.overview_max_chars:
-            return overview
+        overview = render(
+            navigation_renderer([name for name, _ in candidates]),
+            partial=partial,
+            summary=directory_summary,
+        )
+        if len(overview) <= overview_limit:
+            return overview, directory_summary
 
     links: list[str] = []
     summaries: list[str] = []
@@ -80,11 +74,18 @@ def render_directory_overview(
         links.append(f"- [{label}]({target})")
         summaries.append(" ".join(entry["summary"].splitlines()).strip())
 
-    if len(render("\n".join(links), partial=partial)) > config.overview_max_chars:
+    if (
+        links
+        and len(render("\n".join(links), partial=partial, summary=directory_summary))
+        > overview_limit
+    ):
         partial = True
-    budget = config.overview_max_chars - len(render("", partial=partial))
+    fixed_overview = render("", partial=partial, summary="")
+    budget = overview_limit - len(fixed_overview)
     if budget < 0:
-        raise ValueError("overview_max_chars cannot fit the directory abstract and access guide")
+        return fixed_overview[:overview_limit].rstrip(), ""
+    directory_summary = directory_summary[:budget].rstrip()
+    budget -= len(directory_summary)
     selected: list[tuple[str, str]] = []
     for link, summary in zip(links, summaries, strict=True):
         cost = len(link) + bool(selected)
@@ -107,7 +108,7 @@ def render_directory_overview(
             summary = summary[: limit - 1].rstrip() + "…"
         lines[index] += separator + summary
         budget -= len(separator) + len(summary)
-    return render("\n".join(lines), partial=partial)
+    return render("\n".join(lines), partial=partial, summary=directory_summary), directory_summary
 
 
 async def generate_directory_semantics(
@@ -133,7 +134,7 @@ async def generate_directory_semantics(
         summary = (preset_abstract or "") if seeded else ""
     generate_summary = not manual and preset_abstract is None and bool(entries)
 
-    def prompt(material: list[str], *, max_chars: int) -> str:
+    def prompt(material: list[str]) -> str:
         return render_prompt(
             "semantic.abstract_generation",
             {
@@ -142,12 +143,12 @@ async def generate_directory_semantics(
                 "sampled_entries": len(entries),
                 "total_entries": total_entries,
                 "output_language": language,
-                "max_chars": max_chars,
+                "max_chars": config.abstract_max_chars,
             },
         )
 
-    async def summarize(material: list[str], *, max_chars: int) -> str:
-        text = prompt(material, max_chars=max_chars)
+    async def summarize(material: list[str]) -> str:
+        text = prompt(material)
         if len(text) > config.max_overview_prompt_chars:
             raise ValueError("directory abstract input exceeds max_overview_prompt_chars")
         result = (await complete(text)).strip()
@@ -155,18 +156,17 @@ async def generate_directory_semantics(
             raise ValueError("directory abstract generation returned empty content")
         return result
 
-    def batches(material: list[str], *, max_chars: int) -> list[list[str]]:
+    def batches(material: list[str]) -> list[list[str]]:
         result: list[list[str]] = []
         batch: list[str] = []
         for item in material:
             if batch and (
                 len(batch) >= config.overview_batch_size
-                or len(prompt([*batch, item], max_chars=max_chars))
-                > config.max_overview_prompt_chars
+                or len(prompt([*batch, item])) > config.max_overview_prompt_chars
             ):
                 result.append(batch)
                 batch = []
-            if len(prompt([item], max_chars=max_chars)) > config.max_overview_prompt_chars:
+            if len(prompt([item])) > config.max_overview_prompt_chars:
                 raise ValueError("a node summary exceeds the directory abstract input budget")
             batch.append(item)
         if batch:
@@ -174,33 +174,24 @@ async def generate_directory_semantics(
         return result
 
     if generate_summary:
-        # Allow for the template and the coverage notice even when all links do not fit.
-        summary_max_chars = config.overview_max_chars - len(
-            _render_overview_body(
-                dir_uri, "", "", partial=True, chinese=language.lower().startswith("zh")
-            )
-        )
-        if summary_max_chars <= 0:
-            raise ValueError("overview_max_chars cannot fit the directory summary and access guide")
-        prompt_max_chars = max(config.abstract_max_chars, summary_max_chars)
         material = [
             json.dumps({"name": name, **entry}, ensure_ascii=False)
             for name, entry in sorted(entries.items())
         ]
         while True:
-            groups = batches(material, max_chars=prompt_max_chars)
+            groups = batches(material)
             if len(groups) == 1:
-                summary = await summarize(groups[0], max_chars=summary_max_chars)
+                summary = await summarize(groups[0])
                 break
             merged = []
             for group in groups:
-                partial_summary = await summarize(group, max_chars=config.abstract_max_chars)
+                partial_summary = await summarize(group)
                 merged.append(partial_summary[: config.abstract_max_chars].rstrip())
             if len(merged) >= len(material) and sum(map(len, merged)) >= sum(map(len, material)):
                 raise ValueError("directory abstract budget cannot merge summary batches")
             material = merged
 
-    overview = render_directory_overview(
+    overview, overview_summary = _render_directory_overview(
         dir_uri,
         summary,
         entries,
@@ -209,5 +200,7 @@ async def generate_directory_semantics(
         total_entries=total_entries,
         navigation_renderer=navigation_renderer,
     )
-    abstract = summary[: config.abstract_max_chars].rstrip() if generate_summary else summary
+    abstract = (
+        overview_summary[: config.abstract_max_chars].rstrip() if generate_summary else summary
+    )
     return DirectoryGeneration(abstract=abstract, overview=overview, preset_abstract=seeded)

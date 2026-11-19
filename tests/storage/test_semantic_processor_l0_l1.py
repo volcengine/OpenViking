@@ -45,7 +45,7 @@ async def test_directory_generation_uses_the_same_summary_for_l0_and_l1():
     assert "Access guide" in result.overview
     complete.assert_awaited_once()
     assert "Coverage: 2 of 513" in complete.await_args.args[0]
-    assert "at most 17 characters" not in complete.await_args.args[0]
+    assert "at most 17 characters" in complete.await_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -113,11 +113,12 @@ async def test_manual_l0_survives_generation_and_rejects_public_metadata_changes
 
 
 @pytest.mark.asyncio
-async def test_overview_budget_preserves_full_summary_before_navigation():
+async def test_overview_truncates_an_overlong_summary_and_keeps_the_access_guide():
     abstract = "Short abstract."
     full_abstract = (
-        f"{abstract} " + "This directory contains implementation notes for the service. " * 4
+        f"{abstract} " + "This directory contains implementation notes for the service. " * 80
     ).strip()
+    config = SemanticConfig(abstract_max_chars=len(abstract))
     result = await generate_directory_semantics(
         "viking://resources/docs",
         {
@@ -126,17 +127,18 @@ async def test_overview_budget_preserves_full_summary_before_navigation():
         },
         previous=None,
         total_entries=3,
-        config=SemanticConfig(abstract_max_chars=len(abstract), overview_max_chars=722),
+        config=config,
         language="en",
         complete=AsyncMock(return_value=full_abstract),
     )
     assert result.abstract == abstract
-    assert len(result.overview) <= 722
-    assert f"\n\n{full_abstract}\n\n" in result.overview
+    assert len(result.overview) <= config.overview_max_chars
+    summary = result.overview.split("\n\n", 2)[1]
+    assert summary.startswith(abstract)
+    assert full_abstract.startswith(summary)
+    assert len(summary) < len(full_abstract)
     lines = [line for line in result.overview.splitlines() if line.startswith("- [")]
-    assert len(lines) == 1
-    assert lines[0].startswith("- [api.py](viking://resources/docs/api.py)")
-    assert lines[0].endswith("…")
+    assert lines == []
     assert "Only some entries are listed" in result.overview
     assert result.overview.endswith("support these operations.")
 
