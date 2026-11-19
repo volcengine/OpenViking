@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import posixpath
 import shlex
 import uuid
 from collections import Counter
 from copy import copy
 
-from openviking.utils.path_safety import sanitize_relative_viking_path
 from vikingbot.agent.loop import _PlainTextDelivered, _PlainTextFinal
 from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.compile import CompileChildTool
@@ -65,12 +63,10 @@ async def complete_tool_result(result, session_key, *, preserve_complete: bool =
 
 
 class DraftDeleteTool(Tool):
-    """Remove obsolete files only from this worker's private output directory."""
+    """Remove one file at the workspace path bound by CompileChildTool."""
 
     name = "delete_file"
-    description = (
-        "Delete an obsolete output file. Assigned inputs and other workers are unavailable."
-    )
+    description = "Delete an obsolete output file."
     parameters = {
         "type": "object",
         "properties": {"path": {"type": "string"}},
@@ -81,25 +77,19 @@ class DraftDeleteTool(Tool):
     def __init__(self, sandbox, root):
         self.sandbox, self.root = sandbox, root
 
-    async def execute(self, tool_context=None, path=""):
-        path = posixpath.normpath(sanitize_relative_viking_path(path))
-        if path.casefold() in {".", "assignment.json", "inputs"} or path.casefold().startswith(
-            "inputs/"
-        ):
-            raise ValueError("Only this worker's output files can be removed")
-        bound = f"{self.root}/{path}"
+    async def execute(self, tool_context, path: str) -> str:
         try:
-            local = self.sandbox.local_file_path(bound)
+            local = self.sandbox.local_file_path(path)
         except FileNotFoundError:
-            return f"Already absent: {path}"
+            return "File is already absent."
         if local is not None:
             if not local.resolve().is_relative_to((self.sandbox.workspace / self.root).resolve()):
                 raise ValueError("Output file resolves outside this worker's directory")
             await asyncio.to_thread(local.unlink)
         else:
-            result = await self.sandbox.execute(f"rm -f -- {shlex.quote(bound)}")
+            result = await self.sandbox.execute(f"rm -f -- {shlex.quote(path)}")
             self.sandbox._ensure_command_succeeded(result, "draft file removal")
-        return f"Removed {path}"
+        return "Removed obsolete output file."
 
 
 class TargetReader(Tool):
@@ -150,9 +140,12 @@ def agent_runner(loop, session_key, connection, limits):
             f"{root}/assignment.json", json.dumps(assignment, ensure_ascii=False)
         )
         registry = ToolRegistry(config=loop.config)
-        registry.register(DraftDeleteTool(sandbox, output_root))
-        for name in ("read_file", "write_file", "edit_file"):
-            tool = loop.tools.get(name)
+        for name in ("read_file", "write_file", "edit_file", "delete_file"):
+            tool = (
+                DraftDeleteTool(sandbox, output_root)
+                if name == "delete_file"
+                else loop.tools.get(name)
+            )
             if tool is None:
                 raise ValueError(f"Compile requires {name}")
             registry.register(
@@ -201,7 +194,6 @@ def agent_runner(loop, session_key, connection, limits):
                 # AgentLoop swallows callback exceptions for ordinary chat replies.
                 # Carry infrastructure failures out without regenerating the files.
                 completion_error = error
-                return _PlainTextFinal()
             return _PlainTextFinal()
 
         async def remind_completion(iteration):

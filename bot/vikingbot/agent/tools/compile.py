@@ -266,7 +266,7 @@ class CompileChildTool(Tool):
         merge_only: bool = False,
         readonly_paths: Mapping[str, str] | None = None,
     ):
-        if merge_only and tool.name not in {"read_file", "write_file", "edit_file"}:
+        if merge_only and tool.name not in {"read_file", "write_file", "edit_file", "delete_file"}:
             raise ValueError("Merge children accept only bound file tools")
         self.tool = tool
         self.draft_root = draft_root
@@ -290,7 +290,7 @@ class CompileChildTool(Tool):
             if self.readonly_paths:
                 parameters["properties"][field]["description"] = (
                     "Output path relative to the publication destination. Use the same path "
-                    "to write, read and edit an output. assignment.json and the assigned "
+                    "to read, write, edit or delete an output. assignment.json and the assigned "
                     "inputs/ paths are read-only inputs; other workspace paths are unavailable."
                 )
                 return parameters
@@ -322,9 +322,16 @@ class CompileChildTool(Tool):
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
         """Bind file access to the child and enforce private reads for isolated transforms."""
         field = "working_dir" if self.name == "exec" else "path"
-        if self.merge_only and str(kwargs.get(field, "")).startswith("viking://"):
+        path = kwargs.get(field) or "."
+        if self.merge_only and str(path).startswith("viking://"):
             raise ValueError("Merge children can only access their own output files")
-        relative = _normalize_workspace_path(kwargs.get(field) or ".")
+        relative = (
+            posixpath.normpath(sanitize_relative_viking_path(path))
+            if self.merge_only
+            else _normalize_workspace_path(path)
+        )
+        if self.merge_only and relative == ".":
+            raise ValueError("A file path is required")
         if self.name == "read_file" and relative.startswith(
             (COMPILE_DRAFT_ROOT + "/", TOOL_RESULT_DIRECTORY + "/")
         ):
