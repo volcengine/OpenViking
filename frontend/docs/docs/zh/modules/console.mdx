@@ -107,7 +107,7 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 | chatOptions       | 对话配置；自定义 service 同时实现对话和会话契约                                                                                                                     | `ConsoleChatOptions`                    | 原生服务                                                          |
 | quickCommands     | 命令模式空态里的快捷入口 `{ name, value }`，点击后把 `value` 填入输入框，不自动执行；传入空数组时不显示空态，类型见 [CommandConsole](../components/command-console) | `readonly CommandConsoleQuickCommand[]` | `add-resource`、`add-skill`、`add-memory`、`find`、`compile` 五条 |
 | scopeKey          | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                | -                                                                 |
-| commandHistoryKey | 同一标签页刷新时恢复命令历史，按宿主提供的环境和身份标识隔离                                                                                                        | `string`                                | -                                                                 |
+| commandHistoryKey | 在浏览器中保存命令历史，按宿主提供的环境、库和用户标识隔离                                                                                                          | `string`                                | -                                                                 |
 | command           | 命令模式的覆盖项，类型见下方 `ConsoleCommandProps`                                                                                                                  | `ConsoleCommandProps`                   | -                                                                 |
 | commandOptions    | [文件选择、下载与管理员命令配置](#consolecommandoptions)                                                                                                            | `ConsoleCommandOptions`                 | 使用浏览器处理文件，管理员命令关闭                                |
 | onOpenUri         | 点击资源链接时触发，参数为资源 URI；两种模式各自以 `conversation.onOpenUri`、`command.onOpenUri` 为准                                                               | `(uri: string) => void`                 | -                                                                 |
@@ -347,7 +347,7 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 - 命令模式的「新建会话」会中止进行中的请求并忽略迟到的响应，同时清空命令记录、错误和输入框；服务端已接收的操作不会撤销，服务端数据也不会删除。`clear` 命令只清空本地记录。
 - 命令历史列出当前面板的记录，最新的在前，时间为提交时的本地时间（`YYYY-MM-DD HH:mm`）；点击一条会把命令填回输入框，不会执行。
 - 命令记录和草稿只保存在内存中。`scopeKey`、`requestOptions` 或 Provider 的配置变化时，Console 清空记录和草稿并中止进行中的请求，卸载时同样中止。
-- 设置 `commandHistoryKey` 后，Console 在浏览器的会话存储中在浏览器存储容量内保存最近最多 50 条有效只读命令及其提交时间。写入命令和格式错误的命令可在当前页面回填。「新建会话」清除当前身份范围的历史。
+- 设置 `commandHistoryKey` 后，Console 将已提交的命令文本及时间保存在浏览器本地存储中。刷新后，历史菜单和方向键可回查同一份记录。浏览器存储空间不足时，优先淘汰当前作用域最早的记录。「新建会话」清除当前作用域的历史。
 - 身份字段使用函数时，保持函数引用稳定，并在身份变化时更新 `scopeKey`，或用身份作为组件的 `key`。
 - Console 撑满父容器的宽高，父容器需要有明确的高度，或是可伸展的 flex 布局。
 - 切换 `locale` 会更新已有记录里的命令帮助、参数错误和取消提示，保留记录和草稿；服务端返回的内容保持原样。

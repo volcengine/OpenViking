@@ -119,7 +119,7 @@ export interface ConsoleOptions {
   defaultMode?: ConsoleMode;
   /** Change with the identity when using dynamic credential/identity functions. */
   scopeKey?: string;
-  /** Opt in to tab-session command history. Provide a stable, credential-free key for the environment and identity. */
+  /** Opt in to browser-local command history. Provide a stable, credential-free key for the environment, library, and user. */
   commandHistoryKey?: string;
   onModeChange?: (mode: ConsoleMode) => void;
   requestOptions?: OvRequestOptions;
