@@ -113,7 +113,6 @@ export function ConsoleView(props: ConsoleProps) {
         <ConsoleCollectionError activation={activation} locale={botLocale} />
         <ConsoleTaskNotifications
           locale={locale}
-          onOpenUri={openCommandUri}
           onOpenMemoryUri={conversationProps.onOpenUri ?? onOpenUri}
         />
         {state.mode ? (

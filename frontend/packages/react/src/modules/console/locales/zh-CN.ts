@@ -39,12 +39,6 @@ const messages: typeof enUS = {
     saved: '记忆已生成，并保存至目录文件',
     view: '查看记忆',
   },
-  taskCompletion: {
-    title: '任务完成',
-    description: '异步任务已完成。',
-    resource: '资源添加任务已完成，可点击查看结果。',
-    viewResult: '查看结果',
-  },
   compileQuickInputs: {
     createWiki: {
       label: '创建 Wiki',
