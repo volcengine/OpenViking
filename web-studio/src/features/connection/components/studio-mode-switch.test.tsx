@@ -25,12 +25,13 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   flush: vi.fn(),
   error: vi.fn(),
+  serverMode: 'api_key',
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: mocks.connection,
     profiles: mocks.profiles,
-    serverMode: 'api_key',
+    serverMode: mocks.serverMode,
     switchIdentity: mocks.switch,
   }),
 }))
@@ -69,6 +70,7 @@ beforeEach(() => {
   mocks.connection.apiKey = ''
   mocks.connection.userId = ''
   mocks.profiles = []
+  mocks.serverMode = 'api_key'
   mocks.switch.mockResolvedValue(undefined)
   mocks.flush.mockResolvedValue(undefined)
 })
@@ -181,4 +183,10 @@ it('retains the Return to Management entry in the workbench', () => {
       .getByRole('link', { name: 'modes.returnManagement' })
       .getAttribute('href'),
   ).toBe('/admin')
+})
+it('hides the management entry in development mode', () => {
+  mocks.serverMode = 'dev'
+  render(<StudioModeSwitch managementMode={false} />)
+  expect(screen.queryByRole('link')).toBeNull()
+  expect(screen.queryByRole('button')).toBeNull()
 })

@@ -95,6 +95,19 @@ it('blocks ordinary User access to the OpenViking configuration page', () => {
   )
   expect(screen.queryByTestId('configuration child')).toBeNull()
 })
+it('does not mount management pages in development mode', () => {
+  state.provider = 'opensource'
+  state.mode = 'dev'
+  state.role = 'root'
+  state.pathname = '/admin/configuration/server'
+  render(
+    <StudioFeatureBoundary>
+      <span data-testid="configuration child" />
+    </StudioFeatureBoundary>,
+  )
+  expect(screen.queryByTestId('configuration child')).toBeNull()
+  expect(screen.getByText('states.managementRequired.title')).toBeTruthy()
+})
 it('does not mount an incompatible extension or its effects through a deep link', () => {
   state.pathname = '/compile'
   state.capability = 'unavailable'

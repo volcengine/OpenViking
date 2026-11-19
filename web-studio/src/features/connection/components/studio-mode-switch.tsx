@@ -88,6 +88,7 @@ export function StudioModeSwitch({
       setPending(false)
     }
   }
+  if (!managementMode && serverMode === 'dev') return null
   if (!managementMode && !canManage)
     return <ManagementKeyDialog className={buttonClass} />
   if (!managementMode || hasDataIdentity || users.length === 0) {

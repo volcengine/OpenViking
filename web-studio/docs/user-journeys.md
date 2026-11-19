@@ -12,7 +12,7 @@ Server 内置 Studio 从 `/studio/` 访问，首次引导自动带入该 Server 
 | Account Admin Key       | 同时拥有自己的数据身份和本 Account 管理能力，默认进入工作台，提供管理后台入口                   |
 | Root Key                | 进入后台，提示创建使用身份或配置已有 User Key                                                   |
 | 数据 Key 与独立管理 Key | 工作台使用数据 Key，后台使用管理 Key；默认进入工作台                                            |
-| 本地 dev                | 无需 Key，默认进入工作台；后台提供服务配置等可用服务功能，不提供依赖 API Key Manager 的成员管理 |
+| 本地 dev                | 无需 Key，默认进入工作台；不提供管理后台，服务配置通过本地 `ov.conf` 维护                     |
 
 User、Account Admin、Root 均可填写主 API Key 输入框，服务端返回的角色与身份为准。单独填入管理字段的 Account Admin Key 同样可作为该管理员自己的数据身份。首次验证不自动枚举身份目录；需要选择其他身份时可展开高级选项，API Key 模式下仍需对应用户凭据。
 
