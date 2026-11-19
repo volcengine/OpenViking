@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for retrieval statistics and observer."""
 
+import pytest
+
 from openviking.retrieve.retrieval_stats import RetrievalStats, RetrievalStatsCollector
 from openviking.storage.observers.retrieval_observer import RetrievalObserver
 
@@ -56,16 +58,21 @@ class TestRetrievalStatsCollector:
 
     def test_record_multiple_queries(self):
         collector = RetrievalStatsCollector()
-        collector.record_query("memory", 2, [0.8, 0.6], latency_ms=30.0)
-        collector.record_query("resource", 1, [0.5], latency_ms=20.0)
-        collector.record_query("memory", 0, [], latency_ms=5.0)
+        collector.record_query("memory", 2, [0.8, 0.6], account_id="A", latency_ms=30)
+        collector.record_query("memory", 0, [], account_id="A", latency_ms=50)
+        collector.record_query("skill", 0, [], account_id="B", latency_ms=10)
+        collector.record_query("resource", 1, [0.2], latency_ms=20)
 
+        assert collector.snapshot("A").to_dict()["avg_score"] == 0.7
+        assert collector.snapshot("B").zero_result_queries == 1
+        assert collector.snapshot("unknown").total_queries == 0
         stats = collector.snapshot()
-        assert stats.total_queries == 3
+        assert stats.total_queries == 4
         assert stats.total_results == 3
-        assert stats.zero_result_queries == 1
-        assert stats.queries_by_type == {"memory": 2, "resource": 1}
-        assert stats.avg_latency_ms == (30 + 20 + 5) / 3
+        assert stats.zero_result_queries == 2
+        assert stats.avg_score == pytest.approx(1.6 / 3)
+        assert stats.queries_by_type == {"memory": 2, "skill": 1, "resource": 1}
+        assert stats.avg_latency_ms == 27.5
 
     def test_rerank_tracking(self):
         collector = RetrievalStatsCollector()
@@ -87,8 +94,10 @@ class TestRetrievalStatsCollector:
 
     def test_reset(self):
         collector = RetrievalStatsCollector()
-        collector.record_query("memory", 3, [0.9, 0.7, 0.5])
+        collector.record_query("memory", 2, [0.9, 0.7], account_id="A")
+        collector.record_query("resource", 1, [0.5])
         collector.reset()
+        assert collector.snapshot("A").total_queries == 0
         stats = collector.snapshot()
         assert stats.total_queries == 0
         assert stats.total_results == 0

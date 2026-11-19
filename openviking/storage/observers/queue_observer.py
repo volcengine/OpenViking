@@ -24,16 +24,22 @@ class QueueObserver(BaseObserver):
     Provides methods to query queue status and format output.
     """
 
-    def __init__(self, queue_manager: QueueManager):
+    def __init__(self, queue_manager: QueueManager, account_id: str | None = None):
         self._queue_manager = queue_manager
+        self._account_id = account_id
+
+    async def _check_status(self):
+        if self._account_id is None:
+            return await self._queue_manager.check_status()
+        return await self._queue_manager.check_status(account_id=self._account_id)
 
     async def get_status_table_async(self) -> str:
-        statuses = await self._queue_manager.check_status()
+        statuses = await self._check_status()
         tree_stats = self._get_semantic_tree_stats()
         return self._format_status_as_table(statuses, tree_stats)
 
     async def get_status_json_async(self) -> dict:
-        statuses = await self._queue_manager.check_status()
+        statuses = await self._check_status()
         tree_stats = self._get_semantic_tree_stats()
         queues = []
         total_pending = 0
@@ -170,6 +176,8 @@ class QueueObserver(BaseObserver):
             return None
         handler = getattr(semantic_queue, "_dequeue_handler", None)
         if handler and hasattr(handler, "get_tree_stats"):
+            if self._account_id is not None:
+                return handler.get_tree_stats(account_id=self._account_id)
             return handler.get_tree_stats()
         return None
 
@@ -180,7 +188,7 @@ class QueueObserver(BaseObserver):
         return run_async(self.has_active_errors_async())
 
     async def has_active_errors_async(self) -> bool:
-        statuses = await self._queue_manager.check_status()
+        statuses = await self._check_status()
         return self._has_active_errors(statuses)
 
     @staticmethod

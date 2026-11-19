@@ -12,7 +12,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Collection, Dict, Iterable, Optional
 
-from sqlalchemy import and_, delete, exists, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -45,6 +45,7 @@ from openviking.service.task_domain import (
 from openviking.service.task_events import TaskEventHistory, append_task_event
 from openviking.service.task_store import (
     DeleteTasksResult,
+    QueueWorkCounts,
     StoreOperationCode,
     StoreOperationResult,
     TaskAlreadyActive,
@@ -1915,19 +1916,53 @@ class SQLTaskWorkStore(TaskWorkStore):
 
     async def has_open_work(
         self,
-        task_id: str,
+        task_id: Optional[str],
         *,
         exclude_work_id: Optional[str],
         account_id: Optional[str],
         user_id: Optional[str],
+        exclude_inline: bool = False,
     ) -> bool:
         Work = self._models.Work
         async with self._session_factory() as session:
-            predicates = list(self._work_query(Work, task_id, None, account_id, user_id))
+            if task_id is None:
+                if not account_id:
+                    raise ValueError("Account Work query requires account_id")
+                predicates = [
+                    Work.service_name == self._service_name,
+                    Work.account_id == account_id,
+                ]
+                if user_id is not None:
+                    predicates.append(Work.user_id == user_id)
+            else:
+                predicates = list(self._work_query(Work, task_id, None, account_id, user_id))
             predicates.append(Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]))
             if exclude_work_id is not None:
                 predicates.append(Work.work_id != exclude_work_id)
+            if exclude_inline:
+                predicates.append(Work.queue_name != "Inline")
             return bool(await session.scalar(select(exists().where(*predicates))))
+
+    async def get_queue_work_counts(self, *, account_id: str) -> QueueWorkCounts:
+        if not account_id:
+            raise ValueError("Queue Work query requires account_id")
+        Work = self._models.Work
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(Work.queue_name, Work.state, func.count())
+                .where(
+                    Work.service_name == self._service_name,
+                    Work.account_id == account_id,
+                    Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]),
+                    Work.queue_name != "Inline",
+                )
+                .group_by(Work.queue_name, Work.state)
+            )
+            counts: QueueWorkCounts = {}
+            for queue_name, state, count in rows:
+                bucket = counts.setdefault(queue_name, {"pending": 0, "running": 0})
+                bucket[state] = count
+            return counts
 
     async def summarize_works(
         self,

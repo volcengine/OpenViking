@@ -10,12 +10,146 @@ from uuid import UUID
 import pytest
 
 from openviking.pyagfs import AsyncAGFSClient
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_tracker import TaskTracker
+from openviking.service.task_work_index import bind_task_context
+from openviking.storage.observers.queue_observer import QueueObserver
 from openviking.storage.queuefs.named_queue import (
     DequeueHandlerBase,
     NamedQueue,
 )
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
+from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.queuefs.queue_middleware import QueueMiddleware
+from tests.test_task_tracker import _FakeAgfs
+
+
+@pytest.fixture
+def queue_client(tmp_path):
+    import ragfs_python
+
+    client = ragfs_python.RAGFSBindingClient()
+    client.mount("queuefs", "/queue", {"backend": "sqlite", "db_path": str(tmp_path / "queue.db")})
+    yield client
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_account_deliveries_settle_after_retry_ack_and_clear(queue_client, monkeypatch):
+    entered, finish = asyncio.Event(), asyncio.Event()
+    results = iter([ProcessResult.retry(), ProcessResult.success()])
+
+    class Handler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            entered.set()
+            await finish.wait()
+            return next(results)
+
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    manager = QueueManager(queue_client)
+    queue = NamedQueue(
+        queue_client, "/queue", "Semantic", Handler(), middlewares=manager._middlewares
+    )
+    manager._queues["Semantic"] = queue
+    try:
+        for account in ("A", "B"):
+            await tracker.create("add_resource", task_id=account, account_id=account, user_id="u1")
+        with bind_task_context("A", "A", "u1"):
+            await queue.enqueue({"account_id": "A"}, serial_key="A")
+        with bind_task_context("B", "B", "u1"):
+            await queue.enqueue(
+                {"payload": {"context_data": {"account_id": "B", "owner_user_id": "u1"}}}
+            )
+        assert (await manager.check_status(account_id="A"))["Semantic"].pending == 1
+        assert (await manager.check_status(account_id="B"))["Semantic"].pending == 1
+        a = await queue.dequeue_raw()
+        await queue.dequeue_raw()
+        task = asyncio.create_task(queue.process_dequeued(a))
+        await entered.wait()
+        status = (await manager.check_status(account_id="A"))["Semantic"]
+        assert status.in_progress == 1 and status.pending == 0
+        queue.reset_status()
+        assert (await manager.check_status(account_id="A"))["Semantic"].in_progress == 1
+        finish.set()
+        result = await task
+        await queue.settle_dequeued(a, result)
+        status = (await manager.check_status(account_id="A"))["Semantic"]
+        assert status.pending == 1 and status.in_progress == 0
+        assert status.processed == status.requeue_count == 1
+        redelivery = await queue.dequeue_raw()
+        assert redelivery["id"] == a["id"]
+        await queue.process_dequeued(redelivery)
+        assert (await manager.check_status(account_id="A"))["Semantic"].is_complete
+        await queue.ack(redelivery["id"])
+        assert (await manager.check_status(account_id="A"))["Semantic"].is_complete
+        assert (await manager.check_status(account_id="B"))["Semantic"].pending == 1
+        assert await queue.clear()
+        assert (await manager.check_status(account_id="B"))["Semantic"].is_complete
+    finally:
+        await tracker.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["handler", "cancel", "ack", "retry"])
+async def test_queue_unacknowledged_messages_remain_visible(queue_client, monkeypatch, failure):
+    entered = asyncio.Event()
+
+    class Handler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            entered.set()
+            if failure == "cancel":
+                await asyncio.Event().wait()
+            if failure == "handler":
+                raise RuntimeError("handler failed")
+            return ProcessResult.retry() if failure == "retry" else ProcessResult.success()
+
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    manager = QueueManager(queue_client)
+    queue = NamedQueue(
+        queue_client, "/queue", "Semantic", Handler(), middlewares=manager._middlewares
+    )
+    manager._queues["Semantic"] = queue
+    try:
+        await tracker.create("add_resource", task_id="A", account_id="A", user_id="u1")
+        with bind_task_context("A", "A", "u1"):
+            await queue.enqueue({"account_id": "A"})
+        delivery = await queue.dequeue_raw()
+        task = asyncio.create_task(queue.process_dequeued(delivery))
+        await entered.wait()
+        if failure in ("handler", "cancel"):
+            if failure == "cancel":
+                task.cancel()
+            with pytest.raises(RuntimeError if failure == "handler" else asyncio.CancelledError):
+                await task
+        else:
+            result = await task
+            write = queue._async_agfs.write
+
+            async def failed_write(path, data):
+                if path.endswith(f"/{failure}"):
+                    raise RuntimeError("settlement failed")
+                return await write(path, data)
+
+            monkeypatch.setattr(queue._async_agfs, "write", failed_write)
+            if failure == "retry":
+                with pytest.raises(RuntimeError, match="settlement failed"):
+                    await queue.settle_dequeued(delivery, result)
+            else:
+                await queue.settle_dequeued(delivery, result)
+        account = (await manager.check_status(account_id="A"))["Semantic"]
+        runtime = await queue.get_status()
+        assert runtime.in_progress == 1
+        assert account.in_progress == int(failure == "handler")
+        assert account.pending == int(failure in ("cancel", "retry"))
+        assert account.is_complete == (failure == "ack")
+        assert (await manager.check_status(account_id="B"))["Semantic"].is_complete
+        if failure == "handler":
+            assert await QueueObserver(manager, "A").has_active_errors_async()
+            assert not await QueueObserver(manager, "B").has_active_errors_async()
+    finally:
+        await tracker.close()
 
 
 @pytest.fixture
