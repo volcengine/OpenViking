@@ -1044,62 +1044,26 @@ mod tests {
 
     #[test]
     fn streaming_mask_matches_longest_value_reference() {
-        fn next(state: &mut u64) -> usize {
-            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            (*state >> 32) as usize
-        }
+        let masker = OutputMasker::new([
+            ("密".to_owned(), "<first>".to_owned()),
+            ("密钥".to_owned(), "<long>".to_owned()),
+            ("密".to_owned(), "<alias>".to_owned()),
+            ("ababc".to_owned(), "<overlap>".to_owned()),
+            ("aa".to_owned(), "<run>".to_owned()),
+        ]);
+        let mut input = vec![0xff];
+        input.extend_from_slice("密-密钥-abababc-aaaaa-ab".as_bytes());
+        let mut expected = vec![0xff];
+        expected.extend_from_slice(b"<first>-<long>-ab<overlap>-<run><run>a-ab");
 
-        let alphabet = b"abXY09-";
-        for seed in 0_u64..2000 {
-            let mut state = seed + 1;
-            let mut replacements = Vec::new();
-            if seed.is_multiple_of(2) {
-                replacements.extend([
-                    ("密".to_owned(), "<first>".to_owned()),
-                    ("密钥".to_owned(), "<long>".to_owned()),
-                    ("密".to_owned(), "<alias>".to_owned()),
-                ]);
-            }
-            for index in 0..1 + next(&mut state) % 8 {
-                let value: String = (0..1 + next(&mut state) % 10)
-                    .map(|_| alphabet[next(&mut state) % alphabet.len()] as char)
-                    .collect();
-                replacements.push((value, format!("<ref{index}>")));
-            }
-            let mut input = vec![0xff];
-            for _ in 0..100 {
-                if next(&mut state).is_multiple_of(5) {
-                    let index = next(&mut state) % replacements.len();
-                    input.extend_from_slice(replacements[index].0.as_bytes());
-                } else {
-                    input.push(alphabet[next(&mut state) % alphabet.len()]);
-                }
-            }
-            let masker = OutputMasker::new(replacements.clone());
-            // Stable sorting keeps the first reference when values are equal.
-            replacements.sort_by_key(|(value, _)| std::cmp::Reverse(value.len()));
-            let mut expected = Vec::new();
-            let mut rest = input.as_slice();
-            while let Some((&first, tail)) = rest.split_first() {
-                if let Some((value, reference)) = replacements
-                    .iter()
-                    .find(|(value, _)| rest.starts_with(value.as_bytes()))
-                {
-                    expected.extend_from_slice(reference.as_bytes());
-                    rest = &rest[value.len()..];
-                } else {
-                    expected.push(first);
-                    rest = tail;
-                }
-            }
-
+        for step in 1..=input.len() {
             let mut pending = Vec::new();
             let mut actual = Vec::new();
-            for chunk in input.chunks(1 + next(&mut state) % 17) {
+            for chunk in input.chunks(step) {
                 actual.extend(masker.mask(&mut pending, chunk, false));
             }
             actual.extend(masker.mask(&mut pending, &[], true));
-            assert_eq!(actual, expected, "seed {seed}");
+            assert_eq!(actual, expected, "step {step}");
         }
     }
 
