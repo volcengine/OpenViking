@@ -13,6 +13,7 @@ from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -59,12 +60,12 @@ def declare(adapter, uri, uuid, attrs=None):
     )
 
 
-def test_limit_does_not_change_top_item(local_adapter):
+def test_item_recall_excludes_ordinary_records_and_keeps_sum_stable(local_adapter, monkeypatch):
     adapter = local_adapter
     declare(adapter, "viking://resources/A", "uuid-a")
     declare(adapter, "viking://resources/B", "uuid-b")
     records = []
-    for name, count, score in [("A", 60, 0.9), ("B", 80, 0.8)]:
+    for name, count, score in [("A", 1000, 0.9), ("B", 1200, 0.8), ("A-ordinary", 1000, 1.0)]:
         for i in range(count):
             records.append(
                 {
@@ -76,16 +77,33 @@ def test_limit_does_not_change_top_item(local_adapter):
                 }
             )
     adapter.upsert(records)
-    results = {}
-    for n in [1, 10]:
-        result = adapter.search_item_groups(
-            query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a"), max_groups=n, aggregation="sum"
-        )
-        results[n] = [
-            {"id": g["entity_id"], "score": g["entity_score"], "count": g["count"]}
-            for g in result["groups"]
-        ]
-    assert results[1][0]["id"] == results[10][0]["id"]
+    index = adapter.get_collection()._Collection__collection.indexes.get("default")
+    search = index.search
+    recalled_counts = []
+
+    def record_recall(*args, **kwargs):
+        labels, scores = search(*args, **kwargs)
+        recalled_counts.append(len(labels))
+        return labels, scores
+
+    monkeypatch.setattr(index, "search", record_recall)
+
+    def item_groups(limit):
+        return adapter.search_item_groups(
+            query_vector=[1, 0, 0, 0],
+            filter=Eq("account_id", "a"),
+            max_groups=limit,
+            aggregation="sum",
+        )["groups"]
+
+    top = item_groups(1)
+    groups = item_groups(10)
+    assert top == groups[:1]
+    assert [(group["entity_id"], group["candidate_members_count"]) for group in groups] == [
+        ("uuid-b", 1200),
+        ("uuid-a", 1000),
+    ]
+    assert recalled_counts == [2200, 2200]
 
 
 class EnabledAcl:
@@ -268,6 +286,61 @@ async def test_new_skill_declaration_failure_is_retryable(client, service, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["mkdir", "add_resource"])
+@pytest.mark.parametrize("committed", [False, True])
+async def test_new_item_declaration_failure_is_retryable(
+    service, tmp_path, monkeypatch, operation, committed
+):
+    fs = service.viking_fs
+    owner = ctx()
+    root = f"viking://resources/retry-{operation}"
+    attrs = {"kind": "retry"}
+    source = tmp_path / "retry.md"
+    source.write_text("# Retry\nContent for an Item")
+    execute = fs._get_vector_store().catalog_execute
+    failed = False
+
+    async def fail_declaration(request, *, ctx):
+        nonlocal failed
+        if request["op"] == "declare_item" and not failed:
+            failed = True
+            if committed:
+                await execute(request, ctx=ctx)
+            raise OSError("synthetic declaration failure")
+        return await execute(request, ctx=ctx)
+
+    monkeypatch.setattr(fs._get_vector_store(), "catalog_execute", fail_declaration)
+
+    async def add_resource():
+        return await service.resources.add_resource(
+            str(source), to=root, ctx=owner, wait=True, as_item=True, item_attrs=attrs
+        )
+
+    if operation == "mkdir":
+        with pytest.raises(OpenVikingError, match="synthetic declaration failure"):
+            await service.fs.mkdir(root, owner, as_item=True, item_attrs=attrs)
+    else:
+        result = await add_resource()
+        assert result["status"] == "error", result
+        assert result["details"]["uri"] == root
+    assert failed
+    assert not await fs.exists(root, ctx=owner)
+    before = (await execute({"op": "resolve", "uris": [root]}, ctx=owner))["data"][0]
+    assert bool(before.get("item_uuid")) is committed
+
+    if operation == "mkdir":
+        result = await service.fs.mkdir(root, owner, as_item=True, item_attrs=attrs)
+        assert result["uri"] == root
+    else:
+        result = await add_resource()
+        assert result["status"] == "success" and result["root_uri"] == root, result
+    after = (await execute({"op": "resolve", "uris": [root]}, ctx=owner))["data"][0]
+    assert after["item_uuid"]
+    if committed:
+        assert after["item_uuid"] == before["item_uuid"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("nested", [False, True])
 async def test_mkdir_rejects_promoting_existing_ordinary_directory(service, nested):
     from openviking_cli.exceptions import FailedPreconditionError
@@ -306,6 +379,30 @@ async def test_add_resource_rejects_promoting_existing_resource_before_commit(se
     assert result["code"] == "FAILED_PRECONDITION"
     for uri, data in before.items():
         assert await service.viking_fs.read_file_bytes(uri, ctx=owner) == data
+    resolved = await service.viking_fs._get_vector_store().catalog_execute(
+        {"op": "resolve", "uris": [root]}, ctx=owner
+    )
+    assert not resolved["data"][0].get("item_uuid")
+
+
+@pytest.mark.asyncio
+async def test_add_resource_rejects_declaring_a_file_before_commit(service, tmp_path):
+    source = tmp_path / "leaf.md"
+    source.write_text("# Leaf\nContent that cannot become a standalone Item")
+    owner = ctx()
+    parent = "viking://resources"
+    root = f"{parent}/{source.name}"
+    result = await service.resources.add_resource(
+        str(source),
+        parent=parent,
+        parse_mode="no_split",
+        as_item=True,
+        ctx=owner,
+        wait=True,
+    )
+    assert result["status"] == "error" and result["code"] == "INVALID_ARGUMENT", result
+    assert any("Item declarations require a directory root" in error for error in result["errors"])
+    assert not await service.viking_fs.exists(root, ctx=owner)
     resolved = await service.viking_fs._get_vector_store().catalog_execute(
         {"op": "resolve", "uris": [root]}, ctx=owner
     )

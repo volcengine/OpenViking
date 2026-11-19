@@ -383,7 +383,7 @@ def test_grouping_aggregates_in_engine_and_has_stable_ordering():
         "/resources/A/a",
         "/resources/A/b",
     ]
-    assert maximum["groups"][0]["count"] == 2
+    assert maximum["groups"][0]["candidate_members_count"] == 2
 
     summed = call(
         engine,
@@ -1016,10 +1016,12 @@ def test_semantic_item_scan_retries_if_store_fields_change_after_recall(
             updated.set()
         groups = reader.result(timeout=5)["groups"]
     if filter_by_attrs:
+        # The retry counts zero eligible members after the record moves to B.
         assert groups == []
+        assert calls == 1
     else:
         assert [(g["entity_id"], g["entity_score"]) for g in groups] == [("B", 0.5)]
-    assert calls == 2
+        assert calls == 2
 
 
 def test_item_root_type_is_validated_before_a_resource_replacement():
@@ -1029,6 +1031,14 @@ def test_item_root_type_is_validated_before_a_resource_replacement():
     with pytest.raises(ValueError, match="Cannot change an Item root node type"):
         call(engine, "validate_resource_update", uri="/resources/A", node_type="file")
     assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuids"] == ["stable"]
+
+
+def test_file_catalog_node_cannot_be_declared_as_item():
+    engine = CatalogEngine()
+    uri = "/resources/leaf.md"
+    call(engine, "upsert_nodes", nodes=[{"uri": uri, "node_type": "file"}])
+    with pytest.raises(ValueError, match="require a directory Catalog node"):
+        declare(engine, uri, "leaf")
 
 
 def test_resource_catalog_reset_preserves_declaration_and_rejects_independent_children():

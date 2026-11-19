@@ -21,7 +21,8 @@ class Client:
 
     def do_req(self, method, path, *, req_body):
         self.calls.append((path, req_body))
-        scope = req_body["partition_by"]
+        partition_key = "partition" if "/search/" in path else "partition_by"
+        scope = req_body[partition_key]
         result = {"fetch": [{"id": scope, "fields": {"account_id": scope, "uri": "/resources/a"}}]}
         return SimpleNamespace(status_code=200, json=lambda: {"result": result})
 
@@ -30,7 +31,7 @@ class Client:
 async def test_shared_adapter_passes_partition_per_point_request_without_mutable_binding():
     collection = VikingDBCollection(
         "https://unused.invalid",
-        meta_data={"CollectionName": "context", "PartitionBy": "account_id"},
+        meta_data={"CollectionName": "context", "ShardBy": "account_id"},
     )
     collection.client = Client()
     adapter = VikingDBPrivateCollectionAdapter(
@@ -62,7 +63,7 @@ async def test_shared_adapter_passes_partition_per_point_request_without_mutable
 def test_partitioned_point_operations_without_scope_fail_before_io():
     collection = VikingDBCollection(
         "https://unused.invalid",
-        meta_data={"CollectionName": "context", "PartitionBy": "account_id"},
+        meta_data={"CollectionName": "context", "ShardBy": "account_id"},
     )
     collection.client = Client()
     for operation in (lambda: collection.fetch_data(["a"]), lambda: collection.delete_data(["a"])):
@@ -71,15 +72,18 @@ def test_partitioned_point_operations_without_scope_fail_before_io():
     assert collection.client.calls == []
 
 
-def test_ordinary_partitioned_search_adds_routing_without_an_extra_request():
+@pytest.mark.parametrize("shard_key", ["ShardBy", "PartitionBy"])
+def test_ordinary_partitioned_search_adds_routing_without_an_extra_request(shard_key):
     collection = VikingDBCollection(
         "https://unused.invalid",
-        meta_data={"CollectionName": "context", "PartitionBy": "account_id"},
+        meta_data={"CollectionName": "context", shard_key: "account_id"},
     )
     collection.client = Client()
     collection.search_by_vector(
         "index", dense_vector=[1, 0], filters={"op": "must", "field": "account_id", "conds": ["a"]}
     )
     assert len(collection.client.calls) == 1
-    assert collection.client.calls[0][1]["partition_by"] == "a"
-    assert "group_by" not in collection.client.calls[0][1]
+    request = collection.client.calls[0][1]
+    assert request["partition"] == "a"
+    assert "partition_by" not in request
+    assert "group_by" not in request

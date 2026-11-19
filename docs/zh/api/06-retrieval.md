@@ -21,9 +21,9 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、关
 
 分数阈值遵循同一规则：请求中的 `score_threshold` 优先，过滤该路径产出的任何分数；未指定时，`rerank.threshold`（默认 `0.1`）只过滤 Reranker 产出的分数，仅用向量分数的路径（包括 `find()` 和 Rerank 失败后的回退）默认阈值为 `0`。
 
-## Item Search（预览）
+## Item Search（预览） {#item-search-preview}
 
-Item Search 返回声明过的 Item 根，而不是单个命中分片。Item 只能在 `mkdir` 或 `add_resource` 时声明；`write` 和 `batch_write` 不接受 Item 声明字段。
+Item Search 按已声明的目录返回结果。可在 `mkdir` 或 `add_resource` 时声明 Item。`write` 和 `batch_write` 不接受 Item 声明字段。
 
 通过 `as_item=true` 和可选的扁平字符串属性声明 Item：
 
@@ -123,7 +123,7 @@ MCP 的 `find` 和 `search` 工具都通过 `search_as_item: {}` 开启；可选
 }
 ```
 
-HTTP／SDK 响应沿用 `memories`、`resources`、`skills` 和 `total`，不新增 `items`。各 Item 按声明根的 `context_type` 归类，`uri` 指向根，`score` 为聚合分，根层级为 `level=0`，`abstract` 当前为空字符串。条目可选扩展 `item_uuid`、`item_attrs`，以及只描述本次候选的 `item_extra_info.candidate_members_count` 和 `item_extra_info.candidate_members_uri`。各数组保留引擎顺序，`limit` 限制分类前的总 Item 数，`total` 等于三个数组的长度之和；空结果三个数组均为 `[]`。普通检索不增加 Item 字段。
+HTTP／SDK 响应沿用 `memories`、`resources`、`skills` 和 `total`，不新增 `items`。每个 Item UUID 只返回一次，`context_type` 和所属数组由声明根 URI 决定。整个 Peer 声明为 Item 时归入 `resources`。`uri` 指向根，`score` 为聚合分，根层级为 `level=0`，`abstract` 当前为空字符串。条目可选扩展 `item_uuid`、`item_attrs`，以及只描述本次候选的 `item_extra_info.candidate_members_count` 和 `item_extra_info.candidate_members_uri`。各数组保留引擎顺序，`limit` 限制分类前的总 Item 数，`total` 等于三个数组的长度之和；空结果三个数组均为 `[]`。普通检索不增加 Item 字段。
 
 候选证据列表被截断时，`item_extra_info.candidate_members_truncated` 为 `true`，计数仍是本次参与聚合的候选总数，可以大于 URI 列表长度。后端未提供完整候选统计时，省略 `item_extra_info`，不将展示条数当作聚合总数。返回根 URI 不授予根内容的读取权限。开源引擎默认使用 union：先过滤成员，再分别向全部有效祖先 Item 计分，每组返回自身属性；可显式配置 shadow，此时每条命中只给最近 Item 计分。引擎内部的 `item_uuids` 和 `item_attrs` 均为 `list<string>`，OV API 的 `item_attrs` 仍为字符串 KV 对象。
 
@@ -131,7 +131,7 @@ HTTP／SDK 响应沿用 `memories`、`resources`、`skills` 和 `total`，不新
 
 开源 union 当前将每个 `item_attrs` 条件分别展开成成员范围后组合 AND／OR，因此不同条件可以由不同祖先 Item 分别满足；匹配成员仍向全部有效祖先 UUID 聚合，各组返回自身属性。
 
-开源引擎的纯过滤 Item 查询覆盖全部匹配成员，`score` 为 `0.0`；语义检索使用独立于 `limit` 的 1000 条候选召回预算。`limit` 只控制返回的 Item 组数，每组最多返回 1000 条候选证据；证据截断不影响完整计数及 `max`／`sum` 聚合分。
+开源引擎先筛出具有 Item 归属且满足请求过滤条件的成员。纯过滤查询的成员分为 `0.0`，语义查询使用本地向量索引为筛出的成员打分。`limit` 只控制返回的 Item 组数。每组最多返回 1000 条候选证据，计数和 `max`／`sum` 聚合分覆盖全部计分成员。
 
 Item 模式不加载 `session_id` 对应的会话，不做意图分析、query planning 或 rerank，也不预读目标摘要、概述和正文。引擎返回完整根元数据时，不额外查询 UUID。纯过滤 Item 查询不初始化 embedder；语义查询仍需生成查询向量。成员权限检查和分组查询仍正常执行。
 
@@ -141,9 +141,9 @@ Item 模式只支持 list 结果，不支持 `read_content`、`include_provenanc
 
 `VikingDBCollection` 将 Catalog 声明管理映射到既有记录 API，将语义 Item 检索映射到平台 `group_by`，读取 `result.groups` 中的 `item_id`、`item_score`、`item_uri` 和根自身 `item_attrs`。OV 不直接调用引擎 UDF，也不聚合普通 TopK 结果。按聚合分应用 `score_threshold`，不改变平台组顺序。
 
-需要预建包含 OV 标准字段的 collection：`PartitionBy="account_id"`，`uri` 类型为 `path`，`item_uuids` 为挂载到 `uri` 的 `list<string>`，`item_attrs` 为普通、不继承的 `list<string>`。字段模式不能通过 find／search 按请求切换，也不会由 OV 自动修改旧 collection。声明管理支持 shadow／union；当前平台 `group_by` 协议仅接受 union，shadow 分组及纯过滤 Item 查询返回 `501 UNIMPLEMENTED`。
+预建 collection 时使用 `ShardBy="account_id"`，并包含 OV 标准字段。其中 `uri` 类型为 `path`，`item_uuids` 为挂载到 `uri` 的 `list<string>`，`item_attrs` 为普通、不继承的 `list<string>`。字段模式不能通过 find／search 按请求切换，也不会由 OV 自动修改旧 collection。声明管理支持 shadow／union。当前平台 `group_by` 协议仅接受 union，shadow 分组及纯过滤 Item 查询返回 `501 UNIMPLEMENTED`。
 
-普通查询不增加 Item 探测或存储请求；分片 collection 的检索和点操作透传 account 的 `partition_by`。无 `item_attrs` 条件时，Item 查询只发一次分组请求，不回查根 UUID、不读取成员正文。带属性条件时，仅查询该 account 的声明，将每个根属性条件转换为有效 UUID 条件，再交给平台过滤和计分；否定条件可能需要读取该 account 的全部声明。平台尚未提供候选总数和截断信息，因此当前不返回 `item_extra_info`，也不请求未使用的成员字段。
+普通查询不增加 Item 探测或存储请求。对按账号分片的 collection，VikingDB 检索请求用 `partition` 传账号 ID 字符串，并保留账号和权限过滤。点操作使用 `partition_by`。无 `item_attrs` 条件时，Item 查询只发一次分组请求，不回查根 UUID、不读取成员正文。带属性条件时，仅查询该 account 的声明，将每个根属性条件转换为有效 UUID 条件，再交给平台过滤和计分。否定条件可能需要读取该 account 的全部声明。平台尚未提供候选总数和截断信息，因此当前不返回 `item_extra_info`，也不请求未使用的成员字段。
 
 ## 检索流程
 
@@ -188,7 +188,7 @@ Item 模式只支持 list 结果，不支持 `read_content`、`include_provenanc
 | query | str | 否 | "" | 查询文本；图片查询或仅按过滤条件查询时可省略 |
 | image_url | str 或 list[str] | 否 | None | 单个图片 URI 或有序图片 URI 数组，每项支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
-| search_as_item | object \| null | 否 | null | 省略或 `null` 沿用普通检索；`{}` 开启 Item Search；`aggregation` 支持 `max`（默认）和 `sum`。只支持 list 结果，见 [Item Search](#item-search预览) |
+| search_as_item | object \| null | 否 | null | 省略或 `null` 沿用普通检索；`{}` 开启 Item Search；`aggregation` 支持 `max`（默认）和 `sum`。只支持 list 结果，见 [Item Search](#item-search-preview) |
 | events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
@@ -204,7 +204,7 @@ Item 模式只支持 list 结果，不支持 `read_content`、`include_provenanc
 | read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-Item 模式的 `level` 过滤成员层级；根结果字段和互斥参数见 [Item Search](#item-search预览)。
+Item 模式的 `level` 过滤成员层级；根结果字段和互斥参数见 [Item Search](#item-search-preview)。
 
 **目标解析说明**：
 - `target_uri` 为空时，非 ROOT 检索默认搜索当前用户根 `viking://user/{user}` 和公共 `viking://resources`。
@@ -538,7 +538,7 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）；Item 模式忽略且不加载会话 |
-| search_as_item | object \| null | 否 | null | 省略或 `null` 沿用普通检索；`{}` 开启 Item Search；`aggregation` 支持 `max`（默认）和 `sum`。只支持 list 结果，见 [Item Search](#item-search预览) |
+| search_as_item | object \| null | 否 | null | 省略或 `null` 沿用普通检索；`{}` 开启 Item Search；`aggregation` 支持 `max`（默认）和 `sum`。只支持 list 结果，见 [Item Search](#item-search-preview) |
 | events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
@@ -554,7 +554,7 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容；仅支持 `mode="list"`。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-Item 模式的 `level` 过滤成员层级；根结果字段和互斥参数见 [Item Search](#item-search预览)。
+Item 模式的 `level` 过滤成员层级；根结果字段和互斥参数见 [Item Search](#item-search-preview)。
 
 `search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query，不支持图片，且需要远程 VikingDB 配置全文索引。
 

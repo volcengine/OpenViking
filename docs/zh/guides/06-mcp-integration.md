@@ -182,7 +182,7 @@ claude mcp add --transport http openviking \
 {"name":"find","arguments":{"query":"","filter":{"op":"must","field":"item_attrs","conds":["kind=runbook"]},"search_as_item":{}}}
 ```
 
-两者均支持语义查询；默认取 `max`，需要求和时传 `{"aggregation":"sum"}`。结果沿用分类文本，包含根 URI、聚合分和 Item 元数据；`limit` 限制总 Item 数。Item 模式忽略 `session_id`，不加载会话、摘要或正文，且拒绝 `read_content`、事件时间衰减和 context 模式。完整约束见 [Item Search 协议](../api/06-retrieval.md#item-search预览)。
+两者均支持语义查询；默认取 `max`，需要求和时传 `{"aggregation":"sum"}`。结果沿用分类文本，包含根 URI、聚合分和 Item 元数据；`limit` 限制总 Item 数。Item 模式忽略 `session_id`，不加载会话、摘要或正文，且拒绝 `read_content`、事件时间衰减和 context 模式。完整约束见 [Item Search 协议](../api/06-retrieval.md#item-search-preview)。
 
 ### 使用 skill 中引用的凭据
 

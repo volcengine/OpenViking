@@ -34,7 +34,7 @@ def collection():
     meta = {
         "ProjectName": "project",
         "CollectionName": "context",
-        "PartitionBy": "account_id",
+        "ShardBy": "account_id",
         "Fields": [
             {"FieldName": "uri", "FieldType": "path"},
             {
@@ -65,7 +65,9 @@ def group(item_id="a", score=1.7, attrs=None):
 
 @pytest.mark.parametrize("aggregation", ["max", "sum"])
 def test_private_adapter_uses_platform_groups_without_extra_io(collection, aggregation):
-    collection.client.result = {"groups": [group(), group("b", 0.8, ["kind=child"])]}
+    typed_group = group()
+    typed_group["found_records"][0]["fields"] = {"context_type": "skill"}
+    collection.client.result = {"groups": [typed_group, group("b", 0.8, ["kind=child"])]}
     adapter = VikingDBPrivateCollectionAdapter(
         host="https://unused.invalid",
         headers=None,
@@ -84,7 +86,8 @@ def test_private_adapter_uses_platform_groups_without_extra_io(collection, aggre
     assert len(collection.client.calls) == 1
     method, path, request = collection.client.calls[0]
     assert (method, path) == ("POST", "/api/vikingdb/data/search/vector")
-    assert request["partition_by"] == "tenant-a"
+    assert request["partition"] == "tenant-a"
+    assert "partition_by" not in request
     assert request["sparse_vector"] == {"1": 0.7}
     assert request["group_by"] == {
         "item_ids_field": "item_uuids",
@@ -105,6 +108,7 @@ def test_private_adapter_uses_platform_groups_without_extra_io(collection, aggre
         ("a", "viking://resources/a", None),
         ("b", "viking://resources/b", ["kind=child"]),
     ]
+    assert all("context_type" not in g for g in result["groups"])
     assert all(g["candidate_members_uri"] == [] for g in result["groups"])
     assert all("candidate_members_count" not in g for g in result["groups"])
 
@@ -133,7 +137,7 @@ def test_unsupported_platform_combinations_fail_before_http(collection, case):
     if case == "shadow":
         collection.meta_data["Fields"][1]["InheritanceMode"] = "shadow"
     elif case == "partition":
-        collection.meta_data.pop("PartitionBy")
+        collection.meta_data.pop("ShardBy")
     elif case == "inherited_attrs":
         collection.meta_data["Fields"][2]["MountPathField"] = "uri"
     elif case == "filter_only":
@@ -203,6 +207,7 @@ def test_ordinary_search_never_checks_item_metadata_or_adds_grouping(collection)
     request = collection.client.calls[0][2]
     assert request["limit"] == 3
     assert "group_by" not in request
+    assert "partition" not in request
     assert "partition_by" not in request
 
 

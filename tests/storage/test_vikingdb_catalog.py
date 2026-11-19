@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
 import pytest
@@ -49,7 +51,7 @@ class RecordAPI:
     def do_req(self, method, path, *, req_body):
         data = deepcopy(req_body)
         self.calls.append((method, path, data))
-        scope = data.get("partition_by")
+        scope = data["partition"] if "/search/" in path else data.get("partition_by")
         if path.endswith("/vector") and "group_by" in data:
             return Response({"groups": []})
         if path.endswith("/upsert"):
@@ -116,7 +118,7 @@ class RecordAPI:
 @pytest.fixture
 def collection():
     meta = CollectionSchemas.context_collection("context", 2)
-    meta.update(ProjectName="project", PartitionBy="account_id")
+    meta.update(ProjectName="project", ShardBy="account_id")
     meta["Fields"].extend(
         [
             {
@@ -163,6 +165,7 @@ def test_declarations_are_stable_and_separate_from_semantic_upserts(collection):
     )
     assert [r.id for r in result.data] == [record_id]
     assert collection.aggregate_data("catalog-index", filters=account_filter).agg == {"_total": 1}
+    assert collection.client.calls[-1][2]["partition_by"] == "a"
 
 
 @pytest.mark.parametrize("mode,expected", [("union", ["child", "parent"]), ("shadow", ["child"])])
@@ -188,10 +191,12 @@ def test_management_resolves_account_scoped_declarations_without_copying_attrs(
     for _, path, request in collection.client.calls:
         if path.endswith("/upsert"):
             assert all(r["account_id"] in ("a", "b") for r in request["data"])
+        elif path.endswith("/scalar"):
+            assert request["partition"] in ("a", "b")
+            assert "partition_by" not in request
+            assert request["index_name"] == "catalog-index"
         else:
             assert request["partition_by"] in ("a", "b")
-        if path.endswith("/scalar"):
-            assert request["index_name"] == "catalog-index"
 
 
 def test_preserve_root_rejects_independent_children_before_deletion(collection):
@@ -215,8 +220,10 @@ def test_move_and_rollback_preserve_source_and_preexisting_target(collection, fa
     declare(collection, "/resources/A", "source", item_attrs=["kind=source"])
     declare(collection, "/resources/A/child", "child")
     declare(collection, "/resources/B", "old-target", item_attrs=["kind=target"])
+    declare(collection, "/resources/B/kept", "target-only", item_attrs=["kind=kept"])
     declare(collection, "/resources/A", "other-account", scope="b")
     before = deepcopy(collection.client.rows)
+    before_move = len(collection.client.calls)
     collection.client.fail_delete_once = fail
     if fail:
         with pytest.raises(VikingDBException):
@@ -224,9 +231,24 @@ def test_move_and_rollback_preserve_source_and_preexisting_target(collection, fa
     else:
         moved = call(collection, "move_subtree", from_uri="/resources/A", to_uri="/resources/B")
         assert moved["moved_nodes"] == 2
+        reads = collection.client.calls[before_move:]
+        assert [path.rsplit("/", 1)[-1] for _, path, _ in reads[:3]] == [
+            "scalar",
+            "fetch_in_collection",
+            "upsert",
+        ]
+        assert len(reads[1][2]["ids"]) == 4
         assert call(collection, "resolve", uris=["/resources/B/child/hit"])["data"][0][
             "item_uuids"
         ] == ["child", "source"]
+        assert call(collection, "resolve", uris=["/resources/B/kept/hit"])["data"][0][
+            "item_uuids"
+        ] == ["target-only", "source"]
+        items = call(collection, "query_items", item_uuids=["source", "target-only"])["data"]
+        assert {item["item_uuid"]: (item["uri"], item["item_attrs"]) for item in items} == {
+            "source": ("/resources/B", ["kind=source"]),
+            "target-only": ("/resources/B/kept", ["kind=kept"]),
+        }
         with pytest.raises(ValueError, match="different account"):
             call(collection, "restore_move", "b", undo=moved["undo"])
         call(collection, "restore_move", undo=moved["undo"])
@@ -246,6 +268,30 @@ def test_retry_after_index_visibility_timeout_keeps_committed_uuid(collection, m
     retry = declare(collection, "/resources/A", "new-retry-id")
     assert retry["item_uuid"] == "committed"
     assert retry["item_attrs"] == ["kind=case"]
+
+
+def test_index_visibility_wait_does_not_block_another_account(collection, monkeypatch):
+    declare(collection, "/resources/B", "b-item", scope="b")
+    entered = threading.Event()
+    release = threading.Event()
+    original = collection._catalog._wait_visible
+
+    def wait_for_index(scope, expected):
+        if scope == "a":
+            entered.set()
+            assert release.wait(5)
+        return original(scope, expected)
+
+    monkeypatch.setattr(collection._catalog, "_wait_visible", wait_for_index)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(declare, collection, "/resources/A", "a-item")
+        try:
+            assert entered.wait(5)
+            second = pool.submit(call, collection, "resolve", "b", uris=["/resources/B/file"])
+            assert second.result(timeout=3)["data"][0]["item_uuid"] == "b-item"
+        finally:
+            release.set()
+        assert first.result(timeout=5)["item_uuid"] == "a-item"
 
 
 def test_collection_configuration_is_validated_without_metadata_http_calls(collection):
@@ -299,7 +345,8 @@ def test_root_attribute_filters_select_effective_ids_without_member_attribute_in
         "vector",
     ]
     request = calls[-1][2]
-    assert request["partition_by"] == "a"
+    assert request["partition"] == "a"
+    assert "partition_by" not in request
     assert request["filter"]["conds"][0]["conds"][1] == {
         "op": "must",
         "field": "item_uuids",

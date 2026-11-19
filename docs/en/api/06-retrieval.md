@@ -23,7 +23,7 @@ Score thresholds follow one rule: a request `score_threshold` overrides everythi
 
 ## Item Search (preview)
 
-Item Search returns declared Item roots instead of individual matching chunks. An Item must first be declared through `mkdir` or `add_resource`; `write` and `batch_write` do not accept Item declaration fields.
+Item Search returns declared Item directories. Declare an Item through `mkdir` or `add_resource`. The `write` and `batch_write` operations do not accept Item declaration fields.
 
 Declare an Item with `as_item=true` and optional flat string metadata:
 
@@ -123,7 +123,7 @@ One `must` node follows the existing list-string filter semantics: multiple valu
 }
 ```
 
-HTTP/SDK responses keep `memories`, `resources`, `skills`, and `total`, without a separate `items` array. Each Item uses its declaration root's `context_type`, root `uri`, aggregate `score`, and root `level=0`; `abstract` is currently an empty string. Optional extensions are `item_uuid`, `item_attrs`, and `item_extra_info` with only this request's `candidate_members_count` and `candidate_members_uri`. Each array preserves engine order; `limit` bounds the total Items before classification and `total` is the sum of the three array lengths. Empty results have three empty arrays. Ordinary hits do not gain Item fields.
+HTTP/SDK responses keep `memories`, `resources`, `skills`, and `total`, without a separate `items` array. Each Item UUID appears once, and its declaration root URI determines its `context_type` and result array. A Peer root declared as an Item goes into `resources`. Each Item returns the root `uri`, aggregate `score`, and root `level=0`. The `abstract` is currently an empty string. Optional extensions are `item_uuid`, `item_attrs`, and `item_extra_info` with only this request's `candidate_members_count` and `candidate_members_uri`. Each array preserves engine order; `limit` bounds the total Items before classification and `total` is the sum of the three array lengths. Empty results have three empty arrays. Ordinary hits do not gain Item fields.
 
 When member evidence is truncated, `item_extra_info.candidate_members_truncated` is `true`; the count still includes every candidate used in aggregation and may exceed the URI list length. Backends without complete candidate statistics omit `item_extra_info` rather than treating displayed members as the aggregation total. Returning a root URI does not grant access to its contents. The local engine defaults to union: it filters members before scoring every effective ancestor Item, each with its own attributes. Explicit shadow configuration assigns each hit only to its nearest Item. Internal `item_uuids` and `item_attrs` are both `list<string>`; the OV API continues to expose `item_attrs` as a string map.
 
@@ -131,7 +131,7 @@ The inheritance mode is configured once for the `item_uuids` field within a coll
 
 The local union implementation currently expands each `item_attrs` predicate to member ranges before combining AND/OR, so different ancestor Items can satisfy different predicates. Matching members still contribute to every effective ancestor UUID, and each group returns its own attributes.
 
-Local filter-only Item queries cover all matching members and return a `score` of `0.0`. Semantic queries use a 1000-candidate recall budget independent of `limit`. The limit controls returned Item groups, with at most 1000 evidence members per group; truncating evidence does not change complete counts or `max`/`sum` aggregation scores.
+Local Item queries apply the request filters to members that belong to an Item. Filter-only queries give each matching member a score of `0.0`. Semantic queries score the filtered members with the local vector index. `limit` controls how many Item groups are returned. Each group includes at most 1000 evidence members, while its count and `max`/`sum` score cover all scored members.
 
 Item mode does not load the session named by `session_id`, perform intent analysis/query planning or reranking, or pre-read target abstracts, overviews, or content. Complete root metadata from the engine requires no additional UUID lookup. Filter-only Item queries do not initialize an embedder; semantic queries still need query vectors. Member authorization and grouping queries still run.
 
@@ -141,9 +141,9 @@ Item mode supports list results only. It rejects `read_content`, `include_proven
 
 `VikingDBCollection` maps Catalog declaration management to existing record APIs and semantic Item queries to the platform `group_by` API. It reads `item_id`, `item_score`, `item_uri`, and root-owned `item_attrs` from `result.groups`. OV does not call engine UDFs directly or aggregate ordinary TopK results. It applies `score_threshold` to aggregate scores while preserving platform group order.
 
-Pre-create a collection with the standard OV fields, `PartitionBy="account_id"`, a `path`-typed `uri`, a `list<string>` `item_uuids` mounted on `uri`, and an ordinary, non-inherited `list<string>` `item_attrs`. Modes cannot be changed per find/search request, and OV does not reconfigure existing collections. Declaration management supports shadow and union; the current platform grouping contract accepts union only. Shadow grouping and filter-only Item queries return `501 UNIMPLEMENTED`.
+Pre-create a collection with the standard OV fields, `ShardBy="account_id"`, a `path`-typed `uri`, a `list<string>` `item_uuids` mounted on `uri`, and an ordinary, non-inherited `list<string>` `item_attrs`. Modes cannot be changed per find/search request, and OV does not reconfigure existing collections. Declaration management supports shadow and union. The platform `group_by` contract currently requires union. Shadow grouping and filter-only Item queries return `501 UNIMPLEMENTED`.
 
-Ordinary queries add no Item probes or storage calls. Queries and point operations on partitioned collections pass the account as `partition_by`. Without attribute predicates, an Item query makes one grouping request, with no UUID lookup or member-content read. Attribute predicates query only account-scoped declarations and translate each root-attribute condition into an effective-UUID condition for platform filtering and scoring; negative predicates may require all declarations in that account. The current platform contract omits candidate totals and truncation, so OV omits `item_extra_info` and does not request unused member fields.
+Ordinary queries add no Item probes or storage calls. VikingDB search requests on account-sharded collections send the account ID as a `partition` string and retain account and permission filters. Point operations use `partition_by`. Without attribute predicates, an Item query makes one grouping request, with no UUID lookup or member-content read. Attribute predicates query only account-scoped declarations and translate each root-attribute condition into an effective-UUID condition for platform filtering and scoring. Negative predicates may require all declarations in that account. The current platform contract omits candidate totals and truncation, so OV omits `item_extra_info` and does not request unused member fields.
 
 ## Retrieval Pipeline
 

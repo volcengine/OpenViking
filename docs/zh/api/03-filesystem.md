@@ -599,7 +599,7 @@ ov attrs batch-set-tags viking://resources/docs/api.md viking://resources/docs/g
 | item_attrs | object | 否 | 省略 | 可选扁平字符串 KV，仅 `as_item=true` 可传；只属于声明根，不继承、不合并 |
 
 
-声明方式、UUID 生命周期和 `item_attrs` 限制见 [Item Search](06-retrieval.md#item-search预览)。 Item 模式的 HTTP 成功结果额外包含 `item_uuid` 和 `item_attrs`；Python SDK 的 `mkdir()` 仍返回 `None`。
+声明方式、UUID 生命周期和 `item_attrs` 限制见 [Item Search](06-retrieval.md#item-search-preview)。 Item 模式的 HTTP 成功结果额外包含 `item_uuid` 和 `item_attrs`；Python SDK 的 `mkdir()` 仍返回 `None`。
 
 **Python SDK (HTTP)**
 

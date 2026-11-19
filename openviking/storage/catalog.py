@@ -30,10 +30,12 @@ def validate_item_attrs(item_attrs: Any) -> dict[str, str]:
 
 
 def validate_item_declaration(
-    as_item: bool, item_attrs: Any = ITEM_ATTRS_OMITTED
+    as_item: bool, item_attrs: Any = ITEM_ATTRS_OMITTED, *, is_dir: bool | None = None
 ) -> dict[str, str] | None:
     if type(as_item) is not bool:
         raise InvalidArgumentError("as_item must be a boolean")
+    if as_item and is_dir is False:
+        raise InvalidArgumentError("Item declarations require a directory root")
     if item_attrs is ITEM_ATTRS_OMITTED:
         return None
     if not as_item:
@@ -70,7 +72,7 @@ async def declare_item(
     is_dir: bool,
 ) -> dict[str, Any] | None:
     """Atomically create or replay an Item declaration at its actual root."""
-    normalized_attrs = validate_item_declaration(as_item, item_attrs)
+    normalized_attrs = validate_item_declaration(as_item, item_attrs, is_dir=is_dir)
     if not as_item:
         return None
 
@@ -87,7 +89,7 @@ async def declare_item(
         await storage.catalog_execute(
             {
                 "op": "upsert_nodes",
-                "nodes": [{"uri": uri, "node_type": "dir" if is_dir else "file"}],
+                "nodes": [{"uri": uri, "node_type": "dir"}],
             },
             ctx=ctx,
         )
@@ -129,7 +131,7 @@ async def validate_resource_item_update(
     """Check a replacement before committing bytes under its resource lease."""
     from openviking_cli.exceptions import UnimplementedError
 
-    attrs = validate_item_declaration(as_item, item_attrs)
+    attrs = validate_item_declaration(as_item, item_attrs, is_dir=is_dir)
     execute = getattr(storage, "catalog_execute", None)
     if execute is None:
         if as_item:
