@@ -180,7 +180,9 @@ class TestOpenVikingVectorDB(unittest.TestCase):
         collection.update(
             fields=[{"FieldName": "schema_flag", "FieldType": "bool", "DefaultValue": False}]
         )
-        collection.update_index("idx_filters", scalar_index=[*index_meta["ScalarIndex"], "schema_flag"])
+        collection.update_index(
+            "idx_filters", scalar_index=[*index_meta["ScalarIndex"], "schema_flag"]
+        )
 
         self.assertGreater(index.get_newest_version(), previous_version)
         self.assertTrue(Path(index.version_dir, str(previous_version)).is_dir())
@@ -192,6 +194,7 @@ class TestOpenVikingVectorDB(unittest.TestCase):
         assert collection.update_data([{"id": "second", "schema_flag": True}]).ids == ["second"]
         assert collection.fetch_data(["second"]).items[0].fields["schema_flag"] is True
         self.assertEqual(self._search_ids(collection, new_flag), ["second"])
+        self.assertEqual(self._search_ids(collection, old_flag), ["first"])
         collection.close()
         self.collections.remove(collection)
         reopened = self._register(get_or_create_local_collection(path=TEST_DB_PATH))
@@ -203,6 +206,10 @@ class TestOpenVikingVectorDB(unittest.TestCase):
             ["second"],
         )
         self.assertEqual(self._search_ids(reopened, old_flag), ["first"])
+        reopened.delete_data(["first"])
+        self.assertEqual(
+            reopened.aggregate_data("idx_filters", filters=old_flag).agg, {"_total": 0}
+        )
 
     def test_offset_collision_after_delete(self):
         """Test for regression of logical offset collision.

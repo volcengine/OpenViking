@@ -1255,8 +1255,15 @@ class LocalIndex(IIndex):
         return 0
 
     def _convert_delta_list_for_index(self, delta_list: List[DeltaRecord]) -> List[DeltaRecord]:
-        if not self.field_type_converter:
+        converter = self.field_type_converter
+        if not converter:
             return delta_list
+        indexed_fields = {
+            name: converter.fields_dict[name]
+            for name in converter.user_scalar_fields_from_engine(
+                self.meta.inner_meta.get("ScalarIndex", [])
+            )
+        }
         converted: List[DeltaRecord] = []
         for data in delta_list:
             item = DeltaRecord(type=data.type)
@@ -1265,12 +1272,11 @@ class LocalIndex(IIndex):
             item.sparse_raw_terms = list(data.sparse_raw_terms) if data.sparse_raw_terms else []
             item.sparse_values = list(data.sparse_values) if data.sparse_values else []
             item.fields = (
-                self.field_type_converter.convert_fields_for_index(data.fields)
-                if data.fields
-                else data.fields
+                converter.convert_fields_for_index(data.fields) if data.fields else data.fields
             )
+            # A scalar-index rebuild can index defaults absent from the stored row.
             item.old_fields = (
-                self.field_type_converter.convert_fields_for_index(data.old_fields)
+                converter.convert_fields_for_index(data.old_fields, default_fields=indexed_fields)
                 if data.old_fields
                 else data.old_fields
             )

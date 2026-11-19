@@ -22,6 +22,7 @@ from openviking.storage.vectordb.utils.json_safety import (
     safe_json_dumps,
     sanitize_unicode_for_json,
 )
+from openviking.storage.vectordb.utils.validation import fix_fields_data
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +339,9 @@ class DataProcessor:
                     raise ValueError("list<int64> must be list or ';' joined string")
         return converted
 
-    def convert_fields_for_index(self, fields_json: str) -> str:
+    def convert_fields_for_index(
+        self, fields_json: str, *, default_fields: Optional[Dict[str, Any]] = None
+    ) -> str:
         if not fields_json:
             return fields_json
         try:
@@ -351,6 +354,8 @@ class DataProcessor:
             )
             return fields_json
         data = sanitize_unicode_for_json(parsed)
+        if default_fields:
+            fix_fields_data(data, default_fields)
         converted = self.convert_fields_dict_for_index(data)
         return safe_json_dumps(converted, ensure_ascii=False)
 
