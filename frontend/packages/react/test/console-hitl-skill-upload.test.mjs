@@ -1,8 +1,69 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act } from 'react';
-import { card, click, mountHitl, settle } from './helpers/console-hitl.mjs';
+import {
+  card,
+  click,
+  input,
+  mountHitl,
+  settle,
+} from './helpers/console-hitl.mjs';
 import { notificationError, toastContent } from './helpers/feedback-dom.mjs';
+
+test('the compile Skill picker searches the system scope and selects its SKILL.md', async () => {
+  const requests = [];
+  const skill = 'viking://system/compile/example-skills/llm-wiki/SKILL.md';
+  const view = await mountHitl([card('compile_skill', 'Compile Skill')], {
+    locale: 'en-US',
+    fetch: async (url, options) => {
+      if (new URL(url).pathname !== '/api/v1/search/glob') {
+        return Response.json({ status: 'ok', result: [] });
+      }
+      const body = JSON.parse(options.body);
+      requests.push({ ...body, method: options.method });
+      if (body.uri === 'viking://~/skills') {
+        return Response.json(
+          {
+            status: 'error',
+            error: { code: 'NOT_FOUND', message: 'Missing skills' },
+          },
+          { status: 404 },
+        );
+      }
+      return Response.json({
+        status: 'ok',
+        result: { matches: body.uri === 'viking://system' ? [skill] : [] },
+      });
+    },
+  });
+  try {
+    await view.start();
+    await click(view.container.querySelector('[aria-haspopup="dialog"]'));
+    const picker = document.querySelector('.ov-context-picker');
+    await input(picker.querySelector('input[type="search"]'), 'llm');
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
+
+    assert.deepEqual(
+      requests,
+      ['viking://system', 'viking://~/skills', 'viking://agent/skills'].map(
+        (uri) => ({
+          uri,
+          pattern: '**/*llm*/**',
+          node_limit: 256,
+          method: 'POST',
+        }),
+      ),
+    );
+    const choice = picker.querySelector(
+      '[role=treeitem][aria-label="SKILL.md"]',
+    );
+    assert.ok(choice);
+    await click(choice);
+    assert.equal(choice.getAttribute('aria-selected'), 'true');
+  } finally {
+    await view.unmount();
+  }
+});
 
 test('Skill upload shows local validation in a Toast and preserves the server error in a Notification', async () => {
   const uploads = [];

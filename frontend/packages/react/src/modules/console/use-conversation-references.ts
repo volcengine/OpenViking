@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
+import { isOvClientError } from '../../client/errors.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
@@ -16,6 +17,11 @@ import {
 } from './mention-search.js';
 
 const emptyReferences: readonly VikingBotReference[] = [];
+const skillSearchRoots = [
+  'viking://system',
+  'viking://~/skills',
+  'viking://agent/skills',
+];
 
 export function useConversationReferences({
   enabled,
@@ -23,12 +29,14 @@ export function useConversationReferences({
   scopeKey,
   selection,
   directoryClient,
+  searchSkills = false,
 }: {
   enabled: boolean;
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
   selection?: ConsoleChatOptions['referenceSelection'];
   directoryClient?: OvClient;
+  searchSkills?: boolean;
 }) {
   const inheritedClient = useOvClient('local');
   const inheritedSignal = useOvSignal();
@@ -124,19 +132,38 @@ export function useConversationReferences({
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     const timer = setTimeout(() => {
-      void scope.client
-        .request<{ matches: unknown }>({
-          method: 'POST',
-          path: OV_PATHS.searchGlob,
-          body: {
-            uri: MENTION_ROOT,
-            pattern: mentionPattern(keyword),
-            node_limit: 100,
-          },
-          options: { ...scope.options, signal: requestSignal },
-        })
-        .then(({ matches }) => {
+      const roots = searchSkills ? skillSearchRoots : [MENTION_ROOT];
+      const pattern = searchSkills
+        ? `**/*${keyword.replace(/[*?[\]{}\\]/g, (char) => `[${char}]`)}*/**`
+        : mentionPattern(keyword);
+      void Promise.all(
+        roots.map(async (uri) => {
+          try {
+            const { matches } = await scope.client.request<{
+              matches: unknown;
+            }>({
+              method: 'POST',
+              path: OV_PATHS.searchGlob,
+              body: { uri, pattern, node_limit: searchSkills ? 256 : 100 },
+              options: { ...scope.options, signal: requestSignal },
+            });
+            if (!Array.isArray(matches))
+              throw new Error('Invalid file search response');
+            return matches;
+          } catch (error) {
+            if (
+              searchSkills &&
+              isOvClientError(error) &&
+              (error.code === 'NOT_FOUND' || error.statusCode === 404)
+            )
+              return [];
+            throw error;
+          }
+        }),
+      )
+        .then((results) => {
           if (requestSignal.aborted) return;
+          const matches = results.flat();
           setSearch({ scope, keyword, rows: mentionSearchRows(matches) });
         })
         .catch((error: unknown) => {
@@ -152,7 +179,7 @@ export function useConversationReferences({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [opened, keyword, scope, signal, attempt]);
+  }, [opened, keyword, scope, signal, attempt, searchSkills]);
   if (!enabled) return { references: undefined, clearReferences };
 
   const result =
