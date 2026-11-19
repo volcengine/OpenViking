@@ -12,11 +12,11 @@
   "exports": {
     ".": "./index.mjs",
     "./servers/mcp-proxy.mjs": "./servers/mcp-proxy.mjs",
-    "./tui": "./tui.tsx"
+    "./tui": "./tui.mjs"
   },
   "files": [
     "index.mjs",
-    "tui.tsx",
+    "tui.mjs",
     "lib/",
     "servers/",
     "skills/",

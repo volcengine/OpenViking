@@ -321,4 +321,7 @@ To disable just the terminal companion, add the following filter to OpenCode's `
 { "plugins": ["*", "-openviking.tui"] }
 ```
 
-Run `pnpm run check:tui` for a Bun TSX build and `pnpm test` for command/RPC coverage.
+The packaged `./tui` entry uses OpenCode's OpenTUI Solid runtime directly. Run
+`pnpm run check:tui` to check the export and `pnpm test` for command/RPC coverage.
+After packaging changes, install the package in a clean OpenCode home and open
+`/ov` → **Doctor** to verify the terminal client can render the dialog.

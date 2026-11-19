@@ -1,14 +1,14 @@
-// OpenCode supplies Solid/OpenTUI at runtime; syntax-check without bundling them.
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { fileURLToPath } from "node:url"
+// Git installs this entrypoint under node_modules without running a JSX build.
+import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
 import { spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
 
-const output = await mkdtemp(join(tmpdir(), "ov-tui-build-"))
-try {
-  const result = spawnSync("bun", ["build", fileURLToPath(new URL("../tui.tsx", import.meta.url)),
-    "--target=bun", "--external=*", `--outfile=${join(output, "tui.js")}`], { stdio: "inherit" })
-  if (result.error) throw result.error
-  process.exitCode = result.status ?? 1
-} finally { await rm(output, { recursive: true, force: true }) }
+const { exports, files } = JSON.parse(await readFile(new URL("../package.json", import.meta.url)))
+const entry = exports["./tui"]
+assert.ok(files.includes(entry.slice(2)), "Include ./tui in the package files")
+const result = spawnSync("bun", ["build", fileURLToPath(new URL(`../${entry}`, import.meta.url)),
+  "--target=bun", "--external=*"], { encoding: "utf8" })
+if (result.error) throw result.error
+assert.equal(result.status, 0, result.stderr)
+assert.doesNotMatch(result.stdout, /["'](?:react|@opentui\/react)(?:\/[^"']*)?["']/)
