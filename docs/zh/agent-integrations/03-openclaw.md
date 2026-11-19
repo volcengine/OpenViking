@@ -1,5 +1,7 @@
 # OpenClaw
 
+> **推荐优先通过 [OpenViking 网关](https://openviking.ai/gateway) 接入，体验最佳。** 客户端里不用装插件，每条消息的模型调用都会带上记忆。下面的插件方式仍然可用，两种方式的取舍见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)。
+
 为 [OpenClaw](https://github.com/openclaw/openclaw) 添加长效记忆。安装完成后，OpenClaw 会自动记住对话中的重要信息，并在每次回复前召回相关上下文。
 
 源码：[examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)

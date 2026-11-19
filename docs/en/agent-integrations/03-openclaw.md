@@ -1,5 +1,7 @@
 # OpenClaw
 
+> **Recommended: connect through [OpenViking Gateway](https://openviking.ai/gateway) for the best experience.** It adds memory to every model call with nothing to install in OpenClaw. The plugin below still works if you prefer it; see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin) for the trade-offs.
+
 Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw automatically remembers important facts from conversations and recalls relevant context before every reply.
 
 Source: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)

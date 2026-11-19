@@ -1,5 +1,7 @@
 # Hermes
 
+> **Recommended: connect through [OpenViking Gateway](https://openviking.ai/gateway) for the best experience.** It adds memory to every model call with nothing to install in Hermes. The plugin below still works if you prefer it; see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin) for the trade-offs.
+
 Use OpenViking for long-term memory in [Hermes Agent](https://hermes-agent.nousresearch.com/).
 
 ## Get started
