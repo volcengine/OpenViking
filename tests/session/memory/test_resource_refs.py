@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
+
 import pytest
 
 from openviking.session.memory.dataclass import MemoryFile
@@ -215,3 +217,49 @@ def test_unlink_resource_references_removes_bare_uri_but_keeps_sentence():
     assert changed is True
     assert mf.content == "用户保存了越前龙马照片。"
     assert "resource_refs" not in mf.extra_fields
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"ref": "viking://resources/demo"}',
+        '{"outer": {"ref": "viking://resources/demo"}, "n": 2}',
+        '[{"ref": "viking://resources/demo"}]',
+        '{\n  "source": "viking://user/alice/resources/demo",\n  "note": "keep"\n}',
+    ],
+)
+def test_sync_memory_resource_refs_leaves_json_bodies_parseable(body):
+    mf = MemoryFile(content=body, extra_fields={})
+
+    sync_memory_resource_refs(mf, source="content.write")
+
+    assert mf.content == body
+    assert json.loads(mf.content) == json.loads(body)
+    refs = mf.extra_fields["resource_refs"]
+    assert [ref["resource_uri"] for ref in refs] == [extract_resource_uris(body)[0]]
+    assert "match_text" not in refs[0]
+
+
+def test_sync_memory_resource_refs_is_idempotent_for_json_bodies():
+    mf = MemoryFile(content='{"ref": "viking://resources/demo"}', extra_fields={})
+
+    assert sync_memory_resource_refs(mf, source="content.write")
+    assert not sync_memory_resource_refs(mf, source="content.write")
+
+
+def test_sync_memory_resource_refs_still_linkifies_prose_around_braces():
+    mf = MemoryFile(content="config {a: 1} see viking://resources/a", extra_fields={})
+
+    sync_memory_resource_refs(mf, source="content.write")
+
+    assert mf.content == "[config {a: 1} see](viking://resources/a)"
+
+
+def test_sync_memory_resource_refs_records_json_refs_for_resource_memory_link():
+    resource_uri = "viking://resources/demo"
+    mf = MemoryFile(content=f'{{"ref": "{resource_uri}"}}', extra_fields={"resource_refs": []})
+
+    sync_memory_resource_refs(mf, source="session.commit")
+
+    assert content_references_resource(mf.content, resource_uri)
+    assert mf.extra_fields["resource_refs"][0]["resource_uri"] == resource_uri

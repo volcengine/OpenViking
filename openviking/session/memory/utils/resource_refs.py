@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
@@ -31,6 +32,7 @@ _RESOURCE_URI_RE = re.compile(_RESOURCE_URI_PATTERN)
 _CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？、）】》"
+_JSON_STRING_TERMINATORS = '"\\,]}'
 _SENTENCE_BOUNDARIES = "。！？.!?\n"
 _MAX_LINKIFIED_SENTENCE_CHARS = 160
 _MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
@@ -50,18 +52,25 @@ def sync_memory_resource_refs(
     before_content = mf.content
     before_refs = _coerce_resource_refs(mf.extra_fields.get("resource_refs"))
 
-    code_spans = _protected_code_spans(mf.content)
-    markdown_refs, markdown_spans = _extract_markdown_resource_refs(
-        mf.content,
-        code_spans,
-    )
-    mf.content, bare_refs = _linkify_bare_resource_uris(
-        mf.content,
-        code_spans + markdown_spans,
-    )
+    if _is_json_document(mf.content):
+        # A JSON body has no Markdown prose to linkify, and rewriting it would
+        # turn a string value into a link, leaving the body unparsable. The URIs
+        # are still literal, so record them without touching the text.
+        refs = [{"resource_uri": uri} for uri in _json_resource_uris(mf.content)]
+    else:
+        code_spans = _protected_code_spans(mf.content)
+        markdown_refs, markdown_spans = _extract_markdown_resource_refs(
+            mf.content,
+            code_spans,
+        )
+        mf.content, bare_refs = _linkify_bare_resource_uris(
+            mf.content,
+            code_spans + markdown_spans,
+        )
+        refs = markdown_refs + bare_refs
     _merge_resource_refs(
         mf,
-        markdown_refs + bare_refs,
+        refs,
         source=source,
         reason=reason,
         created_at=created_at,
@@ -228,6 +237,38 @@ def _remove_matching_bare_resource_uris(
         end = start + len(matched_uri)
         text = text[:start] + text[end:]
     return text
+
+
+def _is_json_document(content: str) -> bool:
+    """Return whether the whole body is one JSON value rather than Markdown prose."""
+    text = (content or "").strip()
+    if not text or text[0] not in "{[":
+        return False
+    try:
+        json.loads(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _json_resource_uris(content: str) -> List[str]:
+    refs, markdown_spans = _extract_markdown_resource_refs(content, ())
+    uris = [ref["resource_uri"] for ref in refs]
+    found: List[str] = []
+    for match in _RESOURCE_URI_RE.finditer(content or ""):
+        if _overlaps_spans(match.start(), match.end(), markdown_spans):
+            continue
+        uri = _trim_resource_uri(match.group(0))
+        # A URI that ends inside a JSON string is not usable as a stored ref.
+        if not uri or not _ends_clean_json_string(content, match.start(), uri):
+            continue
+        found.append(uri)
+    return uris + list(dict.fromkeys(found))
+
+
+def _ends_clean_json_string(content: str, start: int, uri: str) -> bool:
+    end = start + len(uri)
+    return end >= len(content) or content[end] in _JSON_STRING_TERMINATORS
 
 
 def _linkify_bare_resource_uris(
