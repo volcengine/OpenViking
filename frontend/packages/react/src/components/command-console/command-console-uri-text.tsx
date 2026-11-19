@@ -10,7 +10,7 @@ import {
 export interface CommandConsoleUriTextProps {
   text: string;
   onOpenUri?: (uri: string) => void;
-  /** 编辑镜像隐藏重复文字，但保留链接语义及输入框焦点。 */
+  /** 编辑镜像只绘制文字，避免输入中的 URI 呈现为可点击链接。 */
   editor?: boolean;
   mode: 'prose' | 'literal' | 'json';
   wholeUri?: boolean;
@@ -30,13 +30,16 @@ export function CommandConsoleUriLink({
   editor?: boolean;
   className?: string;
 }) {
+  if (editor) {
+    return <span aria-hidden="true">{children}</span>;
+  }
+
   const href = getCommandConsoleSafeHref(uri);
   if (!href) return <>{children}</>;
   return (
     <a
       href={href}
       className={className}
-      onMouseDown={editor ? (event) => event.preventDefault() : undefined}
       onClick={
         onOpenUri
           ? (event) => {
