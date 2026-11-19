@@ -36,9 +36,13 @@ One step sets up everything. `setup_env.sh` creates a `.venv` at the OpenViking 
 (if one isn't already present), clones tau2-bench into `./tau2-bench` (external dependency,
 gitignored), installs openviking + vikingbot with the **`[bot]` extra**
 (`pip install -e .[bot]`, which also runs the Cargo build) plus tau2-bench (`[gym]` extra) and
-smolagents, then activates the venv and exports the runtime env vars:
+smolagents, then activates the venv and exports the runtime env vars.
+For the deferred-STOP behavior, explicitly select a compatible Tau repo/ref before
+the first install. The script's defaults remain the upstream repository and its default ref:
 
 ```bash
+export TAU2_BENCH_REPO=https://github.com/yeshion23333/tau2-bench.git
+export TAU2_BENCH_REF=dev/tau3_ov_test
 source benchmark/tau2/vikingbot/setup_env.sh              # first run: install, then activate + export
 source benchmark/tau2/vikingbot/setup_env.sh --reinstall  # rebuild the .venv from scratch
 ```
@@ -60,9 +64,24 @@ The tau2 **user simulator** talks to an OpenAI-compatible endpoint — set `ARK_
 Doubao through volcengine ARK) before sourcing, or the simulator will fail. The user-simulator
 model is configured in [`../common/tau2_env/tau2_environment.py`](../common/tau2_env/tau2_environment.py).
 
-> Note: the sibling `llm/` harness ([`../llm/README.md`](../llm/README.md)) pins a tau2-bench ref
-> with a confirmation-aware user-simulator prompt (sierra-research/tau2-bench#297). Set
-> `TAU2_BENCH_REF` to a comparable checkout if you want results aligned with that protocol.
+The VikingBot harness requires Tau's deferred-STOP Gym APIs, available on
+[dev/tau3_ov_test](https://github.com/yeshion23333/tau2-bench/tree/dev/tau3_ov_test),
+based on Sierra `dev/tau3@17e07b1`. The validated commit is
+`548d5c51abfe3867d890e7f6cbd44e74b3a8409b`; set `TAU2_BENCH_REF` to that commit to reproduce it.
+The simulator prompt separates confirmation
+from completion; in Gym mode, user `STOP` closes the dialogue while business tools
+remain available until the agent calls `done`. `TRANSFER` and `OUT-OF-SCOPE` still
+terminate immediately. The agent must still obtain all confirmations required by policy.
+This changes the evaluation protocol; record this Tau commit alongside experiment scores.
+
+Existing checkouts are not switched automatically. For a clean checkout, update it before
+sourcing setup again (preserve any local changes first):
+
+```bash
+git -C benchmark/tau2/vikingbot/tau2-bench fetch https://github.com/yeshion23333/tau2-bench.git dev/tau3_ov_test
+git -C benchmark/tau2/vikingbot/tau2-bench switch --detach 548d5c51abfe3867d890e7f6cbd44e74b3a8409b
+source benchmark/tau2/vikingbot/setup_env.sh
+```
 
 Then start the OpenViking server with the bot enabled:
 
