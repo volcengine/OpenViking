@@ -1,3 +1,4 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import { createDashboardTab } from './dashboard-tab.js';
 import type { FileBrowserDashboardLabels } from './types.js';
@@ -29,6 +30,7 @@ export function useBrowserDashboards({
   onOpenUri,
   dashboardKinds,
   experienceDataSource,
+  experienceDashboardSlots,
   renderDashboard,
   dashboardLabels,
 }: {
@@ -41,6 +43,7 @@ export function useBrowserDashboards({
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   experienceDataSource?: FileBrowserExperienceDataSource;
+  experienceDashboardSlots?: ExperienceDashboardProps['slots'];
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   locale?: 'en-US' | 'zh-CN';
   requestOptions?: OvRequestOptions;
@@ -166,6 +169,7 @@ export function useBrowserDashboards({
         conflictRevision,
         isFile,
         experienceDataSource,
+        experienceDashboardSlots,
         renderDashboard,
         onOpenUri: (target) => {
           close();

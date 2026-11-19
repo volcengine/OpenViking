@@ -77,7 +77,13 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     h(
       OpenVikingProvider,
       { baseURL: 'https://ov.test', fetch },
-      h(FileBrowser, { rootUri }),
+      h(FileBrowser, {
+        rootUri,
+        labels: {
+          searchAdvancedLabelWithCount: (label, count) =>
+            `${label} — ${count} selected`,
+        },
+      }),
     ),
   );
   const modal = () => document.querySelector('.ov-file-browser-search');
@@ -111,9 +117,27 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     await click(menu().querySelector(`[title="${child}"]`));
     await click(menu().querySelector(`[title="${child}"][aria-pressed]`));
     assert.deepEqual(targets().at(-1), [child]);
+    const filterToggle = () =>
+      modal().querySelector('.ov-file-browser-search__advanced-toggle');
+    const filterCount = () =>
+      filterToggle().querySelector('.ov-file-browser-search__filter-count');
+    assert.equal(filterCount().textContent, '1');
+    assert.equal(
+      filterToggle().getAttribute('aria-label'),
+      'Advanced filters — 1 selected',
+    );
+    await click(
+      modal().querySelector('.ov-file-browser-search__advanced-close'),
+    );
+    assert.equal(filterToggle().getAttribute('aria-expanded'), 'false');
+    assert.equal(filterCount().textContent, '1');
+    assert.deepEqual(targets().at(-1), [child]);
+    await click(filterToggle());
     await click(
       modal().querySelector('.ov-file-browser-search__advanced-clear'),
     );
+    assert.equal(filterCount(), null);
+    assert.equal(filterToggle().getAttribute('aria-label'), 'Advanced filters');
     assert.deepEqual(
       targets(),
       [rootUri, [child]],

@@ -1,4 +1,5 @@
 import type { DirState, FsEntry } from './types.js';
+import { decodePathLabel } from '../path-label.js';
 
 export interface DirectoryEntryRow {
   kind: 'entry';
@@ -33,6 +34,11 @@ export function nameFromUri(uri: string): string {
   return name || trimmed;
 }
 
+/** A readable URI-derived label; the original URI and basename keep their identity. */
+export function displayNameFromUri(uri: string): string {
+  return decodePathLabel(nameFromUri(uri));
+}
+
 /**
  * 把接口返回的一行映射成树行。目录未提供子节点信息，按「可以展开」处理。
  *
@@ -60,7 +66,7 @@ export function toEntryRow(
     id: index === undefined ? entry.uri : `${entry.uri}#${index}`,
     depth,
     uri: entry.uri,
-    name: nameFromUri(entry.uri),
+    name: displayNameFromUri(entry.uri),
     type: isDir ? 'directory' : 'file',
     expanded: isDir ? expanded : undefined,
     disabled: entry.access === 'denied' || undefined,

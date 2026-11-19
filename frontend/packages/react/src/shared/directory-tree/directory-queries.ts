@@ -29,8 +29,7 @@ export class DirectoryQueries {
     }
   >();
   private listeners = new Set<() => void>();
-  private snapshot: Record<string, DirState> = {};
-  readonly dirs = { current: this.snapshot };
+  readonly dirs = { current: {} as Record<string, DirState> };
   constructor(
     private request: QueryRequest,
     root: string,
@@ -39,7 +38,7 @@ export class DirectoryQueries {
     this.observe(root);
   }
   private publish = () => {
-    this.snapshot = Object.fromEntries(
+    this.dirs.current = Object.fromEntries(
       [...this.observers].map(([uri, { observer, monitoring, paused }]) => {
         const result = observer.getCurrentResult();
         if (paused || !this.listeners.size) monitoring.cancel();
@@ -63,7 +62,6 @@ export class DirectoryQueries {
         ];
       }),
     );
-    this.dirs.current = this.snapshot;
     this.listeners.forEach((listener) => listener());
   };
   private observe(uri: string) {
@@ -113,7 +111,7 @@ export class DirectoryQueries {
         }
     };
   };
-  getSnapshot = () => this.snapshot;
+  getSnapshot = () => this.dirs.current;
   load = async (
     uri: string,
     offset: number,
@@ -123,9 +121,8 @@ export class DirectoryQueries {
     this.request.signal?.throwIfAborted();
     signal?.throwIfAborted();
     const item = this.observe(uri);
-    const { observer } = item;
     const binding = bindingOf(this.request.client);
-    const error = observer.getCurrentResult().error;
+    const error = item.observer.getCurrentResult().error;
     item.retryCause =
       error && binding?.controller.options && binding.active()
         ? new WeakRef(error)
@@ -138,16 +135,16 @@ export class DirectoryQueries {
       item.paused = true;
       item.unsubscribe?.();
       item.unsubscribe = undefined;
-      observer.updateResult();
+      item.observer.updateResult();
       this.publish();
     };
     signal?.addEventListener('abort', abort, { once: true });
     try {
       const pending =
         offset > 0
-          ? observer.fetchNextPage({ cancelRefetch: false })
+          ? item.observer.fetchNextPage({ cancelRefetch: false })
           : refresh
-            ? observer.refetch({ cancelRefetch: false })
+            ? item.observer.refetch({ cancelRefetch: false })
             : this.request.queryClient
                 .fetchInfiniteQuery(
                   directoryOptions(this.request, uri, this.cacheScopeKey),
@@ -157,14 +154,14 @@ export class DirectoryQueries {
       signal?.throwIfAborted();
       if (this.observers.get(uri) !== item) return;
       this.publish();
-      return this.snapshot[uri];
+      return this.dirs.current[uri];
     } finally {
       signal?.removeEventListener('abort', abort);
     }
   };
   /** Hand off a verified equivalent listing without evicting shared cache data. */
   adoptListing = (uri: string, previousUri: string, retirePrevious = false) => {
-    if (uri === previousUri || this.request.signal?.aborted) return;
+    if (this.request.signal?.aborted) return;
     const target = this.observers.get(uri);
     if (target?.adoptedFrom !== previousUri) {
       const { queryClient } = this.request;
@@ -185,11 +182,16 @@ export class DirectoryQueries {
       if (!target || current?.error)
         void this.load(uri, 0, undefined, true).catch(() => undefined);
     }
-    const previous = this.observers.get(previousUri);
-    if (!retirePrevious || !previous) return;
-    this.observers.delete(previousUri);
-    previous.unsubscribe?.();
-    previous.monitoring.cancel();
+    if (retirePrevious) this.retireListing(previousUri);
+  };
+
+  /** Release one listing observer while keeping the shared cache entry. */
+  retireListing = (uri: string) => {
+    const item = this.observers.get(uri);
+    if (!item) return;
+    this.observers.delete(uri);
+    item.unsubscribe?.();
+    item.monitoring.cancel();
     this.publish();
   };
 

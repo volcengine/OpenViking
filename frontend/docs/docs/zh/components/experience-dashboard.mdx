@@ -59,7 +59,7 @@ import '@openviking/react/components/experience-dashboard/style.css';
 | onOpenUri        | 点击经验名称或轨迹的打开按钮时触发，参数为对应的 URI；省略时这些按钮禁用                                              | `(uri: string) => void`                                                                                                 | -                        |
 | onOpenTrajectory | 点击来源轨迹的「轨迹详情」时触发。提供后显示入口。                                                                    | `(trajectory: ExperienceTrajectory, trigger: HTMLButtonElement) => void`                                                | -                        |
 | labels           | 覆盖界面文案                                                                                                          | `Partial<ExperienceDashboardLabels>`                                                                                    | -                        |
-| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                     | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                                   | -                        |
+| slots            | 覆盖看板区块或[渲染错误展示](../guide/getting-started#自定义错误展示)                                                 | `ExperienceDashboardProps['slots']`                                                                                     | -                        |
 | locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                               | `'zh-CN' \| 'en-US'`                                                                                                    | 继承上级，默认 `'en-US'` |
 | className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                                | HTML 属性                                                                                                               | -                        |
 
@@ -118,6 +118,10 @@ import '@openviking/react/components/experience-dashboard/style.css';
 | loading | 是否正在加载，对应区域显示骨架占位条，加载状态另以视觉隐藏的文本给出           | `boolean`       | -      |
 | error   | 加载失败的错误，对应区域显示失败与重试；追加轨迹页失败时例外，已加载的记录保留 | `Error \| null` | -      |
 | onRetry | 点击重试时触发                                                                 | `() => void`    | -      |
+
+### 区块插槽
+
+在 `slots.sections` 中为 `list`、`effect`、`outcomes`、`trajectories`、`sources` 或 `tests` 传入渲染函数。函数接收看板数据、该区块的请求状态（包括可用的重试回调）、分页和导航回调。第二个参数是默认内容，可以直接返回，也可以返回 `null` 隐藏该区块。「测试」页签仍由 `data.testMaterials` 决定。
 
 ## 注意
 

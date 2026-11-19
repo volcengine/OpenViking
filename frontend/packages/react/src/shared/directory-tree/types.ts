@@ -26,9 +26,15 @@ export interface DirState {
   error: Error | null;
 }
 
+export interface DirectoryExpansionEdit {
+  uri: string;
+  expanded: boolean;
+}
+
 export interface DirectoryExpansionSnapshot {
   expandedUris: readonly string[];
   collapsedUris: readonly string[];
+  pendingEdits?: readonly DirectoryExpansionEdit[];
 }
 
 export interface UseDirectoryTreeOptions {

@@ -443,11 +443,13 @@ extraVolumeMounts:
 
 `$HOSTNAME` 从环境变量解析为 Pod 名，每个 Pod 写自己的文件：副本之间绝不能共用一个日志文件。
 
-独立网关设置 `log_path` 后，应用日志（警告、错误和 traceback）不再以文本写到 stderr，而是以 JSON 行写入这个轮转文件，字段为 `time`、`level`、`logger`、`message`、`request_id`（处理请求时写下的行才有）和 `exc`（有 traceback 时）。
+独立网关的应用日志在 stderr 或 `log_path` 指定的轮转文件中使用统一 UTC 文本格式。每条记录包含 `ts`、`level`、`logger`、`pid`、`request_id`、`trace_id` 和带引号的消息。异步写入前捕获上下文，缺失的关联 ID 使用 `-`。Uvicorn 同样使用此格式。请求和后台保存记录继续使用前述独立 JSON 格式。
 
 当 `management_api: false` 关闭 Studio 和管理接口时，配置 stdout sink 并采集进程或容器日志进行观测。管理面开启但选择 stdout sink 时也采用同样流程：请求日志页和概览中的请求统计不会收到新记录。之前已存储的记录仍可见，直到过期。
 
-从请求日志的顶层字段统计 reason 和首调缓存结果。对保存失败（`capture_status: "failed"`，按 `capture_reason` 统计）、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。网关自身的错误也会写入记录：按 `error_reason` 和 `error_origin` 统计（见[日志记录](../api/25-gateway.md#log-records)）。store 输出不保存密钥确认之前就被拒绝的请求，使用它时请从代理访问日志统计这些 401/402/403；`internal_error` 的 traceback 看网关 stderr。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
+从请求日志的顶层字段统计 reason 和首调缓存结果。对保存失败（`capture_status: "failed"`，按 `capture_reason` 统计）、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。网关自身的错误也会写入记录：按 `error_reason` 和 `error_origin` 统计（见[日志记录](../api/25-gateway.md#log-records)）。store 输出不保存密钥确认之前就被拒绝的请求，使用它时请从代理访问日志统计这些 401/402/403；在网关应用日志中查看 `internal_error` 的安全异常类型摘要。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
+
+对话写入失败以 ERROR 输出，消息为 `gateway finished turn save failed` 或 `gateway history save before compaction failed`：模型回复仍可能成功，但历史可能丢失。commit 失败以 INFO 输出，消息为 `gateway session commit failed`，可查看 `error_code` 区分 `openviking_http_429` 和 `openviking_unavailable` 等原因。这些后台 commit 失败不会进入请求记录。压缩前历史保存失败的日志也包含 `error_code`。
 
 ### 状态行 {#status-line}
 

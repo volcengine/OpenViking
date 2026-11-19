@@ -94,6 +94,7 @@ type ContextEngine = {
     sessionId: string;
     sessionKey?: string;
     isHeartbeat?: boolean;
+    runtimeContext?: Record<string, unknown>;
   }) => Promise<{ status: "committed" | "duplicate" }>;
   compact: (params: {
     sessionId: string;
@@ -442,6 +443,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             prePromptMessageCount: 0, // Host already supplies the closed-turn range.
             isHeartbeat: commitParams.isHeartbeat,
             tokenBudget: 128_000, // Durable delivery does not carry a token budget.
+            runtimeContext: commitParams.runtimeContext,
             throwOnError: true,
             cfg,
             getClient,

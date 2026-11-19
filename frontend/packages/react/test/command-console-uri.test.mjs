@@ -12,11 +12,18 @@ const props = {
   onOpenUri() {},
 };
 
-test('input and command echoes render URI anchors without changing the native value', () => {
+test('command echoes keep URI anchors while the input mirror stays plain text', () => {
   const html = renderMarkup(createElement(CommandConsole, props));
   for (const uri of ['viking://resources/a.md', 'viking://resources/b.md']) {
-    assert.equal(html.split(`href="${uri}"`).length - 1, 2);
+    assert.equal(html.split(`href="${uri}"`).length - 1, 1);
   }
+  const mirror = html.slice(
+    html.indexOf('<span class="ov-command-console__input-mirror">'),
+    html.indexOf('<span id=', html.indexOf('ov-command-console__input-mirror')),
+  );
+  assert.doesNotMatch(mirror, /<a\b/);
+  assert.match(mirror, />viking:\/\/resources\/a\.md<\/span>/);
+  assert.match(mirror, />viking:\/\/resources\/b\.md<\/span>/);
   assert.match(
     html,
     /<textarea[^>]*>ov cp "viking:\/\/resources\/a.md" viking:\/\/resources\/b.md<\/textarea>/,
@@ -37,9 +44,14 @@ test('literal URI links preserve punctuation and native targets while ignoring n
       onValueChange() {},
     }),
   );
-  assert.match(html, /href="VIKING:\/\/resources\/a.md,"/);
+  assert.doesNotMatch(html, /href="VIKING:\/\//);
+  assert.match(html, />VIKING:\/\/resources\/a\.md,<\/span>/);
   assert.doesNotMatch(html, /href="(?:javascript|error):/);
   assert.match(html, /error: denied; javascript:alert/);
+  assert.match(
+    html,
+    /<textarea[^>]*>VIKING:\/\/resources\/a\.md, error: denied; javascript:alert\(1\)<\/textarea>/,
+  );
 });
 
 test('status fields and write-result lines use the same URI links', () => {

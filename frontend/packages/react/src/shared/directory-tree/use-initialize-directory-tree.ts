@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import type { useDirectoryExpansion } from './use-directory-expansion.js';
 import type { DirectoryQueries } from './directory-queries.js';
+import { HOME_URI } from '../resource-uri.js';
 import { expandChain } from './fs-path.js';
 import {
   restoreDirectoryExpansion,
@@ -11,6 +19,7 @@ const emptyExpansion: UnresolvedExpansion = new Map();
 
 interface RestoreAttempt {
   session: DirectoryQueries;
+  home?: string;
   signal: AbortSignal;
   retryQueued: boolean;
   listedUris: Set<string>;
@@ -30,12 +39,18 @@ export function useInitializeDirectoryTree({
 }) {
   const {
     savedExpansion,
+    identifyUri,
     isExpanded,
+    isDeferred,
     readHome,
     resolveHome,
     setExpanded,
     restoreListed,
   } = expansion;
+  const pendingExpansion = useMemo<UnresolvedExpansion>(() => {
+    const saved = [...(savedExpansion ?? [])].filter((uri) => uri !== rootUri);
+    return saved.length ? new Map([[rootUri, saved]]) : emptyExpansion;
+  }, [rootUri, savedExpansion]);
   const [initialized, setInitialized] = useState<{
     session: DirectoryQueries | undefined;
     uri?: string;
@@ -59,10 +74,30 @@ export function useInitializeDirectoryTree({
     // Let the current pass finish without cancelling a sibling listing.
     void initialLoad.current?.then(() => {
       if (activeAttempt.current !== current || current.signal.aborted) return;
-      if (current.unresolved.size) restart();
+      // Identity can settle after grouping, making an exhausted group stale.
+      if (current.unresolved.size || current.home !== readHome()) restart();
       else current.retryQueued = false;
     });
-  }, [session, savedExpansion]);
+  }, [session, savedExpansion, readHome]);
+  const homeUri = identifyUri(HOME_URI);
+  const previousHome = useRef<{
+    session: DirectoryQueries | undefined;
+    uri: string;
+  }>(undefined);
+  // Resume server listings when a verified home identity releases deferred
+  // folders; the lookup can finish without a user event. The retry queue waits
+  // for the active pass and ignores replaced sessions or aborted attempts.
+  useEffect(() => {
+    const previous = previousHome.current;
+    previousHome.current = { session, uri: homeUri };
+    if (
+      previous &&
+      previous.session === session &&
+      homeUri !== HOME_URI &&
+      previous.uri !== homeUri
+    )
+      retryExpansion();
+  }, [session, homeUri, retryExpansion]);
   const retryDirectory = useCallback(
     async (uri: string) => {
       const current = activeAttempt.current;
@@ -87,7 +122,6 @@ export function useInitializeDirectoryTree({
   useEffect(() => {
     if (!session) return;
     const controller = new AbortController();
-    const saved = [...(savedExpansion ?? [])].filter((uri) => uri !== rootUri);
     const previous = activeAttempt.current;
     const cached =
       previous?.session === session && previous.retryQueued
@@ -95,10 +129,11 @@ export function useInitializeDirectoryTree({
         : undefined;
     const current: RestoreAttempt = {
       session,
+      home: readHome(),
       signal: controller.signal,
       retryQueued: false,
       listedUris: new Set(),
-      unresolved: saved.length ? new Map([[rootUri, saved]]) : emptyExpansion,
+      unresolved: pendingExpansion,
     };
     const load: DirectoryQueries['load'] = async (uri, offset, signal) => {
       if (savedExpansion) current.listedUris.add(uri);
@@ -116,7 +151,7 @@ export function useInitializeDirectoryTree({
           rootUri,
           page,
           savedExpansion,
-          { isExpanded, readHome, resolveHome, restoreListed },
+          { isExpanded, isDeferred, readHome, resolveHome, restoreListed },
           controller.signal,
         );
         return;
@@ -144,8 +179,10 @@ export function useInitializeDirectoryTree({
     session,
     rootUri,
     initialPath,
+    pendingExpansion,
     savedExpansion,
     isExpanded,
+    isDeferred,
     readHome,
     resolveHome,
     setExpanded,
@@ -160,7 +197,7 @@ export function useInitializeDirectoryTree({
   return {
     initialLoad,
     initializing,
-    unresolved: initializing ? emptyExpansion : initialized.unresolved,
+    unresolved: initializing ? pendingExpansion : initialized.unresolved,
     retryDirectory,
     retryExpansion,
   };

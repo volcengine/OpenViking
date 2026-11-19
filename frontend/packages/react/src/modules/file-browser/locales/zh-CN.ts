@@ -48,6 +48,7 @@ const messages = {
   searchVia: '向量检索方式',
   searchSwitchMode: '切换',
   searchAdvancedLabel: '高级筛选',
+  searchAdvancedLabelWithCount: (label, count) => `${label}（${count}）`,
   loading: '加载中…',
   searchDismiss: 'Esc 退出',
   searchLoading: '搜索中…',

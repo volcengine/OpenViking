@@ -144,6 +144,7 @@ function FileBrowserPreviewPaneContent({
           previewSlots={slots}
           canEditConflict={canWrite && previewActions?.edit !== false}
           onActiveKeyChange={browser.actions.setPreviewKey}
+          onOpenUri={browser.actions.openResource}
           onSave={() => {
             controls.onFileSaved();
             if (browser.previewDashboard?.kind === 'wiki')

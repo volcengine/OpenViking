@@ -13,8 +13,16 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import httpx
 from loguru import logger
+from PIL.Image import DecompressionBombError
 
-from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+from openviking.utils.image_input import (
+    MAX_COMPILE_IMAGE_DOWNLOAD_BYTES,
+    MAX_IMAGE_INPUT_DOWNLOAD_BYTES,
+    compress_image_input,
+)
+from openviking.utils.media_limits import (
+    MAX_INLINE_TOOL_RESULT_MEDIA_BYTES,
+)
 from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.image_format import sniff_image_format
@@ -1132,8 +1140,8 @@ class VikingMultiReadTool(OVFileTool):
         }
 
     @classmethod
-    async def _read_image(cls, client, uri):
-        """Load one native image for multi-read and Compile using the same checks."""
+    async def _read_image(cls, client, uri, *, for_compile: bool = False):
+        """Load one native image and opt into pixel normalization for Compile."""
         stat = await client.stat(uri)
         size = stat.get("size") if isinstance(stat, dict) else None
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
@@ -1143,12 +1151,15 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        if size > cls._MAX_INLINE_MEDIA_BYTES:
+        download_limit = (
+            MAX_COMPILE_IMAGE_DOWNLOAD_BYTES if for_compile else MAX_IMAGE_INPUT_DOWNLOAD_BYTES
+        )
+        if size > download_limit:
             return {
                 "uri": uri,
                 "content": (
-                    f"Image is {size} bytes; the inline limit is "
-                    f"{cls._MAX_INLINE_MEDIA_BYTES} bytes."
+                    f"Image is {size} bytes; the model image download limit is "
+                    f"{download_limit} bytes."
                 ),
                 "success": False,
                 "media_kind": "image",
@@ -1169,15 +1180,46 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        encoded = base64.b64encode(data).decode("ascii")
+        model_data, mime_type = data, image_format.mime_type
+        if for_compile:
+            try:
+                model_data, mime_type = await asyncio.to_thread(
+                    compress_image_input,
+                    data,
+                    mime_type,
+                    compile_inline_budget=cls._MAX_INLINE_MEDIA_BYTES,
+                )
+            except (DecompressionBombError, OSError, ValueError) as exc:
+                return {
+                    "uri": uri,
+                    "content": f"Cannot prepare image for Compile: {exc}",
+                    "success": False,
+                    "media_kind": "image",
+                }
+        elif len(data) > cls._MAX_INLINE_MEDIA_BYTES:
+            model_data, mime_type = await asyncio.to_thread(compress_image_input, data, mime_type)
+        if len(model_data) > cls._MAX_INLINE_MEDIA_BYTES:
+            return {
+                "uri": uri,
+                "content": (
+                    f"Model rendition is {len(model_data)} bytes; the inline limit is "
+                    f"{cls._MAX_INLINE_MEDIA_BYTES} bytes."
+                ),
+                "success": False,
+                "media_kind": "image",
+            }
+        encoded = base64.b64encode(model_data).decode("ascii")
         return {
             "uri": uri,
-            "content": (f"Image resource ({image_format.mime_type}, {len(data)} bytes)."),
+            "content": (
+                f"Image resource ({image_format.mime_type}, {len(data)} bytes); "
+                f"model input ({mime_type}, {len(model_data)} bytes)."
+            ),
             "image": {
                 "type": "image_url",
-                "image_url": {"url": f"data:{image_format.mime_type};base64,{encoded}"},
+                "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
             },
-            "media_bytes": len(data),
+            "media_bytes": len(model_data),
             "sha256": hashlib.sha256(data).hexdigest(),
             "success": True,
             "media_kind": "image",

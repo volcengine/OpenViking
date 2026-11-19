@@ -1,3 +1,4 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
 import type { DirectoryExpansionSnapshot } from '../../shared/directory-tree/types.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
@@ -129,6 +130,8 @@ export interface FileBrowserLabels {
   searchSwitchMode?: string;
   /** 高级筛选按钮的无障碍名称。Accessible name of the advanced-filter button. */
   searchAdvancedLabel?: string;
+  /** 带生效筛选数量的名称，接收按钮名称和本地化数字。Label with active filters; receives the label and formatted count. */
+  searchAdvancedLabelWithCount?: (label: string, count: string) => string;
   /** 搜索进行中的提示。Message shown while a search runs. */
   searchLoading?: string;
   searchDismiss?: string;
@@ -278,6 +281,7 @@ export interface FileBrowserProps extends Omit<
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   /** Overrides individual requests for the built-in experience dashboard. */
   experienceDataSource?: FileBrowserExperienceDataSource;
+  experienceDashboardSlots?: ExperienceDashboardProps['slots'];
   /**
    * 用户请求打开或关闭内置接入抽屉时触发；宿主改变属性时不触发。
    * Called when the user requests to open or close the built-in connection drawer.

@@ -164,10 +164,10 @@ class GatewayConfig(BaseModel):
         if not isinstance(value, dict):
             return value
         if found := cls.removed_fields.intersection(value):
-            logger.warning(
-                "Ignoring removed gateway settings %s. "
-                "See docs/en/guides/22-gateway-operations.md#migration",
-                ", ".join(sorted(found)),
+            logger.info(
+                "removed gateway configuration settings ignored skipped=%d",
+                len(found),
+                extra={"degraded": True, "skipped": len(found)},
             )
         value = {key: item for key, item in value.items() if key not in found}
         for field in cls.model_fields:
