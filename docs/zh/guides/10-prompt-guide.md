@@ -142,6 +142,8 @@ peer_enabled: true
 - `peer_enabled`
   - 当 `peer_id` 或消息 ranges 指向某个 peer 时，是否将该类记忆按 peer 分目录存储。默认是 `true`；如果该类记忆必须保留在当前 user 目录下，设置为 `false`。
 
+OpenViking 在构建抽取 schema 时渲染顶层 `description` 和每个 `fields[].description`。描述中唯一可用的变量是 `language`。存储模板 `directory` 和 `filename_template` 接收 `user_space`。在描述中请用普通文本指代存储位置，例如“在现有实体记忆中查找匹配的类别”。
+
 编写 memory schema 时，建议重点关注：
 
 - 字段粒度是否稳定
@@ -653,6 +655,7 @@ custom-memory/
 |------|----------|
 | 修改后结果完全没变 | 自定义目录未生效，或文件路径不匹配 |
 | 模型报缺少变量 | 模板变量名与调用方不一致 |
+| 记忆抽取在构建 schema 时报告描述中有 `unknown_variable` | 根据错误中的记忆类型、字段和变量名定位描述。若只显示 `description: unknown_variable (line N)`，请检查自定义 memory schema 的顶层描述和字段描述。行号从描述文本的首行算起。 |
 | 返回内容格式错乱 | prompt 输出格式改了，但下游解析还按旧结构处理 |
 | 新 memory 类型没有出现 | `memory.custom_templates_dir` 未生效，或 schema 未被正确加载 |
 | 检索结果变差 | `retrieval`、`semantic` 或 `compression` 类 prompt 改得过于激进 |
