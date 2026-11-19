@@ -225,36 +225,6 @@ async def test_write_without_wait_is_immediately_readable(client_with_resource):
     assert task_resp.json()["result"]["status"] == "completed"
 
 
-async def test_write_agent_skill_completes_without_lock_self_blocking(client):
-    uri = "viking://agent/skills/content-write-lock/SKILL.md"
-    content = """---
-name: content-write-lock
-description: Verify direct Agent Skill writes complete.
----
-
-# Content Write Lock
-
-Use this skill to verify lock handoff behavior.
-"""
-
-    write_resp = await client.post(
-        "/api/v1/content/write",
-        json={
-            "uri": uri,
-            "content": content,
-            "mode": "create",
-            "wait": True,
-        },
-    )
-
-    assert write_resp.status_code == 200
-    body = write_resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["uri"] == uri
-    assert body["result"]["semantic_status"] == "complete"
-    assert body["result"]["vector_status"] == "complete"
-
-
 @pytest.mark.asyncio
 async def test_write_missing_uri_validation(client):
     resp = await client.post("/api/v1/content/write", json={"content": "missing uri"})

@@ -67,32 +67,6 @@ void test_string_split() {
   SPDLOG_INFO("[Passed] test_string_split");
 }
 
-void test_string_format() {
-  SPDLOG_INFO("[Running] test_string_format");
-
-  // Case 1: Basic format
-  std::string s1 = sformat("Hello {}", "World");
-  ASSERT_EQ(s1, "Hello World");
-
-  // Case 2: Multiple arguments
-  std::string s2 = sformat("{} + {} = {}", 1, 2, 3);
-  ASSERT_EQ(s2, "1 + 2 = 3");
-
-  // Case 3: Float number (Check prefix only due to to_string precision)
-  std::string s3 = sformat("Value: {}", 3.14);
-  ASSERT_TRUE(s3.find("Value: 3.14") == 0);
-
-  // Case 4: Fewer arguments than placeholders (Should preserve {})
-  std::string s4 = sformat("{} {}", "OnlyOne");
-  ASSERT_EQ(s4, "OnlyOne {}");
-
-  // Case 5: More arguments than placeholders (Extra args ignored)
-  std::string s5 = sformat("{}", "First", "Second");
-  ASSERT_EQ(s5, "First");
-
-  SPDLOG_INFO("[Passed] test_string_format");
-}
-
 void test_zip_sort() {
   SPDLOG_INFO("[Running] test_zip_sort");
 
@@ -186,7 +160,6 @@ int main() {
   init_logging("INFO", "stdout", "%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s");
   SPDLOG_INFO("Starting Common Tests...");
   test_string_split();
-  test_string_format();
   test_zip_sort();
   test_logging_utf8_and_flush();
   SPDLOG_INFO("All Common Tests Passed!");

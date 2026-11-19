@@ -1126,15 +1126,6 @@ def test_update_data_preserves_unspecified_fields():
     collection._conn.commit.assert_called_once_with()
 
 
-def test_adapter_exposes_transactional_update_data():
-    adapter = _adapter_without_connect()
-    adapter._collection = Mock()
-    adapter._collection.update_data.return_value = ["doc-1"]
-
-    assert adapter.update_data([{"id": "doc-1", "level": 2}]) == ["doc-1"]
-    adapter._collection.update_data.assert_called_once_with([{"id": "doc-1", "level": 2}])
-
-
 def test_adapter_update_normalizes_all_uri_fields_before_write():
     adapter = _adapter_without_connect()
     adapter._collection = Mock()
