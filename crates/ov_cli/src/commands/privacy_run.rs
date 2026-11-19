@@ -270,14 +270,11 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
         || std::io::stdout().is_terminal()
         || std::io::stderr().is_terminal();
     let terminal = std::fs::File::open("/dev/tty").ok().filter(|_| job);
-    let pipe_out = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stdout()));
-    let pipe_err = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stderr()));
-    // Unmasked non-terminal commands whose outputs go straight to files stay in the caller's
-    // group so background services survive normal exit and group SIGKILL still reaches workers.
-    let isolate = terminal.is_none() && (pipe_out || pipe_err);
-    if isolate {
+    if terminal.is_none() {
         command.process_group(0);
     }
+    let pipe_out = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stdout()));
+    let pipe_err = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stderr()));
     let combined_rx = if pipe_out && pipe_err && shared_non_tty_outputs() {
         let (tx, rx) = tokio::net::unix::pipe::pipe()?;
         // Clear O_NONBLOCK so the child inherits standard blocking descriptors.
@@ -299,13 +296,18 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
     drop(command);
     let pid = child.id().expect("just spawned") as i32;
     // A SIGKILL sent to ov's group cannot reach an isolated group, and ov cannot catch it.
-    // This shell joins the command's group and ends it when ov exits without writing a newline.
-    let guard = if !isolate {
+    // Spawn the guard in its own group so `kill -KILL -$1` reaches every member even on XNU.
+    let guard = if terminal.is_some() {
         None
     } else {
         std::process::Command::new("/bin/sh")
-            .args(["-c", "trap '' INT TERM HUP; read line || kill -s KILL 0"])
-            .process_group(pid)
+            .args([
+                "-c",
+                "trap '' INT TERM HUP; IFS= read -r line || kill -KILL -$1 2>/dev/null",
+                "ov-guard",
+                &pid.to_string(),
+            ])
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -324,12 +326,34 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
         let sig = tokio::select! {
             biased;
             status = &mut wait => {
-                if status.is_err() && isolate {
+                if status.is_err() && terminal.is_none() {
                     kill(-pid, SIGKILL);
                 }
                 if let Some(mut guard) = guard {
                     if let Some(mut stdin) = guard.stdin.take() {
-                        let _ = stdin.write_all(b"\n");
+                        // If background workers remain in the child's group (e.g. `worker >job.log 2>&1 &`),
+                        // hand the guard pipe to a sentinel in caller_pgrp: normal outer exit leaves the
+                        // sentinel and service alive, whereas outer group SIGKILL/SIGTERM closes the pipe
+                        // before zombie creation and triggers `kill -KILL -$pid`.
+                        if status.is_ok() && kill(-pid, 0) == 0 {
+                            let handed_off = std::process::Command::new("/bin/sh")
+                                .args([
+                                    "-c",
+                                    "while kill -0 -$1 2>/dev/null; do sleep 0.2 2>/dev/null || sleep 1; done; echo done",
+                                    "ov-sentinel",
+                                    &pid.to_string(),
+                                ])
+                                .stdin(Stdio::null())
+                                .stdout(Stdio::from(stdin))
+                                .stderr(Stdio::null())
+                                .spawn()
+                                .is_ok();
+                            if handed_off {
+                                return Ok(status?);
+                            }
+                        } else {
+                            let _ = stdin.write_all(b"done\n");
+                        }
                     }
                     let _ = guard.wait();
                 }
@@ -339,18 +363,16 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
             _ = terminate.recv() => SignalKind::terminate(),
             _ = hangup.recv() => SignalKind::hangup(),
         };
-        let target = if isolate {
-            -pid
-        } else {
+        let target = match &terminal {
+            None => -pid,
             // Ctrl-C reaches every process in the terminal's foreground job, the child included.
             // A SIGINT sent only to a foreground ov is therefore not forwarded.
-            if let Some(tty) = &terminal
-                && sig == SignalKind::interrupt()
-                && tcgetpgrp(tty.as_raw_fd()) == caller_pgrp
+            Some(tty)
+                if sig == SignalKind::interrupt() && tcgetpgrp(tty.as_raw_fd()) == caller_pgrp =>
             {
                 continue;
             }
-            pid
+            Some(_) => pid,
         };
         // A child that already exited is reported by the wait above.
         kill(target, sig.as_raw_value());

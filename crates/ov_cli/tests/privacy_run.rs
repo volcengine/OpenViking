@@ -560,6 +560,85 @@ async fn killing_the_process_group_without_a_terminal_leaves_no_command_behind()
             .unwrap();
         child.wait().await.unwrap();
     }
+
+    let direct_script = dir.path().join("direct_target.sh");
+    fs::write(
+        &direct_script,
+        "printf '%s\\n' \"$$\" > direct.ready\nexec sleep 30\n",
+    )
+    .unwrap();
+    let direct_ready = dir.path().join("direct.ready");
+    for use_file in [false, true] {
+        let _ = fs::remove_file(&direct_ready);
+        let mut command = privacy(dir.path(), "http://127.0.0.1:1");
+        command.args(["run", "--", "/bin/sh", direct_script.to_str().unwrap()]);
+        if use_file {
+            let log_file = fs::File::create(dir.path().join("direct.log")).unwrap();
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(log_file.try_clone().unwrap()))
+                .stderr(Stdio::from(log_file));
+        } else {
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+        }
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                if posix::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let ov_pid = child.id().unwrap() as i32;
+        timeout(Duration::from_secs(5), async {
+            while fs::read_to_string(&direct_ready)
+                .map(|text| text.trim().is_empty())
+                .unwrap_or(true)
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("direct target did not start");
+        let direct_pid: i32 = fs::read_to_string(&direct_ready)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(posix::kill(ov_pid, posix::SIGKILL), 0);
+        child.wait().await.unwrap();
+        for _ in 0..15 {
+            if process_stopped(direct_pid) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            process_stopped(direct_pid),
+            "direct child {direct_pid} survived single-PID SIGKILL (use_file={use_file})"
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn process_stopped(pid: i32) -> bool {
+    if posix::kill(pid, 0) < 0 {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            && let Some((_, tail)) = stat.rsplit_once(") ")
+        {
+            return tail.starts_with('Z');
+        }
+    }
+    false
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -618,14 +697,13 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         .parse()
         .unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
-    assert_eq!(
-        posix::kill(service_pid, 0),
-        0,
+    assert!(
+        !process_stopped(service_pid),
         "background service {service_pid} was killed after normal outer exit"
     );
     assert_eq!(posix::kill(service_pid, posix::SIGKILL), 0);
     for _ in 0..20 {
-        if posix::kill(service_pid, 0) < 0 {
+        if process_stopped(service_pid) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -635,73 +713,86 @@ async fn killing_outer_job_stops_redirected_background_worker() {
     let worker_done = dir.path().join("worker.done");
     let next_step = dir.path().join("next_step");
 
-    let mut outer = Command::new("/bin/sh");
-    outer
-        .current_dir(dir.path())
-        .env("HOME", dir.path())
-        .env("USERPROFILE", dir.path())
-        .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
-        .env("OPENVIKING_LANG", "en")
-        .args([
-            "-c",
-            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./worker.sh &' >job.log 2>&1; : > next_step; sleep 10; :"#,
-            "sh",
-            env!("CARGO_BIN_EXE_ov"),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    // Simulate a harness starting a multi-step shell script in its own process group.
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        outer.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
+    for inner_redirect in [false, true] {
+        let _ = fs::remove_file(&worker_ready);
+        let _ = fs::remove_file(&worker_done);
+        let _ = fs::remove_file(&next_step);
+        let script = if inner_redirect {
+            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./worker.sh >job.log 2>&1 &'; : > next_step; sleep 10; :"#
+        } else {
+            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./worker.sh &' >job.log 2>&1; : > next_step; sleep 10; :"#
+        };
+
+        let mut outer = Command::new("/bin/sh");
+        outer
+            .current_dir(dir.path())
+            .env("HOME", dir.path())
+            .env("USERPROFILE", dir.path())
+            .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
+            .env("OPENVIKING_LANG", "en")
+            .args(["-c", script, "sh", env!("CARGO_BIN_EXE_ov")])
+            .stdin(Stdio::null())
+            .stdout(if inner_redirect {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stderr(if inner_redirect {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .kill_on_drop(true);
+        // Simulate a harness starting a multi-step shell script in its own process group.
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            outer.pre_exec(|| {
+                if posix::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut outer_child = outer.spawn().unwrap();
+        let outer_pgid = outer_child.id().unwrap() as i32;
+
+        timeout(Duration::from_secs(5), async {
+            while fs::read_to_string(&worker_ready)
+                .map(|text| text.trim().is_empty())
+                .unwrap_or(true)
+                || !next_step.exists()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            Ok(())
-        });
-    }
-    let mut outer_child = outer.spawn().unwrap();
-    let outer_pgid = outer_child.id().unwrap() as i32;
+        })
+        .await
+        .expect("outer script did not start redirected worker and advance");
+        let worker_pid: i32 = fs::read_to_string(&worker_ready)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            !process_stopped(worker_pid),
+            "recorded worker {worker_pid} should still be alive before cancellation"
+        );
 
-    timeout(Duration::from_secs(5), async {
-        while fs::read_to_string(&worker_ready)
-            .map(|text| text.trim().is_empty())
-            .unwrap_or(true)
-            || !next_step.exists()
-        {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(posix::kill(-outer_pgid, posix::SIGKILL), 0);
+        outer_child.wait().await.unwrap();
+
+        for _ in 0..15 {
+            if process_stopped(worker_pid) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-    })
-    .await
-    .expect("outer script did not start redirected worker and advance");
-    let worker_pid: i32 = fs::read_to_string(&worker_ready)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert_eq!(
-        posix::kill(worker_pid, 0),
-        0,
-        "recorded worker {worker_pid} should still be alive before cancellation"
-    );
-
-    assert_eq!(posix::kill(-outer_pgid, posix::SIGKILL), 0);
-    outer_child.wait().await.unwrap();
-
-    for _ in 0..15 {
-        if posix::kill(worker_pid, 0) < 0 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            process_stopped(worker_pid),
+            "redirected background worker {worker_pid} outlived outer job (inner_redirect={inner_redirect})"
+        );
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        assert!(!worker_done.exists());
     }
-    assert!(
-        posix::kill(worker_pid, 0) < 0,
-        "redirected background worker {worker_pid} outlived outer job"
-    );
-    tokio::time::sleep(Duration::from_millis(450)).await;
-    assert!(!worker_done.exists());
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
