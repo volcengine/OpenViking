@@ -849,4 +849,89 @@ async fn preserves_regular_file_stdout_and_merged_stream_order() {
             }
         }
     }
+
+    let separate_log = dir.path().join("separate.log");
+    fs::write(&separate_log, "AGENT LOG HEADER\n").unwrap();
+    let sep_out = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&separate_log)
+        .unwrap();
+    let sep_err = fs::OpenOptions::new()
+        .append(true)
+        .open(&separate_log)
+        .unwrap();
+    let (url, server) = resolver([(TOKEN, Some("secret-warn".into()))]).await;
+    let mut separate = privacy(dir.path(), &url);
+    separate
+        .args([
+            "run",
+            "--env",
+            &format!("TOKEN={TOKEN}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"printf 'warn:%s\n' "$TOKEN" >&2"#,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(sep_out))
+        .stderr(Stdio::from(sep_err));
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        separate.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let status = separate.status().await.unwrap();
+    assert_eq!(status.code(), Some(0));
+    server.await.unwrap();
+    assert_eq!(
+        fs::read_to_string(&separate_log).unwrap(),
+        format!("AGENT LOG HEADER\nwarn:{TOKEN}\n")
+    );
+
+    use std::io::{Seek, SeekFrom};
+    let shared_log = dir.path().join("shared.log");
+    fs::write(&shared_log, "AGENT LOG HEADER\n").unwrap();
+    let mut shared_out = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&shared_log)
+        .unwrap();
+    shared_out.seek(SeekFrom::End(0)).unwrap();
+    let shared_err = shared_out.try_clone().unwrap();
+    let (url, server) = resolver([(TOKEN, Some("secret-shared".into()))]).await;
+    let mut shared = privacy(dir.path(), &url);
+    shared
+        .args([
+            "run",
+            "--env",
+            &format!("TOKEN={TOKEN}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"printf '1\n'; printf '2:%s\n' "$TOKEN" >&2"#,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(shared_out))
+        .stderr(Stdio::from(shared_err));
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        shared.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let status = shared.status().await.unwrap();
+    assert_eq!(status.code(), Some(0));
+    server.await.unwrap();
+    assert_eq!(
+        fs::read_to_string(&shared_log).unwrap(),
+        format!("AGENT LOG HEADER\n1\n2:{TOKEN}\n")
+    );
 }

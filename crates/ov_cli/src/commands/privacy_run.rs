@@ -131,19 +131,49 @@ fn is_pipe_or_socket(fd: impl std::os::fd::AsFd) -> bool {
 
 #[cfg(unix)]
 fn shared_non_tty_outputs() -> bool {
-    use std::io::IsTerminal;
-    use std::os::unix::fs::MetadataExt;
+    use std::io::{IsTerminal, Seek, SeekFrom};
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
     if std::io::stdout().is_terminal() {
         return false;
     }
-    let Some(out) = fd_metadata(std::io::stdout()) else {
+    let Ok(out_dup) = std::io::stdout().as_fd().try_clone_to_owned() else {
         return false;
     };
-    let Some(err) = fd_metadata(std::io::stderr()) else {
+    let Ok(err_dup) = std::io::stderr().as_fd().try_clone_to_owned() else {
         return false;
     };
-    out.ino() != 0 && out.dev() == err.dev() && out.ino() == err.ino()
+    let mut out_file = std::fs::File::from(out_dup);
+    let mut err_file = std::fs::File::from(err_dup);
+    let (Ok(out), Ok(err)) = (out_file.metadata(), err_file.metadata()) else {
+        return false;
+    };
+    if out.ino() == 0 || out.dev() != err.dev() || out.ino() != err.ino() {
+        return false;
+    }
+    let kind = out.file_type();
+    if kind.is_fifo() || kind.is_socket() {
+        return true;
+    }
+    if !kind.is_file() {
+        return false;
+    }
+    // Separate open() calls to the same regular file keep independent offsets and O_APPEND;
+    // merge only when stdout and stderr share one open file description (such as `2>&1`).
+    let (Ok(out_pos), Ok(err_pos)) = (out_file.stream_position(), err_file.stream_position())
+    else {
+        return false;
+    };
+    let Some(probe_pos) = out_pos.checked_add(1).filter(|_| out_pos == err_pos) else {
+        return false;
+    };
+    if out_file.seek(SeekFrom::Start(probe_pos)).is_err() {
+        return false;
+    }
+    let shared = err_file.stream_position().ok() == Some(probe_pos);
+    let _ = out_file.seek(SeekFrom::Start(out_pos));
+    shared
 }
 
 #[cfg(unix)]
