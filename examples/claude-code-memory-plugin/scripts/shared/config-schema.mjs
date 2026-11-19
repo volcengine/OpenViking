@@ -123,6 +123,9 @@ export const KNOBS = [
   { name: "recallCompressDetectTimeoutMs", type: "int", default: 15000, min: 1000, max: 600000, env: "OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS", capability: "recall" },
   { name: "recallCompressDetectTtlMs", type: "int", default: 604800000, min: 0, capability: "recall", env: "OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS" },
   { name: "recallCompressMinInputChars", type: "int", default: 1500, min: 0, max: 100000, env: "OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS", capability: "recall" },
+  // The only threshold measured against the user's prompt rather than the
+  // retrieved text. 0 keeps compression unconditional, as before.
+  { name: "recallCompressMinPromptChars", type: "int", default: 0, min: 0, max: 100000, env: "OPENVIKING_RECALL_COMPRESS_MIN_PROMPT_CHARS", capability: "recall" },
   { name: "recallCompressMaxInputChars", type: "int", default: 18000, min: 1000, max: 200000, env: "OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS", capability: "recall" },
   { name: "recallCompressMaxBullets", type: "int", default: 6, min: 1, max: 50, env: "OPENVIKING_RECALL_COMPRESS_MAX_BULLETS", sendOnlyWhenConfigured: true, capability: "recall" },
 
