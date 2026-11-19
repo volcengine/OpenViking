@@ -60,6 +60,7 @@ const messages = {
     >
   >,
   telemetryResult: (value: string) => `Telemetry: ${value}`,
+  taskResult: 'Task result',
   memoryCommit: {
     idle: 'Commit session',
     pending: 'Committing session',
@@ -71,12 +72,6 @@ const messages = {
     completed: 'Memory extraction completed.',
     saved: 'Memories were generated and saved.',
     view: 'View memory',
-  },
-  taskCompletion: {
-    title: 'Task complete',
-    description: 'Background task completed.',
-    resource: 'The resource import is complete. Click to view the result.',
-    viewResult: 'View result',
   },
   compileQuickInputs: {
     createWiki: {

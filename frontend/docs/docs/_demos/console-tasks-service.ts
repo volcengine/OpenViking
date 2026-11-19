@@ -74,6 +74,9 @@ export function createTaskDemo() {
       tasks.set(current, {
         ...tasks.get(current)!,
         status: failed ? 'failed' : 'completed',
+        result: failed
+          ? undefined
+          : { root_uri: 'viking://resources/demo-imported' },
         error: failed ? 'Demo: source parsing failed' : undefined,
       });
     },

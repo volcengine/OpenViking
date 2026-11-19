@@ -70,8 +70,9 @@ export function ConsoleView(props: ConsoleProps) {
     draftIdentity,
   );
   const commandRecords = useMemo(
-    () => state.records.map(formatConsoleTaskResult),
-    [state.records],
+    () =>
+      state.records.map((record) => formatConsoleTaskResult(record, locale)),
+    [state.records, locale],
   );
   const monitoring = useMonitoringBinding();
   tagData(monitoring, commandRecords, readData(monitoring, [state.records]));
@@ -104,7 +105,6 @@ export function ConsoleView(props: ConsoleProps) {
         {feedback}
         <ConsoleTaskNotifications
           locale={locale}
-          onOpenUri={openCommandUri}
           onOpenMemoryUri={conversationProps.onOpenUri ?? onOpenUri}
         />
         {state.mode ? (
