@@ -958,3 +958,49 @@ async def test_directory_transfer_keeps_unread_vectors_after_page_deletion(
     assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"old data"
     assert await fs.exists(source, ctx=ctx) == (operation == "cp")
     count.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+@pytest.mark.parametrize("backend_mode", ["volcengine", "vikingdb"])
+async def test_cloud_directory_transfer_preserves_existing_target_when_sort_is_unsupported(
+    indexed_fs, monkeypatch, operation, backend_mode
+):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/target"
+    for name in ["a.md", "b.md"]:
+        await fs.write_file_bytes(f"{source}/{name}", b"new", ctx=ctx)
+        await seed_vector(backend, f"{source}/{name}", "new")
+    await fs.write_file_bytes(target + "/keep.md", b"important old data", ctx=ctx)
+    await seed_vector(backend, target + "/keep.md", "keep")
+    await seed_vector(backend, target + "/a.md", "old a")
+    account = await backend._get_backend_for_context(ctx)
+    monkeypatch.setattr(account, "_mode", backend_mode)
+    adapter = account._adapter
+    original_query = adapter.query
+    calls = []
+
+    def reject_scalar_sort(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("order_by"):
+            raise RuntimeError("scalar sort requires an indexed int64 or float32 field")
+        return original_query(**kwargs)
+
+    monkeypatch.setattr(adapter, "query", reject_scalar_sort)
+    count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    try:
+        result = await getattr(fs, operation)(
+            source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+        )
+    finally:
+        assert await fs.exists(target + "/keep.md", ctx=ctx), "old target data was cleaned"
+    assert result["vectors"]["written"] == 2
+    assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"important old data"
+    assert await fs.read_file_bytes(target + "/a.md", ctx=ctx) == b"new"
+    assert await backend.get([vector_record_id(ctx.account_id, target + "/a.md", 2)], ctx=ctx)
+    assert (await backend.get([target + "/keep.md"], ctx=ctx))[0]["abstract"] == "keep"
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
+    assert calls and all(not call.get("order_by") for call in calls)
+    count.assert_not_awaited()
