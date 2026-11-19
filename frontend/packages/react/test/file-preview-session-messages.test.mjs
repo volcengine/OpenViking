@@ -150,7 +150,7 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
       transcript('remote').textContent,
       /Reply <script>safe text<\/script>/,
     );
-    assert.equal(transcript('remote').querySelector('script'), null);
+    assert.ok(transcript('remote').querySelector('script') === null);
     assert.match(messages[2].textContent, /context_type: resource/);
     assert.match(messages[2].textContent, /viking:\/\/resources\/guide.md/);
     assert.match(
@@ -158,7 +158,7 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
       /https:\/\/images.example\/figure.png/,
     );
     assert.match(messages[3].textContent, /"detail": "high"/);
-    assert.equal(transcript('inline').querySelector('img'), null);
+    assert.ok(transcript('inline').querySelector('img') === null);
 
     const viewSwitch = (label) =>
       [...document.querySelectorAll('#inline button')].find(
@@ -174,14 +174,34 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
     assert.match(document.querySelector('#inline').textContent, /"parts"/);
     viewSwitch('Preview').click();
     await waitFor(() => transcript('inline'));
-    await waitFor(() =>
-      document.querySelector('#ordinary').textContent.includes('msg-user'),
-    );
-    await waitFor(() =>
-      document
-        .querySelector('#unsupported')
-        .textContent.includes('Keep generic JSON'),
-    );
-    assert.equal(transcript('ordinary'), null);
-    assert.equal(transcript('unsupported'), null);
+    for (const [id, text] of [
+      ['ordinary', 'msg-user'],
+      ['unsupported', 'Keep generic JSON'],
+    ]) {
+      const host = document.getElementById(id);
+      const genericJson = () =>
+        host.querySelector(
+          '[data-file-viewer-state="ready"] [data-file-viewer-json]',
+        );
+      // jsdom has no layout, so the JSON viewer's virtual rows stay unmounted.
+      // Verify its ready state and use Source to check the original content.
+      await waitFor(() => genericJson());
+      assert.ok(transcript(id) === null);
+      const mode = (label) =>
+        [...host.querySelectorAll('button')].find(
+          (button) => button.textContent === label,
+        );
+      mode('Source').click();
+      await waitFor(() => host.textContent.includes(text));
+      assert.equal(mode('Source').getAttribute('aria-pressed'), 'true');
+      if (id === 'unsupported')
+        assert.match(host.textContent, /Unsupported future content/);
+      mode('Preview').click();
+      await waitFor(
+        () =>
+          genericJson() &&
+          mode('Preview').getAttribute('aria-pressed') === 'true',
+      );
+      assert.ok(transcript(id) === null);
+    }
   }));
