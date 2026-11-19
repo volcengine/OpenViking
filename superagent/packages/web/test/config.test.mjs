@@ -12,6 +12,7 @@ const KEYS = [
   'OV_SUPERAGENT_WEB_DAEMON_PORT',
   'OV_SUPERAGENT_WEB_INSTANCES',
   'OV_SUPERAGENT_WEB_DEFAULT_INSTANCE',
+  'OV_SUPERAGENT_WEB_API_KEY',
 ];
 let previous;
 
@@ -83,4 +84,11 @@ test('web config binds only to loopback: the page has no login', () => {
   }
   process.env.OV_SUPERAGENT_WEB_HOST = 'localhost';
   assert.equal(getConfig().host, 'localhost');
+});
+
+test('web config binds beyond loopback only with an API key', () => {
+  process.env.OV_SUPERAGENT_WEB_HOST = '0.0.0.0';
+  assert.throws(() => getConfig(), /must be a loopback address/);
+  process.env.OV_SUPERAGENT_WEB_API_KEY = 'k'.repeat(32);
+  assert.equal(getConfig().host, '0.0.0.0');
 });

@@ -29,6 +29,8 @@ const commands = () => {
       ['restart', target, t('重启', 'Restart')],
       ['status', '', t('查看各进程状态和接入的 IM', 'Show each process and its IMs')],
       ['logs', t('[实例]', '[instance]'), t('查看日志', 'Show the logs')],
+      ['web auth', '[--key|--host|--show]', t('设置网页控制台的 API key 和监听地址，并重启 Web',
+        'Set the web console API key and listen address, then restart the Web')],
     ]],
     [t('维护', 'Maintain'), [
       ['upgrade', t('[实例|all]', '[instance|all]'), t('升级到最新版本；不写时升级全部', 'Upgrade to the latest release; everything when no instance is named')],
@@ -125,6 +127,12 @@ async function main([command, ...args], lang) {
       const agent = await chooseInstance({ deployment: loadInstances(), requested: args[0], prompter, question: t('看哪个实例的日志', 'Whose logs') })
         .finally(() => prompter.close());
       return logsCommand(agent.id);
+    }
+    case 'web': {
+      if (args[0] !== 'auth') break;
+      await needInstances();
+      const { webAuthCommand } = await import('../src/web-auth.mjs');
+      return webAuthCommand(args.slice(1));
     }
     case 'login': {
       const [{ loginCommand }, { Prompter }] = await Promise.all([import('../src/login.mjs'), import('../src/prompt.mjs')]);

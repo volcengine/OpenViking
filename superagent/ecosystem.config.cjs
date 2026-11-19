@@ -14,6 +14,7 @@ const {
   loadDeploymentManifest,
   openVikingAgentEnv,
   resolvedDeploymentDaemonEnv,
+  webProcessEnv,
 } = require('./deployment-config.cjs');
 
 const releaseDir = __dirname;
@@ -134,7 +135,7 @@ function buildEcosystem(sourceEnv = process.env) {
         listen_timeout: 10000,
         env: {
           NODE_ENV: 'production',
-          OV_SUPERAGENT_WEB_HOST: '127.0.0.1',
+          ...webProcessEnv(deployment, sourceEnv),
           OV_SUPERAGENT_WEB_PORT: '3737',
           OV_SUPERAGENT_WEB_DEFAULT_INSTANCE: deployment.defaultInstance,
           OV_SUPERAGENT_WEB_INSTANCES: webTargetsJson,

@@ -14,10 +14,12 @@ const {
   deploymentDaemonEnvOverrides,
   applyDeploymentDaemonEnv,
   loadDeploymentManifest,
+  parseWebSettings,
   resolveDeploymentManifestPath,
   resolveSecretsFilePath,
   resolvedDeploymentDaemonEnv,
   selectDeploymentAgent,
+  webProcessEnv,
 } = require('../../../deployment-config.cjs');
 
 function validManifest() {
@@ -849,4 +851,29 @@ test('a legacy pre-release home is neither an error nor read: the default is alw
   const config = path.join(home, '.vika', 'config.json');
   assert.equal(resolveDeploymentManifestPath({ HOME: home, OV_SUPERAGENT_CONFIG: config }), config);
   assert.equal(fs.readFileSync(config, 'utf8'), '{}', 'legacy data is left alone');
+});
+
+test('the shared Web takes its host from web.host and its key from secrets.env', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-web-secrets-'));
+  const secretsPath = path.join(directory, 'secrets.env');
+  try {
+    fs.writeFileSync(secretsPath, 'ARK_API_KEY=ark\nOV_SUPERAGENT_WEB_API_KEY=web-key-0123456789\n');
+    withManifest({ ...validManifest(), web: { host: '0.0.0.0' } }, (manifestPath) => {
+      const env = { HOME: '/Users/test', OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_SECRETS_FILE: secretsPath };
+      const deployment = loadDeploymentManifest(env);
+      assert.deepEqual(webProcessEnv(deployment, env), { OV_SUPERAGENT_WEB_HOST: '0.0.0.0', OV_SUPERAGENT_WEB_API_KEY: 'web-key-0123456789' });
+      assert.equal(resolvedDeploymentDaemonEnv(deployment, env).OV_SUPERAGENT_WEB_API_KEY, undefined);
+    });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('web.host only takes addresses that also answer on 127.0.0.1', () => {
+  for (const host of ['127.0.0.1', '0.0.0.0', '::']) {
+    assert.equal(parseWebSettings({ host }).host, host);
+  }
+  for (const host of ['localhost', '::1', '10.0.0.5', 'box.example.com', ':', 'example..com']) {
+    assert.throws(() => parseWebSettings({ host }), /web\.host must be/);
+  }
 });

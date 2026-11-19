@@ -345,7 +345,16 @@ OV writes rely on successful write responses. Failed/timed-out writes retry the 
 
 `cancel_timer` removes the timer and all occurrence checks, stopping future triggers and heartbeat reminders. It can also clear checks for a naturally ended timer. One-shot or count-exhausted timers remove the schedule but retain the final occurrence check. Cancellation does not interrupt work already handed to the model.
 
-Open [http://127.0.0.1:3737/](http://127.0.0.1:3737/) for received messages, model turns (reasoning/tools), delivery decisions, and outcomes. It has no login and listens locally only. For remote servers, use `ssh -L 3737:127.0.0.1:3737 <server>`.
+Open [http://127.0.0.1:3737/](http://127.0.0.1:3737/) for received messages, model turns (reasoning/tools), delivery decisions, and outcomes. For remote servers, use `ssh -L 3737:127.0.0.1:3737 <server>`.
+
+By default it has no login and listens on 127.0.0.1 only. To reach it remotely without a tunnel, give it an API key:
+
+```bash
+ov-superagent web auth --host 0.0.0.0   # generates a key (or pass --key), prints it, restarts superagent-web
+ov-superagent web auth --show           # current host and key
+```
+
+The key is stored in `~/.ov-superagent/secrets.env` as `OV_SUPERAGENT_WEB_API_KEY`; the host is `web.host` in `config.json` (`127.0.0.1`, `0.0.0.0` or `::`, all of which still answer on 127.0.0.1 for the readiness probe). The page asks for the key once and keeps it in localStorage. Traffic is plain HTTP, so put a TLS reverse proxy in front before exposing it to the internet.
 
 - The current cognitive session opens by default. `/new` creates a new cognitive session; `/runtime` changes native session but preserves cognition. Same-runtime `/model` and `/effort` preserve both and apply next turn. The top bar selects history or the complete ledger.
 - A lower timeline separates turns, messages, assistant, delivery, commands, and system tracks; details and playhead synchronize.

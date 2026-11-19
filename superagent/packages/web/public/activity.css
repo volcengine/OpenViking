@@ -629,6 +629,60 @@ button, select {
   color: #fff;
 }
 
+/* ---------- API key 登录 ---------- */
+.login {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--bg);
+}
+.login[hidden] { display: none; }
+.login-card {
+  display: flex;
+  flex-direction: column;
+  width: min(400px, 100%);
+  padding: 32px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.12);
+  font-size: 14px;
+}
+.login-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; font-weight: 600; }
+.login-mark { width: 28px; height: 28px; color: var(--accent); }
+.login-title { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+.login-hint { margin: 0 0 22px; color: var(--ink-2); font-size: 13px; line-height: 1.6; }
+.login-hint code { padding: 2px 6px; border-radius: 4px; background: var(--code-bg); font: 12px var(--mono); }
+.login-label { margin-bottom: 6px; color: var(--ink-2); font-size: 12px; }
+.login-key {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px var(--mono);
+}
+.login-key:focus { border-color: var(--accent); outline: none; }
+.login-key[aria-invalid="true"] { border-color: var(--bad); }
+.login-error { margin: 8px 0 0; color: var(--bad); font-size: 13px; }
+.login-error[hidden] { display: none; }
+.login-submit {
+  height: 40px;
+  margin-top: 18px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+.login-submit:disabled { cursor: progress; opacity: 0.7; }
+
 body.privacy .txt { filter: blur(5px); }
 body.privacy .txt:hover { filter: none; }
 

@@ -161,3 +161,11 @@ test('明确不回复进入输出区，回合后的「本轮未表态」挂回�
   assert.match(js, /'没有发出消息（静默或仅模型文本）'/);
   assert.match(js, /delivery\.silent \? 'muted' : 'out'/);
 });
+
+test('API key：登录页、localStorage、Bearer、401 回到登录', () => {
+  for (const id of ['login', 'login-form', 'login-key', 'login-error', 'logout']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(js, /headers\.authorization = `Bearer \$\{key\}`/);
+  assert.doesNotMatch(js.replace(/async function apiFetch[\s\S]*?\n\}\n/, ''), /\bfetch\(/);
+});

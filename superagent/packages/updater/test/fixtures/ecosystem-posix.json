@@ -81,6 +81,7 @@
       "listen_timeout": 10000,
       "env": {
         "NODE_ENV": "production",
+        "OV_SUPERAGENT_WEB_API_KEY": "",
         "OV_SUPERAGENT_WEB_HOST": "127.0.0.1",
         "OV_SUPERAGENT_WEB_PORT": "3737",
         "OV_SUPERAGENT_WEB_DEFAULT_INSTANCE": "primary",
