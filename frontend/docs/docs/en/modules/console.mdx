@@ -69,7 +69,7 @@ Click the toolbar `@` or type `@` in the draft to browse, search and reference f
 
 ### Bot activation
 
-Use `chatOptions.activation` when the current library controls access to VikingBot and the host starts its runtime. The example simulates an eligible library, a library with Bot disabled, and a start error.
+Use `chatOptions.activation` when the current library controls access to VikingBot and the host starts its runtime. The example simulates an eligible library, a library with Bot disabled, and a start error. Switch the introduction to try custom text, a full ReactNode replacement or hidden content.
 
 ```tsx file="../../_demos/console-activation.tsx" preview
 
@@ -86,6 +86,8 @@ If the scope's request signal is already cancelled or becomes cancelled, Console
 After `isEligible` returns `true`, Console calls `getStatus`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
 
 Keep the adapter stable for the current library and identity. All three callbacks receive an `AbortSignal` and should throw on failure. Pass `media` to replace the illustration with your introduction media.
+
+Use `labels.activationTitle` and `labels.activationDescription` to replace the default introduction text; an empty string hides that text. `slots.activationIntro` replaces the entire media, title and description area; `undefined` preserves the default introduction and `null` hides it. Enable, Retry and lifecycle status remain managed by Console. Changing these display options does not restart activation checks or clear the draft.
 
 ### Human input
 
@@ -329,29 +331,32 @@ Provide both methods when supplying a custom `files` adapter.
 
 ### ConsoleSlots
 
-| Property            | Description                                                                                  | Type                                              | Default |
-| ------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------- |
-| errorFallback       | Replaces rendering-error content in this block and its nested regions                        | `ReactNode \| ((reset: () => void) => ReactNode)` | -       |
-| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes   | `ReactNode`                                       | -       |
-| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer` | `ReactNode`                                       | -       |
-| commandHelp         | Content above the command console in command mode                                            | `ReactNode`                                       | -       |
+| Property            | Description                                                                                                      | Type                                              | Default               |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | --------------------- |
+| errorFallback       | Replaces rendering-error content in this block and its nested regions                                            | `ReactNode \| ((reset: () => void) => ReactNode)` | -                     |
+| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes                       | `ReactNode`                                       | -                     |
+| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer`                     | `ReactNode`                                       | -                     |
+| commandHelp         | Content above the command console in command mode                                                                | `ReactNode`                                       | -                     |
+| activationIntro     | Replaces the activation introduction (media, title and description), keeping actions and status; `null` hides it | `ReactNode`                                       | Built-in introduction |
 
 ### ConsoleLabels
 
-| Property           | Description                                                                                          | Type                   | Default                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------- | -------------------------- |
-| conversation       | Label of the conversation mode button                                                                | `string`               | `'VikingBot'`              |
-| command            | Label of the command mode button                                                                     | `string`               | `'Terminal'`               |
-| mode               | Accessible name of the mode switch                                                                   | `string`               | `'Panel mode'`             |
-| description        | Description in the conversation welcome area; also the default of `vikingBot.welcomeDescription`     | `string`               | Built-in description       |
-| clear              | Label of the New session button in command mode                                                      | `string`               | `'New session'`            |
-| history            | Label of the Command history button in command mode                                                  | `string`               | `'Command history'`        |
-| emptyHistory       | Text shown when the command history is empty                                                         | `string`               | `'No command history yet'` |
-| commandTitle       | Heading of the command-mode empty state, same as `commandConsole.emptyTitle`                         | `string`               | CommandConsole default     |
-| commandDescription | Description of the command-mode empty state, same as `commandConsole.emptyDescription`               | `string`               | CommandConsole default     |
-| quickStart         | Label above the quick commands, same as `commandConsole.quickStart`                                  | `string`               | CommandConsole default     |
-| commandConsole     | Text for CommandConsole; takes precedence over `commandTitle`, `commandDescription` and `quickStart` | `CommandConsoleLabels` | -                          |
-| vikingBot          | Text for VikingBot; takes precedence over `description` and is overridden by `conversation.labels`   | `VikingBotLabels`      | -                          |
+| Property              | Description                                                                                          | Type                   | Default                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------ |
+| conversation          | Label of the conversation mode button                                                                | `string`               | `'VikingBot'`                  |
+| command               | Label of the command mode button                                                                     | `string`               | `'Terminal'`                   |
+| mode                  | Accessible name of the mode switch                                                                   | `string`               | `'Panel mode'`                 |
+| description           | Description in the conversation welcome area; also the default of `vikingBot.welcomeDescription`     | `string`               | Built-in description           |
+| activationTitle       | Activation introduction title; an empty string hides it                                              | `string`               | Built-in localized title       |
+| activationDescription | Activation introduction description; an empty string hides it                                        | `string`               | Built-in localized description |
+| clear                 | Label of the New session button in command mode                                                      | `string`               | `'New session'`                |
+| history               | Label of the Command history button in command mode                                                  | `string`               | `'Command history'`            |
+| emptyHistory          | Text shown when the command history is empty                                                         | `string`               | `'No command history yet'`     |
+| commandTitle          | Heading of the command-mode empty state, same as `commandConsole.emptyTitle`                         | `string`               | CommandConsole default         |
+| commandDescription    | Description of the command-mode empty state, same as `commandConsole.emptyDescription`               | `string`               | CommandConsole default         |
+| quickStart            | Label above the quick commands, same as `commandConsole.quickStart`                                  | `string`               | CommandConsole default         |
+| commandConsole        | Text for CommandConsole; takes precedence over `commandTitle`, `commandDescription` and `quickStart` | `CommandConsoleLabels` | -                              |
+| vikingBot             | Text for VikingBot; takes precedence over `description` and is overridden by `conversation.labels`   | `VikingBotLabels`      | -                              |
 
 ## Commands
 

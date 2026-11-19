@@ -52,6 +52,8 @@ const messages = {
       ConsoleLabels,
       | 'commandConsole'
       | 'vikingBot'
+      | 'activationTitle'
+      | 'activationDescription'
       | 'commandTitle'
       | 'commandDescription'
       | 'quickStart'

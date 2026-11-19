@@ -21,6 +21,8 @@ const messages: typeof enUS = {
       ConsoleLabels,
       | 'commandConsole'
       | 'vikingBot'
+      | 'activationTitle'
+      | 'activationDescription'
       | 'commandTitle'
       | 'commandDescription'
       | 'quickStart'
