@@ -116,6 +116,26 @@ class TestLinkSatisfaction:
             [{"match_text": "OpenViking", "to_uri": self.target_uri}],
         ) == (content + "\n\n[OpenViking](./tags.md)", 1)
 
+    @pytest.mark.parametrize(
+        "prefix",
+        [
+            "<!-- Example: `OpenViking` -->\n\n",
+            "Example <!-- `OpenViking` --> ",
+            "- A preview\n\t![OpenViking](img.png) ",
+        ],
+    )
+    def test_link_visible_anchor_after_protected_syntax(self, prefix):
+        assert not LinkRenderer.can_render_link(
+            prefix, "OpenViking", self.source_uri, self.target_uri
+        )
+        content = prefix + "OpenViking"
+        assert LinkRenderer.can_render_link(content, "OpenViking", self.source_uri, self.target_uri)
+        assert LinkRenderer.render_links_with_count(
+            content,
+            self.source_uri,
+            [{"match_text": "OpenViking", "to_uri": self.target_uri}],
+        ) == (prefix + "[OpenViking](./tags.md)", 1)
+
     def test_unprotected_anchor_can_be_linked(self):
         assert LinkRenderer.can_render_link(
             "Read the behavior tags.",

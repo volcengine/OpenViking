@@ -7,26 +7,28 @@ from typing import Callable, Dict, Iterator, List, Optional
 from urllib.parse import quote, unquote
 
 from markdown_it import MarkdownIt
-from markdown_it.rules_inline import backtick
+from markdown_it.rules_inline import backtick, html_inline
 from markdown_it.rules_inline import image as image_rule
 
 from openviking.core.namespace import uri_parts
 
+_PROTECTED_INLINE_TYPES = {"code_inline", "html_inline", "image"}
+
 
 def _inline_with_source_span(rule, state, silent):
-    """Keep source offsets consumed by CommonMark's code and image rules."""
+    """Keep source offsets consumed by protected CommonMark inline rules."""
     start, count = state.pos, len(state.tokens)
     matched = rule(state, silent)
     if matched and not silent and len(state.tokens) > count:
         token = state.tokens[-1]
-        if token.type in {"code_inline", "image"}:
+        if token.type in _PROTECTED_INLINE_TYPES:
             token.meta["source_span"] = (start, state.pos)
     return matched
 
 
 def _inline_protected_spans(tokens):
     for token in tokens:
-        if token.type in {"code_inline", "image"}:
+        if token.type in _PROTECTED_INLINE_TYPES:
             yield token.meta["source_span"]
 
 
@@ -162,38 +164,40 @@ class LinkRenderer:
         offsets = [0, *(m.end() for m in re.finditer(r"\r\n|\r|\n", content)), len(content)]
         parser = MarkdownIt("commonmark")
         parser.inline.ruler.at("backticks", partial(_inline_with_source_span, backtick))
+        parser.inline.ruler.at("html_inline", partial(_inline_with_source_span, html_inline))
         parser.inline.ruler.at("image", partial(_inline_with_source_span, image_rule))
         environment = {}
         for token in parser.parse(content, environment):
             if token.map is None:
                 continue
-            start, end = (offsets[line] for line in token.map)
-            if token.type in {"fence", "code_block"}:
+            first_line, last_line = token.map
+            start, end = offsets[first_line], offsets[last_line]
+            if token.type in {"fence", "code_block", "html_block"}:
                 spans.append((start, end))
             elif token.type == "inline":
                 protected = list(_inline_protected_spans(token.children or []))
                 if not protected:
                     continue
-                # Map parser offsets through stripped container prefixes and
-                # CRLF normalization, keeping complete image syntax protected.
+                # Map parser offsets through stripped container prefixes and newline normalization.
                 positions = {}
                 needed = deque(sorted({point for a, b in protected for point in (a, b - 1)}))
-                inline_offset, source_offset = 0, start
-                for inline_line, source_line in zip(
-                    token.content.splitlines(keepends=True),
-                    content[start:end].splitlines(keepends=True),
-                    strict=False,
+                inline_offset = 0
+                for line, text in zip(
+                    range(first_line, last_line), token.content.split("\n"), strict=False
                 ):
-                    text = inline_line.rstrip("\r\n")
-                    at = source_line.find(text)
-                    while needed and needed[0] < inline_offset + len(inline_line):
+                    source_offset = offsets[line]
+                    source_line = content[source_offset : offsets[line + 1]]
+                    # CommonMark can emit spaces for a partially consumed list tab.
+                    body = text.lstrip(" \t")
+                    body_start = inline_offset + len(text) - len(body)
+                    at = source_line.find(body)
+                    while needed and needed[0] < inline_offset + len(text):
                         point = needed.popleft()
-                        if at >= 0 and point < inline_offset + len(text):
-                            positions[point] = source_offset + at + point - inline_offset
-                    inline_offset += len(inline_line)
-                    source_offset += len(source_line)
+                        if at >= 0 and point >= body_start:
+                            positions[point] = source_offset + at + point - body_start
+                    inline_offset += len(text) + 1
                 if any(a not in positions or b - 1 not in positions for a, b in protected):
-                    # Unusual indentation must not expose image alt text.
+                    # Keep the block protected when an inline span cannot be mapped.
                     spans.append((start, end))
                 else:
                     spans.extend((positions[a], positions[b - 1] + 1) for a, b in protected)
