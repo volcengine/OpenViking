@@ -13,6 +13,10 @@ from weakref import WeakKeyDictionary
 
 from openviking.core.namespace import classify_uri
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log, short_hash
+from openviking.observability.reporting.token_sources import (
+    bind_dashboard_token_source_type,
+    get_dashboard_token_source_type,
+)
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -256,6 +260,9 @@ class SemanticTreeExecutor:
         self._coalesce_version = coalesce_version
         self._source = dict(source) if source else None
         self._generation_trigger = generation_trigger
+        self._dashboard_source_type = get_dashboard_token_source_type(
+            generation_trigger=generation_trigger
+        )
         self._aggregate_directory = aggregate_directory
         self._copy_source_uri = copy_source_uri
         self._task_context = get_task_context()
@@ -409,7 +416,10 @@ class SemanticTreeExecutor:
                 previous_incremental = self._incremental_update
                 self._incremental_update = False
                 try:
-                    with bind_ingestion_source_type(self._source_type):
+                    with (
+                        bind_ingestion_source_type(self._source_type),
+                        bind_dashboard_token_source_type(self._dashboard_source_type),
+                    ):
                         await self._file_summary_task(root_uri, root_uri)
                 finally:
                     self._incremental_update = previous_incremental
@@ -607,6 +617,7 @@ class SemanticTreeExecutor:
         with (
             bind_telemetry(self._telemetry),
             bind_ingestion_source_type(self._source_type),
+            bind_dashboard_token_source_type(self._dashboard_source_type),
             task_context,
         ):
             await self._run_work_bound(work)
