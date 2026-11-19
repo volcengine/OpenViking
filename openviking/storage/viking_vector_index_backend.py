@@ -1135,6 +1135,9 @@ class _SingleAccountBackend:
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         try:
             if self._bound_account_id:
@@ -1156,6 +1159,9 @@ class _SingleAccountBackend:
                 offset=offset,
                 filter=filter,
                 output_fields=output_fields,
+                bm25_k1=bm25_k1,
+                bm25_b=bm25_b,
+                advance=advance,
             )
         except Exception as e:
             logger.debug("Error searching by keywords: %s", type(e).__name__)
@@ -1909,6 +1915,9 @@ class VikingVectorIndexBackend:
         ctx: Optional[RequestContext] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         if ctx:
             backend = await self._get_backend_for_context(ctx)
@@ -1928,6 +1937,9 @@ class VikingVectorIndexBackend:
             offset=offset,
             filter=filter,
             output_fields=output_fields,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
+            advance=advance,
         )
 
     async def clear(self, *, ctx: Optional[RequestContext] = None) -> bool:
@@ -2052,6 +2064,7 @@ class VikingVectorIndexBackend:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
@@ -2063,6 +2076,17 @@ class VikingVectorIndexBackend:
             acl_enabled=acl_enabled,
         )
         backend = await self._get_backend_for_context(ctx)
+        bm25_k1 = None
+        bm25_b = None
+        advance = None
+        if keywords_args:
+            bm25_k1 = keywords_args.get("bm25_k1")
+            bm25_b = keywords_args.get("bm25_b")
+            post_process_input_limit = keywords_args.get("post_process_input_limit")
+            if post_process_input_limit is not None:
+                # Rerank multiplies the recall limit; keep the engine-side input
+                # limit at least as large as what this call actually asks for.
+                advance = {"post_process_input_limit": max(post_process_input_limit, limit)}
         return await backend.search_by_keywords(
             query=query,
             mode="bm25",
@@ -2071,6 +2095,9 @@ class VikingVectorIndexBackend:
             limit=limit,
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
+            advance=advance,
         )
 
     async def filter_in_tenant(

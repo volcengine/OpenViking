@@ -449,6 +449,7 @@ class VikingDBManagerProxy:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         return await self._manager.search_by_keywords_in_tenant(
             self._ctx,
@@ -459,6 +460,7 @@ class VikingDBManagerProxy:
             level=level,
             limit=limit,
             offset=offset,
+            keywords_args=keywords_args,
         )
 
     async def filter_in_tenant(
