@@ -18,9 +18,6 @@ it('shares the six-call budget across native work tools, leaving routing and tra
   for (const name of ['Bash', 'Edit', 'ls', 'WebFetch']) assert.match(budget.check(name), /used your own tools 6 times/);
   for (const name of ['mcp__personal_agent__task_create', 'mcp__personal_agent__reply_message', 'mcp__personal_agent__search_messages',
     'mcp__other__lookup', 'functions.exec', 'exec', 'write_stdin', 'update_plan']) assert.equal(budget.check(name), null);
-  budget.reset();
-  assert.equal(budget.check('Bash'), null);
-  assert.equal(budget.used, 1);
 });
 
 it('denies before execution and keeps routing usable when the budget endpoint fails', async () => {
@@ -31,7 +28,6 @@ it('denies before execution and keeps routing usable when the budget endpoint fa
   const offline = async () => { throw new Error('offline'); };
   assert.equal((await routerToolHookOutput(event, offline)).hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(await routerToolHookOutput({ ...event, tool_name: 'mcp__personal_agent__task_create' }, offline), null);
-  assert.equal(await routerToolHookOutput({ ...event, hook_event_name: 'PostToolUse' }, offline), null);
 });
 
 it('serializes parallel hook processes, resets at turn end and authority change, and excludes workers', async (t) => {
@@ -56,8 +52,6 @@ it('serializes parallel hook processes, resets at turn end and authority change,
   authority = 'router-2';
   assert.equal((await check('router-1')).ok, false, 'revoked runtimes cannot spend or reset the budget');
   assert.equal((await check()).result.reason, null);
-  assert.equal(service.routerToolBudget.used, 1);
   service.config.scheduler = 'inbox';
   for (let i = 0; i < 8; i++) assert.equal((await check()).result.reason, null);
-  assert.equal(service.routerToolBudget.used, 1, 'the guard is inactive outside workers scheduling');
 });

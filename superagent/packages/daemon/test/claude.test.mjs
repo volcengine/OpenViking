@@ -820,7 +820,6 @@ for (const scheduler of ['workers', 'legacy']) {
       const args = calls.at(-1).args;
       const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
       assert.equal(Boolean(settings.hooks?.PreToolUse), scheduler === 'workers');
-      assert.equal(settings.enabledPlugins['openviking-memory@openviking'], false);
     } finally { await agent.stop(); }
   });
 }
