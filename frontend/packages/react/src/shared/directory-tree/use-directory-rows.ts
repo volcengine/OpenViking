@@ -92,14 +92,13 @@ export function useDirectoryRows({
             (edit) => edit.expanded && edit.uri === uri,
           );
           if (
-            !reopened &&
-            ((isAlias && containsPath(foldedUserPaths, homePath)) ||
-              (isUserUri && containsPath(foldedAliases, homePath)))
+            (isAlias && containsPath(foldedUserPaths, homePath)) ||
+            (isUserUri && containsPath(foldedAliases, homePath))
           ) {
-            // A persisted fold can match a row even when its own URI is also
-            // saved as open. Wait for the scoped identity before opening it.
+            // A reopen can display this row while its earlier fold still
+            // needs the scoped identity to settle the persisted edit order.
             ambiguousFolds.add(uri);
-            continue;
+            if (!reopened) continue;
           }
           if (!expandedUri) {
             if (
@@ -123,7 +122,7 @@ export function useDirectoryRows({
           const source =
             cached ??
             equivalents.find((previous) => previous !== uri) ??
-            (expandedUri !== uri ? expandedUri : undefined);
+            (expandedUri !== uri || !current ? expandedUri : undefined);
           if (!source) continue;
           sources.set(uri, source);
           if (current?.error || hasListing(current)) continue;
@@ -149,8 +148,17 @@ export function useDirectoryRows({
         if (row.kind !== 'entry' || row.type !== 'directory' || row.expanded)
           continue;
         for (const previous of observers.get(identifyUri(row.uri)) ?? []) {
-          if (previous !== rootUri && !visible.has(previous))
-            retirements.add(previous);
+          if (previous === rootUri || visible.has(previous)) continue;
+          const branch = identifyUri(previous);
+          for (const uri of Object.keys(dirs)) {
+            const key = identifyUri(uri);
+            if (
+              uri !== rootUri &&
+              !visible.has(uri) &&
+              (key === branch || key.startsWith(`${branch}/`))
+            )
+              retirements.add(uri);
+          }
         }
       }
       return {

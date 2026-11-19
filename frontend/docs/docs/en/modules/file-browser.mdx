@@ -111,7 +111,7 @@ History dialogs reserve their content height and show a centred loading indicato
 | defaultExpandedUri        | Path to expand level by level when no snapshot is supplied. Defaults to the root.                                                                                                           | `string`                                                                | -                              |
 | defaultExpandedUris       | Initial expanded folders. Any supplied snapshot takes precedence over `defaultExpandedUri`. An empty array opens only the root.                                                             | `readonly string[]`                                                     | -                              |
 | defaultExpansionSnapshot  | Restores expanded paths and explicit folds for this mount. Takes precedence over `defaultExpandedUris`.                                                                                     | `FileBrowserExpansionSnapshot`                                          | -                              |
-| onExpansionSnapshotChange | Reports `expandedUris` and `collapsedUris` for host persistence, including edits whose alias identity is still unresolved.                                                                  | `(snapshot: FileBrowserExpansionSnapshot) => void`                      | -                              |
+| onExpansionSnapshotChange | Reports the complete snapshot, including optional ordered `pendingEdits`. Save the full object for restoration.                                                                             | `(snapshot: FileBrowserExpansionSnapshot) => void`                      | -                              |
 | readOnly                  | Disables editing, import and deletion and makes the compile configuration view-only; the permission dialog is unaffected, so use `acl.readOnly` there                                       | `boolean`                                                               | `false`                        |
 | acl                       | Turns on permission display and grant management for shared resources, see `FileBrowserAclOptions` below                                                                                    | `boolean \| FileBrowserAclOptions`                                      | `false`                        |
 | agentConnect              | Shows the Connect agent button that opens the connection drawer, see [AgentConnect](../components/agent-connect); hidden when omitted                                                       | `AgentConnectProps`                                                     | -                              |
@@ -129,6 +129,18 @@ History dialogs reserve their content height and show a centred loading indicato
 | locale                    | Interface language, see [Internationalization](../guide/i18n)                                                                                                                               | `'zh-CN' \| 'en-US'`                                                    | Inherited, otherwise `'en-US'` |
 | requestOptions            | Overrides the request configuration, see the [blocks overview](./)                                                                                                                          | `OvRequestOptions`                                                      | -                              |
 | className, style          | Appearance and layout; other HTML attributes are passed to the root element                                                                                                                 | HTML attributes                                                         | -                              |
+
+### FileBrowserExpansionSnapshot
+
+Save the complete object returned by `onExpansionSnapshotChange` and pass it to `defaultExpansionSnapshot` on the next mount.
+
+| Property      | Description                                                                      | Type                                            | Default           |
+| ------------- | -------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------- |
+| expandedUris  | Expanded folder URIs                                                             | `readonly string[]`                             | Required          |
+| collapsedUris | Explicitly folded folder URIs                                                    | `readonly string[]`                             | Required          |
+| pendingEdits  | Optional edits awaiting alias identity resolution, ordered from oldest to newest | `readonly { uri: string; expanded: boolean }[]` | `[]` when omitted |
+
+Each pending edit identifies a folder with `uri`. `expanded: true` opens it and `false` folds it. Preserve the emitted order so that the latest edit takes precedence after identity resolution, including a later reopen that supersedes a stored fold.
 
 ### FileBrowserOpenResourceOptions
 
@@ -476,7 +488,7 @@ All fields are optional, and omitted fields follow `locale`.
 - Click a file to preview its content; click a directory to expand and select it, and the preview shows its L0 summary and L1 overview.
 - Directories under `viking://system` show no summaries.
 - Use `defaultExpandedUri` on its own to expand the tree to a single location at mount. After the first render, changes to the controlled `uri` [open and reveal the resource](#open-and-reveal-a-resource).
-- To persist tree expansion across mounts, save `onExpansionSnapshotChange` per account and root and pass it as `defaultExpansionSnapshot` on the next mount. Save the complete object, including `expandedUris`, `collapsedUris` and optional ordered `pendingEdits`. The most recent pending edit wins after identity resolution. A pending fold can coexist with an equivalent expanded URI until the server confirms its identity. The fold wins once the identity matches. An initial controlled URI is located within the restored open folders.
+- To persist tree expansion across mounts, save the complete `onExpansionSnapshotChange` object per account and root and pass it as `defaultExpansionSnapshot` on the next mount. Keep optional `pendingEdits` in their emitted order. Identity resolution applies the latest edit, including a later reopen that supersedes a stored fold. An initial controlled URI is located within the restored open folders.
 - If a listing fails during restoration, the saved snapshot is kept. After initialization, collapsing a visible folder or expanding a folder through a later controlled `uri` change reports a new snapshot. It retains unresolved paths in other open branches, including folders on a later, failed root page. Retry keeps the error visible while it waits for the active restoration pass to finish. With the URI-only `onExpandedUrisChange` callback, a potentially matching fold waits for a successful home lookup before publishing. Refresh retries the lookup.
 - Text files are read up to 2000 lines, and the preview says when the content is truncated.
 - Images, video, audio, PDF, Office documents and archives are read through the content download endpoint, chosen by file extension.

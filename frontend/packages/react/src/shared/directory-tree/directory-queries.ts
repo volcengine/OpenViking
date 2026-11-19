@@ -161,7 +161,7 @@ export class DirectoryQueries {
   };
   /** Hand off a verified equivalent listing without evicting shared cache data. */
   adoptListing = (uri: string, previousUri: string, retirePrevious = false) => {
-    if (uri === previousUri || this.request.signal?.aborted) return;
+    if (this.request.signal?.aborted) return;
     const target = this.observers.get(uri);
     if (target?.adoptedFrom !== previousUri) {
       const { queryClient } = this.request;

@@ -111,7 +111,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | defaultExpandedUri        | 未传入快照时逐级展开到该路径，默认只展开根目录。                                                                   | `string`                                                                | -                        |
 | defaultExpandedUris       | 初始展开目录快照。只要传入快照，就优先于 `defaultExpandedUri`。空数组只展开根目录。                                | `readonly string[]`                                                     | -                        |
 | defaultExpansionSnapshot  | 恢复本次挂载的展开路径和手动折叠记录。优先于 `defaultExpandedUris`。                                               | `FileBrowserExpansionSnapshot`                                          | -                        |
-| onExpansionSnapshotChange | 上报 `expandedUris` 和 `collapsedUris`，供宿主保存，包括别名身份仍待确认的展开和折叠操作。                         | `(snapshot: FileBrowserExpansionSnapshot) => void`                      | -                        |
+| onExpansionSnapshotChange | 上报完整快照，包括可选且有序的 `pendingEdits`。请保存完整对象以便恢复。                                            | `(snapshot: FileBrowserExpansionSnapshot) => void`                      | -                        |
 | readOnly                  | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
 | acl                       | 开启共享资源的权限显示与授权管理，类型见下方 `FileBrowserAclOptions`                                               | `boolean \| FileBrowserAclOptions`                                      | `false`                  |
 | agentConnect              | 显示「连接 Agent」按钮，点击后从右侧打开接入抽屉，参数见 [AgentConnect](../components/agent-connect)；省略时不显示 | `AgentConnectProps`                                                     | -                        |
@@ -129,6 +129,18 @@ import '@openviking/react/modules/file-browser/style.css';
 | locale                    | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
 | requestOptions            | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
 | className、style          | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                               | -                        |
+
+### FileBrowserExpansionSnapshot
+
+保存 `onExpansionSnapshotChange` 返回的完整对象，并在下次挂载时传给 `defaultExpansionSnapshot`。
+
+| 属性          | 说明                                             | 类型                                            | 默认值        |
+| ------------- | ------------------------------------------------ | ----------------------------------------------- | ------------- |
+| expandedUris  | 展开的目录 URI                                   | `readonly string[]`                             | 必填          |
+| collapsedUris | 手动折叠的目录 URI                               | `readonly string[]`                             | 必填          |
+| pendingEdits  | 可选的待确认别名身份的操作，按从早到晚的顺序排列 | `readonly { uri: string; expanded: boolean }[]` | 省略时为 `[]` |
+
+每项操作用 `uri` 指定目录，`expanded: true` 表示展开，`false` 表示折叠。请保留上报顺序，身份确认后以后一次操作为准，包括用后续重新展开的操作覆盖已保存的折叠记录。
 
 ### FileBrowserOpenResourceOptions
 
@@ -476,7 +488,7 @@ import '@openviking/react/modules/file-browser/style.css';
 - 点击文件预览正文；点击目录展开并选中它，预览区显示该目录的 L0 摘要和 L1 总览。
 - `viking://system` 下的目录保留页签和路径，不显示摘要；目录中的文件仍可预览。
 - 单独设置 `defaultExpandedUri`，可在挂载时将目录树展开到一个指定位置。挂载后更新受控 `uri` 会[打开并定位资源](#打开并定位资源)。
-- 要在重新挂载后恢复目录树状态，请按账号和根目录保存 `onExpansionSnapshotChange` 上报的完整快照，下次挂载时传给 `defaultExpansionSnapshot`。请保存完整对象，包括 `expandedUris`、`collapsedUris` 和可选的有序 `pendingEdits`。身份确认后，以最后一次操作为准。身份待确认时，折叠记录可能与同一目录的展开 URI 同时存在，确认后以折叠记录为准。初始受控 URI 在恢复展开的目录范围内定位。
+- 要在重新挂载后恢复目录树状态，请按账号和根目录保存 `onExpansionSnapshotChange` 上报的完整对象，下次挂载时传给 `defaultExpansionSnapshot`。保留可选 `pendingEdits` 的上报顺序。身份确认后以最后一次操作为准，包括用后续重新展开的操作覆盖已保存的折叠记录。初始受控 URI 在恢复展开的目录范围内定位。
 - 恢复期间列表请求失败时，保留已保存的快照。初始化结束后，折叠可见目录或更新受控 `uri` 并展开目录时，会上报新的快照。快照保留其他仍展开分支中尚未加载的路径，包括根目录后续页请求失败时尚未加载的目录。恢复尚未结束时点击重试，错误会保留到当前恢复完成后再重试。使用仅返回 URI 列表的 `onExpandedUrisChange` 时，可能匹配已保存路径的折叠操作会等主目录身份确认后再上报。点击刷新可重试查询。
 - 文本文件最多读取 2000 行，超出时提示内容被截断。
 - 图片、视频、音频、PDF、Office 文档和压缩包按扩展名通过内容下载接口读取。
