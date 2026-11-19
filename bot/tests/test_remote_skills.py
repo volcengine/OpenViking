@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from vikingbot.agent.remote_skill_cache import RemoteSkillSnapshotCache
 from vikingbot.agent.remote_skills import (
     SkillRuntimeContext,
     SkillRuntimeError,
@@ -149,12 +150,101 @@ async def test_privacy_restoration_validates_trigger_and_stored_bytes(tmp_path, 
     active = await runtime.activate_from_read(skill_md_uri, stored_content)
 
     assert active is not None
-    assert active.content == restored_content
+    assert active.content == stored_content
+    assert "test-value" not in active.content
     assert (
         active.files["SKILL.md"].sha256
         == hashlib.sha256(stored_content.encode("utf-8")).hexdigest()
     )
     assert client.downloaded == [skill_md_uri]
+
+
+@pytest.mark.asyncio
+async def test_activation_response_keeps_privacy_reference_masked(tmp_path, monkeypatch):
+    placeholder = "{{ov_privacy:skill:privacy-response:api_key}}"
+    stored_content = _skill_md("privacy-response", f"Use {placeholder}.")
+    restored_content = stored_content.replace(placeholder, "resolved-secret")
+    root_uri = "viking://user/demo/skills/privacy-response"
+    skill_md_uri = f"{root_uri}/SKILL.md"
+    activation_client = FakeClient(
+        _skill_result(root_uri, restored_content, stored_content=stored_content),
+        downloaded=stored_content.encode("utf-8"),
+    )
+    runtime = _runtime(tmp_path, monkeypatch, activation_client)
+    read_client = SimpleNamespace(read_content=AsyncMock(return_value=stored_content))
+    tool = VikingMultiReadTool()
+    monkeypatch.setattr(tool, "_get_client", AsyncMock(return_value=read_client))
+    monkeypatch.setattr(tool, "_release_client", AsyncMock())
+
+    result = await tool.execute(ToolContext(skill_runtime=runtime), uris=[skill_md_uri])
+
+    assert isinstance(result, str)
+    assert placeholder in result
+    assert "resolved-secret" not in result
+    assert root_uri in runtime.active_skills
+    read_client.read_content.assert_awaited_once_with(
+        skill_md_uri, level="read", offset=0, limit=-1
+    )
+
+
+class FakeSandbox:
+    def __init__(self):
+        self.files: dict[str, bytes] = {}
+
+    async def write_file_bytes(self, path: str, content: bytes) -> None:
+        self.files[path] = content
+
+    async def remove_tree(self, path: str) -> None:
+        prefix = f"{path.rstrip('/')}/"
+        for filename in list(self.files):
+            if filename == path or filename.startswith(prefix):
+                self.files.pop(filename, None)
+
+
+@pytest.mark.asyncio
+async def test_privacy_restoration_materializes_stored_bytes(tmp_path, monkeypatch):
+    placeholder = "{{ov_privacy:skill:privacy-materialized:api_key}}"
+    stored_content = _skill_md("privacy-materialized", f"Use {placeholder}.")
+    restored_content = stored_content.replace(placeholder, "resolved-secret")
+    root_uri = "viking://user/demo/skills/privacy-materialized"
+    client = FakeClient(
+        _skill_result(root_uri, restored_content, stored_content=stored_content),
+        downloaded=stored_content.encode("utf-8"),
+    )
+    config = Config(
+        storage_workspace=str(tmp_path),
+        hooks=[],
+        remote_skills=RemoteSkillsConfig(),
+    )
+    sandbox = FakeSandbox()
+    sandbox_manager = SimpleNamespace(
+        remote_skill_cache=RemoteSkillSnapshotCache(config),
+        get_sandbox=AsyncMock(return_value=sandbox),
+    )
+    runtime = SkillRuntimeContext(
+        config=config,
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="remote-skills"),
+        sandbox_manager=sandbox_manager,
+        workspace_id="workspace",
+        openviking_connection=None,
+        actor_peer_id=None,
+    )
+
+    async def get_client():
+        return client
+
+    monkeypatch.setattr(runtime, "_get_client", get_client)
+    active = await runtime.activate_from_read(f"{root_uri}/SKILL.md", stored_content)
+    assert active is not None
+
+    materialized_root = await runtime.materialize(active)
+
+    assert sandbox.files[f"{materialized_root}/SKILL.md"] == stored_content.encode("utf-8")
+    cached_definitions = list((tmp_path / "bot" / "remote_skill_cache").rglob("SKILL.md"))
+    assert len(cached_definitions) == 1
+    cached_content = cached_definitions[0].read_text(encoding="utf-8")
+    assert placeholder in cached_content
+    assert "resolved-secret" not in cached_content
 
 
 @pytest.mark.asyncio

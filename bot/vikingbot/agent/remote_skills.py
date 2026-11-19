@@ -150,6 +150,7 @@ class ActiveRemoteSkill:
     description: str
     root_uri: str
     skill_md_uri: str
+    # Stored, model-safe bytes. Privacy references remain unresolved here.
     content: str
     source: str
     files: dict[str, RemoteSkillFile]
@@ -491,8 +492,9 @@ class SkillRuntimeContext:
         """Activate a Skill after an OpenViking read reaches its SKILL.md.
 
         Privacy restoration can make the detail content differ from the bytes
-        read by the transport. In that case both the trigger and stored bytes
-        are checked against the manifest before the restored content is used.
+        read by the transport. In that case both layers are checked against the
+        manifest, but the stored representation remains the model-facing and
+        materialized definition so resolved Privacy values never leave storage.
         """
         if not self.is_skill_definition_uri(uri):
             self.note_remote_read(uri)
@@ -552,16 +554,6 @@ class SkillRuntimeContext:
                 raise SkillRuntimeError(
                     "SKILL_REVISION_CHANGED",
                     "OpenViking returned inconsistent SKILL.md integrity metadata",
-                )
-            try:
-                parsed = SkillLoader.parse(canonical_content, source_path=skill_md_uri)
-            except Exception as exc:
-                raise SkillRuntimeError("SKILL_INVALID", str(exc)) from exc
-            parsed_name = str(parsed.get("name") or "").strip()
-            if parsed_name != name:
-                raise SkillRuntimeError(
-                    "SKILL_INVALID",
-                    f"Skill name {parsed_name!r} does not match URI name {name!r}",
                 )
             revision = str(result.get("revision") or "").strip()
             if not revision:
@@ -623,6 +615,7 @@ class SkillRuntimeContext:
                 )
             trigger_bytes = content.encode("utf-8")
             self._validate_downloaded_file(definition, trigger_bytes)
+            stored_content = content
             if content_was_restored:
                 try:
                     stored_bytes = await client.download_bytes(skill_md_uri)
@@ -644,13 +637,23 @@ class SkillRuntimeContext:
                         "Privacy-restored SKILL.md does not match the stored placeholder content",
                     )
 
+            try:
+                parsed = SkillLoader.parse(stored_content, source_path=skill_md_uri)
+            except Exception as exc:
+                raise SkillRuntimeError("SKILL_INVALID", str(exc)) from exc
+            parsed_name = str(parsed.get("name") or "").strip()
+            if parsed_name != name:
+                raise SkillRuntimeError(
+                    "SKILL_INVALID",
+                    f"Skill name {parsed_name!r} does not match URI name {name!r}",
+                )
             metadata = _parse_vikingbot_metadata(parsed.get("metadata"))
             active = ActiveRemoteSkill(
                 name=name,
                 description=str(parsed.get("description") or ""),
                 root_uri=root_uri,
                 skill_md_uri=skill_md_uri,
-                content=canonical_content,
+                content=stored_content,
                 source=_source_for_uri(root_uri),
                 files=files,
                 allowed_tools=tuple(str(value) for value in parsed.get("allowed_tools") or []),
