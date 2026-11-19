@@ -1,6 +1,6 @@
 # OpenClaw
 
-> **Recommended: connect through [OpenViking Gateway](https://openviking.ai/gateway) for the best experience.** It adds memory to every model call with nothing to install in OpenClaw. The plugin below still works if you prefer it; see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin) for the trade-offs.
+> **Recommended: connect through [OpenViking Gateway](../guides/15-gateway.md).** Turn the plugin below off, point the model base URL at the gateway, and use a gateway key instead of the provider key. The gateway then recalls memory for each new user message and saves the conversation. The [upstream](../gateway/07-upstreams.md#upstreams) needs its own provider API key, so a subscription login cannot be used. Settings are in [Connect clients](../gateway/03-connect-clients.md#openclaw-and-hermes), with [Get started](../gateway/02-quickstart.md) for a first key; [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin) covers which fits better. The official page is [openviking.ai/gateway](https://openviking.ai/gateway).
 
 Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw automatically remembers important facts from conversations and recalls relevant context before every reply.
 

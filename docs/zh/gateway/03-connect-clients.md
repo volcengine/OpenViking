@@ -24,6 +24,7 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 | [OpenCode](#opencode) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1` | OpenCode 的会话请求头 |
 | [pi](#pi) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 使用 Responses 时用 pi 的会话请求头，否则根据对话历史匹配 |
 | [DSH](#dsh) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 使用 Responses 时用 DSH 的会话请求头，否则根据对话历史匹配 |
+| [OpenClaw 和 Hermes](#openclaw-and-hermes) | Chat Completions 或 Anthropic Messages | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 根据对话历史匹配 |
 | [火山方舟与 BytePlus 方舟 SDK](#volcano-engine-ark-and-byteplus-modelark-sdks) | 三种均可 | `https://ov.example.com/gateway/api/v3` 或 `https://ov.example.com/gateway/api/compatible` | 取决于客户端发送的请求头 |
 
 最后一列的含义见[网关如何识别对话](#how-conversations-are-recognized)。
@@ -290,6 +291,16 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 - 同一个 profile 里装了 [OpenViking 的 DSH 插件](../agent-integrations/17-dsh.md)时，网关会让出这些对话，两者选一个即可。
 
 配好后，[检查接入是否生效](#check-the-connection)。
+
+## OpenClaw 和 Hermes {#openclaw-and-hermes}
+
+OpenClaw 和 Hermes 各自有 OpenViking 插件（见 [OpenClaw](../agent-integrations/03-openclaw.md) 和 [Hermes](../agent-integrations/05-hermes.md)）。要用网关接管记忆，先关掉插件，再在 Agent 自己的模型设置里把网关加为模型服务，做法和[聊天客户端](#chat-clients-and-sdks)一样：OpenAI Chat Completions 用 `https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`，API Key 填网关密钥。[上游](07-upstreams.md#upstreams)要自带服务商 API Key，订阅登录不能用。
+
+插件还装着的话，网关会为这些对话[让路](../guides/15-gateway.md#when-both-are-in-use)，两者选一个用。
+
+网关没有针对这两个 Agent 的会话请求头，因此按请求历史识别对话，规则见[网关如何识别对话](#how-conversations-are-recognized)；能加请求头的话，自己带上 `X-OpenViking-Session`。它们的心跳、记忆刷写、技能复盘、定时任务、子 Agent 唤醒等后台请求会被网关跳过，不会当成对话轮次保存。
+
+然后[检查接入是否生效](#check-the-connection)。
 
 ## 火山方舟与 BytePlus 方舟 SDK {#volcano-engine-ark-and-byteplus-modelark-sdks}
 
