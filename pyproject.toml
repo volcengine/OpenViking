@@ -116,11 +116,6 @@ mysql = [
     "PyMySQL>=1.1,<1.2",
     "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
-redis-mysql = [
-  "aiomysql>=0.2.0,<1",
-  "redis>=5.3.1,<7",
-  "SQLAlchemy[asyncio]>=2.0.54,<2.1",
-]
 test = [
   "SQLAlchemy[asyncio]>=2.0,<2.1",
   "redis>=5.3.1,<7",

@@ -36,6 +36,7 @@ class RagfsBindingConfig:
     log: Dict[str, Any] | None = None
     service_name: str = DEFAULT_SERVICE_NAME
     shared_redis_backend: bool = False
+    account_store_cache_instance: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the service name used by cache-backed modules."""
@@ -76,14 +77,27 @@ class RagfsBindingConfig:
         if coordination["provider"] != "cache":
             coordination.pop("instance", None)
         backups = getattr(self.agfs, "backups", None)
+        account_store_uses_cache = self.account_store_cache_instance is not None
         uses_runtime = (
             cachefs_backend == "cache"
             or queue_backend == "cache"
             or pathlock_uses_cache
             or coordination["provider"] == "cache"
             or _get_config_value(backups, "provider", "filesystem") == "cache"
+            or account_store_uses_cache
         )
         if self.cache is not None:
+            if account_store_uses_cache:
+                account_store_cache = _require_cache_instance(
+                    self.cache,
+                    self.account_store_cache_instance,
+                    "Redis MySQL Account Store",
+                )
+                if _get_config_value(account_store_cache, "provider") != "redis":
+                    raise ValueError(
+                        "Redis MySQL Account Store requires cache instance "
+                        f"'{self.account_store_cache_instance}' to use provider='redis'"
+                    )
             if cachefs_backend == "cache":
                 _require_cache_instance(self.cache, cachefs_instance, "CacheFS")
             if queue_backend == "cache":
@@ -130,8 +144,9 @@ class RagfsBindingConfig:
         else:
             if uses_runtime:
                 raise ValueError(
-                    "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
-                    "coordination, or cache-backed multi-write uses the shared Runtime"
+                    "top-level cache config is required when Redis MySQL Account Store, CacheFS, "
+                    "QueueFS, cache-backed PathLock, coordination, or cache-backed multi-write "
+                    "uses the shared Runtime"
                 )
             cache_config = _disabled_cache_config(self.service_name)
         binding_config: Dict[str, Any] = {
@@ -352,6 +367,24 @@ def _dump_openviking_config(config: Any) -> Dict[str, Any]:
 def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig, Any | None]:
     """Build the runtime AGFS binding config from storage and encryption settings."""
     from openviking.crypto.config import bootstrap_encryption
+    from openviking.server.config import load_server_config
+    from openviking.server.dependencies import get_server_config
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    account_store_cache_instance = None
+    config_file = OpenVikingConfigSingleton.get_config_file()
+    server_config = (
+        load_server_config(str(config_file)) if config_file is not None else get_server_config()
+    )
+    if (
+        server_config is not None
+        and server_config.account_store.provider == "redis_mysql"
+    ):
+        from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
+
+        account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(
+            server_config.account_store.params
+        )
 
     storage = _get_config_value(config, "storage")
     agfs_config = _get_config_value(storage, "agfs") if storage is not None else None
@@ -384,6 +417,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
             shared_redis_backend=shared_redis_backend,
+            account_store_cache_instance=account_store_cache_instance,
         ), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
@@ -399,6 +433,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
             shared_redis_backend=shared_redis_backend,
+            account_store_cache_instance=account_store_cache_instance,
         ),
         encryptor,
     )

@@ -8,29 +8,54 @@ import json
 import os
 import threading
 from types import SimpleNamespace
-from typing import Any
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, delete
 from sqlalchemy.engine import URL
 
-from openviking.server.account_stores import redis_mysql
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.mysql import MySQLAccountStore
 from openviking.server.account_stores.mysql_schema import Account, Base
 from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
+from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+from openviking_cli.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.cache_config import CacheConfig
+
+
+class _CacheRuntimeObserver:
+    """Forward a native CacheRuntime while allowing test-time observation."""
+
+    def __init__(self, runtime):
+        """Store the native Runtime handle."""
+        self._runtime = runtime
+
+    @property
+    def default_ttl_seconds(self):
+        """Return the native Runtime default TTL."""
+        return self._runtime.default_ttl_seconds
+
+    def register_script(self, script_id: str, redis_lua: str) -> None:
+        """Register a script through the native Runtime."""
+        self._runtime.register_script(script_id, redis_lua)
+
+    async def execute_script(self, script_id: str, keys: list[str], args: list[bytes]):
+        """Execute a registered script through the native Runtime."""
+        return await self._runtime.execute_script(script_id, keys, args)
+
+    async def ping(self) -> None:
+        """Check the native Runtime provider."""
+        await self._runtime.ping()
 
 
 @pytest.fixture
-async def backend():
+async def backend(tmp_path):
     raw_mysql = os.environ.get("OV_TEST_MYSQL")
     endpoint = os.environ.get("OV_TEST_REDIS")
     if not raw_mysql or not endpoint:
         pytest.skip("Set OV_TEST_MYSQL (JSON) and OV_TEST_REDIS for account-store contracts")
     redis = pytest.importorskip("redis")
     params = json.loads(raw_mysql)
-    prefix = f"ov:test:{uuid4().hex}"
     service = f"test-{uuid4().hex}"
     engine = create_engine(
         URL.create(
@@ -43,6 +68,20 @@ async def backend():
     inspection = redis.Redis.from_url(endpoint, decode_responses=True)
     stores: list[AccountStore] = []
     services = {service}
+    cache_client = create_agfs_client(
+        RagfsBindingConfig(
+            agfs=AGFSConfig(path=str(tmp_path), backend="memory"),
+            cache=CacheConfig(
+                instances={
+                    "default": {"provider": "redis", "params": {"endpoints": [endpoint]}},
+                    "accountstore": {"provider": "redis", "params": {"endpoints": [endpoint]}},
+                }
+            ),
+            service_name=service,
+            account_store_cache_instance="accountstore",
+        )
+    )
+    cache_runtime = _CacheRuntimeObserver(cache_client.cache_runtime("accountstore"))
 
     async def make_mysql(mode="hash", service_name=service):
         services.add(service_name)
@@ -63,16 +102,8 @@ async def backend():
         store = RedisMySQLAccountStore(
             service_name=service,
             mysql_store=mysql,
-            params={
-                "cache": {
-                    "provider": "redis",
-                    "params": {
-                        "mode": "standalone",
-                        "endpoints": [endpoint],
-                        "key_prefix": prefix,
-                    },
-                }
-            },
+            cache_runtime=cache_runtime,
+            params={"cache": {"instance": "accountstore"}},
         )
         stores.append(store)
         await store.load()
@@ -88,7 +119,8 @@ async def backend():
     finally:
         for store in reversed(stores):
             await store.close()
-        keys = list(inspection.scan_iter(match=f"{prefix}:*"))
+        account_tag = base64.urlsafe_b64encode(f"{service}\0acme".encode()).decode().rstrip("=")
+        keys = list(inspection.scan_iter(match=f"ov:account-cache:v2:{{{account_tag}}}:*"))
         if keys:
             inspection.delete(*keys)
         inspection.close()
@@ -107,8 +139,6 @@ async def wait(event):
 
 @pytest.fixture
 def paused_snapshot(backend, monkeypatch):
-    from redis.asyncio import Redis
-
     gate = SimpleNamespace(
         started=threading.Event(),
         release=threading.Event(),
@@ -120,15 +150,16 @@ def paused_snapshot(backend, monkeypatch):
     )
     gate.cleanup.set()
     original = backend.mysql.get_auth_snapshot
-    eval_command: Any = Redis.eval
+    execute_script = backend.reader._cache_runtime.execute_script
     reads = 0
 
-    async def observed_eval(client, *args, **kwargs):
+    async def observed_execute(script_id, keys, args):
         nonlocal reads
-        result = await eval_command(client, *args, **kwargs)
-        reads += 1
-        if reads == 2:
-            gate.joined.set()
+        result = await execute_script(script_id, keys, args)
+        if script_id == "accountstore.v2.read_generations":
+            reads += 1
+            if reads == 2:
+                gate.joined.set()
         return result
 
     async def paused(*args, **kwargs):
@@ -146,7 +177,7 @@ def paused_snapshot(backend, monkeypatch):
                 gate.settled.set()
         return value
 
-    monkeypatch.setattr(Redis, "eval", observed_eval)
+    monkeypatch.setattr(backend.reader._cache_runtime, "execute_script", observed_execute)
     monkeypatch.setattr(backend.mysql, "get_auth_snapshot", paused)
     yield gate
     gate.release.set()
@@ -276,8 +307,6 @@ async def test_close_waits_for_orphan_read_cleanup(backend, paused_snapshot):
 
 
 async def test_redis_failure_reads_authority_and_preserves_database_errors(backend, monkeypatch):
-    from redis.asyncio import Redis
-
     await snapshot(backend.reader)
     await snapshot(backend.reader)
     await backend.mysql.set_role("acme", "alice", "admin")
@@ -285,7 +314,7 @@ async def test_redis_failure_reads_authority_and_preserves_database_errors(backe
     async def offline(*args, **kwargs):
         raise OSError("offline")
 
-    monkeypatch.setattr(Redis, "eval", offline)
+    monkeypatch.setattr(backend.reader._cache_runtime, "execute_script", offline)
     assert (await snapshot(backend.reader))["role"] == "admin"
     with monkeypatch.context() as patch:
         patch.setattr(backend.mysql, "get_auth_snapshot", offline)
@@ -294,50 +323,21 @@ async def test_redis_failure_reads_authority_and_preserves_database_errors(backe
     assert (await snapshot(backend.reader))["role"] == "admin"
 
 
-async def test_concurrent_lifecycle_keeps_other_stores_usable_and_stops_runtime(
-    backend, monkeypatch
-):
-    await backend.reader.close()
-    threads = []
-    factory = redis_mysql.create_redis_client
-
-    def create_client(params):
-        threads.append(threading.current_thread())
-        return factory(params)
-
-    monkeypatch.setattr(redis_mysql, "create_redis_client", create_client)
-    await asyncio.gather(
-        backend.reader.load(), asyncio.to_thread(lambda: asyncio.run(backend.reader.load()))
-    )
-    assert len(threads) == 1
-    assert threads[0] is not threading.current_thread()
-    assert (await snapshot(backend.reader))["user_id"] == "alice"
-    await asyncio.gather(
-        backend.reader.close(), asyncio.to_thread(lambda: asyncio.run(backend.reader.close()))
-    )
-    assert (await snapshot(backend.writer))["user_id"] == "alice"
-    await backend.writer.close()
-    await asyncio.to_thread(threads[0].join, 5)
-    assert not threads[0].is_alive()
-
-
 async def test_cancelled_startup_releases_the_runtime(backend, monkeypatch):
-    from redis.asyncio import Redis
-
     await backend.reader.close()
     await backend.writer.close()
     started = threading.Event()
     threads = []
-    ping = Redis.ping
+    ping = backend.reader._cache_runtime.ping
 
-    async def blocked_ping(client, *args, **kwargs):
-        await ping(client, *args, **kwargs)
+    async def blocked_ping():
+        await ping()
         threads.append(threading.current_thread())
         started.set()
         await asyncio.Future()
 
     with monkeypatch.context() as patch:
-        patch.setattr(Redis, "ping", blocked_ping)
+        patch.setattr(backend.reader._cache_runtime, "ping", blocked_ping)
         loading = asyncio.create_task(backend.reader.load())
         try:
             await wait(started)

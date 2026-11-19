@@ -1777,7 +1777,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 }
 ```
 
-标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时，会从 `cache.instances` 初始化 CacheRuntime。Cache PathLock 选择的实例必须使用 `redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
+标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`、多写选择 `backups.provider=cache`，或 Redis MySQL Account Store 选择 `server.account_store.params.cache.instance` 时，会从 `cache.instances` 初始化 CacheRuntime。Cache PathLock 和 Redis MySQL Account Store 选择的实例必须使用 `redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
 Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
 只配置 `cache.instances` 不会建立独立的 Provider 连接。
 
@@ -2384,26 +2384,44 @@ PG 凭证存储支持与 MySQL 相同的 `hash` 和 `encrypted` 模式及
 已有 File/MySQL 账号数据不会自动迁移。此设置仅替换 Account Store；
 Task、Work 和 Watch 的存储配置分别独立。
 
-`redis_mysql` 需要安装 `redis-mysql` extra。`mysql` 部分使用与 MySQL provider
-相同的参数；`cache` 部分沿用顶层缓存的 `provider/params` 结构，支持
-`standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
+`redis_mysql` 需要安装 `mysql` extra。`mysql` 部分使用与 MySQL provider
+相同的参数；`cache` 只能包含 `instance`，用于选择顶层
+`cache.instances` 中的 Redis 配置。即使没有其他缓存消费者，被选择的实例也会启用
+CacheRuntime。
 
 MySQL 是数据来源，Redis 缓存鉴权结果、用户信息、组和删除状态。缓存未命中或
-Redis 读取失败时会查询 MySQL。通过 `server.account_store.params.cache.params.ttl_seconds` 配置缓存有效期，
-默认 60 秒；命中不会延长有效期。
+Redis 读取失败时会查询 MySQL。通过
+`cache.instances.<instance>.params.default_ttl_seconds` 配置 payload 缓存有效期。
+Runtime 默认值为 300 秒；Redis MySQL Account Store 要求该值为正整数。命中不会延长有效期。
 
 凭据、权限和删除状态变更会失效相关缓存。如果失效操作失败，缓存可能保持旧值
 直到 TTL 到期。共享同一缓存的实例应一起升级，旧、新缓存格式无法互相失效。
-缓存版本元数据不会自动过期，需要计入 Redis 容量规划。旧的 `lock_ttl_seconds`
-和 `lock_wait_seconds` 配置兼容接受，但不再使用。
-
-Redis 连接和命令超时分别通过 `server.account_store.params.cache.params.connect_timeout_ms` 和
-`server.account_store.params.cache.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
-总超时。`server.account_store.params.cache.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
-使用 100；连接池耗尽会触发连接错误并转为查询 MySQL。
+缓存版本元数据不会自动过期，需要计入 Redis 容量规划。账号缓存 key 前缀固定为
+`ov:account-cache`。Redis 连接、连接池和超时参数配置在选中的
+`cache.instances` 条目中。
 
 ```json
 {
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://redis.example.com:6379"]
+        }
+      },
+      "accountstore": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["rediss://account-cache.example.com:6379"],
+          "username": "openviking",
+          "password_env": "OPENVIKING_ACCOUNT_REDIS_PASSWORD",
+          "pool_size": 100,
+          "default_ttl_seconds": 60
+        }
+      }
+    }
+  },
   "server": {
     "account_store": {
       "provider": "redis_mysql",
@@ -2415,22 +2433,7 @@ Redis 连接和命令超时分别通过 `server.account_store.params.cache.param
           "database": "openviking"
         },
         "cache": {
-          "provider": "redis",
-          "params": {
-            "mode": "sentinel",
-            "endpoints": [
-              "rediss://sentinel-1.example.com:26379",
-              "rediss://sentinel-2.example.com:26379",
-              "rediss://sentinel-3.example.com:26379"
-            ],
-            "master_name": "openviking",
-            "username": "openviking",
-            "password_env": "OPENVIKING_REDIS_PASSWORD",
-            "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
-            "key_prefix": "ov:account-auth",
-            "pool_size": 100,
-            "ttl_seconds": 60
-          }
+          "instance": "accountstore"
         }
       }
     }

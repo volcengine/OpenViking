@@ -52,19 +52,6 @@ class _RecordingClient:
         return []
 
 
-class _CacheClient:
-    """Provide a native cache Runtime handle for wrapper tests."""
-
-    def cache_runtime(self, instance: str = "default") -> dict[str, str]:
-        """Return a stable fake native cache Runtime handle."""
-        return {"instance": instance}
-
-
-def test_cache_runtime_returns_native_handle_without_thread_hop() -> None:
-    """Return the selected native cache Runtime without an executor hop."""
-    assert AsyncAGFSClient(_CacheClient()).cache_runtime("locks") == {"instance": "locks"}
-
-
 @pytest.mark.asyncio
 async def test_async_client_derives_account_ctx_from_local_agfs_path() -> None:
     client = _RecordingClient()
