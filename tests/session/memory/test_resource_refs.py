@@ -283,6 +283,50 @@ def test_sync_memory_resource_refs_leaves_top_level_json_strings_parseable(body,
     assert [ref["resource_uri"] for ref in refs] == [expected_uri]
 
 
+def test_unlink_resource_references_removes_escaped_json_uri():
+    # A URI spelled with \\u escapes in the serialized body is the same URI once
+    # decoded, so cleanup has to match it the same way the write path collected
+    # it. Matching the raw text left the reference behind and every later
+    # resource linkify turned the escaped spelling into a Markdown link.
+    resource_uri = "viking://resources/café-lifecycle.md"
+    body = json.dumps({"ref": resource_uri})
+    assert "\\u00e9" in body
+    mf = MemoryFile(content=body, extra_fields={"resource_refs": [{"resource_uri": resource_uri}]})
+
+    changed = unlink_resource_references_from_memory(mf, resource_uri)
+
+    assert changed is True
+    assert json.loads(mf.content) == {"ref": ""}
+    assert json.loads(mf.content) is not None
+    assert "resource_refs" not in mf.extra_fields
+
+
+def test_unlink_resource_references_keeps_unrelated_escaped_json_uris():
+    target_uri = "viking://resources/café-lifecycle.md"
+    kept_uri = "viking://resources/café-other.md"
+    body = json.dumps({"ref": target_uri, "keep": kept_uri})
+
+    mf = MemoryFile(content=body, extra_fields={})
+    sync_memory_resource_refs(mf, source="content.write")
+
+    changed = unlink_resource_references_from_memory(mf, target_uri)
+
+    assert changed is True
+    assert json.loads(mf.content) == {"ref": "", "keep": kept_uri}
+    assert [
+        ref["resource_uri"] for ref in mf.extra_fields["resource_refs"]
+    ] == [kept_uri]
+
+
+def test_content_references_resource_decodes_json_bodies():
+    resource_uri = "viking://resources/café-lifecycle.md"
+    body = json.dumps({"ref": resource_uri})
+    assert "\\u00e9" in body
+
+    assert content_references_resource(body, resource_uri) is True
+    assert content_references_resource(body, "viking://resources/other.md") is False
+
+
 def test_sync_memory_resource_refs_decodes_escaped_json_string_values():
     resource_uri = "viking://resources/café.md"
     body = json.dumps({"ref": resource_uri})
