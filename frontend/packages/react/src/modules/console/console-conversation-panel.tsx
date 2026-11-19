@@ -11,33 +11,9 @@ import {
   errorMessage,
 } from '../../shared/feedback/error-notification.js';
 import type { Locale } from '../../shared/locale.js';
-import { Button } from '../../shared/primitives/button/button.js';
 import { ConsoleActivationCard } from './activation-card/activation-card.js';
 import { consoleLabels } from './labels.js';
 import type { useBotActivation } from './use-bot-activation.js';
-
-export function ConsoleCollectionError({
-  activation,
-  locale,
-}: {
-  activation: ReturnType<typeof useBotActivation>;
-  locale: Locale;
-}) {
-  const { state, retry } = activation;
-  if (state.status !== 'collection-error') return null;
-  const labels = consoleLabels(locale);
-  return (
-    <ErrorNotification
-      title={labels.conversation}
-      error={state.error}
-      identity={state}
-      locale={locale}
-      actions={<Button onClick={retry}>{labels.vikingBot.retry}</Button>}
-    >
-      {errorMessage(state.error)}
-    </ErrorNotification>
-  );
-}
 
 export function ConsoleConversationPanel({
   id,
@@ -68,7 +44,9 @@ export function ConsoleConversationPanel({
   const [visited, setVisited] = useState(active);
   if (active && !visited) setVisited(true);
   const failed =
-    state.status === 'load-error' || state.status === 'start-error';
+    state.status === 'collection-error' ||
+    state.status === 'load-error' ||
+    state.status === 'start-error';
   return (
     <div
       id={id}

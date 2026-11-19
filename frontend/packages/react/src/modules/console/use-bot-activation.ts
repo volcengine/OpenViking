@@ -22,12 +22,7 @@ function createBotActivation({
   signal?: AbortSignal;
 }) {
   let state: BotActivationState = {
-    status:
-      !enabled || (activation && scopeSignal?.aborted)
-        ? 'disabled'
-        : activation
-          ? 'checking'
-          : 'ready',
+    status: !enabled ? 'disabled' : activation ? 'checking' : 'ready',
   };
   let active = false;
   let request: AbortController | undefined;
@@ -93,18 +88,20 @@ function createBotActivation({
     connect() {
       if (!enabled || !activation) return;
       active = true;
-      const disable = () => {
+      const suspend = () => {
         cancel();
-        update({ status: 'disabled' });
+        // Cancellation invalidates this scope, not the library's eligibility.
+        // Keep its pending view until the host supplies a fresh scope signal.
+        update({ status: 'checking' });
       };
-      if (scopeSignal?.aborted) disable();
+      if (scopeSignal?.aborted) suspend();
       else {
-        scopeSignal?.addEventListener('abort', disable, { once: true });
+        scopeSignal?.addEventListener('abort', suspend, { once: true });
         void run('load');
       }
       return () => {
         active = false;
-        scopeSignal?.removeEventListener('abort', disable);
+        scopeSignal?.removeEventListener('abort', suspend);
         cancel();
       };
     },

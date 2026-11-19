@@ -16,10 +16,7 @@ import {
   consoleQuickCommands,
 } from './command-catalog.js';
 import { ConsoleToolbar } from './console-toolbar.js';
-import {
-  ConsoleCollectionError,
-  ConsoleConversationPanel,
-} from './console-conversation-panel.js';
+import { ConsoleConversationPanel } from './console-conversation-panel.js';
 import { useBotActivation } from './use-bot-activation.js';
 import { useConversationDraftIdentity } from './use-conversation-draft-identity.js';
 import type { ConsoleMode, ConsoleProps } from './types.js';
@@ -63,14 +60,10 @@ export function ConsoleView(props: ConsoleProps) {
   const { status } = activation.state;
   const chatReady = status === 'ready';
   const visibleModes =
-    status === 'disabled' ||
-    status === 'checking' ||
-    status === 'collection-error'
+    status === 'disabled'
       ? modes.filter((item) => item !== 'conversation')
       : modes;
-  const showConversation =
-    visibleModes.includes('conversation') ||
-    (status === 'checking' && !visibleModes.length);
+  const showConversation = visibleModes.includes('conversation');
   const draftIdentity = useConversationDraftIdentity(props);
   const state = useConsole(
     { ...props, modes: visibleModes, locale },
@@ -110,7 +103,6 @@ export function ConsoleView(props: ConsoleProps) {
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
         {feedback}
-        <ConsoleCollectionError activation={activation} locale={botLocale} />
         <ConsoleTaskNotifications
           locale={locale}
           onOpenUri={openCommandUri}

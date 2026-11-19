@@ -131,7 +131,30 @@ test('scope replacement aborts startup and ignores its late completion', async (
     assert.equal(host.lifecycle.state.status, 'ready');
     assert.equal(reads, 2);
     await act(async () => scope.abort());
-    assert.equal(host.lifecycle.state.status, 'disabled');
+    assert.equal(host.lifecycle.state.status, 'checking');
+  } finally {
+    await host.unmount();
+  }
+});
+
+test('an already cancelled scope waits without declaring Bot disabled', async () => {
+  const scope = new AbortController();
+  scope.abort();
+  const unexpected = () =>
+    assert.fail('A cancelled scope cannot query or start');
+  const host = await mountActivation({
+    enabled: true,
+    signal: scope.signal,
+    activation: {
+      isEligible: unexpected,
+      getStatus: unexpected,
+      start: unexpected,
+    },
+  });
+  try {
+    assert.equal(host.lifecycle.state.status, 'checking');
+    await act(async () => host.lifecycle.start());
+    assert.equal(host.lifecycle.state.status, 'checking');
   } finally {
     await host.unmount();
   }

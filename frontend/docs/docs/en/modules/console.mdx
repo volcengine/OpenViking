@@ -75,7 +75,9 @@ Use `chatOptions.activation` when the current library controls access to VikingB
 
 ```
 
-Implement `isEligible` to confirm whether the current scope allows Bot access. Console shows the conversation tab and calls `getStatus` after it returns `true`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
+Implement `isEligible` to confirm whether the current scope allows Bot access. While checking eligibility or runtime status, Console keeps the Bot tab visible and shows a compact loading indicator in its panel. Only `isEligible` returning `false` removes the Bot tab during activation. If either check fails, the Bot panel offers a retry. Loading and readiness changes preserve the user's selected mode, including command mode.
+
+After `isEligible` returns `true`, Console calls `getStatus`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
 
 Keep the adapter stable for the current library and identity. All three callbacks receive an `AbortSignal` and should throw on failure. Pass `media` to replace the illustration with your introduction media.
 

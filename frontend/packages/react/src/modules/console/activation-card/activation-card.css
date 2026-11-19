@@ -214,6 +214,7 @@
 
 .ov-console-activation__checking {
   display: flex;
+  margin-block: auto;
   align-items: center;
   gap: 8px;
 }
