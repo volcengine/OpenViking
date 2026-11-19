@@ -802,7 +802,7 @@ async fn killing_outer_job_stops_redirected_background_worker() {
     // Outer SIGTERM must reach a background worker cleanly so it can flush checkpoints before exiting.
     fs::write(
         dir.path().join("graceful.sh"),
-        "trap ': > graceful.noticed; /bin/sleep 0.05; printf checkpoint > graceful.saved; exit 0' TERM\nprintf '%s\\n' \"$$\" > graceful.ready\n/bin/sleep 5 &\nwait\n",
+        "trap ': > graceful.noticed; /bin/sleep 0.05; printf checkpoint > graceful.saved; exit 0' TERM\nprintf '%s\\n' \"$$\" > graceful.ready\nwhile :; do /bin/sleep 1 & wait $!; done\n",
     )
     .unwrap();
     let graceful_ready = dir.path().join("graceful.ready");

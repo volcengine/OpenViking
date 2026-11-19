@@ -509,33 +509,6 @@ fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
             }
         }
     }
-    #[cfg(target_os = "macos")]
-    {
-        #[repr(C)]
-        #[derive(Clone, Copy)]
-        struct Flock {
-            l_start: i64,
-            l_len: i64,
-            l_pid: i32,
-            l_type: i16,
-            l_whence: i16,
-        }
-        let mut lock = Flock {
-            l_start: (1_i64 << 62) - i64::from(std::process::id()),
-            l_len: 1,
-            l_pid: 0,
-            l_type: 3, // F_WRLCK
-            l_whence: 0,
-        };
-        // SAFETY: F_OFD_SETLK (90) / F_OFD_GETLK (92) probe a PID-unique byte on struct fileglob.
-        if unsafe { fcntl(out_fd, 90, &mut lock) } == 0 {
-            let mut query = lock;
-            let shared = unsafe { fcntl(err_fd, 92, &mut query) } == 0 && query.l_type == 2;
-            lock.l_type = 2; // F_UNLCK
-            unsafe { fcntl(out_fd, 90, &mut lock) };
-            return shared;
-        }
-    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         #[cfg(target_os = "linux")]
