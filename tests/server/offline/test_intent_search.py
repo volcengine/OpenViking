@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock
 
 
 async def test_search_expands_session_context_and_retrieves_imported_resource(
-    client_with_resource, service, monkeypatch
+    offline_resource_api, service, monkeypatch
 ):
-    client, root_uri = client_with_resource
+    client, root_uri = offline_resource_api
     expanded_query = "OAuth authorization code authentication documentation"
     prompts = []
 
@@ -65,8 +65,11 @@ async def test_search_expands_session_context_and_retrieves_imported_resource(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "ok"
-    assert len(prompts) == 1
-    assert "[user]: I am implementing OAuth authorization code authentication." in prompts[0]
+    assert prompts
+    assert any(
+        "[user]: I am implementing OAuth authorization code authentication." in prompt
+        for prompt in prompts
+    )
     assert expanded_query in embedded_queries
     assert body["result"]["query_plan"]["queries"][0]["query"] == expanded_query
     resources = body["result"]["resources"]

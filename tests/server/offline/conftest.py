@@ -15,11 +15,16 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingl
 
 @pytest.fixture
 def temp_dir(tmp_path):
+    """Intentionally override the parent fixture used by service/upload_temp_dir.
+
+    Keep the parent's service factory, but put its native workspace and config
+    in pytest's per-test directory rather than test_data/tmp_server.
+    """
     return tmp_path
 
 
 @pytest.fixture
-def sample_markdown_file(temp_dir):
+def offline_markdown_file(temp_dir):
     path = temp_dir / "oauth.md"
     path.write_text("# OAuth authentication\n\nUse OAuth authorization codes to authenticate.\n")
     return path
@@ -65,10 +70,11 @@ def reject_external_network(monkeypatch):
 
 
 @pytest_asyncio.fixture
-async def client_with_resource(client, sample_markdown_file, upload_temp_dir):
+async def offline_resource_api(client, offline_markdown_file, upload_temp_dir):
+    """Import a pre-staged file over ASGI; upload and API-key auth are not exercised."""
     response = await client.post(
         "/api/v1/resources",
-        json={"temp_file_id": sample_markdown_file.name, "wait": True},
+        json={"temp_file_id": offline_markdown_file.name, "wait": True},
     )
     assert response.status_code == 200, response.text
     body = response.json()

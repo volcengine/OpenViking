@@ -6,6 +6,8 @@
 import pytest
 
 from openviking.core.mcp_converter import mcp_to_skill
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.session.user_id import UserIdentifier
 
 
 def result(response):
@@ -99,8 +101,8 @@ async def test_add_skill_stores_content_and_indexes_all_levels(client, mcp_forma
         assert any(hit["uri"] == root and hit["level"] == level for hit in found["skills"]), found
 
 
-async def test_resource_import_persists_content_and_index(client_with_resource):
-    client, root = client_with_resource
+async def test_resource_import_persists_content_and_index(offline_resource_api):
+    client, root = offline_resource_api
     entries = result(
         await client.get("/api/v1/fs/ls", params={"uri": root, "simple": True, "recursive": True})
     )
@@ -110,8 +112,8 @@ async def test_resource_import_persists_content_and_index(client_with_resource):
     await assert_indexed(client, uri)
 
 
-async def test_resource_delete_removes_files_and_index(client_with_resource):
-    client, root = client_with_resource
+async def test_resource_delete_removes_files_and_index(offline_resource_api):
+    client, root = offline_resource_api
     found = result(
         await client.post(
             "/api/v1/search/find",
@@ -137,8 +139,8 @@ async def test_resource_delete_removes_files_and_index(client_with_resource):
 
 @pytest.mark.parametrize("endpoint", ["find", "search"])
 @pytest.mark.parametrize("query", ["how to authenticate", "what is OpenViking"])
-async def test_basic_retrieval_contract(client_with_resource, endpoint, query):
-    client, root = client_with_resource
+async def test_basic_retrieval_contract(offline_resource_api, endpoint, query):
+    client, root = offline_resource_api
     found = result(
         await client.post(
             f"/api/v1/search/{endpoint}",
@@ -175,15 +177,26 @@ async def test_copy_file_preserves_source_content_and_index(client):
     await assert_indexed(client, target)
 
 
-async def test_copy_overwrites_target_content_and_index(client):
+async def test_copy_overwrites_target_content_and_index(client, service):
     source, target = "viking://resources/source.md", "viking://resources/target.md"
     await write(client, source, "New source content.")
-    await write(client, target, "Old target content must be replaced.")
+    old_content = "Old target content must be replaced.\n" * 200
+    await write(client, target, old_content)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    index = service.viking_fs.vector_store
+    before = await index.get_l2_diff_records_by_uris([source, target], ctx=ctx)
+    assert set(before) == {source, target}
+    assert before[source]["md5"] and before[target]["md5"]
+    assert before[source]["md5"] != before[target]["md5"]
     copied = result(await client.post("/api/v1/fs/cp", json={"from_uri": source, "to_uri": target}))
     assert copied["phase"] == "completed"
     for uri in (source, target):
         assert await read(client, uri) == "New source content."
         await assert_indexed(client, uri)
+    after = await index.get_l2_diff_records_by_uris([source, target], ctx=ctx)
+    assert after[source] == before[source]
+    assert after[target] == before[source]
+    assert after[target]["md5"] != before[target]["md5"]
 
 
 async def test_copy_directory_requires_recursive_and_copies_tree(client):
