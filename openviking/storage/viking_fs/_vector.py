@@ -3,7 +3,7 @@
 """Vector store integration mixin for VikingFS."""
 
 from functools import partial
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Mapping, Optional
 
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
@@ -44,6 +44,7 @@ class _VectorMixin:
         recursive: bool,
         ctx: Optional[RequestContext] = None,
         source_uris: List[str] | None = None,
+        source_expected_levels: Mapping[str, set[int]] | None = None,
     ) -> Any:
         """Copy a complete vector URI scope while preserving the source."""
         vector_store = self._get_vector_store()
@@ -56,6 +57,11 @@ class _VectorMixin:
             recursive=recursive,
             target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
             **({"source_uris": source_uris} if source_uris is not None else {}),
+            **(
+                {"source_expected_levels": source_expected_levels}
+                if source_expected_levels is not None
+                else {}
+            ),
         )
 
     async def _update_vector_store_uris(
@@ -67,6 +73,7 @@ class _VectorMixin:
         ctx: Optional[RequestContext] = None,
         source_uris: List[str] | None = None,
         restore_acl: dict[str, dict[str, Any]] | None = None,
+        source_expected_levels: Mapping[str, set[int]] | None = None,
     ) -> Any:
         """Move a vector URI scope, overwriting matching target records.
 
@@ -82,6 +89,11 @@ class _VectorMixin:
             recursive=recursive,
             target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
             **({"source_uris": source_uris} if source_uris is not None else {}),
+            **(
+                {"source_expected_levels": source_expected_levels}
+                if source_expected_levels is not None
+                else {}
+            ),
             **({"restore_acl": restore_acl} if restore_acl is not None else {}),
         )
 

@@ -548,7 +548,13 @@ class _OpsMixin:
                         recursive=is_dir,
                         ctx=copy_ctx,
                         **(
-                            {"source_uris": [entry.source_uri for entry in manifest]}
+                            {
+                                "source_uris": [entry.source_uri for entry in manifest],
+                                "source_expected_levels": {
+                                    entry.source_uri: {0, 1} if entry.is_dir else {2}
+                                    for entry in manifest
+                                },
+                            }
                             if is_dir
                             else {}
                         ),
@@ -919,7 +925,17 @@ class _OpsMixin:
                         new_uri,
                         recursive=is_dir,
                         ctx=ctx,
-                        **({"source_uris": uris_to_move} if is_dir else {}),
+                        **(
+                            {
+                                "source_uris": uris_to_move,
+                                "source_expected_levels": {
+                                    entry.source_uri: {0, 1} if entry.is_dir else {2}
+                                    for entry in manifest
+                                },
+                            }
+                            if is_dir
+                            else {}
+                        ),
                         **({"restore_acl": restore_acl} if restore_acl is not None else {}),
                     )
                 elif vector_mode == "delete_source":

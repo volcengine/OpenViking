@@ -13,7 +13,18 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Container,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+)
 
 from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.core.namespace import (
@@ -2373,6 +2384,38 @@ class VikingVectorIndexBackend:
                 timestamp = last_timestamp
                 offset = sum(record.get("updated_at") == timestamp for record in page)
 
+    @staticmethod
+    def _missing_inventory_uris(
+        records: Iterable[Mapping[str, Any]], expected_levels: Mapping[str, set[int]]
+    ) -> List[str]:
+        found: Dict[str, set[int]] = {}
+        for record in records:
+            try:
+                level = int(record.get("level"))
+            except (TypeError, ValueError):
+                continue
+            found.setdefault(str(record["uri"]), set()).add(level)
+        return [
+            uri
+            for uri, levels in expected_levels.items()
+            if not levels.issubset(found.get(uri, set()))
+        ]
+
+    @staticmethod
+    def _inventory_view_changed(before: List[Dict[str, Any]], after: List[Dict[str, Any]]) -> bool:
+        current = {str(record["id"]): record for record in after}
+        if {str(record["id"]) for record in before} != set(current):
+            return True
+        return any(
+            record["uri"] != current[str(record["id"])]["uri"]
+            or (
+                "updated_at" in record
+                and "updated_at" in current[str(record["id"])]
+                and record["updated_at"] != current[str(record["id"])]["updated_at"]
+            )
+            for record in before
+        )
+
     async def get_incremental_inventory_under_uri(
         self,
         uri: str,
@@ -2457,14 +2500,7 @@ class VikingVectorIndexBackend:
                     }
                 )
         if expected_levels:
-            found_levels: Dict[str, set[int]] = {}
-            for record in records.values():
-                found_levels.setdefault(record["uri"], set()).add(record["level"])
-            missing_uris = [
-                known_uri
-                for known_uri, levels in expected_levels.items()
-                if not levels.issubset(found_levels.get(known_uri, set()))
-            ]
+            missing_uris = self._missing_inventory_uris(records.values(), expected_levels)
             for known_uri in missing_uris:
                 if not uri_in_transfer_scope(
                     known_uri, canonical_uri, recursive=recursive or include_direct_children
@@ -2825,44 +2861,115 @@ class VikingVectorIndexBackend:
         *,
         what: str,
         entry_uris: List[str] | None = None,
+        expected_levels: Mapping[str, set[int]] | None = None,
     ) -> List[Dict[str, Any]]:
-        """Read actual transfer pages without an independent count prerequisite."""
+        """Walk once, then recover missing entries and ambiguous historical IDs."""
         records: Dict[str, Dict[str, Any]] = {}
         changed = False
-        needs_recovery = False
-        for timestamp_bounds in (True, False):
-            if not timestamp_bounds and not needs_recovery:
-                break
-            # Timestamp bounds avoid shifts when earlier rows disappear. Replay
-            # the original scope after full pages for ties and SQL NULLS LAST.
-            async for page in self._timestamp_scan_pages(
-                ctx,
-                scope,
-                batch_size=100,
-                output_fields=["id", "uri"],
-                timestamp_bounds=timestamp_bounds,
-            ):
-                needs_recovery |= len(page) == 100
-                for record in page:
-                    record_id = str(record.get("id") or "")
-                    if not record_id or not isinstance(record.get("uri"), str) or not record["uri"]:
-                        if entry_uris is None:
-                            raise RuntimeError(f"{what} returned an invalid vector record")
-                        changed = True
-                        break
-                    previous = records.get(record_id)
-                    if previous is not None and previous["uri"] != record["uri"]:
-                        if entry_uris is None:
-                            raise RuntimeError(
-                                f"{what} returned a changed vector identity: {record_id}"
-                            )
-                        changed = True
-                        break
-                    records.setdefault(record_id, record)
-                if changed:
-                    break
+        had_full_page = False
+        fields = ["id", "uri", "level"]
+        selected = set(entry_uris) if entry_uris is not None else None
+
+        def remember(page: List[Dict[str, Any]]) -> None:
+            nonlocal changed
+            for record in page:
+                record_id = str(record.get("id") or "")
+                if not record_id or not isinstance(record.get("uri"), str) or not record["uri"]:
+                    if entry_uris is None:
+                        raise RuntimeError(f"{what} returned an invalid vector record")
+                    changed = True
+                    return
+                previous = records.get(record_id)
+                if previous is not None and previous["uri"] != record["uri"]:
+                    if entry_uris is None:
+                        raise RuntimeError(
+                            f"{what} returned a changed vector identity: {record_id}"
+                        )
+                    changed = True
+                    return
+                records.setdefault(record_id, record)
+
+        async for page in self._timestamp_scan_pages(
+            ctx, scope, batch_size=100, output_fields=fields
+        ):
+            had_full_page |= len(page) == 100
+            remember(page)
             if changed:
                 break
+
+        if records and not changed:
+            found_uris = {record["uri"] for record in records.values()}
+            missing = (selected or set()) - found_uris
+            if expected_levels:
+                missing.update(self._missing_inventory_uris(records.values(), expected_levels))
+            # Multiple IDs at one URI/level predate the canonical record schema.
+            counts: Dict[tuple[str, int | None], int] = {}
+            historical: set[str] = set()
+            if had_full_page:
+                for record in records.values():
+                    try:
+                        level = int(record.get("level"))
+                    except (TypeError, ValueError):
+                        level = None
+                    key = (record["uri"], level)
+                    counts[key] = counts.get(key, 0) + 1
+                    if counts[key] > 1:
+                        historical.add(record["uri"])
+                if selected is not None and len(selected) * 3 < 100:
+                    # A small batch has at most three canonical levels per URI;
+                    # a full page signals overflow, including unseen old IDs.
+                    historical.update(selected)
+            recovery_uris = sorted(
+                (missing | historical) & selected if selected is not None else missing | historical
+            )
+            for start in range(0, len(recovery_uris), 50):
+                chunk = recovery_uris[start : start + 50]
+                recovery_scope = And([scope, Or([Eq("uri", uri) for uri in chunk])])
+                async for page in self._timestamp_scan_pages(
+                    ctx,
+                    recovery_scope,
+                    batch_size=100,
+                    output_fields=fields,
+                    timestamp_bounds=False,
+                ):
+                    remember(page)
+                    if changed:
+                        break
+                if changed:
+                    break
+
+            if had_full_page and not changed:
+                backend = await self._get_backend_for_context(ctx)
+                mode = getattr(backend, "_mode", None) or self.mode
+                if mode in {"pgvector", "opengauss"}:
+                    # SQL DESC puts NULL timestamps first; inspect that tail only.
+                    probe = await backend.strict_query(
+                        filter=scope,
+                        limit=1,
+                        offset=0,
+                        output_fields=fields + ["updated_at"],
+                        order_by="updated_at",
+                        order_desc=True,
+                    )
+                    if probe and probe[0].get("updated_at") is None:
+                        offset = 0
+                        while True:
+                            page = await backend.strict_query(
+                                filter=scope,
+                                limit=100,
+                                offset=offset,
+                                output_fields=fields + ["updated_at"],
+                                order_by="updated_at",
+                                order_desc=True,
+                            )
+                            null_records = [
+                                record for record in page if record.get("updated_at") is None
+                            ]
+                            remember(null_records)
+                            if changed or len(page) < 100 or len(null_records) < len(page):
+                                break
+                            offset += len(page)
+
         if entry_uris is not None and changed:
             # Preserve legacy URI/ID-change tolerance; genuine read errors propagate.
             legacy_records, _ = await self._read_uri_transfer_entries(
@@ -3046,6 +3153,7 @@ class VikingVectorIndexBackend:
         recursive: bool,
         source_uris: List[str] | None,
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
+        source_expected_levels: Mapping[str, set[int]] | None = None,
     ) -> tuple[List[Dict[str, Any]], int, Dict[str, Dict[str, Any]]]:
         """Read selected source records and remove affected target records."""
         selected_source_uris = {
@@ -3054,16 +3162,65 @@ class VikingVectorIndexBackend:
         }
         use_entry_queries = source_uris is not None or not recursive
         use_manifest_scan = recursive and source_uris is not None
+        if source_expected_levels is not None:
+            source_expected_levels = {
+                resolve_uri(uri).uri: levels for uri, levels in source_expected_levels.items()
+            }
         if use_manifest_scan:
+            source_scope = And(
+                [Eq("account_id", ctx.account_id), PathScope("uri", source_uri, depth=-1)]
+            )
             inventory = await self._read_transfer_inventory(
                 ctx,
-                And([Eq("account_id", ctx.account_id), PathScope("uri", source_uri, depth=-1)]),
+                source_scope,
                 what=f"Vector transfer scan under {source_uri}",
                 entry_uris=list(selected_source_uris),
+                expected_levels=source_expected_levels,
             )
-            source_records = await self._fetch_transfer_records(
-                ctx, [record for record in inventory if record["uri"] in selected_source_uris]
-            )
+            selected_inventory = [
+                record for record in inventory if record["uri"] in selected_source_uris
+            ]
+            source_records = await self._fetch_transfer_records(ctx, selected_inventory)
+            view_changed = self._inventory_view_changed(selected_inventory, source_records)
+            unselected = [
+                record for record in inventory if record["uri"] not in selected_source_uris
+            ]
+            if unselected and not view_changed:
+                # Orphans also shift offset pages; verify only their metadata.
+                unselected_uris = sorted({record["uri"] for record in unselected})
+                current_unselected: List[Dict[str, Any]] = []
+                for start in range(0, len(unselected_uris), 100 // 3):
+                    chunk = unselected_uris[start : start + 100 // 3]
+                    current_unselected.extend(
+                        await self._read_transfer_inventory(
+                            ctx,
+                            And([source_scope, Or([Eq("uri", uri) for uri in chunk])]),
+                            what=f"Vector transfer orphan check under {source_uri}",
+                            entry_uris=chunk,
+                        )
+                    )
+                view_changed = self._inventory_view_changed(unselected, current_unselected)
+            if view_changed:
+                # A changed read view can hide extra IDs even at known URIs.
+                refreshed = await self._read_transfer_inventory(
+                    ctx,
+                    source_scope,
+                    what=f"Vector transfer recovery under {source_uri}",
+                    entry_uris=list(selected_source_uris),
+                    expected_levels=source_expected_levels,
+                )
+                initial_ids = {str(record["id"]) for record in selected_inventory}
+                source_records.extend(
+                    await self._fetch_transfer_records(
+                        ctx,
+                        [
+                            record
+                            for record in refreshed
+                            if record["uri"] in selected_source_uris
+                            and str(record["id"]) not in initial_ids
+                        ],
+                    )
+                )
             # Keep the filesystem API's existing per-entry diagnostic count.
             batches = len(selected_source_uris)
         elif not use_entry_queries:
@@ -3127,6 +3284,20 @@ class VikingVectorIndexBackend:
         affected_target_ids: List[str] = []
         if use_manifest_scan:
             target_entries = sorted(replacement_target_uris)
+            # Keep canonical L0/L1/L2 records below one page; overflow is then
+            # visible even when the historical ID itself has not been read.
+            target_batch_size = 100 // 3
+            target_expected_levels: Dict[str, set[int]] = {}
+            for record in source_records:
+                entry = self._vector_entry_uri(str(record["uri"]), selected_source_uris)
+                try:
+                    levels = {int(record.get("level"))}
+                except (TypeError, ValueError):
+                    levels = set()
+                levels = (source_expected_levels or {}).get(entry, levels)
+                target_expected_levels.setdefault(
+                    rewrite_transfer_uri(entry, source_uri, target_uri), set()
+                ).update(levels)
 
             async def read_target(entries: List[str]) -> List[Dict[str, Any]]:
                 records = await self._read_transfer_inventory(
@@ -3136,13 +3307,14 @@ class VikingVectorIndexBackend:
                     ),
                     what=f"Vector transfer target scan under {target_uri}",
                     entry_uris=entries,
+                    expected_levels={uri: target_expected_levels[uri] for uri in entries},
                 )
                 return [record for record in records if record["uri"] in entries]
 
             target_pages = await bounded_map(
                 (
-                    target_entries[start : start + 100]
-                    for start in range(0, len(target_entries), 100)
+                    target_entries[start : start + target_batch_size]
+                    for start in range(0, len(target_entries), target_batch_size)
                 ),
                 read_target,
                 concurrency=FILE_TASK_CONCURRENCY,
@@ -3191,6 +3363,7 @@ class VikingVectorIndexBackend:
         *,
         source_uris: List[str] | None = None,
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
+        source_expected_levels: Mapping[str, set[int]] | None = None,
     ) -> VectorTransferResult:
         """Copy every vector record in a URI scope without regenerating embeddings."""
         source_uri = resolve_uri(source_uri).uri
@@ -3203,6 +3376,7 @@ class VikingVectorIndexBackend:
             recursive=recursive,
             source_uris=source_uris,
             target_entry_exists=target_entry_exists,
+            source_expected_levels=source_expected_levels,
         )
         result = VectorTransferResult(scanned=len(source_records), batches=batches)
         timestamp = get_current_timestamp()
@@ -3272,6 +3446,7 @@ class VikingVectorIndexBackend:
         source_uris: List[str] | None = None,
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
         restore_acl: Dict[str, Dict[str, Any]] | None = None,
+        source_expected_levels: Mapping[str, set[int]] | None = None,
     ) -> VectorTransferResult:
         """Move every vector record in a URI scope with compensating rollback."""
         source_uri = resolve_uri(source_uri).uri
@@ -3284,6 +3459,7 @@ class VikingVectorIndexBackend:
             recursive=recursive,
             source_uris=source_uris,
             target_entry_exists=target_entry_exists,
+            source_expected_levels=source_expected_levels,
         )
         result = VectorTransferResult(
             scanned=len(source_records),

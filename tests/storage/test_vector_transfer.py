@@ -2112,7 +2112,14 @@ async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact):
     found = await backend._read_transfer_inventory(_ctx(), scope, what="NULLS LAST scan")
     assert {record["id"] for record in found} == set(backend.records)
     assert [request["offset"] for request in requests[-2:]] == [0, 100]
-    assert all(request["filter"] == scope for request in requests[-2:])
+    assert all(
+        _matches_filter(request["filter"], _record("probe", uri, updated_at=None))
+        for request in requests[-2:]
+    )
+    assert all(
+        not _matches_filter(request["filter"], _record("other", uri + "-other"))
+        for request in requests[-2:]
+    )
     count.assert_not_awaited()
 
 
@@ -2158,6 +2165,65 @@ async def test_transfer_inventory_pages_actual_records_without_count(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tied", [False, True])
+async def test_stable_transfer_inventory_reads_101_records_once(monkeypatch, tied):
+    root = "viking://resources/source"
+    records = [_record("root-l0", root, level=0), _record("root-l1", root, level=1)]
+    records += [_record(str(i), f"{root}/{i}.md") for i in range(99)]
+    if not tied:
+        records = [{**record, "updated_at": i + 11} for i, record in enumerate(records)]
+    backend = _MemoryTransferBackend(records)
+    query = backend._query
+    returned = []
+
+    async def track(**kwargs):
+        page = await query(**kwargs)
+        returned.extend(record["id"] for record in page)
+        return page
+
+    monkeypatch.setattr(backend, "_query", track)
+    count = AsyncMock(side_effect=RuntimeError("count must not be called"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    found = await backend._read_transfer_inventory(
+        _ctx(),
+        And([Eq("account_id", "acct"), PathScope("uri", root, depth=-1)]),
+        what="stable 101 records",
+        entry_uris=[record["uri"] for record in records],
+    )
+    assert {record["id"] for record in found} == set(backend.records)
+    assert len(returned) == 101
+    assert len(backend.query_calls) == 2
+    count.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["pgvector", "opengauss"])
+async def test_transfer_recovers_null_timestamp_id_for_already_seen_uri(monkeypatch, mode):
+    root = "viking://resources/source"
+    records = [_record(str(i), f"{root}/{i}.md") for i in range(100)]
+    records.append(_record("legacy", f"{root}/0.md", updated_at=None))
+    backend = _MemoryTransferBackend(records)
+    backend.backend_mode = mode
+
+    async def query(**kwargs):
+        candidates = [record for record in records if _matches_filter(kwargs["filter"], record)]
+        candidates.sort(
+            key=lambda record: (record["updated_at"] is None, record["updated_at"] or 0),
+            reverse=kwargs.get("order_desc", False),
+        )
+        return candidates[kwargs["offset"] : kwargs["offset"] + kwargs["limit"]]
+
+    monkeypatch.setattr(backend, "_query", query)
+    found = await backend._read_transfer_inventory(
+        _ctx(),
+        And([Eq("account_id", "acct"), PathScope("uri", root, depth=-1)]),
+        what="legacy ID on existing URI",
+        entry_uris=[record["uri"] for record in records],
+    )
+    assert {record["id"] for record in found} == set(backend.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tied", [False, True])
 @pytest.mark.parametrize("phase", ["source", "target"])
 async def test_manifest_transfer_recovers_records_after_page_deletion(monkeypatch, tied, phase):
     source, target = "viking://resources/source", "viking://resources/target"
@@ -2177,10 +2243,19 @@ async def test_manifest_transfer_recovers_records_after_page_deletion(monkeypatc
     query = backend._query
     calls = 0
 
+    def matches_uri_scope(expr, record):
+        if isinstance(expr, Range):
+            return True
+        if isinstance(expr, And):
+            return all(matches_uri_scope(cond, record) for cond in expr.conds)
+        if isinstance(expr, Or):
+            return any(matches_uri_scope(cond, record) for cond in expr.conds)
+        return _matches_filter(expr, record)
+
     async def delete_before_second_page(**kwargs):
         nonlocal calls
         affected_uri = source + "/000.md" if phase == "source" else target + "/100.md"
-        if _matches_filter(kwargs["filter"], _record("probe", affected_uri)):
+        if matches_uri_scope(kwargs["filter"], _record("probe", affected_uri)):
             calls += 1
             if calls == 2:
                 backend.records.pop("s000" if phase == "source" else "t000")
@@ -2195,9 +2270,132 @@ async def test_manifest_transfer_recovers_records_after_page_deletion(monkeypatc
         source_uris=[source, *[record["uri"] for record in source_records]],
     )
     assert result.written == (200 if phase == "source" else 201)
+    assert calls >= 2
     assert any(record["uri"] == target + "/100.md" for record in backend.records.values())
     assert not any(record_id.startswith("t") for record_id in backend.records)
     count.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["source", "target"])
+@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_transfer_recovers_unobserved_historical_id_after_deletion(
+    monkeypatch, phase, operation
+):
+    source, target = "viking://resources/source", "viking://resources/target"
+    source_records = [_record(f"s{i:03}", f"{source}/{i:03}.md") for i in range(100)]
+    target_records = [_record(f"t{i:03}", f"{target}/{i:03}.md") for i in range(100)]
+    extra = _record("unobserved", f"{source if phase == 'source' else target}/001.md")
+    backend = _RealAclMemoryTransferBackend([*source_records, *target_records, extra])
+    backend.acl_manager = None
+    query = backend._query
+    calls = 0
+
+    async def delete_before_second_page(**kwargs):
+        nonlocal calls
+        uri = f"{source if phase == 'source' else target}/000.md"
+        if _matches_filter(kwargs["filter"], _record("probe", uri)):
+            calls += 1
+            if calls == 2:
+                backend.records.pop("s000" if phase == "source" else "t000")
+        return await query(**kwargs)
+
+    monkeypatch.setattr(backend, "_query", delete_before_second_page)
+    result = await getattr(backend, operation)(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=[record["uri"] for record in source_records],
+        source_expected_levels={record["uri"]: {2} for record in source_records},
+    )
+    assert result.written == 100
+    if phase == "target" or operation == "update_uri_mapping":
+        assert "unobserved" not in backend.records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_changed_source_timestamp_recovers_hidden_id_without_repeated_fetch(
+    monkeypatch, operation
+):
+    source, target = "viking://resources/source", "viking://resources/target"
+    records = [_record(f"s{i:03}", f"{source}/{i:03}.md") for i in range(100)]
+    backend = _MemoryTransferBackend([*records, _record("unobserved", source + "/001.md")])
+    query, get = backend._query, backend._strict_transfer_get
+    calls = 0
+    fetched = []
+
+    async def change_before_second_page(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            backend.records["s000"]["updated_at"] = 12
+        return await query(**kwargs)
+
+    async def track_get(ctx, ids):
+        fetched.extend(
+            record_id for record_id in ids if record_id.startswith("s") or record_id == "unobserved"
+        )
+        return await get(ctx, ids)
+
+    monkeypatch.setattr(backend, "_query", change_before_second_page)
+    monkeypatch.setattr(backend, "_strict_transfer_get", track_get)
+    result = await getattr(backend, operation)(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=[record["uri"] for record in records],
+        source_expected_levels={record["uri"]: {2} for record in records},
+    )
+    assert result.written == 101
+    assert len(fetched) == len(set(fetched)) == 101
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_unselected_orphan_deletion_recovers_hidden_source_id(monkeypatch, operation):
+    source, target = "viking://resources/source", "viking://resources/target"
+    records = [_record(f"s{i:03}", f"{source}/{i:03}.md") for i in range(100)]
+    backend = _MemoryTransferBackend(
+        [
+            _record("unselected", source + "/orphan.md"),
+            *records[:-1],
+            _record("unobserved", source + "/001.md"),
+            records[-1],
+        ]
+    )
+    query, get = backend._query, backend._strict_transfer_get
+    calls = 0
+    fetched = []
+
+    async def delete_before_second_page(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            backend.records.pop("unselected")
+        return await query(**kwargs)
+
+    async def track_get(ctx, ids):
+        fetched.extend(ids)
+        return await get(ctx, ids)
+
+    monkeypatch.setattr(backend, "_query", delete_before_second_page)
+    monkeypatch.setattr(backend, "_strict_transfer_get", track_get)
+    result = await getattr(backend, operation)(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=[record["uri"] for record in records],
+        source_expected_levels={record["uri"]: {2} for record in records},
+    )
+    assert result.written == 101
+    assert fetched.count("unobserved") == 1
+    assert "unselected" not in fetched
+    if operation == "update_uri_mapping":
+        assert "unobserved" not in backend.records
 
 
 @pytest.mark.asyncio

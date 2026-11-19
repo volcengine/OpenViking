@@ -15,6 +15,7 @@ from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchTas
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
+from openviking.storage.expr import And, PathScope
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
@@ -958,3 +959,67 @@ async def test_directory_transfer_keeps_unread_vectors_after_page_deletion(
     assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"old data"
     assert await fs.exists(source, ctx=ctx) == (operation == "cp")
     count.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+@pytest.mark.parametrize("phase", ["source", "target"])
+async def test_transfer_recovers_missing_directory_level_from_manifest(
+    indexed_fs, monkeypatch, operation, phase
+):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/target"
+    await fs.write_file_bytes(source + "/a.md", b"new", ctx=ctx)
+    await seed_vector(backend, source + "/a.md", "new")
+    for level in (0, 1):
+        await backend.upsert(
+            {
+                "id": vector_record_id(ctx.account_id, source, level),
+                "uri": source,
+                "level": level,
+                "vector": [0.1] * 4,
+                "abstract": "source summary",
+                "account_id": ctx.account_id,
+            },
+            ctx=ctx,
+        )
+        await backend.upsert(
+            {
+                "id": f"old-root-{level}",
+                "uri": target,
+                "level": level,
+                "vector": [0.1] * 4,
+                "abstract": "old summary",
+                "account_id": ctx.account_id,
+            },
+            ctx=ctx,
+        )
+    account = await backend._get_backend_for_context(ctx)
+    query = account.strict_query
+    removed = False
+
+    async def incomplete_first_page(**kwargs):
+        nonlocal removed
+        page = await query(**kwargs)
+        scope = kwargs["filter"]
+        missing_id = (
+            vector_record_id(ctx.account_id, source, 1) if phase == "source" else "old-root-1"
+        )
+        is_first_scope = (
+            isinstance(scope, And) and PathScope("uri", source, depth=-1) in scope.conds
+            if phase == "source"
+            else any(record["id"] == missing_id for record in page)
+        )
+        if not removed and is_first_scope:
+            removed = True
+            page = [record for record in page if record["id"] != missing_id]
+        return page
+
+    monkeypatch.setattr(account, "strict_query", incomplete_first_page)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+    assert result["vectors"]["written"] == 3
+    assert await backend.get([vector_record_id(ctx.account_id, target, 1)], ctx=ctx)
+    assert not await backend.get(["old-root-0", "old-root-1"], ctx=ctx)

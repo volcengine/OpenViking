@@ -382,6 +382,12 @@ async def test_cp_directory_preserves_empty_hidden_and_binary_entries(monkeypatc
             "viking://resources/source/data.bin",
             "viking://resources/source/empty",
         ],
+        source_expected_levels={
+            "viking://resources/source": {0, 1},
+            "viking://resources/source/.hidden": {2},
+            "viking://resources/source/data.bin": {2},
+            "viking://resources/source/empty": {0, 1},
+        },
     )
 
 
