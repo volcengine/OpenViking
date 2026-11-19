@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from 'react';
+import { ViewActivity } from '../../shared/view-activity.js';
+import { NotificationScope } from '../../shared/feedback/notification-scope.js';
 import {
   VikingBot,
   type VikingBotLabels,
@@ -74,23 +76,27 @@ export function ConsoleConversationPanel({
       hidden={!active}
     >
       {visited && state.status === 'ready' ? (
-        <VikingBot
-          {...conversation}
-          onOpenUri={conversation.onOpenUri ?? onOpenUri}
-          messages={conversation.messages ?? []}
-          draft={conversation.draft ?? draft}
-          onDraftChange={
-            conversation.draft === undefined
-              ? (value) => {
-                  onDraftChange(value);
-                  conversation.onDraftChange?.(value);
-                }
-              : conversation.onDraftChange
-          }
-          footer={footer ?? conversation.footer}
-          locale={locale}
-          labels={labels}
-        />
+        <ViewActivity active={active}>
+          <NotificationScope active={active} locale={locale}>
+            <VikingBot
+              {...conversation}
+              onOpenUri={conversation.onOpenUri ?? onOpenUri}
+              messages={conversation.messages ?? []}
+              draft={conversation.draft ?? draft}
+              onDraftChange={
+                conversation.draft === undefined
+                  ? (value) => {
+                      onDraftChange(value);
+                      conversation.onDraftChange?.(value);
+                    }
+                  : conversation.onDraftChange
+              }
+              footer={footer ?? conversation.footer}
+              locale={locale}
+              labels={labels}
+            />
+          </NotificationScope>
+        </ViewActivity>
       ) : null}
       {active && state.status !== 'ready' && state.status !== 'disabled' ? (
         <ConsoleActivationCard

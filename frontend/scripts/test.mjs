@@ -89,6 +89,7 @@ try {
                 './src/modules/console/use-conversation.tsx',
               'console-bot-activation':
                 './src/modules/console/use-bot-activation.ts',
+              'console-overlays': './test/fixtures/console-overlays.tsx',
               provider: './src/client/provider.tsx',
               'request-errors': './src/client/error-events.ts',
               'observe-errors': './src/client/observe-errors.ts',

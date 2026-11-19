@@ -21,6 +21,7 @@ import {
   ConsoleConversationPanel,
 } from './console-conversation-panel.js';
 import { useBotActivation } from './use-bot-activation.js';
+import { useConversationDraftIdentity } from './use-conversation-draft-identity.js';
 import type { ConsoleMode, ConsoleProps } from './types.js';
 
 const defaultModes: readonly ConsoleMode[] = ['conversation', 'command'];
@@ -70,10 +71,10 @@ export function ConsoleView(props: ConsoleProps) {
   const showConversation =
     visibleModes.includes('conversation') ||
     (status === 'checking' && !visibleModes.length);
+  const draftIdentity = useConversationDraftIdentity(props);
   const state = useConsole(
     { ...props, modes: visibleModes, locale },
-    chatOptions?.activation,
-    chatOptions?.scopeKey,
+    draftIdentity,
   );
   const commandRecords = useMemo(
     () => state.records.map(formatConsoleTaskResult),
