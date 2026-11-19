@@ -40,8 +40,6 @@ _SKILL_EXCLUDED_FILES = frozenset(
 _EXEC_PATH_PREFIX = r"(?<![A-Za-z0-9_./-])"
 _EXEC_PATH_SUFFIX = r"(?=$|[\s\"'`;|&()<>])"
 _MATERIALIZED_SKILL_ROOT = ".remote-skill"
-_PRIVACY_REFERENCE = re.compile(r"\{\{[ \t]*ov_privacy:[^{}\r\n]+\}\}")
-_PRIVACY_NOTICE_PREFIX = "\n\n[Privacy Config Notice]\n"
 _TRANSPORT_TOOLS = frozenset({"openviking_multi_read"})
 _SHELL_CONTROL_TOKENS = frozenset({";", "&", "&&", "|", "||", "<", ">", "<<", ">>"})
 _EXEC_FILE_CONSUMERS = frozenset(
@@ -212,6 +210,17 @@ def _normalize_uri(uri: str) -> str:
     return str(uri or "").strip().rstrip("/")
 
 
+def _coerce_line_number(value: object) -> int | None:
+    """Accept integer tool arguments and their JSON-string spellings."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if re.fullmatch(r"-?\d+", stripped):
+            return int(stripped)
+    return None
+
+
 def _skill_identity_from_uri(uri: str) -> tuple[str, str, str, str]:
     """Return (name, target_uri, root_uri, skill_md_uri) for one Skill definition."""
     normalized = _normalize_uri(uri)
@@ -306,19 +315,6 @@ def _manifest_signature(result: Mapping[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()
-
-
-def _matches_privacy_restoration(stored_content: str, restored_content: str) -> bool:
-    """Check that restoration changed only Privacy references and its notice."""
-    if restored_content == stored_content:
-        return True
-    if not _PRIVACY_REFERENCE.search(stored_content):
-        return restored_content.startswith(stored_content + _PRIVACY_NOTICE_PREFIX)
-
-    chunks = _PRIVACY_REFERENCE.split(stored_content)
-    pattern = r"[\s\S]*?".join(re.escape(chunk) for chunk in chunks)
-    pattern += rf"(?:{re.escape(_PRIVACY_NOTICE_PREFIX)}[\s\S]*)?"
-    return re.fullmatch(pattern, restored_content) is not None
 
 
 class SkillRuntimeContext:
@@ -462,16 +458,9 @@ class SkillRuntimeContext:
     def is_activation_call(self, tool_name: str, params: Mapping[str, Any]) -> bool:
         if tool_name != "openviking_multi_read" or params.get("with_revision"):
             return False
-        offset = params.get("offset", 0)
-        limit = params.get("limit", -1)
-        if (
-            not isinstance(offset, int)
-            or isinstance(offset, bool)
-            or not isinstance(limit, int)
-            or isinstance(limit, bool)
-            or offset != 0
-            or limit != -1
-        ):
+        offset = _coerce_line_number(params.get("offset", 0))
+        limit = _coerce_line_number(params.get("limit", -1))
+        if offset != 0 or limit != -1:
             return False
         return any(self.is_skill_definition_uri(str(uri)) for uri in params.get("uris") or [])
 
@@ -492,9 +481,10 @@ class SkillRuntimeContext:
         """Activate a Skill after an OpenViking read reaches its SKILL.md.
 
         Privacy restoration can make the detail content differ from the bytes
-        read by the transport. In that case both layers are checked against the
-        manifest, but the stored representation remains the model-facing and
-        materialized definition so resolved Privacy values never leave storage.
+        read by the transport. In that case the stored bytes are bound to both
+        the server's snapshot hash and the file manifest. The stored
+        representation remains the model-facing and materialized definition so
+        resolved Privacy values and Privacy notices never leave storage.
         """
         if not self.is_skill_definition_uri(uri):
             self.note_remote_read(uri)
@@ -536,14 +526,10 @@ class SkillRuntimeContext:
             canonical_bytes = canonical_content.encode("utf-8")
             content_was_restored = canonical_content != content
             if len(canonical_bytes) > self.settings.max_file_bytes:
-                raise SkillRuntimeError(
-                    "SKILL_PACKAGE_TOO_LARGE",
-                    (
-                        "Privacy-restored SKILL.md exceeds the file limit"
-                        if content_was_restored
-                        else "Remote SKILL.md exceeds the file limit"
-                    ),
-                )
+                if not content_was_restored:
+                    raise SkillRuntimeError(
+                        "SKILL_PACKAGE_TOO_LARGE", "Remote SKILL.md exceeds the file limit"
+                    )
             content_checksum = str(result.get("content_sha256") or "").strip()
             if not content_checksum:
                 raise SkillRuntimeError(
@@ -613,10 +599,14 @@ class SkillRuntimeContext:
                 raise SkillRuntimeError(
                     "SKILL_INVALID", "OpenViking Skill manifest is missing SKILL.md"
                 )
-            trigger_bytes = content.encode("utf-8")
-            self._validate_downloaded_file(definition, trigger_bytes)
             stored_content = content
             if content_was_restored:
+                stored_content_checksum = str(result.get("stored_content_sha256") or "").strip()
+                if re.fullmatch(r"[0-9a-f]{64}", stored_content_checksum) is None:
+                    raise SkillRuntimeError(
+                        "SKILL_INTEGRITY_UNAVAILABLE",
+                        "OpenViking did not return a stored SKILL.md content checksum",
+                    )
                 try:
                     stored_bytes = await client.download_bytes(skill_md_uri)
                 except Exception as exc:
@@ -625,17 +615,23 @@ class SkillRuntimeContext:
                         f"Could not download stored SKILL.md for integrity verification: {exc}",
                     ) from exc
                 self._validate_downloaded_file(definition, stored_bytes)
+                downloaded_checksum = hashlib.sha256(stored_bytes).hexdigest()
+                if (
+                    stored_content_checksum != downloaded_checksum
+                    or stored_content_checksum != definition.sha256
+                ):
+                    raise SkillRuntimeError(
+                        "SKILL_REVISION_CHANGED",
+                        "Stored SKILL.md does not match the snapshot integrity metadata",
+                    )
                 try:
                     stored_content = stored_bytes.decode("utf-8")
                 except UnicodeDecodeError as exc:
                     raise SkillRuntimeError(
                         "SKILL_INVALID", "Stored SKILL.md is not valid UTF-8"
                     ) from exc
-                if not _matches_privacy_restoration(stored_content, canonical_content):
-                    raise SkillRuntimeError(
-                        "SKILL_REVISION_CHANGED",
-                        "Privacy-restored SKILL.md does not match the stored placeholder content",
-                    )
+            else:
+                self._validate_downloaded_file(definition, content.encode("utf-8"))
 
             try:
                 parsed = SkillLoader.parse(stored_content, source_path=skill_md_uri)

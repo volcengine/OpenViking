@@ -10,12 +10,12 @@ import zipfile
 from unittest.mock import AsyncMock
 
 import pytest
-from openviking_cli.session.user_id import UserIdentifier
 from starlette.responses import PlainTextResponse
 
 from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import patch_user_config
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.fixture(autouse=True)
@@ -113,6 +113,8 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert any(file["name"] == "SKILL.md" for file in shown["files"])
     assert len(shown["revision"]) == 64
     assert len(shown["content_sha256"]) == 64
+    [definition] = [file for file in shown["files"] if file["path"] == "SKILL.md"]
+    assert shown["stored_content_sha256"] == definition["sha256"]
     assert all(
         file.get("is_dir") or (file.get("size") is not None and len(file.get("sha256", "")) == 64)
         for file in shown["files"]
@@ -739,7 +741,26 @@ async def test_skills_api_update_accepts_binary_files_and_separates_privacy_laye
     root = added.json()["result"]["root_uri"]
     current = await service.privacy_configs.get_current(owner, "skill", name)
     [field] = current.values
-    await service.privacy_configs.patch_values(owner, "skill", name, {field: rotated})
+    placeholder = build_placeholder(name, field)
+    skill_definition = f"""---
+name: {name}
+description: 'issued to {placeholder}'
+tags:
+  - test
+---
+
+# {name}
+
+## Instructions
+key="{placeholder}"
+"""
+    await service.viking_fs.write_file(root + "/SKILL.md", skill_definition, ctx=owner)
+    await service.privacy_configs.patch_values(
+        owner,
+        "skill",
+        name,
+        {field: rotated, "unused": "UnusedSetting99"},
+    )
     await service.privacy_configs.upsert(reader, "skill", name, {field: "MemberSetting42"})
     current = await service.privacy_configs.get_current(owner, "skill", name)
     stored = await service.viking_fs.read_file(root + "/SKILL.md", ctx=owner)
@@ -753,7 +774,13 @@ async def test_skills_api_update_accepts_binary_files_and_separates_privacy_laye
     [definition] = [item for item in detail["files"] if item["path"] == "SKILL.md"]
     assert detail["content"] == restored
     assert restored != stored
+    assert "description: 'issued to" in stored
+    assert 'description: "issued to' in restored
+    assert "[Privacy Config Notice]" in restored
+    assert "UnusedSetting99" in restored
     assert detail["content_sha256"] == hashlib.sha256(restored.encode()).hexdigest()
+    assert detail["stored_content_sha256"] == hashlib.sha256(stored.encode()).hexdigest()
+    assert detail["stored_content_sha256"] == definition["sha256"]
     assert definition["sha256"] == hashlib.sha256(stored.encode()).hexdigest()
     assert detail["content_sha256"] != definition["sha256"]
 
@@ -866,10 +893,9 @@ async def test_skills_api_validate_rfc_strict_and_loose_rules(client):
 async def test_skill_package_indexes_nested_content_and_returns_actual_hit(
     client, service, tmp_path
 ):
-    from openviking_cli.session.user_id import UserIdentifier
-
     from openviking.server.identity import RequestContext, Role
     from openviking.storage.expr import Eq
+    from openviking_cli.session.user_id import UserIdentifier
 
     archive = tmp_path / "package-search.zip"
     with zipfile.ZipFile(archive, "w") as package:
@@ -942,10 +968,9 @@ async def test_skill_package_indexes_nested_content_and_returns_actual_hit(
 
 
 async def test_mcp_skill_import_and_vector_rebuild_preserve_l1_frontmatter(client, service):
-    from openviking_cli.session.user_id import UserIdentifier
-
     from openviking.core.mcp_converter import mcp_to_skill
     from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
 
     tool = {
         "name": "review_calculator",
