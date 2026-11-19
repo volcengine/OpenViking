@@ -264,16 +264,28 @@
 }
 .ov-agent-connect__instructions-header {
   display: flex;
-  height: 34px;
+  min-height: 34px;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: space-between;
 }
 .ov-agent-connect__instructions-title {
+  min-width: 0;
   margin: 0;
   color: inherit;
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.ov-agent-connect__copy {
+  max-width: 100%;
+  min-height: var(--ov-ui-button-height);
+  height: auto;
+  padding-block: 2px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .ov-agent-connect__copy svg {
   width: 16px;
@@ -391,7 +403,11 @@
 .ov-agent-connect__markdown :where(td, th):last-child {
   border-right: 0;
 }
-.ov-agent-connect__markdown tbody tr:last-child td {
+.ov-agent-connect__markdown
+  table
+  > :last-child
+  > tr:last-child
+  > :where(td, th) {
   border-bottom: 0;
 }
 
@@ -472,11 +488,5 @@
   }
   .ov-agent-connect__guides {
     flex-wrap: wrap;
-  }
-  .ov-agent-connect__instructions-header {
-    height: auto;
-    min-height: 34px;
-    flex-wrap: wrap;
-    gap: 8px;
   }
 }
