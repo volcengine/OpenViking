@@ -60,7 +60,9 @@ export function Modal({
   const generatedId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const maskRef = useRef<HTMLButtonElement>(null);
-  const [present, setPresent] = useState(open);
+  const [present, setPresent] = useState(open && active);
+  const wasPresent = useRef(open && active);
+  if (!active && present) setPresent(false);
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
   usePortalTheme(active && Boolean(layer), triggerRef, layer);
 
@@ -93,6 +95,18 @@ export function Modal({
   useEffect(() => {
     if (active && layer) return lockBodyScroll(layer.ownerDocument.body);
   }, [active, layer]);
+
+  const finishClose = useCallback(() => {
+    const notify = wasPresent.current && !open;
+    wasPresent.current = false;
+    if (notify) afterClose?.();
+  }, [open, afterClose]);
+  // Effect necessity: hiding the view removes CSSTransition before its exit
+  // callback can run. Complete that external transition after removal; the ref
+  // consumes the close once, including effect replay and subsequent reactivation.
+  useEffect(() => {
+    if (!active) finishClose();
+  }, [active, finishClose]);
 
   if (!active || (!open && !present)) return null;
   return createPortal(
@@ -140,10 +154,13 @@ export function Modal({
         appear
         mountOnEnter
         unmountOnExit
-        onEnter={() => setPresent(true)}
+        onEnter={() => {
+          wasPresent.current = true;
+          setPresent(true);
+        }}
         onExited={() => {
           setPresent(false);
-          afterClose?.();
+          finishClose();
         }}
       >
         <div

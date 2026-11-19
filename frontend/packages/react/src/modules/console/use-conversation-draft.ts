@@ -6,9 +6,10 @@ export function useConversationDraft(
   identity?: object,
   scopeKey?: string,
 ) {
+  const effectiveIdentity = identity ?? controller;
   const owner = useMemo(
-    () => ({ controller, identity, scopeKey }),
-    [controller, identity, scopeKey],
+    () => ({ identity: effectiveIdentity, scopeKey }),
+    [effectiveIdentity, scopeKey],
   );
   const [draft, setDraft] = useState({ owner, value: '' });
   if (draft.owner !== owner) setDraft({ owner, value: '' });

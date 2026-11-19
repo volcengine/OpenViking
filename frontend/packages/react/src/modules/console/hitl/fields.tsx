@@ -3,6 +3,7 @@ import type {
   VikingBotInteractionProps,
 } from '../../../components/viking-bot/index.js';
 import type { VikingBotInteractionFieldContext } from '../../../components/viking-bot/interaction/field-types.js';
+import { retainInactiveFieldRenderer } from '../../../components/viking-bot/interaction/field-renderer.js';
 import { useLocale } from '../../../shared/locale-context.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { HitlCard } from './types.js';
@@ -102,7 +103,7 @@ function cardFields(
             ),
           }
         : {}),
-      render,
+      render: render && retainInactiveFieldRenderer(render),
       ...(cardType === 'compile_source' && !scope.client
         ? {
             description: <SourceUriHint />,
