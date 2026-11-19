@@ -354,7 +354,7 @@ ov-superagent web auth --host 0.0.0.0   # generates a key (or pass --key), print
 ov-superagent web auth --show           # current host and key
 ```
 
-The key is stored in `~/.ov-superagent/secrets.env` as `OV_SUPERAGENT_WEB_API_KEY`; the host is `web.host` in `config.json`. The page asks for the key once and keeps it in localStorage. Traffic is plain HTTP, so put a TLS reverse proxy in front before exposing it to the internet.
+The key is stored in `~/.ov-superagent/secrets.env` as `OV_SUPERAGENT_WEB_API_KEY`; the host is `web.host` in `config.json` (`127.0.0.1`, `localhost`, `0.0.0.0` or `::`, all of which still answer on 127.0.0.1 for the readiness probe). The page asks for the key once and keeps it in localStorage. Traffic is plain HTTP, so put a TLS reverse proxy in front before exposing it to the internet.
 
 - The current cognitive session opens by default. `/new` creates a new cognitive session; `/runtime` changes native session but preserves cognition. Same-runtime `/model` and `/effort` preserve both and apply next turn. The top bar selects history or the complete ledger.
 - A lower timeline separates turns, messages, assistant, delivery, commands, and system tracks; details and playhead synchronize.
