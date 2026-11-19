@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
-import { isOvClientError } from '../../client/errors.js';
-import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
@@ -11,9 +9,9 @@ import type {
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import {
-  compileSkillQueries,
-  mentionPattern,
+  loadMentionMatchBatches,
   mentionSearchRows,
+  mentionSearchTerms,
   MENTION_ROOT,
 } from './mention-search.js';
 
@@ -96,16 +94,7 @@ export function useConversationReferences({
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
   }, []);
   const [query, setQuery] = useState('');
-  const trimmedQuery = query.trim();
-  const keyword = trimmedQuery
-    .replace(/^viking:\/\//i, '')
-    .split('/')
-    .filter(Boolean)
-    .join('/');
-  const searchKey =
-    keyword && searchSkills && /^viking:\/\//i.test(trimmedQuery)
-      ? `${MENTION_ROOT}${keyword}`
-      : keyword;
+  const { keyword, searchKey } = mentionSearchTerms(query, searchSkills);
   const opened = enabled && openCount > 0;
   const tree = useDirectoryTree({
     client: opened ? client : null,
@@ -124,7 +113,8 @@ export function useConversationReferences({
     result: typeof search;
     uris: Set<string>;
   }>();
-  // Picker and scope changes cancel the old request, including its debounce.
+  // Glob results follow the open picker's query and scope, including programmatic changes.
+  // A changed query or scope and unmount both clear the timer and abort the old request.
   useEffect(() => {
     if (!opened || !searchKey) return;
     const controller = new AbortController();
@@ -132,47 +122,18 @@ export function useConversationReferences({
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     const timer = setTimeout(() => {
-      const queries = searchSkills
-        ? compileSkillQueries(searchKey)
-        : [
-            {
-              uri: MENTION_ROOT,
-              pattern: mentionPattern(searchKey),
-              node_limit: 100,
-            },
-          ];
-      void Promise.all(
-        queries.map(async (body) => {
-          try {
-            const { matches } = await scope.client.request<{
-              matches: unknown;
-            }>({
-              method: 'POST',
-              path: OV_PATHS.searchGlob,
-              body,
-              options: { ...scope.options, signal: requestSignal },
-            });
-            if (!Array.isArray(matches))
-              throw new Error('Invalid file search response');
-            return matches;
-          } catch (error) {
-            if (
-              searchSkills &&
-              isOvClientError(error) &&
-              (error.code === 'NOT_FOUND' || error.statusCode === 404)
-            )
-              return [];
-            throw error;
-          }
-        }),
+      void loadMentionMatchBatches(
+        scope.client,
+        searchKey,
+        { ...scope.options, signal: requestSignal },
+        searchSkills,
       )
-        .then((results) => {
+        .then((batches) => {
           if (requestSignal.aborted) return;
-          const matches = results.flat();
           setSearch({
             scope,
             key: searchKey,
-            rows: mentionSearchRows(matches),
+            rows: mentionSearchRows(batches.flat()),
           });
         })
         .catch((error: unknown) => {

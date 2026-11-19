@@ -1,3 +1,6 @@
+import { isOvClientError } from '../../client/errors.js';
+import { OV_PATHS } from '../../client/paths.js';
+import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FileTreeEntryRow } from '../../components/file-tree/index.js';
 
 export const MENTION_ROOT = 'viking://';
@@ -7,8 +10,22 @@ const compileSkillRoots = [
   'viking://agent/skills',
 ];
 
+export function mentionSearchTerms(query: string, searchSkills: boolean) {
+  const trimmed = query.trim();
+  const keyword = trimmed
+    .replace(/^viking:\/\//i, '')
+    .split('/')
+    .filter(Boolean)
+    .join('/');
+  const searchKey =
+    keyword && searchSkills && /^viking:\/\//i.test(trimmed)
+      ? `${MENTION_ROOT}${keyword}`
+      : keyword;
+  return { keyword, searchKey };
+}
+
 /** Use native glob for a literal basename search across unloaded directories. */
-export function mentionPattern(keyword: string) {
+function mentionPattern(keyword: string) {
   const parts = keyword
     .split('/')
     .map((part) =>
@@ -34,7 +51,7 @@ function compileSkillPatterns(keyword: string) {
   ];
 }
 
-export function compileSkillQueries(query: string) {
+function compileSkillQueries(query: string) {
   const queriesForRoot = (uri: string, relativePath: string) =>
     compileSkillPatterns(relativePath).map((pattern) => ({
       uri,
@@ -51,9 +68,48 @@ export function compileSkillQueries(query: string) {
   return root ? queriesForRoot(root, query.slice(root.length + 1)) : [];
 }
 
+export function loadMentionMatchBatches(
+  client: OvClient,
+  keyword: string,
+  options: OvRequestOptions,
+  searchSkills: boolean,
+): Promise<unknown[][]> {
+  const queries = searchSkills
+    ? compileSkillQueries(keyword)
+    : [
+        {
+          uri: MENTION_ROOT,
+          pattern: mentionPattern(keyword),
+          node_limit: 100,
+        },
+      ];
+  return Promise.all(
+    queries.map(async (body) => {
+      try {
+        const { matches } = await client.request<{ matches: unknown }>({
+          method: 'POST',
+          path: OV_PATHS.searchGlob,
+          body,
+          options: { ...options },
+        });
+        if (!Array.isArray(matches))
+          throw new Error('Invalid file search response');
+        return matches as unknown[];
+      } catch (error) {
+        if (
+          searchSkills &&
+          isOvClientError(error) &&
+          (error.code === 'NOT_FOUND' || error.statusCode === 404)
+        )
+          return [];
+        throw error;
+      }
+    }),
+  );
+}
+
 /** Keep the ancestors in search results without making inferred paths selectable. */
-export function mentionSearchRows(matches: unknown) {
-  if (!Array.isArray(matches)) throw new Error('Invalid file search response');
+export function mentionSearchRows(matches: readonly unknown[]) {
   const rows = new Map<string, FileTreeEntryRow>();
   for (const match of matches) {
     if (typeof match !== 'string' || !match.startsWith(MENTION_ROOT)) continue;
