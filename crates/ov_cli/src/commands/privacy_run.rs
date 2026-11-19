@@ -444,7 +444,7 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut pending = Vec::new();
-    let mut buffer = [0; 8192];
+    let mut buffer = vec![0; 65536];
     loop {
         // Flush prompts before waiting for more input, and batch consecutive ready reads.
         let size = match reader.read(&mut buffer).now_or_never() {
