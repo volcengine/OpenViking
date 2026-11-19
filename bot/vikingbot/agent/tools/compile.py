@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import posixpath
 from collections.abc import Awaitable, Callable
@@ -265,13 +266,15 @@ class CompileChildTool(Tool):
         *,
         merge_only: bool = False,
         readonly_paths: Mapping[str, str] | None = None,
+        write_lock: asyncio.Lock | None = None,
     ):
-        if merge_only and tool.name not in {"read_file", "write_file", "edit_file", "delete_file"}:
+        if merge_only and tool.name not in {"read_file", "write_file", "edit_file"}:
             raise ValueError("Merge children accept only bound file tools")
         self.tool = tool
         self.draft_root = draft_root
         self.merge_only = merge_only
         self.readonly_paths = dict(readonly_paths or {})
+        self.write_lock = write_lock
 
     @property
     def name(self) -> str:
@@ -351,7 +354,11 @@ class CompileChildTool(Tool):
             if relative == "inputs" or relative.startswith("inputs/"):
                 raise ValueError(f"Input path is not assigned: {relative}")
         kwargs[field] = posixpath.join(self.draft_root, relative)
-        result = await self.tool.execute(tool_context, **kwargs)
+        if self.write_lock is None or self.name == "read_file":
+            result = await self.tool.execute(tool_context, **kwargs)
+        else:
+            async with self.write_lock:
+                result = await self.tool.execute(tool_context, **kwargs)
         if (
             self.name in {"write_file", "edit_file"}
             and result.startswith("Successfully ")

@@ -8,9 +8,17 @@ from pydantic import BaseModel, ConfigDict, Field
 class IncompleteWorkerOutput(ValueError):
     """A bounded file worker ended before its output could be collected."""
 
+    def __init__(self, message: str, *, output_root: str | None = None):
+        super().__init__(message)
+        self.output_root = output_root
+
 
 class InvalidWorkerOutput(ValueError):
     """Private output that the current worker can repair."""
+
+
+class InvalidWorkerPath(InvalidWorkerOutput):
+    """A worker left a file that cannot be corrected in place."""
 
 
 @dataclass
