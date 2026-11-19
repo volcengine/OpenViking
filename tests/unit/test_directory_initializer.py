@@ -343,7 +343,7 @@ async def test_account_workspace_failure_joins_started_index_enqueues_before_rel
         release.set()
         await asyncio.wait_for(sibling_finished.wait(), timeout=3)
         with pytest.raises(OSError) as exc:
-            await init
+            await asyncio.wait_for(init, timeout=3)
 
     assert exc.value is failure
     fs._async_agfs.pathlock_release.assert_awaited_once()
