@@ -56,15 +56,15 @@ pub(crate) enum PrivacyCommands {
         #[arg(value_name = "field")]
         field: Option<String>,
     },
-    /// Resolve Privacy references in arguments and environment, then mask output
+    /// Run a local program with resolved {{ov_privacy:...}} references and mask stdout/stderr
     Run {
-        /// Run with NAME resolved from a Privacy field reference (repeatable)
+        /// Set NAME in child env from an owner-bound {{ov_privacy:...}} reference (repeatable)
         #[arg(long = "env", value_name = "NAME=reference")]
         env: Vec<String>,
-        /// Run with NAME=reference entries from a file (repeatable)
+        /// Load NAME={{ov_privacy:...}} entries from a file into child env (repeatable)
         #[arg(long = "env-file", value_name = "path")]
         env_file: Vec<PathBuf>,
-        /// Program and arguments to run; Privacy references in arguments are resolved
+        /// External program and arguments to run; {{ov_privacy:...}} references in args are resolved
         #[arg(value_name = "command", required = true, trailing_var_arg = true)]
         command: Vec<OsString>,
     },

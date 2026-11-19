@@ -628,35 +628,26 @@ ov privacy scan --uri viking://~/resources/project-a
 ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 ```
 
-### Run commands with Privacy references
+### Run external commands with Privacy references
 
-`ov privacy run` resolves references before running a command, then masks matching sensitive values in stdout and stderr with their references. A reference can appear inside an individual command argument. Both `--env` and `--env-file` set environment variables for the child process; the latter reads them from a file.
+`ov privacy run` executes a local external command without exposing plaintext sensitive values to the caller or Agent: before launch, it resolves Privacy references (`{{ov_privacy:...}}`, obtained via `ov privacy reference` or `ov privacy tree --references`) in environment variables or command arguments, injects the resolved values into the child process, and masks matching values in child `stdout`/`stderr` back into references.
 
 ```bash
+# 1. Pass via environment variable (recommended to keep sensitive values out of argv)
 ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- gh api user
-```
 
-Contents of `privacy.env`:
-
-```dotenv
-GITHUB_TOKEN={{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}
-```
-
-Run the same command from the file, or place a reference inside one `curl` argument:
-
-```bash
+# 2. Load from a file (one NAME={{ov_privacy:...}} entry per line; supports matching quotes and # comments)
 ov privacy run --env-file ./privacy.env -- gh api user
+
+# 3. Embed directly inside an argument of the external command
 ov privacy run -- curl -H 'Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' https://api.example.com
-```
 
-Run a Shell explicitly for pipelines or redirection, and pass the reference to the script through an environment variable:
-
-```bash
+# 4. Invoke sh -c explicitly for shell pipelines or redirections, passing references via --env
 ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- \
   sh -c 'curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.example.com | jq .login'
 ```
 
-Each nonempty, noncomment line in an `--env-file` must be `NAME=reference`; the reference may be enclosed in matching single or double quotes. You can repeat `--env-file`; later files override earlier ones, and `--env` overrides the files. References in command arguments are replaced with their values before the target program starts; other local processes may be able to inspect those arguments. The CLI masks only the child process's stdout and stderr, not files it writes or data it sends over the network.
+> References in command arguments are expanded before launch and may be visible to other local processes (prefer `--env` / `--env-file`). The CLI masks only child `stdout`/`stderr`, not files written or network payloads sent by the child.
 
 ---
 
