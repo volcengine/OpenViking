@@ -111,32 +111,60 @@ test('resource identities and raw structured values retain literal filename punc
   }
 });
 
-test('URLs in the editor remain plain input text without opening or submitting', async () => {
-  for (const uri of [
-    'viking://resources',
-    'https://example.com/a;b,(c)[d].md?x=1&y=2',
-  ]) {
-    const value = `ov read "${uri}"`;
-    const opened = [];
-    const submitted = [];
-    const view = await mount({
-      value,
-      onOpenUri: (target) => opened.push(target),
-      onSubmit: (command) => submitted.push(command),
+test('Viking URIs in the editor remain plain input text without opening or submitting', async () => {
+  const uri = 'viking://resources';
+  const value = `ov read "${uri}"`;
+  const opened = [];
+  const submitted = [];
+  const view = await mount({
+    value,
+    onOpenUri: (target) => opened.push(target),
+    onSubmit: (command) => submitted.push(command),
+  });
+  try {
+    const mirror = view.container.querySelector(
+      '.ov-command-console__input-mirror',
+    );
+    assert.equal(mirror.querySelector('a'), null);
+    assert.equal(mirror.textContent, value);
+    await act(() => view.input.focus());
+    assert.equal(document.activeElement, view.input);
+    assert.equal(view.input.value, value);
+    assert.deepEqual(opened, []);
+    assert.deepEqual(submitted, []);
+  } finally {
+    await view.dispose();
+  }
+});
+
+test('web URLs in the editor keep their exact value, native href and host callback without submitting', async () => {
+  const uri = 'https://example.com/a;b,(c)[d].md?x=1&y=2';
+  const value = `ov read "${uri}"`;
+  const opened = [];
+  const submitted = [];
+  const view = await mount({
+    value,
+    onOpenUri: (target) => opened.push(target),
+    onSubmit: (command) => submitted.push(command),
+  });
+  try {
+    const link = view.container.querySelector(
+      '.ov-command-console__input-mirror a',
+    );
+    assert.equal(link.getAttribute('href'), uri);
+    await act(() => view.input.focus());
+    const down = new window.MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
     });
-    try {
-      const mirror = view.container.querySelector(
-        '.ov-command-console__input-mirror',
-      );
-      assert.equal(mirror.querySelector('a'), null);
-      assert.equal(mirror.textContent, value);
-      await act(() => view.input.focus());
-      assert.equal(document.activeElement, view.input);
-      assert.equal(view.input.value, value);
-      assert.deepEqual(opened, []);
-      assert.deepEqual(submitted, []);
-    } finally {
-      await view.dispose();
-    }
+    await act(() => link.dispatchEvent(down));
+    assert.equal(down.defaultPrevented, true);
+    await act(() => link.click());
+    assert.equal(document.activeElement, view.input);
+    assert.equal(view.input.value, value);
+    assert.deepEqual(opened, [uri]);
+    assert.deepEqual(submitted, []);
+  } finally {
+    await view.dispose();
   }
 });
