@@ -8,9 +8,10 @@ import shlex
 import uuid
 from collections import Counter
 from copy import copy
+from typing import Any
 
 from vikingbot.agent.loop import _PlainTextDelivered, _PlainTextFinal
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile import file_ops
@@ -77,7 +78,8 @@ class DraftDeleteTool(Tool):
     def __init__(self, sandbox, root):
         self.sandbox, self.root = sandbox, root
 
-    async def execute(self, tool_context, path: str) -> str:
+    async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
+        path = kwargs["path"]
         try:
             local = self.sandbox.local_file_path(path)
         except FileNotFoundError:

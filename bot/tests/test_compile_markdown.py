@@ -841,13 +841,13 @@ async def test_worker_delete_rejects_directories_and_outside_symlinks(pipeline):
     await sandbox.write_file("private/output/nested/keep.md", "Preserve other output")
     await sandbox.write_file("private/output/.obsolete.md", "probe")
     tool = DraftDeleteTool(sandbox, "private/output")
-    await tool.execute(None, "private/output/.obsolete.md")
+    await tool.execute(None, path="private/output/.obsolete.md")
     with pytest.raises(OSError):
-        await tool.execute(None, "private/output/nested")
+        await tool.execute(None, path="private/output/nested")
     link = sandbox.workspace / "private/output/link.md"
     link.symlink_to(sandbox.local_file_path("outside.md"))
     with pytest.raises(ValueError, match="outside this worker"):
-        await tool.execute(None, "private/output/link.md")
+        await tool.execute(None, path="private/output/link.md")
     assert await sandbox.read_file("outside.md") == "Preserve source"
     assert await sandbox.read_file("private/output/nested/keep.md") == "Preserve other output"
 
@@ -862,7 +862,7 @@ async def test_remote_worker_delete_quotes_a_single_nonrecursive_file(pipeline):
     )
     tool = DraftDeleteTool(sandbox, "private/output")
     path = "private/output/obsolete ' $(touch injected).md"
-    await tool.execute(None, path)
+    await tool.execute(None, path=path)
     assert shlex.split(sandbox.execute.await_args.args[0]) == ["rm", "-f", "--", path]
 
 
