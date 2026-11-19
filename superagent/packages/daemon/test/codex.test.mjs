@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { TraexAgent } from '../src/traex.mjs';
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -1409,19 +1408,17 @@ it('routes long developer instructions through Codex start/resume RPC only when 
   assert.equal(traex._threadParams().developerInstructions, undefined);
 });
 
-for (const Agent of [CodexAgent, TraexAgent]) {
-  for (const scheduler of ['workers', 'legacy']) {
-    it(`${Agent.name} installs the router hook only for workers scheduling (${scheduler})`, async () => {
-      let args;
-      const children = [];
-      const agent = new Agent({ ...baseConfig, scheduler }, makeStore(), quietLogger, {
-        spawn: (_bin, argv) => { args = argv; const child = new FakeChild(); children.push(child); return child; },
-      });
-      try {
-        const child = await handshake(agent, children);
-        assert.equal(args.some((arg) => arg.startsWith('hooks.PreToolUse=')), scheduler === 'workers');
-        assert.equal(child.ofMethod('thread/start')[0].params.config?.bypass_hook_trust, scheduler === 'workers' ? true : undefined);
-      } finally { await agent.stop(); }
+for (const scheduler of ['workers', 'legacy']) {
+  it(`CodexAgent installs the router hook only for workers scheduling (${scheduler})`, async () => {
+    let args;
+    const children = [];
+    const agent = new CodexAgent({ ...baseConfig, scheduler }, makeStore(), quietLogger, {
+      spawn: (_bin, argv) => { args = argv; const child = new FakeChild(); children.push(child); return child; },
     });
-  }
+    try {
+      const child = await handshake(agent, children);
+      assert.equal(args.some((arg) => arg.startsWith('hooks.PreToolUse=')), scheduler === 'workers');
+      assert.equal(child.ofMethod('thread/start')[0].params.config?.bypass_hook_trust, scheduler === 'workers' ? true : undefined);
+    } finally { await agent.stop(); }
+  });
 }

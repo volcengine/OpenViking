@@ -356,7 +356,7 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.deepEqual([env.PERSONAL_AGENT_SHELL_LIMIT_S, env.PERSONAL_AGENT_WORK_TOOL_BUDGET, env.PERSONAL_AGENT_SHELL_DEFAULT_S, env.PERSONAL_AGENT_SHELL_MAX_S],
       ['30', '6', undefined, undefined]);
     const runtimePrompt = fs.readFileSync(args[args.indexOf('--append-system-prompt') + 1], 'utf8');
-    assert.match(runtimePrompt, /a command is cut off after 30 seconds/);
+    assert.match(runtimePrompt, /keep commands within 30 seconds/);
     assert.doesNotMatch(runtimePrompt, /stopped after 5 minutes/);
   });
 
