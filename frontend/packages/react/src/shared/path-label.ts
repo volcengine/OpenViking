@@ -6,3 +6,8 @@ export function decodePathLabel(segment: string): string {
     return segment;
   }
 }
+
+/** Decode an encoded Viking URI for display only; requests keep the original URI. */
+export function displayVikingUri(uri: string): string {
+  return decodePathLabel(uri);
+}

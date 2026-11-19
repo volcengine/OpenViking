@@ -94,7 +94,7 @@ export function outputDirectories(
     output === 'markdown' ? '_daily_report' : output === 'wiki' ? '_wiki' : '';
   const path =
     suffix && stem && stem !== '.' && stem !== '..' && !/[\\/]/.test(stem)
-      ? '/' + encodeURIComponent(stem) + (stem.endsWith(suffix) ? '' : suffix)
+      ? '/' + stem + (stem.endsWith(suffix) ? '' : suffix)
       : '';
   const personal = userId
     ? `viking://user/${encodeURIComponent(userId)}/resources`

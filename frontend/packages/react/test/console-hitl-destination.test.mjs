@@ -41,6 +41,44 @@ test('output directory suggestions and receipts display Chinese while submitting
   }
 });
 
+test('generated output directory suggestions keep literal Chinese Viking URI segments', async () => {
+  const view = await mountHitl(
+    [
+      card('compile_name', 'Name'),
+      card('compile_output_type', 'Output', {
+        options: [{ value: 'wiki', label: 'Wiki' }],
+      }),
+      card('compile_target', 'Target'),
+    ],
+    { requestOptions: { userId: '中文用户' } },
+  );
+  try {
+    await view.start();
+    await input(view.container.querySelector('[name=answer]'), '研发周报');
+    await submit(view);
+    await click(view.container.querySelector('input[value=wiki]'));
+    await submit(view);
+    const values = [
+      ...view.container.querySelectorAll(
+        '.ov-viking-bot__interaction-option input',
+      ),
+    ].map((item) => item.value);
+    assert.ok(values.includes('viking://resources/研发周报_wiki'));
+    assert.ok(
+      values.includes(
+        'viking://user/%E4%B8%AD%E6%96%87%E7%94%A8%E6%88%B7/resources/研发周报_wiki',
+      ),
+    );
+    assert.ok(
+      values.every(
+        (value) => !/%E7%A0%94%E5%8F%91%E5%91%A8%E6%8A%A5/i.test(value),
+      ),
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('userId alone scopes same-origin output validation without a Provider', async () => {
   const fetch = recordingFetch(({ path, uri, init }) => {
     assert.equal(path, '/api/v1/fs/stat');
