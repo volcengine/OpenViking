@@ -1425,11 +1425,16 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         if mode not in (None, "bm25"):
             raise ValueError("openGauss keyword search mode must be bm25")
         if fields is not None and fields != ["content"]:
             raise ValueError("openGauss keyword search supports the content field only")
+        if bm25_k1 is not None or bm25_b is not None or advance is not None:
+            raise ValueError("openGauss keyword search does not support advanced args")
         return OpenGaussFulltextMixin.search_by_keywords(
             self,
             index_name,

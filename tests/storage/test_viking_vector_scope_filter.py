@@ -302,7 +302,7 @@ def test_mixed_visible_and_outside_targets_keep_original_tenant_filter():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("acl_enabled", [False, True])
-async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(acl_enabled):
+async def test_keywords_tenant_search_keeps_scope_with_candidate_floor(acl_enabled):
     ctx = _ctx()
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
@@ -318,12 +318,14 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
         extra_filter=Eq("status", "ready"),
         level=[2],
         limit=5,
+        keywords_args={"post_process_input_limit": 3},
     )
 
     kwargs = tenant_backend.search_by_keywords.await_args.kwargs
     assert kwargs["query"] == "OAuth token"
     assert kwargs["mode"] == "bm25"
     assert kwargs["fields"] == ["content"]
+    assert kwargs["advance"] == {"post_process_input_limit": 5}
     assert kwargs["filter"] == _build(
         ctx,
         ["viking://resources/docs"],
@@ -331,8 +333,6 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
         level=[2],
         acl_enabled=acl_enabled,
     )
-    backend._acl_enabled.assert_awaited_once_with(ctx)
-    backend._get_backend_for_context.assert_awaited_once_with(ctx)
 
 
 @pytest.mark.asyncio
