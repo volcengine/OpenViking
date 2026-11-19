@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class IncompleteWorkerOutput(ValueError):
+    """A bounded file worker ended before its output could be collected."""
+
+
 @dataclass
 class Source:
     """An immutable prepared input range; source_id also addresses its evidence snapshot."""
