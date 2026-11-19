@@ -135,3 +135,59 @@ for (const {
     }
   });
 }
+
+test('the initial encoded root scope label is readable without changing its selected URI', async () => {
+  const rootUri = 'viking://resources/%E4%B8%AD%E6%96%87';
+  const display = 'viking://resources/中文';
+  const fetch = recordingFetch(({ path }) =>
+    ok(path === '/api/v1/search/find' ? { resources: [] } : []),
+  );
+  const view = await mount(
+    h(
+      OpenVikingProvider,
+      { fetch },
+      h(FileBrowserSearch, {
+        open: true,
+        rootUri,
+        triggerRef: { current: null },
+        advancedOpen: true,
+        locale: 'zh-CN',
+        text: resolveLabels(undefined, 'zh-CN'),
+        onToggleAdvanced() {},
+        onOpenResource() {},
+        onClose() {},
+      }),
+    ),
+  );
+  try {
+    await act(() =>
+      document.querySelector('.ov-file-browser-search__scope-trigger').click(),
+    );
+    const root = document.querySelector(
+      '.ov-file-browser-search__scope-menu button[title]',
+    );
+    assert.equal(root.title, display);
+    assert.equal(root.querySelector('span').textContent, display);
+    await act(() => root.click());
+    await settle();
+    assert.equal(fetch.calls.at(-1).uri, rootUri);
+    await act(() =>
+      document
+        .querySelector('.ov-file-browser-search__scope-current button[title]')
+        .click(),
+    );
+    const input = document.querySelector('.ov-file-browser-search__input');
+    await act(() => {
+      Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      ).set.call(input, 'notes');
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 450)));
+    await settle();
+    assert.deepEqual(fetch.calls.at(-1).body.target_uri, [rootUri]);
+  } finally {
+    await view.unmount();
+  }
+});

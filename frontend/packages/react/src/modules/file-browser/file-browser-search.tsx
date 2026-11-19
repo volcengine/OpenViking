@@ -223,7 +223,7 @@ export function FileBrowserSearch({
                 onHighlight={onHighlight}
                 onRetry={retry}
                 loading={search.loading || (awaitingQuery && !!draft.trim())}
-                error={search.error}
+                failure={search.failure}
                 searched={search.result !== null}
                 text={text}
                 onOpen={openResult}

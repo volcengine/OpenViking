@@ -3,8 +3,7 @@ import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?
 import { Button } from '../../shared/primitives/button/button.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
-import { isOvClientError } from '../../client/errors.js';
-import type { SearchHit } from './search-types.js';
+import type { SearchFailure, SearchHit } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
 /** Search results, with empty, loading, and error states. */
@@ -17,7 +16,7 @@ export interface FileBrowserSearchResultsProps {
   onRetry: () => void;
   hits: SearchHit[];
   loading: boolean;
-  error: Error | null;
+  failure: SearchFailure | null;
   /** 是否已经搜过；`false` 时显示空态。Whether a search has run; `false` shows the empty state. */
   searched: boolean;
   text: ResolvedLabels;
@@ -36,7 +35,7 @@ export function FileBrowserSearchResults({
   onRetry,
   hits,
   loading,
-  error,
+  failure,
   searched,
   text,
   onOpen,
@@ -47,7 +46,7 @@ export function FileBrowserSearchResults({
       : 'file_browser_search_empty_show',
     hits,
     undefined,
-    open && searched && !loading && !error,
+    open && searched && !loading && !failure,
   );
   if (loading && !hits.length) {
     return (
@@ -71,19 +70,16 @@ export function FileBrowserSearchResults({
     );
   }
 
-  const invalidPattern =
-    isOvClientError(error) &&
-    error.code === 'INVALID_ARGUMENT' &&
-    error.message.startsWith('Invalid grep pattern:');
-  const failure = error ? (
+  const invalidPattern = failure?.reason === 'invalid-pattern';
+  const feedback = failure ? (
     <>
       <div role="alert" className="ov-file-browser-search__error">
         <p>{text.searchFailed}</p>
-        <p>{invalidPattern ? text.searchInvalidPattern : error.message}</p>
+        <p>{invalidPattern ? text.searchInvalidPattern : failure.message}</p>
         {invalidPattern ? (
           <details>
             <summary>{text.searchErrorDetails}</summary>
-            <p>{error.message}</p>
+            <p>{failure.message}</p>
           </details>
         ) : null}
       </div>
@@ -92,7 +88,7 @@ export function FileBrowserSearchResults({
       </Button>
     </>
   ) : null;
-  if (failure && !hits.length) return failure;
+  if (feedback && !hits.length) return feedback;
 
   if (!searched) {
     return (
@@ -126,7 +122,7 @@ export function FileBrowserSearchResults({
 
   return (
     <>
-      {failure}
+      {feedback}
       {loading ? <p role="status">{text.searchLoading}</p> : null}
       <ul
         ref={exposure}

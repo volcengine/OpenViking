@@ -7,8 +7,6 @@ const hooks = process.env.OV_UI_TEST_HOOKS;
 const { OpenVikingProvider } = await import(`${hooks}/provider.js`);
 const { FileBrowserSearch } = await import(`${hooks}/browser-search.js`);
 const { resolveLabels } = await import(`${hooks}/browser-labels.js`);
-const rawMessage =
-  'Invalid grep pattern: nothing to repeat at position 0 Request ID: demo-id';
 
 async function type(input, value) {
   await act(() => {
@@ -22,15 +20,34 @@ async function type(input, value) {
   await settle();
 }
 
-for (const locale of ['zh-CN', 'en-US']) {
-  test(`invalid grep patterns explain the syntax and retain server details in ${locale}`, async () => {
+for (const [locale, prefix] of [
+  ['zh-CN', 'Invalid grep pattern:'],
+  ['en-US', 'Invalid grep pattern:'],
+  ['zh-CN', 'Invalid regex pattern:'],
+  ['en-US', 'Invalid regex pattern:'],
+  ['zh-CN', 'Invalid regex:'],
+  ['en-US', 'Invalid regex:'],
+  ['zh-CN', 'invalid operation: Invalid regex pattern:'],
+  ['en-US', 'invalid operation: Invalid regex pattern:'],
+  ['zh-CN', 'invalid operation: Invalid regex:'],
+  ['en-US', 'invalid operation: Invalid regex:'],
+]) {
+  test(`${prefix} explains syntax and retains server details in ${locale}`, async () => {
+    const rawMessage = `${prefix} nothing to repeat at position 0 Request ID: demo-id`;
     const fetch = recordingFetch(({ path, body }) => {
       if (path !== '/api/v1/search/grep') return ok([]);
-      if (body.pattern !== '*test*') return ok({ matches: [] });
+      if (!['*test*', 'backend-error'].includes(body.pattern))
+        return ok({ matches: [] });
       return new Response(
         JSON.stringify({
           status: 'error',
-          error: { code: 'INVALID_ARGUMENT', message: rawMessage },
+          error: {
+            code: 'INVALID_ARGUMENT',
+            message:
+              body.pattern === 'backend-error'
+                ? 'Invalid directory scope'
+                : rawMessage,
+          },
         }),
         { status: 400, headers: { 'content-type': 'application/json' } },
       );
@@ -116,6 +133,17 @@ for (const locale of ['zh-CN', 'en-US']) {
       await type(input, '(?i)test.*');
       assert.equal(document.querySelector('[role="alert"]'), null);
       assert.equal(fetch.calls.at(-1).body.pattern, '(?i)test.*');
+      await type(input, 'backend-error');
+      await act(
+        async () => new Promise((resolve) => setTimeout(resolve, 1100)),
+      );
+      await settle();
+      alert = document.querySelector('[role="alert"]');
+      assert.equal(
+        alert.querySelector('p:nth-child(2)').textContent,
+        'Invalid directory scope',
+      );
+      assert.equal(alert.querySelector('details'), null);
     } finally {
       await view.unmount();
     }

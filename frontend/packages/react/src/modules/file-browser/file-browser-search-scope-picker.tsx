@@ -150,7 +150,11 @@ function ScopePicker({
               onClick={() => browse(directory)}
             >
               <FolderIcon aria-hidden="true" />
-              <span>{uri ? displayNameFromUri(directory) : directory}</span>
+              <span>
+                {uri
+                  ? displayNameFromUri(directory)
+                  : formatVikingUriLabel(directory)}
+              </span>
               <ChevronIcon aria-hidden="true" />
             </button>
           ))}
