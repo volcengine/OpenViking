@@ -20,8 +20,8 @@ HERMES_USAGE_KEYS = [
 
 
 def require_suite(value: str) -> str:
-    if value not in {"baseline", "e2e", "preingest"}:
-        raise argparse.ArgumentTypeError("suite must be one of: baseline, e2e, preingest")
+    if value not in {"baseline", "e2e", "preingest", "agentic-rag"}:
+        raise argparse.ArgumentTypeError("suite must be one of: baseline, e2e, preingest, agentic-rag")
     return value
 
 
@@ -30,6 +30,8 @@ def result_dir_name(suite: str) -> str:
         return "result_baseline"
     if suite == "e2e":
         return "result_e2e"
+    if suite == "agentic-rag":
+        return "result_agentic_rag"
     return "result_preingest"
 
 
@@ -38,6 +40,8 @@ def summary_title(suite: str) -> str:
         return "Hermes Baseline"
     if suite == "e2e":
         return "Hermes OpenViking E2E"
+    if suite == "agentic-rag":
+        return "Hermes Agentic RAG"
     return "Hermes + OpenViking (pre-ingest)"
 
 

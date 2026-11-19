@@ -21,15 +21,17 @@ Run a fixed LoCoMo benchmark suite.
 Suites:
   e2e        Import through Hermes/OpenViking, then eval/judge/stats.
   preingest  Import directly into OpenViking, then eval/judge/stats.
-  native     Import into Hermes native memory, then eval/judge/stats. No OpenViking checkpoint.
+  native       Import into Hermes native memory, then eval/judge/stats.
+  agentic-rag  Index raw history and let Hermes search it, then judge and summarize.
 
 Usage:
   ./run_full_eval.sh --suite e2e [-cp] [options]
   ./run_full_eval.sh --suite preingest [-cp] [options]
   ./run_full_eval.sh --suite native [options]
+  ./run_full_eval.sh --suite agentic-rag [options]
 
 Options:
-  --suite NAME            Required: e2e, preingest, or native.
+  --suite NAME            Required: e2e, preingest, native, or agentic-rag.
   -cp, --checkpoint       Copy an OpenViking checkpoint after import (e2e/preingest only).
   --sample N              Process one LoCoMo sample index.
   --count N               Limit QA questions per sample during eval.
@@ -45,12 +47,13 @@ Options:
 
 Environment:
   LOCOMO_JSON, HERMES_URL, HERMES_TOKEN, HERMES_MODEL, OPENVIKING_URL
-  JUDGE_BASE_URL, JUDGE_TOKEN, JUDGE_MODEL
+  JUDGE_BASE_URL, JUDGE_TOKEN, JUDGE_MODEL, JUDGE_API_VERSION (dated Azure endpoints)
   IMPORT_PARALLEL, QA_PARALLEL, JUDGE_PARALLEL
   IMPORT_ERROR_RETRIES, QA_ERROR_RETRIES, JUDGE_ERROR_RETRIES, QUEUE_MAX_WAIT_SEC
   PYTHON, HERMES_STATE_DB, OPENVIKING_CONFIG_FILE, OPENVIKING_STATE_SOURCE, SNAPSHOT_ROOT, RESULT_DIR
   E2E_PREFLIGHT, SKIP_IMPORT, IMPORT_CSV_OVERRIDE
   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_API_KEY
+  LOCOMO_RAG_INDEX, LOCOMO_RAG_EMBEDDING_URL, LOCOMO_RAG_EMBEDDING_MODEL, LOCOMO_RAG_EMBEDDING_KEY
 
 Dataset:
   By default this expects ../data/locomo10.json from benchmark/locomo/hermes.
@@ -193,8 +196,25 @@ case "$SUITE" in
         RUN_ID="${RUN_ID:-locomo-native-session-no-pe-$(date +%Y%m%d-%H%M%S)}"
         RESULT_DIR="${RESULT_DIR:-$SCRIPT_DIR/result_baseline_${RUN_ID}}"
         ;;
+    agentic-rag)
+        SUITE_LABEL="agentic-rag"
+        EVAL_SUITE="agentic-rag"
+        IMPORT_SCRIPT="build_rag_index.py"
+        BENCHMARK_TITLE="Hermes Agentic RAG LoCoMo benchmark"
+        RUN_ID="${RUN_ID:-locomo-agentic-rag-$(date +%Y%m%d-%H%M%S)}"
+        RESULT_DIR="${RESULT_DIR:-$SCRIPT_DIR/result_agentic_rag_${RUN_ID}}"
+        : "${LOCOMO_RAG_INDEX:?Set LOCOMO_RAG_INDEX to the absolute path shared with the gateway}"
+        if [[ "$LOCOMO_RAG_INDEX" != /* ]]; then
+            echo "Error: LOCOMO_RAG_INDEX must be an absolute path." >&2
+            exit 1
+        fi
+        if [[ "$FORCE_INGEST" == "1" && "$FORCE_EVAL" != "1" && -s "$RESULT_DIR/qa_results.csv" ]]; then
+            echo "Error: Rebuilding the RAG index requires --force-eval or a new --result-dir." >&2
+            exit 1
+        fi
+        ;;
     *)
-        echo "Error: --suite must be one of: e2e, preingest, native" >&2
+        echo "Error: --suite must be one of: e2e, preingest, native, agentic-rag" >&2
         exit 1
         ;;
 esac
@@ -203,7 +223,7 @@ if [[ "$CHECKPOINT_REQUESTED" == "1" ]]; then
     if [[ "$CAN_CHECKPOINT_OPENVIKING" == "1" ]]; then
         CHECKPOINT_OPENVIKING=1
     else
-        echo "Note: -cp/--checkpoint is ignored for native suite; native has no OpenViking checkpoint." >&2
+        echo "Note: -cp/--checkpoint is ignored for $SUITE_LABEL; this suite has no OpenViking checkpoint." >&2
     fi
 fi
 
@@ -283,7 +303,7 @@ ensure_openviking_state_source() {
 
 verify_openviking_archive_readiness() {
     if [[ "$SUITE_LABEL" != "e2e" && "$SUITE_LABEL" != "preingest" ]]; then
-        echo ">>> Step 2: SKIPPED (OpenViking archive readiness is not used for native suite)."
+        echo ">>> Step 2: SKIPPED (OpenViking archive readiness is not used for $SUITE_LABEL)."
         return
     fi
 
@@ -734,6 +754,10 @@ write_run_command() {
         printf 'OPENVIKING_ACCOUNT=%q OPENVIKING_USER=%q E2E_PREFLIGHT=%q ' \
             "$OPENVIKING_ACCOUNT" "$OPENVIKING_USER" "$E2E_PREFLIGHT"
         [[ -n "${HERMES_STATE_DB:-}" ]] && printf 'HERMES_STATE_DB=%q ' "$HERMES_STATE_DB"
+        if [[ "$SUITE_LABEL" == "agentic-rag" ]]; then
+            printf 'LOCOMO_RAG_INDEX=%q LOCOMO_RAG_EMBEDDING_MODEL=%q ' \
+                "$LOCOMO_RAG_INDEX" "${LOCOMO_RAG_EMBEDDING_MODEL:-}"
+        fi
         printf './run_full_eval.sh --suite %q' "$SUITE_LABEL"
         [[ "$CHECKPOINT_OPENVIKING" == "1" ]] && printf ' -cp'
         [[ -n "$SAMPLE" ]] && printf ' --sample %q' "$SAMPLE"
@@ -822,8 +846,13 @@ else
         IMPORT_ARGS+=(--error-retries "$IMPORT_ERROR_RETRIES")
     fi
 
-    [[ -n "$SAMPLE" ]] && IMPORT_ARGS+=(--sample "$SAMPLE")
-    [[ -n "$FORCE_INGEST" ]] && IMPORT_ARGS+=(--force-ingest)
+    if [[ "$SUITE_LABEL" == "agentic-rag" ]]; then
+        IMPORT_ARGS=(--input "$LOCOMO_JSON" --index "$LOCOMO_RAG_INDEX")
+        [[ -n "$FORCE_INGEST" ]] && IMPORT_ARGS+=(--force)
+    else
+        [[ -n "$SAMPLE" ]] && IMPORT_ARGS+=(--sample "$SAMPLE")
+        [[ -n "$FORCE_INGEST" ]] && IMPORT_ARGS+=(--force-ingest)
+    fi
     export QUEUE_MAX_WAIT_SEC
     set +e
     "$PYTHON" "$IMPORT_SCRIPT" "${IMPORT_ARGS[@]}" 2>&1 | tee "${LOG_DIR}/import.log"
@@ -859,6 +888,8 @@ EVAL_ARGS=(
 )
 if [[ "$SUITE_LABEL" == "e2e" || "$SUITE_LABEL" == "preingest" ]]; then
     EVAL_ARGS+=(--openviking-url "$OPENVIKING_URL")
+elif [[ "$SUITE_LABEL" == "agentic-rag" ]]; then
+    EVAL_ARGS+=(--rag-index "$LOCOMO_RAG_INDEX")
 fi
 [[ -n "$HERMES_TOKEN" ]] && EVAL_ARGS+=(--token "$HERMES_TOKEN")
 [[ -n "$SAMPLE" ]] && EVAL_ARGS+=(--sample "$SAMPLE")
