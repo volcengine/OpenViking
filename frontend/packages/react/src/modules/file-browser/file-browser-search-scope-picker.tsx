@@ -8,6 +8,7 @@ import { useLocale } from '../../shared/locale-context.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
 import { useSearchScopePage } from './use-search-scope-page.js';
+import { displayScopeUri } from './search-scope-display.js';
 import type { ScopeOption } from './search-types.js';
 
 interface FileBrowserSearchScopePickerProps {
@@ -95,10 +96,10 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 aria-pressed="true"
-                title={item}
+                title={displayScopeUri(item)}
                 onClick={() => onSelect(item)}
               >
-                <span>{item}</span>
+                <span>{displayScopeUri(item)}</span>
               </button>
             </li>
           ))}
@@ -117,7 +118,9 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 onClick={back}
-                aria-label={parents.at(-2) ?? text.searchScopes}
+                aria-label={displayScopeUri(
+                  parents.at(-2) ?? text.searchScopes,
+                )}
               >
                 ←
               </button>
@@ -125,13 +128,13 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 aria-pressed={value.includes(uri)}
-                title={uri}
+                title={displayScopeUri(uri)}
                 onClick={() => {
                   onSelect(uri);
                   close();
                 }}
               >
-                <span>{nameFromUri(uri)}</span>
+                <span>{displayScopeUri(nameFromUri(uri))}</span>
               </button>
             </div>
           ) : null}
@@ -143,11 +146,13 @@ function ScopePicker({
               key={directory}
               type="button"
               className="ov-file-browser-search__scope-choice"
-              title={directory}
+              title={displayScopeUri(directory)}
               onClick={() => browse(directory)}
             >
               <FolderIcon aria-hidden="true" />
-              <span>{uri ? nameFromUri(directory) : directory}</span>
+              <span>
+                {displayScopeUri(uri ? nameFromUri(directory) : directory)}
+              </span>
               <ChevronIcon aria-hidden="true" />
             </button>
           ))}
