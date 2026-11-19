@@ -64,7 +64,7 @@ class TargetReader(Tool):
     """Read a known target path and remember its revision before allowing replacement."""
 
     name = "read_target_file"
-    description = "Read a target file you need to update. Use read_file for your drafts."
+    description = "Read an existing file under the output destination before updating it."
     parameters = {
         "type": "object",
         "properties": {
@@ -119,10 +119,8 @@ def agent_runner(loop, session_key, connection, limits):
         if evidence.allowed:
             registry.register(evidence)
         registry.register(runtime.resources)
-        can_update_target = runtime.target_has_content is not False or bool(runtime.changes)
-        if can_update_target:
-            registry.register(TargetReader(runtime))
-        search = runtime.tools.get("openviking_search") if can_update_target else None
+        registry.register(TargetReader(runtime))
+        search = runtime.tools.get("openviking_search")
         if search is not None and runtime.tool_context is not None:
 
             async def search_target(tool_context=None, **arguments):
@@ -161,25 +159,17 @@ def agent_runner(loop, session_key, connection, limits):
                 completion_error = error
             return _PlainTextFinal()
 
-        async def remind_completion(iteration):
-            remaining = limits.subagent_iterations - iteration + 1
-            if remaining in (20, 5, 1):
-                return (
-                    f"{remaining} model/tool rounds remain, including this one. "
-                    "Reply Done as soon as the requested files are ready."
-                )
-            return None
-
         final, _, _, _, _ = await child._run_agent_loop(
             messages=[
                 {
                     "role": "system",
-                    "content": system + "\nRead assignment.json with read_file, then read all "
-                    "assigned evidence. Reuse evidence and Skill rules already in context. "
-                    "Check each page against its evidence and the applicable Skill rules before "
-                    "writing it. Write only deliverable Markdown at publication-relative paths. "
-                    "Read more or edit a written page to resolve a specific remaining issue. "
-                    "Finish with a brief completion message after all required writes succeed.",
+                    "content": system + "\nRead assignment.json with read_file. "
+                    "Read all assigned materials. assignment.json and assigned inputs/ paths "
+                    "are read-only. Use write_file and edit_file for deliverable Markdown, "
+                    "with paths relative to the publication destination. Read and edit your "
+                    "outputs using the same paths. Write only deliverables, without scratch files. "
+                    "Finish with a brief completion message after all writes succeed. "
+                    "A completion message alone does not produce files.",
                 },
                 {
                     "role": "user",
@@ -194,7 +184,6 @@ def agent_runner(loop, session_key, connection, limits):
             allow_final_fallback=False,
             require_natural_completion=True,
             on_plain_text=check_completion,
-            status_note_provider=remind_completion,
             inject_write_experience=False,
             agent_id=child_id,
             context_compact_budget=None,

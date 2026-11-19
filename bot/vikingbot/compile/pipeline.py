@@ -61,7 +61,6 @@ class Pipeline:
         self.failures, self.warnings = [], []
         self.artifacts: list[Document] = []
         self.noop = False
-        self.target_has_content: bool | None = None
 
     @property
     def output_format(self):
@@ -169,15 +168,14 @@ class Pipeline:
             await self.files.put("runtime", {"time": self.timestamp, "skill": self.request.skill})
             self.metrics["input_ranges"] = len(sources)
             self.metrics["input_files"] = len({s.metadata["uri"] for s in sources})
-            self.target_has_content = bool(
-                await self.client.list_resources(self.target, node_limit=1)
-            )
             context = {
                 "skill": self.skill,
                 "runtime": {"time": self.timestamp},
                 "request": {"to": self.target, "instruction": self.request.instruction},
                 "source_summary": self.summarize_sources(sources),
-                "target_has_content": self.target_has_content,
+                "target_has_content": bool(
+                    await self.client.list_resources(self.target, node_limit=1)
+                ),
                 "changes": self.changes,
             }
 
