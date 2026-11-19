@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
-import { isOvClientError } from '../../client/errors.js';
-import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
@@ -10,12 +8,8 @@ import type {
 } from '../../components/viking-bot/index.js';
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
-import {
-  compileSkillQueries,
-  mentionPattern,
-  mentionSearchRows,
-  MENTION_ROOT,
-} from './mention-search.js';
+import { mentionSearchRows, MENTION_ROOT } from './mention-search.js';
+import { searchConversationReferences } from './conversation-reference-search.js';
 
 const emptyReferences: readonly VikingBotReference[] = [];
 
@@ -124,7 +118,9 @@ export function useConversationReferences({
     result: typeof search;
     uris: Set<string>;
   }>();
-  // Picker and scope changes cancel the old request, including its debounce.
+  // Sync native search results with the picker query and request scope, including
+  // changes from the host; rendering alone cannot fetch them. Cleanup cancels
+  // the debounce and request so closed pickers and stale scopes cannot update.
   useEffect(() => {
     if (!opened || !searchKey) return;
     const controller = new AbortController();
@@ -132,43 +128,12 @@ export function useConversationReferences({
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     const timer = setTimeout(() => {
-      const queries = searchSkills
-        ? compileSkillQueries(searchKey)
-        : [
-            {
-              uri: MENTION_ROOT,
-              pattern: mentionPattern(searchKey),
-              node_limit: 100,
-            },
-          ];
-      void Promise.all(
-        queries.map(async (body) => {
-          try {
-            const { matches } = await scope.client.request<{
-              matches: unknown;
-            }>({
-              method: 'POST',
-              path: OV_PATHS.searchGlob,
-              body,
-              options: { ...scope.options, signal: requestSignal },
-            });
-            if (!Array.isArray(matches))
-              throw new Error('Invalid file search response');
-            return matches;
-          } catch (error) {
-            if (
-              searchSkills &&
-              isOvClientError(error) &&
-              (error.code === 'NOT_FOUND' || error.statusCode === 404)
-            )
-              return [];
-            throw error;
-          }
-        }),
-      )
-        .then((results) => {
+      void searchConversationReferences(scope.client, searchKey, searchSkills, {
+        ...scope.options,
+        signal: requestSignal,
+      })
+        .then((matches) => {
           if (requestSignal.aborted) return;
-          const matches = results.flat();
           setSearch({
             scope,
             key: searchKey,
