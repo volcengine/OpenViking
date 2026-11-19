@@ -279,8 +279,17 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 		"mode":    mode,
 		"wait":    opts.Wait,
 	}
+	if opts.UseSnapshot {
+		payload["use_snapshot"] = true
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
+	if opts.ResolveConflicts {
+		payload["resolve_conflicts"] = true
+	}
+	if opts.DeferProcessing {
+		payload["defer_processing"] = true
+	}
 	if opts.ACL != nil {
 		payload["acl"] = opts.ACL
 	}
@@ -322,9 +331,15 @@ func (c *Client) BatchWrite(
 		if opts.Wait != nil {
 			payload["wait"] = *opts.Wait
 		}
+		if opts.UseSnapshot {
+			payload["use_snapshot"] = true
+		}
 		setAny(payload, "defer_processing", opts.DeferProcessing)
 		setAny(payload, "telemetry", opts.Telemetry)
 		setString(payload, "processing_mode", opts.ProcessingMode)
+		if opts.SkipConflicts {
+			payload["skip_conflicts"] = true
+		}
 		if err := mergeExtraProtected(payload, opts.Extra, "wait"); err != nil {
 			return nil, err
 		}
@@ -385,6 +400,37 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/fs/attrs/set_tags", nil, payload, &result)
+	return result, err
+}
+
+// BatchSetTags updates retrieval tags for multiple URIs.
+func (c *Client) BatchSetTags(ctx context.Context, uris []string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &SetTagsOptions{Mode: "replace"}
+	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = "replace"
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	normalized := make([]string, len(uris))
+	for index, uri := range uris {
+		normalized[index] = NormalizeURI(uri)
+	}
+	payload := map[string]any{
+		"uris":      normalized,
+		"tags":      tags,
+		"mode":      mode,
+		"recursive": opts.Recursive,
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtraProtected(payload, opts.Extra, "uris", "tags", "mode", "recursive", "telemetry"); err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/batch_set_tags", nil, payload, &result)
 	return result, err
 }
 

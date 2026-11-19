@@ -35,6 +35,7 @@ export type {
   VikingBotStreamingState,
   VikingBotTextPart,
   VikingBotToolPart,
+  VikingBotTask,
   VikingBotToolResultPart,
   VikingBotToolResultLink,
 } from './model.js';
@@ -45,6 +46,14 @@ export type {
   VikingBotProps,
 } from './types.js';
 export type {
+  VikingBotInteractionCustomInputContext,
+  VikingBotInteractionDirectoryPicker,
+  VikingBotInteractionDirectoryPermission,
+  VikingBotInteractionDirectoryInfo,
+  VikingBotInteractionDirectoryOperations,
+  VikingBotInteractionTargetRequest,
+  VikingBotInteractionSingleRequest,
+  VikingBotInteractionSingleAnswer,
   VikingBotInteractionAnswer,
   VikingBotInteractionLabels,
   VikingBotInteractionOption,
@@ -54,3 +63,9 @@ export type {
   VikingBotRepairOption,
   VikingBotScheduleValue,
 } from './interaction/types.js';
+
+export type {
+  VikingBotInteractionFields,
+  VikingBotInteractionField,
+  VikingBotInteractionFieldContext,
+} from './interaction/field-types.js';

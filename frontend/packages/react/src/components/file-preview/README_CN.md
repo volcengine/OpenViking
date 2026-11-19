@@ -1,13 +1,8 @@
-# FilePreview
+# FilePreview 文件预览
 
 [English](README.md) / 中文
 
-多格式文件预览。宿主给出内容与文件名，组件负责格式识别、渲染器加载、标题栏、页签、视图切换与编辑。
+带页签的文件预览：按格式渲染文件正文，提供路径面包屑、预览与源码切换、文本编辑和宿主自定义操作。
 
-`index.ts` 对应 `@openviking/react/components/file-preview`。入口、样式与包导出已预留，尚未导出组件或类型。实现按本文重写，字段以源码为准。
-
-## 开发入口
-
-开发与构建入口见 [前端工作区 README](../../../../../README.md)，模块约定见[包说明](../../../README.md)。
-
-独立样式入口为 `@openviking/react/components/file-preview/style.css`，迁入实现前为空样式。
+- 公开入口：`@openviking/react/components/file-preview`，样式 `@openviking/react/components/file-preview/style.css`
+- 文档：[组件文档](../../../../../docs/docs/zh/components/file-preview.mdx)

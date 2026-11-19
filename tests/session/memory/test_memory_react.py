@@ -607,8 +607,10 @@ class TestExtractLoopFinalJsonRetry:
             "user_id": "user_a",
         }
 
-    @pytest.mark.asyncio
-    async def test_structured_parser_preserves_delete_ids(self):
+    @pytest.fixture
+    def preferences_context(self):
+        """Provide a fresh preferences schema and empty file context for JSON extraction."""
+
         class FakeContextProvider:
             read_file_contents = {}
 
@@ -638,6 +640,10 @@ class TestExtractLoopFinalJsonRetry:
             async def prefetch(self):
                 return []
 
+        return FakeContextProvider()
+
+    @pytest.mark.asyncio
+    async def test_structured_parser_preserves_delete_ids(self, preferences_context):
         vlm = MagicMock()
         vlm.model = "test-model"
         vlm.get_completion_async = AsyncMock(
@@ -652,7 +658,7 @@ class TestExtractLoopFinalJsonRetry:
         extract_loop = ExtractLoop(
             vlm=vlm,
             viking_fs=MagicMock(),
-            context_provider=FakeContextProvider(),
+            context_provider=preferences_context,
             max_iterations=1,
         )
         resolved = ResolvedOperations(
@@ -784,7 +790,7 @@ class TestExtractLoopFinalJsonRetry:
         ]
 
     @pytest.mark.asyncio
-    async def test_final_unparseable_response_raises_instead_of_empty_success(self):
+    async def test_final_unparseable_response_skips_extraction(self, preferences_context):
         class FakeVLM:
             model = "test-model"
 
@@ -795,40 +801,11 @@ class TestExtractLoopFinalJsonRetry:
                 self.seen_messages.append(list(kwargs["messages"]))
                 return "this is not json"
 
-        class FakeContextProvider:
-            read_file_contents = {}
-
-            def get_memory_schemas(self, ctx):
-                return [
-                    MemoryTypeSchema(
-                        memory_type="preferences",
-                        description="Preferences",
-                        directory="viking://user/{user_space}/memories/preferences",
-                        filename_template="{topic}.md",
-                        fields=[],
-                    )
-                ]
-
-            def get_tools(self):
-                return []
-
-            def get_extract_context(self):
-                return MagicMock()
-
-            def get_output_language(self):
-                return "en"
-
-            def instruction(self):
-                return "Extract memory operations."
-
-            async def prefetch(self):
-                return []
-
         vlm = FakeVLM()
         extract_loop = ExtractLoop(
             vlm=vlm,
             viking_fs=MagicMock(),
-            context_provider=FakeContextProvider(),
+            context_provider=preferences_context,
             max_iterations=1,
         )
         config = SimpleNamespace(
@@ -839,8 +816,8 @@ class TestExtractLoopFinalJsonRetry:
             "openviking.session.memory.extract_loop.get_openviking_config",
             return_value=config,
         ):
-            with pytest.raises(RuntimeError, match="Final response could not be parsed"):
-                await extract_loop.run()
+            operations, _ = await extract_loop.run()
+        assert operations is None and len(vlm.seen_messages) == 2
 
         final_prompts = [
             message["content"]
@@ -928,7 +905,7 @@ class TestExtractLoopFinalJsonRetry:
                 "openviking_cli.utils.config.get_openviking_config",
                 return_value=config,
             ),
-            patch("openviking.session.memory.extract_loop.tracer.error") as tracer_error,
+            patch("openviking.session.memory.extract_loop.tracer.error"),
             patch("openviking.session.memory.extract_loop.logger.warning") as logger_warning,
         ):
             extract_loop._check_unread_existing_files = AsyncMock(return_value={})
@@ -948,7 +925,6 @@ class TestExtractLoopFinalJsonRetry:
             "not a valid restricted Python memory SDK program" in message.get("content", "")
             for message in vlm.seen_messages[-1]
         )
-        assert tracer_error.call_count == 1
         assert logger_warning.call_count == 0
 
     @pytest.mark.asyncio

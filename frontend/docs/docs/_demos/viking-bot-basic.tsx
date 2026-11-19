@@ -1,3 +1,4 @@
+import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import { VikingBot } from '@openviking/react/components/viking-bot';
 import type { VikingBotAttachment } from '@openviking/react/components/viking-bot';
@@ -91,13 +92,14 @@ const ATTACHED: VikingBotAttachment[] = [
 ];
 
 export default function VikingBotBasic() {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const [draft, setDraft] = useState('');
   const [opened, setOpened] = useState('');
   return (
     <div style={{ height: 520 }}>
       <VikingBot
         messages={messages}
-        locale="zh-CN"
+        locale={componentLocale}
         onOpenUri={setOpened}
         draft={draft}
         attachments={ATTACHED}

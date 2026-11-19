@@ -64,6 +64,16 @@ class _FakeResourceProcessor:
         return None
 
 
+class _RoutingVFS(SimpleNamespace):
+    """Connector routing fixture with allowed access and no indexed directory tags."""
+
+    async def _ensure_access(self, *_args, **_kwargs):
+        return None
+
+    def _get_vector_store(self):
+        return None
+
+
 @pytest.fixture
 def connector_config(monkeypatch):
     import openviking_cli.utils.config.open_viking_config as config_module
@@ -118,7 +128,7 @@ def service():
     # pre-check tests build their own service with a missing parent.
     return ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(exists=AsyncMock(return_value=True)),
+        viking_fs=_RoutingVFS(exists=AsyncMock(return_value=True)),
         resource_processor=_FakeResourceProcessor(),
         skill_processor=object(),
     )
@@ -286,7 +296,7 @@ async def watch_service(watch_store, watch_vfs, watch_tracker):
     """Connector imports with real Watch and Task persistence."""
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(
+        viking_fs=_RoutingVFS(
             exists=AsyncMock(return_value=True),
             _encryptor=_FakeEncryptor(),
         ),
@@ -523,8 +533,6 @@ async def test_add_resource_routes_tos_to_connector(
         submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
     )
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
-    info_log = Mock()
-    monkeypatch.setattr(connector_delegate_module.logger, "info", info_log)
 
     result = await service.add_resource(
         path=path,
@@ -554,15 +562,6 @@ async def test_add_resource_routes_tos_to_connector(
     assert queued["meta"]["request"]["submit"]["tos_path"] == tos_path
     assert queued["auth"]["external_request_private"]["api_key"] == "secret"
     assert "secret" not in json.dumps(queued["meta"])
-    request_log = next(
-        call for call in info_log.call_args_list if "task add request" in call.args[0]
-    )
-    response_log = next(
-        call for call in info_log.call_args_list if "task add response" in call.args[0]
-    )
-    assert request_log.args[2]["api_key"] == "[REDACTED]"
-    assert response_log.args[2] == {"task_key": "connector-1"}
-    assert "secret" not in str(info_log.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -1045,6 +1044,28 @@ async def test_one_off_connector_import_leaves_existing_watch_untouched(
 
 
 @pytest.mark.asyncio
+async def test_native_one_off_import_does_not_pause_connector_watch(ctx, watch_service):
+    service = watch_service
+    watch_manager = service._get_watch_manager()
+    to_uri = "viking://resources/x/y"
+    existing = await watch_manager.create_task(
+        path="https://git.example/org/repo",
+        account_id="acct",
+        user_id="alice",
+        original_role=str(Role.USER),
+        to_uri=to_uri,
+        watch_interval=5,
+        auth_state={"provider": "connector_encrypted", "ciphertext": "unused"},
+    )
+
+    await service._handle_watch_task_cancellation(to_uri, ctx)
+
+    existing = await watch_manager.get_task(existing.task_id)
+    assert existing.is_active is True
+    assert existing.path == "https://git.example/org/repo"
+
+
+@pytest.mark.asyncio
 async def test_connector_watch_keeps_running_when_target_is_missing(watch_service, watch_vfs):
     """A Connector target only exists once the plugin writes into it: an empty
     first round (or a deleted target) must not deactivate the watch."""
@@ -1518,6 +1539,7 @@ async def test_connector_import_logs_http_error_response(
     connector_config,
     ctx,
     service,
+    caplog,
 ):
     tracker = _task_tracker()
     request = httpx.Request("POST", connector_config.connector)
@@ -1536,8 +1558,10 @@ async def test_connector_import_logs_http_error_response(
         )
     )
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
-    error_log = Mock()
-    monkeypatch.setattr(connector_delegate_module.logger, "error", error_log)
+
+    logger = connector_delegate_module.logger
+    caplog.set_level(logging.INFO, logger=logger.name)
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
 
     with pytest.raises(ExternalTaskError, match="bad request"):
         await service.add_resource(
@@ -1546,15 +1570,10 @@ async def test_connector_import_logs_http_error_response(
             to="viking://resources/imports",
         )
 
-    response_log = next(
-        call for call in error_log.call_args_list if "task add response" in call.args[0]
-    )
-    assert response_log.args[2] == 400
-    assert response_log.args[3] == {
-        "message": "invalid path_prefix",
-        "token": "[REDACTED]",
-    }
-    assert "secret-value" not in str(error_log.call_args_list)
+    logs = caplog.text
+    assert "http_status=400 retrying=False" in logs
+    assert "invalid path_prefix" not in logs
+    assert "secret-value" not in logs
 
 
 @pytest.mark.asyncio
@@ -1582,7 +1601,7 @@ async def test_connector_requires_existing_parent_unless_create_parent(
     ctx,
     request_kwargs,
 ):
-    viking_fs = SimpleNamespace(exists=AsyncMock(return_value=False))
+    viking_fs = _RoutingVFS(exists=AsyncMock(return_value=False))
     service = ResourceService(
         vikingdb=object(),
         viking_fs=viking_fs,
@@ -1607,7 +1626,7 @@ async def test_connector_create_parent_false_accepts_existing_parent(
     connector_config,
     ctx,
 ):
-    viking_fs = SimpleNamespace(exists=AsyncMock(return_value=True))
+    viking_fs = _RoutingVFS(exists=AsyncMock(return_value=True))
     service = ResourceService(
         vikingdb=object(),
         viking_fs=viking_fs,
@@ -2820,6 +2839,7 @@ async def test_connector_provider_logs_http_error_response(
     monkeypatch,
     connector_config,
     ctx,
+    caplog,
 ):
     request = httpx.Request("POST", "https://connector.example/task/info")
     response = httpx.Response(
@@ -2839,24 +2859,24 @@ async def test_connector_provider_logs_http_error_response(
             ]
         )
     )
-    warning_log = Mock()
-    monkeypatch.setattr(connector_delegate_module.logger, "warning", warning_log)
+
+    logger = connector_delegate_module.logger
+    caplog.set_level(logging.INFO, logger=logger.name)
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
 
     provider = ConnectorDelegate(viking_fs=None)
     monkeypatch.setattr(provider, "_client", lambda _account_id: client)
-    await provider.get(
+    snapshot = await provider.get(
         "connector-1",
         {"account_id": ctx.account_id},
         payload={"deadline": time.time() + 1},
         private_payload={"api_key": ctx.api_key},
     )
 
-    error_log = next(
-        call for call in warning_log.call_args_list if "task info error response" in call.args[0]
-    )
-    assert error_log.args[2] == 503
-    assert error_log.args[3] == {"message": "token=[REDACTED]"}
-    assert "secret-value" not in str(warning_log.call_args_list)
+    assert snapshot.status == "running"
+    logs = caplog.text
+    assert "http_status=503 retrying=True" in logs
+    assert "secret-value" not in logs
 
 
 @pytest.mark.asyncio
@@ -2897,8 +2917,6 @@ async def test_declared_add_type_routes_generic_type_to_connector(
         submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
     )
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
-    info_log = Mock()
-    monkeypatch.setattr(connector_delegate_module.logger, "info", info_log)
 
     result = await service.add_resource(
         path="https://example.feishu.cn/wiki/space-home",
@@ -2922,11 +2940,9 @@ async def test_declared_add_type_routes_generic_type_to_connector(
         auth_config={"app_secret": "s3cret"},
         extra_params=None,
     )
-    request_log = next(
-        call for call in info_log.call_args_list if "task add request" in call.args[0]
-    )
-    assert request_log.args[2]["auth_config"] == "[REDACTED]"
-    assert "s3cret" not in str(info_log.call_args_list)
+    queued = tracker.create.await_args.kwargs
+    assert queued["auth"]["external_request_private"]["auth_config"] == {"app_secret": "s3cret"}
+    assert "s3cret" not in json.dumps(queued["meta"])
 
 
 @pytest.mark.asyncio
@@ -3193,11 +3209,20 @@ def _feishu_oauth_reference(**changes):
     return {
         "account_id": "external",
         "user_id": "owner",
+        "resource_id": "ov-resource",
+        "openviking_account_id": "kernel",
         "ov_user_id": "alice",
         "type": "oauth",
         "platform": "feishu_doc",
         **changes,
     }
+
+
+def _legacy_feishu_oauth_reference(**changes):
+    reference = _feishu_oauth_reference(**changes)
+    reference.pop("resource_id")
+    reference.pop("openviking_account_id")
+    return reference
 
 
 def _feishu_request_context():
@@ -3209,20 +3234,26 @@ def _feishu_request_context():
 
 
 @pytest.mark.asyncio
-async def test_document_auth_resolves_token_and_retains_only_private_reference(monkeypatch):
+@pytest.mark.parametrize(
+    "reference_factory", [_feishu_oauth_reference, _legacy_feishu_oauth_reference]
+)
+async def test_document_auth_resolves_token_and_retains_only_private_reference(
+    monkeypatch, reference_factory
+):
     provider = Mock(get_token=Mock(return_value="token"))
     factory = Mock(return_value=provider)
     monkeypatch.setattr(auth, "ExternalFeishuToken", factory)
-    args = {"openviking_oauth_ref": _feishu_oauth_reference()}
+    reference = reference_factory()
+    args = {"openviking_oauth_ref": reference}
 
     resolved = await auth.document_auth_config(args, _feishu_request_context())
 
     assert resolved == {
         "lark_access_token": "token",
-        "openviking_oauth_ref": _feishu_oauth_reference(),
+        "openviking_oauth_ref": reference,
     }
-    factory.assert_called_once_with(_feishu_oauth_reference(), "key")
-    assert args == {"openviking_oauth_ref": _feishu_oauth_reference()}
+    factory.assert_called_once_with(reference, "key")
+    assert args == {"openviking_oauth_ref": reference}
 
 
 @pytest.mark.asyncio

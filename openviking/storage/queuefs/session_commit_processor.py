@@ -75,15 +75,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                 )
                 return True
-            processed = await session.resume_queued_commit(msg)
-            if not processed:
-                from openviking.storage.queuefs import QueueManager, get_queue_manager
-
-                await get_queue_manager().enqueue(
-                    QueueManager.SESSION_COMMIT,
-                    msg.to_dict(),
-                )
-            return processed
+            return await session.resume_queued_commit(msg)
         finally:
             reset_root_observability_context(root_context_token)
 
@@ -129,4 +121,4 @@ class SessionCommitProcessor(DequeueHandlerBase):
                 processed = await self._process(msg, ctx)
             except Exception as exc:
                 return ProcessResult.failed(str(exc))
-        return ProcessResult.success() if processed else ProcessResult.requeued()
+        return ProcessResult.success() if processed else ProcessResult.retry()

@@ -10,8 +10,37 @@ from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
 from typing import Any, Mapping, Protocol
+from urllib.parse import urlparse
 
 import httpx
+
+from openviking.utils.git_auth import append_git_process_config
+from openviking.utils.network_guard import RequestValidator
+
+
+class _ValidatedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Validate archive redirects before urllib sends the next request."""
+
+    handler_order = 100  # Run before an adapter opener's default redirect handler.
+
+    def __init__(self, request_validator: RequestValidator):
+        self.request_validator = request_validator
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            self.request_validator(newurl)
+        except Exception:
+            fp.close()
+            raise
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        old_origin = urlparse(req.full_url)
+        new_origin = urlparse(newurl)
+        if redirected is not None and (old_origin.scheme, old_origin.netloc) != (
+            new_origin.scheme,
+            new_origin.netloc,
+        ):
+            redirected.remove_header("Authorization")
+        return redirected
 
 
 class ParserNetworkOperation(str, Enum):
@@ -118,36 +147,49 @@ def create_parser_httpx_client(
 def open_parser_url(
     context: ParserNetworkContext,
     request: urllib.request.Request | str,
+    *,
+    request_validator: RequestValidator | None = None,
     **open_kwargs: Any,
 ):
-    """Open one parser URL through an adapter opener when available."""
+    """Open a parser URL, validating the initial target and every redirect."""
 
     adapter = _adapter_for(context)
-    if adapter is not None:
-        opener = adapter.create_urllib_opener(context)
-        if opener is not None:
-            return opener.open(request, **open_kwargs)
+    opener = adapter.create_urllib_opener(context) if adapter is not None else None
+    if request_validator is not None:
+        source = request.full_url if isinstance(request, urllib.request.Request) else request
+        request_validator(source)
+        handler = _ValidatedRedirectHandler(request_validator)
+        if opener is None:
+            opener = urllib.request.build_opener(handler)
+        else:
+            opener.add_handler(handler)
+    if opener is not None:
+        return opener.open(request, **open_kwargs)
     return urllib.request.urlopen(request, **open_kwargs)
 
 
 def overlay_parser_subprocess_env(
     context: ParserNetworkContext,
     base_env: Mapping[str, str] | None,
+    *,
+    request_validator: RequestValidator | None = None,
 ) -> dict[str, str] | None:
-    """Merge adapter variables into a child environment without mutating it."""
+    """Apply parser routing and caller-owned Git safeguards to a child environment."""
 
     adapter = _adapter_for(context)
-    if adapter is None:
-        return base_env if isinstance(base_env, dict) or base_env is None else dict(base_env)
-
-    overlay = dict(adapter.subprocess_env_overlay(context))
-    if not overlay:
-        return base_env if isinstance(base_env, dict) or base_env is None else dict(base_env)
+    overlay = dict(adapter.subprocess_env_overlay(context)) if adapter is not None else {}
     if not all(isinstance(key, str) and isinstance(value, str) for key, value in overlay.items()):
         raise TypeError("Parser subprocess environment overlay must contain string pairs")
 
+    if request_validator is None and not overlay:
+        return base_env if isinstance(base_env, dict) or base_env is None else dict(base_env)
     merged = dict(os.environ if base_env is None else base_env)
     merged.update(overlay)
+    if request_validator is not None:
+        request_validator(context.source_url)
+        # Git cannot invoke a Python validator on redirects. Refuse them at the
+        # same URL-specific precedence as credentials, including inherited config.
+        append_git_process_config(merged, f"http.{context.source_url}.followRedirects", "false")
     return merged
 
 

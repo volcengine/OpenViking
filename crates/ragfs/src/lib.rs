@@ -38,7 +38,7 @@ pub mod crypto;
 pub mod git;
 pub mod global_policy;
 #[cfg(feature = "cache")]
-pub mod leader;
+pub mod coordination;
 pub mod lock;
 pub mod metrics;
 pub mod multibackend;

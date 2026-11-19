@@ -17,6 +17,25 @@ from .feishu_token import (
 )
 
 
+def normalize_lark_file(options: dict[str, Any]) -> Optional[dict[str, str]]:
+    """Select the same explicit identity for preflight and Understanding."""
+    raw = options.get("lark_file")
+    if raw is None:
+        raw = {"user_access_token": options.get("feishu_access_token")}
+    if not isinstance(raw, dict):
+        raise ValueError("lark_file must be an object")
+    auth = {
+        key: value.strip()
+        for key in ("user_access_token", "tenant_access_token")
+        if isinstance(value := raw.get(key), str) and value.strip()
+    }
+    if len(auth) > 1:
+        raise ValueError(
+            "lark_file must contain exactly one of user_access_token or tenant_access_token"
+        )
+    return auth or None
+
+
 def _default_api_domain(source_url: str) -> str:
     host = (urlparse(source_url).hostname or "").lower()
     if host.endswith(("larksuite.com", "larkoffice.com")):
@@ -54,8 +73,10 @@ class FeishuApiSession:
         context: FeishuAccessContext,
         *,
         tenant_token_cache: ICache | None = None,
+        tenant_access_token: Optional[str] = None,
     ):
         self.context = context
+        self.tenant_access_token = tenant_access_token
         self._clients: dict[bool, Any] = {}
         self._tenant_token_cache = resolve_feishu_tenant_token_cache(tenant_token_cache)
 
@@ -77,7 +98,7 @@ class FeishuApiSession:
             .domain(self.context.config.domain)
             .timeout(self.context.config.request_timeout)
         )
-        if use_user_token:
+        if use_user_token or self.tenant_access_token:
             builder = builder.enable_set_token(True)
         else:
             config = self.context.config

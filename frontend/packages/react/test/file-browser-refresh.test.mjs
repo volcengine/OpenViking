@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 
-import { OpenVikingProvider } from '@openviking/react/client';
+import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
+import { OpenVikingProvider as PublicOpenVikingProvider } from '@openviking/react/client';
 // 从打包产物导入：Hook 内部的相对引用带 `.js` 后缀，只有构建后的目录能解析。
 // Import from the built package: the Hook's relative imports carry a `.js` suffix,
 // which only resolves inside the build output.
-import { useFileBrowser } from '@openviking/react/modules/file-browser';
+import { useFileBrowser } from './helpers/internal-hooks.mjs';
 import { deferred, mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 const ROOT = 'viking://';
@@ -202,12 +203,13 @@ test('a failed listing renders an error row with a retry, not an empty tree', as
     await import('@openviking/react/modules/file-browser');
   const tree = await mount(
     createElement(
-      OpenVikingProvider,
+      PublicOpenVikingProvider,
       { baseURL: 'https://ov.test', fetch },
       createElement(FileBrowser, null),
     ),
   );
 
+  await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
   const html = tree.container.innerHTML;
   assert.match(html, /Permission denied|加载失败|Failed to load/);
   assert.doesNotMatch(html, /ov-file-tree__state[^]*No files/);
@@ -242,12 +244,13 @@ test('a failed read renders a failure state instead of the unselected artwork', 
     await import('@openviking/react/modules/file-browser');
   const tree = await mount(
     createElement(
-      OpenVikingProvider,
+      PublicOpenVikingProvider,
       { baseURL: 'https://ov.test', fetch },
       createElement(FileBrowser, { defaultUri: 'viking://b.md' }),
     ),
   );
 
+  await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
   const html = tree.container.innerHTML;
   assert.match(html, /ov-file-browser__failure/);
   assert.match(html, /Permission denied/);

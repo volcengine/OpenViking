@@ -1,3 +1,4 @@
+import { Button } from '../../shared/primitives/button/button.js';
 import type { ReactNode } from 'react';
 
 import type { FilePreviewLabels } from './types.js';
@@ -29,10 +30,12 @@ function StatePanel({
 /** 空文件态：严格长度为 0。The empty-file state, for a strictly zero-length body. */
 export function EmptyFileState({
   text,
+  label,
 }: {
   text: Required<FilePreviewLabels>;
+  label?: string;
 }) {
-  return <StatePanel title={text.fileEmpty} />;
+  return <StatePanel title={label ?? text.fileEmpty} />;
 }
 
 /** 无可见内容态：正文存在但没有可渲染的文本。 */
@@ -84,43 +87,28 @@ export function LoadFailedState({
       description={description}
       action={
         onRetry ? (
-          <button
-            type="button"
+          <Button
+            size="small"
+            type="default"
+            htmlType="button"
             className="ov-file-preview__button"
             onClick={onRetry}
           >
             {text.retry}
-          </button>
+          </Button>
         ) : undefined
       }
     />
   );
 }
 
-/** 格式不支持态，带下载入口。An unsupported-format state with a download entry. */
+/** 格式不支持态；宿主操作由 actions 提供。Unsupported format; host commands use actions. */
 export function UnsupportedState({
   text,
-  onDownload,
 }: {
   text: Required<FilePreviewLabels>;
-  onDownload?: () => void;
 }) {
-  return (
-    <StatePanel
-      title={text.unsupported}
-      action={
-        onDownload ? (
-          <button
-            type="button"
-            className="ov-file-preview__button"
-            onClick={onDownload}
-          >
-            {text.download}
-          </button>
-        ) : undefined
-      }
-    />
-  );
+  return <StatePanel title={text.unsupported} />;
 }
 
 /** 正文被截断时的提示，固定在正文下方。 */

@@ -1,41 +1,45 @@
-import type { FilePreviewLabels } from '../../components/file-preview/index.js';
+import { useLocale } from '../../shared/locale-context.js';
+import { renderErrors as renderEn } from './locales/en-US.js';
+import { renderErrors as renderZh } from './locales/zh-CN.js';
+import workflowEn from './locales/preview-workflow.en-US.js';
+import workflowZh from './locales/preview-workflow.zh-CN.js';
+import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
+import { resolveLocale, type Locale } from '../../shared/locale.js';
+import enUS, {
+  stackedEmpty as stackedEmptyEn,
+  emptySummaries as emptySummariesEn,
+} from './locales/en-US.js';
+import zhCN, {
+  stackedEmpty as stackedEmptyZh,
+  emptySummaries as emptySummariesZh,
+} from './locales/zh-CN.js';
+
+const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
+const STACKED_EMPTY = { 'en-US': stackedEmptyEn, 'zh-CN': stackedEmptyZh };
+
+import type {
+  FilePreviewLabels,
+  FilePreviewTab,
+} from '../../components/file-preview/index.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
 import type { FileTreeLabels } from '../../components/file-tree/index.js';
 import type { FileBrowserLabels } from './types.js';
 
 /** 模块外壳自己渲染的文案，其余透传给树与预览。 */
-type ShellLabels = Omit<FileBrowserLabels, 'tree' | 'preview'>;
+export type ShellLabels = Omit<
+  FileBrowserLabels,
+  'tree' | 'preview' | 'actionBar' | 'dashboard' | 'acl' | 'workflows'
+>;
 
 /**
  * 模块外壳的内置文案。树与预览的默认值留在各自组件里，模块不重复一份。
  * Built-in copy of the module shell. The tree and the preview keep their own
  * defaults, so the module does not duplicate them.
  */
-export const DEFAULT_LABELS: Required<ShellLabels> = {
-  empty: 'Select a file to preview',
-  error: 'Failed to load the directory',
-  retry: 'Retry',
-  refresh: 'Refresh',
-  searchPlaceholder: 'Search files ⌘+K...',
-  searchEmpty: 'No matching resources',
-  searchFailed: 'Failed to run the search',
-  loading: 'Loading…',
-  searchLoading: 'Searching…',
-  previewMode: 'Preview',
-  sourceMode: 'Source',
-  copyPath: 'Copy path',
-  copyContent: 'Copy content',
-  download: 'Download',
-  history: 'Version history',
-  viewSwitch: 'Switch view',
-  resizeTree: 'Resize the directory tree',
-  l0Summary: 'L0 Summary',
-  l1Overview: 'L1 Overview',
-  summaryEmpty: 'No summary generated yet',
-  summaryFailed: 'The summary could not be loaded.',
-};
 
 /** 解析后的外壳文案，外加透传给两个组件的文案。 */
 export interface ResolvedLabels extends Required<ShellLabels> {
+  workflow: FileBrowserWorkflowLabels;
   tree: FileTreeLabels | undefined;
   previewLabels: FileBrowserLabels['preview'];
 }
@@ -43,34 +47,83 @@ export interface ResolvedLabels extends Required<ShellLabels> {
 /** 逐项合并默认文案；树与预览的文案原样透传，缺省由组件自己兜底。 */
 export function resolveLabels(
   labels: FileBrowserLabels | undefined,
+  locale: Locale,
+  stacked = false,
 ): ResolvedLabels {
+  const text = resolveLocale(LOCALES, locale, labels);
   return {
-    ...DEFAULT_LABELS,
-    ...labels,
+    ...text,
+    empty: stacked ? (labels?.empty ?? STACKED_EMPTY[locale]) : text.empty,
+    workflow: resolveLocale(
+      { 'en-US': workflowEn, 'zh-CN': workflowZh },
+      locale,
+      labels?.workflows,
+    ),
     tree: labels?.tree,
     previewLabels: labels?.preview,
   };
 }
 
-/**
- * 预览组件的文案：模块自己的那几项叠在宿主透传的之上。组件那份英文默认值只在
- * 宿主完全不传时才会用到，模块不能让它在中文界面里漏出来。
- *
- * The preview component's copy: the module's own fields layered over what the host
- * passed through. The component's English defaults only apply when a host passes
- * nothing, and must not leak into a Chinese interface.
- */
+/** Shared shell labels followed by explicit preview overrides. */
 export function resolvePreviewLabels(text: ResolvedLabels): FilePreviewLabels {
   return {
-    // `loading` 与 `copyPath`、`download` 一样是模块自己渲染的文案，必须带上：
-    // 漏掉它，预览的加载态就会走组件里的英文兜底，中文界面里冒出「Loading…」。
-    //
-    // `loading` belongs here like `copyPath` and `download`: it is copy the module
-    // renders itself. Leaving it out sends the preview's loading state to the
-    // component's English fallback, which surfaces as "Loading…" in a Chinese UI.
     loading: text.loading,
     copyPath: text.copyPath,
-    download: text.download,
+    previewMode: text.previewMode,
+    sourceMode: text.sourceMode,
+    viewSwitch: text.viewSwitch,
     ...text.previewLabels,
   };
+}
+
+export function withDirectoryEmptyLabel(
+  tab: FilePreviewTab | undefined,
+  labels: FilePreviewLabels | undefined,
+  text: ResolvedLabels,
+): FilePreviewLabels | undefined {
+  if (tab?.kind === 'directory' && isSystemUri(tab.key))
+    return { ...labels, fileEmpty: text.systemDirectory };
+  return labels;
+}
+
+export const DEFAULT_LABELS: Required<ShellLabels> = enUS;
+
+export interface DirectorySummaryLabels {
+  l0: string;
+  l1: string;
+  failure: string;
+  l0Empty?: string;
+  l1Empty?: string;
+}
+
+/** Summary titles are derived from the module resource, including host overrides. */
+export function resolveSummaryLabels(
+  locale: Locale,
+  labels?: FileBrowserLabels,
+) {
+  const text = resolveLabels(labels, locale);
+  const empty = locale === 'zh-CN' ? emptySummariesZh : emptySummariesEn;
+  const sharedEmpty = labels?.summaryEmpty ?? labels?.preview?.fileEmpty;
+  return {
+    l0: text.l0Summary,
+    l1: text.l1Overview,
+    failure: text.summaryFailed,
+    l0Empty: labels?.emptyL0Summary ?? sharedEmpty ?? empty.l0,
+    l1Empty: labels?.emptyL1Overview ?? sharedEmpty ?? empty.l1,
+  };
+}
+
+export function resolvePaneLabels(
+  labels: FileBrowserLabels | undefined,
+  locale: Locale,
+) {
+  return {
+    summaryLabels: resolveSummaryLabels(locale, labels),
+    previewLabels: resolvePreviewLabels(resolveLabels(labels, locale)),
+  };
+}
+
+/** Private render-failure copy; independent of request errors and public label overrides. */
+export function useRenderErrors(locale?: Parameters<typeof useLocale>[0]) {
+  return useLocale(locale) === 'zh-CN' ? renderZh : renderEn;
 }

@@ -26,6 +26,7 @@ NOTICE_LINES = re.compile(rf"^(?:{TOOL_LINE}|{RECALL_LINE})$\n*", re.M)
 
 # What the session-start block holds, in the order the recall notice names it.
 SESSION_PARTS = {
+    "soul": "soul",
     "profile": "user profile",
     "memories": "memory index",
     "skills": "skill list",
@@ -44,6 +45,9 @@ FAILED_REASONS = {
     "openviking_http_401": "OpenViking rejected the key (401)",
     "openviking_version_mismatch": "OpenViking version mismatch",
     "recall_timeout": "OpenViking timed out",
+    "openviking_timeout": "OpenViking timed out",
+    "openviking_circuit_open": "OpenViking is not answering; skipped",
+    "openviking_budget_exhausted": "OpenViking time budget used up",
 }
 NAMES_SHOWN = 3
 

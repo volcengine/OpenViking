@@ -12,8 +12,16 @@ from unittest.mock import AsyncMock
 import pytest
 import requests
 
+from openviking.core.context import Context
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.models.model_error import ModelError, ModelErrorKind, brief_for
+from openviking.observability.events import (
+    register_event_subscriber,
+    try_publish_event,
+    unregister_event_subscriber,
+)
+from openviking.observability.reporting.runtime import make_subscriber
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import (
@@ -32,6 +40,7 @@ from openviking.storage.errors import (
 from openviking.storage.expr import Eq
 from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
@@ -183,6 +192,58 @@ def _build_queue_payload_for_account(account_id: str) -> dict:
         telemetry_id="telemetry-1",
     )
     return {"data": json.dumps(msg.to_dict())}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_source_is_restored_from_each_embedding_delivery(monkeypatch):
+    class _ReportingEmbedder(_DummyEmbedder):
+        def embed(self, text, is_query=False):
+            try_publish_event("embedding.call", {"source_type": None, "prompt_tokens": 3})
+            return super().embed(text, is_query=is_query)
+
+    class _VikingDB:
+        is_closing = False
+
+        async def upsert(self, data, *, ctx, options=UpsertOptions()):
+            return data["id"]
+
+    embedder = _ReportingEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config", lambda: _DummyConfig(embedder)
+    )
+    handler = TextEmbeddingHandler(_VikingDB())
+    with bind_dashboard_token_source_type("create_collection"):
+        message = EmbeddingMsgConverter.from_context(
+            Context(uri="viking://resources/sample", abstract="summary"), action=IndexAction.UPSERT
+        )
+    assert message is not None
+
+    exported, original = [], []
+    register_event_subscriber(
+        "test-dashboard-token-source",
+        make_subscriber(SimpleNamespace(report=exported.append), {}),
+    )
+    register_event_subscriber("test-raw-token-source", original.append)
+    try:
+        with bind_dashboard_token_source_type("workspace_init"):
+            for payload in (
+                {"data": message.to_json()},
+                {"data": message.to_json()},
+                _build_queue_payload(),
+            ):
+                assert (await handler.on_dequeue(payload)).outcome is ProcessOutcome.SUCCESS
+    finally:
+        unregister_event_subscriber("test-dashboard-token-source")
+        unregister_event_subscriber("test-raw-token-source")
+
+    assert [event["source_type"] for event in exported] == [
+        "create_collection",
+        "create_collection",
+        "unknown",
+    ]
+    assert [
+        event.payload["source_type"] for event in original if event.event_name == "embedding.call"
+    ] == [None, None, None]
 
 
 def _build_operation_payload(msg: EmbeddingMsg) -> dict:
@@ -806,7 +867,7 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_warning(
+async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_info(
     monkeypatch, caplog
 ):
     from openviking.utils.circuit_breaker import CircuitBreakerOpen
@@ -840,19 +901,16 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
 
     monkeypatch.setattr(collection_schemas.logger, "propagate", False)
     collection_schemas.logger.addHandler(caplog.handler)
-    collection_schemas.logger.setLevel(logging.WARNING)
+    collection_schemas.logger.setLevel(logging.INFO)
     try:
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             first_result = await handler.on_dequeue(_build_queue_payload())
             second_result = await handler.on_dequeue(_build_queue_payload())
     finally:
         collection_schemas.logger.removeHandler(caplog.handler)
 
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
-    assert (
-        warnings.count("Embedding circuit breaker is open; re-enqueueing messages account=default")
-        == 1
-    )
+    infos = [record.message for record in caplog.records if record.levelno == logging.INFO]
+    assert infos.count("Embedding circuit breaker is open; re-enqueueing messages") == 1
     for result in (first_result, second_result):
         assert result.outcome is ProcessOutcome.REQUEUED
         assert result.value is None
@@ -1329,7 +1387,10 @@ async def test_embedding_handler_honors_existing_record_id_override(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_generates_id_and_reports_written_context(monkeypatch):
+@pytest.mark.parametrize("write_result", ["stored-record", "", None])
+async def test_embedding_handler_generates_id_and_reports_written_context(
+    monkeypatch, write_result
+):
     captured = {}
 
     class _CapturingVikingDB:
@@ -1338,7 +1399,7 @@ async def test_embedding_handler_generates_id_and_reports_written_context(monkey
 
         async def upsert(self, data, *, ctx, options=UpsertOptions()):
             captured["data"] = dict(data)
-            return data["id"]
+            return write_result
 
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
@@ -1354,7 +1415,14 @@ async def test_embedding_handler_generates_id_and_reports_written_context(monkey
     result = await TextEmbeddingHandler(_CapturingVikingDB()).on_dequeue(payload)
 
     assert captured["data"]["id"] == vector_record_id("acct-new-id", "viking://resources/sample", 2)
-    assert result.value == {"vector_written": True}
+    if write_result:
+        assert result.outcome is ProcessOutcome.SUCCESS
+        assert result.value == {"vector_written": True}
+    else:
+        assert result.outcome is ProcessOutcome.FAILED
+        assert result.value is None
+        assert result.errors
+        assert result.error and "no record ID" in result.error
 
 
 def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
@@ -3078,7 +3146,7 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
 async def test_update_search_tags_with_levels_queries_directory_uri_only():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     directory_uri = "viking://resources/demo/doc.md"
-    calls = {"filter": [], "get": [], "upsert": []}
+    calls = {"filter": [], "get": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3096,10 +3164,10 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
             {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
         ]
 
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True)
 
     async def _fake_get(ids, *, ctx):
         calls["get"].append((list(ids), ctx.account_id))
@@ -3110,7 +3178,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 
     backend.filter = _fake_filter
     backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         directory_uri,
@@ -3125,17 +3193,13 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
     assert calls["get"] == [(["dir-l0", "dir-l1"], ctx.account_id)]
     assert calls["filter"][0]["limit"] == 2
     assert "id" in calls["filter"][0]["output_fields"]
-    assert calls["upsert"] == [
+    assert calls["update"] == [
         {
             "id": "dir-l0",
-            "uri": directory_uri,
-            "level": 0,
             "search_tags": ["old=0", "team=search"],
         },
         {
             "id": "dir-l1",
-            "uri": directory_uri,
-            "level": 1,
             "search_tags": ["old=1", "team=search"],
         },
     ]
@@ -3144,7 +3208,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 @pytest.mark.asyncio
 async def test_update_search_tags_with_levels_skips_records_without_id_and_private_helper_is_removed():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    calls = {"filter": [], "get": [], "upsert": []}
+    calls = {"filter": [], "get": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3162,10 +3226,10 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
         ]
 
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True)
 
     async def _fake_get(ids, *, ctx):
         calls["get"].append((list(ids), ctx.account_id))
@@ -3181,7 +3245,7 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
 
     backend.filter = _fake_filter
     backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         "viking://resources/demo/doc.md",
@@ -3208,7 +3272,9 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             "search_tags": ["team=search"],
         },
     ]
-    assert calls["upsert"] == updated
+    assert calls["update"] == [
+        {"id": record["id"], "search_tags": record["search_tags"]} for record in updated
+    ]
 
 
 @pytest.mark.asyncio

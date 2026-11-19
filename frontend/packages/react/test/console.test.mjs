@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { act, type, click } from './helpers/tui-dom.mjs';
+import { act, type, click } from './helpers/command-console-dom.mjs';
 import { ok, mount } from './helpers/console-dom.mjs';
 
 test('Console uses native requests, validates before sending and resubmits after failure', async () => {
@@ -52,7 +52,11 @@ test('Console uses native requests, validates before sending and resubmits after
     assert.equal(calls.length, 1);
     failure = true;
     await host.execute('/read viking://resources/demo');
-    assert.match(host.records.at(-1).textContent, /DENIED: No access/);
+    assert.equal(
+      host.records.at(-1).querySelector('.ov-command-console__result-body')
+        .textContent,
+      'No access',
+    );
     assert.equal(host.container.querySelector('.ov-console__error'), null);
     assert.equal(host.button('Retry command'), undefined);
     failure = false;
@@ -127,8 +131,10 @@ test('Console reports controlled mode intent and supports quick actions, keyboar
     assert.deepEqual(changes, ['conversation']);
     assert.equal(host.button('Terminal').getAttribute('aria-pressed'), 'true');
     assert.equal(host.input.value, 'ov health');
-    await click(host.container.querySelector('.ov-console__quick-action'));
-    assert.equal(host.input.value, 'ov help ');
+    await click(
+      host.container.querySelector('.ov-command-console__empty-action'),
+    );
+    assert.match(host.input.value, /^ov add-resource https:\/\//);
     assert.equal(document.activeElement, host.input);
     await host.execute('ov health');
     assert.match(host.text, /ready/);
@@ -154,5 +160,31 @@ test('Console reports controlled mode intent and supports quick actions, keyboar
     assert.equal(document.activeElement, host.input);
   } finally {
     await host.dispose();
+  }
+});
+
+test('Console forwards only explicit terminal copy overrides to CommandConsole', async () => {
+  const title = () =>
+    host0.container.querySelector('.ov-command-console__empty-title')
+      .textContent;
+  const host0 = await mount(async () => ok({ state: 'ready' }));
+  try {
+    assert.equal(title(), 'OpenViking CLI');
+
+    await host0.render({ labels: { commandTitle: 'Custom CLI' } });
+    assert.equal(title(), 'Custom CLI');
+
+    await host0.render({
+      labels: {
+        commandTitle: 'Legacy',
+        commandConsole: { emptyTitle: 'CommandConsole wins' },
+      },
+    });
+    assert.equal(title(), 'CommandConsole wins');
+
+    await host0.render({ labels: { commandTitle: '' } });
+    assert.equal(title(), '');
+  } finally {
+    await host0.dispose();
   }
 });

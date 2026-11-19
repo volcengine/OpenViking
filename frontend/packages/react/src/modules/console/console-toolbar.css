@@ -70,47 +70,33 @@
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   margin-inline-start: auto;
 }
 .ov-console__action {
-  display: inline-flex;
   box-sizing: border-box;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 8px;
-  padding: 0;
-  background: transparent;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  cursor: pointer;
   list-style: none;
+}
+.ov-console__action.ov-button {
+  width: 24px;
+  height: 24px;
+  border: 0;
   transition:
     background-color 160ms ease,
     color 160ms ease;
 }
-.ov-console__action > svg {
-  display: block;
-  width: 12px;
-  height: 12px;
+.ov-console .ov-console__action.ov-button:not(:disabled) {
+  color: var(--ov-ui-console-secondary);
 }
-.ov-console__action > svg path {
-  stroke-width: 1.25px;
-  vector-effect: non-scaling-stroke;
-}
-.ov-console__action:hover,
-.ov-console__action[data-open] {
+/* 悬停与 VikingBot 的会话按钮一致：浅底，图标转为主文字色。 */
+.ov-console .ov-console__action.ov-button:not(:disabled):hover {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
   color: var(--ov-ui-console-text);
 }
-.ov-console__action:disabled {
-  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
-  background: transparent;
-  cursor: not-allowed;
+.ov-console__action > svg {
+  display: block;
 }
-.ov-console__action:focus-visible,
+
 .ov-console__mode:focus-visible {
   outline: 2px solid var(--ov-ui-console-focus);
   outline-offset: 2px;
@@ -126,7 +112,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .ov-console__mode,
-  .ov-console__action {
+  .ov-console__action.ov-button {
     transition: none;
   }
 }

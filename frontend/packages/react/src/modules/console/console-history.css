@@ -36,7 +36,7 @@
 .ov-console__history-content li {
   margin: 0;
 }
-.ov-console__history-content button {
+.ov-console__history-content button:not(.ov-button) {
   display: flex;
   box-sizing: border-box;
   width: 100%;
@@ -53,13 +53,13 @@
   text-align: start;
   cursor: pointer;
 }
-.ov-console__history-content button:hover {
+.ov-console__history-content button:not(.ov-button):hover {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
-.ov-console__history-content button:disabled {
+.ov-console__history-content button:not(.ov-button):disabled {
   cursor: not-allowed;
 }
-.ov-console__history-content button:focus-visible {
+.ov-console__history-content button:not(.ov-button):focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: -2px;
 }
@@ -77,27 +77,8 @@
   line-height: 18px;
 }
 .ov-console__history-empty {
-  display: flex;
-  box-sizing: border-box;
   min-height: 180px;
-  flex-direction: column;
-  align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 12px;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  text-align: center;
-}
-.ov-console__history-illustration {
-  display: block;
-  width: 120px;
-  max-width: 100%;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-}
-.ov-console__history-illustration svg {
-  display: block;
-  width: 100%;
-  height: auto;
 }
 .ov-tooltip.ov-console__action-tooltip {
   --ov-ui-tooltip-border: var(

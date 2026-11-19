@@ -16,7 +16,7 @@ import McpIcon from '../../../../icons/svg/agent-connect/mcp.svg?react';
 import CliIcon from '../../../../icons/svg/agent-connect/cli.svg?react';
 import ApiIcon from '../../../../icons/svg/agent-connect/api.svg?react';
 import SdkIcon from '../../../../icons/svg/agent-connect/sdk.svg?react';
-import { AGENT_CONNECT_COPY } from './agent-connect-copy.js';
+import { resolveAgentConnectLabels } from './agent-connect-copy.js';
 import { getAgentConnectContent } from './agent-connect-instructions.js';
 import type { AgentConnectLocale } from './types.js';
 
@@ -37,9 +37,10 @@ const mainstream = [
   { id: 'kimi-code', Icon: KimiCodeIcon },
 ] as const;
 
+const defaultOverseasAgents = new Set(['codex', 'claude-code']);
+
 const overseasAgents = new Set([
-  'codex',
-  'claude-code',
+  ...defaultOverseasAgents,
   'cursor',
   'openclaw',
   'hermes',
@@ -54,9 +55,18 @@ const custom = [
   { id: 'sdk', Icon: SdkIcon },
 ] as const;
 
-export function getAgentConnectDesign(locale: AgentConnectLocale) {
+export function getAgentConnectDesign(
+  locale: AgentConnectLocale,
+  showOverseasTag?: boolean,
+) {
   const content = getAgentConnectContent(locale);
-  const labels = AGENT_CONNECT_COPY[locale];
+  const labels = resolveAgentConnectLabels(locale);
+  const taggedAgents =
+    showOverseasTag === undefined
+      ? defaultOverseasAgents
+      : showOverseasTag
+        ? overseasAgents
+        : undefined;
   return {
     tabs: [
       { id: 'mainstream', label: labels.mainstream },
@@ -67,7 +77,7 @@ export function getAgentConnectDesign(locale: AgentConnectLocale) {
       ...content[item.id],
       tags: [
         ...content[item.id].tags,
-        ...(overseasAgents.has(item.id) ? [labels.overseas] : []),
+        ...(taggedAgents?.has(item.id) ? [labels.overseas] : []),
       ],
     })),
     custom: custom.map((item) => ({ ...item, ...content[item.id] })),

@@ -1,8 +1,14 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import type { FilePreviewDirectoryTab } from '../../components/file-preview/index.js';
-import { directoryIcon } from './fs-icon.js';
-import { isAbort, toDirectoryTab } from './fs-model.js';
+import { isAbort } from '../../shared/request/fs-errors.js';
+import { type DirectorySummary } from './fs-model.js';
+
+// VikingFS returns these complete Markdown documents for unavailable summaries.
+const placeholders = {
+  abstract: /^# viking:\/\/[^\r\n]* \[Directory abstract is not ready\]$/,
+  overview:
+    /^# viking:\/\/[^\r\n]*\r?\n\r?\n\[Directory overview is not ready\]$/,
+};
 
 /**
  * 读目录的两级摘要，各自成一个页签：L0 是摘要，L1 是总览。
@@ -21,9 +27,7 @@ export async function readDirectory(
   client: OvClient,
   uri: string,
   options: OvRequestOptions,
-  labels: { l0: string; l1: string; failure: string },
-  openParent?: (uri: string) => Promise<void>,
-): Promise<FilePreviewDirectoryTab> {
+): Promise<DirectorySummary> {
   // 失败不吞：两级摘要各自可能为空（目录还没生成），但请求失败是另一回事，
   // 静默变成空串会让「没生成」和「取不到」看起来一样，用户无从判断。
   //
@@ -42,12 +46,18 @@ export async function readDirectory(
   // them apart. The failed level therefore keeps its reason for the tab to show; when
   // both levels fail the whole read is thrown so the preview shows its failure state
   // and a retry.
-  const read = (path: string) =>
+  const basename = uri.replace(/\/$/, '').split('/').at(-1);
+  const unavailableOverview = `# ${basename}\n\n[Directory overview is not ready]`;
+  const read = (path: string, placeholder: (value: string) => boolean) =>
     client
       .request<string>({ method: 'GET', path, query: { uri }, options })
       .then((value) => ({
         ok: true as const,
-        text: typeof value === 'string' ? value : '',
+        text:
+          typeof value === 'string' &&
+          !placeholder(value.trimEnd().replaceAll('\r\n', '\n'))
+            ? value
+            : '',
       }))
       .catch((cause: unknown) => ({ ok: false as const, cause }));
 
@@ -58,8 +68,14 @@ export async function readDirectory(
   // sibling switching inside it, not file tabs. A file tab answers "which files
   // are open"; these answer "which summary level of this directory is shown".
   const [abstractResult, overviewResult] = await Promise.all([
-    read(OV_PATHS.contentAbstract),
-    read(OV_PATHS.contentOverview),
+    read(OV_PATHS.contentAbstract, (value) =>
+      placeholders.abstract.test(value),
+    ),
+    read(
+      OV_PATHS.contentOverview,
+      (value) =>
+        placeholders.overview.test(value) || value === unavailableOverview,
+    ),
   ]);
   // 被取消的那一级不是「没有生成」，而是「这次请求作废了」：把它当作空摘要
   // 返回，调用方就会拿着一个过期结果当成成功。取消优先于其余失败上报。
@@ -82,16 +98,10 @@ export async function readDirectory(
         ? result.cause.message
         : String(result.cause);
 
-  return toDirectoryTab(
-    uri,
-    {
-      abstract: abstractResult.ok ? abstractResult.text : '',
-      overview: overviewResult.ok ? overviewResult.text : '',
-      abstractError: reason(abstractResult),
-      overviewError: reason(overviewResult),
-    },
-    labels,
-    openParent,
-    directoryIcon(),
-  );
+  return {
+    abstract: abstractResult.ok ? abstractResult.text : '',
+    overview: overviewResult.ok ? overviewResult.text : '',
+    abstractError: reason(abstractResult),
+    overviewError: reason(overviewResult),
+  };
 }

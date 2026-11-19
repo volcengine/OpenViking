@@ -77,6 +77,12 @@ describe('enum labels', () => {
     expect(captureReasonLabel(t, 'openviking_unavailable')).toContain(
       'unreachable',
     )
+    expect(captureReasonLabel(t, 'openviking_http_503')).toBe(
+      'OpenViking returned HTTP 503',
+    )
+    expect(captureReasonLabel(t, 'save_timeout')).toBe(
+      'Saving to OpenViking timed out',
+    )
     expect(recallReasonLabel(t, 'empty')).toBe('Nothing relevant found')
     expect(recallReasonLabel(t, undefined)).toBe('')
     expect(healthReasonLabel(t, 'openviking_version_mismatch')).toContain(

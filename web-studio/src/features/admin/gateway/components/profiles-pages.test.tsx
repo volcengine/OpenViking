@@ -31,10 +31,7 @@ import type {
   ProfileSettings,
 } from '#/features/admin/gateway/lib/api'
 import { gatewayDocsUrl } from '#/features/admin/gateway/lib/client-guides'
-import {
-  PROFILE_DEFAULTS,
-  WRITE_TOOLS,
-} from '#/features/admin/gateway/lib/profile-schema'
+import { PROFILE_DEFAULTS } from '#/features/admin/gateway/lib/profile-schema'
 import { parseProfileEditorSearch } from '#/features/admin/gateway/lib/search'
 
 const api = vi.hoisted(() => ({
@@ -129,7 +126,7 @@ const chat: Profile = {
   revision: 1,
   name: 'Chat',
   recall: false,
-  // Saved with OpenViking tools off; the recommended write exclusions remain.
+  // Saved with OpenViking tools off.
   gateway_tools: false,
 }
 
@@ -508,6 +505,9 @@ describe('profile editor', () => {
     fireEvent.click(
       screen.getByRole('switch', { name: 'profiles.recall.profile.label' }),
     )
+    fireEvent.click(
+      screen.getByRole('switch', { name: 'profiles.recall.soul.label' }),
+    )
     fireEvent.change(
       screen.getByLabelText('profiles.recall.profileMaxTokens.label'),
       {
@@ -519,6 +519,7 @@ describe('profile editor', () => {
     expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
       recall: false,
       profile: false,
+      soul: false,
       profile_max_tokens: 0,
     })
   })
@@ -565,7 +566,7 @@ describe('profile editor', () => {
         screen
           .getByRole('checkbox', { name: toolName(tool.name) })
           .getAttribute('aria-checked'),
-      ).toBe(String(!WRITE_TOOLS.includes(tool.name)))
+      ).toBe('true')
       expect(screen.getByText(tool.description)).toBeTruthy()
     }
     expect(
@@ -582,10 +583,7 @@ describe('profile editor', () => {
     // Listed tools in catalog order, then exclusions the catalog lacks.
     expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
       gateway_tools: true,
-      disabled_tools: [
-        'find',
-        ...WRITE_TOOLS.filter((name) => name !== 'write'),
-      ],
+      disabled_tools: ['find', 'write'],
     })
     expect(api.saveProfile.mock.calls[0][2]).not.toHaveProperty(
       'allow_write_tools',
@@ -647,10 +645,9 @@ describe('profile editor', () => {
     expect(saveButton().disabled).toBe(false)
     fireEvent.click(saveButton())
     await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
-    expect(api.saveProfile.mock.calls[0][2].disabled_tools).toEqual([
-      ...tools.map((tool) => tool.name),
-      ...WRITE_TOOLS.filter((name) => name !== 'write'),
-    ])
+    expect(api.saveProfile.mock.calls[0][2].disabled_tools).toEqual(
+      tools.map((tool) => tool.name),
+    )
   })
 
   it('explains the empty catalog and still lets a profile be saved', async () => {
@@ -662,7 +659,7 @@ describe('profile editor', () => {
     expect(saveButton().disabled).toBe(false)
     fireEvent.click(saveButton())
     await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
-    expect(api.saveProfile.mock.calls[0][2].disabled_tools).toEqual(WRITE_TOOLS)
+    expect(api.saveProfile.mock.calls[0][2].disabled_tools).toEqual([])
   })
 
   it('shows a retry action when the tools request fails', async () => {
@@ -711,6 +708,34 @@ describe('profile editor', () => {
     expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
       recall: false,
       show_recall: true,
+    })
+  })
+
+  it('recalls every peer by default and saves the current-peer scope', async () => {
+    // Profiles saved before the setting existed lack the field.
+    const { recall_peer_scope: _, ...legacy } = chat
+    api.listProfiles.mockResolvedValue([legacy as Profile])
+    renderAt('/admin/gateway/profiles/p2')
+    await screen.findByDisplayValue('Chat')
+    expect(saveButton().disabled).toBe(true)
+    fireEvent.click(sectionSwitch('recall'))
+    fireEvent.click(screen.getAllByText('field.advanced')[0])
+    const scope = screen.getByRole('combobox', {
+      name: 'profiles.recall.peerScope.label',
+    })
+    expect(scope.textContent).toContain('profiles.recall.peerScope.all')
+
+    fireEvent.click(scope)
+    const option = await screen.findByRole('option', {
+      name: 'profiles.recall.peerScope.actor',
+    })
+    fireEvent.mouseMove(option)
+    fireEvent.click(option)
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
+    expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
+      recall_peer_scope: 'actor',
     })
   })
 

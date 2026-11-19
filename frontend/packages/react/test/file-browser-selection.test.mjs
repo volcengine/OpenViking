@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 
-import { OpenVikingProvider } from '@openviking/react/client';
-import { useFileBrowser } from '@openviking/react/modules/file-browser';
+import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
+import { useFileBrowser } from './helpers/internal-hooks.mjs';
 import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 const ROOT = 'viking://';
@@ -152,6 +152,7 @@ test('a root retry clears the tree-level error once it succeeds', async () => {
       createElement(Probe, { uri: null, controlled: false }),
     ),
   );
+  await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
   assert.ok(api.current.treeError, 'the first load must fail');
 
   failing = false;

@@ -429,7 +429,55 @@ async def test_search_tools_expose_only_context_type_parameter():
     for tool_name in ("find", "search"):
         properties = tools[tool_name].inputSchema["properties"]
         assert "context_type" in properties
+        assert properties["context_type"]["description"] == (
+            "Filter results to one or more context types: memory, resource, or skill."
+        )
+        assert properties["tags"]["type"] == "array"
+        assert "include_tags" not in properties
         assert "filter" not in properties
+
+
+async def test_retrieval_tools_expose_tag_parameters_with_compatible_defaults():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    for tool_name in ("find", "search", "list", "tree", "grep"):
+        properties = tools[tool_name].inputSchema["properties"]
+        assert properties["tags"]["type"] == "array"
+        assert properties["tags"]["description"] == (
+            "Filter results by tags; every supplied tag must match and use k=v format "
+            "(for example, team=search)."
+        )
+        assert "tags" not in tools[tool_name].inputSchema.get("required", [])
+
+    for tool_name in ("list", "tree", "grep"):
+        properties = tools[tool_name].inputSchema["properties"]
+        assert properties["include_tags"]["type"] == "boolean"
+        assert properties["include_tags"]["default"] is False
+        assert properties["include_tags"]["description"] == (
+            "Include each result's tags in the output; this does not filter results."
+        )
+
+    for tool_name in ("find", "search", "list", "tree", "grep"):
+        assert "k=v" not in tools[tool_name].description
+    for tool_name in ("list", "tree", "grep"):
+        assert "include_tags" not in tools[tool_name].description
+
+
+async def test_search_marks_every_context_only_parameter_in_its_description():
+    from openviking.server.routers.search import CONTEXT_ONLY_FIELDS
+
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    properties = tools["search"].inputSchema["properties"]
+    context_only = {*CONTEXT_ONLY_FIELDS, *mcp_endpoint._MCP_CONTEXT_ONLY_ALIASES}
+
+    # List mode rejects these, and the parameter description is the only place a
+    # caller reading the schema can learn that before spending a failed call.
+    unmarked = sorted(
+        name
+        for name in context_only
+        if "mode='context'" not in properties[name].get("description", "")
+    )
+    assert unmarked == []
 
 
 async def test_recall_tool_is_replaced_by_search_context_mode():
@@ -469,6 +517,8 @@ async def test_tool_schemas_are_portable():
         assert "$defs" not in node, f"{path}: $defs not portable"
         assert "type" in node, f"{path}: missing explicit type"
         assert node.get("default", "") is not None, f"{path}: null default"
+        if "items" in node:
+            assert node["type"] == "array", f"{path}: items on a non-array schema"
         for key, sub in node.get("properties", {}).items():
             assert_portable(sub, f"{path}.{key}")
         for key in ("items", "additionalProperties"):
@@ -542,6 +592,43 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
         "field": "context_type",
         "conds": ["memory", "resource"],
     }
+
+
+async def test_find_tool_combines_context_type_and_tag_filters(service, monkeypatch):
+    captured = {}
+
+    async def fake_find(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            memories=[],
+            resources=[
+                SimpleNamespace(
+                    uri="viking://resources/guide.md",
+                    abstract="Guide",
+                    score=0.8,
+                    search_tags=["team=search", "env=prod"],
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    result = await mcp_endpoint.find(
+        query="guide",
+        context_type="resource",
+        tags=["Team=Search", "env=prod"],
+    )
+
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "context_type", "conds": ["resource"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
+    assert 'tags=["team=search", "env=prod"]' in result
 
 
 @pytest.mark.parametrize(
@@ -671,6 +758,7 @@ async def test_find_tool_collapses_several_hits_from_one_skill_package(service, 
 
     assert "Found 1 item(s)" in result
     assert "- [skill 71%] viking://agent/skills/deploy/SKILL.md" in result
+    assert "tags=[]" in result
     assert "How the deploy skill works" in result
 
 
@@ -698,6 +786,26 @@ async def test_find_tool_forwards_its_bounds_to_find_skills(service, monkeypatch
     assert captured["level"] == [0]
     # find_skills restricts by context type itself and takes no filter.
     assert "filter" not in captured
+
+
+async def test_find_tool_forwards_tags_to_find_skills(service, monkeypatch):
+    captured = {}
+
+    async def fake_find_skills(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
+
+    await mcp_endpoint.find(query="review", context_type="skill", tags=["team=search"])
+
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "context_type", "conds": ["skill"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+        ],
+    }
 
 
 async def test_find_tool_forwards_an_explicit_skill_target_to_find_skills(service, monkeypatch):
@@ -754,7 +862,7 @@ async def test_find_tool_leaves_a_uri_outside_a_skill_package_alone(service, mon
 
     result = await mcp_endpoint.find(query="review", context_type="skill")
 
-    assert f"- [skill 40%] {hit_uri}\n" in result
+    assert f"- [skill 40%] {hit_uri} tags=[]\n" in result
     assert "SKILL.md/SKILL.md" not in result
 
 
@@ -923,6 +1031,7 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
         limit=4,
         min_score=0.1,
         context_type="skill",
+        tags=["team=search"],
     )
 
     assert result == "No matching context found."
@@ -936,9 +1045,11 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["limit"] == 4
     assert captured["score_threshold"] == 0.1
     assert captured["filter"] == {
-        "op": "must",
-        "field": "context_type",
-        "conds": ["skill"],
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "context_type", "conds": ["skill"]},
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+        ],
     }
 
 
@@ -967,6 +1078,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
         exclude_uris=["viking://user/test_user/memories/events/old.md"],
         peer_scope="actor",
         other_peer_penalties={"events": 0.2},
+        tags=["team=search", "env=prod"],
         rewrite="auto",
         rewrite_max_bullets=4,
     )
@@ -986,7 +1098,14 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
     assert params.exclude_uris == ["viking://user/test_user/memories/events/old.md"]
     assert params.peer_scope == "actor"
     assert params.other_peer_penalty == {"events": 0.2}
-    assert params.rewrite is True
+    assert params.filter == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
+    assert params.rewrite == "auto"
     assert params.rewrite_max_bullets == 4
 
 
@@ -1037,6 +1156,122 @@ async def test_search_context_schema_uses_portable_scalar_types():
     assert properties["other_peer_penalties"]["type"] == "object"
     assert properties["rewrite"]["type"] == "string"
     assert properties["rewrite"]["enum"] == ["off", "auto"]
+
+
+async def test_retrieval_tools_describe_advanced_parameters_without_changing_contracts():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    find_schema = tools["find"].inputSchema
+    search_schema = tools["search"].inputSchema
+    find_properties = find_schema["properties"]
+    search_properties = search_schema["properties"]
+
+    assert find_properties["level"]["description"] == (
+        "Filter indexed representation levels: 0=abstract, 1=overview, 2=detail/content."
+    )
+    assert search_properties["level"]["description"] == (
+        "In mode='list', filter indexed representation levels: "
+        "0=abstract, 1=overview, 2=detail/content; ignored in mode='context'."
+    )
+    assert search_properties["quotas"]["description"] == (
+        "In mode='context', set first-pass result ceilings for explicitly listed "
+        "categories: events, entities, preferences, experiences, resources, or skills; "
+        "unused slots may be filled by other listed categories. Explicit quotas replace "
+        "the purpose preset (unlisted categories are not retrieved), and their sum caps "
+        "the results instead of limit."
+    )
+    assert search_properties["detail_by_category"]["description"] == (
+        "In mode='context', request abstract, overview, or full detail per category "
+        "(events, entities, preferences, experiences, resources, skills, or memories); "
+        "do not combine with a non-auto detail value."
+    )
+    assert search_properties["dedup_turns"]["description"] == (
+        "In mode='context' with session_id, suppress URIs served with content within "
+        "this many recent turns; 0 disables cross-turn deduplication."
+    )
+    assert search_properties["peer_scope"]["description"] == (
+        "In mode='context', use 'actor' for the user's own and current peer's memories, "
+        "or 'all' to also consider memories from other peers."
+    )
+    assert search_properties["other_peer_penalty"]["description"] == (
+        "In mode='context', subtract one score penalty from every category of results "
+        "owned by peers other than the current peer; values are clamped to 0..1, and this "
+        "cannot be combined with other_peer_penalties."
+    )
+    assert search_properties["other_peer_penalties"]["description"] == (
+        "In mode='context', override default other-peer score penalties by category; "
+        "allowed categories are events, entities, preferences, experiences, resources, "
+        "skills, and memories, values are clamped to 0..1, and omitted categories keep "
+        "their defaults; do not combine with other_peer_penalty."
+    )
+    assert search_properties["rewrite"]["description"] == (
+        "In mode='context', use 'auto' to get a cited bullet digest from the account's query "
+        "planner model; without one configured, or on failure, the assembled context is "
+        "returned unchanged, while 'off' skips rewriting."
+    )
+
+    decay_description = (
+        "Apply updated_at-based recency decay after an unpenalized protection window; "
+        "use '0' or a non-negative integer plus m, h, or d (for example, 2d), and "
+        "provide a non-empty query."
+    )
+    assert find_properties["events_time_decay_protection"]["description"] == decay_description
+    assert search_properties["events_time_decay_protection"]["description"] == decay_description
+
+    assert find_properties["level"]["type"] == "array"
+    assert find_properties["context_type"]["type"] == "array"
+    assert find_properties["events_time_decay_protection"]["type"] == "string"
+    assert search_properties["level"]["type"] == "array"
+    assert search_properties["context_type"]["type"] == "array"
+    assert search_properties["quotas"]["type"] == "object"
+    assert search_properties["detail_by_category"]["type"] == "object"
+    assert search_properties["dedup_turns"]["type"] == "integer"
+    assert search_properties["peer_scope"]["type"] == "string"
+    assert search_properties["other_peer_penalty"]["type"] == "number"
+    assert search_properties["other_peer_penalties"]["type"] == "object"
+    assert search_properties["rewrite"]["type"] == "string"
+    assert search_properties["events_time_decay_protection"]["type"] == "string"
+    assert search_properties["dedup_turns"]["default"] == 0
+    assert search_properties["peer_scope"]["default"] == "all"
+    assert search_properties["rewrite"]["default"] == "off"
+    for properties, parameters in (
+        (
+            find_properties,
+            ("level", "context_type", "events_time_decay_protection"),
+        ),
+        (
+            search_properties,
+            (
+                "level",
+                "context_type",
+                "quotas",
+                "detail_by_category",
+                "other_peer_penalty",
+                "other_peer_penalties",
+                "events_time_decay_protection",
+            ),
+        ),
+    ):
+        for parameter in parameters:
+            assert "default" not in properties[parameter]
+    for parameter in (
+        "level",
+        "context_type",
+        "events_time_decay_protection",
+    ):
+        assert parameter not in find_schema.get("required", [])
+    for parameter in (
+        "level",
+        "context_type",
+        "quotas",
+        "detail_by_category",
+        "dedup_turns",
+        "peer_scope",
+        "other_peer_penalty",
+        "other_peer_penalties",
+        "rewrite",
+        "events_time_decay_protection",
+    ):
+        assert parameter not in search_schema.get("required", [])
 
 
 async def test_mcp_middleware_sets_actor_peer_context():
@@ -1260,6 +1495,7 @@ async def test_read_rejects_ambiguous_or_missing_uri(arguments, message):
 def test_read_schema_offers_uri_and_uris():
     schema = mcp_endpoint.mcp._tool_manager.get_tool("read").parameters
     assert schema["properties"]["uri"]["type"] == "string"
+    assert "items" not in schema["properties"]["uri"]
     assert schema["properties"]["uris"]["type"] == "array"
     assert schema["properties"]["uris"]["items"]["type"] == "string"
     assert schema.get("required", []) == []
@@ -1579,8 +1815,10 @@ async def test_list_reports_more_entries(service):
 
 @pytest.mark.parametrize("recursive", [False, True])
 @pytest.mark.parametrize("as_object", [False, True])
+@pytest.mark.parametrize("include_tags", [False, True])
+@pytest.mark.parametrize("tags", [None, ["team=search"]])
 async def test_list_renders_summaries_and_preserves_page_options(
-    service, monkeypatch, recursive, as_object
+    service, monkeypatch, recursive, as_object, include_tags, tags
 ):
     uri = "viking://resources/list_summaries"
     entries = [
@@ -1599,23 +1837,32 @@ async def test_list_renders_summaries_and_preserves_page_options(
             "abstract": "[.abstract.md is not ready]",
         },
     ]
+    entries = [{**entry, "tags": ["team=search"]} for entry in entries]
     if as_object:
         entries = [SimpleNamespace(**{**entry, "is_dir": entry["isDir"]}) for entry in entries]
     ls = AsyncMock(return_value=ListingPage(entries=entries, has_more=True))
     monkeypatch.setattr(service.fs, "ls", ls)
 
     result = await list_tool(
-        uri, recursive=recursive, offset=2, limit=4, sort_by="name", sort_order="desc"
+        uri,
+        recursive=recursive,
+        offset=2,
+        limit=4,
+        sort_by="name",
+        sort_order="desc",
+        tags=tags,
+        include_tags=include_tags,
     )
 
     guide = f"{uri}/guide" if recursive else "guide"
     note = f"{uri}/guide/note.md" if recursive else "note.md"
     missing = f"{uri}/missing.md" if recursive else "missing.md"
     pending = f"{uri}/pending" if recursive else "pending"
+    tag_suffix = ' tags=["team=search"]' if include_tags else ""
     assert result == (
-        f"[dir] {guide}\n  - Guide summary\n"
-        f"[file] {note}\n  - File summary\n"
-        f"[file] {missing}\n[dir] {pending}\n"
+        f"[dir] {guide}{tag_suffix}\n  - Guide summary\n"
+        f"[file] {note}{tag_suffix}\n  - File summary\n"
+        f"[file] {missing}{tag_suffix}\n[dir] {pending}{tag_suffix}\n"
         "(more entries available; use offset and limit to view the next page)"
     )
     ls.assert_awaited_once_with(
@@ -1624,6 +1871,8 @@ async def test_list_renders_summaries_and_preserves_page_options(
         recursive=recursive,
         output="original",
         include_abstract=True,
+        tags=tags,
+        include_tags=include_tags,
         offset=2,
         node_limit=4,
         sort_by="name",
@@ -1651,6 +1900,63 @@ async def test_list_system_namespace_keeps_plain_listing(service, monkeypatch):
 
     assert result == "[dir] memory"
     assert ls.await_args.kwargs["include_abstract"] is False
+
+
+async def test_list_forwards_and_renders_tags(service, monkeypatch):
+    captured = {}
+
+    async def fake_ls(uri, **kwargs):
+        captured.update(uri=uri, **kwargs)
+        return ListingPage(
+            entries=[
+                {
+                    "name": "guide.md",
+                    "uri": "viking://resources/guide.md",
+                    "isDir": False,
+                    "tags": ["team=search"],
+                },
+                {
+                    "name": "untagged.md",
+                    "uri": "viking://resources/untagged.md",
+                    "isDir": False,
+                    "tags": [],
+                },
+            ],
+            has_more=False,
+        )
+
+    monkeypatch.setattr(service.fs, "ls", fake_ls)
+
+    result = await list_tool("viking://resources", tags=["team=search"], include_tags=True)
+
+    assert captured["tags"] == ["team=search"]
+    assert captured["include_tags"] is True
+    assert result == '[file] guide.md tags=["team=search"]\n[file] untagged.md tags=[]'
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "fs_method"),
+    [
+        ("list", {"uri": "viking://resources"}, "ls"),
+        ("tree", {"uri": "viking://resources"}, "tree"),
+        ("grep", {"uri": "viking://resources", "pattern": "text"}, "grep"),
+    ],
+)
+async def test_filesystem_tools_reject_a_malformed_tag_filter(
+    service, monkeypatch, tool_name, arguments, fs_method
+):
+    # The service drops a malformed tag, and a filter left empty returns every entry.
+    fs_call = AsyncMock()
+    monkeypatch.setattr(service.fs, fs_method, fs_call)
+
+    result = await mcp_endpoint.mcp.call_tool(tool_name, {**arguments, "tags": ["team:search"]})
+
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    assert result.content[0].text == (
+        "INVALID_ARGUMENT: invalid search tag 'team:search': expected strict k=v format"
+    )
+    fs_call.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -2161,6 +2467,7 @@ async def test_add_resource_neither_path_nor_temp_file_id(service):
     assert "path" in result.lower() or "temp_file_id" in result.lower()
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
     captured = {}
 
@@ -2258,6 +2565,7 @@ async def test_add_resource_declared_add_type_rejects_parent(service):
     assert result == "Error: add_type cannot be combined with parent."
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_remote_tags_are_forwarded(service, monkeypatch):
     captured = {}
 
@@ -2330,6 +2638,7 @@ async def test_add_resource_temp_file_id_ingest_error_is_surfaced(
     assert "Resource added" not in result
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_watch_without_to_is_forwarded(service, monkeypatch):
     """watch_interval > 0 may omit `to`; the service binds to the created root_uri."""
     captured = {}
@@ -2523,7 +2832,7 @@ async def test_write_creates_new_file_with_replace_default(service):
 async def test_write_replace_overwrites_existing(service):
     uri = "viking://resources/test_write_replace.md"
     await write(uri=uri, content="v1", wait=True)
-    result = await write(uri=uri, content="v2-content")
+    result = await write(uri=uri, content="v2-content", wait=True)
     assert "mode=replace" in result
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "v2-content"
@@ -2532,7 +2841,7 @@ async def test_write_replace_overwrites_existing(service):
 async def test_write_create_overwrites_existing_file(service):
     uri = "viking://resources/test_write_create_exists.md"
     await write(uri=uri, content="v1", wait=True)
-    result = await write(uri=uri, content="v2", mode="create")
+    result = await write(uri=uri, content="v2", mode="create", wait=True)
     assert "mode=create" in result
     assert await service.fs.read(uri, ctx=DEFAULT_CTX) == "v2"
 
@@ -2540,7 +2849,7 @@ async def test_write_create_overwrites_existing_file(service):
 async def test_write_append_appends_to_existing(service):
     uri = "viking://resources/test_write_append.md"
     await write(uri=uri, content="line1\n", wait=True)
-    await write(uri=uri, content="line2\n", mode="append")
+    await write(uri=uri, content="line2\n", mode="append", wait=True)
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "line1\nline2\n"
 
@@ -2656,7 +2965,7 @@ async def test_write_and_live_context_read_roundtrip(service, monkeypatch):
 async def test_edit_replaces_unique_occurrence(service):
     uri = "viking://resources/test_edit.md"
     await write(uri=uri, content="alpha\nbeta\ngamma\n", wait=True)
-    result = await edit(uri=uri, old_string="beta", new_string="BETA")
+    result = await edit(uri=uri, old_string="beta", new_string="BETA", wait=True)
     assert "Edited" in result
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "alpha\nBETA\ngamma\n"
@@ -2666,7 +2975,7 @@ async def test_edit_sequential_edits_compose(service):
     uri = "viking://resources/test_edit_order.md"
     await write(uri=uri, content="foo bar baz\n", wait=True)
     await edit(uri=uri, old_string="bar", new_string="qux", wait=True)
-    await edit(uri=uri, old_string="foo qux", new_string="hello")
+    await edit(uri=uri, old_string="foo qux", new_string="hello", wait=True)
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "hello baz\n"
 
@@ -2681,7 +2990,7 @@ async def test_edit_requires_unique_match(service):
 async def test_edit_replace_all(service):
     uri = "viking://resources/test_edit_all.md"
     await write(uri=uri, content="dup\ndup\n", wait=True)
-    await edit(uri=uri, old_string="dup", new_string="x", replace_all=True)
+    await edit(uri=uri, old_string="dup", new_string="x", replace_all=True, wait=True)
     body = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert body == "x\nx\n"
 
@@ -2801,7 +3110,7 @@ async def test_edit_user_root_file_via_canonical_uri(service):
     uri = "viking://user/test_user/project/editable.md"
     await write(uri=uri, content="before\n", wait=True)
 
-    result = await edit(uri=uri, old_string="before", new_string="after")
+    result = await edit(uri=uri, old_string="before", new_string="after", wait=True)
 
     assert "viking://user/test_user/project/editable.md" in result
     assert "after" in await read(uris=uri)
@@ -2862,6 +3171,36 @@ async def test_grep_multiple_patterns(service):
 async def test_grep_case_insensitive(service):
     result = await grep(uri="viking://resources", pattern="TEST", case_insensitive=True)
     assert isinstance(result, str)
+
+
+async def test_grep_forwards_and_renders_tags(service, monkeypatch):
+    captured = {}
+
+    async def fake_grep(uri, pattern, **kwargs):
+        captured.update(uri=uri, pattern=pattern, **kwargs)
+        return {
+            "matches": [
+                {
+                    "uri": "viking://resources/guide.md",
+                    "line": 3,
+                    "content": "tagged text",
+                    "tags": ["team=search"],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(service.fs, "grep", fake_grep)
+
+    result = await grep(
+        uri="viking://resources",
+        pattern="tagged",
+        tags=["team=search"],
+        include_tags=True,
+    )
+
+    assert captured["tags"] == ["team=search"]
+    assert captured["include_tags"] is True
+    assert '\nviking://resources/guide.md tags=["team=search"]' in result
 
 
 # ---------------------------------------------------------------------------
@@ -3098,3 +3437,106 @@ async def test_tree_include_abstract_still_renders(service):
 
     result = await tree(uri="viking://resources/test_tree_abs", include_abstract=True)
     assert "\nnote.md (11 B)" in result
+
+
+async def test_tree_forwards_and_renders_tags(service, monkeypatch):
+    captured = {}
+
+    async def fake_tree(uri, **kwargs):
+        captured.update(uri=uri, **kwargs)
+        return ListingPage(
+            entries=[
+                {
+                    "rel_path": "guide.md",
+                    "isDir": False,
+                    "size": 12,
+                    "tags": ["team=search"],
+                }
+            ],
+            has_more=False,
+        )
+
+    monkeypatch.setattr(service.fs, "tree", fake_tree)
+
+    result = await tree(
+        uri="viking://resources",
+        tags=["team=search"],
+        include_tags=True,
+    )
+
+    assert captured["tags"] == ["team=search"]
+    assert captured["include_tags"] is True
+    assert '\nguide.md (12 B) tags=["team=search"]' in result
+
+
+async def test_tree_with_tag_filter_prints_each_match_as_a_path(service, monkeypatch):
+    # Only the tagged entries survive the filter; the directories above them do not.
+    async def fake_tree(uri, **kwargs):
+        return ListingPage(
+            entries=[
+                {"rel_path": "events/2026/launch.md", "isDir": False, "size": 12},
+                {"rel_path": "entities/people", "isDir": True},
+            ],
+            has_more=False,
+        )
+
+    monkeypatch.setattr(service.fs, "tree", fake_tree)
+
+    result = await tree(uri="viking://user/test_user/memories", tags=["Team=Search"])
+
+    assert result.splitlines()[1:] == ["events/2026/launch.md (12 B)", "entities/people/"]
+
+
+@pytest.mark.parametrize("tags", [None, ["team=search"]])
+@pytest.mark.parametrize("include_tags", [False, True])
+async def test_tree_renders_summaries_with_tags_and_pagination(
+    service, monkeypatch, tags, include_tags
+):
+    uri = "viking://resources"
+    tree_call = AsyncMock(
+        return_value=ListingPage(
+            entries=[
+                {
+                    "rel_path": "docs/guide.md",
+                    "isDir": False,
+                    "size": 12,
+                    "abstract": "File\nsummary",
+                    "tags": ["team=search"],
+                },
+                {
+                    "rel_path": "docs/examples",
+                    "isDir": True,
+                    "abstract": "Directory summary",
+                    "tags": ["team=search"],
+                },
+            ],
+            has_more=True,
+        )
+    )
+    monkeypatch.setattr(service.fs, "tree", tree_call)
+
+    result = await tree(
+        uri, include_abstract=True, tags=tags, include_tags=include_tags, offset=2, limit=2
+    )
+
+    indent = "" if tags else "  "
+    prefix = "docs/" if tags else ""
+    tag_suffix = ' tags=["team=search"]' if include_tags else ""
+    assert result.splitlines()[1:] == [
+        f"{indent}{prefix}guide.md (12 B){tag_suffix}",
+        f"{indent}  - File summary",
+        f"{indent}{prefix}examples/{tag_suffix}",
+        f"{indent}  - Directory summary",
+        "(truncated at node_limit=2; narrow the uri or raise node_limit to see more)",
+    ]
+    tree_call.assert_awaited_once_with(
+        uri,
+        ctx=DEFAULT_CTX,
+        output="agent",
+        abs_limit=2000,
+        node_limit=2,
+        level_limit=3,
+        tags=tags,
+        include_tags=include_tags,
+        offset=2,
+    )

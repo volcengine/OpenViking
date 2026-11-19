@@ -207,6 +207,7 @@ function ProfileEditorForm({
       ...PROFILE_DEFAULTS,
       name: current.name,
       client_overrides: current.client_overrides,
+      capture_memory_types: current.capture_memory_types,
     }))
     toast.success(t('profiles.toast.reset'))
   }

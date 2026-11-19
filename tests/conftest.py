@@ -4,6 +4,7 @@
 """Global test fixtures"""
 
 import asyncio
+import socket
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
@@ -162,6 +163,8 @@ async def service(
     OpenVikingConfigSingleton.reset_instance()
     OpenVikingConfigSingleton.initialize(
         config_dict={
+            # Domain tests use a file-only fake; Watch leadership has dedicated fixtures.
+            "enable_watch_scheduler": False,
             "storage": {
                 "workspace": str(test_data_dir),
                 "agfs": {"backend": "local"},
@@ -203,3 +206,22 @@ def request_context() -> RequestContext:
 def working_memory_policy():
     """Explicit opt-in for tests exercising WM/checkpoint generation."""
     return {"working_memory": {"enabled": True}}
+
+
+@pytest.fixture
+def public_resource_dns(monkeypatch):
+    """Resolve fixture URLs without relying on external DNS."""
+    resolve = socket.getaddrinfo
+
+    def getaddrinfo(host, port, *args, **kwargs):
+        if host in {
+            "example.com",
+            "example.org",
+            "example.feishu.cn",
+            "example.larkoffice.com",
+            "alidocs.dingtalk.com",
+        }:
+            host = "93.184.215.14"
+        return resolve(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)

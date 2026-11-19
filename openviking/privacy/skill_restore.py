@@ -29,8 +29,9 @@ async def restore_skill_content(
     skill_name: str,
 ) -> str:
     restorer = PrivacyRestorer(privacy, ctx, category="skill", target_key=skill_name)
-    restorer.collect_text(content)
-    await restorer.load_values()
+    restored = await restorer.restore_content(
+        content, uri=f"viking://agent/skills/{skill_name}/SKILL.md"
+    )
     current = await restorer.get_current("skill", skill_name)
     values = current.values if current else {}
     unresolved_entries: list[str] = []
@@ -53,7 +54,6 @@ async def restore_skill_content(
         if key not in used_fields and value is not None and value != ""
     ]
 
-    restored = restorer.restore_text(content)
     if current and (unresolved_entries or extra_config_entries):
         restored += "\n\n[Privacy Config Notice]\n"
         if unresolved_entries:
