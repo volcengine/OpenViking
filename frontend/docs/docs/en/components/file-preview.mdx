@@ -417,7 +417,14 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 - Markdown images: `resources` are matched first, then `resolveImage` is called, and a rejected `resolveImage` falls back to the image's original target; the component never turns `viking://` into an HTTP address.
 - File-tab Markdown links: supplying `operations.openUri` hands every link, including external destinations, to the app and prevents default navigation. The app receives the original target and resolves it; omitting the callback preserves the renderer's default behavior.
 - Directory-summary links: `operations.openUri` handles Viking URIs and relative resource links using the original target. HTTP, HTTPS, mail, phone, and protocol-relative external links retain native browser actions.
-- Directory anchors: same-document links scroll to explicit HTML element IDs, including headings such as `<h2 id="details">Details</h2>`, even without `operations.openUri`. Plain Markdown headings do not generate IDs; add an explicit HTML anchor when you need a link target.
+- Directory anchors: same-document links can target HTML headings (`h1`–`h6`) with an explicit `id`, even without `operations.openUri`. Plain Markdown headings do not generate IDs; use an HTML heading as the target:
+
+  ```md
+  [Details](#details)
+
+  <h2 id="details">Details</h2>
+  ```
+
 - JSON logs: `.json` and `.jsonl` render as a JSON tree; render structured files that need their own view, such as session logs, in a content tab.
 - Large files: the component does not check file size; FileViewer shows a confirmation state when it needs one, and `slots.confirmFallback` replaces it. Limit the length of editable text in `editing`.
 - Extras: previous/next image and neighbor preloading are not part of the component; compose them outside the preview, or inject them through `slots.actions` and `slots.footer`.
