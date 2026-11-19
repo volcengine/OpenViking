@@ -3,114 +3,28 @@
 
 """Regression tests for temp-scope access control."""
 
-from datetime import datetime, timezone
-
 import pytest
 
+from openviking.pyagfs import get_binding_client
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotFoundError
+from openviking.utils.agfs_utils import RagfsBindingConfig, mount_agfs_backend
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
-
-
-class FakeAGFS:
-    def __init__(self):
-        self.dirs = {"/", "/local"}
-        self.files = {}
-
-    def mkdir(self, path):
-        if path in self.files:
-            raise FileExistsError(path)
-        if path in self.dirs:
-            raise FileExistsError(f"already exists: {path}")
-        parent = path.rsplit("/", 1)[0] or "/"
-        if parent not in self.dirs:
-            raise FileNotFoundError(parent)
-        self.dirs.add(path)
-        return path
-
-    def write(self, path, data):
-        parent = path.rsplit("/", 1)[0] or "/"
-        if parent not in self.dirs:
-            raise FileNotFoundError(parent)
-        self.files[path] = bytes(data)
-        return path
-
-    def rm(self, path, recursive=False):
-        if path in self.files:
-            del self.files[path]
-            return {}
-        if path not in self.dirs:
-            raise FileNotFoundError(path)
-
-        prefix = f"{path.rstrip('/')}/"
-        has_children = any(
-            item.startswith(prefix) for item in self.dirs | set(self.files) if item != path
-        )
-        if has_children and not recursive:
-            raise OSError(f"directory not empty: {path}")
-
-        for file_path in list(self.files):
-            if file_path.startswith(prefix):
-                del self.files[file_path]
-        for dir_path in sorted(self.dirs, reverse=True):
-            if dir_path.startswith(prefix):
-                self.dirs.remove(dir_path)
-        if path != "/":
-            self.dirs.remove(path)
-        return {}
-
-    def read(self, path, offset=0, size=-1):
-        if path not in self.files:
-            raise FileNotFoundError(path)
-        data = self.files[path]
-        return data[offset:] if size == -1 else data[offset : offset + size]
-
-    def stat(self, path):
-        if path in self.dirs:
-            return {"name": path.rsplit("/", 1)[-1] or "/", "isDir": True, "size": 0}
-        if path in self.files:
-            return {"name": path.rsplit("/", 1)[-1], "isDir": False, "size": len(self.files[path])}
-        raise FileNotFoundError(path)
-
-    def ls(self, path):
-        if path not in self.dirs:
-            raise FileNotFoundError(path)
-        children = {}
-        prefix = path.rstrip("/")
-        prefix = "" if prefix == "/" else prefix
-        for d in sorted(self.dirs):
-            if d in {"/", path}:
-                continue
-            if not d.startswith(prefix + "/"):
-                continue
-            remainder = d[len(prefix + "/") :] if prefix else d[1:]
-            if "/" in remainder or not remainder:
-                continue
-            children[remainder] = {
-                "name": remainder,
-                "isDir": True,
-                "size": 0,
-                "modTime": datetime.now(timezone.utc).isoformat(),
-            }
-        for f, content in sorted(self.files.items()):
-            if not f.startswith(prefix + "/"):
-                continue
-            remainder = f[len(prefix + "/") :] if prefix else f[1:]
-            if "/" in remainder or not remainder:
-                continue
-            children[remainder] = {
-                "name": remainder,
-                "isDir": False,
-                "size": len(content),
-                "modTime": datetime.now(timezone.utc).isoformat(),
-            }
-        return list(children.values())
+from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 
 @pytest.fixture
-def viking_fs():
-    return VikingFS(agfs=FakeAGFS())
+def viking_fs(tmp_path):
+    client_type, _ = get_binding_client()
+    assert client_type is not None
+    config = RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="local"))
+    client = client_type(None, config=config.to_binding_dict())
+    try:
+        mount_agfs_backend(client, config)
+        yield VikingFS(agfs=client)
+    finally:
+        client.close()
 
 
 @pytest.mark.asyncio
@@ -132,10 +46,10 @@ async def test_temp_scope_isolated_between_users_in_same_account(viking_fs):
 
     assert (await viking_fs.read(secret_uri, ctx=owner_ctx)).decode("utf-8") == "owner secret"
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.read(secret_uri, ctx=other_ctx)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.write(secret_uri, "tampered", ctx=other_ctx)
 
 
@@ -157,7 +71,7 @@ async def test_temp_scope_user_id_matching_legacy_pattern_stays_isolated(viking_
     await viking_fs.write(secret_uri, "owner secret", ctx=owner_ctx)
 
     assert temp_uri.startswith("viking://temp/04011234_abcdef/")
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.read(secret_uri, ctx=other_ctx)
 
 
@@ -201,10 +115,10 @@ async def test_temp_root_destructive_operations_are_blocked_for_non_root_users(v
         role=Role.USER,
     )
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.rm("viking://temp", recursive=True, ctx=alice_ctx)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.delete_temp("viking://temp", ctx=alice_ctx)
 
 
@@ -308,7 +222,7 @@ async def test_non_root_cannot_delete_temp_root_recursively(viking_fs):
     await viking_fs.mkdir(bob_temp_uri, exist_ok=True, ctx=bob_ctx)
     await viking_fs.write(bob_secret_uri, "bob secret", ctx=bob_ctx)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         await viking_fs.rm("viking://temp", recursive=True, ctx=alice_ctx)
 
     assert (await viking_fs.read(bob_secret_uri, ctx=bob_ctx)).decode("utf-8") == "bob secret"

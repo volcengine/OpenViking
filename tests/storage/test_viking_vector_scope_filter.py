@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
-import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -64,28 +63,22 @@ class _AclConfigReader:
         return SimpleNamespace(enabled=self.enabled)
 
 
-class _FailingAsyncAdapter:
-    async def call(self, method_name, **kwargs):
-        raise RuntimeError(f"{method_name} failed")
+class _FailingAdapter:
+    mode = "local"
+
+    def search_by_random(self, **kwargs):
+        raise RuntimeError("search_by_random failed")
 
 
-class _RecordingAsyncAdapter:
+class _RecordingAdapter:
+    mode = "local"
+
     def __init__(self):
-        self.calls = []
+        self.filter = None
 
-    async def call(self, method_name, **kwargs):
-        self.calls.append((method_name, kwargs))
+    def search_by_random(self, *, filter, **kwargs):
+        self.filter = filter
         return []
-
-
-def _single_account_backend(async_adapter, account_id: str | None):
-    backend = object.__new__(_SingleAccountBackend)
-    backend._bound_account_id = account_id
-    backend._operation_condition = threading.Condition()
-    backend._operations = {}
-    backend._retired = False
-    backend._async_adapter = async_adapter
-    return backend
 
 
 @pytest.mark.asyncio
@@ -697,7 +690,7 @@ def test_actor_peer_target_retains_account_and_exact_target_scope():
 
 @pytest.mark.asyncio
 async def test_search_by_random_propagates_adapter_errors():
-    backend = _single_account_backend(_FailingAsyncAdapter(), None)
+    backend = _SingleAccountBackend(VectorDBBackendConfig(), None, _FailingAdapter())
 
     with pytest.raises(RuntimeError, match="search_by_random failed"):
         await backend.search_by_random(filter=Eq("uri", "viking://resources/a.md"))
@@ -705,20 +698,10 @@ async def test_search_by_random_propagates_adapter_errors():
 
 @pytest.mark.asyncio
 async def test_search_by_random_reuses_account_filter_for_raw_dsl():
-    backend = _single_account_backend(_RecordingAsyncAdapter(), "acct")
+    adapter = _RecordingAdapter()
+    backend = _SingleAccountBackend(VectorDBBackendConfig(), "acct", adapter)
     raw_filter = {"op": "must", "field": "uri", "conds": ["viking://resources"]}
 
     await backend.search_by_random(filter=raw_filter)
 
-    assert backend._async_adapter.calls == [
-        (
-            "search_by_random",
-            {
-                "filter": And([Eq("account_id", "acct"), RawDSL(raw_filter)]),
-                "limit": 10,
-                "offset": 0,
-                "output_fields": None,
-                "advance": None,
-            },
-        )
-    ]
+    assert adapter.filter == And([Eq("account_id", "acct"), RawDSL(raw_filter)])

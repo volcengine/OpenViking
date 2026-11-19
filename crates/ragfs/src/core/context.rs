@@ -146,21 +146,32 @@ impl FsContextView {
 mod tests {
     use super::*;
 
-    #[test]
-    fn empty_view_when_unset_does_not_panic() {
-        // No FS_CTX.scope around this call.
-        let view = FsContextView::current();
-        assert_eq!(view.account_id(), None);
-    }
-
     #[tokio::test]
-    async fn view_reads_scoped_context() {
-        let ctx = Arc::new(FsContextInner::new("tenant-x"));
-        FS_CTX
-            .scope(ctx, async {
-                assert_eq!(FsContextView::current().account_id(), Some("tenant-x"));
-            })
-            .await;
+    async fn context_is_isolated_across_tasks() {
+        let outside = FsContextView::current();
+        assert_eq!(outside.account_id(), None);
+        assert!(!outside.bypass_cache());
+
+        let a = FS_CTX.scope(
+            Arc::new(FsContextInner::new("tenant-a").with_bypass_cache(true)),
+            async {
+                tokio::task::yield_now().await;
+                let view = FsContextView::current();
+                assert_eq!(view.account_id(), Some("tenant-a"));
+                assert!(view.bypass_cache());
+            },
+        );
+        let b = FS_CTX.scope(Arc::new(FsContextInner::new("tenant-b")), async {
+            tokio::task::yield_now().await;
+            let view = FsContextView::current();
+            assert_eq!(view.account_id(), Some("tenant-b"));
+            assert!(!view.bypass_cache());
+        });
+        tokio::join!(a, b);
+
+        let outside = FsContextView::current();
+        assert_eq!(outside.account_id(), None);
+        assert!(!outside.bypass_cache());
     }
 
     #[tokio::test]
@@ -171,31 +182,5 @@ mod tests {
                 assert_eq!(FsContextView::current().account_id(), None);
             })
             .await;
-    }
-
-    #[tokio::test]
-    async fn context_is_isolated_across_tasks() {
-        let a = Arc::new(FsContextInner::new("a"));
-        FS_CTX
-            .scope(a, async {
-                assert_eq!(FsContextView::current().account_id(), Some("a"));
-            })
-            .await;
-        // Outside the scope it is unset again.
-        assert_eq!(FsContextView::current().account_id(), None);
-    }
-
-    #[tokio::test]
-    async fn bypass_cache_defaults_false_and_round_trips() {
-        assert!(!FsContextInner::new("t").bypass_cache());
-
-        let ctx = Arc::new(FsContextInner::new("t").with_bypass_cache(true));
-        FS_CTX
-            .scope(ctx, async {
-                assert!(FsContextView::current().bypass_cache());
-            })
-            .await;
-        // Unset context reports no bypass.
-        assert!(!FsContextView::current().bypass_cache());
     }
 }
