@@ -5,6 +5,7 @@ import {
   type ExperienceTrajectory,
 } from '../../components/experience-dashboard/index.js';
 import { ExperienceTrajectoryDetailPane } from './experience-trajectory-detail-pane.js';
+import { useExperienceEffect } from './use-experience-effect.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useExperienceDashboard } from './use-experience-dashboard.js';
@@ -14,7 +15,10 @@ import {
   isExperienceDirectory,
 } from './experience-data.js';
 
-type Props = Pick<ExperienceDashboardProps, 'uri' | 'locale' | 'onOpenUri'> & {
+type Props = Pick<
+  ExperienceDashboardProps,
+  'uri' | 'locale' | 'onOpenUri' | 'slots'
+> & {
   requestOptions?: OvRequestOptions;
   dataSource?: FileBrowserExperienceDataSource;
   refreshGeneration?: number;
@@ -23,6 +27,7 @@ export function ExperienceDashboardPane({
   uri,
   locale,
   dataSource,
+  slots,
   requestOptions,
   refreshGeneration,
   onOpenUri,
@@ -44,6 +49,14 @@ export function ExperienceDashboardPane({
   //
   // Trajectories own their paging: the directory view never needs it, and only the
   // file view's Impact tab fetches.
+  const effect = useExperienceEffect({
+    uri,
+    days: browser.days,
+    loader: dataSource?.effect,
+    requestOptions,
+    enabled: !directory && browser.tab === 'impact',
+    refreshGeneration,
+  });
   const trajectories = useExperienceTrajectories({
     uri,
     days: browser.days,
@@ -63,6 +76,7 @@ export function ExperienceDashboardPane({
         uri={uri}
         kind={directory ? 'directory' : 'file'}
         locale={locale}
+        slots={slots}
         onOpenUri={onOpenUri}
         onOpenTrajectory={
           loadMessages
@@ -78,6 +92,7 @@ export function ExperienceDashboardPane({
           total: directory
             ? browser.list.data?.total
             : browser.tests.data?.total,
+          effect: effect.data,
           outcomes: browser.outcomes.data,
           trajectories: trajectories.data?.items,
           trajectoryTotal: trajectories.data?.total,
@@ -98,6 +113,7 @@ export function ExperienceDashboardPane({
         )}
         loadingMore={trajectories.loadingMore}
         states={{
+          effect: status(effect),
           list: status(browser.list),
           sources: status(browser.sources),
           tests: status(browser.tests),

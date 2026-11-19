@@ -123,6 +123,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | previewSlots              | 追加、替换或隐藏预览操作区，看板页签不受影响，类型见下方 `FileBrowserPreviewSlots`                                 | `FileBrowserPreviewSlots`                                               | -                        |
 | dashboardKinds            | 启用的看板类型，空数组关闭看板；例如 `['experience']` 只保留经验看板，并且不再读取编译配置                         | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']` |
 | experienceDataSource      | 按需替换内置经验看板的请求，保留原有界面、分页和重试                                                               | `FileBrowserExperienceDataSource`                                       | -                        |
+| experienceDashboardSlots  | 覆盖内置经验看板的展示区块                                                                                         | `ExperienceDashboardProps['slots']`                                     | -                        |
 | renderDashboard           | 自定义看板页签的内容，返回 `null` 或 `undefined` 时使用内置看板，类型见下方 `FileBrowserDashboard`                 | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                        |
 | slots                     | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`   | -                        |
 | labels                    | 覆盖界面文案，类型见下方 `FileBrowserLabels`                                                                       | `FileBrowserLabels`                                                     | -                        |
@@ -598,9 +599,10 @@ await browserRef.current?.openResource(directoryUri);
 
 ### 经验看板数据源
 
-通过 `experienceDataSource` 注入宿主请求。除 `sourceGroups`、`trajectoryMessages` 和 `tests` 外，未提供的函数走默认 OpenViking 接口。请保持函数引用稳定，并把请求参数中的 `signal` 传给底层请求。请求失败时抛错，内置看板会显示错误和重试。
+通过 `experienceDataSource` 注入宿主请求。除 `effect`、`sourceGroups`、`trajectoryMessages` 和 `tests` 外，未提供的函数走默认 OpenViking 接口。请保持函数引用稳定，并把请求参数中的 `signal` 传给底层请求。请求失败时抛错，内置看板会显示错误和重试。
 
 - `list({ uri, offset, limit, signal })` 返回 `{ items, hasMore, total? }`，其中 `items` 是经验文件列表。返回 `undefined` 时，该 URI 走默认列表接口。
+- `effect({ uri, startDate, endDate, signal })` 返回单条经验的 `{ injectionCount, recallCount, injectionRate }`。注入率为 0 到 1 的小数。省略时，指标显示「—」。
 - `outcomes({ uri, startDate, endDate, signal })` 返回任务结果分布，每项为 `{ outcome, count }`。
 - `trajectories({ uri, offset, limit, startDate, endDate, signal })` 返回 `{ items, hasMore, total }`，其中 `items` 是本页注入轨迹。
 - `sources({ uri, signal })` 返回来源轨迹。
@@ -608,6 +610,10 @@ await browserRef.current?.openResource(directoryUri);
 - `trajectoryMessages({ uri, signal })` 在打开轨迹详情时接收轨迹 URI，返回 `{ archiveUri?, items }`。轨迹正文由区块读取。
 - `tests({ uri, offset, limit, signal })` 返回 `{ items, total }`，其中 `items` 是本页测试素材。配置后，单条经验看板会显示「测试」页签，首次打开时加载。
 - 分页的 `offset` 从 0 开始，`limit` 为 20。时间参数采用 UTC `YYYY-MM-DD`，选择全部时间时省略日期。
+
+### 经验看板区块
+
+通过 `experienceDashboardSlots.sections` 覆盖内置看板的区块，可直接使用看板的数据和请求状态。见 [ExperienceDashboard 区块插槽](../components/experience-dashboard#区块插槽)。
 
 ### 失败状态
 

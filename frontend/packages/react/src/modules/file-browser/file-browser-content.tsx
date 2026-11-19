@@ -55,6 +55,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     onAgentConnectOpenChange,
     dashboardKinds,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     acl,
     readOnly,
@@ -68,8 +69,6 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     previewSlots,
     labels,
     requestOptions,
-    className,
-    style,
     ...rest
   }: FileBrowserProps,
   ref,
@@ -103,6 +102,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     locale,
     dashboardKinds,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     dashboardLabels: labels?.dashboard,
     controlled: isControlled,
@@ -150,11 +150,11 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
       <div
         {...rest}
         ref={exposure}
-        className={className ? `${baseClass} ${className}` : baseClass}
+        className={[baseClass, rest.className].filter(Boolean).join(' ')}
         {...search.shortcut}
         style={
           {
-            ...style,
+            ...rest.style,
             // 分隔条是独立一列，树宽只作用在自己身上，两者相加才是左栏占用。
             // The divider is its own column: the tree width applies to the tree alone
             // and the two together are what the left side occupies.
