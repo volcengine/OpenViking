@@ -376,10 +376,10 @@ class FSService:
         include_tags: bool = False,
         offset: int = 0,
     ) -> ListingPage:
-        """List directory contents.
+        """List a directory's children or return one file entry.
 
         Args:
-            uri: Viking URI
+            uri: File or directory Viking URI
             recursive: List all subdirectories recursively
             simple: Return only relative path list
             output: str = "original" or "agent"
@@ -1418,7 +1418,7 @@ class FSService:
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
     ) -> ListingPage:
-        """Get directory tree."""
+        """List directory descendants or return a file as a single-node tree."""
         viking_fs = self._ensure_initialized()
         if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             await viking_fs._ensure_access(uri, ctx)

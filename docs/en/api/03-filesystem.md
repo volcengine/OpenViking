@@ -19,13 +19,35 @@ Custom templates can also be published through the [template management API](08-
 
 ### ls()
 
-List directory contents.
+List a directory's children, or return the file itself as one entry when the URI
+points to a file. A directory listing does not include the requested directory
+itself.
+
+| Target | `ls` | `ls` with `recursive=true` / `tree` |
+|--------|------|-------------------------------------|
+| Directory URI | Direct children | Descendants with `rel_path` relative to the directory |
+| File URI | One file entry without `rel_path` | One file entry with `rel_path` set to the filename |
+
+File results use the same `original`, `agent`, and URI-only `simple` formats as
+directory listings. A file's abstract and overview are empty strings when
+requested; its parent directory's summaries are not loaded. File results have
+`has_more=false`; `offset>=1` or a nonmatching tag filter returns an empty array.
+Request `extra_fields=id,locked` to include `id` and `isLocked`; files never
+include `count`.
+Explicitly requested hidden files are returned without `show_all_hidden=true`;
+storage-internal names remain hidden. Missing files and denied reads retain the
+existing errors.
+
+Directory reads are attempted first. A Not-a-directory error falls back to file
+metadata. Empty directory results also check the target type because some object
+storage backends return an empty list for file targets. Nonempty directory
+listings do not add a type-check request.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | File or directory Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
@@ -149,6 +171,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
   -H "X-API-Key: your-key"
 
+# A single file, using the same listing response envelope
+curl -G "http://localhost:1933/api/v1/fs/ls" \
+  --data-urlencode "uri=viking://resources/project/readme.md" \
+  --data-urlencode "output=original" \
+  -H "X-API-Key: your-key"
+
 # Recursive listing
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
   -H "X-API-Key: your-key"
@@ -204,13 +232,17 @@ Clients can reuse the listing `access` value to control editing without a per-it
 
 ### tree()
 
-Get directory tree structure.
+Get a directory's descendants, or return a file as a single-node tree. The
+response remains a flat node array. For a file URI, `rel_path` is the filename
+(for example, `readme.md`) and `level_limit` does not expand any descendants.
+`directories_only=true` excludes the file and returns an empty array. File
+pagination, tags, metadata, and errors follow the `ls` rules above.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | File or directory Viking URI |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
 | abs_limit | int | No | HTTP: 256; SDKs: 128 | Maximum returned abstract length |
 | include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |

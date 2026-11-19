@@ -25,6 +25,43 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint,recursive", [("ls", False), ("ls", True), ("tree", False)])
+@pytest.mark.parametrize("output", ["agent", "original"])
+async def test_file_listing_http_uses_native_storage(client, service, endpoint, recursive, output):
+    uri = "viking://resources/file-listing/readme.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.viking_fs.write_file(uri, "hello\n", ctx=ctx)
+
+    response = await client.get(
+        f"/api/v1/fs/{endpoint}",
+        params={"uri": uri, "output": output, "recursive": str(recursive).lower()},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["has_more"] is False
+    assert len(payload["result"]) == 1
+    entry = payload["result"][0]
+    assert entry["uri"] == uri
+    assert entry["size"] == 6
+    assert entry["isDir"] is False
+    assert "id" not in entry
+    assert "count" not in entry
+    assert entry.get("rel_path") == ("readme.md" if endpoint == "tree" or recursive else None)
+    if output == "agent":
+        assert entry["abstract"] == ""
+        assert "name" not in entry
+    else:
+        assert entry["name"] == "readme.md"
+
+    next_page = await client.get(f"/api/v1/fs/{endpoint}", params={"uri": uri, "offset": 1})
+    assert next_page.status_code == 200, next_page.text
+    assert next_page.json()["result"] == []
+    assert next_page.json()["has_more"] is False
+
+
+@pytest.mark.asyncio
 async def test_rm_preserves_memory_cleanup(monkeypatch):
     cleanup = {"status": "success", "memory_uris": ["viking://user/alice/memories/entities/a.md"]}
 
