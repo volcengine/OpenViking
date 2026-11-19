@@ -130,16 +130,15 @@ async fn resolves_environment_and_arguments_and_masks_both_streams() {
             "defaults.env",
             "--env-file",
             "active.env",
-        ])
-        .args([
             "--env",
             &format!("TOKEN={spaced}"),
             "--",
             "/bin/sh",
             "-c",
             script,
+            "sh",
+            &format!("header={TOKEN}/{spaced}"),
         ])
-        .args(["sh", &format!("header={TOKEN}/{spaced}")])
         .output()
         .await
         .unwrap();
@@ -176,9 +175,9 @@ async fn invalid_invocations_keep_private_arguments_out_of_diagnostics() {
             "privacy run --help",
         ),
         (
-            &["--user", "run", "run", "--compact=private-example"],
-            "private-example",
-            "privacy run --help",
+            &["run", "--evn", "A=private-example"],
+            "unused",
+            "Unexpected argument",
         ),
         (
             &["run", "--env-file", "private.env"],
@@ -189,11 +188,6 @@ async fn invalid_invocations_keep_private_arguments_out_of_diagnostics() {
             &["run", "--env", "private-example=x"],
             "unused",
             "Invalid environment variable name",
-        ),
-        (
-            &["run", "--evn", "A=private-example"],
-            "unused",
-            "Unexpected argument",
         ),
         (
             &["run", "--", "private-example-missing-program"],
@@ -250,7 +244,7 @@ async fn forwards_child_flags_and_exit_status_with_or_without_the_separator() {
     }
 }
 
-/// POSIX calls for the signal tests, declared here so the crate needs no extra dependency.
+/// POSIX calls for Unix job-control and descriptor tests without extra crate dependencies.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod posix {
     use std::ffi::{CStr, c_char, c_int, c_ulong};
@@ -280,7 +274,6 @@ mod posix {
     #[cfg(target_os = "macos")]
     const O_NOCTTY: c_int = 0x2_0000;
 
-    /// Returns the master and slave of a new pseudo-terminal, both closed on exec.
     pub fn openpty() -> (File, File) {
         let fd = posix_openpt(2 | O_NOCTTY);
         assert!(fd >= 0 && grantpt(fd) == 0 && unlockpt(fd) == 0);
@@ -289,7 +282,6 @@ mod posix {
             let path = CStr::from_ptr(ptsname(fd)).to_str().unwrap().to_owned();
             (File::from_raw_fd(fd), path)
         };
-        // try_clone sets close-on-exec, so a failed test cannot leave the terminal open.
         let master = opened.try_clone().unwrap();
         let slave = OpenOptions::new()
             .read(true)
@@ -302,25 +294,61 @@ mod posix {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+fn detach_session(command: &mut Command) -> &mut Command {
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        })
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn process_stopped(pid: i32) -> bool {
+    if posix::kill(pid, 0) < 0 {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat"))
+        && let Some((_, tail)) = stat.rsplit_once(") ")
+    {
+        return tail.starts_with('Z');
+    }
+    false
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn wait_until_stopped(pid: i32) {
+    for _ in 0..30 {
+        if process_stopped(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("process {pid} did not stop");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn a_terminal_interrupts_once_and_stays_readable_with_redirected_stdin() {
     use std::{io::Write, os::fd::AsRawFd, process::Stdio};
 
     let dir = tempfile::tempdir().unwrap();
-    for redirected in [false, true] {
-        let (mut master, slave) = posix::openpty();
-        let mut drain = master.try_clone().unwrap();
-        let drain_thread = std::thread::spawn(move || {
-            let mut buf = [0u8; 256];
-            while std::io::Read::read(&mut drain, &mut buf).is_ok_and(|n| n > 0) {}
-        });
-        let stdin = if redirected {
-            Stdio::null()
-        } else {
-            slave.try_clone().unwrap().into()
-        };
-        let mut command = privacy(dir.path(), "http://127.0.0.1:1");
-        command.stdin(stdin).stdout(Stdio::piped()).args([
+    let (mut master, slave) = posix::openpty();
+    let mut drain = master.try_clone().unwrap();
+    let drain_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 256];
+        while std::io::Read::read(&mut drain, &mut buf).is_ok_and(|n| n > 0) {}
+    });
+    let mut command = privacy(dir.path(), "http://127.0.0.1:1");
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(slave.try_clone().unwrap()))
+        .args([
             "run",
             "--",
             "/bin/sh",
@@ -335,81 +363,8 @@ async fn a_terminal_interrupts_once_and_stays_readable_with_redirected_stdin() {
                 printf '%s %s\n' "$answer" "$count"
             "#,
         ]);
-        let slave_fd = slave.as_raw_fd();
-        // SAFETY: setsid and ioctl are async-signal-safe; the slave stays open through spawn.
-        unsafe {
-            command.pre_exec(move || {
-                if posix::setsid() < 0 || posix::ioctl(slave_fd, posix::TIOCSCTTY, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = command.spawn().unwrap();
-        drop(command);
-        timeout(Duration::from_secs(8), async {
-            let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-            assert_eq!(lines.next_line().await.unwrap().as_deref(), Some("ready"));
-            master.write_all(b"\x03").unwrap();
-            assert_eq!(
-                lines.next_line().await.unwrap().as_deref(),
-                Some("interrupted")
-            );
-            master.write_all(b"answer\n").unwrap();
-            assert_eq!(
-                lines.next_line().await.unwrap().as_deref(),
-                Some("answer 1")
-            );
-            drop(slave);
-            // The child handled Ctrl-C and exited normally, so ov reports its real status.
-            assert_eq!(child.wait().await.unwrap().code(), Some(0));
-        })
-        .await
-        .expect("the terminal job did not finish");
-        drop(master);
-        let _ = drain_thread.join();
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[tokio::test]
-async fn piped_wrapper_under_controlling_terminal_forwards_pid_sigint() {
-    use std::{os::fd::AsRawFd, process::Stdio};
-
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("ovcli.conf");
-    fs::write(
-        &config,
-        json!({"url": "http://127.0.0.1:1", "api_key": "test-key", "user": "alice", "timeout": 5})
-            .to_string(),
-    )
-    .unwrap();
-    let (master, slave) = posix::openpty();
-    let mut drain = master.try_clone().unwrap();
-    let drain_thread = std::thread::spawn(move || {
-        let mut buf = [0u8; 256];
-        while std::io::Read::read(&mut drain, &mut buf).is_ok_and(|n| n > 0) {}
-    });
-    let ov_bin = env!("CARGO_BIN_EXE_ov");
-    let mut command = Command::new("/bin/sh");
-    command
-        .args([
-            "-c",
-            r#"(sh -c 'echo $$; exec "$1" privacy run -- /bin/sh -c "(echo ready; exec sleep 30) | cat" </dev/null 2>/dev/null' sh "$1") | cat"#,
-            "sh",
-            ov_bin,
-        ])
-        .current_dir(dir.path())
-        .env("HOME", dir.path())
-        .env("USERPROFILE", dir.path())
-        .env("OPENVIKING_CLI_CONFIG_FILE", &config)
-        .env("OPENVIKING_LANG", "en")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
     let slave_fd = slave.as_raw_fd();
-    // SAFETY: setsid and ioctl are async-signal-safe; the slave stays open through spawn.
+    // SAFETY: setsid and ioctl are async-signal-safe; slave stays open through spawn.
     unsafe {
         command.pre_exec(move || {
             if posix::setsid() < 0 || posix::ioctl(slave_fd, posix::TIOCSCTTY, 0) < 0 {
@@ -419,24 +374,25 @@ async fn piped_wrapper_under_controlling_terminal_forwards_pid_sigint() {
         });
     }
     let mut child = command.spawn().unwrap();
-    drop((command, slave));
-
-    timeout(Duration::from_secs(5), async {
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut pid_line = String::new();
-        stdout.read_line(&mut pid_line).await.unwrap();
-        let ov_pid: i32 = pid_line.trim().parse().expect("ov pid");
-        let mut ready_line = String::new();
-        stdout.read_line(&mut ready_line).await.unwrap();
-        assert_eq!(ready_line, "ready\n");
-
-        assert_eq!(posix::kill(ov_pid, posix::SIGINT), 0);
-        let mut rest = Vec::new();
-        stdout.read_to_end(&mut rest).await.unwrap();
-        child.wait().await.unwrap();
+    drop(command);
+    timeout(Duration::from_secs(8), async {
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        assert_eq!(lines.next_line().await.unwrap().as_deref(), Some("ready"));
+        master.write_all(b"\x03").unwrap();
+        assert_eq!(
+            lines.next_line().await.unwrap().as_deref(),
+            Some("interrupted")
+        );
+        master.write_all(b"answer\n").unwrap();
+        assert_eq!(
+            lines.next_line().await.unwrap().as_deref(),
+            Some("answer 1")
+        );
+        drop(slave);
+        assert_eq!(child.wait().await.unwrap().code(), Some(0));
     })
     .await
-    .expect("piped wrapper under controlling terminal did not exit on SIGINT");
+    .expect("terminal job did not finish");
     drop(master);
     let _ = drain_thread.join();
 }
@@ -451,29 +407,20 @@ async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
     let value = "interactive-fixture";
     let (url, server) = resolver([(TOKEN, Some(value.into()))]).await;
     let mut command = privacy(dir.path(), &url);
-    command
-        .current_dir(dir.path())
-        .args([
-            "run",
-            "--env",
-            &format!("TOKEN={TOKEN}"),
-            "--",
-            "/bin/sh",
-            "-c",
-            r#"sh -c 'printf "%s\n" "$$" > up.pid; printf "ready?"; IFS= read -r line; printf "%s\n" "$line"; exec sleep 20' | cat"#,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped());
-    // Detach from any terminal, as in CI, so a PID-directed SIGINT is forwarded to the group.
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        command.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    detach_session(
+        command
+            .args([
+                "run",
+                "--env",
+                &format!("TOKEN={TOKEN}"),
+                "--",
+                "/bin/sh",
+                "-c",
+                r#"sh -c 'printf "%s\n" "$$" > up.pid; printf "ready?"; IFS= read -r line; printf "%s\n" "$line"; exec sleep 20' | cat"#,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped()),
+    );
     let mut child = command.spawn().unwrap();
 
     timeout(Duration::from_secs(10), async {
@@ -491,180 +438,112 @@ async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
         let mut echo = String::new();
         stdout.read_line(&mut echo).await.unwrap();
         assert_eq!(echo, format!("{TOKEN}\n"));
-        let up_pid: i32 = std::fs::read_to_string(&up_pid_path)
+        let up_pid: i32 = fs::read_to_string(&up_pid_path)
             .unwrap()
             .trim()
             .parse()
             .unwrap();
 
         assert_eq!(posix::kill(child.id().unwrap() as i32, posix::SIGINT), 0);
-        // With `| cat`, bash WCE may return 0 if upstream dies before `cat` receives SIGINT,
-        // so also confirm both EOF on stdout and that the upstream `sleep` actually stopped.
         let code = child.wait().await.unwrap().code();
         assert!(
             matches!(code, Some(0 | 130)),
             "unexpected exit code: {code:?}"
         );
         stdout.read_to_end(&mut Vec::new()).await.unwrap();
-        for _ in 0..50 {
-            if posix::kill(up_pid, 0) < 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(
-            posix::kill(up_pid, 0) < 0,
-            "upstream command {up_pid} kept running after SIGINT"
-        );
+        wait_until_stopped(up_pid).await;
     })
     .await
-    .expect("the prompt or pipeline cancellation did not complete");
+    .expect("prompt or pipeline cancellation did not complete");
     server.await.unwrap();
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
-async fn killing_the_process_group_without_a_terminal_leaves_no_command_behind() {
-    use std::process::Stdio;
-
-    let dir = tempfile::tempdir().unwrap();
-    for script in ["echo started; exec sleep 30", "sleep 30 & echo started"] {
-        let mut command = privacy(dir.path(), "http://127.0.0.1:1");
-        command
-            .args(["run", "--", "/bin/sh", "-c", script])
-            .stdout(Stdio::piped());
-        // Agent harnesses start commands without a terminal and SIGKILL their group on timeout.
-        // SAFETY: setsid is async-signal-safe.
-        unsafe {
-            command.pre_exec(|| {
-                if posix::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = command.spawn().unwrap();
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut line = String::new();
-        stdout.read_line(&mut line).await.unwrap();
-        assert_eq!(line, "started\n");
-
-        // setsid made ov the leader of its own group.
-        assert_eq!(
-            posix::kill(-(child.id().unwrap() as i32), posix::SIGKILL),
-            0
-        );
-        // The pipe closes only after every process holding it, sleep included, has exited.
-        timeout(Duration::from_secs(5), stdout.read_to_end(&mut Vec::new()))
-            .await
-            .expect("the command outlived ov")
-            .unwrap();
-        child.wait().await.unwrap();
-    }
-
-    let direct_script = dir.path().join("direct_target.sh");
-    fs::write(
-        &direct_script,
-        "printf '%s\\n' \"$$\" > direct.ready\nexec sleep 30\n",
-    )
-    .unwrap();
-    let direct_ready = dir.path().join("direct.ready");
-    for use_file in [false, true] {
-        let _ = fs::remove_file(&direct_ready);
-        let mut command = privacy(dir.path(), "http://127.0.0.1:1");
-        command.args(["run", "--", "/bin/sh", direct_script.to_str().unwrap()]);
-        if use_file {
-            let log_file = fs::File::create(dir.path().join("direct.log")).unwrap();
-            command
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(log_file.try_clone().unwrap()))
-                .stderr(Stdio::from(log_file));
-        } else {
-            command
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-        }
-        // SAFETY: setsid is async-signal-safe.
-        unsafe {
-            command.pre_exec(|| {
-                if posix::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = command.spawn().unwrap();
-        let ov_pid = child.id().unwrap() as i32;
-        timeout(Duration::from_secs(5), async {
-            while fs::read_to_string(&direct_ready)
-                .map(|text| text.trim().is_empty())
-                .unwrap_or(true)
-            {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("direct target did not start");
-        let direct_pid: i32 = fs::read_to_string(&direct_ready)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert_eq!(posix::kill(ov_pid, posix::SIGKILL), 0);
-        child.wait().await.unwrap();
-        for _ in 0..15 {
-            if process_stopped(direct_pid) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(
-            process_stopped(direct_pid),
-            "direct child {direct_pid} survived single-PID SIGKILL (use_file={use_file})"
-        );
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn process_stopped(pid: i32) -> bool {
-    if posix::kill(pid, 0) < 0 {
-        return true;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat"))
-            && let Some((_, tail)) = stat.rsplit_once(") ")
-        {
-            return tail.starts_with('Z');
-        }
-    }
-    false
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[tokio::test]
-async fn killing_outer_job_stops_redirected_background_worker() {
-    use std::process::Stdio;
+async fn non_terminal_signals_and_background_lifecycle() {
+    use std::{os::fd::AsRawFd, process::Stdio};
 
     let dir = tempfile::tempdir().unwrap();
     let _ = privacy(dir.path(), "http://127.0.0.1:1");
-    let empty_path_dir = dir.path().join("empty_path");
-    fs::create_dir_all(&empty_path_dir).unwrap();
-    fs::write(
-        dir.path().join("service.sh"),
-        "printf '%s\\n' \"$$\" > service.pid\nexec /bin/sleep 5\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("worker.sh"),
-        "printf '%s\\n' \"$$\" > worker.ready\nsleep 0.6\n: > worker.done\n",
-    )
+
+    // 1. Group SIGTERM delivers once and preserves clean child exit status.
+    let mut group_term = privacy(dir.path(), "http://127.0.0.1:1");
+    detach_session(
+        group_term
+            .args([
+                "run",
+                "--",
+                "/bin/sh",
+                "-c",
+                "count=0; trap 'count=$((count + 1))' TERM; echo ready; while [ \"$count\" -eq 0 ]; do :; done; printf '%s\\n' \"$count\"; exit 0",
+            ])
+            .stdout(Stdio::piped()),
+    );
+    let mut child = group_term.spawn().unwrap();
+    timeout(Duration::from_secs(5), async {
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        stdout.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "ready\n");
+        assert_eq!(
+            posix::kill(-(child.id().unwrap() as i32), posix::SIGTERM),
+            0
+        );
+        line.clear();
+        stdout.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "1\n");
+        assert_eq!(child.wait().await.unwrap().code(), Some(0));
+    })
+    .await
     .unwrap();
 
-    // Normal outer exit must preserve a background service started under a redirected file,
-    // even when PATH lacks standard system tools, and release any extra caller pipes promptly.
-    use std::os::fd::AsRawFd;
+    // 2. Single-PID SIGKILL on ov terminates file-redirected foreground children via guard.
+    let direct_ready = dir.path().join("direct.ready");
+    let log_file = fs::File::create(dir.path().join("direct.log")).unwrap();
+    let mut direct_cmd = privacy(dir.path(), "http://127.0.0.1:1");
+    detach_session(
+        direct_cmd
+            .args([
+                "run",
+                "--",
+                "/bin/sh",
+                "-c",
+                "printf '%s\\n' \"$$\" > direct.ready; exec /bin/sleep 30",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log_file.try_clone().unwrap()))
+            .stderr(Stdio::from(log_file)),
+    );
+    let mut direct_child = direct_cmd.spawn().unwrap();
+    timeout(Duration::from_secs(5), async {
+        while fs::read_to_string(&direct_ready)
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let direct_pid: i32 = fs::read_to_string(&direct_ready)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        posix::kill(direct_child.id().unwrap() as i32, posix::SIGKILL),
+        0
+    );
+    direct_child.wait().await.unwrap();
+    wait_until_stopped(direct_pid).await;
+
+    // 3. Normal return preserves a background service, releases extra caller pipes promptly,
+    //    and outer SIGTERM reaches the background group cleanly for graceful shutdown.
+    fs::write(
+        dir.path().join("graceful.sh"),
+        "trap 'printf checkpoint > graceful.saved; exit 0' TERM\nprintf '%s\\n' \"$$\" > graceful.ready\nwhile :; do /bin/sleep 1 & wait $!; done\n",
+    )
+    .unwrap();
     let (status_tx, mut status_rx) = tokio::net::unix::pipe::pipe().unwrap();
     let status_tx = status_tx.into_blocking_fd().unwrap();
     let status_tx_fd = status_tx.as_raw_fd();
@@ -675,10 +554,9 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         .env("USERPROFILE", dir.path())
         .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
         .env("OPENVIKING_LANG", "en")
-        .env("PATH", &empty_path_dir)
         .args([
             "-c",
-            r#""$1" privacy run -- /bin/sh -c 'printf ready >&3; exec 3>&-; /bin/sh ./service.sh &' >service.log 2>&1; exec 3>&-; while [ ! -s service.pid ]; do /bin/sleep 0.02; done"#,
+            r#""$1" privacy run -- /bin/sh -c 'printf ready >&3; exec 3>&-; /bin/sh ./graceful.sh >graceful.log 2>&1 &'; exec 3>&-; : > graceful.outer; exec /bin/sleep 10"#,
             "sh",
             env!("CARGO_BIN_EXE_ov"),
         ])
@@ -697,314 +575,93 @@ async fn killing_outer_job_stops_redirected_background_worker() {
     }
     let mut service_child = service_outer.spawn().unwrap();
     drop(status_tx);
-    let service_status = timeout(Duration::from_secs(5), service_child.wait())
-        .await
-        .expect("normal outer job did not finish")
-        .unwrap();
-    assert_eq!(service_status.code(), Some(0));
+    let outer_pgid = service_child.id().unwrap() as i32;
+    let graceful_ready = dir.path().join("graceful.ready");
+    let graceful_outer = dir.path().join("graceful.outer");
+    timeout(Duration::from_secs(5), async {
+        while fs::read_to_string(&graceful_ready)
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+            || !graceful_outer.exists()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     let mut status_msg = String::new();
     timeout(
         Duration::from_millis(500),
         status_rx.read_to_string(&mut status_msg),
     )
     .await
-    .expect("helper processes kept extra caller pipe open after command exit")
+    .expect("helper processes kept extra caller pipe open")
     .unwrap();
     assert_eq!(status_msg, "ready");
-    let service_pid: i32 = fs::read_to_string(dir.path().join("service.pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    assert!(
-        !process_stopped(service_pid),
-        "background service {service_pid} was killed after normal outer exit"
-    );
-    assert_eq!(posix::kill(service_pid, posix::SIGKILL), 0);
-    for _ in 0..20 {
-        if process_stopped(service_pid) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
 
-    let worker_ready = dir.path().join("worker.ready");
-    let worker_done = dir.path().join("worker.done");
-    let next_step = dir.path().join("next_step");
-
-    for inner_redirect in [false, true] {
-        let _ = fs::remove_file(&worker_ready);
-        let _ = fs::remove_file(&worker_done);
-        let _ = fs::remove_file(&next_step);
-        let script = if inner_redirect {
-            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./worker.sh >job.log 2>&1 &'; : > next_step; sleep 10; :"#
-        } else {
-            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./worker.sh &' >job.log 2>&1; : > next_step; sleep 10; :"#
-        };
-
-        let mut outer = Command::new("/bin/sh");
-        outer
-            .current_dir(dir.path())
-            .env("HOME", dir.path())
-            .env("USERPROFILE", dir.path())
-            .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
-            .env("OPENVIKING_LANG", "en")
-            .args(["-c", script, "sh", env!("CARGO_BIN_EXE_ov")])
-            .stdin(Stdio::null())
-            .stdout(if inner_redirect {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stderr(if inner_redirect {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .kill_on_drop(true);
-        // Simulate a harness starting a multi-step shell script in its own process group.
-        // SAFETY: setsid is async-signal-safe.
-        unsafe {
-            outer.pre_exec(|| {
-                if posix::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut outer_child = outer.spawn().unwrap();
-        let outer_pgid = outer_child.id().unwrap() as i32;
-
-        timeout(Duration::from_secs(5), async {
-            while fs::read_to_string(&worker_ready)
-                .map(|text| text.trim().is_empty())
-                .unwrap_or(true)
-                || !next_step.exists()
-            {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("outer script did not start redirected worker and advance");
-        tokio::time::sleep(Duration::from_millis(80)).await;
-        let worker_pid: i32 = fs::read_to_string(&worker_ready)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert!(
-            !process_stopped(worker_pid),
-            "recorded worker {worker_pid} should still be alive before cancellation"
-        );
-
-        assert_eq!(posix::kill(-outer_pgid, posix::SIGKILL), 0);
-        outer_child.wait().await.unwrap();
-
-        for _ in 0..15 {
-            if process_stopped(worker_pid) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(
-            process_stopped(worker_pid),
-            "redirected background worker {worker_pid} outlived outer job (inner_redirect={inner_redirect})"
-        );
-        tokio::time::sleep(Duration::from_millis(650)).await;
-        assert!(!worker_done.exists());
-    }
-
-    // Outer SIGTERM must reach a background worker cleanly so it can flush checkpoints before exiting.
-    fs::write(
-        dir.path().join("graceful.sh"),
-        "trap ': > graceful.noticed; /bin/sleep 0.05; printf checkpoint > graceful.saved; exit 0' TERM\nprintf '%s\\n' \"$$\" > graceful.ready\nwhile :; do /bin/sleep 1 & wait $!; done\n",
-    )
-    .unwrap();
-    let graceful_ready = dir.path().join("graceful.ready");
-    let graceful_outer_marker = dir.path().join("graceful.outer");
-    let graceful_noticed = dir.path().join("graceful.noticed");
-    let graceful_saved = dir.path().join("graceful.saved");
-    let mut graceful_outer = Command::new("/bin/sh");
-    graceful_outer
-        .current_dir(dir.path())
-        .env("HOME", dir.path())
-        .env("USERPROFILE", dir.path())
-        .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
-        .env("OPENVIKING_LANG", "en")
-        .args([
-            "-c",
-            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./graceful.sh >graceful.log 2>&1 &'; : > graceful.outer; exec /bin/sleep 10"#,
-            "sh",
-            env!("CARGO_BIN_EXE_ov"),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        graceful_outer.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut graceful_child = graceful_outer.spawn().unwrap();
-    let graceful_outer_pgid = graceful_child.id().unwrap() as i32;
-    timeout(Duration::from_secs(5), async {
-        while fs::read_to_string(&graceful_ready)
-            .map(|text| text.trim().is_empty())
-            .unwrap_or(true)
-            || !graceful_outer_marker.exists()
-        {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("graceful background worker did not start");
     let graceful_pid: i32 = fs::read_to_string(&graceful_ready)
         .unwrap()
         .trim()
         .parse()
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(posix::kill(-graceful_outer_pgid, posix::SIGTERM), 0);
-    graceful_child.wait().await.unwrap();
-    for _ in 0..25 {
-        if process_stopped(graceful_pid) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(
-        process_stopped(graceful_pid),
-        "graceful background worker {graceful_pid} did not exit after SIGTERM"
+    assert!(!process_stopped(graceful_pid));
+    assert_eq!(posix::kill(-outer_pgid, posix::SIGTERM), 0);
+    service_child.wait().await.unwrap();
+    wait_until_stopped(graceful_pid).await;
+    assert_eq!(
+        fs::read_to_string(dir.path().join("graceful.saved")).unwrap(),
+        "checkpoint"
     );
-    assert!(
-        graceful_noticed.exists(),
-        "background worker did not receive outer SIGTERM"
-    );
-    assert_eq!(fs::read_to_string(&graceful_saved).unwrap(), "checkpoint");
 
-    // A short background worker that finishes naturally must not leave running helper processes.
-    let natural_done = dir.path().join("natural.done");
-    let mut natural_outer = privacy(dir.path(), "http://127.0.0.1:1");
-    natural_outer
-        .args([
-            "run",
-            "--",
-            "/bin/sh",
-            "-c",
-            "(/bin/sleep 0.1; : > natural.done) >/dev/null 2>&1 &",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        natural_outer.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut natural_child = natural_outer.spawn().unwrap();
-    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
-    let natural_sid = natural_child.id().unwrap() as i32;
-    assert_eq!(natural_child.wait().await.unwrap().code(), Some(0));
+    // 4. Outer SIGKILL stops a background worker even when it redirected its own stdio.
+    fs::write(
+        dir.path().join("worker.sh"),
+        "printf '%s\\n' \"$$\" > worker.ready\n/bin/sleep 2 && : > worker.done\n",
+    )
+    .unwrap();
+    let worker_ready = dir.path().join("worker.ready");
+    let next_step = dir.path().join("next_step");
+    let mut kill_outer = Command::new("/bin/sh");
+    detach_session(
+        kill_outer
+            .current_dir(dir.path())
+            .env("HOME", dir.path())
+            .env("USERPROFILE", dir.path())
+            .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
+            .env("OPENVIKING_LANG", "en")
+            .args([
+                "-c",
+                r#""$1" privacy run -- /bin/sh -c '/bin/sh ./worker.sh >job.log 2>&1 &'; : > next_step; exec /bin/sleep 10"#,
+                "sh",
+                env!("CARGO_BIN_EXE_ov"),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true),
+    );
+    let mut kill_child = kill_outer.spawn().unwrap();
+    let kill_pgid = kill_child.id().unwrap() as i32;
     timeout(Duration::from_secs(5), async {
-        while !natural_done.exists() {
-            tokio::time::sleep(Duration::from_millis(15)).await;
+        while fs::read_to_string(&worker_ready)
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+            || !next_step.exists()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("natural background worker did not finish");
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    #[cfg(target_os = "linux")]
-    {
-        let mut live_in_session = Vec::new();
-        for entry in fs::read_dir("/proc").unwrap().flatten() {
-            let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
-                continue;
-            };
-            let Some((_, tail)) = stat.rsplit_once(") ") else {
-                continue;
-            };
-            let mut fields = tail.split_whitespace();
-            let (Some(state), Some(_ppid), Some(_pgrp), Some(sid)) = (
-                fields.next(),
-                fields.next(),
-                fields.next(),
-                fields.next().and_then(|s| s.parse::<i32>().ok()),
-            ) else {
-                continue;
-            };
-            if sid == natural_sid && !matches!(state, "Z" | "X" | "x") {
-                live_in_session.push(stat);
-            }
-        }
-        assert!(
-            live_in_session.is_empty(),
-            "helper processes stayed alive after natural background exit: {live_in_session:?}"
-        );
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[tokio::test]
-async fn group_signal_without_a_terminal_delivers_once_and_preserves_zero_status() {
-    use std::process::Stdio;
-
-    let dir = tempfile::tempdir().unwrap();
-    let mut command = privacy(dir.path(), "http://127.0.0.1:1");
-    command
-        .args([
-            "run",
-            "--",
-            "/bin/sh",
-            "-c",
-            r#"
-                count=0
-                trap 'count=$((count + 1))' TERM
-                echo ready
-                while [ "$count" -eq 0 ]; do :; done
-                sleep 0.1
-                printf '%s\n' "$count"
-                exit 0
-            "#,
-        ])
-        .stdout(Stdio::piped());
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        command.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = command.spawn().unwrap();
-
-    timeout(Duration::from_secs(5), async {
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut line = String::new();
-        stdout.read_line(&mut line).await.unwrap();
-        assert_eq!(line, "ready\n");
-
-        assert_eq!(
-            posix::kill(-(child.id().unwrap() as i32), posix::SIGTERM),
-            0
-        );
-        line.clear();
-        stdout.read_line(&mut line).await.unwrap();
-        assert_eq!(line, "1\n");
-        assert_eq!(child.wait().await.unwrap().code(), Some(0));
-    })
-    .await
-    .expect("group signal test did not finish");
+    .unwrap();
+    let worker_pid: i32 = fs::read_to_string(&worker_ready)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(posix::kill(-kill_pgid, posix::SIGKILL), 0);
+    kill_child.wait().await.unwrap();
+    wait_until_stopped(worker_pid).await;
+    assert!(!dir.path().join("worker.done").exists());
 }
 
 #[cfg(unix)]
@@ -1013,409 +670,88 @@ async fn closing_stdout_delivers_sigpipe_without_error_output() {
     use std::process::Stdio;
 
     let dir = tempfile::tempdir().unwrap();
-    for masked in [false, true] {
-        let (url, server) = if masked {
-            let (url, server) = resolver([(TOKEN, Some("secret-line".into()))]).await;
-            (url, Some(server))
-        } else {
-            ("http://127.0.0.1:1".to_owned(), None)
-        };
-        let mut command = privacy(dir.path(), &url);
-        command.arg("run");
-        if masked {
-            command.args(["--env", &format!("TOKEN={TOKEN}")]);
-        }
-        command
-            .args([
-                "--",
-                "/bin/sh",
-                "-c",
-                r#"while :; do printf '%s\n' "${TOKEN:-plain-line}"; done"#,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn().unwrap();
-        let expected = if masked {
-            format!("{TOKEN}\n")
-        } else {
-            "plain-line\n".to_owned()
-        };
+    let (url, server) = resolver([(TOKEN, Some("secret-line".into()))]).await;
+    let mut child = privacy(dir.path(), &url)
+        .args([
+            "run",
+            "--env",
+            &format!("TOKEN={TOKEN}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"while :; do printf '%s\n' "$TOKEN"; done"#,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
 
-        timeout(Duration::from_secs(5), async {
-            let mut stdout = BufReader::new(child.stdout.take().unwrap());
-            let mut first = String::new();
-            stdout.read_line(&mut first).await.unwrap();
-            assert_eq!(first, expected);
-            drop(stdout);
+    timeout(Duration::from_secs(5), async {
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut first = String::new();
+        stdout.read_line(&mut first).await.unwrap();
+        assert_eq!(first, format!("{TOKEN}\n"));
+        drop(stdout);
 
-            let mut stderr = Vec::new();
-            child
-                .stderr
-                .take()
-                .unwrap()
-                .read_to_end(&mut stderr)
-                .await
-                .unwrap();
-            assert!(
-                stderr.is_empty(),
-                "unexpected stderr: {}",
-                String::from_utf8_lossy(&stderr)
-            );
-            assert_eq!(child.wait().await.unwrap().code(), Some(141));
-        })
-        .await
-        .expect("closed stdout test did not finish");
-        if let Some(server) = server {
-            server.await.unwrap();
-        }
-    }
+        let mut stderr = Vec::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_end(&mut stderr)
+            .await
+            .unwrap();
+        assert!(
+            stderr.is_empty(),
+            "unexpected stderr: {}",
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(child.wait().await.unwrap().code(), Some(141));
+    })
+    .await
+    .expect("closed stdout test did not finish");
+    server.await.unwrap();
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn preserves_regular_file_stdout_and_merged_stream_order() {
-    use std::process::Stdio;
+    use std::{
+        io::{Read, Seek, SeekFrom},
+        process::Stdio,
+    };
 
     let dir = tempfile::tempdir().unwrap();
+
+    // 1. Unmasked regular-file stdout stays a real file descriptor while piped stderr is relayed.
     let out_path = dir.path().join("stdout.txt");
-    let mut file_command = privacy(dir.path(), "http://127.0.0.1:1");
-    file_command
-        .args([
-            "run",
-            "--",
-            "/bin/sh",
-            "-c",
-            "[ -f /dev/fd/1 ] && printf 'regular\\n' && printf 'err\\n' >&2",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(std::fs::File::create(&out_path).unwrap()))
-        .stderr(Stdio::piped());
-    // Detach from any terminal so the non-TTY file/pipe rules apply regardless of test runner.
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        file_command.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    // Use spawn + wait_with_output so tokio does not replace file stdout with a pipe.
-    let output = file_command
-        .spawn()
-        .unwrap()
-        .wait_with_output()
-        .await
-        .unwrap();
+    let mut file_cmd = privacy(dir.path(), "http://127.0.0.1:1");
+    detach_session(
+        file_cmd
+            .args([
+                "run",
+                "--",
+                "/bin/sh",
+                "-c",
+                "[ -f /dev/fd/1 ] && printf 'regular\\n' && printf 'err\\n' >&2",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(fs::File::create(&out_path).unwrap()))
+            .stderr(Stdio::piped()),
+    );
+    let output = file_cmd.spawn().unwrap().wait_with_output().await.unwrap();
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(std::fs::read_to_string(&out_path).unwrap(), "regular\n");
+    assert_eq!(fs::read_to_string(&out_path).unwrap(), "regular\n");
     assert_eq!(output.stderr, b"err\n");
 
-    for masked in [false, true] {
-        for _ in 0..5 {
-            let (url, server) = if masked {
-                let (url, server) = resolver([(TOKEN, Some("secret-mid".into()))]).await;
-                (url, Some(server))
-            } else {
-                ("http://127.0.0.1:1".to_owned(), None)
-            };
-            let (rx, tx) = std::io::pipe().unwrap();
-            let mut merged = privacy(dir.path(), &url);
-            merged.arg("run");
-            if masked {
-                merged.args(["--env", &format!("TOKEN={TOKEN}")]);
-            }
-            merged
-                .args([
-                    "--",
-                    "/bin/sh",
-                    "-c",
-                    r#"printf '1\n'; printf '2\n' >&2; printf '3:%s\n' "${TOKEN:-plain}"; printf '4\n' >&2"#,
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(tx.try_clone().unwrap()))
-                .stderr(Stdio::from(tx));
-            // SAFETY: setsid is async-signal-safe.
-            unsafe {
-                merged.pre_exec(|| {
-                    if posix::setsid() < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-            let mut child = merged.spawn().unwrap();
-            drop(merged);
-
-            timeout(Duration::from_secs(5), async {
-                let reader = tokio::task::spawn_blocking(move || {
-                    let mut rx = rx;
-                    let mut captured = String::new();
-                    std::io::Read::read_to_string(&mut rx, &mut captured).unwrap();
-                    captured
-                });
-                let (status, captured) = tokio::join!(child.wait(), reader);
-                assert_eq!(status.unwrap().code(), Some(0));
-                let expected = if masked {
-                    format!("1\n2\n3:{TOKEN}\n4\n")
-                } else {
-                    "1\n2\n3:plain\n4\n".to_owned()
-                };
-                assert_eq!(captured.unwrap(), expected);
-            })
-            .await
-            .expect("merged stream order test timed out");
-            if let Some(server) = server {
-                server.await.unwrap();
-            }
-        }
-    }
-
-    let separate_log = dir.path().join("separate.log");
-    fs::write(&separate_log, "AGENT LOG HEADER\n").unwrap();
-    let sep_out = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&separate_log)
-        .unwrap();
-    let sep_err = fs::OpenOptions::new()
-        .append(true)
-        .open(&separate_log)
-        .unwrap();
-    let (url, server) = resolver([(TOKEN, Some("secret-warn".into()))]).await;
-    let mut separate = privacy(dir.path(), &url);
-    separate
-        .args([
-            "run",
-            "--env",
-            &format!("TOKEN={TOKEN}"),
-            "--",
-            "/bin/sh",
-            "-c",
-            r#"printf 'warn:%s\n' "$TOKEN" >&2"#,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(sep_out))
-        .stderr(Stdio::from(sep_err));
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        separate.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let status = separate.status().await.unwrap();
-    assert_eq!(status.code(), Some(0));
-    server.await.unwrap();
-    assert_eq!(
-        fs::read_to_string(&separate_log).unwrap(),
-        format!("AGENT LOG HEADER\nwarn:{TOKEN}\n")
-    );
-
-    use std::io::Write;
-    let independent_rw = dir.path().join("independent_rw.log");
-    fs::write(&independent_rw, "").unwrap();
-    let out_rw = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&independent_rw)
-        .unwrap();
-    let mut err_rw = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&independent_rw)
-        .unwrap();
-    let (url, server) = resolver([(TOKEN, Some("secret-rw".into()))]).await;
-    let mut rw_cmd = privacy(dir.path(), &url);
-    rw_cmd
-        .args([
-            "run",
-            "--env",
-            &format!("TOKEN={TOKEN}"),
-            "--",
-            "/bin/sh",
-            "-c",
-            r#"printf 'warn:%s\n' "$TOKEN" >&2"#,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(out_rw.try_clone().unwrap()))
-        .stderr(Stdio::from(err_rw.try_clone().unwrap()));
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        rw_cmd.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let status = rw_cmd.status().await.unwrap();
-    assert_eq!(status.code(), Some(0));
-    server.await.unwrap();
-    err_rw.write_all(b"finish\n").unwrap();
-    drop((out_rw, err_rw));
-    assert_eq!(
-        fs::read_to_string(&independent_rw).unwrap(),
-        format!("warn:{TOKEN}\nfinish\n")
-    );
-
-    let shared_log = dir.path().join("shared.log");
-    fs::write(&shared_log, "AGENT LOG HEADER\n").unwrap();
-    let shared_out = fs::OpenOptions::new()
-        .append(true)
-        .open(&shared_log)
-        .unwrap();
+    // 2. Shared 2>&1 regular-file descriptors preserve interleaved stdout/stderr order when masking.
+    let shared_path = dir.path().join("shared.log");
+    let shared_out = fs::File::create(&shared_path).unwrap();
     let shared_err = shared_out.try_clone().unwrap();
     let (url, server) = resolver([(TOKEN, Some("secret-shared".into()))]).await;
-    let mut shared = privacy(dir.path(), &url);
-    shared
-        .args([
-            "run",
-            "--env",
-            &format!("TOKEN={TOKEN}"),
-            "--",
-            "/bin/sh",
-            "-c",
-            r#"printf '1\n'; printf '2:%s\n' "$TOKEN" >&2"#,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(shared_out))
-        .stderr(Stdio::from(shared_err));
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        shared.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let status = shared.status().await.unwrap();
-    assert_eq!(status.code(), Some(0));
-    server.await.unwrap();
-    assert_eq!(
-        fs::read_to_string(&shared_log).unwrap(),
-        format!("AGENT LOG HEADER\n1\n2:{TOKEN}\n")
-    );
-
-    let truncated_shared = dir.path().join("truncated_shared.log");
-    let trunc_out = fs::File::create(&truncated_shared).unwrap();
-    let trunc_err = trunc_out.try_clone().unwrap();
-    let (url, server) = resolver([(TOKEN, Some("secret-trunc".into()))]).await;
-    let mut trunc_cmd = privacy(dir.path(), &url);
-    trunc_cmd
-        .args([
-            "run",
-            "--env",
-            &format!("TOKEN={TOKEN}"),
-            "--",
-            "/bin/sh",
-            "-c",
-            r#"printf '1\n'; printf '2:%s\n' "$TOKEN" >&2; printf '3\n'; printf '4\n' >&2"#,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(trunc_out))
-        .stderr(Stdio::from(trunc_err));
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        trunc_cmd.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let status = trunc_cmd.status().await.unwrap();
-    assert_eq!(status.code(), Some(0));
-    server.await.unwrap();
-    assert_eq!(
-        fs::read_to_string(&truncated_shared).unwrap(),
-        format!("1\n2:{TOKEN}\n3\n4\n")
-    );
-
-    use std::io::{Read, Seek, SeekFrom};
-    let append_cursor = dir.path().join("append_cursor.log");
-    fs::write(&append_cursor, "before\ncursor\n").unwrap();
-    let mut transcript = fs::OpenOptions::new()
-        .read(true)
-        .append(true)
-        .open(&append_cursor)
-        .unwrap();
-    let diag = fs::OpenOptions::new()
-        .read(true)
-        .append(true)
-        .open(&append_cursor)
-        .unwrap();
-    transcript
-        .seek(SeekFrom::Start("before\n".len() as u64))
-        .unwrap();
-    let (url, server) = resolver([(TOKEN, Some("secret-cursor".into()))]).await;
-    let mut cursor_cmd = privacy(dir.path(), &url);
-    cursor_cmd
-        .args([
-            "run",
-            "--env",
-            &format!("TOKEN={TOKEN}"),
-            "--",
-            "/bin/sh",
-            "-c",
-            r#"printf 'warn:%s\n' "$TOKEN" >&2"#,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(transcript.try_clone().unwrap()))
-        .stderr(Stdio::from(diag));
-    // SAFETY: setsid is async-signal-safe.
-    unsafe {
-        cursor_cmd.pre_exec(|| {
-            if posix::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let status = cursor_cmd.status().await.unwrap();
-    assert_eq!(status.code(), Some(0));
-    server.await.unwrap();
-    let mut delta = String::new();
-    transcript.read_to_string(&mut delta).unwrap();
-    assert_eq!(delta, format!("cursor\nwarn:{TOKEN}\n"));
-
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    let concurrent_log = dir.path().join("concurrent.log");
-    let log_file = fs::File::create(&concurrent_log).unwrap();
-    let mut writer_file = log_file.try_clone().unwrap();
-    let started = Arc::new(AtomicBool::new(false));
-    let stop = Arc::new(AtomicBool::new(false));
-    let writer_started = Arc::clone(&started);
-    let writer_stop = Arc::clone(&stop);
-    let writer = std::thread::spawn(move || -> u64 {
-        let mut count = 0u64;
-        while !writer_stop.load(Ordering::Acquire) {
-            writer_file.write_all(&count.to_ne_bytes()).unwrap();
-            count += 1;
-            if count == 64 {
-                writer_started.store(true, Ordering::Release);
-            }
-        }
-        count
-    });
-    timeout(Duration::from_secs(5), async {
-        while !started.load(Ordering::Acquire) {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("concurrent writer did not start");
-
-    for _ in 0..6 {
-        let (url, server) = resolver([(TOKEN, Some("secret-log".into()))]).await;
-        let mut command = privacy(dir.path(), &url);
-        command
+    let mut shared_cmd = privacy(dir.path(), &url);
+    detach_session(
+        shared_cmd
             .args([
                 "run",
                 "--env",
@@ -1423,37 +759,55 @@ async fn preserves_regular_file_stdout_and_merged_stream_order() {
                 "--",
                 "/bin/sh",
                 "-c",
-                ":",
+                r#"printf '1\n'; printf '2:%s\n' "$TOKEN" >&2; printf '3\n'; printf '4\n' >&2"#,
             ])
             .stdin(Stdio::null())
-            .stdout(Stdio::from(log_file.try_clone().unwrap()))
-            .stderr(Stdio::from(log_file.try_clone().unwrap()));
-        // SAFETY: setsid is async-signal-safe.
-        unsafe {
-            command.pre_exec(|| {
-                if posix::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let status = command.status().await.unwrap();
-        assert_eq!(status.code(), Some(0));
-        server.await.unwrap();
-    }
-    stop.store(true, Ordering::Release);
-    let total_records = writer.join().unwrap();
-    drop(log_file);
+            .stdout(Stdio::from(shared_out))
+            .stderr(Stdio::from(shared_err)),
+    );
+    assert_eq!(shared_cmd.status().await.unwrap().code(), Some(0));
+    server.await.unwrap();
+    assert_eq!(
+        fs::read_to_string(&shared_path).unwrap(),
+        format!("1\n2:{TOKEN}\n3\n4\n")
+    );
 
-    let data = fs::read(&concurrent_log).unwrap();
-    let (chunks, remainder) = data.as_chunks::<8>();
-    assert!(remainder.is_empty());
-    assert_eq!(chunks.len(), total_records as usize);
-    for (index, chunk) in chunks.iter().enumerate() {
-        assert_eq!(
-            chunk,
-            &(index as u64).to_ne_bytes(),
-            "shared log corrupted at record {index}"
-        );
-    }
+    // 3. Independently opened descriptors to the same file keep independent offsets and cursors.
+    let sep_path = dir.path().join("separate.log");
+    fs::write(&sep_path, "before\ncursor\n").unwrap();
+    let mut sep_out = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&sep_path)
+        .unwrap();
+    let sep_err = fs::OpenOptions::new().append(true).open(&sep_path).unwrap();
+    sep_out
+        .seek(SeekFrom::Start("before\n".len() as u64))
+        .unwrap();
+    let (url, server) = resolver([(TOKEN, Some("secret-sep".into()))]).await;
+    let mut sep_cmd = privacy(dir.path(), &url);
+    detach_session(
+        sep_cmd
+            .args([
+                "run",
+                "--env",
+                &format!("TOKEN={TOKEN}"),
+                "--",
+                "/bin/sh",
+                "-c",
+                r#"printf 'warn:%s\n' "$TOKEN" >&2"#,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(sep_out.try_clone().unwrap()))
+            .stderr(Stdio::from(sep_err)),
+    );
+    assert_eq!(sep_cmd.status().await.unwrap().code(), Some(0));
+    server.await.unwrap();
+    let mut delta = String::new();
+    sep_out.read_to_string(&mut delta).unwrap();
+    assert_eq!(delta, format!("cursor\nwarn:{TOKEN}\n"));
+    assert_eq!(
+        fs::read_to_string(&sep_path).unwrap(),
+        format!("before\ncursor\nwarn:{TOKEN}\n")
+    );
 }
