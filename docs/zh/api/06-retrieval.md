@@ -409,6 +409,7 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
 | events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
+| args | Dict | 否 | null | `search_type="keywords"` 且 `mode="list"` 时的高级引擎参数。支持 `bm25_k1`（float，> 0）、`bm25_b`（float，`[0, 1]`）、`post_process_input_limit`（int，有效 `limit`/`node_limit` 到 `2000000`）。未知 key 会被拒绝 |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 每条规划查询的结果上限；list 模式直接汇总各查询结果，总数可能超过此值 |
@@ -423,7 +424,7 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容；仅支持 `mode="list"`。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-`search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query，不支持图片，且需要远程 VikingDB 配置全文索引。
+`search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query，不支持图片，且需要远程 VikingDB 配置全文索引。`args` 仅在 `search_type="keywords"` 且 `mode="list"` 时接受，用同一个 map 承载引擎调参，避免为每个参数增加顶层字段。
 
 事件时间衰减作用于语义 `find()`、`search(mode="list")` 和 `search(mode="context")` 中带 `memory_type=events` 标签的结果。记忆提取流程将该标签写入 user / peer 事件的 L2 记录；检索按标签判断，不从 URI 或层级推断事件类型。无事件标签的结果、无 query 的纯过滤 `find()`、`recall`、`grep` 和 `glob` 不受影响。事件召回阶段由向量引擎将原向量分乘以 `time_score`；响应中的 `score` 是最终检索分数，开启模型 rerank 时使用模型分。context 模式默认按向量分组装候选，开启 `retrieval.apply_rerank_to_context` 后按模型分组装。保护期内 `time_score` 为 1，原分不变；时间距离与 VikingDB 指数衰减算子一致，取时间戳与请求时间的绝对差。list 响应中的 event 结果额外返回 `origin_score` 和 `time_score`，CLI 分别展示为 semantic、time 和 final 分。时间取自已有索引的 `updated_at` 字段，无需重新索引或改写时间戳；本地计算遇到缺失或非法时间时保持原分；云端使用索引中的日期时间字段和后处理算子。衰减曲线由服务端内部维护，调用方只需按请求传入保护期，无需修改 `ov.conf` 或 `ovcli.conf`。
 
@@ -478,7 +479,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
         "query": "hnsw",
         "search_type": "keywords",
         "target_uri": "viking://resources/docs",
-        "limit": 10
+        "limit": 10,
+        "args": {
+            "bm25_k1": 1.2,
+            "bm25_b": 0.75,
+            "post_process_input_limit": 100
+        }
     }'
 ```
 
@@ -600,6 +606,10 @@ ov search "how to implement OAuth 2.0 authorization code flow"
 
 # BM25 关键词检索
 ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
+
+# BM25 关键词检索并调优引擎参数
+ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs" \
+  --args '{"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":100}'
 
 # 限定层级范围（仅 L0）
 ov search "best practices" --level 0
@@ -728,7 +738,7 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 - **保底**：每条结果至少给出 `uri`。记忆类摘要缺失或超出单条上限时回落到概览档：写入侧把整篇正文存进了摘要标量，所以对记忆类别而言概览档在内容阶梯上位于摘要档*之下*，这次替换披露得更少。而 `resources` / `skills` 的摘要是语义处理生成的短摘要，同样的替换会去读调用方没有请求的正文，因此这两类直接退成裸 `uri`，不向上加深
 - **显式 `detail`**：把该档作为全部结果请求的起点和上限；装不下的条目仍逐档退档而不截断。上述记忆类概览档替换是实际档位唯一可能高于指定档的情况，且仅因为它比指定档携带的内容更少
 - **概览档按来源取骨架**：记忆文件取开头的 `# Summary` 段，代码文件取函数与类签名（复用 `code_outline`），长文档取标题树加首段
-- **单条上限**：`max_tokens ÷ 候选条数 × 2`，对除裸 `uri` 外的所有档位一律生效；某一档超出该上限时退回上一档，不做截断。预算仍有剩余时，最后一轮加深不受该上限约束，只受 `max_tokens` 约束
+- **单条上限**：`max_tokens ÷ 候选条数 × 2`，对除裸 `uri` 外的所有档位一律生效；某一档超出该上限时退回上一档，不做截断。预算仍有剩余时，最后一轮全文加深不受该上限约束，只受 `max_tokens` 约束；再在类别上限内，用剩余预算补回完整摘要和概览
 
 #### 3. 使用示例
 

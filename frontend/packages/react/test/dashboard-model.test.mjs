@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   parseWikiFileConflicts,
   locateWikiConflict,
-} from '../src/modules/file-browser/wiki-conflicts.ts';
+} from './helpers/internal-hooks.mjs';
 
 const record = {
   match_text: 'two approvals',
@@ -65,4 +65,39 @@ test('native conflict strings may contain CLI flags and Markdown separators', ()
   assert.equal(parsed.status, 'available');
   assert.equal(parsed.records[0].location.status, 'unique');
   assert.equal(parsed.records[0].reason, value.reason);
+});
+
+test('Wiki conflict anchors exclude YAML frontmatter closed with a document end marker', () => {
+  const header = '\uFEFF--- \r\npolicy: two approvals\r\n... \r\n';
+  const beforeAnchor = `${header}\r\n---\r\n`;
+  const body = 'two approvals';
+  const parsed = parseWikiFileConflicts(
+    `${beforeAnchor}${body}\n<!-- CONFLICTS_CONTENT\n${JSON.stringify(record)}\n-->`,
+  );
+  assert.deepEqual(parsed.records[0].location, {
+    status: 'unique',
+    start: beforeAnchor.length,
+    end: beforeAnchor.length + body.length,
+    line: 6,
+  });
+  assert.deepEqual(locateWikiConflict(`${header}# Body`, body), {
+    status: 'missing',
+  });
+});
+
+test('Wiki conflict anchors keep Markdown that only resembles YAML frontmatter', () => {
+  const matchText = 'two approvals';
+  for (const text of [
+    `This policy requires ${matchText}.`,
+    `policy: [${matchText}`,
+  ]) {
+    const markdown = `---\n${text}\n...\n# Body`;
+    const start = markdown.indexOf(matchText);
+    assert.deepEqual(locateWikiConflict(markdown, matchText), {
+      status: 'unique',
+      start,
+      end: start + matchText.length,
+      line: 2,
+    });
+  }
 });

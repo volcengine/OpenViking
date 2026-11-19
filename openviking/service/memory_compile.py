@@ -27,6 +27,7 @@ from openviking.session.memory.consolidation_context_provider import (
     ConsolidationExtractContextProvider,
     build_consolidation_isolation_handler,
 )
+from openviking.session.memory.dataclass import ResolvedOperations
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry, get_default_registry
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -36,6 +37,7 @@ from openviking.session.memory.streaming_memory_updater import (
 from openviking.session.memory.utils.uri import render_template
 from openviking.telemetry import tracer
 from openviking.telemetry.span_models import create_root_span_attributes
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -99,6 +101,35 @@ async def _discover_memory_types(
         if bool(stat.get("isDir")) == is_directory:
             memory_types.append(schema.memory_type)
     return sorted(memory_types)
+
+
+def _validate_operation_targets(
+    operations: ResolvedOperations, target: str, ctx: RequestContext
+) -> None:
+    """Reject the whole batch before locks/writes; reads may cross the target."""
+    target_parts = uri_parts(validate_request_viking_uri(normalize_storage_target_uri(target), ctx))
+    write_uris = {uri for op in operations.upsert_operations for uri in op.uris}
+    write_uris.update(
+        op.old_memory_file_content.uri
+        for op in operations.upsert_operations
+        if op.old_memory_file_content is not None
+    )
+    write_uris.update(file.uri for file in operations.delete_file_contents)
+    write_uris.update(operations.delete_replacements)
+    write_uris.update(operations.delete_replacements.values())
+    # Existing relation migration and destination backlinks remain system-managed.
+    write_uris.update(link.from_uri for link in operations.resolved_links)
+    for uri in sorted(write_uris):
+        try:
+            parts = uri_parts(validate_request_viking_uri(normalize_storage_target_uri(uri), ctx))
+        except (ValueError, OpenVikingError) as exc:
+            raise InvalidArgumentError(
+                f"Invalid memory compile write URI {uri!r} for --to {target!r}: {exc}"
+            ) from exc
+        if parts[: len(target_parts)] != target_parts:
+            raise InvalidArgumentError(
+                f"Memory compile write URI {uri!r} is outside --to {target!r}"
+            )
 
 
 class MemoryCompileRunner:
@@ -255,10 +286,15 @@ class MemoryCompileRunner:
                             result=result,
                         )
                         return
-                    logger.warning(
-                        "Memory-mode compile %s partially succeeded: %s",
+                    logger.info(
+                        "memory compile partially succeeded task_id=%s failed=%d",
                         task_id,
-                        result["errors"],
+                        len(result["errors"]),
+                        extra={
+                            "degraded": True,
+                            "task_id": task_id,
+                            "failed": len(result["errors"]),
+                        },
                     )
                 await tracker.wait_for_task_work(
                     task_id,
@@ -312,9 +348,20 @@ class MemoryCompileRunner:
                 wait_busy=False,
             )
             if oid is None:
-                logger.warning("Memory compile %s %s snapshot is unavailable", task_id, phase)
+                logger.info(
+                    "memory compile snapshot unavailable; continuing task_id=%s phase=%s",
+                    task_id,
+                    phase,
+                    extra={"degraded": True},
+                )
         except Exception as exc:
-            logger.warning("Memory compile %s %s snapshot failed: %s", task_id, phase, exc)
+            logger.info(
+                "memory compile snapshot failed; continuing task_id=%s phase=%s error_type=%s",
+                task_id,
+                phase,
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
 
     async def _consolidate(
         self,
@@ -395,6 +442,8 @@ class MemoryCompileRunner:
         operations, _tools_used = await orchestrator.run()
         if operations is None:
             return result
+
+        _validate_operation_targets(operations, target, ctx)
 
         lease = await acquire_memory_operation_lease(operations, viking_fs, ctx)
         try:

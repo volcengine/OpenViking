@@ -79,7 +79,7 @@ class ExperienceGradientEstimator:
             try:
                 operations = await self._run_extract_loop(trajectory, extract_context)
             except Exception:
-                logger.exception("Experience gradient estimation failed")
+                logger.debug("experience gradient estimation failed")
                 if context.strict_extract_errors:
                     raise
                 return []
@@ -171,7 +171,6 @@ class ExperienceGradientEstimator:
             ctx=context.request_context,
             context_provider=provider,
             isolation_handler=isolation_handler,
-            thinking=True,
         )
         operations, _ = await orchestrator.run()
         if operations is not None:

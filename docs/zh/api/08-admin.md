@@ -268,7 +268,7 @@ ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普�
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
-| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出六类开放模板、完整默认值及生效值 |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出四类开放模板、完整默认值及生效值 |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 查询单个模板 |
 | PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 补齐并发布单个模板 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除该模板覆盖，恢复部署默认值 |
@@ -282,7 +282,7 @@ ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普�
 需要恢复该类型的部署默认值时，调用 DELETE。
 
 内核接收原有 Memory YAML 结构对应的 JSON 对象，并在接口层强制校验以下白名单。
-仅开放下列六类模板；Experience、Cases、Trajectories 等其他类型不开放查询或编辑，
+仅开放下列四类模板；Experience、Cases、Trajectories 等其他类型不开放查询或编辑，
 不支持通过接口新增、删除或重命名 Memory Type。DELETE 仅移除自定义覆盖，不删除模板类型。
 
 | 模板 | 可编辑项 | 用途 |
@@ -291,19 +291,17 @@ ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普�
 | `events` | `description`；`fields.event_name.description`、`fields.summary.description`；`content_template` | 事件范围、原子性与排除项；名称语言、粒度和格式；摘要事实、日期和语言；Summary、时间、ChatLog 的标题、顺序和展示方式 |
 | `preferences` | `description`；`fields.topic.description`、`fields.content.description` | 偏好、习惯、反感及与 Profile/Event 的边界；主题粒度、语言和命名；正文语义、条目和 Markdown 要求 |
 | `entities` | `description`；`fields.category.description`、`fields.name.description`、`fields.content.description` | 实体与关系范围；分类法、语言和粒度；实体命名；卡片事实、章节、语言和长度 |
-| `soul` | `description`；`fields.core_truths.description`、`fields.boundaries.description`、`fields.vibe.description`、`fields.continuity.description`；`content_template` | 核心原则、边界、气质和连续性的抽取表达；四个字段的标题、顺序和固定文案 |
-| `identity` | `description`；`fields.creature.description`、`fields.name.description`、`fields.vibe.description`、`fields.avatar.description`、`fields.emoji.description`、`fields.introduction.description`；`content_template` | 身份信息范围；身份、名称、气质、头像、Emoji、自我介绍的字段要求；正文标签、顺序和固定文案 |
 
 表中 `fields.<name>.description` 表示在 `fields` 数组中按 `name` 定位并修改
 `description`，不是替换整个字段。JSON 属性名统一小写（`description`，不是
 `Description`）。Profile 的 `fields.content` 仅开放其 description，不开放字段本身。
 
-除白名单说明文字和三个正文模板外，所有配置均锁定为部署默认值，包括：
+除白名单说明文字和 Events 正文模板外，所有配置均锁定为部署默认值，包括：
 `memory_type`、`enabled`、`operation_mode`、`stage`、`peer_enabled`、
 `directory`、`filename_template`、所有字段的名称/类型/`merge_op`/`init_value`、
 `embedding_template` 和 `overview_template`，以及未开放的字段说明。
 例如 Profile 保留 `profile.md` 和 content 的 `merge_op=patch`；Events 保留
-`add_only` 以及 `goal/ranges` 的说明；Identity 的 Name immutable 规则不变。
+`add_only` 以及 `goal/ranges` 的说明。
 Profile、Preferences、Entities 不开放 `content_template`。
 改写 topic/category/name/event_name 的生成说明仍可能间接影响未来的目录或文件名，
 但不允许修改目录/文件名模板本身。
@@ -412,13 +410,11 @@ Registry；无关类型变更不会触发拆批。不同 Schema 分开合并、�
 允许修改标题、顺序、固定文案，按条件显示/隐藏字段。不要求保留默认标题或输出全部字段；
 但隐藏字段不等于停止抽取/删除该字段，也不会删除原始 Session 或系统保存的字段元数据。
 Events 的默认 embedding 模板引用正文，因此正文变化也可能影响后续检索输入。
-路径、文件名、字段定义、merge_op（包括 Identity name 的 immutable）仍锁定。
+路径、文件名、字段定义、merge_op 仍锁定。
 
 | 类型 | 正文中可引用的字段 |
 | --- | --- |
 | events | event_name、goal、summary、ranges |
-| soul | core_truths、boundaries、vibe、continuity |
-| identity | name、creature、vibe、emoji、avatar、introduction |
 
 `language` 属于说明模板的变量，不属于上述正文变量。
 正文不要引用其他 Account/User、请求上下文或任意 Python 对象。
@@ -451,7 +447,7 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 
 模板 UTF-8 大小 ≤ 64 KiB，AST 节点 ≤ 2048，渲染正文 ≤ 1 MiB（不含系统追加元数据）。
 与部署默认值不同的 Account 正文在发布时和抽取加载时验证，运行时使用受限 Jinja 环境，只提供白名单字段/方法。
-内置 Events、Soul、Identity 正文也满足受限语法；仅修改标题、末尾换行或 CRLF 换行后仍可校验发布。这些改动不会绕过校验，也不会被标记为部署原样正文。
+内置 Events 正文也满足受限语法；仅修改标题、末尾换行或 CRLF 换行后仍可校验发布。这些改动不会绕过校验，也不会被标记为部署原样正文。
 受限路径渲染失败会报告错误并停止该次文件写入，不走旧的空正文 fallback。
 原样继承的正文继续使用部署渲染器，包括原有错误/fallback 语义，不受上述受限渲染器的源码、AST、正文输出上限约束；
 完整账户 YAML 仍受 1 MiB 上限约束。
@@ -466,17 +462,6 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 
 ```json
 {"content_template": "# {{ event_name.strip() }}\n\n## 事件摘要\n{{ summary.strip() or '待补充' }}"}
-```
-
-示例：Soul 的分节展示：
-
-```jinja
-{% for title, text in [('核心价值', core_truths), ('边界', boundaries), ('气质', vibe), ('连续性', continuity)] %}
-{% if text.strip() %}
-## {{ title }}
-{{ text.strip() }}
-{% endif %}
-{% endfor %}
 ```
 
 ### Runtime Configuration
@@ -959,7 +944,7 @@ Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则�
 
 ROOT 可读写任意 User 的配置，ADMIN 可读写所属 account 内非 GLOBAL User 的配置，
 USER 仅可读写自己的配置：URL 中的 `account_id` 和 `user_id` 必须同时匹配认证身份。
-User 配置接口支持 `add_targets`、`memory_policy` 和 `ttl`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
+User 配置接口支持 `add_targets`、`memory_policy`、`ttl` 和 `privacy`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
 用户记忆根据每条 Message 的 `peer_id` 自动写入 Self 或 Peer；Agent 记忆始终只写入
 Self。
 
@@ -1009,6 +994,17 @@ DELETE /api/v1/user-settings/add-locations
 
 `ttl` 仍返回用户显式设置的值，不在此接口补全其他层级的 TTL。
 
+`privacy` 在 GET/PATCH 响应中返回生效配置：
+
+| 字段 | 说明 | 内置默认值 |
+|---|---|---|
+| `privacy.mode` | `off`、`registered`、`auto` 或 `auto_strict`，详见[隐私配置](../concepts/13-privacy.md#使用方法) | `off` |
+| `privacy.restore` | 是否在 `raw=true` 读取 Skill、Session 时还原占位符 | `true` |
+| `privacy.custom_rules` | 自定义规则数组；每项提供唯一的 `id`，以及 `prefix` + `min_length` 或 `regex` | `[]` |
+| `privacy.never_mask` | 不参与自动发现和按值匹配的精确字符串值 | `[]` |
+
+例如 PATCH `{"privacy":{"mode":"auto"}}` 开启 Skill、Session 的自动发现与保护。规则中的 `min_length` 是前缀后至少需要的字符数，`regex` 使用 Rust 正则语法。省略字段表示保留，`null` 恢复继承，数组整体替换（`[]` 表示清空）；`{"privacy":null}` 清除所有用户隐私设置。
+
 ---
 
 ### create_account
@@ -1039,7 +1035,7 @@ DELETE /api/v1/user-settings/add-locations
 | account_id | str | 是 | - | 工作区 ID；新建文件存储账户不超过 255 个 UTF-8 字节 |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 | settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
@@ -1437,7 +1433,7 @@ ov --sudo task status <task_id>
 | user_id | str | 是 | - | 用户 ID |
 | role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`；只有 `ROOT` 可以注册 `"global"`。ROOT 身份只来自 `server.root_api_key`。 |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 
 **说明：**
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。

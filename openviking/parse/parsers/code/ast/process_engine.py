@@ -16,6 +16,7 @@ from tree_sitter_language_pack import (
     process,
 )
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -36,12 +37,19 @@ def _configure_tree_sitter_cache_dir() -> None:
     if not cache_dir:
         return
     if not Path(cache_dir).is_dir():
-        logger.warning("Configured tree-sitter parser cache does not exist: %s", cache_dir)
+        logger.info(
+            "Parser cache unavailable; using default cache path=%s",
+            safe_path_for_log(str(cache_dir)),
+        )
         return
     try:
         configure(PackConfig(cache_dir=cache_dir))
     except Exception as exc:  # pragma: no cover - defensive only
-        logger.warning("Failed to configure tree-sitter parser cache '%s': %s", cache_dir, exc)
+        logger.info(
+            "Parser cache configuration failed; using default cache path=%s error_type=%s",
+            safe_path_for_log(str(cache_dir)),
+            type(exc).__name__,
+        )
 
 
 _CLASS_KINDS = {"class", "struct", "interface", "enum", "trait", "impl", "namespace"}
@@ -154,7 +162,11 @@ def _detect_process_language(file_name: str) -> Optional[str]:
     try:
         lang = detect_language_from_path(str(path))
     except Exception as exc:
-        logger.warning("process language detection failed for '%s': %s", file_name, exc)
+        logger.debug(
+            "Code language detection failed path=%s error_type=%s",
+            safe_path_for_log(file_name),
+            type(exc).__name__,
+        )
         return None
 
     if (
@@ -210,10 +222,9 @@ def extract_process_skeleton(
     try:
         return _extract_process_skeleton(file_name, content, lang)
     except Exception as exc:
-        logger.warning(
-            "process extraction failed for '%s' (language: %s): %s",
-            file_name,
-            lang,
-            exc,
+        logger.debug(
+            "Code extraction failed path=%s error_type=%s",
+            safe_path_for_log(file_name),
+            type(exc).__name__,
         )
         return None

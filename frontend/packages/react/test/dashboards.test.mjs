@@ -73,9 +73,13 @@ test('controlled experience data needs no Provider, distinguishes zero from unav
       },
     }),
   );
+  // 注入率固定一位小数，与另外两项指标同排时数字宽度不跳；零也显示成 0.0%。
+  //
+  // The rate always carries one decimal so the three metrics keep a steady width; zero
+  // reads 0.0% as well.
   assert.deepEqual(
     [...view.container.querySelectorAll('dd')].map((item) => item.textContent),
-    ['0', '0', '0%'],
+    ['0', '0', '0.0%'],
   );
   await click(
     [...view.container.querySelectorAll('[role="tab"]')].find(

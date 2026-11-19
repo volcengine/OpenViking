@@ -200,7 +200,10 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         title: Optional[str] = None,
     ) -> EmbedResult:
         if not text or not text.strip():
-            logger.warning("Empty text passed to embed(), returning zero vector")
+            logger.info(
+                "empty embedding input; returning zero vector degraded=true",
+                extra={"degraded": True},
+            )
             return EmbedResult(dense_vector=[0.0] * self._dimension)
         text, config = self._prepare_request(text, is_query, task_type=task_type, title=title)
 
@@ -242,7 +245,10 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         title: Optional[str] = None,
     ) -> EmbedResult:
         if not text or not text.strip():
-            logger.warning("Empty text passed to embed_async(), returning zero vector")
+            logger.info(
+                "empty embedding input; returning zero vector degraded=true",
+                extra={"degraded": True},
+            )
             return EmbedResult(dense_vector=[0.0] * self._dimension)
 
         text, config = self._prepare_request(text, is_query, task_type=task_type, title=title)

@@ -13,7 +13,6 @@ export function useTourAnchor(
   target: string,
   locateTarget: DirectoryTourProps['locateTarget'],
   timeout: number,
-  attempt: number,
 ) {
   const [state, setState] = useState<{
     anchor: HTMLElement | null;
@@ -21,7 +20,7 @@ export function useTourAnchor(
     failed: boolean;
   }>({ anchor: null, elements: [], failed: false });
   // Synchronize with the host's asynchronously rendered DOM anchor, which is not
-  // available during render. Abort and ignore stale resolutions on retry/unmount;
+  // available during render. Abort and ignore stale resolutions on target changes/unmount;
   // the deadline also bounds hosts that never settle or ignore cancellation.
   useEffect(() => {
     const controller = new AbortController();
@@ -59,6 +58,6 @@ export function useTourAnchor(
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [target, locateTarget, timeout, attempt]);
+  }, [target, locateTarget, timeout]);
   return state;
 }

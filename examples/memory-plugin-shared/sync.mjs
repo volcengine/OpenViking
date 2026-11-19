@@ -113,6 +113,11 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -147,6 +152,11 @@ export const SKILL_TARGETS = [
   {
     skill: "openviking-skills",
     dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
     committed: true,
   },
   {
@@ -205,6 +215,11 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -225,6 +240,7 @@ export const SKILL_TARGETS = [
     ["examples", "codex-memory-plugin", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "cursor", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "qoder", "skills"],
     ["examples", "dsh-memory-plugin", "skills"],
     ["examples", "pi-coding-agent-extension", "skills"],
     ["examples", "opencode-plugin", "skills"],

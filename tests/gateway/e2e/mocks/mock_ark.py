@@ -9,7 +9,16 @@ import zlib
 
 from aiohttp import web
 
-MODELS = ["mock", "mock-silent", "mock-long", "mock-tools", "mock-silent-gzip"]
+MODELS = [
+    "mock",
+    "mock-silent",
+    "mock-long",
+    "mock-tools",
+    "mock-silent-gzip",
+    # mock-hang never sends response headers; mock-stall sends one event and then nothing.
+    "mock-hang",
+    "mock-stall",
+]
 TEXT = "mock response complete"
 
 
@@ -201,6 +210,8 @@ def create_app():
         if request.path not in paths or request.method != "POST":
             raise web.HTTPNotFound()
         body = await request.json()
+        if body.get("model") == "mock-hang":
+            await asyncio.sleep(3600)
         counter += 1
         record = {
             "path": request.path,
@@ -251,6 +262,8 @@ def create_app():
                 # Pause only after a complete SSE event has reached the client.
                 if "silent" in model and index == 2:
                     await asyncio.sleep(40)
+                if model == "mock-stall" and index == 1:
+                    await asyncio.sleep(3600)
                 if "long" in model and index:
                     await asyncio.sleep(60 / (len(sequence) - 1))
                 frame = "" if protocol == "chat" else f"event: {event['type']}\n"

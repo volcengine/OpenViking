@@ -361,6 +361,9 @@ JSON 输出 - 错误：
 |------|------|------|
 | POST | `/api/v1/resources/temp_upload` | 上传后续导入所需的临时文件 |
 | POST | `/api/v1/resources` | 从 URL 或临时文件添加资源 |
+| POST | `/api/v1/resources/cp` | 在共享资源子树内复制资源 |
+| POST | `/api/v1/resources/mv` | 在共享资源子树内移动或重命名资源 |
+| DELETE | `/api/v1/resources` | 删除共享资源 |
 | GET | `/api/v1/fs/ls` | 列出目录 |
 | GET | `/api/v1/fs/tree` | 获取目录树 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |
@@ -392,6 +395,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
 | POST | `/api/v1/content/batch-write` | 写入多个文件并刷新索引 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
+| POST | `/api/v1/content/batch_set_tags` | 批量设置 1～50 个 URI 的检索标签 |
 | POST | `/api/v1/content/ensure_directory_index` | 确保既有目录的索引就绪，仅在两层摘要都缺失时创建 L0 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 
@@ -404,6 +408,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/skills/find` | 搜索技能 |
 | POST | `/api/v1/skills/validate` | 校验技能数据 |
 | GET | `/api/v1/skills/{skill_name}` | 获取技能 |
+| GET | `/api/v1/skills/{skill_name}/audit` | 查询技能归属和修改历史 |
 | PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
 | DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
 
@@ -480,7 +485,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/watches/{task_id}/trigger` | 按任务 ID 触发 watch |
 | POST | `/api/v1/snapshot/commit` | 创建快照 |
 | GET | `/api/v1/snapshot/log` | 查看快照历史 |
-| GET | `/api/v1/snapshot/versions` | 列出 Compile 产出文件的版本 |
+| GET | `/api/v1/snapshot/versions` | 列出文件原生快照历史 |
 | POST | `/api/v1/snapshot/restore` | 恢复历史快照 |
 | GET | `/api/v1/snapshot/show` | 查看快照或其中的文件 |
 | GET | `/api/v1/snapshot/diff` | 对比快照 |
@@ -497,6 +502,7 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/compile/create` | 创建持久配置并标记输出目录 |
 | POST | `/api/v1/compile` | 创建由 OV 托管的 Compile 任务 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
@@ -592,7 +598,7 @@ JSON 输出 - 错误：
 | PUT / DELETE | `/gateway/admin/policies/{identifier}` | 创建/替换或删除上下文配置 |
 | GET / POST | `/gateway/admin/keys` | 列出调用方可见的网关密钥，或签发新密钥 |
 | DELETE | `/gateway/admin/keys/{identifier}` | 吊销网关密钥 |
-| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话重新开始保存 |
+| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话改存到新的 OpenViking 会话，下一轮结束时写入完整历史 |
 | DELETE | `/gateway/admin/users/{user_id}/data` | admin 或 root：删除某个用户的网关数据 |
 | DELETE | `/gateway/admin/account/data` | root：删除整个账号的网关数据 |
 
@@ -609,13 +615,14 @@ JSON 输出 - 错误：
 | DELETE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 删除文件或目录 |
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
+| POST | `/api/v1/compile/create` | 创建持久配置并标记输出目录 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
-| GET | `/api/v1/compile/config` | 读取目标配置 |
-| POST | `/api/v1/compile/config/update` | 更新目标配置 |
-| GET | `/api/v1/compile/configs` | 列出可见目标 |
-| GET | `/api/v1/compile/operations` | 列出目标操作记录 |
-| GET | `/api/v1/compile/operations/{operation_id}` | 读取单条操作详情 |
-| GET | `/api/v1/compile/operations/{operation_id}/outputs` | 列出操作产出及版本引用 |
+| GET | `/api/v1/compile/config` | 按 compile_name 读取配置 |
+| POST | `/api/v1/compile/config/update` | 按 compile_name 更新配置 |
+| GET | `/api/v1/compile/configs` | 列出可见配置 |
+| GET | `/api/v1/compile/runs` | 按 compile_name 列出运行记录 |
+| GET | `/api/v1/compile/runs/{task_id}` | 按 compile_name 和 task_id 读取 run |
+| GET | `/api/v1/compile/runs/{task_id}/outputs` | 由快照推导运行产出 |
 | POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |

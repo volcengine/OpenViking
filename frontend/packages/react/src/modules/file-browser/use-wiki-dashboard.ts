@@ -1,9 +1,10 @@
 import { useCallback } from 'react';
-import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { parseWikiFileConflicts } from './wiki-conflicts.js';
+import { readFileContent } from './fs-read-content.js';
 import { readDashboardStat } from './dashboard-resource.js';
+import { readWikiConflictSummary } from './wiki-conflict-summary.js';
 import type {
   WikiDirectoryData,
   WikiFileData,
@@ -21,15 +22,8 @@ export async function readWikiDashboard(
   const stat = await readDashboardStat(client, uri, options);
   uri = stat.uri;
   if (!stat.isDir) {
-    const result = await client.request<string>({
-      method: 'GET',
-      path: OV_PATHS.contentRead,
-      query: { uri, limit: -1 },
-      options,
-    });
-    if (typeof result !== 'string')
-      throw new TypeError('Invalid Wiki content response');
-    const parsed = parseWikiFileConflicts(result);
+    const result = await readFileContent(client, uri, options, -1, true);
+    const parsed = parseWikiFileConflicts(result.wikiSource ?? result.content);
     if (parsed.status === 'invalid')
       throw new TypeError('Invalid CONFLICTS_CONTENT metadata');
     return {
@@ -40,35 +34,9 @@ export async function readWikiDashboard(
       },
     };
   }
-  const page = await client.requestEnvelope<{ uri: string; isDir?: boolean }[]>(
-    {
-      method: 'GET',
-      path: OV_PATHS.fsLs,
-      query: {
-        uri,
-        recursive: true,
-        output: 'agent',
-        tags: ['has_conflict=true'],
-        limit: 100,
-        sort_by: 'mtime',
-        sort_order: 'desc',
-      },
-      options,
-    },
-  );
-  if (!Array.isArray(page.result))
-    throw new TypeError('Invalid Wiki conflict listing');
-  const prefix = `${uri.replace(/\/+$/, '')}/`;
-  const files = page.result
-    .filter((entry) => !entry.isDir && entry.uri.startsWith(prefix))
-    .map((entry) => entry.uri);
   return {
     kind: 'directory',
-    data: {
-      files,
-      conflictFileCount: files.length,
-      limited: page.hasMore || files.length >= 100,
-    },
+    data: await readWikiConflictSummary(client, uri, options),
   };
 }
 
@@ -88,5 +56,15 @@ export function useWikiDashboard({
       readWikiDashboard(client, uri, options),
     [uri],
   );
-  return useDashboardQuery(load, requestOptions, enabled, refreshGeneration);
+  return useDashboardQuery(
+    load,
+    requestOptions,
+    enabled,
+    refreshGeneration,
+    'file_browser_wiki_dashboard_load',
+    (value) =>
+      value.kind === 'directory'
+        ? value.data.files.length === 0
+        : value.data.conflicts.length === 0,
+  );
 }

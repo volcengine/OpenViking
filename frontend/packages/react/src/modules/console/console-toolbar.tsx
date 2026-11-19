@@ -1,20 +1,20 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { TuiRecord } from '../../components/tui/index.js';
 import { ConsoleIcon } from '../../icons/console-icons.js';
-import { Tooltip } from '../../shared/components/tooltip/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import { ConsoleHistory } from './console-history.js';
-import type { ConsoleMode } from './types.js';
+import type { ConsoleHistoryEntry, ConsoleMode } from './types.js';
 import type { consoleLabels } from './labels.js';
 
 export function ConsoleToolbar({
   mode,
+  modes,
   panelId,
   locale,
   labels,
-  records,
+  history,
   isExecuting,
   onModeChange,
   onClear,
@@ -23,10 +23,11 @@ export function ConsoleToolbar({
   conversationActions,
 }: {
   mode: ConsoleMode;
+  modes: readonly ConsoleMode[];
   panelId: string;
   locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
-  records: readonly TuiRecord[];
+  history: readonly ConsoleHistoryEntry[];
   isExecuting: boolean;
   onModeChange: (mode: ConsoleMode) => void;
   onClear: () => void;
@@ -37,23 +38,29 @@ export function ConsoleToolbar({
   const [sessionVersion, setSessionVersion] = useState(0);
   return (
     <div className="ov-console__toolbar">
-      <div className="ov-console__modes" role="group" aria-label={labels.mode}>
-        {(['conversation', 'command'] as const).map((value) => (
-          <button
-            className="ov-console__mode"
-            type="button"
-            key={value}
-            aria-label={labels[value]}
-            title={labels[value]}
-            aria-pressed={mode === value}
-            aria-controls={`${panelId}-${value}`}
-            onClick={() => onModeChange(value)}
-          >
-            <ConsoleIcon name={value} />
-            {mode === value ? <span>{labels[value]}</span> : null}
-          </button>
-        ))}
-      </div>
+      {modes.length > 1 ? (
+        <div
+          className="ov-console__modes"
+          role="group"
+          aria-label={labels.mode}
+        >
+          {modes.map((value) => (
+            <button
+              className="ov-console__mode"
+              type="button"
+              key={value}
+              aria-label={labels[value]}
+              title={labels[value]}
+              aria-pressed={mode === value}
+              aria-controls={`${panelId}-${value}`}
+              onClick={() => onModeChange(value)}
+            >
+              <ConsoleIcon name={value} />
+              {mode === value ? <span>{labels[value]}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
       {children ? (
         <div className="ov-console__toolbar-slot">{children}</div>
       ) : null}
@@ -61,7 +68,7 @@ export function ConsoleToolbar({
         <div className="ov-console__actions">
           <ConsoleHistory
             key={sessionVersion}
-            records={records}
+            history={history}
             isExecuting={isExecuting}
             locale={locale}
             labels={labels}

@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { createLogger } from "./debug-log.mjs";
 import { sendSessionMessages } from "./batch-send.mjs";
 import { createOvHttp } from "./ov-http.mjs";
-import { enqueue, replayPending } from "./pending-queue.mjs";
+import { deferCommitBehindPendingWrites, enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./recall-core.mjs";
 import { buildPluginConfig } from "./plugin-config.mjs";
@@ -234,6 +234,11 @@ export async function addAgentMessages(fetchJSON, sessionId, payloads, peerId = 
 
 export async function commitAgentSession(fetchJSON, sessionId, log = () => {}, payload = {}) {
   const body = payload || {};
+  const deferred = await deferCommitBehindPendingWrites(fetchJSON, sessionId, body, log);
+  if (deferred) {
+    log("commit", { sessionId, ok: false, queued: deferred.ok, reason: "pending_writes" });
+    return { ok: false, pendingQueued: deferred.ok, pendingEnqueueFailed: !deferred.ok };
+  }
   const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
     method: "POST",
     body: JSON.stringify(body),

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 
 import { FileTreeRowView } from './file-tree-entry-row.js';
 import { FileTreeStateRow } from './file-tree-state-row.js';
@@ -64,7 +65,7 @@ export function FileTreeBody({
     return (
       <div className="ov-file-tree__state">
         {emptyFallback ?? (
-          <span className="ov-file-tree__muted">{text.empty}</span>
+          <Empty size="compact" illustration="folder" title={text.empty} />
         )}
       </div>
     );

@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Native CONFLICTS_CONTENT protocol. These IDs exist only in the view model. */
 import type { WikiConflict as WikiFileConflictRecord } from '../../components/wiki-dashboard/types.js';
+import {
+  createMarkdownAnchorLocator,
+  locateMarkdownAnchor as locateWikiConflict,
+} from '../../shared/markdown/locate-markdown-anchor.js';
+import { splitWikiMetadata } from './wiki-metadata.js';
+export { locateWikiConflict };
 export type WikiFileConflicts =
   | { status: 'available'; document: string; records: WikiFileConflictRecord[] }
   | { status: 'missing' | 'invalid' };
-const prefix = '<!-- CONFLICTS_CONTENT';
 // Wire protocol sentinel must remain independent of the display locale.
 const manualResolutionBasis = '\u4eba\u5de5\u4fee\u590d';
 const timestamp = (value: unknown): value is number =>
@@ -14,41 +19,15 @@ const timestamp = (value: unknown): value is number =>
   value >= 0 &&
   Number.isFinite(new Date(value * 1000).getTime());
 
-/** Keep source offsets while excluding metadata and comments from conflict anchors. */
-export const locateWikiConflict = (
-  document: string,
-  matchText: string,
-): WikiFileConflictRecord['location'] => {
-  const mask = (value: string) => value.replace(/[^\r\n]/g, ' ');
-  const body = document
-    .replace(/^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, mask)
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, mask);
-  const start = matchText ? body.indexOf(matchText) : -1;
-  if (start < 0) {
-    return { status: 'missing' };
-  }
-  if (body.indexOf(matchText, start + 1) >= 0) {
-    return { status: 'ambiguous' };
-  }
-  return {
-    status: 'unique',
-    start,
-    end: start + matchText.length,
-    line: document.slice(0, start).split('\n').length,
-  };
-};
-
 export const parseWikiFileConflicts = (content: string): WikiFileConflicts => {
-  const start = content.lastIndexOf(prefix);
-  if (start < 0) {
+  const { document, payloads, complete } = splitWikiMetadata(content);
+  if (payloads.length === 0) {
     return { status: 'missing' };
   }
-  const footer = content.slice(start).trimEnd();
-  if (!footer.endsWith('-->')) {
+  if (!complete) {
     return { status: 'invalid' };
   }
-  const document = content.slice(0, start);
-  const source = footer.slice(prefix.length, -3).trim();
+  const source = payloads.filter(Boolean).join(',');
   let parsed: unknown;
   try {
     parsed = source ? JSON.parse(`[${source}]`) : [];
@@ -58,6 +37,7 @@ export const parseWikiFileConflicts = (content: string): WikiFileConflicts => {
   if (!Array.isArray(parsed)) {
     return { status: 'invalid' };
   }
+  const locate = createMarkdownAnchorLocator(document);
   const records: WikiFileConflictRecord[] = [];
   for (const [index, raw] of parsed.entries()) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -85,7 +65,7 @@ export const parseWikiFileConflicts = (content: string): WikiFileConflicts => {
       return { status: 'invalid' };
     }
     const matchText = value.match_text;
-    const location = locateWikiConflict(document, matchText);
+    const location = locate(matchText);
     records.push({
       id: JSON.stringify([index, value.begin_time, matchText]),
       matchText,

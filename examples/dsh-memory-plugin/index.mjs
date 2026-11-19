@@ -14,8 +14,8 @@ export function apply(ctx, input = {}) {
   const client = new OpenVikingClient(config);
   const runtime = new OpenVikingRuntime(client, config, ctx.logger, cwd => (
     // Rebuild from the host input, not the config already merged for boot's cwd.
-    // The shared loader preserves host/env precedence over workspace peers.
-    resolveConfig(input, process.env, cwd).effectivePeer
+    // The shared loader preserves host/env precedence over workspace settings.
+    resolveConfig(input, process.env, cwd)
   ));
   const skipMemory = session => (
     config.skipSubagentSessions && session?.header?.origin === "subagent"

@@ -1,8 +1,6 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-
-const isHomeUri = (uri: string) =>
-  uri === 'viking://~' || uri.startsWith('viking://~/');
+import { isHomeResourceUri } from '../../shared/resource-uri.js';
 
 /** Native stat resolves the home alias in the authenticated request scope. */
 export async function readDashboardStat(
@@ -21,7 +19,7 @@ export async function readDashboardStat(
     typeof stat?.isDir !== 'boolean' ||
     typeof canonical !== 'string' ||
     !canonical ||
-    isHomeUri(canonical)
+    isHomeResourceUri(canonical)
   )
     throw new TypeError('Invalid canonical resource stat');
   return { uri: canonical, isDir: stat.isDir };
@@ -32,7 +30,7 @@ export async function resolveDashboardUri(
   uri: string,
   options: OvRequestOptions,
 ) {
-  return isHomeUri(uri)
+  return isHomeResourceUri(uri)
     ? (await readDashboardStat(client, uri, options)).uri
     : uri;
 }
@@ -51,4 +49,26 @@ export async function readDashboardHint(
     uri: await resolveDashboardUri(client, result?.uri ?? uri, options),
     tags: result?.attrs?.tags ?? [],
   };
+}
+
+/** Directory tags, unlike configuration lists, also cover other users' targets. */
+export async function findCompileTarget(
+  client: OvClient,
+  uri: string,
+  options: OvRequestOptions,
+) {
+  uri = await resolveDashboardUri(client, uri, options);
+  while (uri.length > 'viking://'.length) {
+    const result = await client.request<{ attrs?: { tags?: string[] } }>({
+      method: 'GET',
+      path: OV_PATHS.fsAttrs,
+      query: { uri },
+      options,
+    });
+    const tags = result?.attrs?.tags ?? [];
+    if (tags.includes('compile_target=true')) return { uri, tags };
+    const separator = uri.lastIndexOf('/');
+    if (separator < 'viking://'.length) break;
+    uri = uri.slice(0, separator);
+  }
 }

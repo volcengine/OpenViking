@@ -19,10 +19,12 @@ from openviking.session.memory.session_extract_context_provider import (
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
-from openviking.telemetry import tracer
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMHandle
+
+logger = get_logger(__name__)
 
 EXPERIENCE_MEMORY_TYPE = "experiences"
 HISTORY_TOP_K = 2
@@ -112,7 +114,12 @@ Do not call tools. Follow the output contract below.
         except (AGFSNotFoundError, FileNotFoundError):
             return None
         except Exception as exc:
-            tracer.info(f"Skipping unavailable experience history {uri}: {exc}")
+            logger.info(
+                "experience history unavailable stage=%s error_type=%s",
+                "_read_history_memory",
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
             return None
 
     async def _load_history_trajectories(self) -> list[MemoryFile]:

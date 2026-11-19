@@ -15,6 +15,7 @@ from dataclasses import asdict, is_dataclass
 from types import UnionType
 from typing import (
     Any,
+    Callable,
     List,
     Optional,
     Tuple,
@@ -366,6 +367,7 @@ def parse_json_with_stability(
     content: str,
     model_class: Optional[Type] = None,
     expected_fields: Optional[List[str]] = None,
+    validate_data: Optional[Callable[[dict], None]] = None,
 ) -> Tuple[Optional[Any], Optional[str]]:
     """
     Five-layer JSON parsing with maximum stability.
@@ -436,6 +438,14 @@ def parse_json_with_stability(
             fields = ", ".join(sorted(parsed_data))
             return None, f"No expected fields found; got fields: {fields}"
         parsed_data = filtered_data
+
+    # Run semantic restrictions before item-dropping tolerance: dropping a rejected
+    # replacement but keeping its deletion would silently change the request.
+    if validate_data is not None:
+        try:
+            validate_data(parsed_data)
+        except ValueError as exc:
+            return None, str(exc)
 
     # If no model class, return the raw dict
     if model_class is None:

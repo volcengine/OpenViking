@@ -1,10 +1,11 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { mediaKind } from './file-preview-media.js';
 import { useCallback } from 'react';
 
-import { readCopyableText } from './file-preview-source.js';
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import type { FilePreviewPanelActions } from './file-preview-edit-context.js';
 import type {
-  FilePreviewActions,
   FilePreviewFileTab,
   FilePreviewSource,
   FilePreviewTab,
@@ -44,12 +45,26 @@ export function useFilePreviewActionsContext({
   setViewMode: (mode: FilePreviewViewMode) => void;
   editing: Editing;
   operations: Operations;
-}): FilePreviewActions {
-  const startEditing = useCallback(() => {
-    if (!fileTab) return;
-    setViewMode('source');
-    void editing.start(fileTab);
-  }, [editing, fileTab, setViewMode]);
+}): FilePreviewPanelActions {
+  const track = useTrack();
+  const selectView = (mode: FilePreviewViewMode) => {
+    if (mode !== viewMode)
+      track(
+        mode === 'source'
+          ? 'file_preview_source_view_select'
+          : 'file_preview_preview_view_select',
+      );
+    setViewMode(mode);
+  };
+  const startEditingAtAnnotation = useCallback(
+    (matchText?: string) => {
+      if (!fileTab?.editing || mediaKind(fileTab.source) || editing.editing)
+        return;
+      setViewMode('source');
+      void editing.start(fileTab, matchText);
+    },
+    [editing, fileTab, setViewMode],
+  );
 
   const saveEditing = useCallback(async () => {
     if (!fileTab) return false;
@@ -70,15 +85,6 @@ export function useFilePreviewActionsContext({
     setViewMode('preview');
   }, [activeTab, editing, setViewMode]);
 
-  // 复制正文同样按来源判断：目录的当前摘要也是一段可复制的文本。
-  // Copy-content is decided by the source too: a directory's active summary is
-  // copyable text as well.
-  const copyable = currentSource ? readCopyableText(currentSource) : undefined;
-  const copyContent = useCallback(async () => {
-    if (!copyable) return false;
-    return operations.copyContent(activeTab, copyable);
-  }, [activeTab, copyable, operations]);
-
   // 复制路径按路径判断，不按页签类型：目录与文件都有路径行，两者都需要它。
   // Copy-path is decided by the path, not the tab kind: both a directory and a
   // file have a path row and both need it.
@@ -88,25 +94,24 @@ export function useFilePreviewActionsContext({
     return operations.copyPath(activeTab, path);
   }, [activeTab, currentPath, operations]);
 
-  const download = useCallback(() => {
-    if (fileTab) void operations.download(fileTab);
-  }, [fileTab, operations]);
-
   return {
+    source: currentSource,
+    path: currentPath,
     viewMode,
-    setViewMode,
+    setViewMode: selectView,
     canSwitchView,
     editing: editing.editing,
+    draft: editing.editing ? editing.draft : undefined,
     busy: editing.saving || editing.loadingEdit,
-    canEdit: Boolean(fileTab?.editing) && !editing.editing,
-    startEditing,
+    canEdit:
+      Boolean(fileTab?.editing) &&
+      !mediaKind(fileTab!.source) &&
+      !editing.editing,
+    startEditing: () => startEditingAtAnnotation(),
+    startEditingAtAnnotation,
     saveEditing,
     cancelEditing,
-    canCopyContent: Boolean(copyable),
-    copyContent,
     canCopyPath: Boolean(currentPath),
     copyPath,
-    canDownload: Boolean(fileTab?.operations?.download),
-    download,
   };
 }

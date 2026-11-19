@@ -1,16 +1,12 @@
-import { type KeyboardEvent, type MouseEvent, useRef } from 'react';
+import { type MouseEvent, useRef, useState } from 'react';
 
 import {
   FileTreeChevron,
   FileTreeFileIcon,
   FileTreeFolderIcon,
 } from './file-tree-icons.js';
-import {
-  resolveFileTreeInfoKey,
-  showsInlineDescription,
-} from './file-tree-info.js';
-import { resolveInfoCopy } from './file-tree-info-labels.js';
-import { Popover } from '../../shared/components/popover/index.js';
+import { FileTreeEntryLabel } from './file-tree-entry-label.js';
+import { Popover } from '../../shared/primitives/popover/index.js';
 import { resolveFileTreeInfoCopy } from './file-tree-info-tooltip.js';
 import { FileTreeTooltipContent } from './file-tree-tooltip-surface.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
@@ -32,11 +28,13 @@ export function FileTreeRowView({
   ctx: FileTreeRowContext;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [trailingHovered, setTrailingHovered] = useState(false);
   const {
     text,
     selectedId,
     getRowAttributes,
-    renderDashboard,
+    renderRowTrailing,
     renderRowTooltip,
     renderRowIcon,
     onSelect,
@@ -48,21 +46,15 @@ export function FileTreeRowView({
   const isDirectory = row.type === 'directory';
   const canExpand = isDirectory && row.hasChildren !== false;
   const isExpanded = Boolean(row.expanded);
-  const isSelected = selectedId === row.id;
+  const isSelected = ctx.selectedIds?.includes(row.id) ?? selectedId === row.id;
+  const pinTrailing = ctx.rowTrailingPosition === 'viewport-end';
   const extra = getRowAttributes?.(row) ?? {};
   const {
     className: extraClassName,
     style: extraStyle,
     ...extraAttributes
   } = extra;
-  const dashboard = renderDashboard?.(row) ?? null;
-  // 宿主给了 description 就用它（含显式空串）；否则按 uri 取内置说明。
-  const infoKey = resolveFileTreeInfoKey(row.uri);
-  const description =
-    row.description ??
-    (infoKey && showsInlineDescription(infoKey)
-      ? resolveInfoCopy(infoKey, ctx.infoLabels).description
-      : undefined);
+  const trailing = renderRowTrailing?.(row) ?? null;
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     // 点展开箭头时不再冒泡触发选中。The chevron handles its own click.
@@ -84,6 +76,7 @@ export function FileTreeRowView({
       aria-selected={row.selectable === false ? undefined : isSelected}
       aria-expanded={canExpand ? isExpanded : undefined}
       aria-disabled={row.disabled || undefined}
+      title={row.name}
       {...extraAttributes}
       {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
       className={['ov-file-tree__row', extraClassName]
@@ -92,11 +85,10 @@ export function FileTreeRowView({
       data-selected={isSelected || undefined}
       data-disabled={row.disabled || undefined}
       data-kind={row.kind}
-      style={{ ...rowStyle(row.depth), ...extraStyle }}
+      data-trailing-position={ctx.rowTrailingPosition}
+      style={{ ...rowStyle(row.depth, pinTrailing), ...extraStyle }}
       onClick={handleClick}
-      onKeyDown={(event: KeyboardEvent<HTMLDivElement>) =>
-        onRowKeyDown(event, row)
-      }
+      onKeyDown={(event) => onRowKeyDown(event, row)}
     >
       {/* 每一级祖先画一条竖线，上下各溢出 1px 让相邻行接上。 */}
       <Guides depth={row.depth} />
@@ -127,6 +119,7 @@ export function FileTreeRowView({
         <span aria-hidden="true" className="ov-file-tree__toggle-spacer" />
       )}
 
+      {ctx.renderRowLeading?.(row)}
       <span className="ov-file-tree__icon-slot">
         {isDirectory ? (
           <FileTreeFolderIcon open={isExpanded} />
@@ -135,17 +128,11 @@ export function FileTreeRowView({
         )}
       </span>
 
-      <span
-        className="ov-file-tree__label-group"
-        data-description={Boolean(description) || undefined}
-      >
-        <span className="ov-file-tree__label" title={row.name}>
-          {row.name}
-        </span>
-        {description ? (
-          <span className="ov-file-tree__description">{description}</span>
-        ) : null}
-      </span>
+      <FileTreeEntryLabel
+        row={row}
+        infoLabels={ctx.infoLabels}
+        sharedLabel={text.shared}
+      />
 
       {row.busy && !canExpand ? (
         <span className="ov-file-tree__spinner" />
@@ -173,18 +160,15 @@ export function FileTreeRowView({
       {row.levelLabel ? (
         <span className="ov-file-tree__level">{row.levelLabel}</span>
       ) : null}
-      {row.access ? (
-        <span className="ov-file-tree__level">
-          {row.access === 'read-only'
-            ? text.readOnly
-            : row.access === 'denied'
-              ? text.noAccess
-              : text.traverseOnly}
+      {trailing ? (
+        <span
+          className="ov-file-tree__trailing"
+          title=""
+          onMouseEnter={() => setTrailingHovered(true)}
+          onMouseLeave={() => setTrailingHovered(false)}
+        >
+          {trailing}
         </span>
-      ) : null}
-
-      {dashboard ? (
-        <span className="ov-file-tree__dashboard">{dashboard}</span>
       ) : null}
       <span
         className="ov-file-tree__popover-anchor-container"
@@ -223,6 +207,8 @@ export function FileTreeRowView({
       placement="right"
       anchorRef={anchorRef}
       trigger="hover"
+      open={popoverOpen && !trailingHovered}
+      onOpenChange={setPopoverOpen}
     >
       {rowNode}
     </Popover>

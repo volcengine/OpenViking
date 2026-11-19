@@ -11,7 +11,6 @@ import pytest
 
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
-from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import (
     SessionCompressorV3,
     _commit_experience_snapshot,
@@ -56,6 +55,11 @@ from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
+@pytest.fixture(autouse=True)
+def static_agent_file(monkeypatch):
+    monkeypatch.setattr("openviking.session.compressor_v3.ensure_agent_file", AsyncMock())
+
+
 def _ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier.the_default_user("u"), role=Role.ROOT)
 
@@ -90,21 +94,6 @@ def _case_operation() -> ResolvedOperation:
     )
 
 
-@pytest.fixture
-def compressor_fs(monkeypatch):
-    monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: SimpleNamespace())
-    monkeypatch.setattr(
-        "openviking.session.memory.account_templates.resolve_account_memory_registry",
-        AsyncMock(side_effect=lambda _fs, _account, registry: registry),
-    )
-    return SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
-
-
-def test_factory_defaults_to_v3(compressor_fs):
-    compressor = create_session_compressor(vikingdb=None)
-    assert isinstance(compressor, SessionCompressorV3)
-
-
 @pytest.mark.asyncio
 async def test_commit_extraction_propagates_template_conflict():
     compressor = SessionCompressorV3(
@@ -127,16 +116,6 @@ async def test_commit_extraction_propagates_template_conflict():
         )
     assert raised.value is conflict
     compressor._write_final_memory_diff.assert_not_awaited()
-
-
-def test_factory_ignores_deprecated_memory_version(compressor_fs):
-    assert isinstance(
-        create_session_compressor(vikingdb=None, memory_version="v2"), SessionCompressorV3
-    )
-    assert isinstance(
-        create_session_compressor(vikingdb=None, memory_version="unsupported"),
-        SessionCompressorV3,
-    )
 
 
 def test_extract_long_term_memories_preserves_legacy_positional_parameter_order():

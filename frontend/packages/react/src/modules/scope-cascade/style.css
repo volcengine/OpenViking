@@ -1,2 +1,3 @@
-@import '../../shared/components/button/button.css';
+@import '../../shared/error-boundary/error-boundary.css';
+@import '../../shared/primitives/button/button.css';
 @import '../../components/scope-switcher/style.css';

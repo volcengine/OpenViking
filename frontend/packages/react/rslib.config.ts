@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginSvgr } from '@rsbuild/plugin-svgr';
 import { defineConfig } from '@rslib/core';
 
+const { version } = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+) as { version: string };
+
 export default defineConfig({
+  source: { define: { __OV_UI_VERSION__: JSON.stringify(version) } },
   lib: [
     {
       id: 'javascript',
@@ -11,28 +17,31 @@ export default defineConfig({
       source: {
         entry: {
           index: './src/index.ts',
+          'components/context-picker':
+            './src/components/context-picker/index.ts',
           'components/directory-tour':
             './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
-          'components/invitation-confirmation':
-            './src/components/invitation-confirmation/index.ts',
-          'components/login-method-selector':
-            './src/components/login-method-selector/index.ts',
-          'components/password-setup-form':
-            './src/components/password-setup-form/index.ts',
-          'components/password-reset-request-form':
-            './src/components/password-reset-request-form/index.ts',
-          'components/api-key-login-form':
-            './src/components/api-key-login-form/index.ts',
-          'components/email-login-form':
-            './src/components/email-login-form/index.ts',
+          'components/auth/invitation-confirmation':
+            './src/components/auth/invitation-confirmation/index.ts',
+          'components/auth/login-method-selector':
+            './src/components/auth/login-method-selector/index.ts',
+          'components/auth/password-setup-form':
+            './src/components/auth/password-setup-form/index.ts',
+          'components/auth/password-reset-request-form':
+            './src/components/auth/password-reset-request-form/index.ts',
+          'components/auth/api-key-login-form':
+            './src/components/auth/api-key-login-form/index.ts',
+          'components/auth/email-login-form':
+            './src/components/auth/email-login-form/index.ts',
           'modules/scope-cascade': './src/modules/scope-cascade/index.ts',
           'components/file-tree': './src/components/file-tree/index.ts',
           'components/file-preview': './src/components/file-preview/index.ts',
-          'components/file-browser-entries':
-            './src/components/file-browser-entries/index.ts',
-          'components/tui': './src/components/tui/index.ts',
+          'components/file-browser-action-bar':
+            './src/components/file-browser-action-bar/index.ts',
+          'components/command-console':
+            './src/components/command-console/index.ts',
           'components/scope-switcher':
             './src/components/scope-switcher/index.ts',
           'components/agent-connect': './src/components/agent-connect/index.ts',
@@ -47,16 +56,11 @@ export default defineConfig({
           'modules/console': './src/modules/console/index.ts',
         },
       },
-      // 位图内联成 data URI，产物不落独立的资源文件：库的 JS 入口要能在没有
-      // 打包器的环境（Node、SSR）直接 import，外部 .png 在那里解析不了。
-      //
-      // Inline bitmaps as data URIs instead of emitting separate asset files: the
-      // package's JS entries must stay importable without a bundler (Node, SSR),
-      // where an external .png cannot be resolved.
+      // Small shared bitmaps travel with each public entry; consumers need no extra asset setup.
       output: {
         emitCss: false,
         dataUriLimit: { image: 64 * 1024 },
-        // Normalize this CommonJS default during bundling for direct Node/SSR use.
+        // Normalize the CommonJS default once for consistent consumer interop.
         // React and ReactDOM remain external peer dependencies.
         autoExternal: { exclude: ['react-focus-lock'] },
       },
@@ -73,38 +77,59 @@ export default defineConfig({
       dts: { distPath: './dist/docs' },
       source: {
         entry: {
-          'shared/components/button/button':
-            './src/shared/components/button/button.tsx',
+          'shared/primitives/select/index':
+            './src/shared/primitives/select/index.ts',
+          'shared/primitives/button/button':
+            './src/shared/primitives/button/button.tsx',
+          'shared/primitives/toast/index':
+            './src/shared/primitives/toast/index.ts',
+          'shared/primitives/notification/index':
+            './src/shared/primitives/notification/index.ts',
+          'shared/primitives/input/input':
+            './src/shared/primitives/input/input.tsx',
+          'shared/primitives/checkbox/checkbox':
+            './src/shared/primitives/checkbox/checkbox.tsx',
+          'client/analytics/events': './src/client/analytics/events.ts',
+          style: './src/shared/docs-controls.css',
         },
       },
-      output: { distPath: { root: './dist/docs' }, emitCss: false },
+      output: { distPath: { root: './dist/docs' }, emitCss: true },
     },
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',
+      'components/context-picker/style':
+        './src/components/context-picker/style.css',
+      'docs/toast/style': './src/shared/primitives/toast/style.css',
+      'docs/notification/style':
+        './src/shared/primitives/notification/style.css',
+      'docs/shared/primitives/select/style':
+        './src/shared/primitives/select/style.css',
+
       'components/directory-tour/style':
         './src/components/directory-tour/style.css',
 
-      'components/invitation-confirmation/style':
-        './src/components/invitation-confirmation/style.css',
-      'components/login-method-selector/style':
-        './src/components/login-method-selector/style.css',
-      'components/password-setup-form/style':
-        './src/components/password-setup-form/style.css',
-      'components/password-reset-request-form/style':
-        './src/components/password-reset-request-form/style.css',
-      'components/api-key-login-form/style':
-        './src/components/api-key-login-form/style.css',
-      'components/email-login-form/style':
-        './src/components/email-login-form/style.css',
+      'components/auth/invitation-confirmation/style':
+        './src/components/auth/invitation-confirmation/style.css',
+      'components/auth/login-method-selector/style':
+        './src/components/auth/login-method-selector/style.css',
+      'components/auth/password-setup-form/style':
+        './src/components/auth/password-setup-form/style.css',
+      'components/auth/password-reset-request-form/style':
+        './src/components/auth/password-reset-request-form/style.css',
+      'components/auth/api-key-login-form/style':
+        './src/components/auth/api-key-login-form/style.css',
+      'components/auth/email-login-form/style':
+        './src/components/auth/email-login-form/style.css',
       'modules/scope-cascade/style': './src/modules/scope-cascade/style.css',
       'components/style': './src/components/style.css',
       'components/file-tree/style': './src/components/file-tree/style.css',
       'components/file-preview/style':
         './src/components/file-preview/style.css',
-      'components/file-browser-entries/style':
-        './src/components/file-browser-entries/style.css',
-      'components/tui/style': './src/components/tui/style.css',
+      'components/file-browser-action-bar/style':
+        './src/components/file-browser-action-bar/style.css',
+      'components/command-console/style':
+        './src/components/command-console/style.css',
       'components/scope-switcher/style':
         './src/components/scope-switcher/style.css',
       'components/agent-connect/style':

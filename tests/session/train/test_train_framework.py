@@ -8,7 +8,9 @@ import copy
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from test_fakes import fake_request_context
@@ -62,6 +64,10 @@ class DummyVikingFS:
     def __init__(self):
         self.reloads = 0
         self.version = 1
+        self._async_agfs = SimpleNamespace(
+            pathlock_acquire_tree=AsyncMock(return_value="test-lease"),
+            pathlock_release=AsyncMock(),
+        )
 
     async def ls(self, uri: str, output: str = "original", ctx=None):
         del output, ctx
@@ -748,8 +754,6 @@ async def test_batch_policy_trainer_trains_from_rollout_batch():
 
 @pytest.mark.asyncio
 async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_source_trajectory():
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
 
     from openviking.session.train import (
         PolicyPlanItem,

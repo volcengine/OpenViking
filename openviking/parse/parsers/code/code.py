@@ -20,6 +20,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, List, Optional, Set, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -142,7 +143,7 @@ class CodeRepositoryParser(BaseParser):
                 f"Source type: {type(source)}, value: {source}"
             )
 
-        logger.info(f"[CodeRepositoryParser] Parsing code repository: {source_path}")
+        logger.debug("Parsing code repository source=%s", safe_path_for_log(str(source_path)))
 
         try:
             # Get metadata from DataAccessor
@@ -176,7 +177,9 @@ class CodeRepositoryParser(BaseParser):
             temp_viking_uri = artifact_ref.root
             target_root_uri = f"{temp_viking_uri}/repository"
 
-            logger.debug(f"Uploading code repository artifacts to: {target_root_uri}")
+            logger.debug(
+                "Uploading repository artifacts target=%s", safe_uri_for_log(target_root_uri)
+            )
 
             # 4. Upload to the artifact store (filtering on the fly)
             file_count, upload_failures = await self._upload_directory(
@@ -195,7 +198,11 @@ class CodeRepositoryParser(BaseParser):
                     f"Failed to upload {len(upload_failures)} repository file(s): {detail}"
                 )
 
-            logger.info(f"Uploaded {file_count} files to {target_root_uri}")
+            logger.debug(
+                "Repository artifacts uploaded target=%s files=%d",
+                safe_uri_for_log(target_root_uri),
+                file_count,
+            )
 
             # 5. Create result
             # Root node is just a placeholder, TreeBuilder relies on temp_dir_path
@@ -239,15 +246,19 @@ class CodeRepositoryParser(BaseParser):
             return result
 
         except Exception as e:
-            logger.error(f"Failed to parse repository {source}: {e}", exc_info=True)
+            logger.debug(
+                "Repository parsing failed source=%s error_type=%s",
+                safe_uri_for_log(str(source)),
+                type(e).__name__,
+            )
             if artifact_ref is not None:
                 try:
                     await output_store.cleanup(artifact_ref)
                 except Exception as cleanup_error:
-                    logger.warning(
-                        "Failed to clean repository parse artifact %s: %s",
-                        artifact_ref.root,
-                        cleanup_error,
+                    logger.info(
+                        "Repository artifact cleanup failed path=%s error_type=%s",
+                        safe_path_for_log(str(artifact_ref.root)),
+                        type(cleanup_error).__name__,
                     )
             # Use original URL for error case as well - still important for TreeBuilder
             # Even on failure, we want TreeBuilder to potentially get org/repo from the URL
@@ -423,7 +434,7 @@ class CodeRepositoryParser(BaseParser):
         else:
             zip_url = f"https://github.com/{owner}/{repo_slug}/archive/HEAD.zip"
 
-        logger.info(f"Downloading GitHub ZIP: {zip_url}")
+        logger.debug("Downloading GitHub archive source=%s", safe_uri_for_log(zip_url))
 
         zip_path = os.path.join(target_dir, "_archive.zip")
         extract_dir = os.path.join(target_dir, "_extracted")
@@ -453,7 +464,9 @@ class CodeRepositoryParser(BaseParser):
                 if info.is_dir() or stat.S_ISDIR(mode):
                     continue
                 if stat.S_ISLNK(mode):
-                    logger.warning(f"Skipping symlink entry in GitHub ZIP: {info.filename}")
+                    logger.debug(
+                        "Skipping symlink archive entry path=%s", safe_path_for_log(info.filename)
+                    )
                     continue
                 raw = info.filename.replace("\\", "/")
                 raw_parts = [p for p in raw.split("/") if p]
@@ -477,7 +490,7 @@ class CodeRepositoryParser(BaseParser):
         top_level = [d for d in Path(extract_dir).iterdir() if d.is_dir()]
         content_dir = top_level[0] if len(top_level) == 1 else Path(extract_dir)
 
-        logger.info(f"GitHub ZIP extracted to {content_dir} ({repo_name})")
+        logger.debug("GitHub archive extracted target=%s", safe_path_for_log(str(content_dir)))
         return content_dir, repo_name
 
     async def _git_clone(
@@ -496,7 +509,11 @@ class CodeRepositoryParser(BaseParser):
             Repository name derived from the URL (e.g. "OpenViking").
         """
         name = self._get_repo_name(url)
-        logger.info(f"Cloning {url} to {target_dir}...")
+        logger.debug(
+            "Cloning repository source=%s target=%s",
+            safe_uri_for_log(url),
+            safe_path_for_log(str(target_dir)),
+        )
 
         clone_args = [
             "git",
@@ -567,7 +584,9 @@ class CodeRepositoryParser(BaseParser):
                     continue
                 # Skip symlink entries to prevent symlink-based escapes
                 if stat.S_ISLNK(mode):
-                    logger.warning(f"Skipping symlink entry in zip: {info.filename}")
+                    logger.debug(
+                        "Skipping symlink archive entry path=%s", safe_path_for_log(info.filename)
+                    )
                     continue
                 # Reject entries with suspicious raw path components before extraction
                 raw = info.filename.replace("\\", "/")
@@ -599,8 +618,10 @@ class CodeRepositoryParser(BaseParser):
                     try:
                         extracted.unlink(missing_ok=True)
                     except OSError as cleanup_err:
-                        logger.warning(
-                            f"Failed to clean up escaped file {extracted}: {cleanup_err}"
+                        logger.info(
+                            "Escaped archive entry cleanup failed path=%s error_type=%s",
+                            safe_path_for_log(str(extracted)),
+                            type(cleanup_err).__name__,
                         )
                     raise ValueError(
                         f"Zip Slip detected: entry {info.filename!r} escapes target directory"

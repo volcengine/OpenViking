@@ -26,7 +26,7 @@ _SYSTEM_HIDDEN_FIELDS = {
     "last_update_trace_id",
 }
 _MAX_EXTRA_CANDIDATE_FILES = 10
-_PATCH_METADATA_KEYS = ("confidence",)
+_PATCH_METADATA_KEYS = ("confidence", "delete_uri", "proposed_replacements")
 _EXPERIENCE_MERGE_REASONING = """Write before content in {{ language }}. In 2–3 sentences, compare the supplied experiences' reasoning and applicability, then state the basis for the resulting guidance and any unresolved uncertainty.
 Use only evidence summarized in the inputs, preserving the conditions behind each conclusion; do not infer an action's effectiveness from outcomes under different conditions.
 Repeated claims are not independent support.

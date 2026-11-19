@@ -488,3 +488,49 @@ export async function replayPending(fetchJSON, log, options = {}) {
 
   return { replayed, failed, skipped, deferred };
 }
+
+/** Whether the queue still holds messages for this session. */
+export async function hasPendingWrites(sessionId) {
+  return (await listPending()).some(
+    ({ entry }) => entry.type === "addMessage" && entry.sessionId === sessionId,
+  );
+}
+
+/**
+ * Queue a commit that replays after every message queued for this session.
+ * Writes can be stamped ahead of the clock (batch remainders are), and dedup
+ * would keep an older queued commit at its earlier position, so the session's
+ * queued commits are replaced rather than added to.
+ */
+export async function enqueueCommitAfterWrites(sessionId, payload = {}) {
+  let lastWrite = 0;
+  for (const { filename, entry } of await listPending()) {
+    if (entry.sessionId !== sessionId) continue;
+    if (entry.type === "addMessage") lastWrite = Math.max(lastWrite, entry.createdAt || 0);
+    else if (entry.type === "commitSession") await dequeue(filename);
+  }
+  return enqueue("commitSession", sessionId, payload, {
+    createdAt: Math.max(Date.now(), lastWrite + 1),
+  });
+}
+
+/**
+ * Call before sending a commit. A commit archives only the messages the server
+ * already has, and replay sends only what is queued, so a commit that overtakes
+ * the session's queued messages leaves them unarchived for good. When the
+ * session has queued messages this replays the queue first; if they are still
+ * queued afterwards, the commit is queued behind them.
+ *
+ * @returns {Promise<null | {ok: boolean}>} null when the commit can be sent
+ *   now, otherwise the result of queueing it.
+ */
+export async function deferCommitBehindPendingWrites(fetchJSON, sessionId, payload = {}, log = () => {}) {
+  if (!(await hasPendingWrites(sessionId))) return null;
+  try {
+    await replayPending(fetchJSON, log, { consumeRetries: false });
+  } catch {
+    // Whatever is left queued is handled below.
+  }
+  if (!(await hasPendingWrites(sessionId))) return null;
+  return enqueueCommitAfterWrites(sessionId, payload);
+}

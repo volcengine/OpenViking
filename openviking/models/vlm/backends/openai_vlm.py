@@ -431,7 +431,11 @@ class OpenAIVLM(VLMBase):
         Supported formats: PNG, JPEG, GIF, WebP
         """
         if len(data) < 8:
-            logger.warning(f"[OpenAIVLM] Image data too small: {len(data)} bytes")
+            logger.info(
+                "image input too small; using png format total=%d degraded=true",
+                len(data),
+                extra={"total": len(data), "degraded": True},
+            )
             return "image/png"
 
         if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -443,7 +447,9 @@ class OpenAIVLM(VLMBase):
         if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
             return "image/webp"
 
-        logger.warning(f"[OpenAIVLM] Unknown image format, magic bytes: {data[:8].hex()}")
+        logger.info(
+            "image format unknown; using png format degraded=true", extra={"degraded": True}
+        )
         return "image/png"
 
     def _prepare_image(self, image: Union[str, Path, bytes]) -> Dict[str, Any]:

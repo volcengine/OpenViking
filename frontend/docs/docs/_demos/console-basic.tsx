@@ -30,6 +30,7 @@ export default function ConsoleBasic() {
         >
           <Console
             locale={zh ? 'zh-CN' : 'en-US'}
+            commandHistoryKey="docs:console-basic"
             onOpenUri={setOpened}
             conversation={conversation}
           />

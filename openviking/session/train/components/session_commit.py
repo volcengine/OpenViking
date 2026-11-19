@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from openviking.observability.log_safety import short_hash
 from openviking.session.train.components.progress import run_with_progress
 from openviking.session.train.context import PipelineContext
 from openviking.session.train.domain import (
@@ -25,6 +26,9 @@ from openviking.session.train.domain import (
 )
 from openviking.session.train.utils import average_score, validate_rollouts_have_cases
 from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 _TRAINING_COMMIT_MEMORY_TYPES = ("cases", "trajectories", "experiences")
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
@@ -160,11 +164,11 @@ class SessionCommitPolicyTrainer:
             task = await self._wait_task(task_id) if task_id else None
             task_error = _task_error(task)
             if task_error:
-                print(
-                    f"[session_commit] failed stage={stage} session_id={session_id} "
-                    f"task_id={task_id} trace_id={trace_id or '<none>'} "
-                    f"error={task_error}",
-                    flush=True,
+                logger.debug(
+                    "training session commit returned failed task stage=%s session_hash=%s task_id=%s",
+                    stage,
+                    short_hash(str(session_id)),
+                    task_id,
                 )
             await self._record_event(
                 "train_commit_failed" if task_error else "train_commit_done",
@@ -194,10 +198,11 @@ class SessionCommitPolicyTrainer:
                 "error": task_error,
             }
         except Exception as exc:
-            print(
-                f"[session_commit] failed stage={stage} session_id={session_id} "
-                f"task_id=<none> trace_id=<none> error={exc}",
-                flush=True,
+            logger.debug(
+                "training session commit failed stage=%s session_hash=%s error_type=%s",
+                stage,
+                short_hash(str(session_id)),
+                type(exc).__name__,
             )
             await self._record_event(
                 "train_commit_failed",

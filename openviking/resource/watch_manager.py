@@ -21,6 +21,12 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
 from openviking.connector.auth import is_external_feishu_auth, restore_feishu_request
 from openviking.connector.delegate import ConnectorDelegate
 from openviking.observability.http_error_context import sanitize_public_http_error
+from openviking.observability.log_safety import (
+    safe_log_fields,
+    safe_path_for_log,
+    safe_uri_for_log,
+    short_hash,
+)
 from openviking.resource.git_watch_auth import (
     git_http_auth_config_from_state,
     is_git_http_auth_state,
@@ -46,6 +52,7 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.git_auth import GIT_AUTH_FAILED
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
@@ -222,15 +229,19 @@ class WatchManager:
             if created:
                 try:
                     await run_to_completion(lambda: self._withdraw(task, initial_run_id))
-                except BaseException:
-                    logger.exception("[WatchManager] Failed to withdraw Watch %s", task.task_id)
+                except BaseException as _log_error:
+                    logger.info(
+                        "Failed to withdraw Watch %s error_type=%s",
+                        short_hash(str(task.task_id)),
+                        type(_log_error).__name__,
+                    )
             raise
-        logger.info(
-            "[WatchManager] Created task %s for path %s by user %s/%s",
-            task.task_id,
-            path,
-            account_id,
-            user_id,
+        logger.debug(
+            "Watch created source=%s",
+            safe_uri_for_log(path),
+            extra=safe_log_fields(
+                {"task_id": task.task_id, "account_id": account_id, "user_id": user_id}
+            ),
         )
         return task
 
@@ -595,7 +606,13 @@ class WatchManager:
             if actual_run.run_id is None:
                 if isinstance(result, WatchRunResult):
                     outcome = result
-                elif (result or {}).get("status") in {"completed", "failed", "error", "cancelled"}:
+                elif (result or {}).get("status") in {
+                    "completed",
+                    "partial",
+                    "failed",
+                    "error",
+                    "cancelled",
+                }:
                     outcome = self.result(run.task, result["status"], result, None)
                 else:
                     raise RuntimeError("Resource submission did not create a Task")
@@ -742,6 +759,7 @@ class WatchManager:
             return None
         try:
             probe_kwargs = dict(kwargs)
+            probe_kwargs["request_validator"] = ensure_public_remote_target
             if probe_kwargs.get("auth_config") is None:
                 processor = getattr(self._resource_service, "_resource_processor", None)
                 if processor is not None:
@@ -753,10 +771,10 @@ class WatchManager:
                 timeout=self.DEFAULT_GIT_PROBE_TIMEOUT,
             )
         except Exception as exc:
-            logger.warning(
-                "[WatchManager] Git probe failed for %s: %s; falling back to refresh",
-                task.path,
-                self._public_error(str(exc)),
+            logger.info(
+                "Git probe failed for %s: %s; falling back to refresh",
+                safe_path_for_log(str(task.path)),
+                type(exc).__name__,
             )
             return None
         if probed is None:
@@ -788,6 +806,8 @@ class WatchManager:
         instruction: str,
     ) -> WatchRunResult:
         result = result or {}
+        if status == "completed" and result.get("import_complete") is False:
+            status = "partial"
         states = result.get("connector_states")
         has_states = connector and status == "completed" and "connector_states" in result
         if has_states and not isinstance(states, dict):
@@ -797,7 +817,11 @@ class WatchManager:
             error = "; ".join(str(item) for item in errors) if errors else "watch ingestion failed"
         # A successful source import may later fail in semantic/embedding Work.
         # Its explicit checkpoint still describes the revision actually imported.
-        checkpoint = result.get("source_checkpoint") if status != "cancelled" else None
+        checkpoint = (
+            result.get("source_checkpoint")
+            if status != "cancelled" and result.get("import_complete") is not False
+            else None
+        )
         if status == "completed":
             from openviking.service.resource_service import ResourceService
 

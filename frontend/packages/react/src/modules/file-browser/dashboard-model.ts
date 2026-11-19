@@ -10,6 +10,7 @@ export interface FileBrowserDashboard {
   uri: string;
   pendingConflicts?: boolean;
   isRoot?: boolean;
+  targetUri?: string;
 }
 export const dashboardKey = (uri: string) => `dashboard:${uri}`;
 export const within = (uri: string, root: string) =>
@@ -20,6 +21,7 @@ export function resolveDashboard(
   uri: string,
   rows: readonly FileTreeRow[],
   targets: readonly { to: string; conflicts_num?: number }[],
+  indexedConflict?: boolean,
 ): FileBrowserDashboard | undefined {
   if (isExperienceDirectory(uri) || isExperienceFile(uri))
     return { kind: 'experience', uri };
@@ -36,18 +38,35 @@ export function resolveDashboard(
     .filter((item) => within(uri, item.to))
     .sort((a, b) => b.to.length - a.to.length)[0];
   if (!hasWiki && !owner) return undefined;
+  const targetUri = [
+    owner?.to,
+    ...entries
+      .filter(
+        (item) =>
+          item.tags?.includes('compile_target=true') && within(uri, item.uri),
+      )
+      .map((item) => item.uri),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => b.length - a.length)[0];
   const tagged = row?.tags?.find((tag) => tag.startsWith('has_conflict='));
+  const descendantConflict = entries.some(
+    (entry) =>
+      within(entry.uri, uri) && entry.tags?.includes('has_conflict=true'),
+  );
   return {
     kind: 'wiki',
     uri,
-    isRoot: Boolean(
-      row?.tags?.includes('compile_target=true') || owner?.to === uri,
-    ),
-    pendingConflicts: tagged
-      ? tagged === 'has_conflict=true'
-      : owner?.to === uri && owner.conflicts_num !== undefined
-        ? owner.conflicts_num > 0
-        : undefined,
+    targetUri,
+    isRoot: targetUri === uri,
+    pendingConflicts: descendantConflict
+      ? true
+      : (indexedConflict ??
+        (tagged
+          ? tagged === 'has_conflict=true'
+          : owner?.to === uri && owner.conflicts_num !== undefined
+            ? owner.conflicts_num > 0
+            : undefined)),
   };
 }
 

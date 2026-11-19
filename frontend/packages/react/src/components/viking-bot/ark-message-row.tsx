@@ -1,10 +1,11 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { Bubble } from '@ark-design/ui/bubble';
 import { ErrorCard } from '@ark-design/ui/error-card';
 
 import { MessageBody } from './ark-message-body.js';
 import { messageText } from './message-groups.js';
 import { MessageFooter } from './message-footer.js';
+import { UserMessageGroup } from './user-message-group.js';
 import type { VikingBotMessage, VikingBotStreamingState } from './model.js';
 import type { VikingBotMessageListProps } from './types.js';
 
@@ -31,7 +32,9 @@ function MessageActions({
           type="default"
           key={`${messageId}:${action.key}`}
           htmlType="button"
-          className="ov-viking-bot__message-action"
+          className={`ov-viking-bot__message-action${action.appearance === 'pill' ? ' ov-viking-bot__message-action--pill' : ''}`}
+          icon={action.icon}
+          loading={action.loading}
           disabled={
             Boolean(action.disabledReason) ||
             action.status === 'pending' ||
@@ -100,18 +103,15 @@ export function VikingBotMessageRow({
   );
   return (
     <article
-      className={`ov-viking-bot__message ov-viking-bot__message--${message.role}`}
+      className={`ov-viking-bot__message ov-viking-bot__message--${message.role}${message.answerSummary ? ' ov-viking-bot__message--answers' : ''}`}
     >
       {message.role === 'user' ? (
-        <Bubble
-          className="ov-viking-bot__user-bubble"
-          placement="end"
-          variant="filled"
-          maxHeight="9999px"
+        <UserMessageGroup
+          message={message}
+          labels={labels}
+          onOpenUri={onOpenUri}
           footer={footer}
-        >
-          {body}
-        </Bubble>
+        />
       ) : message.streaming && message.parts.length === 0 ? (
         <Bubble loading placement="start" variant="text" />
       ) : (
