@@ -51,9 +51,7 @@ Quick Local adapts [Hermes PR #94851](https://github.com/NousResearch/hermes-age
 (head `d15e0e65d67a2dd6d3f3ab09a382c1f1684e2560`). Provisioning remains separate
 from the setup UI. The port uses current Hermes PM, authenticated server reuse,
 and paths derived from the provider's bound home. On Python 3.14, the private
-server of an OpenViking release before 0.5.4 uses LiteLLM 1.83.7, within that
-release's supported range; some other releases in that range exclude Python
-3.14. Later OpenViking releases pin LiteLLM themselves. The profile server controller verifies
+server of OpenViking before 0.5.4 uses LiteLLM 1.83.7. The profile server controller verifies
 the PID, creation time, executable and config path before stopping a process.
 It repairs permissions on plugin-owned private files after backup restoration;
 no Hermes backup changes are required.

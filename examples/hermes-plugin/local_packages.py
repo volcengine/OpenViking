@@ -38,11 +38,7 @@ _PACKAGES = {
         "ae5e88a2cf464e5a2dde7c8898c2d5c71cc24d03cac6396bf7509456bde0b9fb",
     ),
 }
-# OpenViking releases before 0.5.4 accept a range of LiteLLM releases, and the
-# PM resolver picks one that excludes Python 3.14. Later releases pin LiteLLM
-# themselves, to a release that supports it: a second pin would leave their
-# environment without a solution. This applies only to OpenViking's private
-# environment, never to Hermes's dependencies.
+# Needed on Python 3.14 for OpenViking < 0.5.4; later releases pin LiteLLM themselves.
 _LITELLM_ON_PYTHON_314 = 'litellm==1.83.7; python_version >= "3.14"'
 _PINS_LITELLM_SINCE = Version("0.5.4")
 
