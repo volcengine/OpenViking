@@ -6,7 +6,12 @@ import type {
 
 export type BotActivationState =
   | {
-      status: ConsoleBotActivationStatus | 'disabled' | 'checking' | 'starting';
+      status:
+        | ConsoleBotActivationStatus
+        | 'disabled'
+        | 'checking'
+        | 'cancelled'
+        | 'starting';
     }
   | { status: 'collection-error'; error: unknown }
   | { status: 'load-error'; error: unknown }
@@ -22,7 +27,13 @@ function createBotActivation({
   signal?: AbortSignal;
 }) {
   let state: BotActivationState = {
-    status: !enabled ? 'disabled' : activation ? 'checking' : 'ready',
+    status: !enabled
+      ? 'disabled'
+      : activation
+        ? scopeSignal?.aborted
+          ? 'cancelled'
+          : 'checking'
+        : 'ready',
   };
   let active = false;
   let request: AbortController | undefined;
@@ -91,8 +102,8 @@ function createBotActivation({
       const suspend = () => {
         cancel();
         // Cancellation invalidates this scope, not the library's eligibility.
-        // Keep its pending view until the host supplies a fresh scope signal.
-        update({ status: 'checking' });
+        // Show a settled cancellation notice until the host supplies a fresh signal.
+        update({ status: 'cancelled' });
       };
       if (scopeSignal?.aborted) suspend();
       else {

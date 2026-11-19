@@ -131,13 +131,13 @@ test('scope replacement aborts startup and ignores its late completion', async (
     assert.equal(host.lifecycle.state.status, 'ready');
     assert.equal(reads, 2);
     await act(async () => scope.abort());
-    assert.equal(host.lifecycle.state.status, 'checking');
+    assert.equal(host.lifecycle.state.status, 'cancelled');
   } finally {
     await host.unmount();
   }
 });
 
-test('an already cancelled scope waits without declaring Bot disabled', async () => {
+test('an already cancelled scope is settled without declaring Bot disabled', async () => {
   const scope = new AbortController();
   scope.abort();
   const unexpected = () =>
@@ -152,9 +152,9 @@ test('an already cancelled scope waits without declaring Bot disabled', async ()
     },
   });
   try {
-    assert.equal(host.lifecycle.state.status, 'checking');
+    assert.equal(host.lifecycle.state.status, 'cancelled');
     await act(async () => host.lifecycle.start());
-    assert.equal(host.lifecycle.state.status, 'checking');
+    assert.equal(host.lifecycle.state.status, 'cancelled');
   } finally {
     await host.unmount();
   }

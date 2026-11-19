@@ -77,6 +77,8 @@ const panel = loading ? (
 
 通过 `isEligible` 确认当前作用域是否允许使用 Bot。检查资格或运行状态期间，Console 保留 Bot 标签页，并在面板内显示轻量加载提示。启用流程中，只有 `isEligible` 返回 `false` 才移除 Bot 标签页。资格或状态检查失败时，Bot 面板保留重试入口。加载和就绪状态变化会保留用户选择的模式，包括命令模式。
 
+作用域的请求 signal 已取消或随后被取消时，Console 保留 Bot 标签页并显示静态取消提示，不显示加载状态，也不提供无法重启已取消请求的重试按钮。宿主须换用未取消的新 signal，或移除已取消的 signal，才能重新检查。只修改 `scopeKey` 而继续传入同一个已取消的 signal，面板仍保持取消状态。
+
 `isEligible` 返回 `true` 后，Console 通过 `getStatus` 查询 Bot 是否已就绪。尚未启动时，用户点击「启用 VikingBot」会触发宿主的 `start` 回调。Console 会再次确认状态，就绪后加载对话和会话历史。切换库或身份时，更新 `scopeKey` 或传入对应的 `activation`。模拟火山宿主适配器将 `GetOpenVikingCollection` 返回的 `EnableVikingBot === true` 映射为 `isEligible` 的布尔结果。
 
 当前库和身份不变时保持适配器引用稳定。三个回调都接收 `AbortSignal`，失败时应抛出错误。可通过 `media` 用介绍视频或封面替换默认插图。

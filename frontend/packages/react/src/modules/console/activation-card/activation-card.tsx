@@ -12,7 +12,7 @@ import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 
 interface ConsoleActivationCardProps {
-  status: 'checking' | 'inactive' | 'activating' | 'error';
+  status: 'checking' | 'cancelled' | 'inactive' | 'activating' | 'error';
   locale?: Locale;
   onAction?: () => void;
   media?: ReactNode;
@@ -62,12 +62,12 @@ export function ConsoleActivationCard({
   const labels = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
   const titleId = useId();
 
-  if (status === 'checking')
+  if (status === 'checking' || status === 'cancelled')
     return (
-      <div className="ov-console-activation">
+      <div className="ov-console-activation" aria-busy={status === 'checking'}>
         <p className="ov-console-activation__checking" role="status">
-          <LoadingIcon />
-          {labels.checking}
+          {status === 'checking' ? <LoadingIcon /> : null}
+          {status === 'checking' ? labels.checking : labels.cancelled}
         </p>
       </div>
     );

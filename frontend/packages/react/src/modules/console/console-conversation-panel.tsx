@@ -79,8 +79,8 @@ export function ConsoleConversationPanel({
       {active && state.status !== 'ready' && state.status !== 'disabled' ? (
         <ConsoleActivationCard
           status={
-            state.status === 'checking'
-              ? 'checking'
+            state.status === 'checking' || state.status === 'cancelled'
+              ? state.status
               : state.status === 'starting'
                 ? 'activating'
                 : failed
