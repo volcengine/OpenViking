@@ -90,11 +90,10 @@ export function ConsoleView(props: ConsoleProps) {
   };
   const id = useId();
   const commandPanel = useRef<HTMLDivElement>(null);
+  const commandInput = useRef<HTMLTextAreaElement>(null);
   const fillCommand = (command: string) => {
     state.setCommand(command);
-    commandPanel.current
-      ?.querySelector('textarea')
-      ?.focus({ preventScroll: true });
+    commandInput.current?.focus({ preventScroll: true });
   };
   return (
     <LocaleProvider locale={locale}>
@@ -115,6 +114,7 @@ export function ConsoleView(props: ConsoleProps) {
               modes={visibleModes}
               panelId={id}
               commandPanelRef={commandPanel}
+              commandInputRef={commandInput}
               locale={locale}
               labels={labels}
               history={state.history}
@@ -146,6 +146,7 @@ export function ConsoleView(props: ConsoleProps) {
           <ConsoleConversationPanel
             id={`${id}-conversation`}
             commandPanelRef={commandPanel}
+            commandInputRef={commandInput}
             active={state.mode === 'conversation' || state.mode === undefined}
             activation={activation}
             media={chatOptions?.activation?.media}
@@ -173,6 +174,7 @@ export function ConsoleView(props: ConsoleProps) {
             >
               {slots?.commandHelp}
               <CommandConsole
+                inputRef={commandInput}
                 records={commandRecords}
                 history={state.history}
                 value={state.command}

@@ -4,6 +4,7 @@ import type { RefObject } from 'react';
 /** Restore focus only when removing a Console region removed its owner. */
 export function useConsoleFocusRecovery(
   commandPanel: RefObject<HTMLDivElement | null>,
+  commandInput: RefObject<HTMLTextAreaElement | null>,
 ) {
   const source = useRef<HTMLDivElement | null>(null);
   return useCallback(
@@ -24,11 +25,17 @@ export function useConsoleFocusRecovery(
         if (current && current !== document.body && current !== focused) return;
         const panel = commandPanel.current;
         if (!panel?.isConnected || panel.closest('[hidden]')) return;
-        const input = panel.querySelector<HTMLTextAreaElement>(
-          ':scope > .ov-command-console > .ov-command-console__composer textarea.ov-command-console__input[name="command"]:not(:disabled):not([readonly])',
-        );
-        input?.focus({ preventScroll: true });
-        if (input && input.ownerDocument.activeElement === input) return;
+        const input = commandInput.current;
+        if (
+          input?.isConnected &&
+          panel.contains(input) &&
+          !input.disabled &&
+          !input.readOnly &&
+          !input.closest('[hidden]')
+        ) {
+          input.focus({ preventScroll: true });
+          if (input.ownerDocument.activeElement === input) return;
+        }
         // A hidden/unavailable input may refuse focus, while a host focus
         // handler may deliberately move it elsewhere. Only the former falls back.
         const after = document.activeElement;
@@ -37,6 +44,6 @@ export function useConsoleFocusRecovery(
         panel.focus({ preventScroll: true });
       });
     },
-    [commandPanel],
+    [commandPanel, commandInput],
   );
 }

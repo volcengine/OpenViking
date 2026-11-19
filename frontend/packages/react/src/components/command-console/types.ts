@@ -2,7 +2,7 @@ import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 export type CommandConsoleTask = TaskSnapshot;
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode, Ref } from 'react';
 import type {
   CommandConsoleCommandDefinition,
   CommandConsoleCommandGroup,
@@ -586,6 +586,8 @@ export interface CommandConsoleProps extends Omit<
   commands?: readonly CommandConsoleCommandDefinition[];
   /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */
   commandGroups?: readonly CommandConsoleCommandGroup[];
+  /** 获取实际命令输入框，可用于程序聚焦。Accesses the command textarea for programmatic focus. */
+  inputRef?: Ref<HTMLTextAreaElement>;
   /**
    * 输入值变化时触发，包括接受命令或示例；行内占位不改变值，也不提交。省略时输入框
    * 只读，用于展示历史记录。

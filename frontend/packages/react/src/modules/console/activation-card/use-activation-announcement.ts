@@ -52,15 +52,29 @@ function observeAnnouncement(element: HTMLSpanElement, message: string) {
     });
   };
   const observer = new view.MutationObserver(refresh);
-  for (let node: HTMLElement | null = element; node; node = node.parentElement)
-    observer.observe(node, {
-      attributes: true,
-      attributeFilter: ['hidden', 'style', 'class', 'inert', 'aria-hidden'],
-    });
+  const resize = view.ResizeObserver
+    ? new view.ResizeObserver(refresh)
+    : undefined;
+  // Hosts can use data attributes, container queries or viewport media queries.
+  // Observe only this ancestor chain, never document children or a frame loop.
+  for (
+    let node: HTMLElement | null = element;
+    node;
+    node = node.parentElement
+  ) {
+    observer.observe(node, { attributes: true });
+    resize?.observe(node);
+  }
+  const viewport = view.visualViewport;
+  view.addEventListener('resize', refresh);
+  viewport?.addEventListener('resize', refresh);
   refresh();
   return () => {
     stopped = true;
     observer.disconnect();
+    resize?.disconnect();
+    view.removeEventListener('resize', refresh);
+    viewport?.removeEventListener('resize', refresh);
     cancelFrame();
     element.textContent = '';
   };
@@ -73,9 +87,9 @@ export function useActivationAnnouncement(
   identity: object,
 ) {
   const stop = useRef<(() => void) | undefined>(undefined);
-  // The host can hide/show ancestors without rendering this Console. The DOM ref
-  // subscribes after commit; ref replacement disconnects observers and cancels
-  // frames so old identities, languages and detached nodes cannot announce.
+  // The host can change ancestor attributes or responsive layout without rendering
+  // this Console. The DOM ref subscribes after commit; ref replacement disconnects
+  // observers/listeners and cancels frames for old identities/languages/nodes.
   return useCallback(
     (element: HTMLSpanElement | null) => {
       // A new request can carry the same status and translated message.

@@ -14,6 +14,7 @@ export function ConsoleToolbar({
   modes,
   panelId,
   commandPanelRef,
+  commandInputRef,
   locale,
   labels,
   history,
@@ -28,6 +29,7 @@ export function ConsoleToolbar({
   modes: readonly ConsoleMode[];
   panelId: string;
   commandPanelRef: RefObject<HTMLDivElement | null>;
+  commandInputRef: RefObject<HTMLTextAreaElement | null>;
   locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
   history: readonly ConsoleHistoryEntry[];
@@ -39,7 +41,10 @@ export function ConsoleToolbar({
   conversationActions?: ReactNode;
 }) {
   const [sessionVersion, setSessionVersion] = useState(0);
-  const modeControlsRef = useConsoleFocusRecovery(commandPanelRef);
+  const modeControlsRef = useConsoleFocusRecovery(
+    commandPanelRef,
+    commandInputRef,
+  );
   return (
     <div className="ov-console__toolbar">
       {modes.length > 1 ? (

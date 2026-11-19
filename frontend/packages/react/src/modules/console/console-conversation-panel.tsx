@@ -23,6 +23,7 @@ export function ConsoleConversationPanel({
   id,
   active,
   commandPanelRef,
+  commandInputRef,
   activation,
   media,
   conversation,
@@ -36,6 +37,7 @@ export function ConsoleConversationPanel({
   id: string;
   active: boolean;
   commandPanelRef: RefObject<HTMLDivElement | null>;
+  commandInputRef: RefObject<HTMLTextAreaElement | null>;
   activation: ReturnType<typeof useBotActivation>;
   media?: ReactNode;
   conversation: Partial<VikingBotProps>;
@@ -47,7 +49,10 @@ export function ConsoleConversationPanel({
   labels: VikingBotLabels;
 }) {
   const { state } = activation;
-  const recoverFocus = useConsoleFocusRecovery(commandPanelRef);
+  const recoverFocus = useConsoleFocusRecovery(
+    commandPanelRef,
+    commandInputRef,
+  );
   const [visited, setVisited] = useState(active);
   if (active && !visited) setVisited(true);
   const failed =
