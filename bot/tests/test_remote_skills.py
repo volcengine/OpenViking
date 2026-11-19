@@ -34,15 +34,18 @@ def _skill_result(
     stored_content: str | None = None,
     manifest_sha256: str | None = None,
     content_sha256: str | None = None,
+    visible_content: str | None = None,
     stored_content_sha256: str | None = None,
 ) -> dict[str, object]:
     stored = returned_content if stored_content is None else stored_content
     stored_bytes = stored.encode("utf-8")
+    visible = stored if visible_content is None else visible_content
     return {
         "root_uri": root_uri,
         "content": returned_content,
         "content_sha256": content_sha256
         or hashlib.sha256(returned_content.encode("utf-8")).hexdigest(),
+        "visible_content_sha256": hashlib.sha256(visible.encode("utf-8")).hexdigest(),
         "stored_content_sha256": stored_content_sha256 or hashlib.sha256(stored_bytes).hexdigest(),
         "revision": "fixture-revision",
         "files": [
@@ -166,19 +169,25 @@ async def test_privacy_restoration_binds_stored_bytes_to_snapshot_and_manifest(
 @pytest.mark.asyncio
 async def test_activation_response_keeps_privacy_reference_masked(tmp_path, monkeypatch):
     placeholder = "{{ov_privacy:skill:privacy-response:api_key}}"
-    stored_content = _skill_md("privacy-response", f"Use {placeholder}.")
+    stored_content = _skill_md("privacy-response", 'Use "resolved-secret".')
+    read_content = _skill_md("privacy-response", f"Use {placeholder}.")
     restored_content = (
-        stored_content.replace(placeholder, "resolved-secret")
+        stored_content
         + "\n\n[Privacy Config Notice]\napi_key=resolved-secret\nunused=also-secret\n"
     )
     root_uri = "viking://user/demo/skills/privacy-response"
     skill_md_uri = f"{root_uri}/SKILL.md"
     activation_client = FakeClient(
-        _skill_result(root_uri, restored_content, stored_content=stored_content),
+        _skill_result(
+            root_uri,
+            restored_content,
+            stored_content=stored_content,
+            visible_content=read_content,
+        ),
         downloaded=stored_content.encode("utf-8"),
     )
     runtime = _runtime(tmp_path, monkeypatch, activation_client)
-    read_client = SimpleNamespace(read_content=AsyncMock(return_value=stored_content))
+    read_client = SimpleNamespace(read_content=AsyncMock(return_value=read_content))
     tool = VikingMultiReadTool()
     monkeypatch.setattr(tool, "_get_client", AsyncMock(return_value=read_client))
     monkeypatch.setattr(tool, "_release_client", AsyncMock())
@@ -211,16 +220,19 @@ class FakeSandbox:
 
 
 @pytest.mark.asyncio
-async def test_privacy_restoration_materializes_stored_bytes(tmp_path, monkeypatch):
+async def test_privacy_restoration_materializes_verified_masked_read(tmp_path, monkeypatch):
     placeholder = "{{ov_privacy:skill:privacy-materialized:api_key}}"
-    stored_content = _skill_md("privacy-materialized", f"Use {placeholder}.")
-    restored_content = (
-        stored_content.replace(placeholder, "resolved-secret")
-        + "\n\n[Privacy Config Notice]\napi_key=resolved-secret\n"
-    )
+    stored_content = _skill_md("privacy-materialized", 'Use "resolved-secret".')
+    read_content = _skill_md("privacy-materialized", f"Use {placeholder}.")
+    restored_content = stored_content + "\n\n[Privacy Config Notice]\napi_key=resolved-secret\n"
     root_uri = "viking://user/demo/skills/privacy-materialized"
     client = FakeClient(
-        _skill_result(root_uri, restored_content, stored_content=stored_content),
+        _skill_result(
+            root_uri,
+            restored_content,
+            stored_content=stored_content,
+            visible_content=read_content,
+        ),
         downloaded=stored_content.encode("utf-8"),
     )
     config = Config(
@@ -246,12 +258,12 @@ async def test_privacy_restoration_materializes_stored_bytes(tmp_path, monkeypat
         return client
 
     monkeypatch.setattr(runtime, "_get_client", get_client)
-    active = await runtime.activate_from_read(f"{root_uri}/SKILL.md", stored_content)
+    active = await runtime.activate_from_read(f"{root_uri}/SKILL.md", read_content)
     assert active is not None
 
     materialized_root = await runtime.materialize(active)
 
-    assert sandbox.files[f"{materialized_root}/SKILL.md"] == stored_content.encode("utf-8")
+    assert sandbox.files[f"{materialized_root}/SKILL.md"] == read_content.encode("utf-8")
     cached_definitions = list((tmp_path / "bot" / "remote_skill_cache").rglob("SKILL.md"))
     assert len(cached_definitions) == 1
     cached_content = cached_definitions[0].read_text(encoding="utf-8")
@@ -316,12 +328,18 @@ async def test_restoration_enforces_stored_definition_limit(tmp_path, monkeypatc
 
 @pytest.mark.asyncio
 async def test_restoration_accepts_sanitized_read_trigger(tmp_path, monkeypatch):
-    stored_content = _skill_md("restoration-binding", "Run the reviewed workflow.")
-    restored_content = _skill_md("restoration-binding", "Run the reviewed workflow with value.")
-    sanitized_trigger = _skill_md("restoration-binding", "Sanitized transport read.")
+    placeholder = "{{ov_privacy:skill:restoration-binding:api_key}}"
+    stored_content = _skill_md("restoration-binding", 'Run with "resolved-secret".')
+    restored_content = stored_content
+    sanitized_trigger = _skill_md("restoration-binding", f"Run with {placeholder}.")
     root_uri = "viking://user/demo/skills/restoration-binding"
     client = FakeClient(
-        _skill_result(root_uri, restored_content, stored_content=stored_content),
+        _skill_result(
+            root_uri,
+            restored_content,
+            stored_content=stored_content,
+            visible_content=sanitized_trigger,
+        ),
         downloaded=stored_content.encode("utf-8"),
     )
     runtime = _runtime(tmp_path, monkeypatch, client)
@@ -329,8 +347,45 @@ async def test_restoration_accepts_sanitized_read_trigger(tmp_path, monkeypatch)
     active = await runtime.activate_from_read(f"{root_uri}/SKILL.md", sanitized_trigger)
 
     assert active is not None
-    assert active.content == stored_content
-    assert "Sanitized transport read" not in active.content
+    assert active.content == sanitized_trigger
+    assert "resolved-secret" not in active.content
+    assert placeholder in active.content
+
+
+@pytest.mark.asyncio
+async def test_restoration_requires_visible_read_checksum(tmp_path, monkeypatch):
+    stored_content = _skill_md("missing-visible-checksum", "Run the reviewed workflow.")
+    restored_content = _skill_md("missing-visible-checksum", "Run the restored workflow.")
+    root_uri = "viking://user/demo/skills/missing-visible-checksum"
+    result = _skill_result(root_uri, restored_content, stored_content=stored_content)
+    result.pop("visible_content_sha256")
+    client = FakeClient(result, downloaded=stored_content.encode("utf-8"))
+    runtime = _runtime(tmp_path, monkeypatch, client)
+
+    with pytest.raises(SkillRuntimeError) as caught:
+        await runtime.activate_from_read(f"{root_uri}/SKILL.md", stored_content)
+
+    assert caught.value.code == "SKILL_INTEGRITY_UNAVAILABLE"
+    assert client.downloaded == []
+
+
+@pytest.mark.asyncio
+async def test_restoration_rejects_read_from_stale_snapshot(tmp_path, monkeypatch):
+    original = _skill_md("stale-read", "Run version one.")
+    current = _skill_md("stale-read", "Run version two.")
+    root_uri = "viking://user/demo/skills/stale-read"
+    client = FakeClient(
+        _skill_result(root_uri, current, stored_content=current),
+        downloaded=current.encode("utf-8"),
+    )
+    runtime = _runtime(tmp_path, monkeypatch, client)
+
+    with pytest.raises(SkillRuntimeError) as caught:
+        await runtime.activate_from_read(f"{root_uri}/SKILL.md", original)
+
+    assert caught.value.code == "SKILL_REVISION_CHANGED"
+    assert "Initial SKILL.md read" in str(caught.value)
+    assert client.downloaded == []
 
 
 @pytest.mark.asyncio

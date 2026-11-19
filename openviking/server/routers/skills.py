@@ -505,6 +505,10 @@ async def _read_skill_detail(
             result["content"] = content
             result["content_sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
             if include_integrity:
+                visible_content = await service.fs.read_visible(_skill_md_uri(root_uri), ctx=ctx)
+                result["visible_content_sha256"] = hashlib.sha256(
+                    visible_content.encode("utf-8")
+                ).hexdigest()
                 stored_content = await service.fs.read_file_bytes(_skill_md_uri(root_uri), ctx=ctx)
                 result["stored_content_sha256"] = hashlib.sha256(stored_content).hexdigest()
         if include_files:

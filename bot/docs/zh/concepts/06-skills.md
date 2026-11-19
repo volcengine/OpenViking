@@ -82,7 +82,7 @@ VikingBot 支持活动 Workspace 中的本地 Skill，以及保存在 OpenViking
 }
 ```
 
-激活会解析 frontmatter，并通过 `get_skill(include_integrity=true)` 校验正文、canonical URI、revision 和文件清单。此时不下载辅助文件。Privacy 恢复使详情正文与读取通道返回的字节不一致时，服务端会在同一快照锁内返回 `stored_content_sha256`；激活会下载存储层的 `SKILL.md`，并要求下载字节的哈希同时匹配该快照哈希和 `files["SKILL.md"].sha256`，不再比较读取层正文与恢复后正文的结构。模型收到、写入 sandbox 和主机缓存的仍是存储层正文，因此恢复后的 Privacy 值及 Privacy 提示都不会外发。模型收到的正文附带包内相对路径与 canonical URI 的映射。激活需要完整正文并保持默认 `offset=0, limit=-1`；窗口读取只返回请求范围，不能激活定义。当前读取工具默认拒绝完整返回超过 512 KiB 的文件，因此应将大段参考资料拆到辅助文件。
+激活会解析 frontmatter，并通过 `get_skill(include_integrity=true)` 校验正文、canonical URI、revision 和文件清单。除非详情正文与初次读取不同，此时不会下载辅助文件；发生差异时，服务端会在同一快照锁内返回 `visible_content_sha256` 和 `stored_content_sha256`。激活先要求初次读取的哈希匹配 `visible_content_sha256`，再下载存储层的 `SKILL.md`，并要求下载字节的哈希同时匹配 `stored_content_sha256` 和 `files["SKILL.md"].sha256`。校验通过的初次读取仍作为模型收到、写入 sandbox 和主机缓存的定义，因此读取时新打码的值、恢复后的 Privacy 值及 Privacy 提示都不会通过激活路径外发。模型收到的正文附带包内相对路径与 canonical URI 的映射。激活需要完整正文并保持默认 `offset=0, limit=-1`；窗口读取只返回请求范围，不能激活定义。当前读取工具默认拒绝完整返回超过 512 KiB 的文件，因此应将大段参考资料拆到辅助文件。
 
 如果模型在同一批中同时请求读取定义和执行其他工具，运行时先处理激活，其余调用返回 `SKILL_CONTEXT_UPDATED`，由模型在新 Schema 下重试；激活失败时返回 `SKILL_ACTIVATION_FAILED`，不执行同批普通工具。
 

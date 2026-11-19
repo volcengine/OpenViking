@@ -114,6 +114,7 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert len(shown["revision"]) == 64
     assert len(shown["content_sha256"]) == 64
     [definition] = [file for file in shown["files"] if file["path"] == "SKILL.md"]
+    assert len(shown["visible_content_sha256"]) == 64
     assert shown["stored_content_sha256"] == definition["sha256"]
     assert all(
         file.get("is_dir") or (file.get("size") is not None and len(file.get("sha256", "")) == 64)
@@ -700,6 +701,56 @@ async def test_skills_api_add_accepts_source_metadata_override(client, monkeypat
     assert len(downloads) == count
 
 
+async def test_skills_api_binds_read_time_masked_content_to_stored_snapshot(client, service):
+    owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await patch_user_config(
+        service.viking_fs, owner, UserSettingsPatch.model_validate({"privacy": {"mode": "off"}})
+    )
+    name = "late-masked-skill"
+    secret = "ghp_lateMaskedCredential1234567890"
+    created = await client.post(
+        "/api/v1/skills",
+        json={
+            "data": _skill_md(name, "Late masked skill", f'key="{secret}"'),
+            "wait": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    root = created.json()["result"]["root_uri"]
+
+    seeded = await client.post(
+        f"/api/v1/privacy-configs/skill/{name}",
+        json={"values": {"api_key": secret}, "change_reason": "registered after upload"},
+    )
+    assert seeded.status_code == 200, seeded.text
+    await patch_user_config(
+        service.viking_fs,
+        owner,
+        UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}}),
+    )
+
+    stored = await service.viking_fs.read_file(root + "/SKILL.md", ctx=owner)
+    visible = await service.fs.read_visible(root + "/SKILL.md", ctx=owner)
+    read_response = await client.get("/api/v1/content/read", params={"uri": root + "/SKILL.md"})
+    assert read_response.status_code == 200, read_response.text
+    assert read_response.json()["result"] == visible
+    assert secret in stored
+    assert secret not in visible
+    assert "{{ov_privacy:" in visible
+
+    detail = (
+        await client.get(
+            "/api/v1/skills/" + name,
+            params={"include_files": True, "include_integrity": True},
+        )
+    ).json()["result"]
+    [definition] = [item for item in detail["files"] if item["path"] == "SKILL.md"]
+    assert detail["visible_content_sha256"] == hashlib.sha256(visible.encode()).hexdigest()
+    assert detail["stored_content_sha256"] == hashlib.sha256(stored.encode()).hexdigest()
+    assert detail["stored_content_sha256"] == definition["sha256"]
+    assert detail["visible_content_sha256"] != detail["stored_content_sha256"]
+
+
 async def test_skills_api_update_accepts_binary_files_and_separates_privacy_layers(client, service):
     from openviking.privacy.skill_placeholder import build_placeholder
 
@@ -742,6 +793,7 @@ async def test_skills_api_update_accepts_binary_files_and_separates_privacy_laye
     current = await service.privacy_configs.get_current(owner, "skill", name)
     [field] = current.values
     placeholder = build_placeholder(name, field)
+
     skill_definition = f"""---
 name: {name}
 description: 'issued to {placeholder}'
@@ -765,6 +817,7 @@ key="{placeholder}"
     current = await service.privacy_configs.get_current(owner, "skill", name)
     stored = await service.viking_fs.read_file(root + "/SKILL.md", ctx=owner)
     restored = await service.fs.read(root + "/SKILL.md", ctx=owner)
+    visible = await service.fs.read_visible(root + "/SKILL.md", ctx=owner)
     detail = (
         await client.get(
             "/api/v1/skills/" + name,
@@ -779,6 +832,7 @@ key="{placeholder}"
     assert "[Privacy Config Notice]" in restored
     assert "UnusedSetting99" in restored
     assert detail["content_sha256"] == hashlib.sha256(restored.encode()).hexdigest()
+    assert detail["visible_content_sha256"] == hashlib.sha256(visible.encode()).hexdigest()
     assert detail["stored_content_sha256"] == hashlib.sha256(stored.encode()).hexdigest()
     assert detail["stored_content_sha256"] == definition["sha256"]
     assert definition["sha256"] == hashlib.sha256(stored.encode()).hexdigest()

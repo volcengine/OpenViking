@@ -148,7 +148,7 @@ class ActiveRemoteSkill:
     description: str
     root_uri: str
     skill_md_uri: str
-    # Stored, model-safe bytes. Privacy references remain unresolved here.
+    # Model-safe bytes from the verified read snapshot of this package revision.
     content: str
     source: str
     files: dict[str, RemoteSkillFile]
@@ -480,11 +480,12 @@ class SkillRuntimeContext:
     async def activate_from_read(self, uri: str, content: str) -> ActiveRemoteSkill | None:
         """Activate a Skill after an OpenViking read reaches its SKILL.md.
 
-        Privacy restoration can make the detail content differ from the bytes
-        read by the transport. In that case the stored bytes are bound to both
-        the server's snapshot hash and the file manifest. The stored
-        representation remains the model-facing and materialized definition so
-        resolved Privacy values and Privacy notices never leave storage.
+        Privacy handling can make the detail content differ from the bytes read
+        by the transport. In that case the initial read is bound to the current
+        visible snapshot, while the stored bytes are bound to both the server's
+        snapshot hash and the file manifest. The verified initial read remains
+        the model-facing and materialized definition so read-time masks,
+        resolved Privacy values, and Privacy notices never leave the Bot.
         """
         if not self.is_skill_definition_uri(uri):
             self.note_remote_read(uri)
@@ -524,9 +525,9 @@ class SkillRuntimeContext:
                     "OpenViking did not return the canonical SKILL.md content",
                 )
             canonical_bytes = canonical_content.encode("utf-8")
-            content_was_restored = canonical_content != content
+            content_differs_from_read = canonical_content != content
             if len(canonical_bytes) > self.settings.max_file_bytes:
-                if not content_was_restored:
+                if not content_differs_from_read:
                     raise SkillRuntimeError(
                         "SKILL_PACKAGE_TOO_LARGE", "Remote SKILL.md exceeds the file limit"
                     )
@@ -599,8 +600,20 @@ class SkillRuntimeContext:
                 raise SkillRuntimeError(
                     "SKILL_INVALID", "OpenViking Skill manifest is missing SKILL.md"
                 )
-            stored_content = content
-            if content_was_restored:
+            definition_content = content
+            if content_differs_from_read:
+                visible_content_checksum = str(result.get("visible_content_sha256") or "").strip()
+                if re.fullmatch(r"[0-9a-f]{64}", visible_content_checksum) is None:
+                    raise SkillRuntimeError(
+                        "SKILL_INTEGRITY_UNAVAILABLE",
+                        "OpenViking did not return a visible SKILL.md content checksum",
+                    )
+                read_checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                if read_checksum != visible_content_checksum:
+                    raise SkillRuntimeError(
+                        "SKILL_REVISION_CHANGED",
+                        "Initial SKILL.md read does not match the current stored snapshot",
+                    )
                 stored_content_checksum = str(result.get("stored_content_sha256") or "").strip()
                 if re.fullmatch(r"[0-9a-f]{64}", stored_content_checksum) is None:
                     raise SkillRuntimeError(
@@ -624,17 +637,11 @@ class SkillRuntimeContext:
                         "SKILL_REVISION_CHANGED",
                         "Stored SKILL.md does not match the snapshot integrity metadata",
                     )
-                try:
-                    stored_content = stored_bytes.decode("utf-8")
-                except UnicodeDecodeError as exc:
-                    raise SkillRuntimeError(
-                        "SKILL_INVALID", "Stored SKILL.md is not valid UTF-8"
-                    ) from exc
             else:
                 self._validate_downloaded_file(definition, content.encode("utf-8"))
 
             try:
-                parsed = SkillLoader.parse(stored_content, source_path=skill_md_uri)
+                parsed = SkillLoader.parse(definition_content, source_path=skill_md_uri)
             except Exception as exc:
                 raise SkillRuntimeError("SKILL_INVALID", str(exc)) from exc
             parsed_name = str(parsed.get("name") or "").strip()
@@ -649,7 +656,7 @@ class SkillRuntimeContext:
                 description=str(parsed.get("description") or ""),
                 root_uri=root_uri,
                 skill_md_uri=skill_md_uri,
-                content=stored_content,
+                content=definition_content,
                 source=_source_for_uri(root_uri),
                 files=files,
                 allowed_tools=tuple(str(value) for value in parsed.get("allowed_tools") or []),
