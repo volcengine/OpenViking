@@ -16,6 +16,19 @@ export function mentionPattern(keyword: string) {
   return `**/*${parts.join('/')}*`;
 }
 
+/** A compile Skill search returns its entry file, matched by filename or directory. */
+export function compileSkillPatterns(keyword: string) {
+  const pattern = mentionPattern(keyword);
+  const segments = keyword.split('/');
+  const filename = segments.pop()!.toLowerCase();
+  if (!'skill.md'.includes(filename)) return [`${pattern}/SKILL.md`];
+  if (segments.length === 0) return ['**/SKILL.md'];
+  return [
+    `${pattern}/SKILL.md`,
+    `${mentionPattern(segments.join('/'))}/SKILL.md`,
+  ];
+}
+
 /** Keep the ancestors in search results without making inferred paths selectable. */
 export function mentionSearchRows(matches: unknown) {
   if (!Array.isArray(matches)) throw new Error('Invalid file search response');

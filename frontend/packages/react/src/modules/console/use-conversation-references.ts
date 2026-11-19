@@ -11,6 +11,7 @@ import type {
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import {
+  compileSkillPatterns,
   mentionPattern,
   mentionSearchRows,
   MENTION_ROOT,
@@ -133,18 +134,25 @@ export function useConversationReferences({
       : controller.signal;
     const timer = setTimeout(() => {
       const roots = searchSkills ? skillSearchRoots : [MENTION_ROOT];
-      const pattern = searchSkills
-        ? `**/*${keyword.replace(/[*?[\]{}\\]/g, (char) => `[${char}]`)}*/**`
-        : mentionPattern(keyword);
+      const patterns = searchSkills
+        ? compileSkillPatterns(keyword)
+        : [mentionPattern(keyword)];
+      const queries = roots.flatMap((uri) =>
+        patterns.map((pattern) => ({
+          uri,
+          pattern,
+          node_limit: searchSkills ? 256 : 100,
+        })),
+      );
       void Promise.all(
-        roots.map(async (uri) => {
+        queries.map(async (body) => {
           try {
             const { matches } = await scope.client.request<{
               matches: unknown;
             }>({
               method: 'POST',
               path: OV_PATHS.searchGlob,
-              body: { uri, pattern, node_limit: searchSkills ? 256 : 100 },
+              body,
               options: { ...scope.options, signal: requestSignal },
             });
             if (!Array.isArray(matches))
