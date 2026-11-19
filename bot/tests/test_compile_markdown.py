@@ -12,18 +12,23 @@ from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
-from vikingbot.compile import file_ops, simple
+from vikingbot.compile import simple
 from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
-from vikingbot.compile.ops import map as map_op
 from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import DraftDeleteTool, TargetReader, agent_runner
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS
 from vikingbot.compile.plan import Contract, PlanProposal, Transform, parse_plan
-from vikingbot.compile.results import Document, Group, IncompleteWorkerOutput, RouteResponse, Source
+from vikingbot.compile.results import (
+    Document,
+    Group,
+    IncompleteWorkerOutput,
+    InvalidWorkerOutput,
+    RouteResponse,
+)
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.sources import split_source
 from vikingbot.config.schema import Config, SessionKey
@@ -180,7 +185,7 @@ async def configure_pipeline(pipeline, merge=False, fail_second=False):
         )
         if fail_second and len(calls) == 2:
             raise ValueError("Worker stopped after a partial write")
-        return await file_ops.collect_outputs(pipeline, root, stage)
+        return await pipeline.collect_outputs(root, stage)
 
     pipeline.model.agent_runner = worker
     return calls
@@ -189,6 +194,16 @@ async def configure_pipeline(pipeline, merge=False, fail_second=False):
 async def sources(count=2):
     for index in range(count):
         yield split_source(f"viking://resources/source/{index}.md", f"Fact {index}", 1000)
+
+
+def tool_reply(*calls):
+    return LLMResponse(
+        content="",
+        tool_calls=[
+            ToolCallRequest(call_id, name, arguments, index)
+            for index, (call_id, name, arguments) in enumerate(calls)
+        ],
+    )
 
 
 async def test_map_only_collects_only_completed_output_directories(pipeline):
@@ -200,42 +215,33 @@ async def test_map_only_collects_only_completed_output_directories(pipeline):
     assert (await pipeline.files.get("summary"))["prepared"] is False
 
 
-async def test_map_does_not_retry_completion_backend_error(pipeline, agent_loop, monkeypatch):
+async def test_worker_does_not_retry_completion_backend_error(pipeline, agent_loop, monkeypatch):
     loop, key, _ = agent_loop
-    source = Source("source-0", {"uri": "viking://resources/source/0.md", "start_char": 0})
     error = ValueError("directory inventory backend failed")
-    limits = pipeline.limits.model_copy(update={"subagent_iterations": 2})
-    pipeline.model.provider.chat = AsyncMock(
-        return_value=LLMResponse(content="Done", finish_reason="stop")
-    )
+    pipeline.model.provider.chat = chat = AsyncMock(return_value=LLMResponse("Done"))
     monkeypatch.setattr(pipeline.files.sandbox, "list_files", AsyncMock(side_effect=error))
-    pipeline.model.agent_runner = AsyncMock(wraps=agent_runner(loop, key, None, limits))
-    node = parse_plan(MAP_ONLY, pipeline.contract)[0]
+    pipeline.model.agent_runner = agent_runner(loop, key, None, pipeline.limits)
 
-    assert await map_op.run(pipeline, node, [source]) == []
-    pipeline.model.agent_runner.assert_awaited_once()
-    assert pipeline.status[source.source_id] == "failed"
-    assert any(str(error) in failure for failure in pipeline.failures)
+    with pytest.raises(ValueError) as caught:
+        await pipeline.generate("map-0", "Write Markdown", {}, [])
+    assert caught.value is error
+    chat.assert_awaited_once()
     assert pipeline.metrics["repairs"] == 0
 
 
 async def test_worker_reports_validation_error_after_exhausting_recovery(pipeline, agent_loop):
     loop, key, _ = agent_loop
     limits = pipeline.limits.model_copy(update={"subagent_iterations": 2})
-    writes = LLMResponse(
-        content="",
-        tool_calls=[
-            ToolCallRequest("scratch", "write_file", {"path": "notes.bak", "content": "draft"}, 0)
-        ],
+    write = tool_reply(("scratch", "write_file", {"path": "notes.bak", "content": "draft"}))
+    pipeline.model.provider.chat = chat = AsyncMock(
+        side_effect=[write, LLMResponse("Done")] * MAX_JOB_ATTEMPTS
     )
-    done = LLMResponse(content="Done", finish_reason="stop")
-    pipeline.model.provider.chat = AsyncMock(side_effect=[writes, done] * MAX_JOB_ATTEMPTS)
-    pipeline.model.agent_runner = runner = AsyncMock(wraps=agent_runner(loop, key, None, limits))
+    pipeline.model.agent_runner = agent_runner(loop, key, None, limits)
 
     with pytest.raises(IncompleteWorkerOutput, match="Output must be nonempty Markdown: notes.bak"):
         await pipeline.generate("map-0", "Write final Markdown only", {}, [])
 
-    assert runner.await_count == MAX_JOB_ATTEMPTS
+    assert chat.await_count == 2 * MAX_JOB_ATTEMPTS
     assert pipeline.metrics["repairs"] == MAX_JOB_ATTEMPTS - 1
 
 
@@ -286,7 +292,7 @@ async def test_file_worker_uses_existing_tools_without_emit(
             ),
         )
     if ending == "budget":
-        replies *= 4
+        replies *= MAX_JOB_ATTEMPTS
     else:
         replies.extend(
             [
@@ -306,8 +312,8 @@ async def test_file_worker_uses_existing_tools_without_emit(
     if ending == "success":
         body = "# Original\n\n" + "a" * 5_000 + "\nMIDDLE FACT: limit is 37 kg.\n" + "b" * 5_000
         await pipeline.files.sandbox.write_file("original.md", body)
-        collect = AsyncMock(wraps=file_ops.collect_outputs)
-        monkeypatch.setattr(file_ops, "collect_outputs", collect)
+        collect = AsyncMock(wraps=pipeline.collect_outputs)
+        monkeypatch.setattr(pipeline, "collect_outputs", collect)
         source_refs = [f"{index:064x}" for index in range(138)]
         data = {
             "inputs": [{"payload": {"source_ranges": source_refs}}],
@@ -331,20 +337,15 @@ async def test_file_worker_uses_existing_tools_without_emit(
         with pytest.raises(error_type):
             await pipeline.generate("map-0", "Generate Markdown", {"inputs": []}, [])
         if ending == "budget":
-            assert pipeline.model.provider.chat.await_count == 4
+            assert pipeline.model.provider.chat.await_count == MAX_JOB_ATTEMPTS
     for call in pipeline.model.provider.chat.await_args_list:
         names = {t["function"]["name"] for t in call.kwargs["tools"]}
         assert {"read_file", "write_file", "edit_file"} <= names
         assert "emit" not in names
 
 
-@pytest.mark.parametrize(
-    ("input_path", "output_path"),
-    [("assignment.json", "ASSIGNMENT.JSON"), ("inputs/0.md", "Inputs/0.md")],
-)
-async def test_worker_output_paths_and_readonly_inputs(
-    pipeline, agent_loop, input_path, output_path
-):
+@pytest.mark.parametrize("input_path", ["assignment.json", "inputs/0.md"])
+async def test_worker_output_paths_and_readonly_inputs(pipeline, agent_loop, input_path):
     loop, key, manager = agent_loop
     root = "__compile_staging__/drafts/private"
     aliases = {input_path: f"{root}/{input_path}"}
@@ -358,6 +359,7 @@ async def test_worker_output_paths_and_readonly_inputs(
     delete = CompileChildTool(DraftDeleteTool(sandbox, output_root), **options)
     context = ToolContext(session_key=key, sandbox_manager=manager)
     await sandbox.write_file(aliases[input_path], "input")
+    output_path = input_path.upper()
     await write.execute(context, path=f".//{output_path}", content="before")
     await edit.execute(context, path=output_path, old_text="before", new_text="after")
     assert await read.execute(context, path=output_path) == "after"
@@ -609,16 +611,10 @@ async def test_file_collection_rejects_missing_empty_nonmarkdown_and_invalid_utf
     pipeline, path, content
 ):
     root = "__compile_staging__/drafts/invalid/output"
-
-    async def worker(*args, **kwargs):
-        if path is not None:
-            await pipeline.files.sandbox.write_file_bytes(root + "/" + path, content)
-        return await file_ops.collect_outputs(pipeline, root, "invalid")
-
-    pipeline.model.agent_runner = worker
-    with pytest.raises(ValueError):
-        await pipeline.generate("map-0", "Write Markdown.", {}, [])
-    assert pipeline.artifacts == []
+    if path is not None:
+        await pipeline.files.sandbox.write_file_bytes(f"{root}/{path}", content)
+    with pytest.raises(InvalidWorkerOutput):
+        await pipeline.collect_outputs(root, "invalid")
 
 
 async def test_routing_history_rejects_files_outside_to(pipeline):
@@ -809,25 +805,15 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
 async def test_file_worker_can_remove_obsolete_outputs_before_completion(pipeline, agent_loop):
     loop, key, _ = agent_loop
     stale_path = "Inputs/notes.bak"
-    done = LLMResponse(content="Done", finish_reason="stop")
+    done = LLMResponse("Done")
     chat = pipeline.model.provider.chat = AsyncMock(
         side_effect=[
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        "old", "write_file", {"path": stale_path, "content": "draft"}, 0
-                    ),
-                    ToolCallRequest(
-                        "new", "write_file", {"path": "fact.md", "content": "# Fact"}, 1
-                    ),
-                ],
+            tool_reply(
+                ("old", "write_file", {"path": stale_path, "content": "draft"}),
+                ("new", "write_file", {"path": "fact.md", "content": "# Fact"}),
             ),
             done,
-            LLMResponse(
-                content="",
-                tool_calls=[ToolCallRequest("delete", "delete_file", {"path": stale_path}, 0)],
-            ),
+            tool_reply(("delete", "delete_file", {"path": stale_path})),
             done,
         ]
     )
@@ -873,12 +859,7 @@ async def test_remote_worker_delete_quotes_a_single_nonrecursive_file(pipeline):
     tool = DraftDeleteTool(sandbox, "private/output")
     path = "private/output/obsolete ' $(touch injected).md"
     await tool.execute(None, path)
-    assert shlex.split(sandbox.execute.await_args.args[0]) == [
-        "rm",
-        "-f",
-        "--",
-        path,
-    ]
+    assert shlex.split(sandbox.execute.await_args.args[0]) == ["rm", "-f", "--", path]
 
 
 async def test_reduce_recovers_spent_worker_without_selecting_partial_files(pipeline, agent_loop):
@@ -890,30 +871,12 @@ async def test_reduce_recovers_spent_worker_without_selecting_partial_files(pipe
     pipeline.status["source-0"] = "prepared"
     chat = pipeline.model.provider.chat = AsyncMock(
         side_effect=[
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        "partial", "write_file", {"path": "partial.md", "content": "# Partial"}, 0
-                    )
-                ],
+            tool_reply(("partial", "write_file", {"path": "partial.md", "content": "# Partial"})),
+            tool_reply(("read", "read_file", {"path": "inputs/0.md"})),
+            tool_reply(
+                ("complete", "write_file", {"path": "complete.md", "content": "# Complete"})
             ),
-            LLMResponse(
-                content="",
-                tool_calls=[ToolCallRequest("read", "read_file", {"path": "inputs/0.md"}, 0)],
-            ),
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        "complete",
-                        "write_file",
-                        {"path": "complete.md", "content": "# Complete"},
-                        0,
-                    )
-                ],
-            ),
-            LLMResponse(content="Done", finish_reason="stop"),
+            LLMResponse("Done"),
         ]
     )
     pipeline.model.agent_runner = agent_runner(loop, key, None, limits)

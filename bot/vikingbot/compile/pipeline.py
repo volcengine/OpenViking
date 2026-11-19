@@ -10,17 +10,17 @@ from typing import Any
 from loguru import logger
 
 from openviking.core.namespace import classify_uri
-from openviking.utils.path_safety import safe_join_viking_uri
+from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
 from vikingbot.compile.hashing import content_hash, digest
-from vikingbot.compile.models import CompileFailure, has_directory_plan, utc_now
+from vikingbot.compile.models import COMPILE_DRAFT_ROOT, CompileFailure, has_directory_plan, utc_now
 from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.ops import map as map_op
 from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, JsonModel, TaskFiles, bounded_jobs
 from vikingbot.compile.plan import PLANNING_RULES, PlanProposal, parse_plan
-from vikingbot.compile.renderer import RenderedBundle
-from vikingbot.compile.results import Document, IncompleteWorkerOutput, Source
+from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
+from vikingbot.compile.results import Document, IncompleteWorkerOutput, InvalidWorkerOutput, Source
 from vikingbot.compile.review import run as review_stage
 from vikingbot.compile.skill_resources import SkillResources
 
@@ -129,6 +129,32 @@ class Pipeline:
             runtime=self,
         )
         return [replace(document, source_refs=list(source_refs)) for document in outputs]
+
+    async def collect_outputs(self, root: str, stage: str) -> list[Document]:
+        """Validate the worker's private directory before accepting its final reply."""
+        root = sanitize_relative_viking_path(root)
+        if not root.startswith(COMPILE_DRAFT_ROOT + "/") or not root.endswith("/output"):
+            raise ValueError("Invalid private worker output directory")
+        documents = []
+        prefix = root + "/"
+        for entry in await self.files.sandbox.list_files(root, max_entries=None):
+            if not entry.path.startswith(prefix):
+                raise ValueError("Worker output is outside its private output directory")
+            try:
+                path = validate_relative_file_path(entry.path[len(prefix) :])
+            except ValueError as error:
+                raise InvalidWorkerOutput(str(error)) from error
+            payload = await self.files.sandbox.read_file_bytes(entry.path)
+            try:
+                content = payload.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise InvalidWorkerOutput(f"Output must be UTF-8 Markdown: {path}") from error
+            if not path.lower().endswith(".md") or not content.strip():
+                raise InvalidWorkerOutput(f"Output must be nonempty Markdown: {path}")
+            documents.append(Document(path, entry.path))
+        if not documents and not (has_directory_plan(self.changes) and self.changes.get("head")):
+            raise InvalidWorkerOutput(f"{stage}: worker completed without Markdown files")
+        return documents
 
     async def run(self, batches) -> RenderedBundle:
         """Prepare inputs, validate a plan, execute selected stages, and retain honest diagnostics."""

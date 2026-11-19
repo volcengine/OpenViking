@@ -17,7 +17,7 @@ from vikingbot.compile import file_ops
 from vikingbot.compile.models import COMPILE_DRAFT_ROOT
 from vikingbot.compile.pipeline_io import retry_allowed
 from vikingbot.compile.renderer import validate_relative_file_path
-from vikingbot.compile.results import Document, IncompleteWorkerOutput
+from vikingbot.compile.results import Document, IncompleteWorkerOutput, InvalidWorkerOutput
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.providers.base import LLMProvider
 
@@ -171,14 +171,14 @@ def agent_runner(loop, session_key, connection, limits):
         child._preview_tool_result = complete_tool_result
 
         completed_outputs: list[Document] | None = None
-        validation_error: file_ops.InvalidWorkerOutput | None = None
+        validation_error: InvalidWorkerOutput | None = None
         completion_error: Exception | None = None
 
         async def check_completion(context):
             nonlocal completed_outputs, validation_error, completion_error
             try:
-                completed_outputs = await file_ops.collect_outputs(runtime, output_root, stage)
-            except file_ops.InvalidWorkerOutput as error:
+                completed_outputs = await runtime.collect_outputs(output_root, stage)
+            except InvalidWorkerOutput as error:
                 validation_error = error
                 messages = child.context.add_assistant_message(context.messages, context.text, [])
                 messages.append(

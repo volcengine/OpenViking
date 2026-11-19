@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import base64
 import json
+from typing import TYPE_CHECKING
 
 from openviking.core.skill_loader import validate_skill_format
-from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
+from openviking.utils.path_safety import safe_join_viking_uri
 from openviking_cli.exceptions import OpenVikingError
-from vikingbot.compile.models import COMPILE_DRAFT_ROOT, has_directory_plan
 from vikingbot.compile.renderer import validate_relative_file_path
-from vikingbot.compile.results import Document
+
+if TYPE_CHECKING:
+    from vikingbot.compile.pipeline import Pipeline
 
 
 def encode_content(value: str | bytes) -> dict:
@@ -33,38 +35,7 @@ def file_bytes(file: dict) -> bytes:
     return text.encode("utf-8") if text is not None else base64.b64decode(encoded, validate=True)
 
 
-class InvalidWorkerOutput(ValueError):
-    """Private output that the current worker can repair."""
-
-
-async def collect_outputs(runtime, root, stage) -> list[Document]:
-    """Validate a private worker's complete directory without hiding invalid files."""
-    root = sanitize_relative_viking_path(root)
-    if not root.startswith(COMPILE_DRAFT_ROOT + "/") or not root.endswith("/output"):
-        raise ValueError("Invalid private worker output directory")
-    documents = []
-    prefix = root + "/"
-    for entry in await runtime.files.sandbox.list_files(root, max_entries=None):
-        if not entry.path.startswith(prefix):
-            raise ValueError("Worker output is outside its private output directory")
-        try:
-            path = validate_relative_file_path(entry.path[len(prefix) :])
-        except ValueError as error:
-            raise InvalidWorkerOutput(str(error)) from error
-        payload = await runtime.files.sandbox.read_file_bytes(entry.path)
-        try:
-            content = payload.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise InvalidWorkerOutput(f"Output must be UTF-8 Markdown: {path}") from error
-        if not path.lower().endswith(".md") or not content.strip():
-            raise InvalidWorkerOutput(f"Output must be nonempty Markdown: {path}")
-        documents.append(Document(path, entry.path))
-    if not documents and not (has_directory_plan(runtime.changes) and runtime.changes.get("head")):
-        raise InvalidWorkerOutput(f"{stage}: worker completed without Markdown files")
-    return documents
-
-
-async def load_old(runtime, path: str) -> str | bytes | None:
+async def load_old(runtime: Pipeline, path: str) -> str | bytes | None:
     """Read a selected target body once in this execution; only NOT_FOUND means absence."""
     path = validate_relative_file_path(path)
     if path not in runtime.old:
