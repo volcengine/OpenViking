@@ -118,7 +118,9 @@ function ScopePicker({
                 type="button"
                 className="ov-file-browser-search__scope-choice"
                 onClick={back}
-                aria-label={parents.at(-2) ?? text.searchScopes}
+                aria-label={formatVikingUriLabel(
+                  parents.at(-2) ?? text.searchScopes,
+                )}
               >
                 ←
               </button>
@@ -148,7 +150,11 @@ function ScopePicker({
               onClick={() => browse(directory)}
             >
               <FolderIcon aria-hidden="true" />
-              <span>{uri ? displayNameFromUri(directory) : directory}</span>
+              <span>
+                {uri
+                  ? displayNameFromUri(directory)
+                  : formatVikingUriLabel(directory)}
+              </span>
               <ChevronIcon aria-hidden="true" />
             </button>
           ))}

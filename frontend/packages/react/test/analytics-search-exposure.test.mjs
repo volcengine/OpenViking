@@ -43,7 +43,7 @@ for (const hits of [
           onRetry() {},
           onOpen() {},
           loading: false,
-          error: null,
+          failure: null,
           searched: true,
           text,
         }),
