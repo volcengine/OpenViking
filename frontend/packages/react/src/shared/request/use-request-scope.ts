@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { scopeKeyOf, type RequestScope } from './fs-scope.js';
@@ -11,7 +11,7 @@ import { scopeKeyOf, type RequestScope } from './fs-scope.js';
  *
  * 中止是**传输副作用**，只在提交之后做，不在渲染里做：React 可以放弃一次渲染
  * （`startTransition` + Suspense 就会），渲染里中止会把仍在屏幕上的那棵树的在途
- * 请求杀掉。渲染里只记下「期望的作用域键」，请求回来时用它判断结果是否过期。
+ * 请求杀掉。渲染只计算作用域键，由布局提交发布它，使异步结果及时识别旧作用域。
  *
  * The request scope: the client instance, root, per-request identity overrides
  * and local view scope.
@@ -22,7 +22,7 @@ import { scopeKeyOf, type RequestScope } from './fs-scope.js';
  * Aborting is a **transport side effect** and happens only after commit, never during
  * render: React may abandon a render (`startTransition` with Suspense does), and
  * aborting there would kill the in-flight requests of the tree still on screen. Render
- * only records the *desired* scope key, which a returning request compares against.
+ * only computes the desired key; layout commit publishes it before async work resumes.
  */
 export interface RequestScopeHandle {
   /**
@@ -51,10 +51,10 @@ export function useRequestScope(
     viewScopeKey === undefined
       ? requestKey
       : JSON.stringify([requestKey, viewScopeKey]);
-  // 渲染期不写任何 ref：作用域身份只在下面的 effect 里发布，也就是提交之后。
+  // 渲染期不写任何 ref：作用域身份只在下面的 layout effect 里发布，也就是提交之后。
   // `startTransition` + Suspense 放弃的那次渲染因此不会改动它。
   //
-  // No ref is written during render: the scope identity is published in the effect
+  // No ref is written during render: the scope identity is published in the layout effect
   // below, after commit, so a render abandoned by `startTransition` with Suspense
   // cannot change it.
   const scopeRef = useRef<RequestScope>({
@@ -65,23 +65,20 @@ export function useRequestScope(
     current: () => scopeRef.current,
   });
 
-  // useEffect 必要性：作用域变化与卸载都要中止传输层上仍在进行的请求（与网络这个外
-  // 部系统同步）。中止只能在提交之后做；两种情况下都换新控制器（而不是留着已中止的
-  // 那个），否则 Strict Mode 的 setup → cleanup → setup 之后每次操作都会在入口直接
-  // 返回，树再也不发请求。
-  //
-  // Why an effect: a scope change and an unmount must abort requests still running in
-  // the transport (syncing with the network). Aborting can only happen after commit, and
-  // both install a fresh controller — leaving the aborted one would make every operation
-  // return at its entry after Strict Mode's setup → cleanup → setup.
-  useEffect(() => {
+  // Commit network cancellation in the same layout phase as the directory session.
+  // Passive effects leave a window for old responses to resume against the new session.
+  // Render cannot abort requests because React may abandon it; key changes retire the
+  // old scope here, before asynchronous continuations can run after the commit.
+  useLayoutEffect(() => {
     const current = scopeRef.current;
     if (current.key === scopeKey) return;
     current.controller.abort();
     scopeRef.current = { key: scopeKey, controller: new AbortController() };
   }, [scopeKey]);
 
-  useEffect(
+  // Unmount retires in-flight transport during layout too. Replace the controller
+  // after cleanup so Strict Mode's next setup can accept new requests.
+  useLayoutEffect(
     () => () => {
       scopeRef.current.controller.abort();
       scopeRef.current = {

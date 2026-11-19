@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { transitionNavigation } from './helpers/user-root-transition.mjs';
 import { act } from 'react';
 import {
   deferred,
@@ -96,5 +97,22 @@ for (const [before, after] of [
       await pending;
       state.queryClient.clear();
     }
+  });
+}
+
+for (const [before, after] of [
+  ['all', 'current'],
+  ['current', 'all'],
+]) {
+  test(`a concurrent ${before} to ${after} mode commit cancels navigation before layout releases its response`, async (context) => {
+    const observed = await transitionNavigation(before, after);
+    context.diagnostic(JSON.stringify(observed));
+    assert.deepEqual(observed, {
+      abortedAtLayout: true,
+      oldResult: false,
+      oldChildren: [],
+      newResult: true,
+      childVisible: true,
+    });
   });
 }
