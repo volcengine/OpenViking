@@ -261,6 +261,7 @@ mod posix {
     unsafe extern "C" {
         pub safe fn kill(pid: c_int, sig: c_int) -> c_int;
         pub safe fn setsid() -> c_int;
+        pub safe fn dup2(oldfd: c_int, newfd: c_int) -> c_int;
         pub fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
         safe fn posix_openpt(flags: c_int) -> c_int;
         safe fn grantpt(fd: c_int) -> c_int;
@@ -662,7 +663,11 @@ async fn killing_outer_job_stops_redirected_background_worker() {
     .unwrap();
 
     // Normal outer exit must preserve a background service started under a redirected file,
-    // even when PATH lacks standard system tools.
+    // even when PATH lacks standard system tools, and release any extra caller pipes promptly.
+    use std::os::fd::AsRawFd;
+    let (status_tx, mut status_rx) = tokio::net::unix::pipe::pipe().unwrap();
+    let status_tx = status_tx.into_blocking_fd().unwrap();
+    let status_tx_fd = status_tx.as_raw_fd();
     let mut service_outer = Command::new("/bin/sh");
     service_outer
         .current_dir(dir.path())
@@ -673,7 +678,7 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         .env("PATH", &empty_path_dir)
         .args([
             "-c",
-            r#""$1" privacy run -- /bin/sh -c '/bin/sh ./service.sh &' >service.log 2>&1; while [ ! -s service.pid ]; do /bin/sleep 0.02; done"#,
+            r#""$1" privacy run -- /bin/sh -c 'printf ready >&3; exec 3>&-; /bin/sh ./service.sh &' >service.log 2>&1; exec 3>&-; while [ ! -s service.pid ]; do /bin/sleep 0.02; done"#,
             "sh",
             env!("CARGO_BIN_EXE_ov"),
         ])
@@ -681,20 +686,31 @@ async fn killing_outer_job_stops_redirected_background_worker() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    // SAFETY: setsid is async-signal-safe.
+    // SAFETY: setsid and dup2 are async-signal-safe.
     unsafe {
-        service_outer.pre_exec(|| {
-            if posix::setsid() < 0 {
+        service_outer.pre_exec(move || {
+            if posix::setsid() < 0 || posix::dup2(status_tx_fd, 3) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
         });
     }
-    let service_status = timeout(Duration::from_secs(5), service_outer.status())
+    let mut service_child = service_outer.spawn().unwrap();
+    drop(status_tx);
+    let service_status = timeout(Duration::from_secs(5), service_child.wait())
         .await
         .expect("normal outer job did not finish")
         .unwrap();
     assert_eq!(service_status.code(), Some(0));
+    let mut status_msg = String::new();
+    timeout(
+        Duration::from_millis(500),
+        status_rx.read_to_string(&mut status_msg),
+    )
+    .await
+    .expect("helper processes kept extra caller pipe open after command exit")
+    .unwrap();
+    assert_eq!(status_msg, "ready");
     let service_pid: i32 = fs::read_to_string(dir.path().join("service.pid"))
         .unwrap()
         .trim()
