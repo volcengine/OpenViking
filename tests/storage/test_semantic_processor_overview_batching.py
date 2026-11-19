@@ -65,9 +65,7 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
     )
     children = [{"name": f"child-{index}", "abstract": "x" * 20} for index in range(3)]
 
-    overview = await SemanticProcessor(
-        vlm_resolver=_TestVLMResolver(vlm)
-    )._generate_overview(
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
         "viking://resources/root",
         file_summaries=[],
         children_abstracts=children,
@@ -143,9 +141,7 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
         lambda _name, values: values["file_summaries"],
     )
 
-    overview = await SemanticProcessor(
-        vlm_resolver=_TestVLMResolver(vlm)
-    )._generate_overview(
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
         "viking://resources/业务 docs",
         file_summaries=[
             {"name": "first file.md", "summary": "first summary"},
@@ -174,3 +170,55 @@ async def test_overview_includes_more_than_32_children_under_budget(monkeypatch)
     )
     assert len(vlm.prompts) == 1
     assert all(item["summary"] in vlm.prompts[0] for item in files)
+
+
+class BudgetedMergeVLM:
+    def __init__(self, budget: int):
+        self.budget = budget
+        self.prompts = []
+        self.merge_prompts = []
+
+    def is_available(self):
+        return True
+
+    async def get_completion_async(self, prompt):
+        self.prompts.append(prompt)
+        if "\n\n---\n\n" in prompt:
+            self.merge_prompts.append(prompt)
+            if len(prompt) > self.budget:
+                raise RuntimeError(f"merge prompt {len(prompt)} exceeds budget {self.budget}")
+            return f"MERGED-{len(self.merge_prompts)}"
+        return f"PARTIAL-{len(self.prompts)} " + ("x" * 70)
+
+
+@pytest.mark.asyncio
+async def test_batched_merge_keeps_each_prompt_within_budget(monkeypatch):
+    budget = 200
+    vlm = BudgetedMergeVLM(budget)
+    config = SimpleNamespace(
+        semantic=SimpleNamespace(
+            max_overview_prompt_chars=budget,
+            overview_batch_size=1,
+        ),
+        output_language_override="en",
+    )
+    monkeypatch.setattr(
+        semantic_processor_module,
+        "get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        semantic_processor_module,
+        "render_prompt",
+        lambda _name, values: values["file_summaries"],
+    )
+    files = [{"name": f"f{i}.md", "summary": "s" * 40} for i in range(6)]
+
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
+        "viking://resources/museums", files, []
+    )
+
+    assert overview.startswith("MERGED-")
+    assert vlm.merge_prompts, "expected at least one merge prompt"
+    assert all(len(prompt) <= budget for prompt in vlm.merge_prompts)
+    assert len(vlm.merge_prompts) > 1
