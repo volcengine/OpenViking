@@ -120,3 +120,42 @@ test('final task links use native navigation when neither URI callback is config
     await host.dispose();
   }
 });
+
+test('a final URI already linked inside nested command output is not repeated', async () => {
+  let finish;
+  const opened = [];
+  const host = await mount(
+    async () =>
+      ok({
+        task_id: 'nested-task',
+        status: 'accepted',
+        result: { root_uri: finalUri },
+      }),
+    {
+      onOpenUri: (uri) => opened.push(uri),
+      taskService: {
+        getTask: () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      },
+    },
+  );
+  try {
+    await host.execute('ov add-resource https://example.com/resource');
+    await tick();
+    const links = () =>
+      host.records[0].querySelectorAll(`a[href="${finalUri}"]`);
+    assert.equal(links().length, 1);
+    await act(() =>
+      finish({ id: 'nested-task', status: 'completed', uri: finalUri }),
+    );
+    assert.equal(links().length, 1);
+    await act(() => links()[0].click());
+    assert.deepEqual(opened, [finalUri]);
+    assert.equal(host.records[0].textContent.includes('Task result:'), false);
+    assert.ok(document.querySelector('.ov-notification') === null);
+  } finally {
+    await host.dispose();
+  }
+});
