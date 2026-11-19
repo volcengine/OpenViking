@@ -1467,11 +1467,12 @@ pub async fn handle_write(
     from_file: Option<String>,
     mode: String,
     wait: bool,
+    use_snapshot: bool,
     processing_mode: String,
+    defer_processing: bool,
     tags: Vec<String>,
     tag_mode: String,
     acl: Option<Value>,
-    edit_source: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1491,11 +1492,12 @@ pub async fn handle_write(
         &payload,
         &mode,
         wait,
+        use_snapshot,
         &processing_mode,
+        defer_processing,
         tags,
         &tag_mode,
         acl,
-        &edit_source,
         ctx.output_format,
         ctx.compact,
     )

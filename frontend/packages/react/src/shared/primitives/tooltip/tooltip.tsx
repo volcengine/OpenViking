@@ -12,13 +12,6 @@ import { createPortal } from 'react-dom';
 import { useOverlayPosition } from '../overlay/use-overlay-position.js';
 import type { TooltipLabels, TooltipProps } from './types.js';
 
-export type {
-  TooltipLabels,
-  TooltipPlacement,
-  TooltipProps,
-  TooltipTrigger,
-} from './types.js';
-
 const DEFAULT_LABELS: Required<TooltipLabels> = { close: 'Close' };
 
 /**
@@ -74,6 +67,7 @@ export function Tooltip({
   placement = 'top',
   trigger = 'hover',
   delay = 300,
+  focusVisibleOnly = false,
   disabled = false,
   className,
   style,
@@ -224,10 +218,14 @@ export function Tooltip({
       if (trigger === 'hover') hide();
     },
     onFocus: (event: React.FocusEvent) => {
-      (childProps.onFocus as ((e: React.FocusEvent) => void) | undefined)?.(
-        event,
-      );
-      if (trigger === 'hover') show();
+      (childProps.onFocus as React.FocusEventHandler | undefined)?.(event);
+      if (trigger !== 'hover') return;
+      const { currentTarget, target } = event;
+      if (
+        !focusVisibleOnly ||
+        (currentTarget.contains(target) && target.matches(':focus-visible'))
+      )
+        show();
     },
     onBlur: (event: React.FocusEvent) => {
       (childProps.onBlur as ((e: React.FocusEvent) => void) | undefined)?.(

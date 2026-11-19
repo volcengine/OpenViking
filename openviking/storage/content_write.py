@@ -28,6 +28,7 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -280,33 +281,35 @@ class ContentWriteCoordinator:
     ) -> str:
         if self._privacy_sanitizer is None:
             return content
-        result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
-        if result.ambiguous_references:
-            raise InvalidArgumentError(
-                "Content contains a Privacy value mapped to multiple fields; "
-                "remove the duplicate mapping or insert the intended reference explicitly",
-                details={
-                    "uri": uri,
-                    "candidate_references": [
-                        list(candidates) for candidates in result.ambiguous_references
-                    ],
-                },
-            )
-        return result.content
+        return await self._privacy_sanitizer.sanitize_for_write(content, ctx=ctx, uri=uri)
 
-    async def _sanitize_batch_operations(
-        self,
-        operations: list[dict[str, Any]],
+    @staticmethod
+    def _resolve_conflict_edit(
+        previous_content: str,
+        final_bytes: bytes,
+        ingest_options: IngestOptions | None,
         *,
-        ctx: RequestContext,
-    ) -> None:
-        if self._privacy_sanitizer is None:
-            return
-        for operation in operations:
-            content = operation.get("content")
-            uri = operation.get("uri")
-            if isinstance(content, str) and isinstance(uri, str):
-                operation["content"] = await self._sanitize_text(content, uri=uri, ctx=ctx)
+        user_id: str,
+    ) -> tuple[bytes, IngestOptions, list[str] | None]:
+        resolved, conflict_tags = resolve_manual_conflicts(
+            previous_content, final_bytes.decode("utf-8"), user_id=user_id
+        )
+        options = ingest_options or IngestOptions()
+        if conflict_tags is None:
+            return final_bytes, options, None
+        return (
+            resolved.encode("utf-8"),
+            replace(
+                options,
+                search_tags=merge_search_tags(options.search_tags, conflict_tags),
+                search_tag_mode=(
+                    "append"
+                    if options.search_tags is None
+                    else IngestOptions.vector_search_tag_mode(options.search_tag_mode)
+                ),
+            ),
+            conflict_tags,
+        )
 
     async def write(
         self,
@@ -321,6 +324,7 @@ class ContentWriteCoordinator:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
         resolve_conflicts: bool = False,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
         task = None
         task_id = None
@@ -356,6 +360,7 @@ class ContentWriteCoordinator:
                     tag_mode=tag_mode,
                     acl=acl,
                     resolve_conflicts=resolve_conflicts,
+                    defer_processing=defer_processing,
                     root_operation="content_write",
                     root_task_factory=create_root_task,
                 )
@@ -373,6 +378,31 @@ class ContentWriteCoordinator:
             result,
             ctx=ctx,
             wait=wait,
+        )
+
+    async def _complete_content_write_task_directly(
+        self,
+        *,
+        task_factory: Callable[[], Awaitable[Any]],
+        result: Dict[str, Any],
+        ctx: RequestContext,
+        resource_id: str,
+    ) -> None:
+        task = await task_factory()
+        tracker = get_task_tracker()
+        await tracker.start(
+            task.task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        terminal_result = deepcopy(result)
+        terminal_result.setdefault("task_id", task.task_id)
+        await tracker.complete(
+            task.task_id,
+            terminal_result,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            resource_id=resource_id,
         )
 
     async def _fail_content_write_task(
@@ -522,6 +552,7 @@ class ContentWriteCoordinator:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
         resolve_conflicts: bool = False,
+        defer_processing: bool = False,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
     ) -> Dict[str, Any]:
@@ -544,8 +575,6 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"tags are not supported for namespace: {normalized_uri}")
         if acl is not None and not namespace_policy.supports_acl:
             raise InvalidArgumentError(f"ACL is not supported for namespace: {normalized_uri}")
-        if isinstance(content, str):
-            content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
         content = normalize_account_memory_template_write(normalized_uri, content, mode)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         if acl is not None:
@@ -553,6 +582,10 @@ class ContentWriteCoordinator:
                 ingest_options,
                 acl_update=await self._viking_fs.prepare_acl_update(normalized_uri, acl, ctx),
             )
+        if defer_processing and ingest_options != IngestOptions():
+            raise InvalidArgumentError("defer_processing does not support tags or ACL updates")
+        if defer_processing and resolve_conflicts:
+            raise InvalidArgumentError("defer_processing does not support resolve_conflicts")
 
         # ``create`` is an upsert alias for ``replace``: it overwrites an existing
         # file or materializes a missing one, never conflicting. Normalize it away
@@ -586,6 +619,20 @@ class ContentWriteCoordinator:
             validate_storage=False,
         )
         telemetry_id = get_current_telemetry().telemetry_id
+
+        if defer_processing:
+            return await self._write_file_only(
+                uri=normalized_uri,
+                root_uri=root_uri,
+                content=content,
+                mode=mode,
+                response_mode=response_mode,
+                context_type=context_type,
+                ctx=ctx,
+                root_operation=root_operation,
+                root_task_factory=root_task_factory,
+                defer_processing=True,
+            )
 
         if context_type == "memory" and not is_abstract_overview_uri(normalized_uri):
             return await self._write_memory_with_refresh(
@@ -717,7 +764,10 @@ class ContentWriteCoordinator:
             operation["ingest_options"] != IngestOptions() for operation in normalized_operations
         ):
             raise InvalidArgumentError("defer_processing does not support tags or ACL updates")
-        await self._sanitize_batch_operations(normalized_operations, ctx=ctx)
+        if defer_processing and any(
+            operation["resolve_conflicts"] for operation in normalized_operations
+        ):
+            raise InvalidArgumentError("defer_processing does not support resolve_conflicts")
         for operation in normalized_operations:
             operation["content"] = normalize_account_memory_template_write(
                 operation["uri"], operation["content"], operation["mode"]
@@ -799,6 +849,7 @@ class ContentWriteCoordinator:
                             and write_mode == "replace"
                             and current == desired
                             and operation["ingest_options"] == IngestOptions()
+                            and not operation["resolve_conflicts"]
                         ):
                             unchanged.append(uri)
                             continue
@@ -810,6 +861,30 @@ class ContentWriteCoordinator:
                 pending.append((operation, exists, write_mode))
 
             if not file_only and not defer_processing:
+                for operation, existed, _ in pending:
+                    uri = operation["uri"]
+                    if not (
+                        operation["resolve_conflicts"]
+                        and existed
+                        and operation["mode"] in {"replace", "create"}
+                        and context_type_for_uri(uri) == "resource"
+                        and uri.lower().endswith(".md")
+                    ):
+                        continue
+                    previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
+                    edited = operation["content"]
+                    edited_bytes = edited.encode("utf-8") if isinstance(edited, str) else edited
+                    (
+                        resolved_bytes,
+                        operation["ingest_options"],
+                        operation["conflict_tags"],
+                    ) = self._resolve_conflict_edit(
+                        previous_content,
+                        edited_bytes,
+                        operation["ingest_options"],
+                        user_id=ctx.user.user_id,
+                    )
+                    operation["content"] = resolved_bytes.decode("utf-8")
                 prepared_resources = await self._prepare_batch_resource_plans(
                     pending=pending,
                     ctx=ctx,
@@ -854,6 +929,10 @@ class ContentWriteCoordinator:
                         if prepared is not None:
                             final_content = prepared.final_bytes
                             committed_resource_plans.append(prepared)
+                        if not final_content.strip() and operation.get("conflict_tags") is not None:
+                            await self._upsert_uri_tags(
+                                uri=uri, tags=operation["conflict_tags"], mode="append", ctx=ctx
+                            )
                         if (
                             not file_only
                             and context_type_for_uri(uri)
@@ -893,10 +972,13 @@ class ContentWriteCoordinator:
                     error = sys.exc_info()[1]
                     try:
                         await run_to_completion(lambda: self._batch_commit(lease_ref=lease))
-                    except BaseException:
+                    except BaseException as _log_error:
                         if error is None and write_error is None:
                             raise
-                        logger.exception("Failed to version partial batch writes")
+                        logger.error(
+                            "Failed to version partial batch writes error_type=%s",
+                            type(_log_error).__name__,
+                        )
         except BaseException:
             await lock_guard.close()
             raise
@@ -968,6 +1050,17 @@ class ContentWriteCoordinator:
                 else:
                     lock_handoff = None
                     refresh = {"kind": "none"}
+                if defer_processing and not file_only:
+                    await self._complete_content_write_task_directly(
+                        task_factory=root_task_factory,
+                        result=result,
+                        ctx=ctx,
+                        resource_id=normalized_root,
+                    )
+                    await lock_guard.close()
+                    lock_settled = True
+                    return result
+
                 await root_task_factory()
                 root_dispatched = False
 
@@ -1139,6 +1232,15 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(
                     f"batch-write append does not support binary content: {uri}"
                 )
+            resolve_conflicts = raw.get("resolve_conflicts", False)
+            if not isinstance(resolve_conflicts, bool):
+                raise InvalidArgumentError(
+                    f"batch-write resolve_conflicts must be a boolean: {uri}"
+                )
+            if resolve_conflicts and has_content_base64:
+                raise InvalidArgumentError(
+                    f"batch-write resolve_conflicts requires text content: {uri}"
+                )
             if context_type == "memory" and mode in {"create", "upsert"}:
                 self._validate_create_extension(uri)
             if context_type == "memory" and mode == "append":
@@ -1167,6 +1269,7 @@ class ContentWriteCoordinator:
                     "mode": mode,
                     "expected_sha256": raw.get("expected_sha256"),
                     "if_absent": if_absent,
+                    "resolve_conflicts": resolve_conflicts,
                     "ingest_options": ingest_options,
                 }
             )
@@ -1384,9 +1487,13 @@ class ContentWriteCoordinator:
                 force_refresh=force_refresh,
             )
             action = decision.action
-        except LockAcquisitionError:
+        except LockAcquisitionError as _log_error:
             # Parent aggregation is best-effort; changed-file work must still run.
-            logger.info("Skipping busy parent semantic refresh: %s", root_uri)
+            logger.info(
+                "Skipping busy parent semantic refresh: %s error_type=%s",
+                safe_uri_for_log(str(root_uri)),
+                type(_log_error).__name__,
+            )
             action = FreshnessAction.NOOP
         aggregate_directory = action is FreshnessAction.REFRESH_NOW
         has_live_files = any(changes.get(kind) for kind in ("added", "modified"))
@@ -1628,12 +1735,13 @@ class ContentWriteCoordinator:
             existing_raw: str | bytes | None = None
             if write_mode == "append" and existed:
                 existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            final_bytes = self._render_final_bytes(
+            final_bytes = await self._render_final_bytes(
                 uri,
                 operation["content"],
                 mode=write_mode,
                 existing_raw=existing_raw,
                 is_new_file=not existed,
+                ctx=ctx,
             )
             prepared[uri] = await self._prepare_inline_resource_plan(
                 uri=uri,
@@ -1957,29 +2065,20 @@ class ContentWriteCoordinator:
             )
             if (mode == "append" or resolve_conflicts) and target_preexisting:
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
-            final_bytes = self._render_final_bytes(
+            if resolve_conflicts:
+                edited_bytes = content.encode("utf-8") if isinstance(content, str) else content
+                resolved_bytes, ingest_options, conflict_tags = self._resolve_conflict_edit(
+                    previous_content, edited_bytes, ingest_options, user_id=ctx.user.user_id
+                )
+                content = resolved_bytes.decode("utf-8")
+            final_bytes = await self._render_final_bytes(
                 uri,
                 content,
                 mode=mode,
                 existing_raw=previous_content,
                 is_new_file=is_new_file,
+                ctx=ctx,
             )
-            if resolve_conflicts:
-                resolved, conflict_tags = resolve_manual_conflicts(
-                    previous_content, final_bytes.decode("utf-8")
-                )
-                final_bytes = resolved.encode("utf-8")
-                if conflict_tags is not None:
-                    options = ingest_options or IngestOptions()
-                    ingest_options = replace(
-                        options,
-                        search_tags=merge_search_tags(options.search_tags, conflict_tags),
-                        search_tag_mode=(
-                            "append"
-                            if options.search_tags is None
-                            else IngestOptions.vector_search_tag_mode(options.search_tag_mode)
-                        ),
-                    )
             request = RequestIntent.from_ingest_options(
                 target_uri=uri,
                 processing_mode=processing_mode,
@@ -2010,6 +2109,9 @@ class ContentWriteCoordinator:
                     target=prepared.target,
                 ),
             )
+            if resolve_conflicts and not final_bytes.strip() and conflict_tags is not None:
+                # Empty bodies can skip vector upserts, leaving stale tags.
+                await self._upsert_uri_tags(uri=uri, tags=conflict_tags, mode="append", ctx=ctx)
             has_async_work = bool(
                 prepared.plan.direct_index_actions or prepared.plan.file_refresh is not None
             )
@@ -2192,8 +2294,12 @@ class ContentWriteCoordinator:
             # materialized, while keeping the state check inside the exact lock.
             await self._classify_locked_write_target(uri, ctx=ctx)
             previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
-            await self._write_in_place(
-                uri, content, mode=mode, ctx=ctx, lease_ref=lease, existing_raw=previous_content
+            await self._commit_content(
+                [uri],
+                lease,
+                lambda: self._write_in_place(
+                    uri, content, mode=mode, ctx=ctx, lease_ref=lease, existing_raw=previous_content
+                ),
             )
             result = self._build_write_result(
                 uri=uri,
@@ -2336,6 +2442,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         lock_guard = PathLockGuard(self._viking_fs._async_agfs)
@@ -2354,14 +2461,19 @@ class ContentWriteCoordinator:
 
         try:
             target_state = await self._classify_locked_write_target(uri, ctx=ctx)
-            final_bytes = await self._write_in_place(
-                uri,
-                content,
-                mode=mode,
-                ctx=ctx,
-                lease_ref=lease,
-                is_new_file=target_state.is_new_file,
+            final_bytes = await self._commit_content(
+                [uri],
+                lease,
+                lambda: self._write_in_place(
+                    uri,
+                    content,
+                    mode=mode,
+                    ctx=ctx,
+                    lease_ref=lease,
+                    is_new_file=target_state.is_new_file,
+                ),
             )
+            processing_status = "deferred" if defer_processing else "skipped"
             result = self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
@@ -2369,10 +2481,19 @@ class ContentWriteCoordinator:
                 mode=response_mode,
                 written_bytes=len(final_bytes),
                 queue_status=None,
-                semantic_status="skipped",
-                vector_status="skipped",
+                semantic_status=processing_status,
+                vector_status=processing_status,
             )
             if root_task_factory is not None:
+                if defer_processing:
+                    await self._complete_content_write_task_directly(
+                        task_factory=root_task_factory,
+                        result=result,
+                        ctx=ctx,
+                        resource_id=uri,
+                    )
+                    await lock_guard.close()
+                    return result
                 await root_task_factory()
                 root_dispatched = False
 
@@ -2444,13 +2565,14 @@ class ContentWriteCoordinator:
                 f"creating a new file does not allow extension '{ext}': {uri}"
             )
 
-    def _render_final_bytes(
+    async def _render_final_bytes(
         self,
         uri: str,
         content: str | bytes,
         *,
         mode: str,
         existing_raw: str | bytes | None,
+        ctx: RequestContext,
         is_new_file: bool = False,
     ) -> bytes:
         """Render the final on-disk bytes for a write without touching storage.
@@ -2471,6 +2593,7 @@ class ContentWriteCoordinator:
                 requested_raw=content,
                 mode=mode,
             )
+            rendered = await self._sanitize_text(rendered, uri=uri, ctx=ctx)
             return rendered.encode("utf-8")
 
         if context_type_for_uri(uri) == "memory":
@@ -2484,6 +2607,7 @@ class ContentWriteCoordinator:
                 mf.content = mf.content + content
             else:
                 raise InvalidArgumentError(f"unsupported memory write mode: {mode}")
+            mf.content = await self._sanitize_text(mf.content, uri=uri, ctx=ctx)
             sync_memory_resource_refs(mf, source=RESOURCE_REF_SOURCE_CONTENT_WRITE)
             return MemoryFileUtils.write(mf).encode("utf-8")
 
@@ -2495,11 +2619,15 @@ class ContentWriteCoordinator:
             if is_new_file:
                 if not isinstance(content, str):
                     raise InvalidArgumentError(f"append only supports text content: {uri}")
+                content = await self._sanitize_text(content, uri=uri, ctx=ctx)
                 return content.encode("utf-8")
             if not isinstance(existing_raw, str) or not isinstance(content, str):
                 raise InvalidArgumentError(f"append only supports text content: {uri}")
-            return (existing_raw + content).encode("utf-8")
+            content = await self._sanitize_text(existing_raw + content, uri=uri, ctx=ctx)
+            return content.encode("utf-8")
 
+        if isinstance(content, str):
+            content = await self._sanitize_text(content, uri=uri, ctx=ctx)
         return content if isinstance(content, bytes) else content.encode("utf-8")
 
     async def _write_in_place(
@@ -2533,12 +2661,13 @@ class ContentWriteCoordinator:
             and existing_raw is None
         ):
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-        final_bytes = self._render_final_bytes(
+        final_bytes = await self._render_final_bytes(
             uri,
             content,
             mode=mode,
             existing_raw=existing_raw,
             is_new_file=is_new_file,
+            ctx=ctx,
         )
         await self._viking_fs.write_file_bytes(uri, final_bytes, ctx=ctx, lease_ref=lease_ref)
         return final_bytes
@@ -2553,7 +2682,7 @@ class ContentWriteCoordinator:
         try:
             records = await vector_store.get_l2_diff_records_by_uris(sorted(set(uris)), ctx=ctx)
         except Exception as exc:
-            logger.warning("Failed to load existing file abstracts: %s", exc)
+            logger.info("Failed to load existing file abstracts: %s", type(exc).__name__)
             return {}
         return {
             uri: str(record.get("abstract") or "")
@@ -2929,6 +3058,10 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"invalid write uri: {uri}")
 
         root_uri = uri
+        if parts[:2] == ["agent", "skills"]:
+            raise InvalidArgumentError(
+                f"generic content writes cannot modify Skills; use the Skill API instead: {uri}"
+            )
         if parts[0] == "resources":
             if len(parts) >= 2:
                 if anchor_to_parent:

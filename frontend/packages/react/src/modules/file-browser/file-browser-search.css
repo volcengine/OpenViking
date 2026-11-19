@@ -143,8 +143,9 @@
 .ov-file-browser-search__summary {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   padding-left: 12px;
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
@@ -778,14 +779,46 @@
   min-width: 0;
 }
 
-/* ── 窄屏：高级面板独占内容区 ─────────────────────────────────────── */
+/* ── 窄屏：高级面板位于计数行下方 ─────────────────────────────────── */
 
 @media (max-width: 720px) {
+  .ov-file-browser-search--advanced .ov-file-browser-search__content {
+    flex-direction: column;
+  }
+
   .ov-file-browser-search--advanced .ov-file-browser-search__results {
+    flex: none;
+    padding-block: 12px;
+  }
+
+  .ov-file-browser-search--advanced
+    .ov-file-browser-search__results
+    > :not(.ov-file-browser-search__summary) {
     display: none;
   }
 
   .ov-file-browser-search__advanced {
+    flex: 1;
     width: 100%;
+    min-height: 0;
+  }
+
+  .ov-file-browser-search__dates {
+    position: relative;
+  }
+
+  .ov-file-browser-search__dates > .ov-date-picker {
+    position: static;
+  }
+
+  .ov-file-browser-search__dates .ov-date-picker__popup {
+    max-width: 100%;
+  }
+
+  .ov-file-browser-search__dates
+    > .ov-date-picker:last-child
+    .ov-date-picker__popup {
+    right: 0;
+    left: auto;
   }
 }

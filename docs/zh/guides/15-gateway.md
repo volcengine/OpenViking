@@ -36,10 +36,10 @@ OpenViking 网关是一个模型 API 代理：客户端只要能修改 Base URL�
 | 网关密钥 | 客户端用来代替服务商 API Key 的密钥（`ovgw_…`），绑定一位 OpenViking 用户、一份上下文配置和一组上游。 | [网关密钥](../gateway/09-gateway-keys.md#gateway-keys) |
 | OpenViking API 密钥 | 你在 OpenViking 的用户密钥：用它登录 Studio，它也决定以哪个账号、哪个用户的身份读写记忆。 | [密钥和凭证](22-gateway-operations.md#keys-and-credentials) |
 | 网关管理密钥 | 可选的密钥（`ovgm_…`）；设置后，只有带上它的请求才能修改上游和上下文配置。谁能修改什么，见[权限矩阵](../api/25-gateway.md#credentials-and-account-scope)。 | [网关管理密钥](22-gateway-operations.md#gateway-management-key) |
-| 对话 | 网关认定属于同一次聊天的一组请求；一段对话沿用开始时的上下文配置和上游。它的轮次保存到一个 OpenViking 会话，某些情况下改存到新会话，例如客户端改写历史时（见[保存状态](../gateway/10-overview-and-requests.md#saving-status)）。 | [网关如何识别对话](../gateway/03-connect-clients.md#how-conversations-are-recognized) |
+| 对话 | 网关认定属于同一次聊天的一组请求；一段对话沿用开始时的上下文配置和上游。它的轮次保存到一个 OpenViking 会话，客户端改写历史后也不换会话，只有[重新同步对话](../gateway/10-overview-and-requests.md#resync-a-conversation)会换。 | [网关如何识别对话](../gateway/03-connect-clients.md#how-conversations-are-recognized) |
 | 召回 | 从 OpenViking 搜出和当前消息相关的记忆，附加到这条消息上。 | [模型看到什么](../gateway/01-how-it-works.md#what-the-model-sees) |
-| 保存 | 把已完成的轮次写入 OpenViking 会话（晚一轮进行），供之后的提交从中提取新记忆。 | [对话什么时候保存](../gateway/01-how-it-works.md#when-conversations-are-saved) |
-| 提交 | 告诉 OpenViking 会话里已保存的轮次可以处理了：OpenViking 归档较早的轮次（会话中只留最新的消息），并在后台从中提取记忆。已保存的轮次要等提交之后才会变成记忆。 | [对话什么时候保存](../gateway/01-how-it-works.md#when-conversations-are-saved) |
+| 保存 | 一轮结束时，把这一轮写入 OpenViking 会话，供之后的提交从中提取新记忆。 | [对话什么时候保存](../gateway/01-how-it-works.md#when-conversations-are-saved) |
+| 提交 | 告诉 OpenViking 会话里已保存的消息可以处理了：OpenViking 归档较早的消息（按提交阈值提交时会话中只留最新的消息），并在后台从中提取记忆。已保存的轮次要等提交之后才会变成记忆。默认由网关提交。 | [对话什么时候保存](../gateway/01-how-it-works.md#when-conversations-are-saved) |
 | 压缩 | 对话接近模型的上下文窗口时，让同一个模型写一份摘要，替换截断点之前的全部内容。 | [网关中的长对话](../gateway/05-long-conversations.md#long-conversations) |
 | 提示词缓存 | 服务商的计费机制：请求开头和上一次请求相同的部分按缓存价计费（通常只有原价的一小部分），从第一个不同的字节起按原价计费。 | [记忆原样放回与提示词缓存](../gateway/01-how-it-works.md#replay) |
 | 本地 dev 模式 | 以 dev 模式运行的 OpenViking 服务：绑定 `127.0.0.1`、未配置 `root_api_key`，打开 Studio 不需要 API 密钥，所有操作都以 `default` 用户身份进行。 | [本地服务](../gateway/02-quickstart.md#local-server-no-api-key) |
@@ -52,14 +52,14 @@ OpenViking 网关是一个模型 API 代理：客户端只要能修改 Base URL�
 - **运行在哪**：开启后嵌入 OpenViking Server，和 Server 共用端口；也可以用 `openviking-gateway` 独立运行，连接已有的 OpenViking 服务（开源版或商业版）。两种方式下网关的所有 URL 都在 `/gateway` 下（例如 `/gateway/v1`），客户端路径相同，见[选择部署方式](22-gateway-operations.md#deployment-options)。
 - **和 OpenViking 的关系**：网关只调用 OpenViking 的公开接口，向量化和记忆提取都在 OpenViking 中完成。
 - **数据在哪**：会话和记忆的正本在 OpenViking。网关默认使用两个 SQLite 文件，多副本部署可以改用共享 Redis。开启 OpenViking 加密后，两种后端中存储的值都会加密。见[安全与数据](../gateway/11-security-and-data.md)。
-- **出故障时**：OpenViking 不可用时，对话照常进行，只是不带记忆，保存会自动重试。网关停止服务时，经过它的模型调用全部失败。
+- **出故障时**：OpenViking 不可用时，对话照常进行，只是不带记忆；这期间结束的轮次保存失败，下一轮结束时补上。网关停止服务时，经过它的模型调用全部失败。
 
 ## 能得到什么，代价是什么 {#what-you-get-and-what-it-costs}
 
 接入后你会得到：
 
 - 每条新消息都补上相关记忆；
-- 新对话开头带上你的用户画像；
+- 新对话开头带上你的 soul（`soul.md` 里的指令）和用户画像；
 - 对话保存回 OpenViking，并提取成新记忆；
 - 长对话自动压缩；
 - 开启 OpenViking 工具后，模型还能主动检索、读取和写入记忆（见[让任意客户端拥有 Agentic 记忆](../gateway/04-openviking-tools.md#agentic-memory-for-any-client)）。
@@ -84,7 +84,7 @@ OpenViking 也能以插件形式接入 Agent，例如 Claude Code、Codex、Curs
 | 适用客户端 | 能设置 Base URL 和 API Key、使用 Anthropic Messages、Chat Completions 或 Responses 的客户端：聊天应用、SDK 脚本、低代码平台和编程 Agent。Cursor 和 TRAE 不行，它们的模型调用从厂商服务器发出。 | 只有带 OpenViking 插件的 Agent。其他 MCP 客户端可以接入 OpenViking 工具，但没有自动召回和保存。 |
 | 模型登录方式 | 需要服务商的 API Key，由网关保管，或[由客户端各自发送](../gateway/03-connect-clients.md#bring-your-own-provider-key)。客户端不能用订阅账号登录，可以改用[订阅反代上游](../gateway/07-upstreams.md#custom-upstreams)。Codex 可以通过 [CLIProxyAPI](../gateway/03-connect-clients.md#codex-chatgpt-subscription) 使用 ChatGPT 订阅；其他订阅服务请自行确认其使用条款。 | 不经手模型调用，Agent 原来怎么登录就怎么登录，订阅也可以。 |
 | 召回 | 每条新的用户消息召回一次，结果附加在这条消息末尾；检索默认最多等 2 秒。默认检索记忆、资源和技能。 | 在 Agent 的提问事件里进行。多数插件会带上会话 ID，让服务端结合对话扩展查询；自动召回不含资源。 |
-| 保存 | 晚一轮保存已完成的轮次，连同客户端自己的工具调用和结果。子 Agent 请求和杂项请求不保存。 | 跟随 Agent 的事件，通常在每轮结束时。子 Agent 各不相同：Claude Code、OpenCode 和 DSH 存成单独的会话，Codex 并入主会话，Hermes 不保存。 |
+| 保存 | 每一轮结束时保存这一轮，连同客户端自己的工具调用和结果。子 Agent 请求和杂项请求不保存。 | 跟随 Agent 的事件，通常在每轮结束时。子 Agent 各不相同：Claude Code、OpenCode 和 DSH 存成单独的会话，Codex 并入主会话，Hermes 不保存。 |
 | OpenViking 工具 | 由网关在回复过程中执行，不支持工具或 MCP 的客户端也能用。默认开放全部工具。调用[不经过客户端的权限确认](../gateway/04-openviking-tools.md#risks-and-controls)，每次调用显示一行提示。 | 由 Agent 当作自己的工具执行，调用和结果出现在对话记录里，遵循 Agent 的工具权限设置。 |
 | 提示词缓存 | 在后续请求里把每个记忆块逐字节原样放回，缓存前缀保持不变。**概览**页显示缓存命中率。 | 因插件而异。基于 hook 的插件把记忆块交给 Agent，由 Agent 保存在自己的历史里；pi 和 OpenCode v2 也会让之前的召回保持不变；OpenClaw 每轮在系统提示词里重建召回内容。 |
 | 长对话 | 接近模型上下文窗口时由网关压缩，任何客户端都适用，包括从不压缩的应用。[实验性的 Agent 自管上下文窗口](../gateway/05-long-conversations.md#experimental-agent-managed-context-windows)让模型自己决定何时开启新窗口。 | 由 Agent 自己压缩，多数插件会先提交已捕获的内容。pi 和 OpenClaw 可以用 OpenViking 的摘要替换 Agent 的摘要。 |
@@ -92,7 +92,7 @@ OpenViking 也能以插件形式接入 Agent，例如 Claude Code、Codex、Curs
 | 可见性 | 补充的记忆在客户端里看不到，除非上下文配置开启了[召回摘要](../gateway/08-context-profiles.md#recall-summary)。Studio 的请求日志记录条数和保存状态，不记录内容。 | Claude Code 的状态栏和 `/openviking-memory:ov` 命令显示召回条数和补充内容的来源；pi 的状态栏显示连接状态。其他插件没有自己的状态显示。 |
 | 部署与运维 | 一个服务，嵌入 OpenViking Server 或独立运行。用户只改 Base URL 和密钥；上游、上下文配置和密钥都在 Studio 里管理。 | 每台机器分别安装和升级，各自配置 OpenViking 凭证。 |
 | 团队使用 | 管理员给每人签发一个网关密钥，可以单独吊销。网关保管服务商 API Key 时，用户看不到它。 | 每人用自己的 OpenViking API 密钥安装插件。行为设置可以写进代码仓库的 `.openviking/config.json`，按仓库共享。 |
-| 出故障时 | OpenViking 不可用时，请求照常发出，只是不带记忆，保存会自动重试。网关本身停止服务时（嵌入形态即 OpenViking Server 停止时），经过它的模型调用全部失败。服务商 API Key 和尚未保存的对话文本集中存放在网关，每次模型调用也多经过一跳。 | OpenViking 不可用时，Agent 等到插件的召回超时（多数为 15 秒，Hermes 为 4 秒）后不带记忆继续；多数插件会把写入失败的内容排队存到磁盘。模型调用从不依赖 OpenViking。 |
+| 出故障时 | OpenViking 不可用时，请求照常发出，只是不带记忆；结束的轮次保存失败，不重试，由下一轮结束时补上，没有下一轮时会丢失。网关本身停止服务时（嵌入形态即 OpenViking Server 停止时），经过它的模型调用全部失败。服务商 API Key 集中存放在网关，每次模型调用也多经过一跳。 | OpenViking 不可用时，Agent 等到插件的召回超时（多数为 15 秒，Hermes 为 4 秒）后不带记忆继续；多数插件会把写入失败的内容排队存到磁盘。模型调用从不依赖 OpenViking。 |
 
 各插件的细节见 [Agent 集成能力](../agent-integrations/16-capability-reference.md)，网关的细节见 [OpenViking 网关的工作原理](../gateway/01-how-it-works.md)。
 

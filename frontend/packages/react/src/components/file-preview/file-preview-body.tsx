@@ -99,6 +99,9 @@ function FilePreviewBodyContent({
     return (
       <FilePreviewEditor
         draft={editing.draft}
+        annotations={editing.annotations}
+        initialAnnotation={editing.initialAnnotation}
+        readOnlySuffix={editing.readOnlySuffix}
         source={fileTab.source}
         text={text}
         loading={editing.loadingEdit}
@@ -117,7 +120,8 @@ function FilePreviewBodyContent({
   if (fileTab.loading)
     return fileTab.slots?.loadingFallback ?? <LoadingState text={text} />;
 
-  if (isEmptyFile(fileTab.source)) return <EmptyFileState text={text} />;
+  if (isEmptyFile(fileTab.source))
+    return <EmptyFileState text={text} label={fileTab.emptyLabel} />;
 
   const media = mediaKind(fileTab.source);
   if (media)
@@ -125,6 +129,7 @@ function FilePreviewBodyContent({
       <FilePreviewMedia
         source={fileTab.source}
         kind={media}
+        videoDetails={fileTab.videoDetails}
         text={text}
         slots={fileTab.slots}
         reports={reports}

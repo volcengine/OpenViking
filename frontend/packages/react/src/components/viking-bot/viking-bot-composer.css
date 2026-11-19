@@ -32,24 +32,36 @@
   padding: 12px;
 }
 .ov-viking-bot__sender .ark-agentic-sender-richTextArea {
-  --ark-sender-rich-textarea-line-height: 22px;
   margin: 0;
   padding-top: 0;
-}
-.ov-viking-bot__sender .tiptap.ProseMirror {
-  outline: none;
   color: var(--ov-viking-bot-text);
   font-family: inherit;
   font-size: 14px;
   font-weight: 400;
   letter-spacing: 0.3px;
-  line-height: 22px;
+  line-height: var(--agentic-sender-rich-textarea-line-height);
+}
+.ov-viking-bot__sender .tiptap.ProseMirror {
+  outline: none;
+  font: inherit;
+}
+.ov-viking-bot__sender
+  .ark-agentic-sender-richTextArea
+  .tiptap.ProseMirror
+  .ark-agentic-sender-richTextArea-paragraph {
+  font: inherit;
 }
 .ov-viking-bot__sender .tiptap p {
   margin: 0;
 }
-.ov-viking-bot__sender .tiptap p.is-editor-empty:first-child::before {
-  color: var(--ov-viking-bot-text-muted);
+.ov-viking-bot__sender
+  .ark-agentic-sender-richTextArea
+  .tiptap
+  p.is-editor-empty:first-child::before,
+.ov-viking-bot__sender
+  .ark-agentic-sender-richTextArea
+  .ark-agentic-sender-richTextArea-placeholder::before {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-conversation-meta-default));
   font: inherit;
 }
 
@@ -122,6 +134,9 @@
 .ov-viking-bot__attach,
 .ov-viking-bot__submit {
   flex-shrink: 0;
+}
+.ov-viking-bot__submit.ov-button {
+  border-radius: 8px;
 }
 .ov-viking-bot__composer .ov-viking-bot__attach.ov-button {
   --ov-ui-button-height: 32px;

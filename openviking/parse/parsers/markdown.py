@@ -25,9 +25,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
 import yaml
 
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.image_validation import is_valid_image
@@ -377,7 +379,7 @@ class MarkdownParser(BaseParser):
             return result
 
         except Exception as e:
-            logger.error(f"[MarkdownParser] Parse failed: {e}", exc_info=True)
+            logger.debug("Markdown parsing failed error_type=%s", type(e).__name__)
             await writer.cleanup()
             raise
 
@@ -520,13 +522,20 @@ class MarkdownParser(BaseParser):
 
         total_s = time.perf_counter() - started
         if _env_bool("OPENVIKING_MARKDOWN_APPLY_PROFILE", False):
-            logger.info(
-                f"[MarkdownApplyProfile] total={total_s:.3f}s mkdir={mkdir_s:.3f}s "
-                f"write={write_s:.3f}s images={images_s:.3f}s ops={len(layout.ops)} "
-                f"mkdir_ops={len(mkdir_ops)} mkdir_count={mkdir_count} "
-                f"write_ops={len(write_ops)} write_chars={write_chars} "
-                f"rewrite_enabled={rewrite_enabled} has_image_refs={has_image_refs} "
-                f"root={layout.root_dir}"
+            logger.debug(
+                "Markdown layout applied total=%.3fs mkdir=%.3fs write=%.3fs images=%.3fs ops=%d mkdir_ops=%d mkdir_count=%d write_ops=%d write_chars=%d rewrite_enabled=%s has_image_refs=%s root=%s",
+                total_s,
+                mkdir_s,
+                write_s,
+                images_s,
+                len(layout.ops),
+                len(mkdir_ops),
+                mkdir_count,
+                len(write_ops),
+                write_chars,
+                rewrite_enabled,
+                has_image_refs,
+                safe_path_for_log(str(layout.root_dir)),
             )
 
     # ========== Helper Methods ==========
@@ -600,20 +609,19 @@ class MarkdownParser(BaseParser):
             return content, None
 
         frontmatter_text = match.group(1)
-        content_without_frontmatter = content[match.end() :]
 
         try:
             # Keep scalar values as strings, matching the previous parser and keeping
             # ParseResult metadata JSON-serializable, while honoring YAML nesting.
             frontmatter = yaml.load(frontmatter_text, Loader=yaml.BaseLoader)
         except yaml.YAMLError:
-            logger.warning("Ignoring malformed YAML frontmatter")
-            return content_without_frontmatter, None
+            logger.info("Malformed YAML frontmatter ignored degraded=true")
+            return content, None
 
         if not isinstance(frontmatter, dict):
-            return content_without_frontmatter, None
+            return content, None
 
-        return content_without_frontmatter, frontmatter
+        return content[match.end() :], frontmatter
 
     def _find_headings(self, content: str) -> List[Tuple[int, int, str, int]]:
         """
@@ -821,6 +829,8 @@ class MarkdownParser(BaseParser):
 
         # mapping: rel_md_path -> {original_path_str -> unique_filename}
         mappings: Dict[str, Dict[str, str]] = {}
+        names_by_directory: Dict[str, set[str]] = {}
+        skipped_images = 0
 
         for md_uri, content in markdown_files:
             # Collect all image references in this markdown file: markdown
@@ -844,7 +854,10 @@ class MarkdownParser(BaseParser):
 
                 resolved_path = self._resolve_image_path(path_str, base_dir, allowed_media_dirs)
                 if resolved_path is None:
-                    logger.warning(f"[MarkdownParser] Image file not found: {path_str}")
+                    skipped_images += 1
+                    logger.debug(
+                        "Image path unresolved; skipping path=%s", safe_path_for_log(path_str)
+                    )
                     continue
 
                 # Skip duplicates within the same markdown file
@@ -861,12 +874,16 @@ class MarkdownParser(BaseParser):
             md_dir = md_uri.rsplit("/", 1)[0]
 
             # Copy each local image next to the markdown file, deduplicating names
-            used_names: set[str] = set()
+            used_names = names_by_directory.setdefault(md_dir, set())
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
             for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
                 try:
                     if not await asyncio.to_thread(resolved_path.exists):
-                        logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
+                        skipped_images += 1
+                        logger.debug(
+                            "Image file missing; skipping path=%s",
+                            safe_path_for_log(str(resolved_path)),
+                        )
                         continue
 
                     # Read image bytes
@@ -876,6 +893,7 @@ class MarkdownParser(BaseParser):
                     if not await asyncio.to_thread(
                         self._is_valid_image, image_bytes, resolved_path
                     ):
+                        skipped_images += 1
                         continue
 
                     # Get filename and deduplicate
@@ -891,13 +909,21 @@ class MarkdownParser(BaseParser):
                     file_mappings[origin_link] = unique_filename
 
                 except Exception as e:
-                    logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
+                    skipped_images += 1
+                    logger.debug(
+                        "Image ingestion failed; skipping path=%s error_type=%s",
+                        safe_path_for_log(str(resolved_path)),
+                        type(e).__name__,
+                    )
 
             if file_mappings:
                 rel_md_path = (
                     md_uri[len(root_prefix) + 1 :] if md_uri.startswith(root_prefix) else md_uri
                 )
                 mappings[rel_md_path] = file_mappings
+
+        if skipped_images:
+            logger.info("Local image ingestion incomplete skipped=%d degraded=true", skipped_images)
 
         # Write a single mapping file at the root directory for rewrite_image_uris
         if mappings:
@@ -931,11 +957,11 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(self._unwrap_link_destination(path_str))
+            path = Path(unquote(self._unwrap_link_destination(path_str), errors="strict"))
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
-                logger.warning(f"[MarkdownParser] Rejected absolute image path: {path_str}")
+                logger.debug("Absolute image path rejected path=%s", safe_path_for_log(path_str))
                 return None
 
             # Build the list of allowed roots to confine resolution to.
@@ -973,8 +999,9 @@ class MarkdownParser(BaseParser):
                 try:
                     candidate.relative_to(root.resolve())
                 except ValueError:
-                    logger.warning(
-                        f"[MarkdownParser] Rejected image path outside base dir: {path_str}"
+                    logger.debug(
+                        "Image path outside base directory rejected path=%s",
+                        safe_path_for_log(path_str),
                     )
                     continue
 
@@ -983,7 +1010,7 @@ class MarkdownParser(BaseParser):
 
             return None
         except Exception:
-            logger.warning(f"[MarkdownParser] Cannot resolve image path: {path_str}")
+            logger.debug("Image path unresolved path=%s", safe_path_for_log(path_str))
             return None
 
     def _is_valid_image(self, image_bytes: bytes, source_path: Path) -> bool:
@@ -1105,6 +1132,8 @@ class MarkdownParser(BaseParser):
             return link
 
         m = _MD_FRAGMENT_RE.match(raw)
+        if m is None:
+            return link
         path_part = m.group(1)
         suffix = m.group(2) or ""
         if not path_part:
@@ -1308,7 +1337,11 @@ class MarkdownParser(BaseParser):
                 out[rel] = op.content
             return out
         except Exception as exc:
-            logger.debug(f"[_probe_split_layout] failed for {target_path}: {exc}")
+            logger.info(
+                "Split layout probe failed; using fallback layout target=%s error_type=%s",
+                safe_uri_for_log(target_path),
+                type(exc).__name__,
+            )
             return None
 
     def _section_subpath(self, uri: str, root_dir: str) -> str:
@@ -1389,7 +1422,9 @@ class MarkdownParser(BaseParser):
         if not split_content:
             file_path = f"{root_dir}/{doc_name}.md"
             ops.append(_LayoutOp("write", file_path, content))
-            logger.debug(f"[MarkdownParser] No-split document planned as: {file_path}")
+            logger.debug(
+                "Document layout planned path=%s split=false", safe_path_for_log(str(file_path))
+            )
             return
 
         # Small document: save as single file (character budget)

@@ -130,13 +130,13 @@ const otherLibrary = { resourceId: 'library-b' };
 
 ### Basic usage
 
-Places FileBrowser and Console side by side, with the styles from `modules/style.css`.
+Places FileBrowser and Console side by side. Use `@` to add references. The composer shows the first five and folds the rest into `+N`. Select a directory in the left tree to replace all references with that directory. Click a reference to reveal its directory.
 
 ```tsx file="../../_demos/modules-basic.tsx" preview
 
 ```
 
-The example is not wrapped in `OpenVikingProvider` and only shows the styles: FileBrowser's tree stays in the loading state and Console carries no identity. The grid belongs to the example; your app chooses its own layout.
+The example uses simulated data. The host replaces the selection through `FileBrowser.onSelect` and passes the list to `Console.conversation.references`. The `@` picker and removal controls update the same list through `references.onChange`. Send the draft to see the submitted URIs below the panels.
 
 ### Shared query cache
 

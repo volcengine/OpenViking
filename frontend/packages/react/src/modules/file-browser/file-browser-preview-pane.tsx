@@ -1,10 +1,15 @@
 import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
-import { useRenderErrors } from './file-browser-labels.js';
+import {
+  useRenderErrors,
+  withDirectoryEmptyLabel,
+  type ResolvedLabels,
+} from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
 import { useRef } from 'react';
+import { useOvClient } from '../../client/provider.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 import { previewActionContext } from './file-browser-preview-action-source.js';
-import { isSystemUri } from './preview-policy.js';
 import type { Locale } from '../../shared/locale.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { FileBrowserDetail } from './file-browser-detail.js';
@@ -14,11 +19,11 @@ import {
   previewModelNotice,
 } from './file-browser-preview-footer.js';
 import { FileBrowserFailure } from './file-browser-failure.js';
-import type { ResolvedLabels } from './file-browser-labels.js';
 import type { useFileBrowserAcl } from './use-file-browser-acl.js';
 import { useFileBrowserPreviewActions } from './use-file-browser-preview-actions.js';
+import { WikiSaveNotification } from './wiki-save-notification.js';
+import type { FileBrowserApi } from './file-browser-state-types.js';
 import type {
-  FileBrowserApi,
   FileBrowserLabels,
   FileBrowserPreviewActions,
   FileBrowserPreviewSlots,
@@ -48,20 +53,16 @@ function FileBrowserPreviewPaneContent({
   requestOptions?: OvRequestOptions;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const canWrite = !readOnly && permissions.canEdit;
+  const { currentUri: uri, previewTabs, previewKey } = browser;
   const tab =
-    browser.previewTabs?.find(
-      (candidate) => candidate.key === browser.previewKey,
-    ) ?? browser.previewTabs?.[0];
-  const systemDirectory = tab?.kind === 'directory' && isSystemUri(tab.key);
-  const modelNotice = previewModelNotice(
-    browser.currentUri,
-    text.previewModelNotice,
-  );
+    previewTabs?.find(({ key }) => key === previewKey) ?? previewTabs?.[0];
+  const modelNotice = previewModelNotice(uri, text.previewModelNotice);
   const previewFooter =
     tab &&
     tab.kind !== 'content' &&
     !tab.loading &&
-    tab.key === browser.currentUri &&
+    tab.key === uri &&
     (browser.previewFooter || browser.previewUpdatedAt || modelNotice) ? (
       <FileBrowserPreviewFooter
         count={browser.previewFooter}
@@ -72,7 +73,7 @@ function FileBrowserPreviewPaneContent({
       />
     ) : undefined;
   const controls = useFileBrowserPreviewActions({
-    uri: browser.currentUri,
+    uri,
     rootUri,
     isFile: tab?.kind === 'file',
     enabled: Boolean(tab && tab.kind !== 'content' && !tab.loading),
@@ -80,7 +81,7 @@ function FileBrowserPreviewPaneContent({
     onUpdated: () => {
       void browser.actions.refresh().catch(() => {});
     },
-    canWrite: !readOnly && permissions.canEdit,
+    canWrite,
     canManage: !readOnly && permissions.canDelete,
     options: previewActions,
     locale,
@@ -123,19 +124,15 @@ function FileBrowserPreviewPaneContent({
   };
   return (
     <div ref={ref} className="ov-file-browser__preview-pane">
-      {browser.previewTabs?.length ? (
+      {previewTabs?.length ? (
         <FileBrowserDetail
-          tabs={browser.previewTabs}
-          activeKey={browser.previewKey}
+          tabs={previewTabs}
+          activeKey={previewKey}
           locale={locale}
-          labels={
-            systemDirectory
-              ? { ...previewLabels, fileEmpty: text.systemDirectory }
-              : previewLabels
-          }
+          labels={withDirectoryEmptyLabel(tab, previewLabels, text)}
           footer={previewFooter}
           titleExtra={permissions.titleExtra}
-          readOnly={readOnly || !permissions.canEdit || !controls.policy.edit}
+          readOnly={!canWrite || !controls.policy.edit}
           toolbar={{
             copyPath: previewActions?.copyPath,
             viewSwitch:
@@ -145,7 +142,13 @@ function FileBrowserPreviewPaneContent({
           }}
           actions={commandSource}
           previewSlots={slots}
+          canEditConflict={canWrite && previewActions?.edit !== false}
           onActiveKeyChange={browser.actions.setPreviewKey}
+          onSave={() => {
+            controls.onFileSaved();
+            if (browser.previewDashboard?.kind === 'wiki')
+              browser.refreshWikiConflicts();
+          }}
         />
       ) : browser.currentUri && browser.previewError ? (
         <div className="ov-file-browser__detail">
@@ -175,15 +178,23 @@ function FileBrowserPreviewPaneContent({
 export function FileBrowserPreviewPane(
   props: Parameters<typeof FileBrowserPreviewPaneContent>[0],
 ) {
+  const { browser, locale, requestOptions, rootUri } = props;
+  const client = useOvClient();
+  const scope = JSON.stringify([rootUri, browser.currentUri]);
+  const key = scopeKeyOf(client, requestOptions, scope);
   return (
-    <MonitoringFlow operation={props.browser.previewMonitoring}>
+    <MonitoringFlow operation={browser.previewMonitoring}>
+      <WikiSaveNotification
+        feedback={browser.wikiSaveFeedback}
+        locale={locale}
+      />
       <ErrorBoundary
         monitoringRegion="preview"
         message={useRenderErrors(props.locale).preview}
         locale={props.locale}
         resetKeys={[props.browser.currentUri]}
       >
-        <FileBrowserPreviewPaneContent {...props} />
+        <FileBrowserPreviewPaneContent key={key} {...props} />
       </ErrorBoundary>
     </MonitoringFlow>
   );

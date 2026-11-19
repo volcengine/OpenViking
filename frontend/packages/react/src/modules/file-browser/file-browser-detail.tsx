@@ -6,7 +6,10 @@ import {
   type FilePreviewToolbarOptions,
   type FilePreviewHeaderSlots,
 } from '../../components/file-preview/index.js';
-import type { ReactNode } from 'react';
+import { useCallback, useRef, type ReactNode } from 'react';
+import { FilePreviewEditContext } from '../../components/file-preview/file-preview-edit-context.js';
+import { dashboardKey } from './dashboard-model.js';
+import { isEditableText } from './preview-policy.js';
 
 import type { FileBrowserLabels } from './types.js';
 
@@ -21,7 +24,9 @@ export interface FileBrowserDetailProps {
   previewSlots?: FilePreviewHeaderSlots;
   toolbar?: FilePreviewToolbarOptions;
   actions?: FilePreviewActionSource;
+  canEditConflict: boolean;
   onActiveKeyChange: (key: string) => void;
+  onSave?: () => void;
 }
 
 export function FileBrowserDetail({
@@ -35,27 +40,60 @@ export function FileBrowserDetail({
   previewSlots,
   toolbar,
   actions,
+  canEditConflict,
   onActiveKeyChange,
+  onSave,
 }: FileBrowserDetailProps) {
+  const pendingEdit = useRef<{ key: string; matchText: string } | null>(null);
+  const onFileReady = useCallback(
+    (key: string, startEditing?: (matchText?: string) => void) => {
+      const pending = pendingEdit.current;
+      if (pending?.key !== key) return;
+      pendingEdit.current = null;
+      if (canEditConflict) startEditing?.(pending.matchText);
+    },
+    [canEditConflict],
+  );
+  const conflictFile = canEditConflict
+    ? tabs.find(
+        (tab) =>
+          tab.kind === 'file' &&
+          !tab.disabled &&
+          dashboardKey(tab.key) === activeKey &&
+          isEditableText(tab.key),
+      )
+    : undefined;
+  const editFile = conflictFile
+    ? (matchText: string) => {
+        pendingEdit.current = { key: conflictFile.key, matchText };
+        onActiveKeyChange(conflictFile.key);
+      }
+    : null;
   return (
     <div className="ov-file-browser__detail">
-      <FilePreview
-        tabs={
-          decorateTabs(
-            tabs,
-            footer,
-            titleExtra,
-            readOnly,
-            previewSlots,
-            actions,
-          ) as [FilePreviewTab, ...FilePreviewTab[]]
-        }
-        toolbar={toolbar}
-        activeKey={activeKey ?? undefined}
-        locale={locale}
-        labels={labels}
-        onActiveKeyChange={onActiveKeyChange}
-      />
+      <FilePreviewEditContext.Provider value={{ editFile, onFileReady }}>
+        <FilePreview
+          tabs={
+            decorateTabs(
+              tabs,
+              footer,
+              titleExtra,
+              readOnly,
+              previewSlots,
+              actions,
+              onSave,
+            ) as [FilePreviewTab, ...FilePreviewTab[]]
+          }
+          toolbar={toolbar}
+          activeKey={activeKey ?? undefined}
+          locale={locale}
+          labels={labels}
+          onActiveKeyChange={(key) => {
+            pendingEdit.current = null;
+            onActiveKeyChange(key);
+          }}
+        />
+      </FilePreviewEditContext.Provider>
     </div>
   );
 }
@@ -67,6 +105,7 @@ function decorateTabs(
   readOnly?: boolean,
   previewSlots?: FilePreviewHeaderSlots,
   actions?: FilePreviewActionSource,
+  onSave?: () => void,
 ): readonly FilePreviewTab[] {
   return tabs.map((tab) => {
     if (tab.kind === 'content') return tab;
@@ -83,6 +122,17 @@ function decorateTabs(
         : tab;
     return {
       ...editableTab,
+      ...(editableTab.kind === 'file' && editableTab.editing && onSave
+        ? {
+            editing: {
+              ...editableTab.editing,
+              onSave: (value: string) => {
+                editableTab.editing?.onSave?.(value);
+                onSave();
+              },
+            },
+          }
+        : {}),
       actions: actions ?? tab.actions,
       slots: {
         ...tab.slots,

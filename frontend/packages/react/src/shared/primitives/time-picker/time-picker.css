@@ -21,7 +21,7 @@
   padding: 0;
   overflow: hidden;
   border-radius: 4px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  background: var(--ov-ui-color-bg-8, var(--ov-ui-bg-8-default));
   box-shadow: var(--ov-ui-overlay-shadow-default);
 }
 .ov-time-picker__panel {

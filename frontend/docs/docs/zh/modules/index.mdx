@@ -130,13 +130,13 @@ const otherLibrary = { resourceId: 'library-b' };
 
 ### 基础用法
 
-并排放置 FileBrowser 和 Console，样式来自 `modules/style.css`。
+并排放置 FileBrowser 和 Console。通过 `@` 添加引用，输入区直接显示前 5 个，其余收进 `+N`。点击左侧目录树中的目录，会清空已有引用，只保留本次点选的目录。点击引用可定位回目录。
 
 ```tsx file="../../_demos/modules-basic.tsx" preview
 
 ```
 
-示例没有包 `OpenVikingProvider`，只用来查看样式：FileBrowser 的目录树停在加载状态，Console 不带身份信息。网格布局属于示例，应用自行决定布局。
+示例使用模拟数据。宿主通过 `FileBrowser.onSelect` 替换引用列表，并通过 `Console.conversation.references` 传入。`@` 选择器和移除按钮通过 `references.onChange` 更新同一列表。发送后可在面板下方查看本次提交的 URI。
 
 ### 共享查询缓存
 

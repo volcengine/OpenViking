@@ -4,6 +4,7 @@ import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
 import { joinLines, splitLines } from './fs-lines.js';
 import { splitWikiMetadata } from './wiki-metadata.js';
 import { readCompileTargets } from './dashboard-data.js';
+import { findCompileTarget } from './dashboard-resource.js';
 import { isOvClientError } from '../../client/errors.js';
 
 /** Read and project text once for preview, editing and Wiki business data. */
@@ -44,7 +45,9 @@ export async function readFileContent(
   const projection = candidate || wiki ? splitWikiMetadata(body) : undefined;
   if (!wiki && projection?.payloads.length) {
     try {
-      wiki = (await readCompileTargets(client, uri, options)).length > 0;
+      wiki =
+        Boolean(await findCompileTarget(client, uri, options)) ||
+        (await readCompileTargets(client, uri, options)).length > 0;
     } catch (error) {
       // An old server without Compile cannot establish Wiki ownership.
       // Other failures must not expose unclassified metadata as trusted body text.
@@ -58,7 +61,7 @@ export async function readFileContent(
   return {
     content: truncated ? joinLines(lines.slice(0, limit)) : visible,
     truncated,
-    // Only the business parser receives metadata; views and drafts receive content.
+    // Keep full Wiki data separate from the projected preview and draft content.
     wikiSource: wiki ? body : undefined,
     wiki,
   };

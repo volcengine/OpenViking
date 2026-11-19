@@ -106,10 +106,18 @@ async def rewrite_context(
     except (asyncio.TimeoutError, TimeoutError):
         # Separate names before Python 3.11; catching only the builtin there
         # reports every timeout as a generic failure.
-        logger.warning("Context rewrite timed out after %.2fs", timeout)
+        logger.info(
+            "context rewrite timed out; keeping assembled context timeout_seconds=%.2f",
+            timeout,
+            extra={"degraded": True, "error_type": "TimeoutError"},
+        )
         return "", "timeout", None
     except Exception as exc:
-        logger.warning("Context rewrite failed: %s", exc)
+        logger.info(
+            "context rewrite failed; keeping assembled context error_type=%s",
+            type(exc).__name__,
+            extra={"degraded": True, "error_type": type(exc).__name__},
+        )
         return "", "failed", None
 
     after = _usage_snapshot(planner)

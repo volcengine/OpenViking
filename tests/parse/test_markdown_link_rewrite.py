@@ -14,9 +14,13 @@ from openviking.parse.parsers.markdown import MarkdownParser, _RewriteContext
 
 
 @pytest.mark.asyncio
-async def test_parse_rewrites_rendered_links_and_preserves_examples(tmp_path):
+@pytest.mark.parametrize(
+    "other_content",
+    ["", "[example](./linked.md#section\ncontinued)", "[example](./linked.md?query\ncontinued)"],
+)
+async def test_parse_rewrites_rendered_links_and_preserves_examples(tmp_path, other_content):
     (tmp_path / "linked.md").write_text("# Linked\n", encoding="utf-8")
-    code = "```markdown\n[example](./linked.md)\n```\n\n`[inline](./linked.md)`"
+    code = f"```markdown\n[example](./linked.md)\n```\n\n`[inline](./linked.md)`\n\n{other_content}"
     source = tmp_path / "guide.md"
     source.write_text(f"# Guide\n\n{code}\n\n[Open `linked.md`](./linked.md)", encoding="utf-8")
     output = tmp_path / "parsed"

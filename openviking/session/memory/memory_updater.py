@@ -1146,39 +1146,33 @@ class MemoryUpdater:
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
-        # Apply unified operations - _apply_edit returns True if edited, False if written
+        from openviking.observability.reporting.facts import bind_memory_type
+
         uri_memory_type_map = {}
         for resolved_op in applicable_upserts:
-            try:
-                from openviking.observability.reporting.facts import bind_memory_type
-
-                with bind_memory_type(
-                    resolved_op.memory_type,
-                    task_id=getattr(resolved_op.source, "task_id", None),
-                    source_task_ids=getattr(resolved_op.source, "task_ids", None),
-                ):
-                    await self._apply_upsert(
-                        resolved_op,
-                        ctx,
-                        extract_context=extract_context,
-                        lease_ref=self._transaction_handle,
-                        uri_remap=uri_remap,
-                    )
-                # Add all uris to result (uris is List[str])
-                add_result = (
-                    result.add_edited
-                    if resolved_op.is_edit() and not self._is_uri_migration(resolved_op)
-                    else result.add_written
-                )
-                for uri in resolved_op.uris:
+            add_result = (
+                result.add_edited
+                if resolved_op.is_edit() and not self._is_uri_migration(resolved_op)
+                else result.add_written
+            )
+            for uri in resolved_op.uris:
+                try:
+                    with bind_memory_type(
+                        resolved_op.memory_type,
+                        task_id=getattr(resolved_op.source, "task_id", None),
+                        source_task_ids=getattr(resolved_op.source, "task_ids", None),
+                    ):
+                        await self._apply_upsert(
+                            resolved_op.model_copy(update={"uris": [uri]}),
+                            ctx,
+                            extract_context=extract_context,
+                            lease_ref=self._transaction_handle,
+                            uri_remap=uri_remap,
+                        )
                     add_result(uri)
                     uri_memory_type_map[uri] = resolved_op.memory_type
-            except Exception as e:
-                tracer.error(
-                    f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={resolved_op.uris}",
-                    e,
-                )
-                for uri in resolved_op.uris:
+                except Exception as e:
+                    tracer.error(f"Failed to apply memory operation for {uri}", e)
                     result.add_error(uri, e)
 
         failed_upsert_uris = {uri for uri, _error in result.errors}
@@ -1736,14 +1730,15 @@ class MemoryUpdater:
                         continue
                     metadata[field.name] = new_value
 
-            # Preserve system-managed metadata from the old file that is not
-            # covered by the schema. These fields are written by the system,
-            # never by the LLM, so they would be silently dropped on every
-            # Update without this copy.
+            # Preserve fields omitted by the update, including system-managed metadata.
             if old_content and old_content.extra_fields:
-                schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
                 for key, val in old_content.extra_fields.items():
-                    if key not in schema_field_names and key not in metadata and val is not None:
+                    if (
+                        key not in {"content", "memory_type"}
+                        and key not in resolved_op.memory_fields
+                        and key not in metadata
+                        and val is not None
+                    ):
                         metadata[key] = val
 
             metadata["version"] = next_memory_version(old_content)

@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Optional, Protocol
 
+from openviking.observability.log_safety import short_hash
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,12 +22,9 @@ _LEADER_COMPONENT_CHARS = frozenset("._-:")
 
 def _validate_component(name: str, value: str) -> None:
     if not value or not all(
-        char.isascii() and (char.isalnum() or char in _LEADER_COMPONENT_CHARS)
-        for char in value
+        char.isascii() and (char.isalnum() or char in _LEADER_COMPONENT_CHARS) for char in value
     ):
-        raise ValueError(
-            f"{name} must contain only ASCII letters, digits, '.', '_', '-' or ':'"
-        )
+        raise ValueError(f"{name} must contain only ASCII letters, digits, '.', '_', '-' or ':'")
 
 
 def _validate_timing(name: str, value: float) -> None:
@@ -89,22 +87,25 @@ class _NativeLeaderBackend:
                 await self._release_acquired_after_cancel(future)
             raise
 
-    async def _release_acquired_after_cancel(
-        self, future: asyncio.Future[str | None]
-    ) -> None:
+    async def _release_acquired_after_cancel(self, future: asyncio.Future[str | None]) -> None:
         try:
             lease_ref = future.result()
         except asyncio.CancelledError:
             return
-        except Exception:
-            logger.exception("Leader lease acquisition cleanup failed")
+        except Exception as _log_error:
+            logger.info(
+                "Leader lease acquisition cleanup failed error_type=%s", type(_log_error).__name__
+            )
             return
         if lease_ref is None:
             return
         try:
             await self.release(lease_ref)
-        except Exception:
-            logger.exception("Failed to release leader lease after cancellation")
+        except Exception as _log_error:
+            logger.info(
+                "Failed to release leader lease after cancellation error_type=%s",
+                type(_log_error).__name__,
+            )
 
     async def renew(self, lease_ref: str, ttl_secs: float) -> bool:
         return bool(await self._client.leader_renew_async(lease_ref, ttl_secs))
@@ -193,15 +194,17 @@ class LeaderCandidate(AsyncIterator[Leadership]):
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.exception("Leader lease acquisition failed key=%s", self._key)
+            except Exception as _log_error:
+                logger.info(
+                    "Leader lease acquisition failed key=%s error_type=%s",
+                    short_hash(str(self._key)),
+                    type(_log_error).__name__,
+                )
                 lease_ref = None
             if lease_ref is not None:
                 deadline = acquire_started + self._ttl_secs
                 accepted = (
-                    self._active
-                    and self._generation == generation
-                    and loop.time() < deadline
+                    self._active and self._generation == generation and loop.time() < deadline
                 )
                 if accepted:
                     stop_event = asyncio.Event()
@@ -215,8 +218,12 @@ class LeaderCandidate(AsyncIterator[Leadership]):
                     return Leadership(holder_id=self._holder_id, stop_event=stop_event)
                 try:
                     await self._backend.release(lease_ref)
-                except Exception:
-                    logger.exception("Failed to release rejected leader lease key=%s", self._key)
+                except Exception as _log_error:
+                    logger.info(
+                        "Failed to release rejected leader lease key=%s error_type=%s",
+                        short_hash(str(self._key)),
+                        type(_log_error).__name__,
+                    )
                 if not self._active or self._generation != generation:
                     raise StopAsyncIteration
             await asyncio.sleep(self._retry_interval_secs)
@@ -239,8 +246,12 @@ class LeaderCandidate(AsyncIterator[Leadership]):
         if lease_ref is not None:
             try:
                 await self._backend.release(lease_ref)
-            except Exception:
-                logger.exception("Failed to release leader lease key=%s", self._key)
+            except Exception as _log_error:
+                logger.info(
+                    "Failed to release leader lease key=%s error_type=%s",
+                    short_hash(str(self._key)),
+                    type(_log_error).__name__,
+                )
 
     async def _renew(
         self,
@@ -268,8 +279,12 @@ class LeaderCandidate(AsyncIterator[Leadership]):
                 deadline = renew_started + self._ttl_secs
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Leader lease renewal failed key=%s", self._key)
+        except Exception as _log_error:
+            logger.info(
+                "Leader lease renewal failed key=%s error_type=%s",
+                short_hash(str(self._key)),
+                type(_log_error).__name__,
+            )
         finally:
             stop_event.set()
 

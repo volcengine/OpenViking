@@ -806,7 +806,7 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_warning(
+async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_info(
     monkeypatch, caplog
 ):
     from openviking.utils.circuit_breaker import CircuitBreakerOpen
@@ -840,19 +840,16 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
 
     monkeypatch.setattr(collection_schemas.logger, "propagate", False)
     collection_schemas.logger.addHandler(caplog.handler)
-    collection_schemas.logger.setLevel(logging.WARNING)
+    collection_schemas.logger.setLevel(logging.INFO)
     try:
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             first_result = await handler.on_dequeue(_build_queue_payload())
             second_result = await handler.on_dequeue(_build_queue_payload())
     finally:
         collection_schemas.logger.removeHandler(caplog.handler)
 
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
-    assert (
-        warnings.count("Embedding circuit breaker is open; re-enqueueing messages account=default")
-        == 1
-    )
+    infos = [record.message for record in caplog.records if record.levelno == logging.INFO]
+    assert infos.count("Embedding circuit breaker is open; re-enqueueing messages") == 1
     for result in (first_result, second_result):
         assert result.outcome is ProcessOutcome.REQUEUED
         assert result.value is None
@@ -3078,7 +3075,7 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
 async def test_update_search_tags_with_levels_queries_directory_uri_only():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     directory_uri = "viking://resources/demo/doc.md"
-    calls = {"filter": [], "get": [], "upsert": []}
+    calls = {"filter": [], "get": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3096,10 +3093,10 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
             {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
         ]
 
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True)
 
     async def _fake_get(ids, *, ctx):
         calls["get"].append((list(ids), ctx.account_id))
@@ -3110,7 +3107,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 
     backend.filter = _fake_filter
     backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         directory_uri,
@@ -3125,17 +3122,13 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
     assert calls["get"] == [(["dir-l0", "dir-l1"], ctx.account_id)]
     assert calls["filter"][0]["limit"] == 2
     assert "id" in calls["filter"][0]["output_fields"]
-    assert calls["upsert"] == [
+    assert calls["update"] == [
         {
             "id": "dir-l0",
-            "uri": directory_uri,
-            "level": 0,
             "search_tags": ["old=0", "team=search"],
         },
         {
             "id": "dir-l1",
-            "uri": directory_uri,
-            "level": 1,
             "search_tags": ["old=1", "team=search"],
         },
     ]
@@ -3144,7 +3137,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 @pytest.mark.asyncio
 async def test_update_search_tags_with_levels_skips_records_without_id_and_private_helper_is_removed():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    calls = {"filter": [], "get": [], "upsert": []}
+    calls = {"filter": [], "get": [], "update": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -3162,10 +3155,10 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
         ]
 
-    async def _fake_upsert(data, *, ctx, options=UpsertOptions()):
-        del ctx, options
-        calls["upsert"].append(dict(data))
-        return data["id"]
+    async def _fake_update(data, *, ctx):
+        del ctx
+        calls["update"].append(dict(data))
+        return UpdateResult(ok=True)
 
     async def _fake_get(ids, *, ctx):
         calls["get"].append((list(ids), ctx.account_id))
@@ -3181,7 +3174,7 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
 
     backend.filter = _fake_filter
     backend.get = _fake_get
-    backend.upsert = _fake_upsert
+    backend.update = _fake_update
 
     updated = await backend.update_search_tags(
         "viking://resources/demo/doc.md",
@@ -3208,7 +3201,9 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             "search_tags": ["team=search"],
         },
     ]
-    assert calls["upsert"] == updated
+    assert calls["update"] == [
+        {"id": record["id"], "search_tags": record["search_tags"]} for record in updated
+    ]
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ export const DropdownItem = forwardRef<HTMLButtonElement, DropdownItemProps>(
     { className, closeOnClick = true, onClick, ...props },
     ref,
   ) {
-    const close = useContext(DropdownContext);
+    const context = useContext(DropdownContext);
     const itemRef = useCallback(
       (node: HTMLButtonElement | null) => {
         if (node) {
@@ -28,7 +28,7 @@ export const DropdownItem = forwardRef<HTMLButtonElement, DropdownItemProps>(
         type="button"
         className={['ov-dropdown__item', className].filter(Boolean).join(' ')}
         onClick={(event) => {
-          if (closeOnClick) close?.();
+          if (closeOnClick) context?.close();
           onClick?.(event);
         }}
       />

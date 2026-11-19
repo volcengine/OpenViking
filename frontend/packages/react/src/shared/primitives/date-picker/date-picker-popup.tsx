@@ -26,6 +26,7 @@ export interface DatePickerPopupProps {
   month: number;
   /** 已选日期；`null` 表示未选。Picked date, or `null`. */
   selected: Dayjs | null;
+  isDateDisabled: (date: Dayjs) => boolean;
   /** BCP 47 语言标签，决定月份与周标题的语言。BCP 47 tag for month and weekday headings. */
   locale: string;
   prevLabel: string;
@@ -38,6 +39,7 @@ export function DatePickerPopup({
   year,
   month,
   selected,
+  isDateDisabled,
   locale,
   prevLabel,
   nextLabel,
@@ -122,6 +124,7 @@ export function DatePickerPopup({
                 .filter(Boolean)
                 .join(' ')}
               aria-pressed={active}
+              disabled={isDateDisabled(cell.date)}
               onClick={() => onPick(toApiDate(cell.date))}
             >
               {cell.date.date()}

@@ -1,3 +1,8 @@
+import { compileHelp } from './compile-help.js';
+import { transferSession } from './transfer-session.zh-CN.js';
+import { coreParameters } from './core-parameters.js';
+import filesystemParameters from './filesystem-parameters.js';
+import { SEARCH_PARAMETERS_ZH_CN } from './search-parameters.js';
 import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ConsoleLabels } from '../types.js';
 import type enUS from './en-US.js';
@@ -21,7 +26,25 @@ const messages: typeof enUS = {
       | 'quickStart'
     >
   >,
+  telemetryResult: (value: string) => `遥测：${value}`,
+  taskCompletion: {
+    title: '任务完成',
+    description: '异步任务已完成。',
+    resource: '资源添加任务已完成，可点击查看结果。',
+    viewResult: '查看结果',
+  },
+  compileQuickInputs: {
+    createWiki: {
+      label: '创建 Wiki',
+      prompt: '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联',
+    },
+    dailyReport: {
+      label: '定时日报',
+      prompt: '基于选中的目录生成日报，并设置定时更新',
+    },
+  },
   commands: {
+    ...transferSession,
     'add-resource': '添加路径或 URL 到资源',
     'add-skill': '添加 Skill 到技能目录',
     'add-memory': '直接添加记忆',
@@ -76,20 +99,10 @@ const messages: typeof enUS = {
         '按搜索词在当前上下文中做语义检索，返回匹配的资源、记忆或技能。',
       examples: ['ov find "OpenViking 有什么价值？"'],
     },
-    'compile create': {
-      description: '保存来源、目标和 Skill 的编译配置，不立即启动编译。',
-      examples: [
-        'ov compile create --from viking://resources/source --to viking://resources/wiki',
-      ],
-    },
-    compile: {
-      description:
-        '默认使用内置 llm-wiki Skill 整理资料，将 Wiki 写入目标目录。可通过 --skill 指定其他 Skill。',
-      examples: [
-        'ov compile --from viking://resources/source --to viking://resources/wiki',
-      ],
-    },
+    'compile create': compileHelp['zh-CN'].createGuide,
+    compile: compileHelp['zh-CN'].runGuide,
   },
+  compileArgsHelp: compileHelp['zh-CN'].args,
   parameters: {
     path: '要导入的远程路径或 URL',
     to: '写入的目标 URI',
@@ -97,19 +110,31 @@ const messages: typeof enUS = {
     'parent-auto-create': '父目录不存在时创建',
     reason: '导入原因',
     args: '以 JSON 对象提供解析参数',
-    wait: '等待处理完成后返回',
+    'compile-args':
+      '合法的 JSON 对象，用于保存模型和定时计划。字段名区分大小写。',
     'target-uri': 'Skill 的目标根目录',
     content: '要写入记忆的纯文本',
     'session-id': '要写入并提交的会话 ID',
-    query: '用于语义检索的搜索词',
-    target_uri: '限制检索范围的 URI',
     limit: '最多返回的条目数量',
-    level: '筛选内容层级，例如 0,1,2',
-    from: '待编译的来源 URI',
-    skill: '用于编译的 Skill URI',
-    instruction: '编译的额外要求',
+    'compile-name':
+      '汉字、ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符。纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符。同一用户内不可重名，不支持改名',
+    from: '已存在的来源目录 URI，可重复传入 --from，或用英文逗号分隔多个 URI',
+    'compile-from':
+      '至少一个已存在且可读的来源目录。可重复传入 --from，或用英文逗号分隔多个 URI，重复项自动去重。',
+    'compile-to': '可写的产物输出目录。目录不存在时，服务端可创建。',
+    skill: '用于编译的 Skill 目录 URI，决定如何读取、整理和输出资料',
+    instruction:
+      '补充语言、结构、引用及处理要求。省略时按 Skill 默认行为执行。',
+    'task-type': '按任务类型过滤，例如 add_resource、add_skill',
+    'task-status': '按任务状态过滤，例如 pending、running、completed、failed',
+    'task-id': '异步任务 ID',
+    ...coreParameters['zh-CN'],
+    ...filesystemParameters['zh-CN'],
+    ...SEARCH_PARAMETERS_ZH_CN,
   },
   commandGroups: {
+    transfer: '文件传输',
+    session: '会话',
     core: '核心流程',
     filesystem: '文件系统',
     search: '搜索与上下文',
@@ -117,6 +142,10 @@ const messages: typeof enUS = {
   },
   messages: {
     cancelled: () => '请求已取消；服务端可能仍在处理已接收的操作。',
+    unavailableCommand: (value?: string) => `当前工作台不支持命令：${value}`,
+    invalidOvpack: () => '请选择有效的 .ovpack 文件。',
+    invalidOvpackDownload: () => '服务端未返回有效的 OVPack 压缩包。',
+    missingUploadId: () => '上传未返回临时文件 ID。',
     unknownCommand: () => '未知命令。输入 ov help 查看可用命令。',
     shellSyntax: () => '不支持 Shell 语法。',
     unclosedQuote: () => '引号或转义未闭合。',
@@ -126,6 +155,8 @@ const messages: typeof enUS = {
     expectedUri: (value: string) => `需要 Viking URI：${value}`,
     invalidArgument: (value: string) => `无效参数 ${value}`,
     missingArgument: (value: string) => `缺少参数 ${value}`,
+    compileNamedRunInputs: () =>
+      '请先使用 compile create 保存输入，再使用 compile --compile-name 执行。',
   },
 };
 export default messages;

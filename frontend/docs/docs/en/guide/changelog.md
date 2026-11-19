@@ -7,6 +7,104 @@ Changes in stable releases of `@openviking/react`.
 <details className="ov-release-notes__group" name="ov-release-minors" open>
 <summary>0.1.x</summary>
 
+### 0.1.14
+
+**Minor Changes**
+
+- 128b63d: AgentConnect accepts `isEnterprise` to show English or Chinese team onboarding instructions for agents supported by the official installer, preserving API key masking and copying. Existing instructions remain the default.
+
+- 196fad5: Add OpenViking CLI session, file download, and OVPack commands to Console. Local inputs use the browser file picker. Administrator-only backup and restore require opting in through `commandOptions.allowAdminCommands`.
+
+  With `--read-content`, Console search results display multiline file content and fall back to the abstract when content is unavailable or blank. Search result items support an optional `content` field for the multiline body.
+
+- 81c42ac: Align the Console's built-in command options with the Volcengine terminal, including filesystem limits, search filters, ACL JSON, inline writes, resource import options, and task filters. Show the canonical names, aliases, and defaults in command help. `tree` now requires a directory URI, for example `ov tree viking://resources -L 2`.
+
+- d510934: FileBrowser can show test materials, group source trajectories by update, and display trajectory documents and source messages when the host supplies the corresponding loaders.
+
+- a8d37f3: Show timestamped transcripts and extracted frames in FileBrowser for processed video segments. Select a transcript entry to seek the video, or open an extracted frame at full size.
+
+- b90eb2e: Show Create Wiki and Scheduled Report shortcuts in managed VikingBot. Use the toolbar @ or type @ in the draft to browse and search for files or directories to include with a message.
+
+  After switching languages, select another shortcut to replace the previous preset draft.
+
+**Patch Changes**
+
+- 0019eb7: Keep the active video transcript entry highlighted and in view during playback. Show extracted frame filenames, keep thumbnails stable when resizing the preview, and expand the video and transcript together while preserving playback.
+
+- b62b243: The command console accepts Han characters in compile configuration names, up to 32 characters in total. ASCII-only names allow up to 64 characters.
+
+- a961625: Allow Console hosts to control selected directory references while keeping the built-in picker and search. Reset the selection when switching or starting a conversation. Chat adapters can acknowledge accepted input before the reply arrives so a submitted clarification card can close promptly.
+
+- d510934: FileBrowser shows the appropriate empty state when a directory has no L0 or L1 summary.
+
+- 1c25783: Align the version history and copy icons in the FileBrowser editor with the console. Hide the dashboard tab during editing, show a folder-specific empty message, and label the shared resources root.
+
+- 84e5f15: Keep retrieval mode selection beside the FileBrowser search field, including when there are no matches. Switching modes retains the query and compatible filters.
+
+- 3e229d1: Prevent the copy-path tooltip from opening after a mouse-driven rollback when focus moves to the copy button. The tooltip still opens on hover or keyboard focus.
+
+- b90eb2e: Make selected text stand out in the file editor, including on Wiki conflict lines.
+
+- 85b3666: Hide in-progress resource import notifications in Console. Import progress stays visible in the command result, and Console still shows completion and failure notifications.
+
+- 85b3666: Reveal the first conflict when opening the Wiki editor.
+
+- 85b3666: Align the VikingBot reference picker with the file tree's root order.
+
+- 85b3666: Close a submitted clarification when VikingBot resumes.
+
+- b90eb2e: Enable the Load more and Retry buttons in the VikingBot reference picker so users can continue browsing directory pages and recover from listing errors.
+
+- 13282ba: Show Rename and Delete in a per-session menu in VikingBot history.
+
+- 85b3666: Keep the VikingBot history popover at a stable height during refresh, and show a centered diamond loader when switching conversations. Add session rename and delete actions when the session service supports them.
+
+  Dismiss pending rename and delete confirmations when the session account or service changes. Standalone VikingBot hosts can provide `sessions.scopeKey` to identify their session scope.
+
+- b90eb2e: Show a progress notification while FileBrowser saves Wiki changes, including conflict resolutions.
+
+- 1c25783: Highlight unresolved Wiki conflicts in the FileBrowser editor and show their explanations on hover. Conflict metadata stays out of the draft.
+
+- 6e8578d: Show the original Wiki conflict trailer in green at the end of the editor. The trailer is read-only, and saving still submits the editable body.
+
+- a86d3a4: Align Markdown and YAML syntax colors and the Wiki conflict tooltip with the console editor. Load YAML front matter highlighting regardless of when the Markdown grammar is registered.
+
+- b90eb2e: Label versions created by a Wiki rollback and show a confirmation after restoring a version or selecting identical content.
+
+### 0.1.13
+
+**Patch Changes**
+
+- ae0ce7a: Add the named compile workflow and its CLI guide. FileBrowser now reports selected tree entries so hosts can add directory references to VikingBot, whose send button uses a rounded square.
+
+- 62d5cd5: Support switching named compilation configurations through directory-style tabs, native Git snapshot history, and Wiki edits with explicit snapshots.
+
+  Propagate pending Wiki conflicts from deeply nested files to every ancestor directory, including collapsed subtrees, and refresh cleared markers. Preserve conflict tags loaded after an older empty index, and let refreshed conflict results override historical compilation counts. Skip inaccessible directory placeholders while traversing containers with readable descendants. Respect write-permission changes in open configuration editors, compare the first version against an empty baseline, and refresh the current version after a restore conflict before allowing another confirmation.
+
+  Align compilation settings with directory and Skill pickers, full-path tooltips, frequency radio cards and time selection. Add file selection, historical comparison and file restore to Wiki history in a full-width document panel with the FileViewer diff renderer, hide history for ordinary resource files and while editing, improve pack upload, and keep model names and dashboard tooltips readable.
+
+  Keep history loading indicators centred, show initial picker loading immediately, reuse an Arco-derived Switch, keep target paths on one line and hide view switching while editing. Fix the selected background of the history Preview / Markdown tabs.
+
+  Complete theme fallbacks on migrated workflow roots, align dark surfaces, schedule selection borders, history badges and diff legends, and apply the console theme to Switch sizes and unavailable states. Preserve the FileViewer's native diff colours. Show the empty state when a selected directory file has no historical versions, including after retrying a failed request.
+
+- a08cec9: Fix Console showing a command-unavailable warning during execution. CommandConsole now accepts `busy` to lock input and submission while pending result cards show progress; `disabled` retains its unavailable message.
+
+- 63da276: Align the typography and colors of CommandConsole and VikingBot with the console design. Simplify completed resource import cards and add a result action to CLI completion notifications.
+
+- 63da276: Updating a mounted `FileBrowser`'s controlled `uri` opens the preview and reveals the resource in the directory tree. Hosts that need a preview-only update can call `openResource(uri, { reveal: false })`. Use `defaultExpandedUri` to set the initial tree expansion.
+
+- a4c0257: Allow FileBrowser hosts to override individual experience dashboard requests while retaining the built-in UI, pagination, retries, and cancellation.
+
+- 0a7197c: After saving an editable ordinary file in FileBrowser, choose whether to keep a snapshot, then enter a description and save it. Snapshot failures retain the description for retry and do not undo the file save. Wiki compile files retain their automatic version history.
+
+- 41108b0: Hide the Preview / Source switch during editing. FileBrowser keeps version history available and copies the current editor draft.
+
+- 62d5cd5: Use the same theme background for the file tree panel, FileBrowser directory pane and sticky trailing actions. Keep normal, hover and selected surfaces consistent in light and dark themes without host-specific overrides, while preserving text masking during horizontal scrolling.
+
+- 41108b0: Replace the file path in Wiki conflict rows with a compact pencil button. File Browser opens the editor directly for pending conflicts when editing is allowed.
+
+- 41108b0: Use tagged data-plane search to list Wiki conflicts and mark directories with pending conflicts, even when the matching files are collapsed. Refresh conflict status after saving a Wiki file. Accept the current and legacy Compile registry response fields.
+
 ### 0.1.12
 
 **Patch Changes**

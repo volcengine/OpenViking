@@ -34,7 +34,7 @@ from vikingbot.compile.models import (
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
 _FRONTMATTER_END_RE = re.compile(rb"\r?\n---[ \t]*(?:\r?\n|\Z)")
-_OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^(?:type|["']type["'])[ \t]*:""")
+_OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^[ \t]*(?:type|["']type["'])[ \t]*:""")
 _BARE_VIKING_URI_RE = re.compile(r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+""")
 _LEADING_H1_RE = re.compile(r"\A(?:[ \t]*\r?\n)*#[ \t]+[^\r\n]*(?:\r?\n|\Z)")
 _LEGACY_RELATED_PAGES_RE = re.compile(
@@ -80,6 +80,21 @@ def has_unclosed_frontmatter(content: bytes) -> bool:
     return opening is not None and _FRONTMATTER_END_RE.search(content[opening.end() :]) is None
 
 
+def _format_yaml_frontmatter_error(exc: yaml.YAMLError) -> str:
+    problem = getattr(exc, "problem", None)
+    context = getattr(exc, "context", None)
+    mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
+    if context and problem:
+        reason = f"{context}: {problem}"
+    else:
+        reason = problem or context or str(exc).splitlines()[0].strip()
+    if mark is not None:
+        # match.group(1) starts on line 2 of the Markdown file (after opening "---").
+        location = f"line {mark.line + 2}, column {mark.column + 1}"
+        return f"{reason} ({location})" if reason else location
+    return reason
+
+
 def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
     """Validate a Markdown artifact and return its declared OKF type, if any."""
     if not path.casefold().endswith(".md"):
@@ -109,7 +124,11 @@ def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
         frontmatter = yaml.safe_load(match.group(1))
     except yaml.YAMLError as exc:
         if raw_declares_type:
-            raise ValueError(f'OKF Markdown file "{path}" has invalid YAML frontmatter') from exc
+            detail = _format_yaml_frontmatter_error(exc)
+            suffix = f": {detail}" if detail else ""
+            raise ValueError(
+                f'OKF Markdown file "{path}" has invalid YAML frontmatter{suffix}'
+            ) from exc
         return
     if not isinstance(frontmatter, dict):
         if raw_declares_type:

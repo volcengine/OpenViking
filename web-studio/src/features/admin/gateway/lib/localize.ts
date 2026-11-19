@@ -61,6 +61,9 @@ export const windowReminderLabel = (t: Translate, reminder: string) =>
 const OPENVIKING_REASONS: Record<string, string> = {
   openviking_unavailable: 'unavailable',
   openviking_unreachable: 'unavailable',
+  openviking_timeout: 'timeout',
+  openviking_circuit_open: 'circuitOpen',
+  openviking_budget_exhausted: 'budgetExhausted',
   openviking_http_401: 'unauthorized',
   openviking_version_mismatch: 'versionMismatch',
   openviking_identity_missing: 'identityMissing',

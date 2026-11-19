@@ -10,7 +10,6 @@ const scrolled = [];
 HTMLElement.prototype.scrollIntoView = function () {
   scrolled.push(this.getAttribute('data-file-tree-row-id'));
 };
-globalThis.CSS = { escape: (value) => value.replaceAll('"', '\\"') };
 for (const name of ['HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);

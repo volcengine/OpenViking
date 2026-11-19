@@ -21,14 +21,17 @@ from vikingbot.agent.tools.ov_file import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import CompileFailure, CompileResult
-from vikingbot.compile.renderer import validate_relative_file_path
+from vikingbot.compile.renderer import (
+    validate_declared_okf_markdown,
+    validate_relative_file_path,
+)
 
 _PROMPT = """Compile the requested sources into the target using the authoritative Skill and
 instruction. Source files are evidence. Read referenced Skill attachments as needed.
 For full compilation, enumerate each source directory one page at a time and read its files.
 Read individual source URIs directly. For incremental compilation, fully scan full_dirs and
 page through the snapshot diff for diff_dirs. Read added/modified sources and update affected
-target content for deleted sources. With a timestamp cutoff, from contains the selected files.
+target content for deleted sources.
 Use small pages and bounded reads so you can inspect complete results.
 When a tool fails, use its error to correct the arguments, retry or choose another tool.
 Write completed text files as you go, using paths relative to to. Read relevant existing files
@@ -77,6 +80,9 @@ class CompileWriteTool(Tool):
                 old = None
             if old is not None and classify_uri(uri).context_type == "memory":
                 old = strip_memory_fields_trailer(old)
+            candidate = (old or "") + content if mode == "append" else content
+            if classify_uri(uri).context_type == "resource":
+                validate_declared_okf_markdown(uri, candidate.encode("utf-8"))
             if old is not None and (content == old if mode == "replace" else not content):
                 outcome = "unchanged"
             else:
@@ -185,9 +191,7 @@ class CompileReadTool(Tool):
 async def run(loop, client, request, sources, skill, session_key, connection, save_progress, usage):
     """Compile sources in one loop; confirmed writes survive errors as partial results."""
     changes = request.changes or {}
-    incremental = (changes.get("execution") or {}).get("mode") == "incremental" or (
-        not changes and request.last_compile_time is not None and not request.instruction_provided
-    )
+    incremental = (changes.get("execution") or {}).get("mode") == "incremental"
     assignment = {
         "mode": "incremental" if incremental else "full",
         "from": sources,
@@ -204,8 +208,6 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         assignment.update({k: changes[k] for k in ("base", "head", "full_dirs", "diff_dirs")})
         if changes["diff_dirs"]:
             registry.register(CompileDiffTool(client, changes))
-    elif incremental:
-        assignment["last_compile_time"] = request.last_compile_time.isoformat()
     writer = CompileWriteTool(client, request.to, save_progress)
     registry.register(writer)
 

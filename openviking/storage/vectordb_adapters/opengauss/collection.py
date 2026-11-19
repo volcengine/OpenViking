@@ -9,6 +9,7 @@ import re
 import threading
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.collection.collection import ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
@@ -1402,7 +1403,7 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 finally:
                     cur.close()
         except Exception as error:
-            logger.error("opengauss_adapter: search_by_scalar failed: %s", error)
+            logger.debug("opengauss_adapter: search_by_scalar failed: %s", type(error).__name__)
             raise
 
         items = []
@@ -1461,7 +1462,7 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 finally:
                     cur.close()
         except Exception as error:
-            logger.error("opengauss_adapter: search_by_random failed: %s", error)
+            logger.debug("opengauss_adapter: search_by_random failed: %s", type(error).__name__)
             raise
 
         items = []
@@ -1517,9 +1518,9 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 fetch=True,
             )
         except Exception as error:
-            logger.error(
+            logger.debug(
                 "opengauss_adapter: search_by_id failed to fetch source vector: %s",
-                error,
+                type(error).__name__,
             )
             raise
 
@@ -1708,20 +1709,27 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
             except Exception:
                 try:
                     self._conn.rollback()
-                except Exception:
-                    logger.warning("openGauss upsert rollback failed during error cleanup", exc_info=True)
+                except Exception as _log_error:
+                    logger.info(
+                        "openGauss upsert rollback failed during error cleanup error_type=%s",
+                        type(_log_error).__name__,
+                    )
                 try:
                     cursor.close()
-                except Exception:
-                    logger.warning("openGauss upsert cursor close failed during error cleanup", exc_info=True)
+                except Exception as _log_error:
+                    logger.info(
+                        "openGauss upsert cursor close failed during error cleanup error_type=%s",
+                        type(_log_error).__name__,
+                    )
                 raise
             else:
                 cursor.close()
         try:
             self._materialize_pending_indexes()
-        except Exception:
-            logger.exception(
-                "opengauss_adapter: data committed but pending ANN index materialization failed"
+        except Exception as _log_error:
+            logger.error(
+                "opengauss_adapter: data committed but pending ANN index materialization failed error_type=%s",
+                type(_log_error).__name__,
             )
 
     def update_data(self, data_list: List[Dict[str, Any]]):
@@ -1843,7 +1851,7 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 finally:
                     cur.close()
         except Exception as error:
-            logger.error("opengauss_adapter: fetch_data failed: %s", error)
+            logger.debug("opengauss_adapter: fetch_data failed: %s", type(error).__name__)
             raise
 
         found_ids = set()
@@ -1914,7 +1922,10 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 try:
                     rows = self._execute(sql, where_params, fetch=True)
                 except Exception as error:
-                    logger.error("opengauss_adapter: aggregate_data (grouped) failed: %s", error)
+                    logger.debug(
+                        "opengauss_adapter: aggregate_data (grouped) failed: %s",
+                        type(error).__name__,
+                    )
                     raise
 
                 agg: Dict[str, Any] = {}
@@ -1941,9 +1952,11 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                     rows = self._execute(sql, where_params, fetch=True)
                     total = rows[0][0] if rows else 0
                 except Exception as error:
-                    logger.error("opengauss_adapter: aggregate_data (count) failed: %s", error)
+                    logger.debug(
+                        "opengauss_adapter: aggregate_data (count) failed: %s", type(error).__name__
+                    )
                     raise
                 return AggregateResult(agg={"_total": int(total)}, op=op, field=None)
 
-        logger.warning("opengauss_adapter: unsupported aggregate op=%r", op)
+        logger.info("opengauss_adapter: unsupported aggregate op=%s", short_hash(str(op)))
         return AggregateResult(agg={"_total": 0}, op=op, field=field)

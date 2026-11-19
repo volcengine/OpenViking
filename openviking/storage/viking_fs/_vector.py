@@ -5,6 +5,7 @@
 from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs._base import logger
 
@@ -30,9 +31,9 @@ class _VectorMixin:
         try:
             await vector_store.delete_uris(real_ctx, uris)
             for uri in uris:
-                logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
+                logger.debug("Deleted from vector store: %s", safe_uri_for_log(str(uri)))
         except Exception as e:
-            logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
+            logger.debug("Failed to delete from vector store: %s", type(e).__name__)
             raise
 
     async def _copy_vector_store_uris(

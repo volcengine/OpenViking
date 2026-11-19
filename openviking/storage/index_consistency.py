@@ -9,6 +9,7 @@ from typing import Any
 
 from openviking.core.context import ResourceContentType
 from openviking.core.namespace import is_session_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
 from openviking.utils.embedding_utils import get_resource_content_type
@@ -195,9 +196,17 @@ async def _fetch_index_records(vector_store, uri: str, ctx: RequestContext) -> l
         try:
             return await vector_store.filter(**kwargs)
         except Exception as exc:
-            logger.warning(f"Failed to check vector index records for {uri}: {exc}")
+            logger.info(
+                "Failed to check vector index records for %s: %s",
+                safe_uri_for_log(str(uri)),
+                type(exc).__name__,
+            )
     except Exception as exc:
-        logger.warning(f"Failed to check vector index records for {uri}: {exc}")
+        logger.info(
+            "Failed to check vector index records for %s: %s",
+            safe_uri_for_log(str(uri)),
+            type(exc).__name__,
+        )
     return []
 
 

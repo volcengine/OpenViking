@@ -156,6 +156,12 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
     def _render_schema_contract(
         self, context: ExtractionOutputContext, schema: MemoryTypeSchema
     ) -> list[str]:
+        creation_unavailable = context.consolidation and schema.requires_messages()
+        if creation_unavailable and schema.operation_mode == "add_only":
+            return [
+                f"- {schema.memory_type}: create/set unavailable without original messages. "
+                "Existing records may be deleted, not updated."
+            ]
         fields = _protocol_fields(context, schema)
         type_alias = _identifier_alias(schema.memory_type)
         signature = ", ".join(
@@ -168,7 +174,12 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             or "target scope (fixed to self)"
         )
         lines = [
-            f"- sdk.{verb}_{type_alias}(*, {signature})",
+            (
+                f"- {schema.memory_type}: create/set unavailable without original messages; "
+                "update existing bound objects in place or delete them."
+                if creation_unavailable
+                else f"- sdk.{verb}_{type_alias}(*, {signature})"
+            ),
             f"  - Identity fields (primary key): {identity_label}. Calls with identical "
             "identity field values address the same memory object.",
         ]
@@ -895,6 +906,8 @@ class _PythonProgramCompiler:
             schema = self.schemas.get(memory_type)
             if schema is None:
                 self._error(node, f"memory type {type_alias!r} is not available")
+            if self.context.consolidation and schema.requires_messages():
+                self._error(node, f"Cannot create {memory_type} without original messages")
             expected_verb = "create" if schema.filename_has_variables() else "set"
             if verb != expected_verb:
                 self._error(
@@ -1006,14 +1019,21 @@ class _PythonProgramCompiler:
                 self._error(node, "delete() accepts only replacement=")
             if not owner.existing:
                 self._error(node, "a memory created in this program cannot be deleted")
-            if self.schemas[owner.memory_type].operation_mode == "add_only":
+            if (
+                self.schemas[owner.memory_type].operation_mode == "add_only"
+                and not self.context.consolidation
+            ):
                 self._error(node, "delete() is unavailable for the selected memory schemas")
             replacement = kwargs.get("replacement")
             if replacement is not None and not isinstance(replacement, _MemoryObject):
                 self._error(node, "delete replacement must be a memory object")
             if replacement is not None and not replacement.existing and not replacement.name:
                 self._error(node, "assign a new replacement object before referencing it")
-            if replacement is not None and replacement.memory_type != owner.memory_type:
+            if (
+                replacement is not None
+                and replacement.memory_type != owner.memory_type
+                and not self.context.consolidation
+            ):
                 self._error(node, "delete replacement must have the same memory type")
             if replacement is owner:
                 self._error(node, "a memory cannot replace itself")
@@ -1275,6 +1295,7 @@ class _PythonProgramCompiler:
                 if not skip and remapped["f"] != remapped["t"]:
                     payload["links"].append(remapped)
         try:
+            self.context.validate_creates(payload)
             return self.context.operations_model.model_validate(payload)
         except Exception as exc:
             raise ExtractionOutputProtocolError(

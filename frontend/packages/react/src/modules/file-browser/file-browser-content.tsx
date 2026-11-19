@@ -1,7 +1,6 @@
 import { useExposureRef } from '../../shared/analytics/use-exposure.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useCallback, useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
+import { forwardRef, useMemo, useState, type CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
@@ -13,12 +12,14 @@ import {
 } from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
-import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
+import { resolveLabels, resolvePaneLabels } from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js';
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
+import { usePackImportPicker } from './use-pack-import-picker.js';
 import { useFileBrowserHandle } from './use-file-browser-handle.js';
+import { useFileBrowserUri } from './use-file-browser-uri.js';
 import type {
   FileBrowserComponent,
   FileBrowserHandle,
@@ -46,6 +47,8 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     defaultUri,
     rootUri = 'viking://',
     defaultExpandedUri,
+    defaultExpandedUris,
+    defaultExpansionSnapshot,
     locale: localeProp,
     agentConnect,
     agentConnectOpen,
@@ -57,6 +60,9 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     readOnly,
     previewActions,
     onUriChange,
+    onSelect,
+    onExpandedUrisChange,
+    onExpansionSnapshotChange,
     onImportResources,
     renderImportResources,
     previewSlots,
@@ -69,24 +75,12 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   ref,
 ) {
   const locale = useLocale(localeProp);
-  const [internalUri, setInternalUri] = useState<string | null>(
-    () => defaultUri ?? null,
-  );
+  const { currentUri, isControlled, reportedUri, changeUri } =
+    useFileBrowserUri(uri, defaultUri, onUriChange);
   const [preferredTreeWidth, setPreferredTreeWidth] =
     useState(TREE_DEFAULT_WIDTH);
-  // `uri !== undefined` 才是受控：传了空字符串也算宿主接管，而不是「没传」。
-  // 模块自身不会主动清空选中——点目录行与点面包屑祖先都带具体 URI，没有「取消
-  // 选中」的交互——因此这里不需要为 `null` 单独留一条分支。
-  //
-  // `uri !== undefined` is what makes it controlled: even an empty string counts as
-  // the host taking over rather than "absent". The module never clears the selection
-  // on its own — both the row click and the breadcrumb ancestor carry a concrete URI,
-  // and there is no "deselect" interaction — so no separate `null` branch is needed.
-  const isControlled = uri !== undefined;
-  const currentUri = isControlled ? uri : internalUri;
-  const { ref: layoutRef, width: layoutWidth } =
-    useContainerWidth<HTMLDivElement>();
-  const stacked = layoutWidth > 0 && layoutWidth < SIDE_BY_SIDE_MIN_WIDTH;
+  const { ref: layoutRef, width } = useContainerWidth<HTMLDivElement>();
+  const stacked = width > 0 && width < SIDE_BY_SIDE_MIN_WIDTH;
   const text = resolveLabels(labels, locale, stacked);
 
   // 上限随容器变化：宿主把整个模块塞进窄栏时，树不能继续按 520px 抢地方。当前
@@ -96,41 +90,14 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   // must not have the tree keep claiming 520px. The current width is re-clamped
   // rather than discarded, so the tree returns to where it was dragged once the
   // container widens again.
-  const treeMaxWidth = resolveTreeMaxWidth(layoutWidth);
+  const treeMaxWidth = resolveTreeMaxWidth(width);
   const treeWidth = Math.min(preferredTreeWidth, treeMaxWidth);
 
-  // 引用必须稳定：它一路传到预览的取数 effect，每次渲染换新函数会让 effect
-  // 反复重跑并取消上一次请求，预览永远加载不出来。
-  //
-  // The identity must stay stable: it reaches the preview's loading effect, and a
-  // fresh function every render would re-run that effect and cancel the previous
-  // request, leaving the preview permanently empty.
-  const changeUri = useCallback(
-    (next: string | null) => {
-      if (!isControlled) setInternalUri(next);
-      onUriChange?.(next);
-    },
-    [isControlled, onUriChange],
-  );
-
-  // 摘要文案只影响展示，不作为预览请求的依赖。
-  // Summary copy changes presentation without restarting preview requests.
-  const summaryLabels = useMemo(
-    () => ({
-      l0: text.l0Summary,
-      l1: text.l1Overview,
-      failure: text.summaryFailed,
-    }),
-    [text.l0Summary, text.l1Overview, text.summaryFailed],
-  );
-
-  // 宿主文案和语言未变时，保留预览覆盖对象的引用。
-  // Preserve the preview overrides while the host copy and language are unchanged.
-  const previewLabels = useMemo(
-    () => resolvePreviewLabels(resolveLabels(labels, locale)),
+  // Keep preview and summary copy stable until locale or host overrides change.
+  const { summaryLabels, previewLabels } = useMemo(
+    () => resolvePaneLabels(labels, locale),
     [labels, locale],
   );
-
   const browser = useFileBrowser({
     rootUri,
     locale,
@@ -143,19 +110,34 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     formatCharacterCount: text.formatCharacterCount,
     accessLabels: text,
     defaultExpandedUri,
+    defaultExpandedUris,
+    defaultExpansionSnapshot,
+    onExpandedUrisChange,
+    onExpansionSnapshotChange,
     currentUri,
     requestOptions,
     onUriChange: changeUri,
+    onSelect,
   });
   const permissions = useFileBrowserAcl({
     uri: browser.currentUri,
     acl,
+    readOnly,
     locale,
     labels: labels?.acl,
     requestOptions,
     refresh: browser.actions.refresh,
   });
-  const navigation = useFileBrowserHandle(browser, ref, rootUri);
+  const pack = usePackImportPicker(layoutRef, text, locale, permissions);
+  const navigation = useFileBrowserHandle(
+    browser,
+    ref,
+    rootUri,
+    uri,
+    reportedUri,
+    pack.choosePackFile,
+    defaultExpansionSnapshot !== undefined || defaultExpandedUris !== undefined,
+  );
 
   const search = useFileBrowserSearchDialog(layoutRef);
   const baseClass = stacked
@@ -232,18 +214,17 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
         />
       </div>
       {permissions.drawer}
+      {pack.dialog}
       <FileBrowserSearch
         key={search.session}
-        open={search.open}
+        {...search.dialog}
         locale={locale}
         rootUri={rootUri}
-        triggerRef={layoutRef}
         text={text}
         requestOptions={requestOptions}
-        advancedOpen={search.advanced}
-        onToggleAdvanced={search.setAdvanced}
-        onOpenResource={navigation.openResource}
-        onClose={search.close}
+        onOpenResource={(target) => {
+          void navigation.openResource(target).catch(() => {});
+        }}
       />
     </LocaleProvider>
   );

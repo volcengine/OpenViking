@@ -32,3 +32,6 @@ gix-hash = "0.14"
 bytes = "1.5"
 similar = "3.1"
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+ragfs = { path = "../ragfs", features = ["cache", "test-utils"] }

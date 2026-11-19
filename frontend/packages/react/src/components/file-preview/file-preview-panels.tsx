@@ -4,10 +4,14 @@ import type {
   ViewerHandle,
   ViewerViewModeOption,
 } from '@ark-design/ui/file-viewer/core';
-import { useRef, type HTMLAttributes } from 'react';
+import type { HTMLAttributes } from 'react';
 
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewDirectoryBody } from './file-preview-directory.js';
+import {
+  useFilePreviewReadyRef,
+  type FilePreviewPanelActions,
+} from './file-preview-edit-context.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import {
   FilePreviewTransition,
@@ -17,7 +21,7 @@ import {
 import { TruncatedNotice } from './file-preview-state.js';
 import { FilePreviewVersionNote } from './file-preview-version-note.js';
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
-import type { FilePreviewActions, FilePreviewProps } from './types.js';
+import type { FilePreviewProps } from './types.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewContentTab,
@@ -55,7 +59,7 @@ export interface FilePreviewPanelsProps {
   text: Required<FilePreviewLabels>;
   locale?: Locale;
   actions: ReturnType<typeof useFilePreviewActions>;
-  actionContext: FilePreviewActions;
+  actionContext: FilePreviewPanelActions;
   editing: ReturnType<typeof useFilePreviewEditing>;
   viewMode: FilePreviewViewMode;
   setViewMode: (mode: FilePreviewViewMode) => void;
@@ -86,7 +90,18 @@ export function FilePreviewPanels({
   linkClickHandler,
   activeTab,
 }: FilePreviewPanelsProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
+  const toolbarOptions = {
+    viewSwitch:
+      toolbar?.viewSwitch !== false && activeTab.toolbar?.viewSwitch !== false,
+    edit: toolbar?.edit !== false && activeTab.toolbar?.edit !== false,
+    copyPath:
+      toolbar?.copyPath !== false && activeTab.toolbar?.copyPath !== false,
+  };
+  const { panelRef, attachPanel } = useFilePreviewReadyRef(
+    fileTab,
+    actionContext,
+    toolbarOptions.edit,
+  );
   if (contentTab) {
     // 内容页签整块交给宿主：组件只画页签行，正文不套任何容器，也没有标题行
     // ——组件不知道该在那里显示什么，套一层只会限制宿主的排版。
@@ -100,13 +115,6 @@ export function FilePreviewPanels({
     );
   }
 
-  const toolbarOptions = {
-    viewSwitch:
-      toolbar?.viewSwitch !== false && activeTab.toolbar?.viewSwitch !== false,
-    edit: toolbar?.edit !== false && activeTab.toolbar?.edit !== false,
-    copyPath:
-      toolbar?.copyPath !== false && activeTab.toolbar?.copyPath !== false,
-  };
   if (directoryTab) {
     return (
       <div {...panelProps} className={panelClass}>
@@ -130,7 +138,7 @@ export function FilePreviewPanels({
   if (!fileTab) return null;
 
   return (
-    <div {...panelProps} className={panelClass} ref={panelRef}>
+    <div {...panelProps} className={panelClass} ref={attachPanel}>
       <FilePreviewHeader
         levels={fileTab.levels}
         levelKey={levelKey}
