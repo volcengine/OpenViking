@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from redis.asyncio.cluster import ClusterNode, RedisCluster
@@ -21,16 +22,19 @@ class SeededRedisCluster(RedisCluster):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._seeds = [(node.host, node.port) for node in self.nodes_manager.startup_nodes.values()]
+        self._seed_lock = asyncio.Lock()
 
     async def initialize(self, *args: Any, **kwargs: Any) -> RedisCluster:
-        startup_nodes = self.nodes_manager.startup_nodes
-        if not startup_nodes:
-            for host, port in self._seeds:
-                node = ClusterNode(host, port, **self.connection_kwargs)
-                startup_nodes[node.name] = node
-        try:
-            return await super().initialize(*args, **kwargs)
-        except BaseException:
-            # redis-py has already disconnected these nodes.
-            startup_nodes.clear()
-            raise
+        # A caller cancelled while it waits here must not touch the nodes of the running one.
+        async with self._seed_lock:
+            startup_nodes = self.nodes_manager.startup_nodes
+            if not startup_nodes:
+                for host, port in self._seeds:
+                    node = ClusterNode(host, port, **self.connection_kwargs)
+                    startup_nodes[node.name] = node
+            try:
+                return await super().initialize(*args, **kwargs)
+            except BaseException:
+                # redis-py has already disconnected these nodes.
+                startup_nodes.clear()
+                raise
