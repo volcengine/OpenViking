@@ -80,7 +80,7 @@ export function createConsoleController(
     const createdAtMs = Date.now();
     const entry = { id, command, createdAtMs };
     const history = commandHistoryKey
-      ? appendCommandHistory(commandHistoryKey, entry)
+      ? (appendCommandHistory(commandHistoryKey, entry) ?? state.history)
       : [...state.history, entry];
     const event = analytics?.begin(id);
     const monitoring = observeCommand(client, signal);

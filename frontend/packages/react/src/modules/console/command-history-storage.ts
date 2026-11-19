@@ -93,7 +93,7 @@ export function readCommandHistory(key: string): ConsoleHistoryEntry[] {
 export function appendCommandHistory(
   key: string,
   { command, createdAtMs }: StoredEntry,
-): ConsoleHistoryEntry[] {
+): ConsoleHistoryEntry[] | undefined {
   try {
     const storage = window.localStorage;
     const entries = readEntries(storage, key);
@@ -103,7 +103,7 @@ export function appendCommandHistory(
     ]);
     return toHistory(saved ?? entries);
   } catch {
-    return [];
+    return undefined;
   }
 }
 
