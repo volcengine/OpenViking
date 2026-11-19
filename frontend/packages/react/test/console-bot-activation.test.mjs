@@ -81,7 +81,7 @@ test('user startup is exclusive and chat waits for the authoritative status refr
     assert.equal(signals.length, 2);
     await act(async () => started.resolve());
     await settle();
-    assert.equal(host.lifecycle.state.status, 'starting');
+    assert.equal(host.lifecycle.state.status, 'checking');
     assert.equal(signals.length, 3);
     assert.equal(signals[1], signals[2]);
     await act(async () => refreshed.resolve('ready'));

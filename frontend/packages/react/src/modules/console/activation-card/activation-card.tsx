@@ -10,13 +10,40 @@ import { Button } from '../../../shared/primitives/button/button.js';
 import { LoadingIcon } from '../../../shared/primitives/loading-icon/loading-icon.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
+import type { BotActivationState } from '../use-bot-activation.js';
 
 interface ConsoleActivationCardProps {
   status: 'checking' | 'cancelled' | 'inactive' | 'activating' | 'error';
   locale?: Locale;
   onAction?: () => void;
   media?: ReactNode;
-  error?: ReactNode;
+}
+
+export function ConsoleActivationStatus({
+  status,
+  locale: localeProp,
+}: {
+  status: BotActivationState['status'];
+  locale?: Locale;
+}) {
+  const locale = useLocale(localeProp);
+  const labels = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
+  const messages: Partial<Record<BotActivationState['status'], string>> = {
+    checking: labels.checking,
+    starting: labels.activating,
+    cancelled: labels.cancelled,
+    ready: labels.ready,
+    'not-started': labels.inactive,
+  };
+  return (
+    <span
+      className="ov-console-activation__announcement"
+      role="status"
+      aria-atomic="true"
+    >
+      {messages[status] ?? ''}
+    </span>
+  );
 }
 
 function ActivationArtwork() {
@@ -56,7 +83,6 @@ export function ConsoleActivationCard({
   locale: localeProp,
   onAction,
   media,
-  error,
 }: ConsoleActivationCardProps) {
   const locale = useLocale(localeProp);
   const labels = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
@@ -65,7 +91,7 @@ export function ConsoleActivationCard({
   if (status === 'checking' || status === 'cancelled')
     return (
       <div className="ov-console-activation" aria-busy={status === 'checking'}>
-        <p className="ov-console-activation__checking" role="status">
+        <p className="ov-console-activation__checking">
           {status === 'checking' ? <LoadingIcon /> : null}
           {status === 'checking' ? labels.checking : labels.cancelled}
         </p>
@@ -89,11 +115,6 @@ export function ConsoleActivationCard({
           </p>
         </div>
         <div className="ov-console-activation__actions">
-          {failed ? (
-            <div className="ov-console-activation__error" role="alert">
-              {error ?? labels.failed}
-            </div>
-          ) : null}
           <Button
             type="primary"
             className="ov-console-activation__action"
@@ -108,9 +129,6 @@ export function ConsoleActivationCard({
                 : labels.enable}
             {status === 'inactive' ? <ArrowRightIcon /> : null}
           </Button>
-          <span className="ov-console-activation__announcement" role="status">
-            {activating ? labels.activating : ''}
-          </span>
         </div>
       </div>
     </section>

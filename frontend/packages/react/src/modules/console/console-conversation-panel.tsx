@@ -11,7 +11,10 @@ import {
   errorMessage,
 } from '../../shared/feedback/error-notification.js';
 import type { Locale } from '../../shared/locale.js';
-import { ConsoleActivationCard } from './activation-card/activation-card.js';
+import {
+  ConsoleActivationCard,
+  ConsoleActivationStatus,
+} from './activation-card/activation-card.js';
 import { consoleLabels } from './labels.js';
 import type { useBotActivation } from './use-bot-activation.js';
 
@@ -53,6 +56,7 @@ export function ConsoleConversationPanel({
       className="ov-console__panel ov-console__panel--conversation"
       hidden={!active}
     >
+      <ConsoleActivationStatus status={state.status} locale={locale} />
       {visited && state.status === 'ready' ? (
         <ViewActivity active={active}>
           <NotificationScope active={active} locale={locale}>

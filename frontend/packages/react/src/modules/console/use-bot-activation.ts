@@ -55,12 +55,13 @@ function createBotActivation({
       'collection-error';
     const readStatus = async () => {
       failure = 'collection-error';
+      update({ status: 'checking' });
+      signal.throwIfAborted();
       const eligible = await activation.isEligible(signal);
       signal.throwIfAborted();
       failure = 'load-error';
       return eligible === true ? activation.getStatus(signal) : 'disabled';
     };
-    update({ status: operation === 'load' ? 'checking' : 'starting' });
     try {
       if (operation === 'retry-start') {
         // A rejected response may still have started the bot on the backend.
@@ -73,6 +74,8 @@ function createBotActivation({
       }
       if (operation !== 'load') {
         failure = 'start-error';
+        update({ status: 'starting' });
+        signal.throwIfAborted();
         await activation.start(signal);
         if (!current()) return;
       }

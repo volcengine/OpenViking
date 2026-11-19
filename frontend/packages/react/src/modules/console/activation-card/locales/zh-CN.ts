@@ -7,6 +7,7 @@ export default {
   checking: '正在检查 VikingBot 状态…',
   cancelled: 'VikingBot 状态检查已取消。',
   activating: '正在启用 VikingBot…',
-  failed: 'VikingBot 启用失败。',
+  ready: 'VikingBot 已就绪。',
+  inactive: 'VikingBot 尚未启用。',
   retry: '重试',
 } satisfies typeof enUS;

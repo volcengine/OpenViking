@@ -75,7 +75,7 @@ Use `chatOptions.activation` when the current library controls access to VikingB
 
 ```
 
-Implement `isEligible` to confirm whether the current scope allows Bot access. While checking eligibility or runtime status, Console keeps the Bot tab visible and shows a compact loading indicator in its panel. Only `isEligible` returning `false` removes the Bot tab during activation. If either check fails, the Bot panel offers a retry. Loading and readiness changes preserve the user's selected mode, including command mode.
+Implement `isEligible` to confirm whether the current scope allows Bot access. Every eligibility/status read, including post-start confirmation and retry prechecks, keeps the Bot tab visible with compact loading; the enabling indicator appears only while `start` is pending. Only `isEligible` returning `false` removes the Bot tab during activation. Error text appears once in a notification with Retry on the card, while a persistent live status announces lifecycle changes without repeating errors. Loading and readiness changes preserve the user's selected mode, including command mode.
 
 If the scope's request signal is already cancelled or becomes cancelled, Console keeps the Bot tab and displays a static cancellation message, without loading or a retry button that cannot restart the cancelled request. To check again, the host must replace the aborted signal with a fresh, non-aborted signal, or remove it. Changing only `scopeKey` while passing the same aborted signal leaves the panel cancelled.
 
