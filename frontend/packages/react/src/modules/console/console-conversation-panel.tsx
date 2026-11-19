@@ -59,6 +59,7 @@ export function ConsoleConversationPanel({
       id={id}
       ref={recoverFocus}
       className="ov-console__panel ov-console__panel--conversation"
+      tabIndex={-1}
       hidden={!active}
     >
       <ConsoleActivationStatus
@@ -101,7 +102,16 @@ export function ConsoleConversationPanel({
                   ? 'error'
                   : 'inactive'
           }
-          onAction={failed ? activation.retry : activation.start}
+          onAction={(event) => {
+            const action = event.currentTarget;
+            // Keep keyboard focus in this stable panel before its action is removed.
+            if (action.ownerDocument.activeElement === action)
+              action
+                .closest<HTMLElement>('.ov-console__panel--conversation')
+                ?.focus({ preventScroll: true });
+            if (failed) activation.retry();
+            else activation.start();
+          }}
           media={media}
           locale={locale}
         />

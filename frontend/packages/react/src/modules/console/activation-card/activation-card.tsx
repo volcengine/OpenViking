@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, type ReactNode } from 'react';
+import { useId, type MouseEventHandler, type ReactNode } from 'react';
 import {
   ArrowRightIcon,
   DocumentIcon,
@@ -11,11 +11,12 @@ import { LoadingIcon } from '../../../shared/primitives/loading-icon/loading-ico
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 import type { BotActivationState } from '../use-bot-activation.js';
+import { useActivationAnnouncement } from './use-activation-announcement.js';
 
 interface ConsoleActivationCardProps {
   status: 'checking' | 'cancelled' | 'inactive' | 'activating' | 'error';
   locale?: Locale;
-  onAction?: () => void;
+  onAction?: MouseEventHandler<HTMLButtonElement>;
   media?: ReactNode;
 }
 
@@ -40,27 +41,7 @@ export function ConsoleActivationStatus({
     'not-started': labels.inactive,
   };
   const message = messages[status] ?? '';
-  const frame = useRef<number | undefined>(undefined);
-  // The live region must exist and be exposed before its text is inserted.
-  // A ref owns that DOM work; replacing it cancels stale status/locale frames.
-  const announce = useCallback(
-    (element: HTMLSpanElement | null) => {
-      // A new request can have the same status and translated message.
-      void identity;
-      if (frame.current !== undefined)
-        window.cancelAnimationFrame(frame.current);
-      frame.current = undefined;
-      if (!element) return;
-      element.textContent = '';
-      if (!active || !message) return;
-      frame.current = window.requestAnimationFrame(() => {
-        frame.current = undefined;
-        if (element.isConnected && !element.closest('[hidden]'))
-          element.textContent = message;
-      });
-    },
-    [active, message, identity],
-  );
+  const announce = useActivationAnnouncement(active, message, identity);
   return (
     <span
       ref={announce}

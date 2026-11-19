@@ -25,9 +25,16 @@ export function useConsoleFocusRecovery(
         const panel = commandPanel.current;
         if (!panel?.isConnected || panel.closest('[hidden]')) return;
         const input = panel.querySelector<HTMLTextAreaElement>(
-          'textarea:not(:disabled)',
+          ':scope > .ov-command-console > .ov-command-console__composer textarea.ov-command-console__input[name="command"]:not(:disabled):not([readonly])',
         );
-        (input ?? panel).focus({ preventScroll: true });
+        input?.focus({ preventScroll: true });
+        if (input && input.ownerDocument.activeElement === input) return;
+        // A hidden/unavailable input may refuse focus, while a host focus
+        // handler may deliberately move it elsewhere. Only the former falls back.
+        const after = document.activeElement;
+        if (after && after !== document.body && after !== focused) return;
+        if (!panel.isConnected || panel.closest('[hidden]')) return;
+        panel.focus({ preventScroll: true });
       });
     },
     [commandPanel],
