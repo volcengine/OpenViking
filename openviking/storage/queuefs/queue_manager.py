@@ -42,6 +42,7 @@ def init_queue_manager(
     max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
     max_concurrent_external_task: int = 10,
     *,
+    disable_semantic_vlm: bool = False,
     middlewares: Sequence[QueueMiddleware] = (),
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
@@ -56,6 +57,7 @@ def init_queue_manager(
         max_concurrent_add_resource: Max concurrent AddResource tasks.
         max_concurrent_reindex: Max concurrent Reindex tasks.
         max_concurrent_session_commit: Max concurrent SessionCommit tasks.
+        disable_semantic_vlm: Skip all SemanticQueue messages before any VLM call.
         middlewares: Additional middleware, fixed at construction for all queues.
     """
     global _instance
@@ -70,6 +72,7 @@ def init_queue_manager(
         max_concurrent_reindex=max_concurrent_reindex,
         max_concurrent_session_commit=max_concurrent_session_commit,
         max_concurrent_external_task=max_concurrent_external_task,
+        disable_semantic_vlm=disable_semantic_vlm,
         middlewares=middlewares,
     )
     return _instance
@@ -118,6 +121,7 @@ class QueueManager:
         max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
         max_concurrent_external_task: int = 10,
         *,
+        disable_semantic_vlm: bool = False,
         middlewares: Sequence[QueueMiddleware] = (),
     ):
         """Initialize QueueManager."""
@@ -131,6 +135,7 @@ class QueueManager:
         self._max_concurrent_reindex = max_concurrent_reindex
         self._max_concurrent_session_commit = max_concurrent_session_commit
         self._max_concurrent_external_task = max_concurrent_external_task
+        self._disable_semantic_vlm = disable_semantic_vlm
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
@@ -254,6 +259,7 @@ class QueueManager:
             embedding_worker_stopped=self._embedding_worker_stopped.is_set,
             vlm_resolver=self._vlm_resolver,
             runtime_config_manager=self._runtime_config_manager,
+            disable_vlm=self._disable_semantic_vlm,
         )
         self.get_queue(
             self.SEMANTIC,
@@ -286,6 +292,7 @@ class QueueManager:
                     embedding_worker_stopped=self._embedding_worker_stopped.is_set,
                     vlm_resolver=resolver,
                     runtime_config_manager=self._runtime_config_manager,
+                    disable_vlm=self._disable_semantic_vlm,
                 )
             )
 

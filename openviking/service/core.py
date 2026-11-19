@@ -224,6 +224,9 @@ class OpenVikingService:
                 max_concurrent_reindex=max_concurrent_reindex,
                 max_concurrent_session_commit=max_concurrent_session_commit,
                 max_concurrent_external_task=max_concurrent_external_task,
+                # Temporary rollout guard: consume and settle old semantic
+                # messages without invoking the account VLM.
+                disable_semantic_vlm=True,
             )
         else:
             logger.info("RAGFS client not initialized; skipping queue manager")

@@ -160,6 +160,7 @@ class SemanticProcessor(DequeueHandlerBase):
         embedding_worker_stopped: Optional[Callable[[], bool]] = None,
         vlm_resolver: Optional["VLMResolver"] = None,
         runtime_config_manager: Any = None,
+        disable_vlm: bool = False,
     ):
         """
         Initialize SemanticProcessor.
@@ -174,6 +175,7 @@ class SemanticProcessor(DequeueHandlerBase):
         self._embedding_worker_stopped = embedding_worker_stopped
         self._vlm_resolver = vlm_resolver
         self._runtime_config_manager = runtime_config_manager
+        self._disable_vlm = disable_vlm
 
     def _account_breaker(self, account_id: str) -> CircuitBreaker:
         with self._breaker_lock:
@@ -560,6 +562,18 @@ class SemanticProcessor(DequeueHandlerBase):
             breaker = self._account_breaker(msg.account_id)
             work = self._message_work(msg, lock)
             work.start()
+            if self._disable_vlm:
+                logger.info(
+                    "[SemanticVLMDisabled] skipping semantic message without VLM: "
+                    "uri=%s context_type=%s trigger=%s account_id=%s",
+                    msg.uri,
+                    msg.context_type,
+                    msg.generation_trigger,
+                    msg.account_id,
+                )
+                await work.skip()
+                await self._cleanup_local_artifact(msg)
+                return ProcessResult.success()
             execute_started_at = time.perf_counter()
             if msg.queue_enqueued_at > 0:
                 queue_wait_ms = max((time.time() - msg.queue_enqueued_at) * 1000.0, 0.0)
