@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { click, type } from './helpers/command-console-dom.mjs';
 import { mount, ok } from './helpers/console-dom.mjs';
 
-test('write links the quoted destination and only the URI within quoted content', async () => {
+test('write keeps the draft plain and links only the quoted URIs after submission', async () => {
   const destination = 'viking://resources/output folder/out.md';
   const uri = 'viking://resources/a.md';
   const content = `${uri} -> /tmp/a.md`;
@@ -19,21 +19,25 @@ test('write links the quoted destination and only the URI within quoted content'
     { onOpenUri: (target) => opened.push(target) },
   );
   try {
-    async function checkLinks(selector) {
-      const region = host.container.querySelector(selector);
-      const links = [...region.querySelectorAll('a')];
-      assert.equal(region.textContent, command);
-      assert.deepEqual(
-        links.map((link) => link.getAttribute('href')),
-        [destination, uri],
-      );
-      for (const link of links) await click(link);
-    }
     await type(host.input, command);
-    await checkLinks('.ov-command-console__input-mirror');
+    const draft = host.container.querySelector(
+      '.ov-command-console__input-mirror',
+    );
+    assert.equal(draft.textContent, command);
+    assert.equal(draft.querySelectorAll('a').length, 0);
+
     await host.execute(command);
-    await checkLinks('.ov-command-console__bubble-text');
-    assert.deepEqual(opened, [destination, uri, destination, uri]);
+    const message = host.container.querySelector(
+      '.ov-command-console__bubble-text',
+    );
+    const links = [...message.querySelectorAll('a')];
+    assert.equal(message.textContent, command);
+    assert.deepEqual(
+      links.map((link) => link.getAttribute('href')),
+      [destination, uri],
+    );
+    for (const link of links) await click(link);
+    assert.deepEqual(opened, [destination, uri]);
   } finally {
     await host.dispose();
   }
