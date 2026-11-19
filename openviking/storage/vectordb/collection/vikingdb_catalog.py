@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import threading
 import time
-from copy import deepcopy
+from collections.abc import Iterator
 from typing import Any
+from weakref import WeakValueDictionary
 
 from openviking.storage.errors import VikingDBException
 from openviking.storage.vector_ids import vector_record_id
@@ -21,12 +22,16 @@ _BATCH_SIZE = 100
 _INDEX_WAIT_SECONDS = 30
 
 
+def is_account_sharded(meta: dict[str, Any]) -> bool:
+    return meta.get("ShardBy", meta.get("PartitionBy")) == "account_id"
+
+
 def catalog_mode(meta: dict[str, Any]) -> str | None:
     fields = {f["FieldName"]: f for f in meta.get("Fields", [])}
     ids, attrs = fields.get("item_uuids", {}), fields.get("item_attrs", {})
     mode = ids.get("InheritanceMode")
     if (
-        meta.get("PartitionBy") == "account_id"
+        is_account_sharded(meta)
         and fields.get("uri", {}).get("FieldType") == "path"
         and ids.get("FieldType") == "list<string>"
         and ids.get("MountPathField") == "uri"
@@ -71,13 +76,22 @@ def _eq(field: str, values: list[Any]) -> dict[str, Any]:
 class VikingDBCatalog:
     def __init__(self, collection):
         self.collection = collection
-        self.lock = threading.RLock()
+        self._locks_guard = threading.Lock()
+        self._scope_locks = WeakValueDictionary()
 
-    def _body(self, scope: str, **kwargs) -> dict[str, Any]:
+    def _scope_lock(self, scope: str):
+        # Operations in a partition share a lock while any caller holds or waits for it.
+        with self._locks_guard:
+            lock = self._scope_locks.get(scope)
+            if lock is None:
+                lock = threading.Lock()
+                self._scope_locks[scope] = lock
+            return lock
+
+    def _body(self, **kwargs) -> dict[str, Any]:
         return {
             "project": self.collection.project_name,
             "collection_name": self.collection.collection_name,
-            "partition_by": scope,
             **kwargs,
         }
 
@@ -104,7 +118,9 @@ class VikingDBCatalog:
         for start in range(0, len(ids), _BATCH_SIZE):
             result = self.collection._data_post(
                 "/api/vikingdb/data/fetch_in_collection",
-                self._body(scope, ids=ids[start : start + _BATCH_SIZE], output_fields=fields),
+                self._body(
+                    partition_by=scope, ids=ids[start : start + _BATCH_SIZE], output_fields=fields
+                ),
             )
             if not isinstance(result.get("fetch"), list):
                 raise VikingDBException("Invalid VikingDB Catalog fetch response")
@@ -118,7 +134,6 @@ class VikingDBCatalog:
         result = self.collection._data_post(
             "/api/vikingdb/data/search/scalar",
             self._body(
-                scope,
                 index_name=self.collection.catalog_index_name,
                 field="id",
                 order="asc",
@@ -131,18 +146,25 @@ class VikingDBCatalog:
             raise VikingDBException("Invalid VikingDB Catalog index response")
         return result["data"]
 
-    def _scan(self, scope: str, condition: dict[str, Any]) -> list[dict[str, Any]]:
-        rows = []
+    def _scan_pages(
+        self, scope: str, condition: dict[str, Any], output_fields: list[str]
+    ) -> Iterator[list[dict[str, Any]]]:
         offset = 0
         while True:
             page = self._search(
-                scope, condition, limit=_BATCH_SIZE, offset=offset, output_fields=["id"]
+                scope, condition, limit=_BATCH_SIZE, offset=offset, output_fields=output_fields
             )
-            ids = [str(item["id"]) for item in page]
-            rows.extend(self._fetch(scope, ids).values())
+            if page:
+                yield page
             if len(page) < _BATCH_SIZE:
-                return rows
+                return
             offset += len(page)
+
+    def _scan(self, scope: str, condition: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = []
+        for page in self._scan_pages(scope, condition, ["id"]):
+            rows.extend(self._fetch(scope, [str(item["id"]) for item in page]).values())
+        return rows
 
     def _subtree(self, scope: str, uri: str) -> list[dict[str, Any]]:
         return self._scan(scope, {**_eq("uri", [uri]), "para": "-d=-1"})
@@ -161,7 +183,8 @@ class VikingDBCatalog:
     def _delete(self, scope: str, ids: list[str]) -> None:
         for start in range(0, len(ids), _BATCH_SIZE):
             self.collection._data_post(
-                "/api/vikingdb/data/delete", self._body(scope, ids=ids[start : start + _BATCH_SIZE])
+                "/api/vikingdb/data/delete",
+                self._body(partition_by=scope, ids=ids[start : start + _BATCH_SIZE]),
             )
 
     def _wait_visible(self, scope: str, expected: dict[str, dict[str, Any] | None]) -> None:
@@ -259,6 +282,57 @@ class VikingDBCatalog:
         self._delete(scope, added)
         self._wait_visible(scope, {**dict.fromkeys(added), **{r["id"]: r for r in rows}})
 
+    def _move_subtree(self, scope: str, source: str, target: str) -> dict[str, Any]:
+        if source == target:
+            return {"moved_nodes": 0}
+        if source.startswith(target.rstrip("/") + "/") or target.startswith(
+            source.rstrip("/") + "/"
+        ):
+            raise ValueError("Cannot move overlapping Catalog subtrees")
+
+        moved = {}
+        previous = {}
+        source_ids = []
+        condition = {**_eq("uri", [source]), "para": "-d=-1"}
+        for page in self._scan_pages(scope, condition, ["uri"]):
+            destinations = {}
+            for item in page:
+                uri = _uri(item["fields"].get("uri"))
+                if (uri != source and not uri.startswith(source + "/")) or item["id"] != _id(
+                    scope, uri
+                ):
+                    raise VikingDBException("Invalid source row in VikingDB Catalog move")
+                new_uri = target + uri[len(source) :]
+                destinations[item["id"]] = (_id(scope, new_uri), new_uri)
+
+            # Read the local source rows and the exact destination keys needed for rollback.
+            target_ids = [key for key, _ in destinations.values()]
+            snapshot = self._fetch(scope, [*destinations, *target_ids])
+            for old_id, (new_id, new_uri) in destinations.items():
+                if old_id not in snapshot:
+                    continue  # An index entry may outlive its Collection record.
+                source_ids.append(old_id)
+                previous[old_id] = snapshot[old_id]
+                if new_id in snapshot:
+                    previous[new_id] = snapshot[new_id]
+                moved[new_id] = {**snapshot[old_id], "id": new_id, "uri": new_uri}
+
+        if not moved:
+            return {"moved_nodes": 0}
+        undo = {
+            "scope": scope,
+            "rows": list(previous.values()),
+            "added_uris": [row["uri"] for key, row in moved.items() if key not in previous],
+        }
+        try:
+            self._write(list(moved.values()))
+            self._delete(scope, source_ids)
+            self._wait_visible(scope, {**dict.fromkeys(source_ids), **moved})
+        except Exception:
+            self._restore(scope, undo)
+            raise
+        return {"moved_nodes": len(moved), "undo": undo}
+
     def compile_item_filter(self, scope: str, condition: dict[str, Any]) -> dict[str, Any] | bool:
         """Translate root-attribute predicates into effective identity predicates.
 
@@ -293,7 +367,7 @@ class VikingDBCatalog:
             values = sorted({v for p in predicates for v in p["conds"]})
             branches = [_eq("item_attrs", [v]) for v in values]
             selector = branches[0] if len(branches) == 1 else {"op": "or", "conds": branches}
-        with self.lock:
+        with self._scope_lock(scope):
             rows = self._scan(scope, selector) if selector.get("conds") else []
         declarations = [r for r in rows if r.get("item_uuids")]
 
@@ -339,7 +413,7 @@ class VikingDBCatalog:
         scope = request.get("scope")
         if not isinstance(scope, str) or not scope or "\0" in scope:
             raise ValueError("Catalog requires an account scope")
-        with self.lock:
+        with self._scope_lock(scope):
             return self._execute(request, scope, mode)
 
     def _execute(self, request: dict[str, Any], scope: str, mode: str) -> dict[str, Any]:
@@ -390,37 +464,7 @@ class VikingDBCatalog:
             self._restore(scope, request["undo"])
             return {}
         if op == "move_subtree":
-            source, target = _uri(request["from_uri"]), _uri(request["to_uri"])
-            if source == target:
-                return {"moved_nodes": 0}
-            if source.startswith(target + "/") or target.startswith(source + "/"):
-                raise ValueError("Cannot move overlapping Catalog subtrees")
-            rows = self._subtree(scope, source)
-            if not rows:
-                return {"moved_nodes": 0}
-            previous = {r["id"]: r for r in rows + self._subtree(scope, target)}
-            moved = []
-            for old in rows:
-                row = deepcopy(old)
-                row["uri"] = target + old["uri"][len(source) :]
-                row["id"] = _id(scope, row["uri"])
-                moved.append(row)
-            undo = {
-                "scope": scope,
-                "rows": list(previous.values()),
-                "added_uris": [r["uri"] for r in moved if r["id"] not in previous],
-            }
-            obsolete = sorted(set(previous) - {r["id"] for r in moved})
-            try:
-                self._write(moved)
-                self._delete(scope, obsolete)
-                self._wait_visible(
-                    scope, {**dict.fromkeys(obsolete), **{r["id"]: r for r in moved}}
-                )
-            except Exception:
-                self._restore(scope, undo)
-                raise
-            return {"moved_nodes": len(rows), "undo": undo}
+            return self._move_subtree(scope, _uri(request["from_uri"]), _uri(request["to_uri"]))
 
         if op not in ("declare_item", "validate_resource_update", "delete_subtree"):
             raise NotImplementedError(f"VikingDB Catalog operation is not supported: {op}")

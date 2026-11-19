@@ -23,6 +23,7 @@ from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     VECTORS_ONLY,
@@ -1140,25 +1141,35 @@ class ResourceProcessor:
                                 root_is_file=root_is_file,
                                 target_validator=target_validator,
                             )
-                            newly_reserved = True
                             result["root_uri"] = root_uri
                             if root_uri != candidate_uri:
                                 result.setdefault("warnings", []).append(
                                     f"'{candidate_uri}' already exists. Creating '{root_uri}'. "
                                     f"Tip: Use --to <path> to specify exact target."
                                 )
+                    elif target_validator is not None:
+                        await target_validator(root_uri, ctx)
+                    dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                    if resource_lock is None:
+                        resource_lock = await self.acquire_resource_lock(
+                            dst_path,
+                            uri=root_uri,
+                            root_is_file=root_is_file,
+                        )
+                    # Recheck the final URI under the lease, bypassing any
+                    # cached result from target resolution.
+                    try:
+                        await viking_fs._async_agfs.stat(dst_path, bypass_cache=True)
+                    except AGFSNotFoundError:
+                        pass
                     else:
-                        if target_validator is not None:
-                            await target_validator(root_uri, ctx)
-                        target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
-                        if resource_lock is None:
-                            newly_reserved = not target_preexisting
-                            dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                            resource_lock = await self.acquire_resource_lock(
-                                dst_path,
-                                uri=root_uri,
-                                root_is_file=root_is_file,
+                        if candidate_uri:
+                            raise AGFSAlreadyExistsError(
+                                f"Auto-named resource target is already occupied: {root_uri}"
                             )
+                        target_preexisting = True
+                    if preacquired_lock is None:
+                        newly_reserved = not target_preexisting
                     if acl is not None:
                         ingest_options = replace(
                             ingest_options,
@@ -1171,11 +1182,20 @@ class ResourceProcessor:
                     local_artifact_doc_rel = self._artifact_doc_rel(artifact_ref, temp_uri)
                     if as_item and target_preexisting:
                         await require_existing_item_root(self.vikingdb, root_uri, ctx)
-                    # Validate under the same tree lease as the content commit.
-                    # Rejected declarations must never overwrite existing bytes,
-                    # and a parent snapshot must not delete independent Items.
-                    await validate_resource_item_update(
-                        self.vikingdb,
+                    if target_preexisting or as_item:
+                        # Protect independent child Items and check declaration
+                        # support before committing content under this lease.
+                        await validate_resource_item_update(
+                            self.vikingdb,
+                            root_uri,
+                            ctx,
+                            as_item=as_item,
+                            item_attrs=item_attrs,
+                            is_dir=not root_is_file,
+                        )
+                    # A declaration failure must leave a new target available to retry.
+                    await declare_item(
+                        viking_fs,
                         root_uri,
                         ctx,
                         as_item=as_item,
@@ -1207,14 +1227,6 @@ class ResourceProcessor:
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
                     source_committed = True
-                    await declare_item(
-                        viking_fs,
-                        root_uri,
-                        ctx,
-                        as_item=as_item,
-                        item_attrs=item_attrs,
-                        is_dir=not root_is_file,
-                    )
                 except BaseException:
                     # Mirror the Phase 3 (finalize) on-error cleanup: a lock or
                     # persist failure here would otherwise orphan the

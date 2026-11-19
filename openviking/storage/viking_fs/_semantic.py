@@ -249,11 +249,9 @@ class _SemanticMixin:
                 uri for uri in group.get("candidate_members_uri", []) if isinstance(uri, str)
             ]
             extra_info = None
-            count = group.get("candidate_members_count", group.get("count"))
+            count = group.get("candidate_members_count")
             if count is not None:
-                truncated = group.get(
-                    "candidate_members_truncated", group.get("labels_truncated", False)
-                )
+                truncated = group.get("candidate_members_truncated", False)
                 if (
                     type(count) is not int
                     or type(truncated) is not bool
@@ -268,8 +266,6 @@ class _SemanticMixin:
                 if truncated:
                     extra_info["candidate_members_truncated"] = True
             attrs = group["entity_attrs"]
-            # Classify the declaration root, never a representative member.
-            # Root metadata needs no summary/content read or model invocation.
             context_type = ContextType(context_type_for_uri(root_uri))
             buckets[context_type].append(
                 MatchedContext(

@@ -17,6 +17,7 @@ from openviking.storage.vectordb.collection.vikingdb_catalog import (
     CATALOG_LEVEL,
     VikingDBCatalog,
     catalog_mode,
+    is_account_sharded,
 )
 from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
@@ -127,21 +128,21 @@ class VikingDBCollection(ICollection):
             return {}
 
     def _data_post(self, path: str, data: Dict[str, Any], *, include_catalog: bool = False):
-        if getattr(self, "meta_data", {}).get("PartitionBy") == "account_id":
-            if path.startswith("/api/vikingdb/data/search/") or path.endswith("/agg"):
+        is_search = path.startswith("/api/vikingdb/data/search/")
+        is_query = is_search or path == "/api/vikingdb/data/agg"
+        if is_account_sharded(getattr(self, "meta_data", {})):
+            if is_query:
                 from .vikingdb_item_search import _partition_values
 
                 scopes = _partition_values(data.get("filter"))
-                if len(scopes) != 1 or data.get("partition_by", next(iter(scopes))) not in scopes:
+                scope = scopes.pop() if len(scopes) == 1 else None
+                partition_key = "partition" if is_search else "partition_by"
+                if scope is None or data.get(partition_key, scope) != scope:
                     raise ValueError("VikingDB partitioned queries require one account_id scope")
-                data = {**data, "partition_by": scopes.pop()}
+                data = {**data, partition_key: scope}
             elif ("ids" in data or path.endswith("/update")) and not data.get("partition_by"):
                 raise ValueError("VikingDB partitioned point operations require partition_by")
-        if (
-            not include_catalog
-            and getattr(self, "_has_catalog_metadata", False)
-            and (path.startswith("/api/vikingdb/data/search/") or path == "/api/vikingdb/data/agg")
-        ):
+        if is_query and not include_catalog and getattr(self, "_has_catalog_metadata", False):
             hidden = {"op": "must_not", "field": "level", "conds": [CATALOG_LEVEL]}
             condition = data.get("filter")
             data = {
@@ -264,7 +265,7 @@ class VikingDBCollection(ICollection):
             "data": data_list,
             "ignore_unknown_fields": True,
         }
-        if partition_by is not None and self.meta_data.get("PartitionBy") == "account_id":
+        if partition_by is not None and is_account_sharded(self.meta_data):
             data["partition_by"] = partition_by
         return self._data_post(path, data)
 
@@ -278,7 +279,7 @@ class VikingDBCollection(ICollection):
             "ids": primary_keys,
             "ignore_unknown_fields": True,
         }
-        if partition_by is not None and self.meta_data.get("PartitionBy") == "account_id":
+        if partition_by is not None and is_account_sharded(self.meta_data):
             data["partition_by"] = partition_by
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
@@ -290,7 +291,7 @@ class VikingDBCollection(ICollection):
             "collection_name": self.collection_name,
             "ids": primary_keys,
         }
-        if partition_by is not None and self.meta_data.get("PartitionBy") == "account_id":
+        if partition_by is not None and is_account_sharded(self.meta_data):
             data["partition_by"] = partition_by
         return self._data_post(path, data)
 
@@ -353,7 +354,7 @@ class VikingDBCollection(ICollection):
             filter_only=filter_only,
         )
         if _has_item_attrs(filters):
-            compiled = self._catalog.compile_item_filter(request["partition_by"], filters)
+            compiled = self._catalog.compile_item_filter(request["partition"], filters)
             if compiled is False:
                 return {"groups": []}
             request["filter"] = compiled

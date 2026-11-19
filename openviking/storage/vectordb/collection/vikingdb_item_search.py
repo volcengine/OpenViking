@@ -78,7 +78,7 @@ def build_item_group_request(
         "project": project,
         "collection_name": collection_name,
         "index_name": index_name,
-        "partition_by": partitions.pop(),
+        "partition": partitions.pop(),
         "dense_vector": dense_vector,
         "filter": filters,
         "group_by": {
@@ -86,9 +86,7 @@ def build_item_group_request(
             "item_attrs_field": "item_attrs",
             "op": aggregation,
             "group_limit": max_groups,
-            # The current platform response has no candidate totals. OV cannot
-            # expose evidence statistics, so request the smallest member list
-            # and no member fields instead of transferring unused content.
+            # OV uses only group metadata. One is the smallest supported member limit.
             "record_per_group_limit": 1,
             "found_records_output_fields": [],
         },

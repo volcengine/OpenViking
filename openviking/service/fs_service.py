@@ -613,8 +613,8 @@ class FSService:
 
         # Ordinary mkdir rejects occupied targets before the Tree lock can scan
         # their subtree. Item replay must validate its declaration under the lock.
+        path = viking_fs._uri_to_path(directory_uri, ctx=ctx)
         if not as_item:
-            path = viking_fs._uri_to_path(directory_uri, ctx=ctx)
             try:
                 await viking_fs._async_agfs.stat(path, bypass_cache=True)
             except AGFSNotFoundError:
@@ -673,26 +673,39 @@ class FSService:
         async with self._hold_watch_scope(
             [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
         ) as lease:
-            item_replay = as_item and await viking_fs.exists(directory_uri, ctx=ctx)
-            if item_replay:
-                await require_existing_item_root(viking_fs._get_vector_store(), directory_uri, ctx)
+            item_replay = False
+            if as_item:
+                try:
+                    target = await viking_fs._async_agfs.stat(path, bypass_cache=True)
+                except AGFSNotFoundError:
+                    pass
+                else:
+                    if not target.get("isDir", False):
+                        raise AGFSAlreadyExistsError(f"path already exists: {directory_uri}")
+                    await require_existing_item_root(
+                        viking_fs._get_vector_store(), directory_uri, ctx
+                    )
+                    item_replay = True
             acl_update = (
                 await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
                 if acl is not None and not file_only
                 else None
             )
-            mkdir_options: dict[str, Any] = {"ctx": ctx, "lease_ref": lease}
+            declaration = None
             if as_item:
-                mkdir_options["exist_ok"] = True
-            await viking_fs.mkdir(uri, **mkdir_options)
-            declaration = await declare_item(
-                viking_fs,
-                directory_uri,
-                ctx,
-                as_item=as_item,
-                item_attrs=item_attrs,
-                is_dir=True,
-            )
+                # Publish the declaration before the directory can appear ordinary.
+                declaration = await run_to_completion(
+                    partial(
+                        declare_item,
+                        viking_fs,
+                        directory_uri,
+                        ctx,
+                        as_item=True,
+                        item_attrs=item_attrs,
+                        is_dir=True,
+                    )
+                )
+            await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease, exist_ok=item_replay)
             if not file_only:
                 await initialize(acl_update, lease, preserve_existing=item_replay)
             return declaration

@@ -174,7 +174,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 `search --mode list`（默认）返回排序命中列表。`search --mode context` 按服务端默认配置组装上下文并输出文本；使用 `-o json` 可保留完整的 `entries`、`rendered`、`digest` 和 `stats` 结果。context 模式支持 `--events-time-decay-protection`，但拒绝 `--uri` 和 `--read-content`，服务端会忽略 `--level`。CLI 暂未提供 `max_tokens`、`detail` 等 context 专用选项。
 
-`find` 和 `search --mode list` 均支持 `--search-as-item`，返回已声明的 Item 根；`--aggregation max` 为默认值，也可选择 `sum`。此模式不加载 `--session-id` 对应的会话，不支持 `--read-content` 和 `--events-time-decay-protection`。目录 Item 先用 `ov ls` 浏览，再用 `ov read` 读取成员文件；文件 Item 可直接读取。完整参数和返回语义见 [Item Search](../../docs/zh/api/06-retrieval.md#item-search预览)。
+`find` 和 `search --mode list` 均支持 `--search-as-item`，返回已声明的 Item 根；`--aggregation max` 为默认值，也可选择 `sum`。此模式不加载 `--session-id` 对应的会话，不支持 `--read-content` 和 `--events-time-decay-protection`。用 `ov ls` 浏览 Item 目录，再用 `ov read` 读取成员文件。完整参数和返回语义见 [Item Search](../../docs/zh/api/06-retrieval.md#item-search-preview)。
 
 ```bash
 ov find "service startup failure" --search-as-item

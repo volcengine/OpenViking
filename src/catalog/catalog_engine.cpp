@@ -71,6 +71,8 @@ class CatalogEngine::Impl {
   void index_node(const std::string& node_key, const std::string& value);
   JsonValue compile_filter(const std::string& scope, const JsonValue& filter,
                            JsonAllocator& allocator) const;
+  JsonValue compile_item_filter(const std::string& scope, const JsonValue& filter,
+                                JsonAllocator& allocator) const;
   void commit(const std::map<std::string, std::string>& updates,
               const std::vector<std::string>& deletes = {});
 };
@@ -214,19 +216,23 @@ JsonValue impossible_filter(JsonAllocator& allocator) {
   return JsonValue(empty, allocator);
 }
 
-JsonValue path_filter(const char* op, const std::string& uri,
+JsonValue path_filter(const char* op, JsonValue paths,
                       JsonAllocator& allocator) {
   JsonValue filter(rapidjson::kObjectType);
   filter.AddMember("op", JsonValue(op, allocator), allocator);
   filter.AddMember("field", "uri", allocator);
-  JsonValue conds(rapidjson::kArrayType);
-  conds.PushBack(JsonValue(uri.c_str(),
-                           static_cast<rapidjson::SizeType>(uri.size()),
-                           allocator),
-                 allocator);
-  filter.AddMember("conds", conds, allocator);
+  filter.AddMember("conds", paths, allocator);
   filter.AddMember("para", "-d=-1", allocator);
   return filter;
+}
+
+JsonValue path_filter(const char* op, const std::string& uri,
+                      JsonAllocator& allocator) {
+  JsonValue paths(rapidjson::kArrayType);
+  paths.PushBack(JsonValue(uri.data(),
+                           static_cast<rapidjson::SizeType>(uri.size()), allocator),
+                 allocator);
+  return path_filter(op, std::move(paths), allocator);
 }
 
 }  // namespace
@@ -447,6 +453,49 @@ JsonValue CatalogEngine::Impl::compile_filter(const std::string& scope,
   return out;
 }
 
+JsonValue CatalogEngine::Impl::compile_item_filter(
+    const std::string& scope, const JsonValue& filter,
+    JsonAllocator& allocator) const {
+  auto compiled = compile_filter(scope, filter, allocator);
+  JsonValue roots(rapidjson::kArrayType);
+  const auto prefix = key(scope, "/");
+  for (auto it = declarations_.lower_bound(prefix);
+       it != declarations_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
+    const auto& uri = it->second.root_uri;
+    // An ancestor's path already covers this subtree in either inheritance mode.
+    auto ancestor = parent(uri);
+    while (!ancestor.empty() && !declarations_.count(key(scope, ancestor))) {
+      ancestor = parent(ancestor);
+    }
+    if (ancestor.empty()) {
+      // Direct collection writes can keep the URI scheme in the path index.
+      const auto qualified_uri = "viking:/" + uri;
+      for (const auto* path : {&uri, &qualified_uri}) {
+        roots.PushBack(JsonValue(path->data(),
+                                 static_cast<rapidjson::SizeType>(path->size()),
+                                 allocator),
+                       allocator);
+      }
+    }
+  }
+  auto membership = roots.Empty() ? impossible_filter(allocator)
+                                  : path_filter("must", std::move(roots), allocator);
+  if (compiled.HasMember("sorter") && !compiled.HasMember("filter")) {
+    compiled.AddMember("filter", membership, allocator);
+    return compiled;
+  }
+  auto& predicate = compiled.HasMember("filter") ? compiled["filter"] : compiled;
+  if (!predicate.ObjectEmpty()) {
+    JsonValue clauses(rapidjson::kArrayType);
+    clauses.PushBack(predicate, allocator).PushBack(membership, allocator);
+    membership.SetObject();
+    membership.AddMember("op", "and", allocator);
+    membership.AddMember("conds", clauses, allocator);
+  }
+  predicate = std::move(membership);
+  return compiled;
+}
+
 void CatalogEngine::Impl::group_candidates(
     const JsonValue& req, const std::string& scope, JsonDoc& result,
     const CandidateSource& source) const {
@@ -546,7 +595,6 @@ void CatalogEngine::Impl::group_candidates(
     const bool truncated = count > group.members.size();
     output.AddMember("candidate_members_count", count, allocator);
     output.AddMember("candidate_members_truncated", truncated, allocator);
-    output.AddMember("count", count, allocator);  // Legacy local adapter alias.
     JsonValue labels(rapidjson::kArrayType);
     JsonValue uris(rapidjson::kArrayType);
     for (size_t i = 0; i < group.members.size() && i < static_cast<size_t>(max_members); ++i) {
@@ -560,9 +608,7 @@ void CatalogEngine::Impl::group_candidates(
                               allocator),
                     allocator);
     }
-    output.AddMember("candidate_members", JsonValue(labels, allocator), allocator);
-    output.AddMember("labels", labels, allocator);
-    output.AddMember("labels_truncated", truncated, allocator);
+    output.AddMember("candidate_members", labels, allocator);
     output.AddMember("candidate_members_uri", uris, allocator);
     output_groups.PushBack(output, allocator);
   }
@@ -592,7 +638,7 @@ std::string CatalogEngine::Impl::aggregate_filter(
   JsonDoc result(rapidjson::kObjectType);
   auto& allocator = result.GetAllocator();
   JsonDoc dsl(rapidjson::kObjectType);
-  auto compiled = compile_filter(scope, req["filter"], dsl.GetAllocator());
+  auto compiled = compile_item_filter(scope, req["filter"], dsl.GetAllocator());
   if (compiled.HasMember("filter")) {
     dsl.CopyFrom(compiled, dsl.GetAllocator());
   } else {
@@ -787,6 +833,9 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     const bool attrs_supplied = req.HasMember("item_attrs");
     if (attrs_supplied) validate_item_attrs(req["item_attrs"]);
     auto node = parse(found->second);
+    if (required_string(node, "node_type") != "dir") {
+      throw std::invalid_argument("Item declarations require a directory Catalog node");
+    }
     auto& node_allocator = node.GetAllocator();
     const auto existing_item = declarations_.find(key(scope, uri));
     if (existing_item != declarations_.end()) {
@@ -873,12 +922,14 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       data.PushBack(row, allocator);
     }
     result.AddMember("data", data, allocator);
-  } else if (op == "compile_filter") {
+  } else if (op == "compile_filter" || op == "compile_item_filter") {
     if (!req.HasMember("filter")) {
       throw std::invalid_argument("Catalog requires filter");
     }
-    result.AddMember("filter", compile_filter(scope, req["filter"], allocator),
-                     allocator);
+    auto filter = op == "compile_item_filter"
+                      ? compile_item_filter(scope, req["filter"], allocator)
+                      : compile_filter(scope, req["filter"], allocator);
+    result.AddMember("filter", filter, allocator);
   } else if (op == "group_candidates") {
     if (!req.HasMember("candidates") || !req["candidates"].IsArray()) {
       throw std::invalid_argument("Catalog grouping requires candidates");

@@ -671,6 +671,8 @@ class LocalCollection(ICollection):
         output_fields: Optional[List[str]] = None,
         advance: Optional[Dict[str, Any]] = None,
         return_detail_info: bool = False,
+        *,
+        item_members_only: bool = False,
     ) -> SearchResult:
         time_decay = (advance or {}).get("time_decay")
         if advance is not None and (
@@ -683,7 +685,7 @@ class LocalCollection(ICollection):
             if catalog_scope:
                 compiled = self.catalog_execute(
                     {
-                        "op": "compile_filter",
+                        "op": "compile_item_filter" if item_members_only else "compile_filter",
                         "scope": catalog_scope,
                         "filter": filters or {},
                     }
@@ -693,6 +695,17 @@ class LocalCollection(ICollection):
         index = self.indexes.get(index_name)
         if not index:
             return search_result
+
+        if item_members_only:
+            # Use the filtered index population as the recall budget so the
+            # Item group limit cannot change which members contribute to sum.
+            predicate = (filters or {}).get("filter", filters)
+            counts = index.aggregate({"filter": predicate, "sorter": {"op": "count"}})
+            limit = counts.get(AggregateKeys.TOTAL_COUNT_INTERNAL.value)
+            if limit is None:
+                raise ValueError("Native index could not count eligible Item members")
+            if limit == 0:
+                return search_result
 
         sparse_raw_terms = []
         sparse_values = []
@@ -875,17 +888,15 @@ class LocalCollection(ICollection):
 
         with self._catalog_lock:
             self._open_catalog()
-        # Group TopK must not change the semantic scoring population (especially sum).
-        candidate_limit = 1000
         for _ in range(3):
             snapshot = self._index_mutation_barrier.item_snapshot(scope)
             recalled = self.search_by_vector(
                 index_name=index_name,
                 dense_vector=dense_vector,
                 sparse_vector=sparse_vector,
-                limit=candidate_limit,
                 filters=filters,
                 output_fields=["uri"],
+                item_members_only=True,
             )
             candidates = [
                 {

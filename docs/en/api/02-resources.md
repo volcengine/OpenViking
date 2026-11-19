@@ -181,7 +181,7 @@ This endpoint is the core entry point for resource management. It supports vario
 | temp_file_id | string | No | - | Temporary upload file ID. Mutually exclusive with `path` |
 | to | string | No | - | Final location for this import. If the target already exists, it is refreshed. Mutually exclusive with `parent` |
 | parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
-| as_item | bool | No | False | Declare the resolved import root as an Item; existing Items support same-root updates, while ordinary roots cannot be promoted |
+| as_item | bool | No | False | Declare the resolved import directory as an Item. If the import resolves to a file, the request fails before writing it. Existing Items support same-root updates, while ordinary roots cannot be promoted |
 | item_attrs | object | No | omitted | Optional flat string map; requires `as_item=true`. Attributes belong only to the declaration root and are not inherited or merged |
 | create_parent | bool | No | False | Automatically create parent directory if it does not exist (server-side flag) |
 | add_type | string | No | None | Explicit connector type; requires `path` and exact `to`, and cannot be combined with `parent` or `temp_file_id` |
