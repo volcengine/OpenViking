@@ -4,6 +4,7 @@ function observeAnnouncement(element: HTMLSpanElement, message: string) {
   const view = element.ownerDocument.defaultView;
   if (!view) return () => {};
   let frame: number | undefined;
+  let motionFrame: number | undefined;
   let exposed = false;
   let stopped = false;
   const visible = () => {
@@ -55,6 +56,30 @@ function observeAnnouncement(element: HTMLSpanElement, message: string) {
   const resize = view.ResizeObserver
     ? new view.ResizeObserver(refresh)
     : undefined;
+  const ancestors: HTMLElement[] = [];
+  const motionEvents = [
+    'transitionstart',
+    'transitionend',
+    'transitioncancel',
+    'animationstart',
+    'animationend',
+    'animationcancel',
+  ] as const;
+  // A delayed visibility rule can settle without another mutation or resize.
+  const motion = (event: Event) => {
+    if (stopped || event.target !== event.currentTarget) return;
+    if (event.type !== 'transitionstart' && event.type !== 'animationstart') {
+      refresh();
+      return;
+    }
+    // At start, computed visibility may still reflect progress zero. Recheck once
+    // on the next frame, independently of the frame that writes the announcement.
+    if (motionFrame !== undefined) return;
+    motionFrame = view.requestAnimationFrame(() => {
+      motionFrame = undefined;
+      refresh();
+    });
+  };
   // Hosts can use data attributes, container queries or viewport media queries.
   // Observe only this ancestor chain, never document children or a frame loop.
   for (
@@ -62,8 +87,10 @@ function observeAnnouncement(element: HTMLSpanElement, message: string) {
     node;
     node = node.parentElement
   ) {
+    ancestors.push(node);
     observer.observe(node, { attributes: true });
     resize?.observe(node);
+    for (const event of motionEvents) node.addEventListener(event, motion);
   }
   const viewport = view.visualViewport;
   view.addEventListener('resize', refresh);
@@ -73,9 +100,14 @@ function observeAnnouncement(element: HTMLSpanElement, message: string) {
     stopped = true;
     observer.disconnect();
     resize?.disconnect();
+    for (const ancestor of ancestors)
+      for (const event of motionEvents)
+        ancestor.removeEventListener(event, motion);
     view.removeEventListener('resize', refresh);
     viewport?.removeEventListener('resize', refresh);
     cancelFrame();
+    if (motionFrame !== undefined) view.cancelAnimationFrame(motionFrame);
+    motionFrame = undefined;
     element.textContent = '';
   };
 }
