@@ -4,7 +4,7 @@ import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { scopeKeyOf, type RequestScope } from './fs-scope.js';
 
 /**
- * 请求作用域：客户端实例、根目录与逐请求覆盖的身份字段。
+ * 请求作用域：客户端实例、根目录、逐请求身份与局部视图范围。
  *
  * 换 Provider、换 `requestOptions.accountId`、换 `rootUri`，上一个作用域里还没回来
  * 的请求都必须作废，否则 A 的响应会在 B 的树上落地。
@@ -13,8 +13,8 @@ import { scopeKeyOf, type RequestScope } from './fs-scope.js';
  * （`startTransition` + Suspense 就会），渲染里中止会把仍在屏幕上的那棵树的在途
  * 请求杀掉。渲染里只记下「期望的作用域键」，请求回来时用它判断结果是否过期。
  *
- * The request scope: the client instance, the root and the per-request identity
- * overrides.
+ * The request scope: the client instance, root, per-request identity overrides
+ * and local view scope.
  *
  * Switching the Provider, `requestOptions.accountId` or `rootUri` must invalidate the
  * requests still in flight, or A's response lands on B's tree.
@@ -44,8 +44,13 @@ export function useRequestScope(
   client: OvClient | null,
   requestOptions: OvRequestOptions | undefined,
   rootUri: string,
+  viewScopeKey?: string,
 ): RequestScopeHandle {
-  const scopeKey = scopeKeyOf(client, requestOptions, rootUri);
+  const requestKey = scopeKeyOf(client, requestOptions, rootUri);
+  const scopeKey =
+    viewScopeKey === undefined
+      ? requestKey
+      : JSON.stringify([requestKey, viewScopeKey]);
   // 渲染期不写任何 ref：作用域身份只在下面的 effect 里发布，也就是提交之后。
   // `startTransition` + Suspense 放弃的那次渲染因此不会改动它。
   //

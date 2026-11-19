@@ -3,7 +3,7 @@ import { bindingOf } from '../monitoring/client.js';
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FsEntry } from './types.js';
-import { isSystemUri } from '../resource-uri.js';
+import { isSystemUri, normalizeResourceUri } from '../resource-uri.js';
 import type { UserRootMode } from './user-root-context.js';
 
 /** 一次取多少个子节点。One page of children. */
@@ -34,7 +34,7 @@ export async function loadPage(
   const userId = requestOptions?.userId;
   if (
     userRootMode === 'current' &&
-    uri.replace(/\/+$/, '') === 'viking://user' &&
+    normalizeResourceUri(uri) === 'viking://user' &&
     typeof userId === 'string' &&
     userId.trim()
   ) {

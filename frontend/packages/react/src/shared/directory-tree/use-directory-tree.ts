@@ -84,6 +84,7 @@ export function useDirectoryTree({
     request?.client ?? null,
     request?.options,
     rootUri,
+    userRootMode,
   );
   const fetchPage = useCallback(
     async (...args: Parameters<DirectoryQueries['load']>) => {
