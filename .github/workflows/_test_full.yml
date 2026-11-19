@@ -28,6 +28,12 @@ jobs:
   test:
     name: Full Test (${{ matrix.os }}, ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    container:
+      image: ${{ matrix.os == 'ubuntu-24.04' && (vars.CI_UBUNTU24_IMAGE || 'ubuntu:24.04') || '' }}
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
+    defaults:
+      run:
+        shell: ${{ startsWith(matrix.os, 'windows-') && 'pwsh' || 'bash' }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,9 +41,35 @@ jobs:
         python-version: ${{ fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]') }}
 
     steps:
+    - name: Bootstrap Ubuntu test container
+      if: matrix.os == 'ubuntu-24.04'
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        packages=(git ca-certificates curl python3 cmake build-essential pkg-config libssl-dev ccache unzip xz-utils)
+        ready=true
+        for package in "${packages[@]}"; do
+          if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+            ready=false
+            break
+          fi
+        done
+        if "$ready"; then
+          echo "System dependencies are already installed in the CI image."
+          exit 0
+        fi
+        sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+        apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+          -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+          -o APT::Update::Error-Mode=any update
+        apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+          -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+          install -y --no-install-recommends "${packages[@]}"
     - uses: actions/checkout@v6
       with:
         submodules: recursive
+    - uses: ./.github/actions/linux-test-env
+      if: matrix.os == 'ubuntu-24.04'
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v6
@@ -48,12 +80,6 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-
-    - name: Install system dependencies (Ubuntu)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
