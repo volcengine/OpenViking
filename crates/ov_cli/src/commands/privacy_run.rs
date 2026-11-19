@@ -167,7 +167,8 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
     let mut hangup = signal(SignalKind::hangup())?;
     // With a terminal job, the child stays in the shell's group so it can read /dev/tty and
     // follow Ctrl-Z and fg. Otherwise, its own group lets ov signal the whole command once.
-    let job = getpgrp() == std::process::id() as i32
+    let caller_pgrp = getpgrp();
+    let job = caller_pgrp == std::process::id() as i32
         || std::io::stdin().is_terminal()
         || std::io::stdout().is_terminal()
         || std::io::stderr().is_terminal();
@@ -198,13 +199,29 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
     drop(command);
     let pid = child.id().expect("just spawned") as i32;
     // A SIGKILL sent to ov's group cannot reach the command's own group, and ov cannot catch it.
-    // This shell joins the command's group and ends it when ov exits without writing a newline.
+    // Run the guard in its own group so kill(-pid, 0) detects surviving background workers and
+    // keeps watching until the outer caller group finishes.
+    const GUARD_SCRIPT: &str = r#"trap '' INT TERM HUP
+if ! IFS= read -r line; then
+    kill -KILL -$1 2>/dev/null
+elif [ "$line" = watch ]; then
+    while kill -0 -$1 2>/dev/null; do
+        kill -0 -$2 2>/dev/null || { kill -KILL -$1 2>/dev/null; break; }
+        sleep 0.05 2>/dev/null || sleep 1
+    done
+fi"#;
     let guard = if terminal.is_some() {
         None
     } else {
         std::process::Command::new("/bin/sh")
-            .args(["-c", "trap '' INT TERM HUP; read line || kill -s KILL 0"])
-            .process_group(pid)
+            .args([
+                "-c",
+                GUARD_SCRIPT,
+                "ov-guard",
+                &pid.to_string(),
+                &caller_pgrp.to_string(),
+            ])
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -227,10 +244,14 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
                     kill(-pid, SIGKILL);
                 }
                 if let Some(mut guard) = guard {
+                    let keep_watching = status.is_ok() && kill(-pid, 0) == 0;
                     if let Some(mut stdin) = guard.stdin.take() {
-                        let _ = stdin.write_all(b"\n");
+                        let msg: &[u8] = if keep_watching { b"watch\n" } else { b"done\n" };
+                        let _ = stdin.write_all(msg);
                     }
-                    let _ = guard.wait();
+                    if !keep_watching {
+                        let _ = guard.wait();
+                    }
                 }
                 return Ok(status?);
             }

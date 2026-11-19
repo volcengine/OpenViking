@@ -564,6 +564,76 @@ async fn killing_the_process_group_without_a_terminal_leaves_no_command_behind()
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
+async fn killing_outer_job_stops_redirected_background_worker() {
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let _ = privacy(dir.path(), "http://127.0.0.1:1");
+    let worker_ready = dir.path().join("worker.ready");
+    let worker_done = dir.path().join("worker.done");
+    let next_step = dir.path().join("next_step");
+
+    let mut outer = Command::new("/bin/sh");
+    outer
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
+        .env("OPENVIKING_LANG", "en")
+        .args([
+            "-c",
+            r#""$1" privacy run -- /bin/sh -c '(printf "%s\n" "$$" > worker.ready; sleep 0.6; : > worker.done) &' >job.log 2>&1; : > next_step; exec sleep 10"#,
+            "sh",
+            env!("CARGO_BIN_EXE_ov"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    // Simulate a harness starting a multi-step shell script in its own process group.
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        outer.pre_exec(|| {
+            if posix::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut outer_child = outer.spawn().unwrap();
+    let outer_pgid = outer_child.id().unwrap() as i32;
+
+    timeout(Duration::from_secs(5), async {
+        while !worker_ready.exists() || !next_step.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("outer script did not start redirected worker and advance");
+    let worker_pid: i32 = fs::read_to_string(&worker_ready)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+
+    assert_eq!(posix::kill(-outer_pgid, posix::SIGKILL), 0);
+    outer_child.wait().await.unwrap();
+
+    for _ in 0..20 {
+        if posix::kill(worker_pid, 0) < 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        posix::kill(worker_pid, 0) < 0,
+        "redirected background worker {worker_pid} outlived outer job"
+    );
+    assert!(!worker_done.exists());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
 async fn group_signal_without_a_terminal_delivers_once_and_preserves_zero_status() {
     use std::process::Stdio;
 
