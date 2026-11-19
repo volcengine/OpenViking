@@ -248,7 +248,7 @@ async def resolve_resource_diff(
         records_by_rel.setdefault(record.relative_path, []).append(record)
 
     states: dict[str, tuple[ContentState, str | None]] = {}
-    compare_paths: list[str] = []
+    compare_paths: dict[str, str] = {}
     hash_paths: list[str] = []
     md5_fast_path_count = 0
     keys = set(new) | set(formal) | set(records_by_rel)
@@ -268,14 +268,12 @@ async def resolve_resource_diff(
                 )
                 l2_record = canonical_records.get(2)
                 l2_md5 = str(l2_record.fields.get("md5") or "") if l2_record else ""
-                if new_entry.md5 and l2_md5:
+                if new_entry.md5 and l2_md5 and new_entry.md5 != l2_md5:
                     md5_fast_path_count += 1
-                    state = (
-                        ContentState.UNCHANGED if new_entry.md5 == l2_md5 else ContentState.MODIFIED
-                    )
-                    states[rel_path] = (state, new_entry.md5)
+                    states[rel_path] = (ContentState.MODIFIED, new_entry.md5)
                 else:
-                    compare_paths.append(rel_path)
+                    # A matching L2 digest describes the indexed bytes. Verify the stored file.
+                    compare_paths[rel_path] = new_entry.md5 if l2_md5 else ""
         elif new_entry is not None:
             state = ContentState.RESTORE if records_by_rel.get(rel_path) else ContentState.ADDED
             states[rel_path] = (state, new_entry.md5 or None)
@@ -287,13 +285,19 @@ async def resolve_resource_diff(
             states[rel_path] = (ContentState.ABSENT, None)
 
     async def compare(rel_path: str) -> tuple[str, ContentState, str]:
+        from openviking.utils.content_hash import content_md5
+
+        expected_md5 = compare_paths[rel_path]
+        if expected_md5:
+            stored_md5 = content_md5(await target.read_file(rel_path))
+            state = ContentState.UNCHANGED if stored_md5 == expected_md5 else ContentState.MODIFIED
+            return rel_path, state, expected_md5
+
         artifact_path = (artifact_paths or {}).get(rel_path, rel_path)
         new_bytes, old_bytes = await asyncio.gather(
             store.read_bytes(artifact_ref, artifact_path),
             target.read_file(rel_path),
         )
-        from openviking.utils.content_hash import content_md5
-
         return (
             rel_path,
             ContentState.UNCHANGED if new_bytes == old_bytes else ContentState.MODIFIED,

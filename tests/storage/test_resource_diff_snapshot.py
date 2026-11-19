@@ -653,3 +653,52 @@ async def test_build_rnfv_snapshot_default_scope_reads_subtree():
         f"{root}/a.py",
         f"{root}/sub/b.py",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [b"7 days", b"30 days", None])
+async def test_matching_index_digest_verifies_stored_body(stored):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from openviking.storage.resource_diff import ContentState, IndexState, resolve_resource_diff
+    from openviking.storage.resource_rnfv import (
+        FormalTreeSnapshot,
+        NewArtifactSnapshot,
+        RequestIntent,
+        RNFVSnapshot,
+        VectorIndexSnapshot,
+        VectorRecordSnapshot,
+    )
+    from openviking.utils.content_hash import content_md5
+
+    uri = "viking://resources/refund.md"
+    digest = content_md5(b"7 days")
+    record = VectorRecordSnapshot("target", uri, "", 2, {"md5": digest})
+    snapshot = RNFVSnapshot(
+        RequestIntent(uri, "semantic_and_vectors"),
+        NewArtifactSnapshot({"": NewEntry(md5=digest)}),
+        FormalTreeSnapshot({"": FormalEntry()}),
+        VectorIndexSnapshot({"target": record}, frozenset({"id", "uri", "level", "md5"})),
+    )
+    target = SimpleNamespace(read_file=AsyncMock(return_value=stored))
+    store = SimpleNamespace(read_bytes=AsyncMock())
+    if stored is None:
+        target.read_file.side_effect = OSError("stored body is unavailable")
+        with pytest.raises(OSError, match="stored body is unavailable"):
+            await resolve_resource_diff(
+                snapshot, store=store, artifact_ref=None, target=target, concurrency=2
+            )
+    else:
+        result = await resolve_resource_diff(
+            snapshot, store=store, artifact_ref=None, target=target, concurrency=2
+        )
+        entry = result.entries[""]
+        if stored == b"7 days":
+            assert entry.content_state is ContentState.UNCHANGED
+            assert entry.index_state is IndexState.COMPLETE
+        else:
+            assert entry.content_state is ContentState.MODIFIED
+            assert entry.index_state is IndexState.STALE
+    target.read_file.assert_awaited_once_with("")
+    store.read_bytes.assert_not_called()
