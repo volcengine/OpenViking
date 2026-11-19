@@ -33,9 +33,11 @@ from .notices import recall_notice
 from .observe import degrade
 from .profile import build_profile
 from .protocols import (
+    appended_request,
     classify,
     clean_text,
     client_openviking_tools,
+    codex_turn,
     is_user,
     plugin_present,
     prefix_chain,
@@ -156,12 +158,14 @@ class MemoryKernel:
         except Exception as error:
             metrics = {}
             if isinstance(error, asyncio.TimeoutError) and budget.expired:
-                logger.warning(
-                    "OpenViking Gateway preparation timed out; forwarding without memory"
-                )
+                logger.info("gateway preparation timed out; forwarding without memory")
                 degrade(metrics, "prepare_timeout")
             else:
-                logger.exception("OpenViking Gateway preparation failed")
+                logger.info(
+                    "gateway preparation failed; forwarding without memory error_type=%s",
+                    type(error).__name__,
+                    extra={"degraded": True, "error_type": type(error).__name__},
+                )
                 degrade(metrics, "memory_store_failure")
             return self.degraded_body(body, protocol), None, metrics
 
@@ -342,6 +346,18 @@ class MemoryKernel:
         self.configure_tools(prepared, policy, owner)
         if not disabled and policy.capture and kind == "user" and anchor >= 0:
             await self.capture.open(prepared)
+        if kind == "auxiliary" and messages and appended_request(messages[-1]):
+            # Claude Code compacts by appending its request to a tool result: the history
+            # before it is saved as at a cut, and neither the request nor its reply is.
+            *before, last = messages
+            last = {**last, "content": last["content"][:-1]}
+            kept = [*body_chain[:-1], *hidden_chain([last], protocol, body_chain[:-1])]
+            await self.capture.save_cut(prepared, credential, kept[-1], [*before, last], kept)
+        elif (codex_turn(headers).get("compaction") or {}).get("phase") == "mid_turn":
+            # Codex sends its request as a user message of its own, after the turn so far.
+            turn = next((i for i in range(anchor - 1, -1, -1) if is_user(messages[i])), -1)
+            cut = next((a for a in reversed(body_chain[: max(anchor, 0)]) if a), "")
+            await self.capture.save_cut(replace(prepared, anchor=turn), credential, cut)
         if kind in {"user", "continuation"}:
             prepared.context_window = window_size(prepared, policy)
             prepared.context_tokens = await self.measure(prepared)
@@ -926,7 +942,9 @@ class MemoryKernel:
             await self.compaction_failed(request, error.reason)
             return
         except Exception:
-            logger.exception("OpenViking Gateway summary failed")
+            logger.info(
+                "gateway summary failed; using compaction fallback", extra={"degraded": True}
+            )
             request.metrics["compaction_ms"] = round((time.monotonic() - started) * 1000, 2)
             await self.compaction_failed(request, "summary_failed")
             return

@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { isRetainedFieldRenderer } from './field-renderer.js';
+import { useViewActive } from '../../../shared/view-activity.js';
 import { FormField } from '../../../shared/primitives/form-field/form-field.js';
 import type {
   VikingBotInteractionField,
@@ -26,6 +28,7 @@ export function InteractionField<Value>({
     control: VikingBotInteractionFieldContext<Value>['controlProps'],
   ) => ReactNode;
 }) {
+  const active = useViewActive();
   return (
     <FormField
       {...props}
@@ -34,7 +37,8 @@ export function InteractionField<Value>({
     >
       {(controlProps) =>
         config?.render
-          ? config.render({
+          ? (active || isRetainedFieldRenderer(config.render)) &&
+            config.render({
               value,
               onChange,
               disabled,

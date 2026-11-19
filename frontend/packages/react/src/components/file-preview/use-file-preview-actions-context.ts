@@ -4,8 +4,8 @@ import { useCallback } from 'react';
 
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import type { FilePreviewPanelActions } from './file-preview-edit-context.js';
 import type {
-  FilePreviewActions,
   FilePreviewFileTab,
   FilePreviewSource,
   FilePreviewTab,
@@ -45,7 +45,7 @@ export function useFilePreviewActionsContext({
   setViewMode: (mode: FilePreviewViewMode) => void;
   editing: Editing;
   operations: Operations;
-}): FilePreviewActions {
+}): FilePreviewPanelActions {
   const track = useTrack();
   const selectView = (mode: FilePreviewViewMode) => {
     if (mode !== viewMode)
@@ -56,12 +56,15 @@ export function useFilePreviewActionsContext({
       );
     setViewMode(mode);
   };
-  const startEditing = useCallback(() => {
-    if (!fileTab?.editing || mediaKind(fileTab.source) || editing.editing)
-      return;
-    setViewMode('source');
-    void editing.start(fileTab);
-  }, [editing, fileTab, setViewMode]);
+  const startEditingAtAnnotation = useCallback(
+    (matchText?: string) => {
+      if (!fileTab?.editing || mediaKind(fileTab.source) || editing.editing)
+        return;
+      setViewMode('source');
+      void editing.start(fileTab, matchText);
+    },
+    [editing, fileTab, setViewMode],
+  );
 
   const saveEditing = useCallback(async () => {
     if (!fileTab) return false;
@@ -104,7 +107,8 @@ export function useFilePreviewActionsContext({
       Boolean(fileTab?.editing) &&
       !mediaKind(fileTab!.source) &&
       !editing.editing,
-    startEditing,
+    startEditing: () => startEditingAtAnnotation(),
+    startEditingAtAnnotation,
     saveEditing,
     cancelEditing,
     canCopyPath: Boolean(currentPath),

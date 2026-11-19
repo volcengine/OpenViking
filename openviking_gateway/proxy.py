@@ -17,6 +17,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import ValidationError
 
 from openviking.core.peer_id import normalize_peer_id
+from openviking.observability.log_safety import short_hash
 
 from .client import PEER_HEADER
 from .kernel import Budget
@@ -568,7 +569,9 @@ class ProxyRequest:
         try:
             await self.app.state.kernel.relayed(self.prepared, self.capture)
         except Exception:
-            logger.exception("OpenViking Gateway reply bookkeeping failed")
+            logger.info(
+                "gateway reply bookkeeping failed; preserving response", extra={"degraded": True}
+            )
 
     async def finish(self):
         """Book an answered request and write its record; called once per answered request."""
@@ -643,11 +646,15 @@ class ProxyRequest:
                 )
             stats.capture_failed += 1
             self.metrics.update(capture_status="failed", capture_reason=reason)
-            logger.warning(
-                "OpenViking Gateway could not save a finished turn of %s: %s",
-                self.prepared.session,
-                reason,
-                exc_info=reason == "save_failed",
+            logger.error(
+                "gateway finished turn save failed; preserving response session_hash=%s error_type=%s",
+                short_hash(str(self.prepared.session)),
+                type(error).__name__,
+                extra={
+                    "degraded": True,
+                    "operation": "gateway.capture_save",
+                    "error_type": type(error).__name__,
+                },
             )
             return
         if saved:
@@ -658,7 +665,11 @@ class ProxyRequest:
             )
 
     def bookkeeping_failed(self, step):
-        logger.exception("OpenViking Gateway response bookkeeping failed: %s", step)
+        logger.info(
+            "gateway response bookkeeping failed; preserving response stage=%s",
+            step,
+            extra={"degraded": True},
+        )
         self.metrics.setdefault("bookkeeping_failed", []).append(step)
 
     async def tool_response(self):

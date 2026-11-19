@@ -55,6 +55,7 @@
 .ov-auth,
 .ov-agent-connect,
 .ov-console,
+.ov-console-skeleton,
 .ov-divider,
 .ov-file-browser-action-bar,
 .ov-drawer,
@@ -226,6 +227,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-auth,
 .dark .ov-agent-connect,
 .dark .ov-console,
+.dark .ov-console-skeleton,
 .dark .ov-divider,
 .dark .ov-file-browser-action-bar,
 .dark .ov-drawer,
@@ -654,6 +656,11 @@ html.dark .ov-directory-tour {
   --ov-ui-tour-surface-default: var(--ov-ui-bg-1-default);
   --ov-ui-tour-border-default: var(--ov-ui-border-3-default);
   --ov-ui-tour-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-tour-illustration-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-memories-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-shared-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-experiences-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-peers-default: var(--ov-ui-bg-3-default);
 }
 
 /* Persistent notice surface from the console Arco theme (MIT). */
@@ -669,4 +676,14 @@ html.dark .ov-notification-stack {
 
 .ov-toast-stack {
   --ov-ui-toast-shadow-default: var(--ov-ui-overlay-shadow-default);
+}
+
+/* VikingBot activation cover, shown when the host supplies no tutorial media. */
+.ov-console {
+  --ov-ui-activation-preview-sky-default: #7ab7f6;
+  --ov-ui-activation-preview-haze-default: #dce1f6;
+}
+.dark .ov-console {
+  --ov-ui-activation-preview-sky-default: #315b92;
+  --ov-ui-activation-preview-haze-default: #292841;
 }

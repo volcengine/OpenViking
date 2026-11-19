@@ -16,6 +16,7 @@ export interface Argument {
     | 'number'
     | 'boolean'
     | 'boolean-or-json'
+    | 'json-array'
     | 'json-object';
   placeholder?: string;
   descriptionKey?: string;
@@ -35,7 +36,7 @@ export interface Argument {
 }
 
 export type ArgumentValue =
-  string | number | boolean | string[] | number[] | Record<string, unknown>;
+  string | number | boolean | unknown[] | Record<string, unknown>;
 
 export type ArgumentValues = Record<string, ArgumentValue>;
 

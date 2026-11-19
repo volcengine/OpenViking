@@ -4,6 +4,7 @@ import type { Locale } from '../../../shared/locale.js';
 import type { ConsoleHitlOptions, HitlGroup } from './types.js';
 import { groupsIn, object, parse, text, weekdays } from './protocol.js';
 import { hitlLabels } from './locales.js';
+import { formatCompileUriLabel } from './uris.js';
 
 const builtinTypes = new Set([
   'compile_output_type',
@@ -68,6 +69,12 @@ function answerRows(
         (item) => item.value === answer.value,
       );
       if (typeof option?.label === 'string') result = option.label;
+    } else if (
+      answer.card_type === 'compile_target' &&
+      typeof answer.value === 'string' &&
+      !card?.options?.createRequest
+    ) {
+      result = formatCompileUriLabel(answer.value);
     } else if (answer.card_type === 'compile_schedule') {
       const schedule = object(answer.value);
       if (

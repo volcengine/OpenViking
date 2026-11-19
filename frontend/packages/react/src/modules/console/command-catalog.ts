@@ -17,8 +17,8 @@ const COMMAND_GROUPS = {
   core: [
     'add-resource',
     'add-skill',
-    'compile',
     'compile create',
+    'compile',
     'find',
     'read',
     'write',
@@ -64,6 +64,7 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
   'add-skill',
   'add-memory',
   'find',
+  'compile create',
   'compile',
 ] as const;
 
@@ -73,7 +74,7 @@ export function consoleQuickCommands(
   const guides = resolveConsoleLocale(locale).commandGuides;
   return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
     name,
-    value: name === 'compile' ? 'ov compile ' : guides[name].examples[0],
+    value: guides[name].examples[0],
   }));
 }
 
@@ -103,7 +104,6 @@ export function consoleCommands(
         {
           name: spec.name,
           inputText: `ov ${spec.name}`,
-          hiddenFromSuggestions: spec.name === 'compile create',
           description: guide?.description ?? text.commands[spec.name],
           summary: text.commands[spec.name],
           examples: guide?.examples ?? parameterExamples[spec.name],
@@ -145,10 +145,9 @@ export function consoleCommands(
       ] as const;
     }),
   );
-  const compile = catalog.get('compile');
   const create = catalog.get('compile create');
-  if (compile && create) {
-    compile.parameterDetails = {
+  if (create) {
+    create.parameterDetails = {
       usage: create.usage,
       options: create.options,
       extra: text.compileArgsHelp,
@@ -177,9 +176,7 @@ export function createCommandHelp(
   locale: Locale,
   options?: ConsoleCommandOptions,
 ): CommandConsoleRecordContent {
-  const commands = consoleCommands(locale, options).filter(
-    (command) => !command.hiddenFromSuggestions,
-  );
+  const commands = consoleCommands(locale, options);
   return {
     variant: 'command-help',
     sections: consoleCommandGroups(locale)

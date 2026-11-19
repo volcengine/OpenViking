@@ -1,60 +1,81 @@
 import { useMonitoringBinding } from '../../shared/monitoring/context.js';
 import { readData, tagData } from '../../shared/monitoring/data.js';
-import { useRenderErrors } from './labels.js';
+import { consoleLabels, useRenderErrors } from './labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { ConsoleTaskNotifications } from './task-notifications.js';
 import { formatConsoleTaskResult } from './task-records.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
+import { useOvSignal } from '../../client/provider.js';
 import { useId, useMemo, useRef } from 'react';
 import { CommandConsole } from '../../components/command-console/index.js';
-import {
-  VikingBot,
-  VikingBotSessionActions,
-} from '../../components/viking-bot/index.js';
+import { VikingBotSessionActions } from '../../components/viking-bot/index.js';
 import { useConsole } from './use-console.js';
 import { useConversation } from './use-conversation.js';
 import {
   consoleCommandGroups,
   consoleQuickCommands,
 } from './command-catalog.js';
-import { consoleLabels } from './labels.js';
 import { ConsoleToolbar } from './console-toolbar.js';
-import type { ConsoleProps } from './types.js';
+import {
+  ConsoleCollectionError,
+  ConsoleConversationPanel,
+} from './console-conversation-panel.js';
+import { useBotActivation } from './use-bot-activation.js';
+import { useConversationDraftIdentity } from './use-conversation-draft-identity.js';
+import type { ConsoleMode, ConsoleProps } from './types.js';
 
-export function ConsoleView({
-  mode,
-  modes,
-  defaultMode,
-  locale: localeProp,
-  quickCommands,
-  scopeKey,
-  requestOptions,
-  onModeChange,
-  onOpenUri,
-  conversation,
-  command,
-  chatOptions,
-  taskService,
-  commandOptions,
-  slots,
-  labels: overrides,
-  className,
-  ...rest
-}: ConsoleProps) {
+const defaultModes: readonly ConsoleMode[] = ['conversation', 'command'];
+
+export function ConsoleView(props: ConsoleProps) {
+  const {
+    mode: _mode,
+    modes = defaultModes,
+    defaultMode: _defaultMode,
+    locale: localeProp,
+    quickCommands,
+    scopeKey,
+    commandHistoryKey: _commandHistoryKey,
+    requestOptions,
+    onModeChange: _onModeChange,
+    onOpenUri,
+    conversation: _conversation,
+    command,
+    chatOptions,
+    taskService: _taskService,
+    commandOptions: _commandOptions,
+    slots,
+    labels: overrides,
+    className,
+    ...rest
+  } = props;
   const locale = useLocale(localeProp);
   const openCommandUri = command?.onOpenUri ?? onOpenUri;
   const renderErrors = useRenderErrors(locale);
-  const state = useConsole({
-    mode,
-    modes,
-    defaultMode,
-    locale,
-    scopeKey,
-    requestOptions,
-    taskService,
-    commandOptions,
-    onModeChange,
+  const inheritedSignal = useOvSignal();
+  const activation = useBotActivation({
+    activation: chatOptions?.activation,
+    enabled: modes.includes('conversation'),
+    scopeKey: chatOptions?.scopeKey ?? scopeKey,
+    signal:
+      (chatOptions?.requestOptions ?? requestOptions)?.signal ??
+      inheritedSignal,
   });
+  const { status } = activation.state;
+  const chatReady = status === 'ready';
+  const visibleModes =
+    status === 'disabled' ||
+    status === 'checking' ||
+    status === 'collection-error'
+      ? modes.filter((item) => item !== 'conversation')
+      : modes;
+  const showConversation =
+    visibleModes.includes('conversation') ||
+    (status === 'checking' && !visibleModes.length);
+  const draftIdentity = useConversationDraftIdentity(props);
+  const state = useConsole(
+    { ...props, modes: visibleModes, locale },
+    draftIdentity,
+  );
   const commandRecords = useMemo(
     () => state.records.map(formatConsoleTaskResult),
     [state.records],
@@ -63,7 +84,7 @@ export function ConsoleView({
   tagData(monitoring, commandRecords, readData(monitoring, [state.records]));
   const labels = consoleLabels(locale, overrides);
   const managedConversation = useConversation(
-    { conversation, chatOptions, scopeKey, requestOptions, locale, modes },
+    { ...props, locale, modes: chatReady ? modes : [] },
     state.setConversationDraft,
     state.conversationDraft,
   );
@@ -89,16 +110,21 @@ export function ConsoleView({
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
         {feedback}
-        <ConsoleTaskNotifications locale={locale} onOpenUri={openCommandUri} />
+        <ConsoleCollectionError activation={activation} locale={botLocale} />
+        <ConsoleTaskNotifications
+          locale={locale}
+          onOpenUri={openCommandUri}
+          onOpenMemoryUri={conversationProps.onOpenUri ?? onOpenUri}
+        />
         {state.mode ? (
           <ErrorBoundary message={renderErrors.toolbar} resetKeys={[scopeKey]}>
             <ConsoleToolbar
               mode={state.mode}
-              modes={modes ?? ['conversation', 'command']}
+              modes={visibleModes}
               panelId={id}
               locale={locale}
               labels={labels}
-              records={state.records}
+              history={state.history}
               isExecuting={state.isExecuting}
               onModeChange={(next) => state.setMode(next)}
               onClear={() => {
@@ -107,48 +133,38 @@ export function ConsoleView({
               }}
               onRecall={fillCommand}
               conversationActions={
-                <VikingBotSessionActions
-                  sessions={sessions}
-                  extra={headerActions}
-                  onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
-                  onCopy={conversationProps.onCopy}
-                  labels={botLabels}
-                  locale={botLocale}
-                />
+                chatReady ? (
+                  <VikingBotSessionActions
+                    sessions={sessions}
+                    extra={headerActions}
+                    onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
+                    onCopy={conversationProps.onCopy}
+                    labels={botLabels}
+                    locale={botLocale}
+                  />
+                ) : undefined
               }
             >
               {slots?.toolbar}
             </ConsoleToolbar>
           </ErrorBoundary>
         ) : null}
-        {modes === undefined || modes.includes('conversation') ? (
-          <div
+        {showConversation ? (
+          <ConsoleConversationPanel
             id={`${id}-conversation`}
-            className="ov-console__panel ov-console__panel--conversation"
-            hidden={state.mode !== 'conversation'}
-          >
-            {state.mode === 'conversation' ? (
-              <VikingBot
-                {...conversationProps}
-                onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
-                messages={conversationProps.messages ?? []}
-                draft={conversationProps.draft ?? state.conversationDraft}
-                onDraftChange={
-                  conversationProps.draft === undefined
-                    ? (value) => {
-                        state.setConversationDraft(value);
-                        conversationProps.onDraftChange?.(value);
-                      }
-                    : conversationProps.onDraftChange
-                }
-                footer={slots?.conversationContext ?? conversationProps.footer}
-                locale={botLocale}
-                labels={botLabels}
-              />
-            ) : null}
-          </div>
+            active={state.mode === 'conversation' || state.mode === undefined}
+            activation={activation}
+            media={chatOptions?.activation?.media}
+            conversation={conversationProps}
+            draft={state.conversationDraft}
+            onDraftChange={state.setConversationDraft}
+            footer={slots?.conversationContext}
+            onOpenUri={onOpenUri}
+            locale={botLocale}
+            labels={botLabels}
+          />
         ) : null}
-        {modes === undefined || modes.includes('command') ? (
+        {visibleModes.includes('command') ? (
           <div
             id={`${id}-command`}
             ref={commandPanel}
@@ -163,6 +179,7 @@ export function ConsoleView({
               {slots?.commandHelp}
               <CommandConsole
                 records={commandRecords}
+                history={state.history}
                 value={state.command}
                 commands={state.commands}
                 commandGroups={consoleCommandGroups(locale)}

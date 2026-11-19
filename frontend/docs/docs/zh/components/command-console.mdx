@@ -53,6 +53,7 @@ import '@openviking/react/components/command-console/style.css';
 | ---------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------ |
 | records          | 要展示的命令记录，按提交顺序排列                                                           | `readonly CommandConsoleRecord[]`                                     | 必填                     |
 | value            | 输入区的文本，受控                                                                         | `string`                                                              | 必填                     |
+| history          | 方向键可回填的命令，按提交顺序排列                                                         | `readonly Pick<CommandConsoleRecord, 'command'>[]`                    | 同 `records`             |
 | disabled         | 禁用输入和提交，并在输入区下方显示 `labels.unavailableMessage`                             | `boolean`                                                             | `false`                  |
 | busy             | 执行中锁定输入与提交，由结果卡片展示进度，不显示不可用提示                                 | `boolean`                                                             | `false`                  |
 | emptyState       | 没有记录时显示的内容，替换内置空态；传 `null` 时不显示空态                                 | `ReactNode`                                                           | -                        |

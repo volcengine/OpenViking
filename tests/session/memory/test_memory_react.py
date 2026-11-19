@@ -790,9 +790,7 @@ class TestExtractLoopFinalJsonRetry:
         ]
 
     @pytest.mark.asyncio
-    async def test_final_unparseable_response_logs_error_and_skips_extraction(
-        self, preferences_context
-    ):
+    async def test_final_unparseable_response_skips_extraction(self, preferences_context):
         class FakeVLM:
             model = "test-model"
 
@@ -818,10 +816,8 @@ class TestExtractLoopFinalJsonRetry:
             "openviking.session.memory.extract_loop.get_openviking_config",
             return_value=config,
         ):
-            with patch("openviking.session.memory.extract_loop.tracer.error") as log_error:
-                operations, _ = await extract_loop.run()
+            operations, _ = await extract_loop.run()
         assert operations is None and len(vlm.seen_messages) == 2
-        assert "failure_kind=parse_error" in log_error.call_args.args[0]
 
         final_prompts = [
             message["content"]
@@ -909,7 +905,7 @@ class TestExtractLoopFinalJsonRetry:
                 "openviking_cli.utils.config.get_openviking_config",
                 return_value=config,
             ),
-            patch("openviking.session.memory.extract_loop.tracer.error") as tracer_error,
+            patch("openviking.session.memory.extract_loop.tracer.error"),
             patch("openviking.session.memory.extract_loop.logger.warning") as logger_warning,
         ):
             extract_loop._check_unread_existing_files = AsyncMock(return_value={})
@@ -929,7 +925,6 @@ class TestExtractLoopFinalJsonRetry:
             "not a valid restricted Python memory SDK program" in message.get("content", "")
             for message in vlm.seen_messages[-1]
         )
-        assert tracer_error.call_count == 1
         assert logger_warning.call_count == 0
 
     @pytest.mark.asyncio

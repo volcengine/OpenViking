@@ -12,6 +12,8 @@ export default {
   latest: 'Latest',
   rollback: 'Restore this version',
   rollbackBadge: 'Restored',
+  deletedBadge: 'Deleted',
+  deletedVersion: 'The file was deleted in this version.',
   rollbackTitle: 'Restore this document to this version?',
   rollbackConfirm: 'Confirm restore',
   rollbackHint:

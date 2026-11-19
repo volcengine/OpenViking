@@ -1,6 +1,11 @@
 import type { FileTreeEntryRow } from '../../components/file-tree/index.js';
 
 export const MENTION_ROOT = 'viking://';
+const compileSkillRoots = [
+  'viking://system',
+  'viking://~/skills',
+  'viking://agent/skills',
+];
 
 /** Use native glob for a literal basename search across unloaded directories. */
 export function mentionPattern(keyword: string) {
@@ -14,6 +19,36 @@ export function mentionPattern(keyword: string) {
       ),
     );
   return `**/*${parts.join('/')}*`;
+}
+
+/** A compile Skill search returns its entry file, matched by filename or directory. */
+function compileSkillPatterns(keyword: string) {
+  const pattern = mentionPattern(keyword);
+  const segments = keyword.split('/');
+  const filename = segments.pop()!.toLowerCase();
+  if (!'skill.md'.includes(filename)) return [`${pattern}/SKILL.md`];
+  if (segments.length === 0) return ['**/SKILL.md'];
+  return [
+    `${pattern}/SKILL.md`,
+    `${mentionPattern(segments.join('/'))}/SKILL.md`,
+  ];
+}
+
+export function compileSkillQueries(query: string) {
+  const queriesForRoot = (uri: string, relativePath: string) =>
+    compileSkillPatterns(relativePath).map((pattern) => ({
+      uri,
+      pattern,
+      node_limit: 256,
+    }));
+  if (!query.startsWith(MENTION_ROOT)) {
+    return compileSkillRoots.flatMap((uri) => queriesForRoot(uri, query));
+  }
+  const root =
+    compileSkillRoots.find(
+      (uri) => query === uri || query.startsWith(`${uri}/`),
+    ) ?? /^viking:\/\/user\/[^/]+\/skills(?=\/|$)/.exec(query)?.[0];
+  return root ? queriesForRoot(root, query.slice(root.length + 1)) : [];
 }
 
 /** Keep the ancestors in search results without making inferred paths selectable. */

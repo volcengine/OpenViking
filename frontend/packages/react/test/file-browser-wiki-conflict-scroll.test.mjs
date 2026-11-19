@@ -52,3 +52,46 @@ test('entering Wiki edit mode reveals the first highlighted line without moving 
     await view.unmount();
   }
 });
+
+test('each Wiki conflict pencil centers the selected conflict and puts the cursor at its start', async (context) => {
+  const first = { ...pending, problem_description: 'First conflict' };
+  const later = {
+    ...pending,
+    match_text: 'manager approval',
+    problem_description: 'Later conflict',
+  };
+  const document = `${body}\n${'Context\n'.repeat(100)}Require manager approval.`;
+  const content = `${document}\n<!-- CONFLICTS_CONTENT\n${[first, later]
+    .map((record) => JSON.stringify(record))
+    .join(',\n')}\n-->`;
+  const { view, openDashboard } = await mountWikiFile(
+    undefined,
+    undefined,
+    undefined,
+    content,
+  );
+  const scroll = context.mock.method(EditorView, 'scrollIntoView');
+  try {
+    for (const conflict of [later, first]) {
+      await openDashboard();
+      await click(
+        view.container.querySelector(
+          `button[aria-label="Edit conflict: ${conflict.problem_description}"]`,
+        ),
+      );
+      const editor = await waitForEditor(view.container);
+      const position = document.indexOf(conflict.match_text);
+      assert.deepEqual(scroll.mock.calls.at(-1)?.arguments, [
+        position,
+        { y: 'center' },
+      ]);
+      assert.equal(
+        EditorView.findFromDOM(editor).state.selection.main.head,
+        position,
+      );
+      await click(button('Cancel', view.container));
+    }
+  } finally {
+    await view.unmount();
+  }
+});

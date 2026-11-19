@@ -13,6 +13,8 @@ export interface FileBrowserWorkflowLabels {
   latest: string;
   rollback: string;
   rollbackBadge: string;
+  deletedBadge: string;
+  deletedVersion: string;
   rollbackTitle: string;
   rollbackConfirm: string;
   rollbackHint: string;

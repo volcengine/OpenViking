@@ -1,8 +1,12 @@
+import { createOvClient } from '../../../client/client.js';
+import { useOvClient, useOvIdentity } from '../../../client/provider.js';
+import { sourceSuggestions } from './directory-validation.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   VikingBotInteractionAnswer,
   VikingBotInteractionProps,
 } from '../../../components/viking-bot/index.js';
+import type { VikingBotMessage } from '../../../components/viking-bot/model.js';
 import type { Locale } from '../../../shared/locale.js';
 import { useMonitoringBinding } from '../../../shared/monitoring/context.js';
 import { readData, tagData } from '../../../shared/monitoring/data.js';
@@ -10,13 +14,20 @@ import type { VikingBotChatResult } from '../chat/types.js';
 import type { ConsoleHitlOptions, HitlGroup } from './types.js';
 import { pendingGroup } from './protocol.js';
 import { formatAnswers } from './answers.js';
-import { cardFields } from './fields.js';
+import { presentCard } from './fields.js';
+import type { CompilePickerScope } from './picker-fields.js';
 import { summarizeMessages } from './summary.js';
+import {
+  clarificationFlow,
+  confirmedSources,
+  outputDirectories,
+} from './flow.js';
 
 interface Draft {
   owner: object;
   group: HitlGroup;
-  answers: readonly VikingBotInteractionAnswer[];
+  turnUser?: VikingBotMessage;
+  answers: Readonly<Record<string, VikingBotInteractionAnswer>>;
   closed?: boolean;
   failedInput?: string;
   pendingInput?: string;
@@ -28,8 +39,22 @@ export function useHitl(
   enabled: boolean,
   locale: Locale,
   options?: ConsoleHitlOptions | false,
+  pickerScope: CompilePickerScope & { customChat?: boolean } = {},
 ) {
   const monitoring = useMonitoringBinding();
+  const inheritedClient = useOvClient('local');
+  const [fallback] = useState(createOvClient);
+  const requestOptions = pickerScope.requestOptions;
+  const user = useOvIdentity(requestOptions).userId;
+  const userId = typeof user === 'string' ? user : undefined;
+  const hasConnection =
+    !pickerScope.customChat ||
+    requestOptions?.baseURL !== undefined ||
+    requestOptions?.apiKey !== undefined ||
+    requestOptions?.accountId !== undefined ||
+    requestOptions?.userId !== undefined ||
+    requestOptions?.resourceId !== undefined;
+  const client = inheritedClient ?? (hasConnection ? fallback : undefined);
   const owner = useMemo(
     () => ({
       active: true,
@@ -62,10 +87,16 @@ export function useHitl(
       : undefined;
   const group = detected ?? retry;
   const same = draft?.owner === owner && draft.group.id === group?.id;
-  const answers = same ? draft.answers : [];
-  const card = group?.cards[answers.length];
+  const answers = same ? draft.answers : {};
+  const turnUser = retry ? draft?.turnUser : lastUser;
+  const flow = group && clarificationFlow(group, answers);
+  const card = flow?.cards.find(({ id }) => !answers[id]);
+  const recommendations =
+    group && card
+      ? outputDirectories(card, group, answers, flow?.output, userId)
+      : [];
   const current = useRef({ owner, key: '', raw });
-  const key = JSON.stringify([lastUser?.id, group?.id, answers.length]);
+  const key = JSON.stringify([lastUser?.id, group?.id, card?.id]);
   current.current = { owner, key, raw };
   const isCurrent = () =>
     owner.active &&
@@ -81,14 +112,26 @@ export function useHitl(
     !active || !group || !card
       ? undefined
       : {
-          requestKey: `${group.id}:${answers.length}`,
-          request: card.request,
-          fields: cardFields(card, locale),
-          index: answers.length,
-          total: group.cards.length,
+          requestKey: JSON.stringify([
+            pickerScope.scopeKey,
+            chat.sessionId,
+            card.id,
+          ]),
+          ...presentCard(
+            card,
+            locale,
+            { ...pickerScope, client },
+            recommendations,
+            sourceSuggestions(card, turnUser),
+            confirmedSources(group, answers),
+            userId,
+          ),
+          ...(card.options?.createRequest
+            ? { index: Object.keys(answers).length, total: group.cards.length }
+            : {}),
           onCancel: () => {
             if (isCurrent() && !lock.current)
-              setDraft({ owner, group, answers, closed: true });
+              setDraft({ owner, group, turnUser, answers, closed: true });
           },
           onSubmit: async (answer) => {
             if (
@@ -98,18 +141,34 @@ export function useHitl(
             )
               return;
             lock.current = true;
-            const next = [...answers, answer];
+            const next = { ...answers, [card.id]: answer };
             try {
-              if (next.length < group.cards.length) {
-                setDraft({ owner, group, answers: next });
+              const nextFlow = clarificationFlow(group, next);
+              if (nextFlow.cards.some(({ id }) => !next[id])) {
+                setDraft({ owner, group, turnUser, answers: next });
                 return;
               }
-              const input = formatAnswers(group, next);
-              setDraft({ owner, group, answers, pendingInput: input });
+              const input = formatAnswers(
+                group,
+                group.cards.map(({ id }) => next[id] ?? nextFlow.fixed[id]!),
+              );
+              setDraft({
+                owner,
+                group,
+                turnUser,
+                answers,
+                pendingInput: input,
+              });
               const ownsDraft = () =>
                 owner.active && current.current.owner === owner;
               const close = () =>
-                setDraft({ owner, group, answers: next, closed: true });
+                setDraft({
+                  owner,
+                  group,
+                  turnUser,
+                  answers: next,
+                  closed: true,
+                });
               let delivered = false;
               const sent = await owner.send(
                 { text: input, attachments: [] },
@@ -122,7 +181,13 @@ export function useHitl(
               if (!sent) {
                 // A failed chat attempt may already have appended the user's wire message.
                 // Preserve the last card only while that attempt is still the latest input.
-                setDraft({ owner, group, answers, failedInput: input });
+                setDraft({
+                  owner,
+                  group,
+                  turnUser,
+                  answers,
+                  failedInput: input,
+                });
                 throw new Error();
               }
               close();

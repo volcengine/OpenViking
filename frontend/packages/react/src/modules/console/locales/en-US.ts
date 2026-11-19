@@ -10,8 +10,8 @@ const commands = {
   'add-resource': 'Add a resource from a URL',
   'add-skill': 'Install a Skill',
   'add-memory': 'Add memory directly',
-  compile: 'Compile material with a Skill',
-  'compile create': 'Create a compile configuration',
+  compile: 'Run compilation',
+  'compile create': 'Create a configuration to run with compile',
 
   grep: 'Match text in resources',
   glob: 'Match resource paths',
@@ -57,6 +57,19 @@ const messages = {
       | 'quickStart'
     >
   >,
+  telemetryResult: (value: string) => `Telemetry: ${value}`,
+  memoryCommit: {
+    idle: 'Commit session',
+    pending: 'Committing session',
+    submitted: 'Committing session',
+    success: 'Session committed',
+    empty: 'There are no new messages to extract memories from.',
+    skipped: 'No new memories were generated.',
+    failed: 'Could not submit the session',
+    completed: 'Memory extraction completed.',
+    saved: 'Memories were generated and saved.',
+    view: 'View memory',
+  },
   taskCompletion: {
     title: 'Task complete',
     description: 'Background task completed.',
@@ -103,7 +116,8 @@ const messages = {
         'Search for relevant resources, memories, and skills in the current context.',
       examples: ['ov find "What is the value of OpenViking?"'],
     },
-    compile: compileHelp['en-US'].guide,
+    'compile create': compileHelp['en-US'].createGuide,
+    compile: compileHelp['en-US'].runGuide,
   } satisfies Partial<Record<keyof typeof commands, ConsoleCommandGuide>>,
   compileArgsHelp: compileHelp['en-US'].args,
   parameters: {
@@ -120,9 +134,9 @@ const messages = {
     'session-id': 'Session to append and commit',
     limit: 'Maximum number of results',
     'compile-name':
-      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters.',
+      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters. Names must be unique per user and cannot be renamed.',
     'compile-from':
-      'At least one existing readable source directory. Repeat --from or separate URIs with commas. Duplicate URIs are removed.',
+      'At least one existing readable source directory. Individual files are unsupported. Repeat --from or separate URIs with commas. Duplicate URIs are removed.',
     'compile-to':
       'Writable output directory. The server can create it if needed.',
     from: 'Existing source directory URIs. Repeat --from or separate URIs with commas',

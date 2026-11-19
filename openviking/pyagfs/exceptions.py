@@ -42,7 +42,7 @@ class AGFSNotFoundError(AGFSClientError):
 class AGFSPathNotFoundError(AGFSNotFoundError):
     """Path not found inside a snapshot tree"""
 
-    pass
+    deleted_file: bool | None = None
 
 
 class AGFSAlreadyExistsError(AGFSClientError):

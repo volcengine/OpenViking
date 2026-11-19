@@ -165,7 +165,7 @@ The Python example uses `SyncHTTPClient`; use `await` with `AsyncHTTPClient`.
 
 | HTTP API | Result |
 |----------|--------|
-| `GET /api/v1/compile/config?compile_name={compile_name}` | Public saved inputs, scheduling and invocation times |
+| `GET /api/v1/compile/config?compile_name={compile_name}` | Public saved inputs, scheduling, creation and execution times |
 | `POST /api/v1/compile/config/update` | Replace configuration identified by body `compile_name` |
 | `GET /api/v1/compile/configs` | `configs` and `next_cursor`; page boundaries follow configuration name order, with each page ordered by `last_run_time` descending (null last) |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` and `next_cursor`, newest first by `created_at` and `task_id` |
@@ -182,12 +182,12 @@ At creation, `state.json` records the configuration owner’s user ID in the top
 
 Private fields in nested `args` are redacted from public responses and encrypted for execution: unchanged public arguments preserve their private values, editing a nested subtree containing private fields requires resending those fields, and deleting the subtree removes its saved private values.
 
-The two invocation times are Unix seconds:
+Creation and execution times are in Unix seconds.
 
-- `task_first_create_time`: the first accepted execution task's `created_at`; null until first execution and then immutable.
-- `last_run_time`: the most recently accepted new task's `created_at`. Failed or cancelled executions retain this time; idempotent replay does not advance it.
+- `task_first_create_time` records when `POST /api/v1/compile/create` saves the configuration. The value remains fixed after creation.
+- `last_run_time` records the most recently accepted new task's `created_at`. It is null until the first acceptance. Failed or cancelled executions retain this time, and idempotent replay does not advance it.
 
-Manual and scheduled submissions both update these fields. `last_triggered_slot` and `next_triggered_slot` belong only to scheduling; manual execution does not advance them.
+Manual and scheduled submissions both update `last_run_time`. `last_triggered_slot` and `next_triggered_slot` belong only to scheduling. Manual execution does not advance them.
 
 A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `finished_at`, `params`, `result`, `error`, and `meta`. `params` contains the full public inputs and scheduling configuration accepted for that run. `result` contains `created`, `updated`, and `deleted` counts. Its metadata is limited to:
 

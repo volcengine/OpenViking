@@ -111,6 +111,32 @@ test('resource identities and raw structured values retain literal filename punc
   }
 });
 
+test('Viking URIs in the editor remain plain input text without opening or submitting', async () => {
+  const uri = 'viking://resources';
+  const value = `ov read "${uri}"`;
+  const opened = [];
+  const submitted = [];
+  const view = await mount({
+    value,
+    onOpenUri: (target) => opened.push(target),
+    onSubmit: (command) => submitted.push(command),
+  });
+  try {
+    const mirror = view.container.querySelector(
+      '.ov-command-console__input-mirror',
+    );
+    assert.equal(mirror.querySelector('a'), null);
+    assert.equal(mirror.textContent, value);
+    await act(() => view.input.focus());
+    assert.equal(document.activeElement, view.input);
+    assert.equal(view.input.value, value);
+    assert.deepEqual(opened, []);
+    assert.deepEqual(submitted, []);
+  } finally {
+    await view.dispose();
+  }
+});
+
 test('web URLs in the editor keep their exact value, native href and host callback without submitting', async () => {
   const uri = 'https://example.com/a;b,(c)[d].md?x=1&y=2';
   const value = `ov read "${uri}"`;
