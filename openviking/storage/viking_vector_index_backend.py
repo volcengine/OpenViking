@@ -2826,11 +2826,15 @@ class VikingVectorIndexBackend:
         what: str,
         entry_uris: List[str] | None = None,
     ) -> List[Dict[str, Any]]:
-        """Read paged inventory with legacy fallback for changing filesystem scopes."""
-        expected_count = await self._strict_transfer_count(ctx, scope)
+        """Read actual transfer pages without an independent count prerequisite."""
         records: Dict[str, Dict[str, Any]] = {}
         changed = False
+        needs_recovery = False
         for timestamp_bounds in (True, False):
+            if not timestamp_bounds and not needs_recovery:
+                break
+            # Timestamp bounds avoid shifts when earlier rows disappear. Replay
+            # the original scope after full pages for ties and SQL NULLS LAST.
             async for page in self._timestamp_scan_pages(
                 ctx,
                 scope,
@@ -2838,6 +2842,7 @@ class VikingVectorIndexBackend:
                 output_fields=["id", "uri"],
                 timestamp_bounds=timestamp_bounds,
             ):
+                needs_recovery |= len(page) == 100
                 for record in page:
                     record_id = str(record.get("id") or "")
                     if not record_id or not isinstance(record.get("uri"), str) or not record["uri"]:
@@ -2854,29 +2859,16 @@ class VikingVectorIndexBackend:
                         changed = True
                         break
                     records.setdefault(record_id, record)
-                if len(records) > expected_count:
-                    if entry_uris is None:
-                        raise RuntimeError(
-                            f"{what} returned more records than count was {expected_count}"
-                        )
-                    changed = True
                 if changed:
                     break
-            if changed or len(records) == expected_count:
+            if changed:
                 break
-            # SQL NULLS LAST records are excluded by timestamp ranges. Recover
-            # them once using the original scope, then verify its original count.
-        if entry_uris is not None and (changed or len(records) != expected_count):
-            # Filesystem transfers retain legacy tolerance for concurrent V
-            # changes. Backend failures still propagate from either read path.
+        if entry_uris is not None and changed:
+            # Preserve legacy URI/ID-change tolerance; genuine read errors propagate.
             legacy_records, _ = await self._read_uri_transfer_entries(
                 ctx, entry_uris, include_full_records=False
             )
             return legacy_records
-        if len(records) != expected_count:
-            raise RuntimeError(
-                f"{what} returned {len(records)} unique records but count was {expected_count}"
-            )
         return list(records.values())
 
     async def _fetch_transfer_records(

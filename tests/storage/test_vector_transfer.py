@@ -1979,7 +1979,7 @@ async def test_manifest_transfer_uses_prefix_scan_and_parallel_complete_reads(mo
     assert result.batches == len(manifest)
     assert peak_gets == peak_queries == 8
     assert (
-        len(backend.query_calls) < 40
+        len(backend.query_calls) < 60
     )  # 800 entries must be read by pages, not one query per URI.
     assert set(fetched_ids) == {record["id"] for record in source_records}
     assert not set(backend.records).intersection(record["id"] for record in old_records)
@@ -2085,6 +2085,8 @@ async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact):
     records = [_record(str(i), uri, updated_at=11) for i in range(100)]
     records.append(_record("legacy", uri, updated_at=None))
     backend = _MemoryTransferBackend(records)
+    count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
     requests = []
 
     async def query(**kwargs):
@@ -2106,14 +2108,12 @@ async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact):
     assert {record["id"] for record in found} == set(backend.records)
     assert [request["offset"] for request in requests[-2:]] == [0, 100]
     assert all(request["filter"] == scope for request in requests[-2:])
+    count.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["source", "target"])
-@pytest.mark.parametrize("delta", [-1, 1])
-async def test_manifest_transfer_keeps_legacy_reads_when_inventory_count_changes(
-    monkeypatch, phase, delta
-):
+@pytest.mark.parametrize("reported_count", [0, 999])
+async def test_manifest_transfer_ignores_independent_inventory_count(monkeypatch, reported_count):
     source, target = "viking://resources/source", "viking://resources/target"
     backend = _RealAclMemoryTransferBackend(
         [
@@ -2123,19 +2123,73 @@ async def test_manifest_transfer_keeps_legacy_reads_when_inventory_count_changes
         ]
     )
     backend.acl_manager = None
-    count = backend._strict_transfer_count
-    calls = 0
-
-    async def changed_count(ctx, scope):
-        nonlocal calls
-        calls += 1
-        actual = await count(ctx, scope)
-        return actual + delta if calls == (1 if phase == "source" else 2) else actual
-
-    monkeypatch.setattr(backend, "_strict_transfer_count", changed_count)
+    count = AsyncMock(return_value=reported_count)
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
     result = await backend.copy_uri_mapping(
         _ctx(), source, target, recursive=True, source_uris=[source, source + "/a.md"]
     )
     assert result.written == 1
     assert backend.records["keep"]["uri"] == target + "/keep.md"
     assert "old-target" not in backend.records
+    count.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [99, 100, 101, 205])
+async def test_transfer_inventory_pages_actual_records_without_count(monkeypatch, size):
+    uri = "viking://resources/source/a.md"
+    backend = _RealAclMemoryTransferBackend([_record(str(i), uri) for i in range(size)])
+    count = AsyncMock(side_effect=RuntimeError("count must not be used"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    records = await backend._read_transfer_inventory(
+        _ctx(), And([Eq("account_id", "acct"), Eq("uri", uri)]), what="actual records"
+    )
+    assert {record["id"] for record in records} == set(backend.records)
+    # Full pages require a count-free recovery walk; short scans need only one.
+    assert len(backend.query_calls) <= 2 * (size // 100 + 1)
+    assert backend.query_calls[0][2] == 0
+    count.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tied", [False, True])
+@pytest.mark.parametrize("phase", ["source", "target"])
+async def test_manifest_transfer_recovers_records_after_page_deletion(monkeypatch, tied, phase):
+    source, target = "viking://resources/source", "viking://resources/target"
+    source_records = [
+        _record(f"s{i:03}", f"{source}/{i:03}.md", updated_at=11 if tied else i + 11)
+        for i in range(201)
+    ]
+    # A single overwritten URI can have several historical records.
+    target_records = [
+        _record(f"t{i:03}", f"{target}/100.md", updated_at=11 if tied else i + 11)
+        for i in range(201)
+    ]
+    backend = _RealAclMemoryTransferBackend(source_records + target_records)
+    backend.acl_manager = None
+    count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    query = backend._query
+    calls = 0
+
+    async def delete_before_second_page(**kwargs):
+        nonlocal calls
+        affected_uri = source + "/000.md" if phase == "source" else target + "/100.md"
+        if _matches_filter(kwargs["filter"], _record("probe", affected_uri)):
+            calls += 1
+            if calls == 2:
+                backend.records.pop("s000" if phase == "source" else "t000")
+        return await query(**kwargs)
+
+    monkeypatch.setattr(backend, "_query", delete_before_second_page)
+    result = await backend.copy_uri_mapping(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=[source, *[record["uri"] for record in source_records]],
+    )
+    assert result.written == (200 if phase == "source" else 201)
+    assert any(record["uri"] == target + "/100.md" for record in backend.records.values())
+    assert not any(record_id.startswith("t") for record_id in backend.records)
+    count.assert_not_awaited()
