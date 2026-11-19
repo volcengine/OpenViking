@@ -1,3 +1,9 @@
+import studioI18n from '#/i18n/core'
+import {
+  ScopeSelector,
+  ScopeSwitcher,
+} from '@openviking/react/components/scope-switcher'
+import '@openviking/react/components/scope-switcher/style.css'
 import { ScopeCreateAccount } from '#/features/connection/components/scope-create-account'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
@@ -9,19 +15,15 @@ import {
 import { newConnectionPath } from '#/features/connection/lib/studio-mode'
 import { resolveStudioManagementCapabilities } from '#/features/connection/lib/studio-permissions'
 import { fetchAdminAccounts, fetchAdminUsers } from '#/shared/api/admin'
+import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '#/shared/ui/popover'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import type { LucideIcon } from 'lucide-react'
 import {
   Building2Icon,
-  CheckIcon,
-  ChevronDownIcon,
   CloudIcon,
-  LoaderCircleIcon,
   PlusIcon,
   ServerIcon,
   ShieldCheckIcon,
@@ -34,56 +36,6 @@ import { toast } from 'sonner'
 const ROW =
   'flex min-h-10 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50'
 type Scope = 'connection' | 'account' | 'user'
-function ScopeMenu({
-  open,
-  onOpenChange,
-  label,
-  value,
-  icon: Icon,
-  readOnly = false,
-  children,
-}: React.PropsWithChildren<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  label: string
-  value: string
-  icon: LucideIcon
-  readOnly?: boolean
-}>) {
-  if (readOnly) {
-    return (
-      <div
-        role="group"
-        aria-label={label}
-        title={value}
-        className="flex h-9 min-w-0 items-center gap-1 px-1.5 text-xs sm:gap-1.5 sm:px-2.5 sm:text-sm"
-      >
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="max-w-24 truncate sm:max-w-40">{value}</span>
-      </div>
-    )
-  }
-  return (
-    <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger
-        aria-label={label}
-        title={value}
-        className="flex h-9 min-w-0 items-center gap-1 rounded-md px-1.5 text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:gap-1.5 sm:px-2.5 sm:text-sm"
-      >
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="max-w-24 truncate sm:max-w-40">{value}</span>
-        <ChevronDownIcon className="hidden size-3 shrink-0 text-muted-foreground sm:block" />
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        sideOffset={8}
-        className="w-[min(21rem,calc(100vw-1.5rem))] gap-0 overflow-hidden rounded-xl p-1.5 shadow-lg"
-      >
-        {children}
-      </PopoverContent>
-    </Popover>
-  )
-}
 function host(url: string) {
   try {
     return new URL(url).host
@@ -273,17 +225,43 @@ export function StudioScopeSwitcher({
       setPending(false)
     }
   }
-  const searchField = (placeholder: string) => (
-    <div className="p-1.5">
-      <Input
-        aria-label={placeholder}
-        placeholder={placeholder}
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        className="h-9"
-      />
-    </div>
-  )
+  const serviceOptions = services
+    .filter(
+      ({ profile }) =>
+        !managementMode ||
+        resolveConfiguredServiceProvider(
+          profile.connection.baseUrl,
+          profile.connection.serviceSelection,
+        ) === 'opensource',
+    )
+    .map(({ profile, name }) => ({
+      id: profile.id,
+      label: name,
+      description: profile.connection.baseUrl,
+    }))
+  const accountOptions = (
+    canListAccounts
+      ? (accounts.data ?? []).map((account) => account.accountId)
+      : savedAccounts
+  ).map((id) => ({ id, label: id, icon: <Building2Icon className="size-4" /> }))
+  const userOptions = savedUsers.map((identity) => ({
+    id: identity.userId,
+    label: identity.userId,
+    icon: <UserRoundIcon className="size-4" />,
+    disabled: serverMode === 'dev',
+  }))
+  if (
+    assertedIdentity &&
+    connection.userId &&
+    !userOptions.some((option) => option.id === connection.userId)
+  ) {
+    userOptions.push({
+      id: connection.userId,
+      label: connection.userId,
+      icon: <UserRoundIcon className="size-4" />,
+      disabled: true,
+    })
+  }
   const notice = (text: string) => (
     <p className="px-3 py-3 text-xs leading-5 text-muted-foreground">{text}</p>
   )
@@ -306,309 +284,298 @@ export function StudioScopeSwitcher({
 
   return (
     <>
-      <div className="flex h-9 min-w-0 items-center rounded-lg border border-border/60 bg-muted/30 p-0.5">
-        <ScopeMenu
-          open={open === 'connection'}
-          onOpenChange={changeOpen('connection')}
-          label={t('connections.switch')}
-          value={activeService?.name || host(connection.baseUrl)}
-          icon={provider === 'volcengine' ? CloudIcon : ServerIcon}
-        >
-          <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
-            {t('connections.title')}
-          </p>
-          {searchField(t('scope.searchConnections'))}
-          <div className="max-h-64 overflow-y-auto">
-            {services
-              .filter(({ name, profile }) =>
-                matches(`${name} ${profile.connection.baseUrl}`),
+      <ScopeSwitcher
+        locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
+        style={
+          {
+            '--ov-ui-scope-switcher-panel-width': '336px',
+            '--ov-ui-scope-switcher-panel-max-height': '420px',
+          } as React.CSSProperties
+        }
+        className={cn(
+          'flex h-9 min-w-0 items-center rounded-lg border border-border/60 bg-muted/30 p-0.5',
+          managementMode &&
+            'studio-management-scope rounded-full bg-transparent',
+        )}
+      >
+        <ScopeSelector
+          kind="selectable"
+          identity={{ key: 'service', ariaLabel: t('connections.switch') }}
+          trigger={{
+            label: activeService?.name || host(connection.baseUrl),
+            icon:
+              provider === 'volcengine' ? (
+                <CloudIcon className="size-3.5" />
+              ) : (
+                <ServerIcon className="size-3.5" />
+              ),
+          }}
+          data={{
+            options: serviceOptions,
+            visibleOptions: serviceOptions.filter((option) =>
+              matches(`${option.label} ${option.description}`),
+            ),
+            selectedId:
+              services.find((service) => service.selected)?.profile.id ?? '',
+          }}
+          state={{
+            visible: open === 'connection',
+            searchKeyword: search,
+          }}
+          actions={{
+            onVisibleChange: changeOpen('connection'),
+            onSearchKeywordChange: setSearch,
+            onSelect: (option) => {
+              if (
+                !services.find((service) => service.profile.id === option.id)
+                  ?.selected
               )
-              .map(({ profile, name, selected }) => (
-                <button
-                  key={profile.id}
-                  type="button"
-                  className={cn(ROW, selected && 'bg-accent/60')}
-                  aria-current={selected ? 'true' : undefined}
-                  onClick={() => {
-                    setOpen(null)
-                    if (!selected) activateProfile(profile.id)
-                  }}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {profile.connection.baseUrl}
-                    </span>
-                  </span>
-                  {selected ? (
-                    <CheckIcon className="size-3.5 shrink-0" />
-                  ) : null}
-                </button>
-              ))}
-            {!services.some(({ name, profile }) =>
-              matches(`${name} ${profile.connection.baseUrl}`),
-            )
-              ? notice(t('scope.noConnections'))
-              : null}
-          </div>
-          <div className="mt-1 border-t pt-1">
-            <Link
-              to={newConnectionPath(settingsPath)}
-              className={ROW}
-              onClick={() => setOpen(null)}
-            >
-              <PlusIcon className="size-4" />
-              {t('connections.add')}
-            </Link>
-            <Link
-              to={settingsPath}
-              className={ROW}
-              onClick={() => setOpen(null)}
-            >
-              {t('manageConnections')}
-            </Link>
-          </div>
-        </ScopeMenu>
+                activateProfile(option.id)
+            },
+          }}
+          labels={{
+            searchPlaceholder: t('scope.searchConnections'),
+            empty: t('scope.noConnections'),
+          }}
+          slots={{
+            renderPanel: ({ search: searchControl, list }) => (
+              <>
+                <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                  {t('connections.title')}
+                </p>
+                {searchControl}
+                {list}
+                <div className="mt-1 border-t pt-1">
+                  <Link
+                    to={newConnectionPath(settingsPath)}
+                    className={ROW}
+                    onClick={() => setOpen(null)}
+                  >
+                    <PlusIcon className="size-4" />
+                    {t('connections.add')}
+                  </Link>
+                  <Link
+                    to={settingsPath}
+                    className={ROW}
+                    onClick={() => setOpen(null)}
+                  >
+                    {t('manageConnections')}
+                  </Link>
+                </div>
+              </>
+            ),
+          }}
+        />
         {showAccountScope ? (
           <>
-            <span aria-hidden="true" className="text-border">
-              /
-            </span>
-            <ScopeMenu
-              open={open === 'account'}
-              onOpenChange={changeOpen('account')}
-              label={t(
-                managementMode && !canListAccounts
-                  ? 'scope.managementAccount'
-                  : 'scope.switchAccount',
-              )}
-              readOnly={managementMode && !canListAccounts}
-              value={connection.accountId || t('unset')}
-              icon={Building2Icon}
-            >
-              <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
-                {t(
-                  canListAccounts
-                    ? 'serverAccountsTitle'
-                    : managementMode
-                      ? 'scope.managementAccount'
-                      : 'scope.savedAccounts',
-                )}
-              </p>
-              {canListAccounts ? (
-                <>
-                  {searchField(t('searchPlaceholder'))}
-                  <div className="max-h-64 overflow-y-auto">
-                    {accounts.isPending ? (
-                      notice(t('loading'))
-                    ) : accounts.isError ? (
-                      loadError(() => accounts.refetch())
-                    ) : (
-                      <>
-                        {accounts.data
-                          .filter((account) => matches(account.accountId))
-                          .map((account) => (
-                            <button
-                              key={account.accountId}
-                              type="button"
-                              className={cn(
-                                ROW,
-                                account.accountId === connection.accountId &&
-                                  'bg-accent/60',
-                              )}
-                              disabled={pending}
-                              onClick={() => {
-                                void chooseAccount(account.accountId)
-                              }}
-                            >
-                              <Building2Icon className="size-4 shrink-0 text-muted-foreground" />
-                              <span className="min-w-0 flex-1 truncate">
-                                {account.accountId}
-                              </span>
-                              {account.accountId === connection.accountId ? (
-                                <CheckIcon className="size-3.5 shrink-0" />
-                              ) : null}
-                            </button>
-                          ))}
-                        {!accounts.data.some((account) =>
-                          matches(account.accountId),
-                        )
-                          ? notice(t('empty'))
-                          : null}
-                      </>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <>
-                  {searchField(t('searchPlaceholder'))}
-                  <div className="max-h-64 overflow-y-auto">
-                    {savedAccounts.filter(matches).map((accountId) => (
-                      <button
-                        key={accountId}
-                        type="button"
-                        className={cn(
-                          ROW,
-                          accountId === connection.accountId && 'bg-accent/60',
+            {managementMode && !canListAccounts ? (
+              <ScopeSelector
+                kind="fixed"
+                identity={{
+                  key: 'account',
+                  ariaLabel: t('scope.managementAccount'),
+                }}
+                trigger={{
+                  label: connection.accountId || t('unset'),
+                  icon: <Building2Icon className="size-3.5" />,
+                }}
+              />
+            ) : (
+              <ScopeSelector
+                kind="selectable"
+                identity={{
+                  key: 'account',
+                  ariaLabel: t('scope.switchAccount'),
+                }}
+                trigger={{
+                  label: connection.accountId || t('unset'),
+                  icon: <Building2Icon className="size-3.5" />,
+                }}
+                data={{
+                  options: accountOptions,
+                  visibleOptions: accountOptions.filter((option) =>
+                    matches(option.id),
+                  ),
+                  selectedId: connection.accountId,
+                }}
+                state={{
+                  visible: open === 'account',
+                  searchKeyword: search,
+                  busy: pending,
+                  loading: canListAccounts && accounts.isPending,
+                  error: canListAccounts && accounts.isError,
+                }}
+                actions={{
+                  onVisibleChange: changeOpen('account'),
+                  onSearchKeywordChange: setSearch,
+                  onSelect: (option) => {
+                    if (canListAccounts) void chooseAccount(option.id)
+                    else if (option.id !== connection.accountId) {
+                      const identity = identities.find(
+                        (entry) => entry.accountId === option.id,
+                      )
+                      if (identity) void chooseSavedIdentity(identity)
+                    }
+                  },
+                }}
+                labels={{
+                  searchPlaceholder: t('searchPlaceholder'),
+                  loading: t('loading'),
+                  empty: t('empty'),
+                }}
+                slots={{
+                  errorFallback: loadError(() => accounts.refetch()),
+                  renderPanel: ({ search: searchControl, list }) => (
+                    <>
+                      <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                        {t(
+                          canListAccounts
+                            ? 'serverAccountsTitle'
+                            : 'scope.savedAccounts',
                         )}
-                        disabled={pending}
-                        onClick={() => {
-                          if (accountId === connection.accountId) {
-                            setOpen(null)
-                            return
-                          }
-                          const identity = identities.find(
-                            (entry) => entry.accountId === accountId,
-                          )
-                          if (identity) void chooseSavedIdentity(identity)
-                        }}
-                      >
-                        <Building2Icon className="size-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {accountId}
-                        </span>
-                        {accountId === connection.accountId ? (
-                          <CheckIcon className="size-3.5" />
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                  {notice(t('scope.savedAccountsHint'))}
-                </>
-              )}
-              {canListAccounts && managementMode && !isGatewayHost ? (
-                <ScopeCreateAccount
-                  connection={adminConnection}
-                  onCreated={() => setOpen(null)}
-                />
-              ) : null}
-            </ScopeMenu>
+                      </p>
+                      {searchControl}
+                      {list}
+                      {!canListAccounts
+                        ? notice(t('scope.savedAccountsHint'))
+                        : null}
+                      {canListAccounts && managementMode && !isGatewayHost ? (
+                        <ScopeCreateAccount
+                          connection={adminConnection}
+                          onCreated={() => setOpen(null)}
+                        />
+                      ) : null}
+                    </>
+                  ),
+                }}
+              />
+            )}
             {!managementMode ? (
               <>
-                <span aria-hidden="true" className="text-border">
-                  /
-                </span>
-                <ScopeMenu
-                  open={open === 'user'}
-                  onOpenChange={changeOpen('user')}
-                  label={t('scope.switchUser')}
-                  value={
-                    hasUser && connection.userId
-                      ? connection.userId
-                      : t('appShell:modes.selectUser')
-                  }
-                  icon={UserRoundIcon}
-                >
-                  <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
-                    {t(
-                      trusted
-                        ? 'scope.trustedUsersInAccount'
-                        : 'scope.usersInAccount',
-                      {
-                        account: connection.accountId,
-                      },
-                    )}
-                  </p>
-                  {searchField(t('scope.searchUsers'))}
-                  <div className="max-h-64 overflow-y-auto">
-                    {trusted && trustedUsers.isPending
-                      ? notice(t('loading'))
-                      : null}
-                    {trusted && trustedUsers.isError
-                      ? loadError(() => trustedUsers.refetch())
-                      : null}
-                    {savedUsers
-                      .filter((identity) => matches(identity.userId))
-                      .map((identity) => (
-                        <button
-                          key={identity.userId}
-                          type="button"
-                          className={cn(
-                            ROW,
-                            hasUser &&
-                              identity.userId === connection.userId &&
-                              'bg-accent/60',
-                          )}
-                          disabled={pending || serverMode === 'dev'}
-                          onClick={() => {
-                            void chooseSavedIdentity(identity)
-                          }}
-                        >
-                          <UserRoundIcon className="size-4 shrink-0 text-muted-foreground" />
-                          <span className="min-w-0 flex-1 truncate">
-                            {identity.userId}
-                          </span>
-                          {pending ? (
-                            <LoaderCircleIcon className="size-3.5 animate-spin" />
-                          ) : hasUser &&
-                            identity.userId === connection.userId ? (
-                            <CheckIcon className="size-3.5" />
-                          ) : null}
-                        </button>
-                      ))}
-                    {assertedIdentity &&
-                    connection.userId &&
-                    !savedUsers.some(
-                      (identity) => identity.userId === connection.userId,
-                    ) ? (
-                      <div className={ROW}>
-                        <UserRoundIcon className="size-4 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {connection.userId}
-                        </span>
-                        <CheckIcon className="size-3.5" />
-                      </div>
-                    ) : null}
-                    {!assertedIdentity &&
-                    !savedUsers.some((identity) => matches(identity.userId))
-                      ? notice(t('scope.noSavedUsers'))
-                      : null}
-                  </div>
-                  {trusted &&
-                  search.trim() &&
-                  !savedUsers.some(
-                    (identity) => identity.userId === search.trim(),
-                  ) ? (
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start"
-                      disabled={pending}
-                      onClick={() =>
-                        void chooseSavedIdentity({
-                          accountId: connection.accountId,
-                          userId: search.trim(),
-                          apiKey: '',
-                        })
-                      }
-                    >
-                      <UserRoundIcon className="size-4" />
-                      {t('scope.useTrustedUser', { user: search.trim() })}
-                    </Button>
-                  ) : null}
-                  {notice(
-                    t(
-                      assertedIdentity
-                        ? 'scope.assertedIdentity'
-                        : 'scope.savedUsersHint',
+                <ScopeSelector
+                  kind="selectable"
+                  identity={{ key: 'user', ariaLabel: t('scope.switchUser') }}
+                  trigger={{
+                    label:
+                      hasUser && connection.userId
+                        ? connection.userId
+                        : t('appShell:modes.selectUser'),
+                    icon: (
+                      <UserRoundIcon className="size-3.5 text-muted-foreground" />
                     ),
-                  )}
-                  {!assertedIdentity ? (
-                    <Link
-                      to="/connections/user-key"
-                      className={cn(ROW, 'border-t')}
-                      onClick={() => setOpen(null)}
-                    >
-                      <PlusIcon className="size-4" />
-                      {t('scope.addUserKey')}
-                    </Link>
-                  ) : null}
-                </ScopeMenu>
+                  }}
+                  data={{
+                    options: userOptions,
+                    visibleOptions: userOptions.filter((option) =>
+                      matches(option.id),
+                    ),
+                    selectedId: hasUser ? connection.userId : '',
+                  }}
+                  state={{
+                    visible: open === 'user',
+                    searchKeyword: search,
+                    busy: pending,
+                    loading: trusted && trustedUsers.isPending,
+                    error: trusted && trustedUsers.isError,
+                  }}
+                  actions={{
+                    onVisibleChange: changeOpen('user'),
+                    onSearchKeywordChange: setSearch,
+                    onSelect: (option) => {
+                      const identity = savedUsers.find(
+                        (item) => item.userId === option.id,
+                      )
+                      if (identity) void chooseSavedIdentity(identity)
+                    },
+                  }}
+                  labels={{
+                    searchPlaceholder: t('scope.searchUsers'),
+                    loading: t('loading'),
+                    empty: t('scope.noSavedUsers'),
+                  }}
+                  slots={{
+                    errorFallback: loadError(() => trustedUsers.refetch()),
+                    renderPanel: ({ search: searchControl, list }) => (
+                      <>
+                        <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                          {t(
+                            trusted
+                              ? 'scope.trustedUsersInAccount'
+                              : 'scope.usersInAccount',
+                            {
+                              account: connection.accountId,
+                            },
+                          )}
+                        </p>
+                        {trusted ? (
+                          !trustedUsers.isError ? (
+                            <div className="px-2 py-1">
+                              <Input
+                                type="search"
+                                aria-label={t('scope.searchUsers')}
+                                placeholder={t('scope.searchUsers')}
+                                value={search}
+                                onChange={(event) =>
+                                  setSearch(event.currentTarget.value)
+                                }
+                              />
+                            </div>
+                          ) : null
+                        ) : (
+                          searchControl
+                        )}
+                        {list}
+                        {trusted &&
+                        search.trim() &&
+                        !savedUsers.some(
+                          (identity) => identity.userId === search.trim(),
+                        ) ? (
+                          <Button
+                            variant="ghost"
+                            className="w-full justify-start"
+                            disabled={pending}
+                            onClick={() =>
+                              void chooseSavedIdentity({
+                                accountId: connection.accountId,
+                                userId: search.trim(),
+                                apiKey: '',
+                              })
+                            }
+                          >
+                            <UserRoundIcon className="size-4" />
+                            {t('scope.useTrustedUser', { user: search.trim() })}
+                          </Button>
+                        ) : null}
+                        {notice(
+                          t(
+                            assertedIdentity
+                              ? 'scope.assertedIdentity'
+                              : 'scope.savedUsersHint',
+                          ),
+                        )}
+                        {!assertedIdentity ? (
+                          <Link
+                            to="/connections/user-key"
+                            className={cn(
+                              ROW,
+                              'mt-1 rounded-none border-t pt-3',
+                            )}
+                            onClick={() => setOpen(null)}
+                          >
+                            <PlusIcon className="size-4" />
+                            {t('scope.addUserKey')}
+                          </Link>
+                        ) : null}
+                      </>
+                    ),
+                  }}
+                />
               </>
             ) : null}
           </>
         ) : null}
-      </div>
-      {managementMode ? (
+      </ScopeSwitcher>
+      {managementMode && showAccountScope ? (
         <span
           role="status"
           aria-label={t('scope.managementCredential')}

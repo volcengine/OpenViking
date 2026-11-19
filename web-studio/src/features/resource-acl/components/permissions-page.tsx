@@ -1,3 +1,5 @@
+import { AdminScopeFilters } from '#/features/admin/users/components/admin-scope-filters'
+import styles from './permissions-page.module.css'
 import { AccountAclSettings } from '#/features/resource-acl/components/account-acl-settings'
 import { ResourceAclIdentityRecovery } from '#/features/resource-acl/components/resource-acl-identity-recovery'
 import { ResourcePermissionsPanel } from '#/features/resource-acl/components/resource-permissions'
@@ -31,23 +33,15 @@ const root = 'viking://resources/'
 
 export function PermissionsPage() {
   const state = useAclManagement()
-  const { t } = useTranslation('settings')
+  const { t } = useTranslation(['settings', 'appShell'])
   return (
-    <main className="flex w-full min-w-0 flex-col gap-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t('acl.page.title')}
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {t('acl.page.description')}
-          </p>
-        </div>
-        {state.allowed && state.settings.data === true && (
-          <AccountAclSettings inPopover />
-        )}
+    <main className={styles.page}>
+      <header className={styles.header}>
+        <h1>{t('appShell:adminNavigation.permissions')}</h1>
       </header>
-      {state.allowed && state.settings.data !== true && <AccountAclSettings />}
+      <AdminScopeFilters />
+      {state.allowed && <AccountAclSettings inline />}
+      <p className={styles.hint}>{t('acl.page.inheritanceHint')}</p>
       <DirectoryPermissions
         key={`${state.connection.baseUrl}:${state.connection.accountId}`}
       />
@@ -84,13 +78,14 @@ function DirectoryPermissions() {
     })),
   ]
 
+  if (state.isLoading) return <p role="status">{t('loading')}</p>
   if (!state.allowed) return <p>{t('acl.page.unavailable')}</p>
   if (!state.hasDataIdentity)
     return <ResourceAclIdentityRecovery missingDataIdentity />
 
   return (
-    <section className="min-w-0 space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+    <section className={styles.directories}>
+      <div className={styles.toolbar}>
         {currentUri !== root && (
           <Button
             variant="ghost"
@@ -142,7 +137,7 @@ function DirectoryPermissions() {
           <RotateCwIcon />
         </Button>
       </div>
-      <div className="rounded-lg border">
+      <div className={styles.table}>
         <Table className="table-fixed">
           <TableHeader>
             <TableRow>
@@ -270,11 +265,7 @@ function DirectoryRow({
   return (
     <TableRow>
       <TableCell className="pl-4">
-        <button
-          type="button"
-          className="flex max-w-full items-center gap-2 text-left font-medium hover:underline"
-          onClick={onOpen}
-        >
+        <button type="button" className={styles.directoryLink} onClick={onOpen}>
           <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="truncate" title={name}>
             {name}
@@ -294,6 +285,7 @@ function DirectoryRow({
         <Button
           variant="ghost"
           size="sm"
+          className={styles.manageButton}
           disabled={!accountEnabled}
           onClick={onEdit}
         >

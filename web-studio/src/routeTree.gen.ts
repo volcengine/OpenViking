@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsersRouteImport } from './routes/users'
+import { Route as UsageRouteImport } from './routes/usage'
 import { Route as PlaygroundRouteImport } from './routes/playground'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as MemoriesRouteImport } from './routes/memories'
@@ -46,7 +47,12 @@ import { Route as ConnectionsNewRouteImport } from './routes/connections/new'
 import { Route as ConnectionsProfileIdRouteImport } from './routes/connections/$profileId'
 import { Route as CompileNewRouteImport } from './routes/compile/new'
 import { Route as AgentExperienceExperienceUriRouteImport } from './routes/agent-experience/$experienceUri'
+import { Route as AdminTasksRouteImport } from './routes/admin/tasks'
+import { Route as AdminSpacesRouteImport } from './routes/admin/spaces'
 import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
+import { Route as AdminRequestLogsRouteImport } from './routes/admin/request-logs'
+import { Route as AdminMonitoringRouteImport } from './routes/admin/monitoring'
+import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
 import { Route as AdminConfigurationRouteImport } from './routes/admin/configuration'
 import { Route as AdminUsersRouteRouteImport } from './routes/admin/users/route'
 import { Route as AdminGatewayRouteRouteImport } from './routes/admin/gateway/route'
@@ -75,6 +81,11 @@ import { Route as AdminGatewayProfilesProfileIdRouteImport } from './routes/admi
 const UsersRoute = UsersRouteImport.update({
   id: '/users',
   path: '/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UsageRoute = UsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PlaygroundRoute = PlaygroundRouteImport.update({
@@ -258,9 +269,34 @@ const AgentExperienceExperienceUriRoute =
     path: '/$experienceUri',
     getParentRoute: () => AgentExperienceRouteRoute,
   } as any)
+const AdminTasksRoute = AdminTasksRouteImport.update({
+  id: '/tasks',
+  path: '/tasks',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminSpacesRoute = AdminSpacesRouteImport.update({
+  id: '/spaces',
+  path: '/spaces',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminSettingsRoute = AdminSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminRequestLogsRoute = AdminRequestLogsRouteImport.update({
+  id: '/request-logs',
+  path: '/request-logs',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminMonitoringRoute = AdminMonitoringRouteImport.update({
+  id: '/monitoring',
+  path: '/monitoring',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminDashboardRoute = AdminDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminConfigurationRoute = AdminConfigurationRouteImport.update({
@@ -415,11 +451,17 @@ export interface FileRoutesByFullPath {
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/usage': typeof UsageRoute
   '/users': typeof UsersRouteWithChildren
   '/admin/gateway': typeof AdminGatewayRouteRouteWithChildren
   '/admin/users': typeof AdminUsersRouteRouteWithChildren
   '/admin/configuration': typeof AdminConfigurationRouteWithChildren
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/monitoring': typeof AdminMonitoringRoute
+  '/admin/request-logs': typeof AdminRequestLogsRoute
   '/admin/settings': typeof AdminSettingsRoute
+  '/admin/spaces': typeof AdminSpacesRoute
+  '/admin/tasks': typeof AdminTasksRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
   '/compile/new': typeof CompileNewRoute
   '/connections/$profileId': typeof ConnectionsProfileIdRoute
@@ -475,8 +517,14 @@ export interface FileRoutesByTo {
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/usage': typeof UsageRoute
   '/users': typeof UsersRouteWithChildren
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/monitoring': typeof AdminMonitoringRoute
+  '/admin/request-logs': typeof AdminRequestLogsRoute
   '/admin/settings': typeof AdminSettingsRoute
+  '/admin/spaces': typeof AdminSpacesRoute
+  '/admin/tasks': typeof AdminTasksRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
   '/compile/new': typeof CompileNewRoute
   '/connections/$profileId': typeof ConnectionsProfileIdRoute
@@ -537,11 +585,17 @@ export interface FileRoutesById {
   '/memories': typeof MemoriesRoute
   '/onboarding': typeof OnboardingRoute
   '/playground': typeof PlaygroundRoute
+  '/usage': typeof UsageRoute
   '/users': typeof UsersRouteWithChildren
   '/admin/gateway': typeof AdminGatewayRouteRouteWithChildren
   '/admin/users': typeof AdminUsersRouteRouteWithChildren
   '/admin/configuration': typeof AdminConfigurationRouteWithChildren
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/monitoring': typeof AdminMonitoringRoute
+  '/admin/request-logs': typeof AdminRequestLogsRoute
   '/admin/settings': typeof AdminSettingsRoute
+  '/admin/spaces': typeof AdminSpacesRoute
+  '/admin/tasks': typeof AdminTasksRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
   '/compile/new': typeof CompileNewRoute
   '/connections/$profileId': typeof ConnectionsProfileIdRoute
@@ -603,11 +657,17 @@ export interface FileRouteTypes {
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/usage'
     | '/users'
     | '/admin/gateway'
     | '/admin/users'
     | '/admin/configuration'
+    | '/admin/dashboard'
+    | '/admin/monitoring'
+    | '/admin/request-logs'
     | '/admin/settings'
+    | '/admin/spaces'
+    | '/admin/tasks'
     | '/agent-experience/$experienceUri'
     | '/compile/new'
     | '/connections/$profileId'
@@ -663,8 +723,14 @@ export interface FileRouteTypes {
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/usage'
     | '/users'
+    | '/admin/dashboard'
+    | '/admin/monitoring'
+    | '/admin/request-logs'
     | '/admin/settings'
+    | '/admin/spaces'
+    | '/admin/tasks'
     | '/agent-experience/$experienceUri'
     | '/compile/new'
     | '/connections/$profileId'
@@ -724,11 +790,17 @@ export interface FileRouteTypes {
     | '/memories'
     | '/onboarding'
     | '/playground'
+    | '/usage'
     | '/users'
     | '/admin/gateway'
     | '/admin/users'
     | '/admin/configuration'
+    | '/admin/dashboard'
+    | '/admin/monitoring'
+    | '/admin/request-logs'
     | '/admin/settings'
+    | '/admin/spaces'
+    | '/admin/tasks'
     | '/agent-experience/$experienceUri'
     | '/compile/new'
     | '/connections/$profileId'
@@ -789,6 +861,7 @@ export interface RootRouteChildren {
   MemoriesRoute: typeof MemoriesRoute
   OnboardingRoute: typeof OnboardingRoute
   PlaygroundRoute: typeof PlaygroundRoute
+  UsageRoute: typeof UsageRoute
   UsersRoute: typeof UsersRouteWithChildren
   CompileNewRoute: typeof CompileNewRoute
   ConnectionsProfileIdRoute: typeof ConnectionsProfileIdRoute
@@ -807,6 +880,13 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/users'
       preLoaderRoute: typeof UsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/usage': {
+      id: '/usage'
+      path: '/usage'
+      fullPath: '/usage'
+      preLoaderRoute: typeof UsageRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/playground': {
@@ -1061,11 +1141,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AgentExperienceExperienceUriRouteImport
       parentRoute: typeof AgentExperienceRouteRoute
     }
+    '/admin/tasks': {
+      id: '/admin/tasks'
+      path: '/tasks'
+      fullPath: '/admin/tasks'
+      preLoaderRoute: typeof AdminTasksRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/spaces': {
+      id: '/admin/spaces'
+      path: '/spaces'
+      fullPath: '/admin/spaces'
+      preLoaderRoute: typeof AdminSpacesRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/settings': {
       id: '/admin/settings'
       path: '/settings'
       fullPath: '/admin/settings'
       preLoaderRoute: typeof AdminSettingsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/request-logs': {
+      id: '/admin/request-logs'
+      path: '/request-logs'
+      fullPath: '/admin/request-logs'
+      preLoaderRoute: typeof AdminRequestLogsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/monitoring': {
+      id: '/admin/monitoring'
+      path: '/monitoring'
+      fullPath: '/admin/monitoring'
+      preLoaderRoute: typeof AdminMonitoringRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/dashboard': {
+      id: '/admin/dashboard'
+      path: '/dashboard'
+      fullPath: '/admin/dashboard'
+      preLoaderRoute: typeof AdminDashboardRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/admin/configuration': {
@@ -1299,7 +1414,12 @@ interface AdminRouteRouteChildren {
   AdminGatewayRouteRoute: typeof AdminGatewayRouteRouteWithChildren
   AdminUsersRouteRoute: typeof AdminUsersRouteRouteWithChildren
   AdminConfigurationRoute: typeof AdminConfigurationRouteWithChildren
+  AdminDashboardRoute: typeof AdminDashboardRoute
+  AdminMonitoringRoute: typeof AdminMonitoringRoute
+  AdminRequestLogsRoute: typeof AdminRequestLogsRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
+  AdminSpacesRoute: typeof AdminSpacesRoute
+  AdminTasksRoute: typeof AdminTasksRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminConnectionsProfileIdRoute: typeof AdminConnectionsProfileIdRoute
   AdminConnectionsNewRoute: typeof AdminConnectionsNewRoute
@@ -1313,7 +1433,12 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminGatewayRouteRoute: AdminGatewayRouteRouteWithChildren,
   AdminUsersRouteRoute: AdminUsersRouteRouteWithChildren,
   AdminConfigurationRoute: AdminConfigurationRouteWithChildren,
+  AdminDashboardRoute: AdminDashboardRoute,
+  AdminMonitoringRoute: AdminMonitoringRoute,
+  AdminRequestLogsRoute: AdminRequestLogsRoute,
   AdminSettingsRoute: AdminSettingsRoute,
+  AdminSpacesRoute: AdminSpacesRoute,
+  AdminTasksRoute: AdminTasksRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminConnectionsProfileIdRoute: AdminConnectionsProfileIdRoute,
   AdminConnectionsNewRoute: AdminConnectionsNewRoute,
@@ -1408,6 +1533,7 @@ const rootRouteChildren: RootRouteChildren = {
   MemoriesRoute: MemoriesRoute,
   OnboardingRoute: OnboardingRoute,
   PlaygroundRoute: PlaygroundRoute,
+  UsageRoute: UsageRoute,
   UsersRoute: UsersRouteWithChildren,
   CompileNewRoute: CompileNewRoute,
   ConnectionsProfileIdRoute: ConnectionsProfileIdRoute,

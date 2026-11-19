@@ -1,6 +1,7 @@
 import {
   addNewSkill,
   fetchSkillTask,
+  listSkillSources,
   validateNewSkill,
 } from '#/features/workbench/skills/lib/add-skill'
 import { ovClient } from '#/shared/api/ov-client/index'
@@ -47,5 +48,33 @@ it('reads the submitted background task by its ID', async () => {
   })
   expect(ovClient.client.get).toHaveBeenCalledWith({
     url: '/api/v1/tasks/task-1',
+  })
+})
+
+it('lists and installs a selected GitHub skill through the existing endpoint', async () => {
+  const url = 'https://github.com/owner/repo/tree/main/skills'
+  const skill = { name: 'Example', description: '', path: 'example-dir' }
+  vi.mocked(ovClient.client.post).mockResolvedValueOnce({
+    data: { result: { skills: [skill] } },
+  } as never)
+  vi.mocked(ovClient.client.post).mockResolvedValueOnce({
+    data: { result: { task_id: 'github-task' } },
+  } as never)
+
+  await expect(listSkillSources(url)).resolves.toEqual([skill])
+  await expect(addNewSkill(url, 'agent', skill.path)).resolves.toEqual({
+    task_id: 'github-task',
+  })
+  expect(ovClient.client.post).toHaveBeenNthCalledWith(1, {
+    url: '/api/v1/skills',
+    body: { data: url, list_only: true },
+  })
+  expect(ovClient.client.post).toHaveBeenNthCalledWith(2, {
+    url: '/api/v1/skills',
+    body: {
+      data: url,
+      skills: [skill.path],
+      target_uri: 'viking://agent/skills',
+    },
   })
 })

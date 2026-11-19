@@ -5,16 +5,13 @@ import {
   parentUri,
 } from '#/shared/lib/viking-fs'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
-import type { FindResultItem, GroupedFindResult } from '#/shared/api/retrieval'
 
 import { cleanVikingUri } from '#/shared/lib/viking-uri'
 
 import {
   FILESYSTEM_AGENT_SESSIONS_STORAGE_KEY,
-  FILESYSTEM_EXPANDED_URIS_STORAGE_KEY,
   ROOT_URI,
 } from '#/features/workbench/filesystem/lib/constants'
-import type { ResourceRef } from '#/features/workbench/filesystem/lib/types'
 
 export { cleanVikingUri }
 
@@ -61,11 +58,9 @@ export function readStoredNumber(
   return Number.isFinite(value) ? clampNumber(value, min, max) : fallback
 }
 
-export function readStoredJsonArray<T>(
+function readStoredJsonArray<T>(
   key: string,
   validator: (value: unknown) => T | undefined,
-  limit?: number,
-  fromEnd = false,
 ): T[] {
   if (typeof window === 'undefined') return []
 
@@ -73,30 +68,19 @@ export function readStoredJsonArray<T>(
     const raw = window.localStorage.getItem(key)
     const parsed: unknown = raw ? JSON.parse(raw) : []
     if (!Array.isArray(parsed)) return []
-    const values = parsed.flatMap((item) => {
+    return parsed.flatMap((item) => {
       const value = validator(item)
       return value === undefined ? [] : [value]
     })
-    if (limit === undefined) return values
-    return fromEnd ? values.slice(-limit) : values.slice(0, limit)
   } catch {
     return []
   }
 }
 
-export function writeStoredJson(key: string, value: unknown): void {
+function writeStoredJson(key: string, value: unknown): void {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // Ignore storage failures in restricted browser contexts.
-  }
-}
-
-export function removeStoredValue(key: string): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.removeItem(key)
   } catch {
     // Ignore storage failures in restricted browser contexts.
   }
@@ -150,33 +134,6 @@ export function registerFilesystemAgentSessionId(
   return next
 }
 
-export function readFilesystemExpandedUris(identityScopeKey: string): string[] {
-  return readStoredJsonArray(
-    createIdentityStorageKey(
-      FILESYSTEM_EXPANDED_URIS_STORAGE_KEY,
-      identityScopeKey,
-    ),
-    (uri) =>
-      typeof uri === 'string' && uri.startsWith(ROOT_URI)
-        ? normalizeDirUri(uri)
-        : undefined,
-    500,
-  )
-}
-
-export function writeFilesystemExpandedUris(
-  identityScopeKey: string,
-  uris: Iterable<string>,
-): void {
-  writeStoredJson(
-    createIdentityStorageKey(
-      FILESYSTEM_EXPANDED_URIS_STORAGE_KEY,
-      identityScopeKey,
-    ),
-    [...uris],
-  )
-}
-
 export function createEntryFromUri(uri: string, isDir: boolean): VikingFsEntry {
   const normalized = isDir ? normalizeDirUri(uri) : normalizeFileUri(uri)
   return {
@@ -209,18 +166,15 @@ export function getAncestorUris(uri: string): string[] {
   return ancestors
 }
 
-export function mergeExpanded(
-  current: Set<string>,
-  uris: string[],
-): Set<string> {
-  const next = new Set(current)
-  for (const uri of uris) next.add(uri)
-  return next
+export function isDirectoryLevelFile(uri: string): boolean {
+  return directoryLevelFromUri(uri) !== undefined
 }
 
-export function isDirectoryLevelFile(uri: string): boolean {
+export function directoryLevelFromUri(uri: string): 'l0' | 'l1' | undefined {
+  if (uri.endsWith('/')) return
   const name = fileNameFromUri(uri)
-  return name === '_abstract.md' || name === '_overview.md'
+  if (name === '.abstract.md' || name === '_abstract.md') return 'l0'
+  if (name === '.overview.md' || name === '_overview.md') return 'l1'
 }
 
 export function normalizeFilesystemResourceUri(uri: string): string {
@@ -231,14 +185,6 @@ export function normalizeFilesystemResourceUri(uri: string): string {
     return normalizeDirUri(parentUri(normalized))
   }
   return normalized
-}
-
-export function entryToRef(entry: VikingFsEntry): ResourceRef {
-  return {
-    label: entry.name || fileNameFromUri(entry.uri),
-    meta: entry.isDir ? 'dir' : entry.size || undefined,
-    uri: entry.uri,
-  }
 }
 
 export function visibleContextEntries(
@@ -260,58 +206,4 @@ export function sortTreeEntries(entries: VikingFsEntry[]): VikingFsEntry[] {
     if (leftTime !== rightTime) return rightTime - leftTime
     return left.name.localeCompare(right.name)
   })
-}
-
-export function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => {
-      reject(new Error(message))
-    }, timeoutMs)
-
-    promise.then(
-      (value) => {
-        window.clearTimeout(timeoutId)
-        resolve(value)
-      },
-      (error) => {
-        window.clearTimeout(timeoutId)
-        reject(error)
-      },
-    )
-  })
-}
-
-export function formatScore(score: number): string {
-  if (!Number.isFinite(score)) return 'score -'
-  return `score ${score.toFixed(2)}`
-}
-
-type FindGroup = 'memories' | 'resources' | 'skills'
-
-/**
- * Flatten a grouped search result (resources + memories + skills) into a single
- * ordered ref list, tagging each ref with its (localized) type, level and score
- * so nothing is dropped from the terminal output.
- */
-export function searchResultToRefs(
-  result: GroupedFindResult,
-  groupLabels: Record<FindGroup, string>,
-): ResourceRef[] {
-  const groups: Array<[FindGroup, FindResultItem[]]> = [
-    ['resources', result.resources],
-    ['memories', result.memories],
-    ['skills', result.skills],
-  ]
-
-  return groups.flatMap(([group, items]) =>
-    items.map((item) => ({
-      label: fileNameFromUri(item.uri) || item.uri,
-      meta: `${groupLabels[group]} · L${item.level} · ${formatScore(item.score)}`,
-      uri: item.uri,
-    })),
-  )
 }

@@ -20,13 +20,20 @@ import type {
   ConsoleTokenSeriesResult,
 } from '@ov-server/api/v1/console'
 
-export function fetchConsoleDashboardSummary(): Promise<ConsoleDashboardSummaryResult> {
+export function fetchConsoleDashboardSummary(
+  headers?: Record<string, string>,
+): Promise<ConsoleDashboardSummaryResult> {
   return getOvResult<ConsoleDashboardSummaryResult>(
-    getConsoleDashboardSummary({ query: { timezone: getViewerTimezone() } }),
+    getConsoleDashboardSummary({
+      headers,
+      query: { timezone: getViewerTimezone() },
+    }),
   )
 }
 
-export function fetchConsoleTokenSeries(): Promise<ConsoleTokenSeriesResult> {
+export function fetchConsoleTokenSeries(
+  headers?: Record<string, string>,
+): Promise<ConsoleTokenSeriesResult> {
   const tz = getViewerTimezone()
   const range = getLastDaysRange(TOKEN_SERIES_DAYS, tz)
   const query: ConsoleSeriesQuery = {
@@ -35,10 +42,14 @@ export function fetchConsoleTokenSeries(): Promise<ConsoleTokenSeriesResult> {
     start_date: range.startDate,
     timezone: tz,
   }
-  return getOvResult<ConsoleTokenSeriesResult>(getConsoleTokens({ query }))
+  return getOvResult<ConsoleTokenSeriesResult>(
+    getConsoleTokens({ headers, query }),
+  )
 }
 
-export function fetchConsoleContextCommits(): Promise<ConsoleContextCommitsResult> {
+export function fetchConsoleContextCommits(
+  headers?: Record<string, string>,
+): Promise<ConsoleContextCommitsResult> {
   const tz = getViewerTimezone()
   const range = getLastDaysRange(COMMIT_SERIES_DAYS, tz)
   const query: ConsoleSeriesQuery = {
@@ -48,6 +59,6 @@ export function fetchConsoleContextCommits(): Promise<ConsoleContextCommitsResul
     timezone: tz,
   }
   return getOvResult<ConsoleContextCommitsResult>(
-    getConsoleContextCommits({ query }),
+    getConsoleContextCommits({ headers, query }),
   )
 }

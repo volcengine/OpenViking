@@ -1,4 +1,20 @@
 export default {
+  hostedAddress: '服务地址：{{address}}',
+  showAddress: '显示服务地址',
+  hideAddress: '隐藏服务地址',
+  productName: 'OpenViking',
+  connectTitle: '连接 OpenViking',
+  connectDescription:
+    '用 API Key 连接 OpenViking，可使用火山服务或你自己部署的服务',
+  privateDeployment: '私有化部署',
+  hostedService: '火山服务',
+  addressPlaceholder: '如：http://your-server:1933',
+  keyPlaceholder: '请输入你的 OpenViking 个人 API Key',
+  connectAndEnter: '连接并进入',
+  teamTagline: '让每位成员的 Agent 都能接上团队进度',
+  showKey: '显示 API Key',
+  hideKey: '隐藏 API Key',
+
   directoryOptions: '选择其他数据身份（高级）',
   rootSetupTitle: '开始使用工作台',
   rootSetupDescription:

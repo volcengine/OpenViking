@@ -57,7 +57,7 @@ const outputKeys = [
   ['viking-fs-ls', `${outputUri}/`, {}],
   ['viking-fs-tree', 'viking://resources/', {}],
   ['viking-fs-stat', outputUri],
-  ['viking-file-read', `${outputUri}/index.md`, '', {}],
+  ['studio-shared-preview', 'connection-a', `${outputUri}/index.md`, '', -1],
   ['dir-picker', 'connection-a', outputUri],
 ]
 const unrelatedKeys = [

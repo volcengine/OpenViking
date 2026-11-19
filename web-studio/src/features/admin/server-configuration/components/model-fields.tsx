@@ -1,3 +1,4 @@
+import styles from './server-configuration.module.css'
 import type { ModelConfig } from '#/features/admin/server-configuration/lib/config-file-api'
 import { PLAIN_INPUT_PROPS } from '#/shared/lib/form-input'
 import { Button } from '#/shared/ui/button'
@@ -135,6 +136,7 @@ export function ModelFields({
   readOnly = false,
   prefix = 'model',
   inheritedModel,
+  compact = false,
 }: {
   fields: FieldSpec[]
   value: ModelConfig
@@ -142,6 +144,7 @@ export function ModelFields({
   readOnly?: boolean
   prefix?: string
   inheritedModel?: unknown
+  compact?: boolean
 }) {
   const { t } = useTranslation('settings')
   const [visible, setVisible] = React.useState<Record<string, boolean>>({})
@@ -170,17 +173,26 @@ export function ModelFields({
         const isProvider = field.key === 'provider'
         const options = field.options?.map((option) => ({
           value: option,
-          label: option,
+          label:
+            compact && isProvider
+              ? t(`models.providerNames.${option}`, { defaultValue: option })
+              : option,
         }))
         if (isProvider && options)
           options.push({
             value: CUSTOM_OPENAI,
             label: t('models.customProvider'),
           })
-        return (
-          <Field key={field.key} className="gap-2">
-            <FieldLabel htmlFor={id} className="text-xs">
-              {label}
+        const control = (
+          <Field key={field.key} data-model-field={field.key} className="gap-2">
+            <FieldLabel
+              htmlFor={id}
+              data-required={(compact && field.required) || undefined}
+              className="text-xs"
+            >
+              {compact && field.key === 'thinking'
+                ? t('models.thinkingColumn')
+                : label}
             </FieldLabel>
             {field.options ? (
               <Select
@@ -221,7 +233,9 @@ export function ModelFields({
               />
             ) : field.type === 'toggle' ? (
               <Switch
+                aria-label={label}
                 id={id}
+                aria-label={label}
                 checked={current === true}
                 disabled={readOnly}
                 onCheckedChange={change}
@@ -230,6 +244,9 @@ export function ModelFields({
               <div className="relative min-w-0">
                 <Input
                   {...PLAIN_INPUT_PROPS}
+                  placeholder={
+                    compact ? t('models.inputPlaceholder') : undefined
+                  }
                   id={id}
                   required={
                     field.key === 'api_base' &&
@@ -263,7 +280,7 @@ export function ModelFields({
                     )
                   }
                 />
-                {field.type === 'secret' && (
+                {field.type === 'secret' && (!compact || Boolean(current)) && (
                   <Button
                     type="button"
                     variant="ghost"
@@ -288,6 +305,25 @@ export function ModelFields({
               </div>
             )}
           </Field>
+        )
+        return compact &&
+          ['api_base', 'api_version'].includes(field.key) &&
+          !field.required ? (
+          <details
+            key={field.key}
+            className={styles.modelEditorAddress}
+            open={
+              customProvider ||
+              needsEmbeddingBase ||
+              Boolean(current) ||
+              undefined
+            }
+          >
+            <summary>{t('models.defaultAddressHint')}</summary>
+            {control}
+          </details>
+        ) : (
+          control
         )
       })}
     </>

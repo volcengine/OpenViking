@@ -48,6 +48,7 @@ export const STUDIO_FEATURES = [
   // These pages need additional endpoints or mutations that have not been
   // adapted for hosted deployments. One healthy endpoint cannot enable them.
   { id: 'home', domain: 'extensions', to: '/home' },
+  { id: 'usage', domain: 'extensions', to: '/usage' },
   { id: 'arranger', domain: 'extensions', to: '/arranger' },
 
   { id: 'vikingbot', domain: 'extensions', to: '/vikingbot' },
@@ -67,8 +68,8 @@ export const STUDIO_FEATURES = [
   },
   {
     id: 'monitoring',
-    domain: 'extensions',
-    to: '/monitoring',
+    domain: 'management',
+    to: '/admin/monitoring',
     probe: '/api/v1/observer/system',
   },
   { id: 'gateway', domain: 'management', to: '/admin/gateway' },

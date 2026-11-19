@@ -1,9 +1,24 @@
 // @vitest-environment jsdom
+import { FilePreview } from '@openviking/react/components/file-preview'
+import type {
+  FileBrowserHandle,
+  FileBrowserProps,
+} from '@openviking/react/modules/file-browser'
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import type { ComponentType, PropsWithChildren } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { useEffect, useImperativeHandle } from 'react'
+import type { ComponentType, PropsWithChildren, Ref } from 'react'
+import {
+  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
@@ -19,20 +34,23 @@ const mocks = vi.hoisted(() => ({
   provider: 'opensource',
   uploadProvider: vi.fn(),
   preview: vi.fn(),
+  editor: vi.fn(),
   agent: vi.fn(),
-  terminal: vi.fn(),
+  console: vi.fn(),
   fetchFsStat: vi.fn(),
+  reveal: vi.fn(),
+  mountBrowser: vi.fn(),
   invalidateList: vi.fn(),
+  invalidateAll: vi.fn(),
   navigate: vi.fn(),
   dataManagement: vi.fn(),
-  refreshLabel: 'refresh',
+  addResource: vi.fn(),
   search: {} as { file?: string; panel?: 'agent' | 'terminal'; uri?: string },
 }))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal()
-  return {
-    ...actual,
+  return Object.assign({}, actual, {
     getRouteApi: () => ({ useSearch: () => mocks.search }),
     createFileRoute: () => (options: Record<string, unknown>) => ({
       ...options,
@@ -41,8 +59,13 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
       useSearch: () => mocks.search,
     }),
     useNavigate: () => mocks.navigate,
-  }
+    useBlocker: () => undefined,
+  })
 })
+
+vi.mock('#/app/layouts/studio-header-actions', () => ({
+  StudioHeaderActions: ({ children }: PropsWithChildren) => children,
+}))
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -56,12 +79,22 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
 }))
 
 vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
-  useInvalidateVikingFs: () => ({ invalidateList: mocks.invalidateList }),
+  useInvalidateVikingFs: () => ({
+    invalidateList: mocks.invalidateList,
+    invalidateAll: mocks.invalidateAll,
+  }),
   useVikingFsList: () => ({ data: { entries: [] }, isFetching: false }),
 }))
 
 vi.mock('#/features/workbench/resources/lib/api', () => ({
   fetchFsStat: mocks.fetchFsStat,
+}))
+
+vi.mock('#/features/workbench/resources/components/add-resource-page', () => ({
+  AddResourceForm: (props: { initialTargetUri?: string }) => {
+    mocks.addResource(props)
+    return null
+  },
 }))
 
 vi.mock('#/features/workbench/resources/hooks/use-resource-upload', () => ({
@@ -81,35 +114,81 @@ vi.mock('#/features/workbench/resources/hooks/use-resource-upload', () => ({
   }),
 }))
 
-vi.mock('#/features/workbench/resources/components/lazy-file-preview', () => ({
-  LazyFilePreview: (props: {
-    file: { uri: string } | null
-    readOnly?: boolean
-    defaultReadLimit?: number
-  }) => {
-    mocks.preview(props)
-    return <div data-testid="preview">{props.file?.uri}</div>
-  },
-}))
+vi.mock(
+  '#/features/workbench/filesystem/components/workbench-file-browser',
+  () => ({
+    WorkbenchFileBrowser: (
+      props: FileBrowserProps & { ref?: Ref<FileBrowserHandle> },
+    ) => {
+      useImperativeHandle(props.ref, () => ({ openResource: mocks.reveal }))
+      useEffect(() => {
+        mocks.mountBrowser()
+      }, [])
+      mocks.preview(props)
+      return (
+        <>
+          <div data-testid="preview">{props.uri}</div>
+          <FilePreview
+            locale="en-US"
+            tabs={[
+              {
+                kind: 'file',
+                key: props.uri ?? 'empty',
+                source: {
+                  path: props.uri,
+                  fileName: 'preview.md',
+                  content: '',
+                },
+                slots: { extraActions: props.previewSlots?.extraActions },
+                actions: (context) => {
+                  const actionItems = props.previewSlots?.actionItems
+                  return typeof actionItems === 'function'
+                    ? actionItems({
+                        ...context,
+                        canDelete: false,
+                        deleteFile: vi.fn(),
+                        defaultActions: [
+                          {
+                            key: 'download',
+                            label: 'Download',
+                            icon: null,
+                            onClick: vi.fn(),
+                          },
+                        ],
+                      })
+                    : (actionItems ?? [])
+                },
+              },
+            ]}
+          />
+        </>
+      )
+    },
+  }),
+)
 
-vi.mock('#/features/workbench/filesystem/components/context-explorer', () => ({
-  ContextExplorerHeader: ({ onRefresh }: { onRefresh: () => void }) => (
-    <button type="button" aria-label={mocks.refreshLabel} onClick={onRefresh} />
-  ),
-  ContextTree: () => null,
-  PanelTab: ({ label }: { label: string }) => (
-    <button type="button" role="tab">
-      {label}
-    </button>
-  ),
-  FilesystemResizeHandle: () => null,
-}))
+vi.mock(
+  '#/features/workbench/filesystem/components/shared-file-preview',
+  () => ({
+    SharedFilePreview: (props: { onDirtyChange: (dirty: boolean) => void }) => {
+      mocks.editor(props)
+      return null
+    },
+  }),
+)
+
+vi.mock(
+  '#/features/workbench/filesystem/components/filesystem-resize-handle',
+  () => ({
+    FilesystemResizeHandle: () => null,
+  }),
+)
 
 vi.mock('#/features/workbench/filesystem/components/agent-panel', () => ({
   AgentPanel: mocks.agent,
 }))
-vi.mock('#/features/workbench/filesystem/components/terminal-panel', () => ({
-  TerminalPanel: mocks.terminal,
+vi.mock('#/features/workbench/filesystem/components/workbench-console', () => ({
+  WorkbenchConsole: mocks.console,
 }))
 vi.mock(
   '#/features/workbench/filesystem/components/data-management-dialog',
@@ -120,8 +199,29 @@ vi.mock(
     },
   }),
 )
+vi.mock(
+  '#/features/workbench/filesystem/components/delete-document-dialog',
+  () => ({
+    DeleteDocumentDialog: ({
+      uri,
+      onClose,
+      onDeleted,
+    }: {
+      uri: string
+      onClose: () => void
+      onDeleted: (uri: string) => void
+    }) => (
+      <div role="alertdialog">
+        <span>{uri}</span>
+        <button onClick={onClose}>cancel-delete</button>
+        <button onClick={() => onDeleted(uri)}>confirm-delete</button>
+      </div>
+    ),
+  }),
+)
 vi.mock('#/features/workbench/resources/components/find-palette', () => ({
-  FindPalette: () => null,
+  FindPalette: ({ open, scopeUri }: { open: boolean; scopeUri: string }) =>
+    open ? <div role="dialog">{scopeUri}</div> : null,
 }))
 
 const FilesystemRoute = Route.options.component as ComponentType & {
@@ -131,11 +231,34 @@ const firstFile = 'viking://user/default/memories/first.md'
 const secondFile = 'viking://user/default/memories/second.md'
 const parentDirectory = 'viking://user/default/memories/'
 
-describe('filesystem context tree refresh', () => {
+function renderFilesystem() {
+  const client = new QueryClient()
+  return render(<FilesystemRoute />, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  })
+}
+
+async function openPreviewActions() {
+  const trigger = screen.getByRole('button', { name: 'More actions' })
+  trigger.focus()
+  await userEvent.keyboard('{ArrowDown}')
+}
+
+describe('filesystem workbench', () => {
   beforeAll(async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    )
     await FilesystemRoute.preload?.()
   })
 
+  afterAll(() => vi.unstubAllGlobals())
   afterEach(cleanup)
 
   beforeEach(() => {
@@ -143,12 +266,137 @@ describe('filesystem context tree refresh', () => {
     mocks.uploadProvider.mockClear()
     mocks.preview.mockClear()
     mocks.agent.mockReset().mockReturnValue(null)
-    mocks.terminal.mockReset().mockReturnValue(null)
+    mocks.console.mockReset().mockReturnValue(null)
     mocks.search = { file: firstFile, uri: parentDirectory }
-    mocks.fetchFsStat.mockReset()
+    mocks.fetchFsStat.mockReset().mockResolvedValue({ isDir: true })
+    mocks.reveal.mockReset().mockResolvedValue(true)
+    mocks.mountBrowser.mockClear()
     mocks.invalidateList.mockReset().mockResolvedValue(undefined)
+    mocks.invalidateAll.mockReset().mockResolvedValue(undefined)
     mocks.navigate.mockReset()
     mocks.dataManagement.mockReset()
+    mocks.addResource.mockReset()
+  })
+
+  it.each([{ metaKey: true }, { ctrlKey: true }])(
+    'reserves K for FileBrowser and opens the current-directory palette with F (%j)',
+    (modifier) => {
+      renderFilesystem()
+
+      expect(fireEvent.keyDown(document.body, { key: 'k', ...modifier })).toBe(
+        true,
+      )
+      expect(screen.queryByRole('dialog')).toBeNull()
+
+      expect(fireEvent.keyDown(document.body, { key: 'f', ...modifier })).toBe(
+        false,
+      )
+      expect(screen.getByRole('dialog').textContent).toBe(parentDirectory)
+    },
+  )
+
+  it('leaves the find shortcut to CodeMirror when its editor has focus', () => {
+    renderFilesystem()
+    render(
+      <div className="cm-editor">
+        <textarea />
+      </div>,
+    )
+    const editor = screen.getByRole('textbox')
+    editor.focus()
+
+    expect(fireEvent.keyDown(editor, { key: 'f', metaKey: true })).toBe(true)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('uses only native tabs for a direct user experience file', () => {
+    const uri = 'viking://user/alice/memories/experiences/release-check.md'
+    mocks.search = { file: uri }
+    renderFilesystem()
+
+    const props: FileBrowserProps = mocks.preview.mock.lastCall![0]
+    expect(props.uri).toBe(uri)
+    expect(
+      screen.queryByRole('button', { name: 'resources:filePreview.edit' }),
+    ).toBeNull()
+    expect(screen.queryByText('ide.experienceDetails')).toBeNull()
+  })
+
+  it('keeps the current resource when the user declines to discard an edit', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      mocks.fetchFsStat.mockResolvedValue({ isDir: false, name: 'other.md' })
+      renderFilesystem()
+      await userEvent.click(
+        screen.getByRole('button', { name: 'resources:filePreview.edit' }),
+      )
+
+      await act(async () => {
+        const props: FileBrowserProps = mocks.preview.mock.lastCall![0]
+        mocks.editor.mock.lastCall![0].onDirtyChange(true)
+        props.onUriChange?.(secondFile)
+      })
+
+      expect(confirm).toHaveBeenCalledOnce()
+      expect(mocks.navigate).not.toHaveBeenCalled()
+      expect(screen.getByTestId('preview').textContent).toBe(firstFile)
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
+  it('offers file deletion and clears the deleted preview and URL', async () => {
+    renderFilesystem()
+    await openPreviewActions()
+    expect(screen.getByRole('menuitem', { name: 'Download' })).toBeTruthy()
+    expect(
+      screen.queryByRole('menuitem', { name: 'resources:filePreview.edit' }),
+    ).toBeNull()
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: 'dataManagement:deleteDocument' }),
+    )
+    expect(screen.getByRole('alertdialog').textContent).toContain(firstFile)
+    expect(screen.getByTestId('preview')).toBeTruthy()
+    await userEvent.click(
+      screen.getByRole('button', { name: 'confirm-delete' }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('preview').textContent).toBe(
+        parentDirectory.slice(0, -1),
+      ),
+    )
+    expect(mocks.invalidateAll).toHaveBeenCalled()
+    const navigation = mocks.navigate.mock.lastCall![0]
+    expect(
+      navigation.search({ file: firstFile, uri: parentDirectory }),
+    ).toEqual({ uri: parentDirectory })
+  })
+  it('preserves a newer selection after deletion of the confirmed file', async () => {
+    const { rerender } = renderFilesystem()
+    await openPreviewActions()
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: 'dataManagement:deleteDocument' }),
+    )
+    mocks.search = { file: secondFile, uri: parentDirectory }
+    rerender(<FilesystemRoute />)
+    await waitFor(() =>
+      expect(screen.getByTestId('preview').textContent).toBe(secondFile),
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: 'confirm-delete' }),
+    )
+    expect(screen.getByTestId('preview').textContent).toBe(secondFile)
+  })
+
+  it('opens the standalone task list from the workbench header', async () => {
+    renderFilesystem()
+
+    await userEvent.click(screen.getByRole('button', { name: 'title' }))
+
+    expect(mocks.navigate).toHaveBeenCalledWith({
+      to: '/tasks',
+      search: { file: firstFile, uri: parentDirectory },
+    })
   })
 
   it('offers OVPack for the parent resource directory while a file is selected', async () => {
@@ -156,15 +404,19 @@ describe('filesystem context tree refresh', () => {
       file: 'viking://resources/preferences/response-tone.md',
       uri: 'viking://resources/preferences/',
     }
-    render(<FilesystemRoute />)
+    renderFilesystem()
 
+    await openPreviewActions()
     await userEvent.click(
-      screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
+      screen.getByRole('menuitem', { name: 'dataManagement:exportMenu' }),
     )
     expect(screen.getByTestId('data-management-uri').textContent).toBe(
       'viking://resources/preferences/',
     )
     expect(mocks.dataManagement.mock.lastCall?.[0].isDirectory).toBe(true)
+    expect(mocks.dataManagement.mock.lastCall?.[0].initialTransferTab).toBe(
+      'export',
+    )
   })
 
   it('offers OVPack on hosted resource directories too', async () => {
@@ -173,91 +425,136 @@ describe('filesystem context tree refresh', () => {
       file: 'viking://resources/preferences/response-tone.md',
       uri: 'viking://resources/preferences/',
     }
-    render(<FilesystemRoute />)
+    renderFilesystem()
 
+    await openPreviewActions()
     await userEvent.click(
-      screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
+      screen.getByRole('menuitem', { name: 'dataManagement:importMenu' }),
     )
     expect(screen.getByTestId('data-management-uri').textContent).toBe(
       'viking://resources/preferences/',
     )
     expect(mocks.dataManagement.mock.lastCall?.[0].isDirectory).toBe(true)
+    expect(mocks.dataManagement.mock.lastCall?.[0].initialTransferTab).toBe(
+      'import',
+    )
+  })
+
+  it('keeps history, export and compile available on a read-only directory', async () => {
+    const uri = 'viking://resources/im/feishu/'
+    mocks.search = { uri }
+    mocks.fetchFsStat.mockResolvedValue({ isDir: true, access: 'read' })
+    renderFilesystem()
+
+    await openPreviewActions()
+    expect(mocks.fetchFsStat).toHaveBeenCalledWith(uri, { throwOnError: true })
+    expect(
+      screen.getByRole('menuitem', { name: 'dataManagement:historyMenu' }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('menuitem', { name: 'compile:compileThisFolder' }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('menuitem', { name: 'dataManagement:importMenu' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('menuitem', { name: 'explorer.addResource' }),
+    ).toBeNull()
+
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: 'dataManagement:exportMenu' }),
+    )
+    expect(mocks.dataManagement.mock.lastCall?.[0]).toMatchObject({
+      uri,
+      allowImport: false,
+    })
+  })
+
+  it('uses the writable directory as the default resource import target', async () => {
+    const uri = 'viking://resources/im/feishu/'
+    mocks.search = { uri }
+    mocks.fetchFsStat.mockResolvedValue({ isDir: true, access: 'write' })
+    renderFilesystem()
+
+    await openPreviewActions()
+    expect(
+      screen.getByRole('menuitem', { name: 'dataManagement:importMenu' }),
+    ).toBeTruthy()
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: 'explorer.addResource' }),
+    )
+    expect(mocks.addResource.mock.lastCall?.[0]).toMatchObject({
+      initialTargetUri: uri,
+    })
+  })
+
+  it('checks the parent directory for OVPack import when a file is selected', async () => {
+    const uri = 'viking://resources/im/feishu/'
+    mocks.search = { file: `${uri}notes.md`, uri }
+    mocks.fetchFsStat.mockRejectedValue({ statusCode: 403 })
+    renderFilesystem()
+
+    await openPreviewActions()
+    expect(mocks.fetchFsStat).toHaveBeenCalledExactlyOnceWith(uri, {
+      throwOnError: true,
+    })
+    expect(
+      screen.queryByRole('menuitem', { name: 'dataManagement:importMenu' }),
+    ).toBeNull()
+    expect(
+      screen.getByRole('menuitem', { name: 'dataManagement:exportMenu' }),
+    ).toBeTruthy()
   })
 
   it('shows only the CLI tab for hosted reads while keeping local tools unavailable', async () => {
     mocks.provider = 'volcengine'
     mocks.search = { file: firstFile, panel: 'agent', uri: parentDirectory }
-    render(<FilesystemRoute />)
+    renderFilesystem()
+    await openPreviewActions()
     await userEvent.click(
-      screen.getByRole('button', { name: 'dataManagement:historyTitle' }),
+      screen.getByRole('menuitem', { name: 'dataManagement:historyMenu' }),
     )
     expect(screen.getByTestId('data-management-uri').textContent).toBe(
       firstFile,
     )
     expect(
-      screen.queryByRole('button', { name: 'dataManagement:transferTitle' }),
+      screen.queryByRole('menuitem', { name: 'dataManagement:exportMenu' }),
     ).toBeNull()
     expect(screen.getByTestId('preview').textContent).toBe(firstFile)
-    expect(mocks.preview.mock.lastCall?.[0].readOnly).not.toBe(true)
-    expect(mocks.preview.mock.lastCall?.[0].defaultReadLimit).toBe(10000)
+    expect(mocks.preview.mock.lastCall?.[0].readOnly).toBe(true)
     expect(mocks.uploadProvider.mock.lastCall?.[0]).toBe(false)
     expect(mocks.agent).not.toHaveBeenCalled()
-    expect(mocks.terminal).toHaveBeenCalled()
-    expect(mocks.agent).not.toHaveBeenCalled()
-    expect(screen.getAllByRole('tab')).toHaveLength(1)
-    expect(screen.getByRole('tab', { name: 'tabs.terminal' })).toBeTruthy()
-    expect(screen.queryByRole('tab', { name: 'tabs.agent' })).toBeNull()
+    expect(mocks.console.mock.lastCall?.[0]).toMatchObject({ mode: 'command' })
+    expect(mocks.console.mock.lastCall?.[0].conversation).toBeUndefined()
     expect(screen.queryByText('addResource.title')).toBeNull()
   })
 
-  it('clears a deleted selected file from the preview and URL search', async () => {
-    mocks.fetchFsStat.mockRejectedValue({ statusCode: 404 })
-    render(<FilesystemRoute />)
+  it.each([
+    ['.abstract.md', '.abstract.md'],
+    ['.overview.md', '.overview.md'],
+    ['_abstract.md', '.abstract.md'],
+    ['_overview.md', '.overview.md'],
+  ])(
+    'reveals the summary directory in the existing tree for %s',
+    async (name, summaryFile) => {
+      mocks.provider = 'volcengine'
+      mocks.fetchFsStat.mockResolvedValue({ isDir: true, name: 'deep' })
+      const directory = 'viking://resources/deep/'
+      renderFilesystem()
+      const { onOpenResource } = mocks.console.mock.lastCall![0]
 
-    await userEvent.click(
-      await screen.findByRole('button', { name: mocks.refreshLabel }),
-    )
+      await act(async () => onOpenResource(directory + name))
 
-    await waitFor(() => {
-      expect(screen.getByTestId('preview').textContent).toBe('')
-    })
-    expect(mocks.invalidateList.mock.calls[0]).toEqual([])
-    expect(mocks.fetchFsStat).toHaveBeenCalledWith(firstFile, {
-      throwOnError: true,
-    })
-    const navigation = mocks.navigate.mock.calls[0][0]
-    expect(
-      navigation.search({ file: firstFile, uri: parentDirectory }),
-    ).toEqual({ uri: parentDirectory })
-  })
-
-  it('does not clear a newer selection when the old file stat finishes late', async () => {
-    let rejectStat: (error: unknown) => void = () => undefined
-    mocks.fetchFsStat.mockReturnValue(
-      new Promise((_, reject) => {
-        rejectStat = reject
-      }),
-    )
-    const { rerender } = render(<FilesystemRoute />)
-
-    await userEvent.click(
-      await screen.findByRole('button', { name: mocks.refreshLabel }),
-    )
-    await waitFor(() => {
-      expect(mocks.fetchFsStat).toHaveBeenCalledOnce()
-    })
-
-    mocks.search = { file: secondFile, uri: parentDirectory }
-    rerender(<FilesystemRoute />)
-    await waitFor(() => {
-      expect(screen.getByTestId('preview').textContent).toBe(secondFile)
-    })
-
-    await act(async () => {
-      rejectStat({ statusCode: 404 })
-    })
-
-    expect(screen.getByTestId('preview').textContent).toBe(secondFile)
-    expect(mocks.navigate).not.toHaveBeenCalled()
-  })
+      expect(mocks.fetchFsStat).toHaveBeenCalledExactlyOnceWith(directory, {
+        throwOnError: true,
+      })
+      expect(mocks.reveal).toHaveBeenCalledExactlyOnceWith(
+        directory + summaryFile,
+      )
+      expect(mocks.mountBrowser).toHaveBeenCalledTimes(1)
+      expect(mocks.preview.mock.lastCall?.[0]).toMatchObject({
+        uri: directory.slice(0, -1),
+      })
+    },
+  )
 })

@@ -6,7 +6,11 @@ export function AdminIndex() {
   return (
     <Navigate
       replace
-      to={serverMode === 'dev' ? '/admin/configuration/server' : '/admin/users'}
+      to={
+        serverMode === 'dev'
+          ? '/admin/configuration/server'
+          : '/admin/dashboard'
+      }
     />
   )
 }

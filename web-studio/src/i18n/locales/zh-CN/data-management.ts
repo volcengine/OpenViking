@@ -1,4 +1,18 @@
 const dataManagement = {
+  deleteDocument: '删除文档',
+  deleteConfirmTitle: '删除文档？',
+  deleteConfirmDescription: '确定删除「{{name}}」吗？此操作无法撤销。',
+  deleteUnsavedWarning: '此文档有未保存的修改，删除后这些修改也将丢失。',
+  deleteCancel: '取消',
+  deleteConfirm: '确认删除',
+  deletingDocument: '正在删除…',
+  deleteFailed: '删除失败：{{error}}',
+  documentDeleted: '文档已删除',
+
+  historyMenu: '查看历史版本',
+  importMenu: '导入 .ovpack',
+  exportMenu: '导出 .ovpack',
+
   historyTitle: '历史版本',
   transferTitle: 'OVPack 导入与导出',
   transferShortLabel: 'OVPack',
@@ -9,6 +23,9 @@ const dataManagement = {
   snapshotSaved: '快照已保存',
   snapshotScope: '仅包含当前路径。被排除的文件、权限和向量索引不纳入版本管理。',
   loading: '正在加载历史版本…',
+  historyScanLimit:
+    '服务端已达到历史扫描上限，未能查完此路径的历史。可能还有更早的快照。',
+  historyLoadFailed: '历史版本加载失败。',
   noSnapshots: '当前路径还没有快照。',
   viewDiff: '查看差异',
   diffComparison: '版本对比',

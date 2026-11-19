@@ -20,10 +20,11 @@ export type UpdateSchedule =
   | { frequency: 'daily'; hour: number; minute: number }
   | { frequency: 'weekly'; weekday: number; hour: number; minute: number }
 export type CompileConfigSummary = {
-  status: string
+  compile_name?: string
+  status?: string
   to: string
-  initialized: boolean
-  running: boolean
+  initialized?: boolean
+  running?: boolean
   auto_update: boolean
   update_schedule: UpdateSchedule | null
   next_run_at: string | null
@@ -32,10 +33,12 @@ export type CompileConfig = Omit<CompileConfigSummary, 'running'> & {
   from: string[]
   skill: string
   instruction: string | null
-  last_error: string | null
-  last_run: unknown
+  args?: Record<string, unknown> | null
+  last_error?: string | null
 }
 export type CompileConfigUpdate = {
+  compile_name?: string
+  args?: Record<string, unknown> | null
   to: string
   from: string[]
   skill: string
@@ -43,9 +46,24 @@ export type CompileConfigUpdate = {
   auto_update: boolean
   update_schedule: UpdateSchedule | null
 }
-export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
-  return getOvResult<{
-    targets: CompileConfigSummary[]
+type NamedCompileConfig = { compile_name: string }
+type ConfigTiming = { next_triggered_slot?: string | null }
+
+function normalizeCompileConfig<T extends CompileConfig | CompileConfigSummary>(
+  config: T & ConfigTiming,
+): T {
+  return config.compile_name
+    ? { ...config, next_run_at: config.next_triggered_slot ?? null }
+    : config
+}
+
+export async function fetchCompileConfigs(
+  cursor?: string,
+  signal?: AbortSignal,
+) {
+  const page = await getOvResult<{
+    configs?: (CompileConfigSummary & ConfigTiming)[]
+    targets?: CompileConfigSummary[]
     next_cursor: string | null
   }>(
     ovClient.client.get({
@@ -54,21 +72,49 @@ export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
       query: { limit: 30, ...(cursor ? { cursor } : {}) },
     }),
   )
+  const targets = page.configs ?? page.targets
+  if (!Array.isArray(targets)) throw new Error(i18n.t('compile:errors.upgrade'))
+  return {
+    targets: targets.map(normalizeCompileConfig<CompileConfigSummary>),
+    named: Array.isArray(page.configs),
+    next_cursor: page.next_cursor,
+  }
 }
-export function fetchCompileConfig(to: string, signal?: AbortSignal) {
-  return getOvResult<CompileConfig>(
+export async function fetchCompileConfig(id: string, signal?: AbortSignal) {
+  const config = await getOvResult<CompileConfig & ConfigTiming>(
     ovClient.client.get({
       url: '/api/v1/compile/config',
       signal,
-      query: { to },
+      query: id.startsWith('viking://') ? { to: id } : { compile_name: id },
     }),
   )
+  return normalizeCompileConfig<CompileConfig>(config)
 }
-export function updateCompileConfig(body: CompileConfigUpdate) {
-  return getOvResult<CompileConfig>(
+export async function updateCompileConfig(body: CompileConfigUpdate) {
+  const config = await getOvResult<CompileConfig & ConfigTiming>(
     ovClient.client.post({
       url: '/api/v1/compile/config/update',
       body,
+    }),
+  )
+  return normalizeCompileConfig<CompileConfig>(config)
+}
+
+export async function saveCompileSchedule(
+  body: CompileRequest,
+  compileName: string,
+  key: string,
+  signal: AbortSignal,
+): Promise<CompileTask | CompileConfig | NamedCompileConfig> {
+  // Even an empty catalog identifies the API version without attempting a write.
+  const catalog = await fetchCompileConfigs(undefined, signal)
+  signal.throwIfAborted()
+  if (!catalog.named) return createCompile(body, key)
+  return getOvResult<NamedCompileConfig>(
+    ovClient.client.post({
+      url: '/api/v1/compile/create',
+      body: { ...body, compile_name: compileName },
+      signal,
     }),
   )
 }

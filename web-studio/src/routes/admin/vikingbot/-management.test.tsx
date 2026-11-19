@@ -19,6 +19,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     identityScopeKey: 'account-one',
+    connection: { accountId: 'account-one' },
     connectionRole: state.role,
   }),
 }))

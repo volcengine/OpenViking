@@ -15,35 +15,46 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 export function DeleteConversation({
+  defaultOpen = false,
+  hideTrigger = false,
+  onOpenChange,
   id,
   title,
   onDeleted,
 }: {
+  defaultOpen?: boolean
+  hideTrigger?: boolean
+  onOpenChange?: (open: boolean) => void
   id: string
   title: string
   onDeleted: () => void
 }) {
   const { t } = useTranslation('sessions')
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const mutation = useDeleteSession()
   return (
     <>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="mr-1 shrink-0 text-muted-foreground hover:text-destructive [@media(hover:hover)]:opacity-0 group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100 focus-visible:opacity-100 transition-opacity"
-        aria-label={t('threadList.deleteSession', { title })}
-        onClick={() => {
-          mutation.reset()
-          setOpen(true)
-        }}
-      >
-        <Trash2Icon className="size-4" />
-      </Button>
+      {!hideTrigger ? (
+        <Button
+          size="icon"
+          variant="ghost"
+          className="mr-1 shrink-0 text-muted-foreground hover:text-destructive [@media(hover:hover)]:opacity-0 group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100 focus-visible:opacity-100 transition-opacity"
+          aria-label={t('threadList.deleteSession', { title })}
+          onClick={() => {
+            mutation.reset()
+            setOpen(true)
+          }}
+        >
+          <Trash2Icon className="size-4" />
+        </Button>
+      ) : null}
       <AlertDialog
         open={open}
         onOpenChange={(value) => {
-          if (!mutation.isPending) setOpen(value)
+          if (!mutation.isPending) {
+            setOpen(value)
+            onOpenChange?.(value)
+          }
         }}
       >
         <AlertDialogContent>

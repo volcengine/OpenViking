@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import userEvent from '@testing-library/user-event'
 import type { Connection } from '#/features/admin/vikingbot/api'
 import { FeishuSetup } from '#/features/admin/vikingbot/providers/feishu/feishu-setup'
 import zh from '#/i18n/locales/zh-CN/vikingbot'
@@ -116,13 +117,15 @@ it('preserves credentials after validation failure and blocks duplicate submissi
   fireEvent.change(screen.getByLabelText<HTMLInputElement>(zh.appSecret), {
     target: { value: 'secret' },
   })
-  await screen.findByRole('option', { name: 'bot-user' })
-  fireEvent.change(screen.getByLabelText<HTMLSelectElement>(zh.runtimeUser), {
-    target: { value: 'bot-user' },
-  })
-  fireEvent.change(screen.getByLabelText(zh.replyMode), {
-    target: { value: 'false' },
-  })
+  await waitFor(() =>
+    expect(
+      screen.getByRole('combobox', { name: zh.runtimeUser }).textContent,
+    ).toContain('bot-user'),
+  )
+  await userEvent.click(screen.getByRole('combobox', { name: zh.replyMode }))
+  await userEvent.click(
+    await screen.findByRole('option', { name: zh.withoutMention }),
+  )
   fireEvent.click(
     screen.getByRole<HTMLButtonElement>('button', { name: zh.connect }),
   )
@@ -165,8 +168,8 @@ it.each([
     fireEvent.click(screen.getByRole('button', { name: zh.retry }))
     await waitFor(() =>
       expect(
-        screen.getByLabelText<HTMLSelectElement>(zh.runtimeUser).value,
-      ).toBe('recovered'),
+        screen.getByRole('combobox', { name: zh.runtimeUser }).textContent,
+      ).toContain('recovered'),
     )
     expect(submit.disabled).toBe(false)
     expect(screen.queryByRole('link', { name: zh.manageUsers })).toBeNull()

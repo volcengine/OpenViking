@@ -1,3 +1,4 @@
+import { AdminScopeFilters } from '#/features/admin/users/components/admin-scope-filters'
 import { EvolutionSettingRow } from '#/features/admin/account-configuration/experience-setting'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useTranslation } from 'react-i18next'
@@ -13,6 +14,7 @@ export function OpenVikingConfigurationPage() {
           {t('modes.configurationDescription')}
         </p>
       </header>
+      <AdminScopeFilters />
       <div className="overflow-hidden rounded-xl border bg-card">
         <h2 className="px-6 py-4 font-medium">
           {t('modes.accountConfiguration', { account: connection.accountId })}

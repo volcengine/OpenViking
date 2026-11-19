@@ -1,3 +1,4 @@
+import { FilterSelect } from '#/shared/components/filter-select'
 import type { Connection } from '#/features/admin/vikingbot/api'
 import { updateConnectionSettings } from '#/features/admin/vikingbot/api'
 import { Button } from '#/shared/ui/button'
@@ -26,18 +27,20 @@ export function ReplyMode({
   const { t } = useTranslation('vikingbot')
   return (
     <div className="space-y-2">
-      <label className="grid gap-2 text-sm">
+      <div className="grid gap-2 text-sm">
         <span>{t('replyMode')}</span>
-        <select
-          className="h-9 rounded-md border bg-background px-3"
+        <FilterSelect
+          label={t('replyMode')}
+          className="w-full"
           value={String(value)}
           disabled={disabled}
-          onChange={(event) => onChange(event.target.value === 'true')}
-        >
-          <option value="true">{t('onlyMention')}</option>
-          <option value="false">{t('withoutMention')}</option>
-        </select>
-      </label>
+          onValueChange={(next) => onChange(next === 'true')}
+          options={[
+            { value: 'true', label: t('onlyMention') },
+            { value: 'false', label: t('withoutMention') },
+          ]}
+        />
+      </div>
       <p className="text-xs leading-6 text-muted-foreground">
         {t(value ? 'mentionModeHint' : 'withoutMentionHint')}
       </p>

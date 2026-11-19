@@ -1,3 +1,8 @@
+import {
+  routeManagementCredential,
+  hasRootManagementCredential,
+  invalidateManagementCredential,
+} from './management-credentials'
 import type { ApiKeyAuth } from '#/shared/api/auth'
 import { createApiKeyHeaders, resolveApiKeyAuth } from '#/shared/api/auth'
 import type { ServerMode } from '#/shared/types/auth'
@@ -134,8 +139,26 @@ export function createAdminClient(connection: AdminConnection) {
   }
   setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
 
+  const instance = axios.create()
+  instance.interceptors.request.use(routeManagementCredential)
+  instance.interceptors.response.use(
+    (response) => {
+      invalidateManagementCredential(response.config)
+      return response
+    },
+    (error) => {
+      if (
+        axios.isAxiosError(error) &&
+        error.config &&
+        (error.response?.status === 401 || error.response?.status === 403)
+      ) {
+        invalidateManagementCredential(error.config, true)
+      }
+      return Promise.reject(error)
+    },
+  )
   return createClient({
-    axios: axios.create(),
+    axios: instance,
     baseURL: normalizeBaseUrl(connection.baseUrl),
     headers,
     throwOnError: true,
@@ -431,6 +454,16 @@ export async function fetchAdminUsersPage(
   accountId: string,
   options: { page: number; pageSize: number; search: string },
 ): Promise<AdminUserPage> {
+  const query = {
+    page: options.page,
+    limit: options.pageSize,
+    query: options.search.trim() || undefined,
+    include_summary: true,
+  }
+  const rootCanReveal = hasRootManagementCredential(
+    connection.baseUrl,
+    connection.apiKey,
+  )
   const result = await getOvResult<{
     users: unknown[]
     total: number
@@ -442,13 +475,32 @@ export async function fetchAdminUsersPage(
       url: '/api/v1/admin/accounts/{account_id}/users',
       path: { account_id: accountId },
       query: {
-        page: options.page,
-        limit: options.pageSize,
-        query: options.search.trim() || undefined,
-        include_summary: true,
+        ...query,
+        ...(rootCanReveal ? { include_credentials: false } : {}),
       },
     }),
   )
+  if (rootCanReveal) {
+    const credentials = await getOvResult<{ users: Record<string, unknown>[] }>(
+      createAdminClient(connection).get({
+        url: '/api/v1/admin/accounts/{account_id}/users',
+        path: { account_id: accountId },
+        query: { ...query, include_credentials: true },
+      }),
+    )
+    const keysByUser = new Map(
+      credentials.users.map((user) => [user.user_id, user]),
+    )
+    result.users = result.users.map((user) => {
+      if (!isRecord(user)) return user
+      const credential = keysByUser.get(user.user_id)
+      return {
+        ...user,
+        api_key: credential?.api_key,
+        key_prefix: credential?.key_prefix,
+      }
+    })
+  }
   return {
     users: result.users
       .map((item) => normalizeUser(accountId, item))

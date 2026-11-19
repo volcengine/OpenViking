@@ -1,404 +1,181 @@
+import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard'
+import type { ExperienceDashboardTab } from '@openviking/react/components/experience-dashboard'
+import '@openviking/react/components/experience-dashboard/style.css'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { getRouteApi, Link } from '@tanstack/react-router'
-import {
-  ArrowLeftIcon,
-  BarChart3Icon,
-  BrainCircuitIcon,
-  ClipboardIcon,
-  ExternalLinkIcon,
-  FileTextIcon,
-  GitBranchIcon,
-  LoaderCircleIcon,
-  RefreshCwIcon,
-} from 'lucide-react'
-import * as React from 'react'
+import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import { toast } from 'sonner'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { isOvClientError } from '#/shared/api/ov-client/index'
-import { copyTextToClipboard } from '#/shared/lib/clipboard'
+import { LazyFilePreview } from '#/features/workbench/resources/components/lazy-file-preview'
+import { fetchFsStat } from '#/features/workbench/resources/lib/api'
+import { fileNameFromUri } from '#/shared/lib/viking-uri'
 import { Button } from '#/shared/ui/button'
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '#/shared/ui/card'
-
-import { OutcomeDistribution } from '#/features/workbench/agent-experience/components/outcome-distribution'
-import { SourceTracePanel } from '#/features/workbench/agent-experience/components/source-trace-panel'
-import { TimeRangePicker } from '#/features/workbench/agent-experience/components/time-range-picker'
-import { TrajectoryList } from '#/features/workbench/agent-experience/components/trajectory-list'
-import { TrajectoryPreviewSheet } from '#/features/workbench/agent-experience/components/trajectory-preview-sheet'
-import {
-  fetchContent,
   fetchOutcomeDistribution,
+  fetchSourceTrajectories,
   fetchTrajectories,
-} from '#/features/workbench/agent-experience/lib/api'
-import {
-  getExperienceDisplayName,
-  resolveTimeRange,
-} from '#/features/workbench/agent-experience/lib/experience'
-import type {
-  TimeRange,
-  TimeRangePreset,
-  TrajectoryItem,
-  TrajectoryPage,
-} from '#/features/workbench/agent-experience/lib/types'
+} from './lib/api'
+import { resolveTimeRange } from './lib/experience'
 
 const routeApi = getRouteApi('/agent-experience/$experienceUri')
 
-type DetailTab = 'impact' | 'source'
-
-const DETAIL_TABS: readonly DetailTab[] = ['impact', 'source']
-
-function getErrorMessage(error: unknown): string {
-  if (isOvClientError(error) || error instanceof Error) {
-    return error.message
-  }
-  return String(error)
+export function ExperienceDetailRoute() {
+  const { experienceUri } = routeApi.useParams()
+  const { identityScopeKey } = useAppConnection()
+  return (
+    <ExperienceDetail
+      key={`${identityScopeKey}:${experienceUri}`}
+      experienceUri={experienceUri}
+    />
+  )
 }
 
-export function ExperienceDetailRoute() {
+function ExperienceDetail({ experienceUri }: { experienceUri: string }) {
   const { t, i18n } = useTranslation('agentExperiencePage')
   const { identityScopeKey } = useAppConnection()
-  const params = routeApi.useParams()
-  // The router percent-encodes path params when building hrefs and decodes
-  // them again on match, so `params.experienceUri` is the raw `viking://` URI.
-  const experienceUri = params.experienceUri
-
-  const [activeTab, setActiveTab] = React.useState<DetailTab>('impact')
-  const [timeRangePreset, setTimeRangePreset] =
-    React.useState<TimeRangePreset>('all')
-  const [timeRange, setTimeRange] = React.useState<TimeRange>(() =>
-    resolveTimeRange('all'),
-  )
-  const [selectedTrajectory, setSelectedTrajectory] =
-    React.useState<TrajectoryItem | null>(null)
-
-  const handleTimeRangeChange = (preset: TimeRangePreset, range: TimeRange) => {
-    setTimeRangePreset(preset)
-    setTimeRange(preset === 'custom' ? range : resolveTimeRange(preset))
+  const navigate = useNavigate()
+  const [tab, setTab] = useState<ExperienceDashboardTab>('impact')
+  const [days, setDays] = useState(0)
+  const timeRange = resolveTimeRange(days)
+  const openResource = (uri: string) => {
+    void navigate({
+      to: '/filesystem',
+      search: uri.endsWith('/') ? { uri } : { file: uri },
+    })
   }
-
-  const contentQuery = useQuery({
-    queryFn: ({ signal }) => fetchContent(experienceUri, signal),
-    queryKey: ['agent-experience-content', identityScopeKey, experienceUri],
-    staleTime: 60_000,
+  const file = useQuery({
+    queryKey: ['agent-experience-file', identityScopeKey, experienceUri],
+    queryFn: () => fetchFsStat(experienceUri, { throwOnError: true }),
   })
-
-  const outcomeQuery = useQuery({
-    enabled: activeTab === 'impact',
-    queryFn: ({ signal }) =>
-      fetchOutcomeDistribution({
-        experienceUri,
-        signal,
-        timeRange,
-      }),
+  const outcomes = useQuery({
+    enabled: tab === 'impact',
     queryKey: [
       'agent-experience-outcomes',
       identityScopeKey,
       experienceUri,
-      timeRange.preset,
-      timeRange.startDate,
-      timeRange.endDate,
+      timeRange,
     ],
+    queryFn: ({ signal }) =>
+      fetchOutcomeDistribution({ experienceUri, timeRange, signal }),
     retry: false,
   })
-
-  const trajectoriesQuery = useInfiniteQuery<
-    TrajectoryPage,
-    Error,
-    { pages: TrajectoryPage[]; pageParams: number[] },
-    readonly unknown[],
-    number
-  >({
-    enabled: activeTab === 'impact',
-    initialPageParam: 0,
-    getNextPageParam: (lastPage) =>
-      lastPage.hasMore ? lastPage.offset + lastPage.items.length : undefined,
-    queryFn: ({ pageParam, signal }) =>
-      fetchTrajectories({
-        experienceUri,
-        offset: pageParam,
-        signal,
-        timeRange,
-      }),
+  const trajectories = useInfiniteQuery({
+    enabled: tab === 'impact',
     queryKey: [
       'agent-experience-trajectories',
       identityScopeKey,
       experienceUri,
-      timeRange.preset,
-      timeRange.startDate,
-      timeRange.endDate,
+      timeRange,
     ],
+    initialPageParam: 0,
+    queryFn: ({ pageParam, signal }) =>
+      fetchTrajectories({
+        experienceUri,
+        offset: pageParam,
+        timeRange,
+        signal,
+      }),
+    getNextPageParam: (last) =>
+      last.hasMore && last.items.length > 0
+        ? last.offset + last.items.length
+        : undefined,
     retry: false,
   })
-
-  const trajectories =
-    trajectoriesQuery.data?.pages.flatMap((page) => page.items) ?? []
-  const trajectoryTotal = trajectoriesQuery.data?.pages[0]?.total ?? 0
-  const hasMoreTrajectories = Boolean(trajectoriesQuery.hasNextPage)
-  const experienceName = getExperienceDisplayName(experienceUri)
-  const outcomeErrorMessage = outcomeQuery.error
-    ? getErrorMessage(outcomeQuery.error)
-    : undefined
-  const trajectoryErrorMessage = trajectoriesQuery.error
-    ? getErrorMessage(trajectoriesQuery.error)
-    : undefined
-
-  const handleCopyUri = () => {
-    void copyTextToClipboard(experienceUri)
-      .then(() => {
-        toast.success(t('detail.copied'))
-      })
-      .catch(() => {
-        toast.error(t('detail.copyFailed'))
-      })
-  }
-
+  const sources = useQuery({
+    enabled: tab === 'source',
+    queryKey: ['agent-experience-sources', identityScopeKey, experienceUri],
+    queryFn: ({ signal }) => fetchSourceTrajectories(experienceUri, signal),
+    retry: false,
+  })
   return (
-    <div className="flex w-full min-w-0 flex-col gap-6">
-      <header className="grid gap-3">
-        <div>
-          <Button
-            render={<Link to="/agent-experience" />}
-            nativeButton={false}
-            size="xs"
-            variant="ghost"
-            className="-ml-2 text-muted-foreground"
-          >
-            <ArrowLeftIcon className="size-3.5" />
-            {t('detail.back')}
-          </Button>
-        </div>
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <BrainCircuitIcon className="size-4.5" />
-          </div>
-          <div className="min-w-0">
-            <h1
-              className="truncate text-xl font-semibold tracking-tight"
-              title={experienceName}
-            >
-              {experienceName}
-            </h1>
-            <div className="flex items-center gap-1.5">
-              <code
-                className="min-w-0 truncate text-xs text-muted-foreground"
-                title={experienceUri}
-              >
-                {experienceUri}
-              </code>
-              <Button
-                type="button"
-                aria-label={t('detail.copyUri')}
-                size="icon-xs"
-                variant="ghost"
-                onClick={handleCopyUri}
-              >
-                <ClipboardIcon className="size-3.5" />
-              </Button>
-              <Button
-                render={
-                  <Link
-                    rel="noreferrer noopener"
-                    search={{ file: experienceUri }}
-                    target="_blank"
-                    to="/filesystem"
-                  />
-                }
-                nativeButton={false}
-                aria-label={t('detail.openFilesystem')}
-                title={t('detail.openFilesystem')}
-                size="icon-xs"
-                variant="ghost"
-              >
-                <ExternalLinkIcon className="size-3.5" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(360px,2fr)]">
-        <Card
+    <div className="flex min-w-0 flex-col gap-4">
+      <header className="flex flex-wrap items-center gap-3">
+        <Button
+          render={<Link to="/agent-experience" />}
+          nativeButton={false}
+          variant="ghost"
           size="sm"
-          className="gap-0 bg-background shadow-none ring-border/70"
         >
-          <CardHeader className="border-b border-border/60">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
-                <CardTitle className="truncate text-base">
-                  {t('detail.contentTitle')}
-                </CardTitle>
-              </div>
+          {t('detail.back')}
+        </Button>
+        <h1 className="min-w-0 truncate text-xl font-semibold">
+          {fileNameFromUri(experienceUri)}
+        </h1>
+      </header>
+      <div className="grid min-w-0 items-start gap-4 xl:grid-cols-2">
+        <div className="flex h-[min(65vh,640px)] min-w-0 flex-col overflow-hidden rounded-lg border">
+          {file.isError ? (
+            <div className="grid gap-2 p-4" role="alert">
+              {file.error.message}
               <Button
-                type="button"
-                aria-label={t('refresh')}
-                size="icon-xs"
-                variant="ghost"
-                disabled={contentQuery.isFetching}
-                onClick={() => void contentQuery.refetch()}
+                variant="outline"
+                size="sm"
+                className="w-fit"
+                onClick={() => void file.refetch()}
               >
-                <RefreshCwIcon
-                  className={
-                    contentQuery.isFetching ? 'animate-spin' : undefined
-                  }
-                />
+                {t('refresh')}
               </Button>
             </div>
-          </CardHeader>
-          <CardContent className="px-0">
-            {contentQuery.isLoading ? (
-              <div className="flex min-h-64 items-center justify-center gap-2 px-6 text-sm text-muted-foreground">
-                <LoaderCircleIcon className="size-4 animate-spin" />
-                {t('detail.contentLoading')}
-              </div>
-            ) : contentQuery.isError ? (
-              <div className="grid min-h-64 place-items-center gap-2 px-6 text-center">
-                <p className="font-medium">{t('detail.contentLoadFailed')}</p>
-                <p className="max-w-md text-sm text-muted-foreground">
-                  {getErrorMessage(contentQuery.error)}
-                </p>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  onClick={() => void contentQuery.refetch()}
-                >
-                  {t('refresh')}
-                </Button>
-              </div>
-            ) : (
-              <div className="max-h-[75vh] overflow-y-auto px-6 py-6 sm:px-8">
-                <div className="prose prose-sm max-w-none break-words prose-headings:font-semibold prose-headings:tracking-tight prose-h2:text-lg prose-p:leading-7 prose-li:leading-7 prose-hr:border-border dark:prose-invert dark:prose-pre:bg-muted/40">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {contentQuery.data || ''}
-                  </ReactMarkdown>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card size="sm" className="bg-background shadow-none ring-border/70">
-          <CardHeader className="gap-4">
-            <div className="flex gap-5 border-b border-border/60">
-              {DETAIL_TABS.map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  aria-pressed={activeTab === tab}
-                  className={
-                    activeTab === tab
-                      ? 'flex items-center gap-2 whitespace-nowrap border-b-2 border-primary px-1 pb-3 text-sm font-medium text-foreground'
-                      : 'flex items-center gap-2 whitespace-nowrap border-b-2 border-transparent px-1 pb-3 text-sm text-muted-foreground transition-colors hover:text-foreground'
-                  }
-                  onClick={() => setActiveTab(tab)}
-                >
-                  {tab === 'impact' ? (
-                    <BarChart3Icon className="size-4" />
-                  ) : (
-                    <GitBranchIcon className="size-4" />
-                  )}
-                  {tab === 'impact'
-                    ? t('detail.tabImpact')
-                    : t('detail.tabSource')}
-                </button>
-              ))}
-            </div>
-            <div className="grid gap-3">
-              <CardDescription>
-                {activeTab === 'impact'
-                  ? t('detail.analysisDescription')
-                  : t('detail.sourceDescription')}
-              </CardDescription>
-              {activeTab === 'impact' ? (
-                <TimeRangePicker
-                  onChange={handleTimeRangeChange}
-                  preset={timeRangePreset}
-                  range={timeRange}
-                />
-              ) : null}
-            </div>
-          </CardHeader>
-          <CardContent className="grid gap-5 px-5 pb-5">
-            {activeTab === 'impact' ? (
-              <>
-                <section className="grid gap-3">
-                  <h3 className="text-sm font-medium">
-                    {t('detail.outcomeTitle')}
-                  </h3>
-                  {outcomeQuery.isLoading ? (
-                    <div className="flex min-h-16 items-center gap-2 text-sm text-muted-foreground">
-                      <LoaderCircleIcon className="size-4 animate-spin" />
-                      {t('detail.loadingMore')}
-                    </div>
-                  ) : outcomeQuery.isError ? (
-                    <div className="grid min-h-16 place-items-center gap-2 text-center">
-                      <p className="text-sm text-muted-foreground">
-                        {outcomeErrorMessage}
-                      </p>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        onClick={() => void outcomeQuery.refetch()}
-                      >
-                        {t('refresh')}
-                      </Button>
-                    </div>
-                  ) : outcomeQuery.data ? (
-                    <OutcomeDistribution
-                      distribution={outcomeQuery.data.distribution}
-                    />
-                  ) : null}
-                </section>
-
-                <section className="grid gap-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-medium">
-                      {t('detail.trajectoriesTitle')}
-                    </h3>
-                    <span className="text-xs text-muted-foreground">
-                      {t('detail.rangeUtcHint')}
-                    </span>
-                  </div>
-                  <TrajectoryList
-                    errorMessage={trajectoryErrorMessage}
-                    hasMore={hasMoreTrajectories}
-                    isLoading={trajectoriesQuery.isLoading}
-                    isLoadingMore={trajectoriesQuery.isFetchingNextPage}
-                    items={trajectories}
-                    language={i18n.language}
-                    onLoadMore={() => void trajectoriesQuery.fetchNextPage()}
-                    onRetry={() => void trajectoriesQuery.refetch()}
-                    onSelect={setSelectedTrajectory}
-                    total={trajectoryTotal}
-                  />
-                </section>
-              </>
-            ) : (
-              <SourceTracePanel
-                experienceUri={experienceUri}
-                onSelect={setSelectedTrajectory}
-              />
-            )}
-          </CardContent>
-        </Card>
+          ) : file.data ? (
+            <LazyFilePreview
+              file={file.data}
+              readOnly
+              showCloseButton={false}
+              onClose={() => {}}
+              onNavigate={openResource}
+            />
+          ) : (
+            <p role="status" className="p-4">
+              {t('detail.contentLoading')}
+            </p>
+          )}
+        </div>
+        <ExperienceDashboard
+          uri={experienceUri}
+          kind="file"
+          locale={i18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
+          tab={tab}
+          onTabChange={setTab}
+          days={days}
+          onDaysChange={setDays}
+          data={{
+            outcomes: outcomes.data?.distribution,
+            trajectories: trajectories.data?.pages.flatMap(
+              (page) => page.items,
+            ),
+            trajectoryTotal: trajectories.data?.pages[0]?.total,
+            sources: sources.data?.map(({ uri, reason }) => ({
+              uri,
+              name: fileNameFromUri(uri),
+              description: reason,
+            })),
+          }}
+          states={{
+            outcomes: {
+              loading: outcomes.isPending,
+              error: outcomes.error,
+              onRetry: () => void outcomes.refetch(),
+            },
+            trajectories: {
+              loading: trajectories.isPending,
+              error: trajectories.isFetchNextPageError
+                ? null
+                : trajectories.error,
+              onRetry: () => void trajectories.refetch(),
+            },
+            sources: {
+              loading: sources.isPending,
+              error: sources.error,
+              onRetry: () => void sources.refetch(),
+            },
+          }}
+          hasMore={trajectories.hasNextPage}
+          loadingMore={trajectories.isFetchingNextPage}
+          onLoadMore={() => void trajectories.fetchNextPage()}
+          onOpenUri={openResource}
+        />
       </div>
-
-      <TrajectoryPreviewSheet
-        language={i18n.language}
-        onClose={() => setSelectedTrajectory(null)}
-        trajectory={selectedTrajectory}
-      />
     </div>
   )
 }

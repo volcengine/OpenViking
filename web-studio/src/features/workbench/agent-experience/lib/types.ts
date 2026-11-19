@@ -34,6 +34,7 @@ export type TrajectoryItem = {
   description?: string
   created_at?: string
   updated_at?: string
+  outcome?: TrajectoryOutcome
 }
 
 export type TrajectoryPage = {
@@ -50,18 +51,7 @@ export type OutcomeDistribution = {
   distribution: OutcomeCount[]
 }
 
-/** Quick time-range options shared by the outcome and trajectory queries. */
-export type TimeRangePreset = 'all' | '7d' | '30d' | 'custom'
-
 export type TimeRange = {
-  preset: TimeRangePreset
-  /** UTC `YYYY-MM-DD` inclusive lower bound, or `undefined` for no filter. */
   startDate?: string
-  /** UTC `YYYY-MM-DD` inclusive upper bound, or `undefined` for no filter. */
   endDate?: string
-}
-
-export type AgentEvolutionStatus = {
-  enabled: boolean
-  accountId?: string
 }

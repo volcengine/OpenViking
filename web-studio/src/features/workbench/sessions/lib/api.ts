@@ -9,9 +9,7 @@ import {
   getSessionIdArchiveByArchiveId,
   getSessionIdContext,
   getSessions,
-  postBotV1Chat,
   postSessionIdCommit,
-  postSessionIdMessages,
   postSessions,
 } from '#/gen/ov-client/sdk.gen'
 import i18n from '#/i18n/core'
@@ -21,16 +19,11 @@ import {
   ovClient,
   OvClientError,
 } from '#/shared/api/ov-client/index'
-import { fetchSse } from '#/shared/lib/sse'
 
 import type { SessionMemoryDiff } from '#/features/workbench/sessions/lib/memory-diff'
 import { parseSessionMemoryDiff } from '#/features/workbench/sessions/lib/memory-diff'
+import type { Message } from '#/features/workbench/sessions/lib/types/message'
 import type {
-  Message,
-  MessagePart,
-} from '#/features/workbench/sessions/lib/types/message'
-import type {
-  AddMessageResult,
   CommitSessionResult,
   CreateSessionResult,
   DeleteSessionResult,
@@ -39,7 +32,6 @@ import type {
   SessionListItem,
   SessionMeta,
 } from '@ov-server/api/v1/sessions'
-import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
 
 // ---------------------------------------------------------------------------
 // Session CRUD
@@ -321,30 +313,14 @@ export async function fetchSessionMemoryDiffs(
     .sort((left, right) => right.archiveId.localeCompare(left.archiveId))
 }
 
-export async function addMessage(
-  sessionId: string,
-  role: 'user' | 'assistant',
-  content?: string,
-  parts?: Array<Record<string, unknown>>,
-): Promise<AddMessageResult> {
-  return getOvResult<AddMessageResult>(
-    postSessionIdMessages({
-      path: { session_id: sessionId },
-      body: {
-        role,
-        content: parts ? undefined : content,
-        parts: parts ?? undefined,
-      },
-    }),
-  )
-}
-
 export async function commitSession(
   sessionId: string,
   keepRecentCount?: number,
+  headers?: Record<string, string>,
 ): Promise<CommitSessionResult> {
   return getOvResult<CommitSessionResult>(
     postSessionIdCommit({
+      ...(headers ? { headers } : {}),
       body:
         keepRecentCount === undefined
           ? undefined
@@ -469,170 +445,4 @@ export async function fetchBotHealth(): Promise<unknown> {
   }
 
   return response.json().catch(() => ({ status: 'ok' }))
-}
-
-/**
- * Send a streaming chat request and return standards-compliant SSE messages.
- */
-export async function sendChatStream(
-  request: BotChatRequest,
-  signal?: AbortSignal,
-): Promise<ReturnType<typeof fetchSse>> {
-  const baseUrl = ovClient.getOptions().baseUrl
-  const conn = ovClient.getConnection()
-  return fetchSse(`${baseUrl}/bot/v1/chat/stream`, {
-    method: 'POST',
-    headers: {
-      ...buildFetchHeaders(),
-      Accept: 'text/event-stream',
-    },
-    body: JSON.stringify({
-      ...request,
-      user_id: request.user_id || conn.userId || undefined,
-      stream: true,
-    }),
-    signal,
-  })
-}
-
-/** Send a non-streaming chat request. */
-export async function sendChat(
-  request: BotChatRequest,
-): Promise<BotChatResponse> {
-  const conn = ovClient.getConnection()
-  const response = await postBotV1Chat({
-    body: {
-      ...request,
-      user_id: request.user_id || conn.userId || undefined,
-    },
-    throwOnError: true,
-  } as unknown as NonNullable<Parameters<typeof postBotV1Chat<true>>[0]>)
-
-  return response.data as BotChatResponse
-}
-
-export type InterruptChatSessionResult = {
-  interrupted: boolean
-}
-
-export type SteerChatSessionResult = {
-  accepted: boolean
-}
-
-export async function steerChatSession(
-  sessionId: string,
-  request: BotChatRequest,
-): Promise<SteerChatSessionResult> {
-  const baseUrl = ovClient.getOptions().baseUrl
-  const conn = ovClient.getConnection()
-  const response = await fetch(
-    `${baseUrl}/bot/v1/sessions/${encodeURIComponent(sessionId)}/steer`,
-    {
-      method: 'POST',
-      headers: buildFetchHeaders(),
-      body: JSON.stringify({
-        ...request,
-        session_id: sessionId,
-        user_id: request.user_id || conn.userId || undefined,
-      }),
-    },
-  )
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new OvClientError({
-      code: 'BOT_STEER_FAILED',
-      message: extractErrorMessage(
-        text,
-        i18n.t('studio:errors.botSteer', { status: response.status }),
-      ),
-      responseBody: text,
-      statusCode: response.status,
-    })
-  }
-
-  return response.json().catch(() => ({ accepted: false }))
-}
-
-export async function interruptChatSession(
-  sessionId: string,
-): Promise<InterruptChatSessionResult> {
-  const baseUrl = ovClient.getOptions().baseUrl
-  const response = await fetch(
-    `${baseUrl}/bot/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
-    {
-      method: 'POST',
-      headers: buildFetchHeaders(),
-    },
-  )
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new OvClientError({
-      code: 'BOT_INTERRUPT_FAILED',
-      message: extractErrorMessage(
-        text,
-        i18n.t('studio:errors.botInterrupt', { status: response.status }),
-      ),
-      responseBody: text,
-      statusCode: response.status,
-    })
-  }
-
-  return response.json().catch(() => ({ interrupted: false }))
-}
-
-// ---------------------------------------------------------------------------
-// Part serialization helpers (Message → API request format)
-// ---------------------------------------------------------------------------
-
-export function serializeParts(
-  parts: MessagePart[],
-): Array<Record<string, unknown>> {
-  return parts.flatMap((part) => {
-    if (part.type === 'text') {
-      return [{ type: 'text', text: part.text }]
-    }
-    if (part.type === 'image_url') {
-      return [
-        {
-          type: 'image_url',
-          image_url: { ...part.image_url },
-        },
-      ]
-    }
-    if (part.type === 'context') {
-      return [
-        {
-          type: 'context',
-          uri: part.uri,
-          context_type: part.context_type,
-          abstract: part.abstract,
-        },
-      ]
-    }
-    if (
-      part.type === 'reasoning' ||
-      part.type === 'iteration' ||
-      part.type === 'tool_result'
-    )
-      return []
-
-    // tool
-    const d: Record<string, unknown> = {
-      type: 'tool',
-      tool_id: part.tool_id,
-      tool_name: part.tool_name,
-      tool_uri: part.tool_uri,
-      skill_uri: part.skill_uri,
-      tool_status: part.tool_status,
-    }
-    if (part.tool_input) d.tool_input = part.tool_input
-    if (part.tool_output) d.tool_output = part.tool_output
-    if (part.duration_ms != null) d.duration_ms = part.duration_ms
-    if (part.prompt_tokens != null) d.prompt_tokens = part.prompt_tokens
-    if (part.completion_tokens != null)
-      d.completion_tokens = part.completion_tokens
-    return [d]
-  })
 }

@@ -47,7 +47,7 @@ export function SessionsPage() {
   }, [handleNewSession, provider])
 
   return (
-    <div className="@container/sessions -mx-4 -my-6 flex h-[calc(100svh-3rem)] min-w-0 overflow-hidden md:-mx-6">
+    <div className="@container/sessions flex min-h-0 min-w-0 flex-1 overflow-hidden">
       <ThreadList
         activeSessionId={activeSessionId}
         className={

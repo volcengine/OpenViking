@@ -58,17 +58,17 @@ export function ResourceDestinationFields({
           value={uri}
           disabled={disabled}
           onChange={(event) => onUriChange(event.target.value)}
-          className="flex-1"
+          className="h-8 flex-1 rounded-sm"
         />
         <Button
           type="button"
           variant="outline"
           size="sm"
-          className="shrink-0"
+          className="shrink-0 rounded-sm"
           disabled={disabled}
           onClick={onBrowse}
         >
-          <FolderOpen className="mr-1.5 size-4" />
+          <FolderOpen />
           {t('targetUri.browse')}
         </Button>
       </div>

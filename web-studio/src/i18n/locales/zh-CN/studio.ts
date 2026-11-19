@@ -4,6 +4,8 @@ const studio = {
       '当前环境无法保存连接改动，刷新或关闭页面后，本次改动将丢失。已有本地记录会保留。',
     startError:
       '无法读取本地加密凭据。请使用 HTTPS 或 localhost，并允许此站点使用浏览器存储后刷新。已有凭据未被清除。',
+    conflictError:
+      '其他标签页已更新连接配置，本页修改尚未保存。请先确认最新配置，再重新打开本页。',
     saveError:
       '凭据尚未保存到本机，请勿关闭或刷新页面。请检查浏览器存储权限后重试保存。',
   },
@@ -45,8 +47,6 @@ const studio = {
     details: '技术详情',
 
     botHealth: 'Bot 健康检查失败（{{status}}）',
-    botSteer: '追加 Bot 输入失败（{{status}}）',
-    botInterrupt: '中断 Bot 失败（{{status}}）',
     expectedEventStream: '响应格式应为 {{contentType}}',
     sseFailed: 'SSE 请求失败（{{status}}）：{{detail}}',
     imageLoadFailed: '图片加载失败',
@@ -67,6 +67,7 @@ const studio = {
     modelResponseUnavailable: '未能获取模型配置响应',
     invalidTaskResponse: '任务响应无效',
     invalidDirectoryResponse: '目录列表响应无效',
+    invalidExperienceResponse: '经验分析响应无效',
     emptyBlob: '文件内容为空',
     invalidSvg: 'Mermaid 返回了无效的 SVG 内容。',
     invalidConfigObject: 'ov.conf 必须包含 JSON 对象',

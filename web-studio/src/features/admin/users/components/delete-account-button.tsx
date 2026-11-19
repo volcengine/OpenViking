@@ -25,13 +25,16 @@ import { getErrorMessage } from '#/shared/lib/error'
 export function DeleteAccountButton({
   accountId,
   adminConnection,
+  iconOnly = false,
 }: {
   accountId: string
+  iconOnly?: boolean
   adminConnection: AdminConnection
 }) {
   const { t } = useTranslation('settings')
   const queryClient = useQueryClient()
-  const { openConnectionSettings, switchManagementAccount } = useAppConnection()
+  const { connection, openConnectionSettings, switchManagementAccount } =
+    useAppConnection()
   const [open, setOpen] = React.useState(false)
   const [confirmation, setConfirmation] = React.useState('')
 
@@ -51,16 +54,17 @@ export function DeleteAccountButton({
         )
       }
 
-      await switchManagementAccount(nextAccountId)
+      const deletingSelectedAccount = connection.accountId === accountId
+      if (deletingSelectedAccount) await switchManagementAccount(nextAccountId)
       queryClient.removeQueries({ queryKey: ['managed-users'] })
-      await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
+      await queryClient.invalidateQueries({ queryKey: ['data-spaces'] })
       setOpen(false)
       setConfirmation('')
       toast.success(
         t('toast.accountDeletionStarted', { account: accountId, taskId }),
       )
 
-      if (!nextAccountId) {
+      if (deletingSelectedAccount && !nextAccountId) {
         openConnectionSettings()
       }
     },
@@ -72,13 +76,20 @@ export function DeleteAccountButton({
     <>
       <Button
         type="button"
-        variant="outline"
+        variant={iconOnly ? 'ghost' : 'outline'}
+        size={iconOnly ? 'icon-sm' : 'default'}
+        aria-label={t('actions.deleteAccount')}
+        title={t('actions.deleteAccount')}
         disabled={!accountId}
-        className="border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        className={
+          iconOnly
+            ? 'text-muted-foreground hover:text-destructive'
+            : 'border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive'
+        }
         onClick={() => setOpen(true)}
       >
         <Trash2Icon />
-        {t('actions.deleteAccount')}
+        {iconOnly ? null : t('actions.deleteAccount')}
       </Button>
 
       <Dialog

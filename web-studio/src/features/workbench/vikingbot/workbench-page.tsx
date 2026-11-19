@@ -70,7 +70,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
     setSelected({ id })
   }
   return (
-    <div className="-mx-4 -my-6 flex h-[calc(100svh-3rem)] min-w-0 flex-col overflow-hidden md:-mx-6">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <header className="flex shrink-0 items-center gap-4 border-b px-4 py-4 md:px-6">
         <h1 className="flex items-center gap-2 font-semibold">
           <BotIcon className="size-5 text-primary" />
@@ -138,7 +138,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
             ))}
           </div>
         </aside>
-        <main
+        <section
           className={`${selected ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col`}
         >
           {selected && (
@@ -175,7 +175,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
               </div>
             )}
           </div>
-        </main>
+        </section>
       </div>
     </div>
   )

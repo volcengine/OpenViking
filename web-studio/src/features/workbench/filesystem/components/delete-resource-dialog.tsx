@@ -16,19 +16,21 @@ import {
 import { Input } from '#/shared/ui/input'
 
 export function DeleteResourceDialog({
+  dirty,
   isDirectory,
   onDeleted,
   onOpenChange,
   open,
   uri,
 }: {
+  dirty?: boolean
   isDirectory: boolean
   onDeleted: (result: { semanticStatus?: string }) => void
   onOpenChange: (open: boolean) => void
   open: boolean
   uri: string
 }) {
-  const { t } = useTranslation('filesystem')
+  const { t } = useTranslation(['filesystem', 'dataManagement'])
   const [confirmation, setConfirmation] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const normalizedUri = uri.replace(/\/$/, '')
@@ -72,6 +74,11 @@ export function DeleteResourceDialog({
         <div className="rounded-md bg-muted p-3 font-mono text-xs break-all">
           {normalizedUri}
         </div>
+        {dirty ? (
+          <p className="text-sm text-destructive">
+            {t('dataManagement:deleteUnsavedWarning')}
+          </p>
+        ) : null}
         <div className="space-y-2">
           <label htmlFor="delete-resource-confirmation" className="text-sm">
             {t('deleteResource.confirmationLabel')}

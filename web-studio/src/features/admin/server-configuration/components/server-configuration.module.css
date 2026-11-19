@@ -1,0 +1,409 @@
+.modelConfigurationPage {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+.modelConfigurationHeading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.modelConfigurationHeading h1 {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+}
+.modelConfigurationHeading p {
+  font-size: 13px;
+  line-height: 22px;
+  color: #787c91;
+}
+.modelConfigurationHeading > div {
+  height: 28px;
+}
+.modelAdvancedToggle {
+  opacity: 0;
+}
+.modelConfigurationHeading:hover .modelAdvancedToggle,
+.modelAdvancedToggle:focus-visible,
+.modelAdvancedToggle[aria-expanded='true'] {
+  opacity: 1;
+}
+.modelConfigurationFileStatus[hidden] {
+  display: none;
+}
+.modelConfigurationPage [data-slot='tabs'] {
+  gap: 0;
+}
+.modelConfigurationPage [data-slot='tabs-list'][hidden] {
+  display: none;
+}
+.modelConfigurationPage[data-advanced='true'] [data-slot='tabs'] {
+  gap: 24px;
+}
+.modelSectionHeader {
+  height: 32px;
+  margin-bottom: 8px;
+}
+.modelParametersControl {
+  opacity: 0;
+}
+.modelSectionHeader:hover .modelParametersControl,
+.modelParametersControl:focus-visible,
+[data-advanced='true'] .modelParametersControl {
+  opacity: 1;
+}
+.modelAddAction {
+  width: auto;
+  height: 32px;
+  padding: 0 16px;
+  gap: 4px;
+  border-radius: 6px;
+  background: #f2f3f7;
+  color: #4e5267;
+  font-size: 13px;
+  font-weight: 400;
+}
+.modelAddAction svg {
+  width: 14px;
+  height: 14px;
+}
+.modelTableScroll {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+.modelTable {
+  min-width: 1050px;
+  overflow: hidden;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px #edeef2;
+}
+.modelTableGrid {
+  display: grid;
+  grid-template-columns: 56px minmax(220px, 1fr) 140px 154px 100px 94px 248px;
+  align-items: center;
+}
+.modelTableHeader {
+  height: 44px;
+  background: #f7f7fa;
+  border: 1px solid #edeef2;
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  font-size: 13px;
+  line-height: 22px;
+  color: #555862;
+}
+.modelTableHeader > span:nth-child(2) {
+  padding-left: 12px;
+}
+.modelTableCell {
+  min-width: 0;
+  padding: 0 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modelTableRow {
+  min-height: 64px;
+  border-top: 1px solid #edeef2;
+  font-size: 14px;
+  line-height: 22px;
+  background: transparent;
+}
+.modelTableRow[data-drop-target] {
+  background: var(--accent);
+}
+.modelTableRow[data-drop-target='before'] {
+  box-shadow: inset 0 2px var(--primary);
+}
+.modelTableRow[data-drop-target='after'] {
+  box-shadow: inset 0 -2px var(--primary);
+}
+.modelRowPriority {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 4px;
+}
+.modelRowPriority button {
+  width: 16px;
+  height: 24px;
+}
+.modelRowPriority button svg {
+  width: 12px;
+  height: 12px;
+}
+.modelRowPriority > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ecfcf3;
+  color: #00966b;
+  font-size: 12px;
+}
+.modelRowIdentity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.modelRowId {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.modelPriorityBadge {
+  flex-shrink: 0;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid #cce9eb;
+  color: #22a6aa;
+  font-size: 10px;
+  line-height: 18px;
+  font-weight: 400;
+}
+.modelTestStatus {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.modelTestStatus > span {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.modelTestStatus[data-tone='success'] {
+  color: #169b7c;
+}
+.modelTestStatus[data-tone='error'] {
+  color: var(--destructive);
+}
+.modelRowActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+}
+.modelRowActions > button {
+  padding: 0;
+  height: auto;
+  border: 0;
+  color: #5252ff;
+  font-size: 13px;
+  line-height: 22px;
+  font-weight: 400;
+}
+.modelRowActions > button:disabled {
+  opacity: 0.4;
+}
+.modelRowActions > .modelRemoveAction {
+  color: #ff2458;
+}
+.modelRowActions > .modelRowMore {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  opacity: 0;
+  pointer-events: none;
+  color: var(--muted-foreground);
+}
+.modelTableRow:hover .modelRowMore,
+.modelRowMore:focus-visible,
+.modelRowMore[aria-expanded='true'] {
+  opacity: 1;
+}
+.modelTableRow:hover .modelRowMore:not(:disabled),
+.modelRowMore[aria-expanded='true'] {
+  pointer-events: auto;
+}
+.modelTableRow:hover .modelRowMore:disabled {
+  opacity: 0.4;
+}
+:global(.dark) .modelTableHeader,
+:global(.dark) .modelAddAction {
+  background: var(--muted);
+  color: var(--foreground);
+}
+:global(.dark) .modelTableHeader,
+:global(.dark) .modelTableRow {
+  border-color: var(--border);
+}
+:global(.dark) .modelTable {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+:global(.dark) .modelRowPriority > span {
+  background: #17372f;
+  color: #6de8bc;
+}
+.modelEditor {
+  width: 480px;
+  min-height: min(480px, calc(100dvh - 32px));
+  max-width: calc(100vw - 32px);
+  padding: 24px;
+  gap: 0;
+  border-radius: 16px;
+  background: var(--background);
+  font-family: 'PingFang SC', sans-serif;
+}
+.modelEditorHeader {
+  gap: 6px;
+  margin-bottom: 24px;
+}
+.modelEditorHeader h2 {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+}
+.modelEditorDescription {
+  font-size: 12px;
+  line-height: 18px;
+  color: #787c91;
+}
+.modelEditorBody {
+  display: grid;
+  gap: 24px;
+  overflow-y: auto;
+  max-height: calc(100dvh - 260px);
+}
+.modelEditorBody [data-slot='field'] {
+  gap: 8px;
+}
+.modelEditorBody [data-slot='field-label'] {
+  font-size: 14px;
+  line-height: 16px;
+  font-weight: 400;
+  color: #4e5267;
+  gap: 4px;
+}
+.modelEditorBody [data-required]::before {
+  content: '*';
+  color: #ff2458;
+}
+.modelEditorBody input,
+.modelEditorBody [data-slot='select-trigger'] {
+  height: 32px;
+  border: 1px solid #d9dbe5;
+  border-radius: 8px;
+  box-shadow: none;
+  font-size: 14px;
+  padding: 0 16px;
+}
+.modelEditorBody input::placeholder {
+  color: #787c91;
+}
+.modelEditorBody input:focus-visible,
+.modelEditorBody [data-slot='select-trigger']:focus-visible {
+  border-color: #5252ff;
+  outline: none;
+}
+.modelEditorBody input[aria-invalid='true']:focus-visible,
+.modelEditorBody [data-slot='select-trigger'][aria-invalid='true']:focus-visible {
+  border-color: var(--destructive);
+}
+.modelEditorBody [data-model-field='provider'] {
+  width: min(216px, 100%);
+}
+.modelEditorAddress {
+  margin-top: -20px;
+  color: #787c91;
+  font-size: 12px;
+  line-height: 20px;
+}
+.modelEditorAddress summary {
+  cursor: pointer;
+  list-style: none;
+}
+.modelEditorAddress summary::-webkit-details-marker {
+  display: none;
+}
+.modelEditorAddress[open] summary {
+  margin-bottom: 16px;
+}
+.modelEditorThinking {
+  margin-top: 2px;
+}
+.modelEditorThinking [data-slot='field'] {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+.modelEditorThinking [data-slot='switch'] {
+  width: 28px;
+  height: 16px;
+  background: #c9cbd4;
+}
+.modelEditorThinking [data-slot='switch'][data-checked] {
+  background: #5252ff;
+}
+.modelEditorFooter {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+.modelEditorFooter > button,
+.modelCompactTest button {
+  height: 32px;
+  min-width: 60px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  background: #f3f4f8;
+  color: #4e5267;
+  font-size: 14px;
+  font-weight: 400;
+}
+.modelEditorFooter > button[type='submit'] {
+  background: #5252ff;
+  color: white;
+}
+.modelCompactTest {
+  margin-right: auto;
+}
+.modelCompactTest > p {
+  max-width: 280px;
+}
+@media (max-width: 600px) {
+  .modelEditor {
+    padding: 24px;
+  }
+  .modelEditorHeader h2 {
+    font-size: 20px;
+  }
+  .modelEditorFooter {
+    gap: 8px;
+  }
+  .modelEditorFooter > button,
+  .modelCompactTest button {
+    min-width: 0;
+    padding: 0 14px;
+  }
+}
+
+.modelEditorOverlay {
+  background: rgb(0 0 0 / 50%);
+  backdrop-filter: none;
+}
+
+.modelEditorThinking [data-slot='switch-thumb'] {
+  width: 12px;
+  height: 12px;
+}

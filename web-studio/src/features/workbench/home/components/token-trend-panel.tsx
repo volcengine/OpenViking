@@ -9,6 +9,7 @@ import {
 } from '#/features/workbench/home/components/panel'
 import { TOKEN_SERIES_DAYS } from '#/features/workbench/home/constants/dashboard'
 import {
+  formatNumber,
   getLastDaysRange,
   isDisabledPayload,
 } from '#/features/workbench/home/lib/format'
@@ -33,6 +34,7 @@ export function TokenTrendPanel({
   disabledMessage,
   isError,
   isLoading,
+  showTotal = false,
   t,
 }: {
   data: ConsoleSeries<TokenSeriesItem> | undefined
@@ -40,6 +42,7 @@ export function TokenTrendPanel({
   disabledMessage?: string
   isError: boolean
   isLoading: boolean
+  showTotal?: boolean
   t: HomeT
 }) {
   const items = normalizeTokenSeries(data?.items)
@@ -57,9 +60,20 @@ export function TokenTrendPanel({
             {rangeLabel}
           </span>
         }
-        description={t('tokenTrend.description')}
+        description={showTotal ? undefined : t('tokenTrend.description')}
         title={t('tokenTrend.title')}
       />
+      {showTotal && !isLoading && !isError && !disabled ? (
+        <p className="mb-4 text-2xl font-semibold tabular-nums">
+          {formatNumber(
+            items.reduce(
+              (sum, item) =>
+                sum + item.vlm_input + item.vlm_output + item.embedding_input,
+              0,
+            ),
+          )}
+        </p>
+      ) : null}
 
       {isLoading ? (
         <Skeleton className="h-72 w-full" />

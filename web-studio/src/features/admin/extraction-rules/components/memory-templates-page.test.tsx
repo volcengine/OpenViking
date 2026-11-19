@@ -145,3 +145,34 @@ it('shows the path pattern returned by the server', async () => {
     ),
   ).toBeTruthy()
 })
+
+it('filters the overview by rule name and restores all editable templates when cleared', async () => {
+  api.fetch.mockResolvedValue({ account_id: 'acme', templates: [] })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryTemplatesPage />
+    </QueryClientProvider>,
+  )
+  expect(
+    await screen.findAllByRole('button', { name: /memoryTemplates.fileName/ }),
+  ).toHaveLength(4)
+  const search = screen.getByRole('searchbox')
+  fireEvent.change(search, { target: { value: 'profile' } })
+  expect(
+    screen.getAllByRole('button', { name: /memoryTemplates.fileName/ }),
+  ).toHaveLength(1)
+  fireEvent.change(search, { target: { value: 'no-matching-rule' } })
+  expect(screen.getByRole('status').textContent).toBe(
+    'memoryTemplates.noResults',
+  )
+  expect(
+    screen.queryByRole('button', { name: /memoryTemplates.fileName/ }),
+  ).toBeNull()
+  fireEvent.change(search, { target: { value: '' } })
+  expect(
+    screen.getAllByRole('button', { name: /memoryTemplates.fileName/ }),
+  ).toHaveLength(4)
+})

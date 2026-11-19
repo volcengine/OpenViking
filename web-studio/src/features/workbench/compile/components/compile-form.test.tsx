@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { queryClient as studioQueryClient } from '#/app/providers/query-client'
 import { CompileForm } from '#/features/workbench/compile/components/compile-form'
-import { prepareCompileHandoff } from '#/features/workbench/compile/lib/handoff'
 import { OvClientError } from '#/shared/api/ov-client/index'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
@@ -18,6 +17,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const api = vi.hoisted(() => ({
   BUILTIN_SKILLS_ROOT: 'viking://system/compile/example-skills',
   createCompile: vi.fn(),
+  saveCompileSchedule: vi.fn(),
   fetchCompileConfig: vi.fn(),
   updateCompileConfig: vi.fn(),
   lookupSubmission: vi.fn(),
@@ -81,7 +81,12 @@ const storageKey = 'compile-submission:recovery-test'
 const clients: QueryClient[] = []
 const task = { task_id: 'cmp-original', status: 'pending' }
 function mount(
-  props: { fromTask?: string; sourceUri?: string; target?: string } = {},
+  props: {
+    fromTask?: string
+    sourceUri?: string
+    target?: string
+    compileName?: string
+  } = {},
   cachedConfig?: unknown,
   cachedAt = Date.now(),
 ) {
@@ -91,7 +96,7 @@ function mount(
   clients.push(client)
   if (cachedConfig)
     client.setQueryData(
-      ['compile-config', 'recovery-test', props.target],
+      ['compile-config', 'recovery-test', props.compileName ?? props.target],
       cachedConfig,
       { updatedAt: cachedAt },
     )
@@ -123,6 +128,13 @@ const savedDraft = {
   instruction: 'Keep citations',
 }
 const draftKey = 'compile-draft:recovery-test'
+
+function mountRestoredDraft() {
+  localStorage.setItem(draftKey, JSON.stringify(savedDraft))
+  const page = mount()
+  fireEvent.click(page.getByRole('button', { name: 'restoreDraft' }))
+  return page
+}
 
 it('prefills only the current user resource root and preserves the old draft until explicitly restored', () => {
   localStorage.setItem(draftKey, JSON.stringify(savedDraft))
@@ -198,10 +210,6 @@ it('still fills all original sources when rerunning an existing task', async () 
 it('preserves pending submission parameters ahead of new entry and rerun values', async () => {
   localStorage.setItem(draftKey, JSON.stringify(savedDraft))
   sessionStorage.setItem(storageKey, `${Date.now()}:pending`)
-  prepareCompileHandoff(
-    'recovery-test',
-    'compile --from viking://resources/handoff --to viking://resources/new --skill viking://agent/skills/new',
-  )
   api.fetchCompileTask.mockResolvedValueOnce({
     meta: {
       request: {
@@ -228,15 +236,11 @@ it('preserves pending submission parameters ahead of new entry and rerun values'
 })
 
 it('blocks a direct form submission when execution requirements are not met', async () => {
-  prepareCompileHandoff(
-    'recovery-test',
-    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://system/compile/example-skills/llm-wiki',
-  )
   api.fetchCapabilities.mockResolvedValue({
     configured: false,
     can_create: false,
   })
-  const page = mount()
+  const page = mountRestoredDraft()
   page.submit()
   await waitFor(() =>
     expect(
@@ -268,12 +272,8 @@ const configuredTarget = {
 }
 
 it('saves a weekly plan without navigating to a task or leaving a submission recovery key', async () => {
-  prepareCompileHandoff(
-    'recovery-test',
-    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
-  )
-  api.createCompile.mockResolvedValueOnce(configuredTarget)
-  const page = mount()
+  api.saveCompileSchedule.mockResolvedValueOnce({ compile_name: 'weekly-plan' })
+  const page = mountRestoredDraft()
   fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
   await choose(
     page.getByRole('combobox', { name: 'schedule.frequency' }),
@@ -292,22 +292,19 @@ it('saves a weekly plan without navigating to a task or leaving a submission rec
       search: { tab: 'schedules' },
     }),
   )
-  expect(api.createCompile.mock.calls[0][0].args).toEqual({
+  expect(api.saveCompileSchedule.mock.calls[0][0].args).toEqual({
     auto_update: true,
     update_schedule: configuredTarget.update_schedule,
   })
+  expect(api.createCompile).not.toHaveBeenCalled()
   expect(sessionStorage.getItem(storageKey)).toBeNull()
 })
 
 it('keeps a failed plan save retryable without task submission recovery', async () => {
-  prepareCompileHandoff(
-    'recovery-test',
-    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
-  )
-  api.createCompile
+  api.saveCompileSchedule
     .mockRejectedValueOnce(new Error('response lost'))
     .mockResolvedValueOnce(configuredTarget)
-  const page = mount()
+  const page = mountRestoredDraft()
   fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
   page.submit()
   await waitFor(() => expect(page.getByRole('alert')).toBeTruthy())
@@ -315,7 +312,37 @@ it('keeps a failed plan save retryable without task submission recovery', async 
   expect(page.queryByText('unknownSubmission')).toBeNull()
   page.submit()
   await waitFor(() => expect(api.navigate).toHaveBeenCalled())
+  expect(api.saveCompileSchedule.mock.calls[1][1]).toBe(
+    api.saveCompileSchedule.mock.calls[0][1],
+  )
   expect(api.lookupSubmission).not.toHaveBeenCalled()
+})
+
+it('loads and saves a named plan while preserving its stored skill arguments', async () => {
+  const config = {
+    ...configuredTarget,
+    compile_name: 'wiki-plan',
+    args: { template: 'weekly' },
+  }
+  api.fetchCompileConfig.mockResolvedValueOnce(config)
+  api.updateCompileConfig.mockResolvedValueOnce(config)
+  const page = mount({ compileName: config.compile_name })
+  const save = page.getByRole('button', { name: 'schedule.save' })
+  await waitFor(() => expect(save.hasAttribute('disabled')).toBe(false))
+  fireEvent.click(save)
+  await waitFor(() => {
+    expect(api.fetchCompileConfig).toHaveBeenCalledWith(
+      config.compile_name,
+      expect.any(AbortSignal),
+    )
+    expect(api.updateCompileConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compile_name: config.compile_name,
+        to: config.to,
+        args: config.args,
+      }),
+    )
+  })
 })
 
 it('loads a registered target and disables its schedule without requiring an execution runtime', async () => {
@@ -443,13 +470,9 @@ it('submits over HTTP origins without crypto.randomUUID', async () => {
     globalThis.crypto,
   )
   vi.stubGlobal('crypto', { getRandomValues })
-  prepareCompileHandoff(
-    'recovery-test',
-    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
-  )
   api.createCompile.mockResolvedValueOnce(task)
 
-  const page = mount()
+  const page = mountRestoredDraft()
   page.submit()
 
   await waitFor(() => expect(api.createCompile).toHaveBeenCalledOnce())
@@ -459,14 +482,16 @@ it('submits over HTTP origins without crypto.randomUUID', async () => {
 })
 
 it('recovers an accepted submission after response loss and reload without resubmitting missing args', async () => {
-  prepareCompileHandoff(
-    'recovery-test',
-    `compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki --args '{"mode":"summary"}'`,
-  )
   api.createCompile.mockRejectedValueOnce(
     new OvClientError({ code: 'NETWORK_ERROR', message: 'Response lost' }),
   )
-  let page = mount()
+  let page = mountRestoredDraft()
+  const advanced = page.container.querySelector('details#compile-advanced')!
+  advanced.setAttribute('open', '')
+  fireEvent.click(page.getByRole('button', { name: 'argRaw' }))
+  fireEvent.change(page.getByRole('textbox', { name: 'argRaw' }), {
+    target: { value: '{"mode":"summary"}' },
+  })
   page.submit()
   await waitFor(() => expect(page.getByText('retry')).toBeTruthy())
   const originalKey = sessionStorage.getItem(storageKey)

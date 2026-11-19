@@ -91,3 +91,52 @@ it('does not fall back when an existing encrypted record has lost its key', asyn
   )
   expect(localStorage.getItem('ov_console_connection_profiles')).toBe(previous)
 })
+
+it('accepts identical cross-tab plaintext saves and reports a real conflict until it is resolved', async () => {
+  vi.stubGlobal('crypto', {
+    getRandomValues: crypto.getRandomValues.bind(crypto),
+  })
+  vi.resetModules()
+  const first = await import('#/features/connection/lib/credential-storage')
+  await first.initializeCredentialStorage()
+  vi.resetModules()
+  const second = await import('#/features/connection/lib/credential-storage')
+  await second.initializeCredentialStorage()
+  const failed = vi.fn()
+  const recovered = vi.fn()
+  window.addEventListener('ov-credential-storage-error', failed)
+  window.addEventListener('ov-credential-storage-saved', recovered)
+  try {
+    first.writeCredentialStorage(
+      'ov_console_connection_profiles',
+      'same-credentials',
+    )
+    second.writeCredentialStorage(
+      'ov_console_connection_profiles',
+      'same-credentials',
+    )
+    await second.flushCredentialStorage()
+    expect(failed).not.toHaveBeenCalled()
+    localStorage.setItem('ov_console_connection_profiles', 'new-credentials')
+    expect(() =>
+      second.writeCredentialStorage(
+        'ov_console_connection_profiles',
+        'stale-credentials',
+      ),
+    ).toThrow('another tab')
+    expect((failed.mock.calls[0][0] as CustomEvent).detail).toBe('conflict')
+    expect(recovered).not.toHaveBeenCalled()
+    expect(localStorage.getItem('ov_console_connection_profiles')).toBe(
+      'new-credentials',
+    )
+    second.writeCredentialStorage(
+      'ov_console_connection_profiles',
+      'new-credentials',
+    )
+    await second.flushCredentialStorage()
+    expect(recovered).toHaveBeenCalledOnce()
+  } finally {
+    window.removeEventListener('ov-credential-storage-error', failed)
+    window.removeEventListener('ov-credential-storage-saved', recovered)
+  }
+})

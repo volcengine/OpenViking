@@ -1,4 +1,19 @@
 const dataManagement = {
+  deleteDocument: 'Delete document',
+  deleteConfirmTitle: 'Delete document?',
+  deleteConfirmDescription: 'Delete “{{name}}”? This cannot be undone.',
+  deleteUnsavedWarning:
+    'This document has unsaved changes. Deleting it will also discard those changes.',
+  deleteCancel: 'Cancel',
+  deleteConfirm: 'Delete',
+  deletingDocument: 'Deleting…',
+  deleteFailed: 'Could not delete document: {{error}}',
+  documentDeleted: 'Document deleted',
+
+  historyMenu: 'View version history',
+  importMenu: 'Import .ovpack',
+  exportMenu: 'Export .ovpack',
+
   historyTitle: 'Version history',
   transferTitle: 'OVPack import and export',
   transferShortLabel: 'OVPack',
@@ -10,6 +25,9 @@ const dataManagement = {
   snapshotScope:
     'Only the selected path is included. Excluded files, permissions, and vector indexes are not versioned.',
   loading: 'Loading history...',
+  historyScanLimit:
+    'The server reached its scan limit before it finished checking this path’s history. Older snapshots may exist.',
+  historyLoadFailed: 'Could not load version history.',
   noSnapshots: 'No snapshots for this path yet.',
   viewDiff: 'View diff',
   diffComparison: 'Version comparison',

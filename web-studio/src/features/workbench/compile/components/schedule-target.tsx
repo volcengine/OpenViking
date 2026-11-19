@@ -45,6 +45,7 @@ export function CompileScheduleTarget({
 }) {
   const { t, i18n } = useTranslation('compile')
   const { identityScopeKey } = useAppConnection()
+  const configId = target.compile_name ?? target.to
   const client = useQueryClient()
   const navigate = useNavigate()
   const switchId = useId()
@@ -56,10 +57,13 @@ export function CompileScheduleTarget({
       // Read fresh source/Skill settings so a list action cannot restore stale ones.
       const controller = new AbortController()
       pendingRead.current = controller
-      const config = await fetchCompileConfig(target.to, controller.signal)
+      const config = await fetchCompileConfig(configId, controller.signal)
       // The active connection may have changed while reading the configuration.
       controller.signal.throwIfAborted()
       return updateCompileConfig({
+        ...(config.compile_name
+          ? { compile_name: config.compile_name, args: config.args }
+          : {}),
         to: target.to,
         from: config.from,
         skill: config.skill,
@@ -79,7 +83,9 @@ export function CompileScheduleTarget({
             pages: data.pages.map((page) => ({
               ...page,
               targets: page.targets.map((item) =>
-                item.to === target.to ? { ...item, ...config } : item,
+                (item.compile_name ?? item.to) === configId
+                  ? { ...item, ...config }
+                  : item,
               ),
             })),
           },
@@ -91,7 +97,7 @@ export function CompileScheduleTarget({
       await Promise.all([
         client.invalidateQueries({ queryKey: listKey }),
         client.invalidateQueries({
-          queryKey: ['compile-config', identityScopeKey, target.to],
+          queryKey: ['compile-config', identityScopeKey, configId],
           refetchType: 'none',
         }),
       ])
@@ -116,14 +122,24 @@ export function CompileScheduleTarget({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="min-w-0 flex-1 break-words text-sm font-medium [overflow-wrap:anywhere]">
           <ContextLink uri={target.to}>{target.to}</ContextLink>
+          {target.compile_name && (
+            <span className="block text-xs text-muted-foreground">
+              {target.compile_name}
+            </span>
+          )}
         </h2>
         <Button
           variant="ghost"
           size="sm"
           disabled={mutation.isPending}
-          aria-label={`${t('schedule.edit')}: ${target.to}`}
+          aria-label={`${t('schedule.edit')}: ${configId}`}
           onClick={() =>
-            void navigate({ to: '/compile/new', search: { target: target.to } })
+            void navigate({
+              to: '/compile/new',
+              search: target.compile_name
+                ? { compileName: target.compile_name }
+                : { target: target.to },
+            })
           }
         >
           {t('schedule.edit')}
@@ -132,11 +148,11 @@ export function CompileScheduleTarget({
       <div className="flex flex-wrap items-center gap-3">
         <label htmlFor={switchId} className="text-sm font-medium">
           {t('schedule.autoUpdate')}
-          <span className="sr-only">{`: ${target.to}`}</span>
+          <span className="sr-only">{`: ${configId}`}</span>
         </label>
         <Switch
           id={switchId}
-          aria-label={`${t('schedule.autoUpdate')}: ${target.to}`}
+          aria-label={`${t('schedule.autoUpdate')}: ${configId}`}
           checked={target.auto_update}
           disabled={mutation.isPending}
           onCheckedChange={(checked) => {
@@ -181,7 +197,7 @@ export function CompileScheduleTarget({
               size="sm"
               className="h-auto px-1 py-0.5 text-xs text-muted-foreground"
               disabled={mutation.isPending}
-              aria-label={`${t(target.auto_update ? 'schedule.adjust' : 'schedule.setUp')}: ${target.to}`}
+              aria-label={`${t(target.auto_update ? 'schedule.adjust' : 'schedule.setUp')}: ${configId}`}
               onClick={openEditor}
             >
               <PencilIcon className="size-3" />
@@ -205,12 +221,14 @@ export function CompileScheduleTarget({
             )}
           </dd>
         </div>
-        <div className="space-y-1">
-          <dt className="text-xs text-muted-foreground">
-            {t('schedule.execution')}
-          </dt>
-          <dd>{t(target.running ? 'schedule.running' : 'schedule.idle')}</dd>
-        </div>
+        {target.running !== undefined && (
+          <div className="space-y-1">
+            <dt className="text-xs text-muted-foreground">
+              {t('schedule.execution')}
+            </dt>
+            <dd>{t(target.running ? 'schedule.running' : 'schedule.idle')}</dd>
+          </div>
+        )}
       </dl>
       {!editing && mutation.isError && (
         <CompileError
@@ -253,9 +271,10 @@ function ScheduleDialog({
   const { identityScopeKey } = useAppConnection()
   const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
   const [filled, setFilled] = useState(false)
+  const configId = target.compile_name ?? target.to
   const config = useQuery({
-    queryKey: ['compile-config', identityScopeKey, target.to],
-    queryFn: ({ signal }) => fetchCompileConfig(target.to, signal),
+    queryKey: ['compile-config', identityScopeKey, configId],
+    queryFn: ({ signal }) => fetchCompileConfig(configId, signal),
     staleTime: 0,
   })
   useEffect(() => {
@@ -277,7 +296,7 @@ function ScheduleDialog({
             {t(target.auto_update ? 'schedule.adjust' : 'schedule.turnOn')}
           </DialogTitle>
           <DialogDescription className="break-all">
-            {target.to}
+            {target.compile_name ?? target.to}
           </DialogDescription>
         </DialogHeader>
         <form

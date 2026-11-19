@@ -399,6 +399,7 @@ const resources = {
       },
     },
     filePreview: {
+      viewMode: '查看模式',
       editFailed: '无法读取完整文件用于编辑。',
       saveFailed: '文件保存失败。',
       directoryLevels: {
@@ -418,6 +419,7 @@ const resources = {
       jsonFormatFailed: 'JSON 格式化失败，已显示原始内容。',
       loadFile: '仍然加载',
       loadingContent: '正在读取内容...',
+      truncated: '当前只预览文件的部分内容。',
       loadingEditor: '加载编辑器...',
       markdownPreview: '预览',
       markdownSource: '源码',

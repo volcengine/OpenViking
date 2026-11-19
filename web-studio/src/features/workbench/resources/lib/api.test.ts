@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type * as OvClient from '#/shared/api/ov-client/index'
 
 import {
   deleteSharedResource,
   fetchDirectorySidecarContent,
   fetchFsList,
+  fetchFsStat,
   transferSharedResource,
 } from '#/features/workbench/resources/lib/api'
 
@@ -11,23 +13,26 @@ const {
   deleteResourcesMock,
   getContentReadMock,
   getFsLsMock,
+  getFsStatMock,
   postResourcesCpMock,
   postResourcesMvMock,
 } = vi.hoisted(() => ({
   deleteResourcesMock: vi.fn(),
   getContentReadMock: vi.fn(),
   getFsLsMock: vi.fn(),
+  getFsStatMock: vi.fn(),
   postResourcesCpMock: vi.fn(),
   postResourcesMvMock: vi.fn(),
 }))
 
 vi.mock('#/shared/api/ov-client/index', async (importOriginal) => {
-  const original = await importOriginal()
+  const original = await importOriginal<typeof OvClient>()
   return {
     ...original,
     deleteResources: deleteResourcesMock,
     getContentRead: getContentReadMock,
     getFsLs: getFsLsMock,
+    getFsStat: getFsStatMock,
     postResourcesCp: postResourcesCpMock,
     postResourcesMv: postResourcesMvMock,
   }
@@ -54,12 +59,30 @@ beforeEach(() => {
   })
   getContentReadMock.mockReset()
   getFsLsMock.mockReset()
+  getFsStatMock.mockReset()
   getFsLsMock.mockResolvedValue({
     data: { status: 'ok', result: [] },
     headers: {},
     status: 200,
   })
 })
+
+it.each(['read', 'write', 'manage', 'container', undefined])(
+  'preserves the stat access level %s',
+  async (access) => {
+    const uri = 'viking://resources/project/'
+    getFsStatMock.mockResolvedValue({
+      data: { status: 'ok', result: { isDir: true, access } },
+      headers: {},
+      status: 200,
+    })
+    expect(await fetchFsStat(uri, { throwOnError: true })).toMatchObject({
+      uri,
+      isDir: true,
+      access,
+    })
+  },
+)
 
 describe('fetchDirectorySidecarContent', () => {
   it.each(['abstract', 'overview'] as const)(

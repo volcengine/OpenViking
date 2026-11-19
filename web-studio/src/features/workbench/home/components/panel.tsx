@@ -11,6 +11,7 @@ export function Panel({
 }) {
   return (
     <section
+      data-slot="usage-panel"
       className={cn(
         'animate-home-panel-in rounded-2xl border border-border/70 bg-card p-6 dark:border-[#363638] dark:bg-[#262628]',
         className,

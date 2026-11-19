@@ -1,0 +1,6 @@
+/* Session navigation is already available in the adjacent Studio sidebar. */
+.thread
+  > :global(.ov-console__toolbar)
+  > :global(.ov-viking-bot__session-actions) {
+  display: none;
+}

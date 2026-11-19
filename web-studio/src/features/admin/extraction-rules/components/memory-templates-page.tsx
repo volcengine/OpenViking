@@ -1,3 +1,7 @@
+import userIllustration from '#/assets/memory-templates/user.svg'
+import { UserSpaceSwitcher } from '#/features/admin/users/components/user-space-switcher'
+import { Input } from '#/shared/ui/input'
+import { Tooltip, TooltipContent, TooltipTrigger } from '#/shared/ui/tooltip'
 import type {
   EditableMemoryType,
   MemoryTemplate,
@@ -20,11 +24,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   ArrowLeftIcon,
-  BookOpenTextIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
+  ArrowRightIcon,
+  CircleHelpIcon,
+  SearchIcon,
+  SquareUserRoundIcon,
   RotateCcwIcon,
-  UserRoundIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -68,12 +73,13 @@ export function MemoryTemplatesPage() {
   const { t } = useTranslation('settings')
   const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
     useAppConnection()
-  const { canManageUsers } = resolveStudioManagementCapabilities({
-    hasControlCredential: Boolean(connection.adminApiKey.trim()),
-    isRoleLoading: isConnectionRoleLoading,
-    role: connectionRole,
-    serverMode,
-  })
+  const { canManageUsers, canManageAccounts } =
+    resolveStudioManagementCapabilities({
+      hasControlCredential: Boolean(connection.adminApiKey.trim()),
+      isRoleLoading: isConnectionRoleLoading,
+      role: connectionRole,
+      serverMode,
+    })
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
       accountId: connection.accountId,
@@ -103,6 +109,7 @@ export function MemoryTemplatesPage() {
   const [selected, setSelected] = React.useState<EditableMemoryType | null>(
     null,
   )
+  const [search, setSearch] = React.useState('')
   const [editing, setEditing] = React.useState(false)
   const [draft, setDraft] = React.useState<MemoryTemplateSchema | null>(null)
   const [expanded, setExpanded] = React.useState<string>('description')
@@ -202,32 +209,55 @@ export function MemoryTemplatesPage() {
   return (
     <div className="min-w-0">
       {!selected || !template ? (
-        <div className="w-full min-w-0 space-y-7 pb-12">
-          <header className="space-y-2">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-xl border border-primary/20 bg-primary/5 text-primary">
-                <BookOpenTextIcon className="size-5" />
-              </div>
-              <h2 className="text-2xl font-semibold tracking-tight">
-                {t('memoryTemplates.title')}
-              </h2>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {t('memoryTemplates.subtitle')}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {t('memoryTemplates.account', { account: connection.accountId })}
-            </p>
+        <section className="memory-template-overview">
+          <header className="memory-template-heading">
+            <h1>{t('memoryTemplates.title')}</h1>
+            <Tooltip>
+              <TooltipTrigger
+                aria-label={t('memoryTemplates.subtitle')}
+                render={<button type="button" />}
+              >
+                <CircleHelpIcon />
+              </TooltipTrigger>
+              <TooltipContent>{t('memoryTemplates.subtitle')}</TooltipContent>
+            </Tooltip>
           </header>
-          <TemplateGroup
-            title={t('memoryTemplates.userGroup')}
-            hint={t('memoryTemplates.userGroupHint')}
-            icon={<UserRoundIcon className="size-12 stroke-[1.2]" />}
-            types={editableMemoryTypes}
-            templates={templatesQuery.data.templates}
-            onSelect={choose}
-          />
-        </div>
+          <div className="memory-template-list">
+            <div className="memory-template-toolbar">
+              <UserSpaceSwitcher canManageAccounts={canManageAccounts} />
+              <div className="memory-template-search">
+                <SearchIcon aria-hidden="true" />
+                <Input
+                  type="search"
+                  aria-label={t('memoryTemplates.searchLabel')}
+                  placeholder={t('memoryTemplates.search')}
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
+            </div>
+            <TemplateGroup
+              title={t('memoryTemplates.userGroup')}
+              hint={t('memoryTemplates.userGroupHint')}
+              templates={templatesQuery.data.templates}
+              onSelect={choose}
+              search={search}
+            />
+            {search.trim() &&
+            !editableMemoryTypes.some((type) =>
+              `${t(`memoryTemplates.${type}`)} ${t(`memoryTemplates.overviewHints.${type}`)}`
+                .toLocaleLowerCase()
+                .includes(search.trim().toLocaleLowerCase()),
+            ) ? (
+              <p
+                role="status"
+                className="py-12 text-center text-sm text-muted-foreground"
+              >
+                {t('memoryTemplates.noResults')}
+              </p>
+            ) : null}
+          </div>
+        </section>
       ) : (
         <div className="grid min-h-[680px] gap-6 pb-20 xl:grid-cols-[minmax(0,1fr)_minmax(320px,22%)]">
           <main className="min-w-0 space-y-5">
@@ -400,61 +430,61 @@ export function MemoryTemplatesPage() {
 function TemplateGroup({
   title,
   hint,
-  icon,
-  types,
   templates,
   onSelect,
+  search,
 }: {
   title: string
   hint: string
-  icon: React.ReactNode
-  types: readonly EditableMemoryType[]
   templates: MemoryTemplate[]
   onSelect: (memoryType: EditableMemoryType) => void
+  search: string
 }) {
   const { t } = useTranslation('settings')
+  const visibleTypes = editableMemoryTypes.filter((type) =>
+    `${t(`memoryTemplates.${type}`)} ${t(`memoryTemplates.overviewHints.${type}`)}`
+      .toLocaleLowerCase()
+      .includes(search.trim().toLocaleLowerCase()),
+  )
+  if (!visibleTypes.length) return null
   return (
-    <section className="grid overflow-hidden rounded-2xl border bg-card md:grid-cols-[minmax(200px,25%)_minmax(0,1fr)]">
-      <div className="relative flex min-h-52 items-center justify-center overflow-hidden border-b bg-muted/15 text-muted-foreground/60 md:border-r md:border-b-0">
-        <div className="absolute size-44 rounded-full border border-border/60" />
-        <div className="absolute size-32 rounded-full border border-border/70" />
-        <div className="relative flex size-20 items-center justify-center rounded-full border bg-background shadow-sm">
-          {icon}
-        </div>
+    <section className="memory-template-group" aria-label={title}>
+      <div className="memory-template-illustration" data-kind="user">
+        <img src={userIllustration} alt="" />
       </div>
-      <div className="min-w-0 px-5 py-5 md:px-7">
-        <h3 className="mb-4 flex flex-wrap items-baseline gap-x-2 text-base font-semibold">
-          {title}
-          <span className="text-sm font-normal text-muted-foreground">
-            · {hint}
-          </span>
-        </h3>
-        <div className="divide-y">
-          {types.map((type) => {
+      <div className="memory-template-group-content">
+        <h2>
+          <SquareUserRoundIcon aria-hidden="true" />
+          <span>{title}</span>
+          <span className="memory-template-group-hint">· {hint}</span>
+        </h2>
+        <div className="memory-template-rows">
+          {visibleTypes.map((type) => {
             const template = templates.find((item) => item.memory_type === type)
             return (
               <button
                 key={type}
                 type="button"
                 onClick={() => onSelect(type)}
-                className="group flex w-full items-center justify-between gap-4 py-4 text-left first:pt-1 last:pb-0 hover:text-primary"
+                className="memory-template-row"
               >
-                <span className="min-w-0">
-                  <span className="flex items-center gap-2 font-medium">
-                    {t('memoryTemplates.fileName', {
-                      type: t(`memoryTemplates.${type}`),
-                    })}
-                    {template?.status === 'custom' ? (
-                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
-                        {t('memoryTemplates.custom')}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="mt-1 block text-sm leading-6 text-muted-foreground">
-                    {t(`memoryTemplates.${type}Hint`)}
-                  </span>
+                <span className="memory-template-row-title">
+                  {t('memoryTemplates.fileName', {
+                    type: t(`memoryTemplates.${type}`),
+                  })}
+                  {template?.status === 'custom' ? (
+                    <span className="memory-template-custom">
+                      {t('memoryTemplates.custom')}
+                    </span>
+                  ) : null}
                 </span>
-                <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-1 group-hover:text-primary" />
+                <span className="memory-template-row-hint">
+                  {t(`memoryTemplates.overviewHints.${type}`)}
+                </span>
+                <span className="memory-template-row-action">
+                  {t('memoryTemplates.viewAndConfigure')}
+                  <ArrowRightIcon />
+                </span>
               </button>
             )
           })}

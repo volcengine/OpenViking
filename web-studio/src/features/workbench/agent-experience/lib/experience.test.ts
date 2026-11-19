@@ -3,13 +3,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  buildCustomTimeRange,
   buildExperiencesUri,
-  formatFileSize,
-  formatTimestamp,
-  getExperienceDisplayName,
-  isExperienceUpdatedSinceLastSeen,
-  markExperiencesSeen,
   normalizeOutcomeDistribution,
   normalizeTrajectoryPage,
   resolveTimeRange,
@@ -38,27 +32,6 @@ describe('buildExperiencesUri', () => {
     expect(buildExperiencesUri('  ')).toBe(
       'viking://user/default/memories/experiences',
     )
-  })
-})
-
-describe('getExperienceDisplayName', () => {
-  it('strips the markdown extension from the file name', () => {
-    expect(
-      getExperienceDisplayName(
-        'viking://user/default/memories/experiences/exchange.md',
-      ),
-    ).toBe('exchange')
-    expect(
-      getExperienceDisplayName(
-        'viking://user/default/memories/exchanges/Refund_Flow.MD',
-      ),
-    ).toBe('Refund_Flow')
-  })
-
-  it('returns the raw segment when there is no extension', () => {
-    expect(
-      getExperienceDisplayName('viking://user/default/memories/experiences/x'),
-    ).toBe('x')
   })
 })
 
@@ -98,13 +71,26 @@ describe('normalizeTrajectoryPage', () => {
     expect(page?.hasMore).toBe(true)
   })
 
-  it('returns null for non-object payloads', () => {
-    expect(normalizeTrajectoryPage('nope', 'fallback')).toBeNull()
-    expect(normalizeTrajectoryPage(undefined, 'fallback')).toBeNull()
+  it.each([
+    undefined,
+    'nope',
+    {},
+    { total: 0 },
+    { items: [], total: -1 },
+    { items: [], total: '20' },
+    { items: [], total: 1.5 },
+    { items: [], total: 0, offset: -1 },
+    { items: [], total: 0, limit: 0 },
+    { items: [], total: 0, has_more: 'false' },
+  ])('rejects malformed trajectory pages: %j', (value) => {
+    expect(normalizeTrajectoryPage(value, 'fallback')).toBeNull()
   })
 
   it('falls back to the provided uri when the response omits it', () => {
-    const page = normalizeTrajectoryPage({ items: [] }, 'fallback-uri')
+    const page = normalizeTrajectoryPage(
+      { items: [], total: 0 },
+      'fallback-uri',
+    )
     expect(page?.experienceUri).toBe('fallback-uri')
   })
 })
@@ -121,7 +107,7 @@ describe('normalizeOutcomeDistribution', () => {
       'viking://user/u/memories/experiences/e.md',
     )
 
-    expect(result.distribution).toEqual([
+    expect(result!.distribution).toEqual([
       { outcome: 'success', count: 4 },
       { outcome: 'failure', count: 1 },
       { outcome: 'partial', count: 0 },
@@ -140,149 +126,57 @@ describe('normalizeOutcomeDistribution', () => {
       },
       'uri',
     )
-    expect(result.distribution.map((item) => item.outcome)).toEqual([
+    expect(result!.distribution.map((item) => item.outcome)).toEqual([
       'success',
       'failure',
       'partial',
       'unknown',
       'unfinished',
     ])
-    expect(result.distribution.map((item) => item.count)).toEqual([
+    expect(result!.distribution.map((item) => item.count)).toEqual([
       0, 0, 3, 0, 2,
     ])
   })
 
-  it('handles empty or malformed payloads', () => {
-    const empty = normalizeOutcomeDistribution(undefined, 'uri')
-    expect(empty.distribution).toHaveLength(5)
-    expect(empty.distribution.every((item) => item.count === 0)).toBe(true)
+  it.each([
+    undefined,
+    {},
+    { outcome_distribution: 'invalid' },
+    { outcome_distribution: [{ outcome: 'success', count: -1 }] },
+    { outcome_distribution: [{ outcome: 'success', count: '2' }] },
+    { outcome_distribution: [{ outcome: 'other', count: 2 }] },
+    {
+      outcome_distribution: [
+        { outcome: 'success', count: 1 },
+        { outcome: 'success', count: 2 },
+      ],
+    },
+  ])(
+    'rejects malformed distributions instead of reporting zero counts: %j',
+    (value) => {
+      expect(normalizeOutcomeDistribution(value, 'uri')).toBeNull()
+    },
+  )
+
+  it('accepts a successful empty distribution', () => {
+    const empty = normalizeOutcomeDistribution(
+      { outcome_distribution: [] },
+      'uri',
+    )
+    expect(empty!.distribution).toHaveLength(5)
+    expect(empty!.distribution.every((item) => item.count === 0)).toBe(true)
   })
 })
 
 describe('resolveTimeRange', () => {
-  it('disables filtering for the all preset', () => {
-    expect(resolveTimeRange('all', new Date('2026-08-15T12:00:00Z'))).toEqual({
-      preset: 'all',
+  it('omits date bounds for all time', () => {
+    expect(resolveTimeRange(0)).toEqual({})
+  })
+
+  it('uses inclusive UTC days across a month boundary', () => {
+    expect(resolveTimeRange(3, new Date('2026-09-01T22:00:00Z'))).toEqual({
+      startDate: '2026-08-30',
+      endDate: '2026-09-01',
     })
-  })
-
-  it('returns no bounds for the custom preset', () => {
-    expect(resolveTimeRange('custom')).toEqual({ preset: 'custom' })
-  })
-
-  it('computes inclusive UTC bounds for the 7d preset', () => {
-    expect(resolveTimeRange('7d', new Date('2026-08-15T12:00:00Z'))).toEqual({
-      preset: '7d',
-      startDate: '2026-08-09',
-      endDate: '2026-08-15',
-    })
-  })
-
-  it('computes inclusive UTC bounds for the 30d preset', () => {
-    expect(resolveTimeRange('30d', new Date('2026-08-15T12:00:00Z'))).toEqual({
-      preset: '30d',
-      startDate: '2026-07-17',
-      endDate: '2026-08-15',
-    })
-  })
-
-  it('handles month boundaries', () => {
-    expect(resolveTimeRange('7d', new Date('2026-09-03T23:59:59Z'))).toEqual({
-      preset: '7d',
-      startDate: '2026-08-28',
-      endDate: '2026-09-03',
-    })
-  })
-})
-
-describe('buildCustomTimeRange', () => {
-  it('builds a range from both bounds', () => {
-    expect(buildCustomTimeRange('2026-08-01', '2026-08-10')).toEqual({
-      range: { preset: 'all', startDate: '2026-08-01', endDate: '2026-08-10' },
-    })
-  })
-
-  it('supports an open-ended start bound only', () => {
-    expect(buildCustomTimeRange('2026-08-01', '')).toEqual({
-      range: { preset: 'all', startDate: '2026-08-01' },
-    })
-  })
-
-  it('supports an open-ended end bound only', () => {
-    expect(buildCustomTimeRange('', '2026-08-10')).toEqual({
-      range: { preset: 'all', endDate: '2026-08-10' },
-    })
-  })
-
-  it('rejects invalid formats', () => {
-    expect(buildCustomTimeRange('2026/08/01', '2026-08-10')).toEqual({
-      error: 'invalid',
-    })
-    expect(buildCustomTimeRange('2026-13-01', '')).toEqual({
-      error: 'invalid',
-    })
-    expect(buildCustomTimeRange('', '')).toEqual({ error: 'invalid' })
-  })
-
-  it('rejects reversed ranges', () => {
-    expect(buildCustomTimeRange('2026-08-10', '2026-08-01')).toEqual({
-      error: 'order',
-    })
-  })
-})
-
-describe('last-seen tracking', () => {
-  it('reports unseen experiences as updated until marked seen', () => {
-    expect(
-      isExperienceUpdatedSinceLastSeen(
-        'viking://user/u/memories/experiences/e.md',
-        '2026-08-05T02:00:00Z',
-      ),
-    ).toBe(true)
-
-    markExperiencesSeen([{ uri: 'viking://user/u/memories/experiences/e.md' }])
-
-    expect(
-      isExperienceUpdatedSinceLastSeen(
-        'viking://user/u/memories/experiences/e.md',
-        '2026-08-05T02:00:00Z',
-      ),
-    ).toBe(false)
-    expect(
-      isExperienceUpdatedSinceLastSeen(
-        'viking://user/u/memories/experiences/e.md',
-        undefined,
-      ),
-    ).toBe(false)
-  })
-})
-
-describe('formatTimestamp', () => {
-  it('formats parseable timestamps', () => {
-    const formatted = formatTimestamp('2026-08-05T02:00:00Z', 'zh-CN')
-    expect(formatted).toBeTruthy()
-    expect(formatTimestamp('2026-08-05T02:00:00Z', 'zh-CN')).toBe(formatted)
-  })
-
-  it('returns undefined for missing or invalid values', () => {
-    expect(formatTimestamp(undefined, 'zh-CN')).toBeUndefined()
-    expect(formatTimestamp('', 'zh-CN')).toBeUndefined()
-    expect(formatTimestamp('not-a-date', 'zh-CN')).toBeUndefined()
-  })
-})
-
-describe('formatFileSize', () => {
-  it('formats bytes, kilobytes and megabytes', () => {
-    expect(formatFileSize(0)).toBe('0 B')
-    expect(formatFileSize(512)).toBe('512 B')
-    expect(formatFileSize(2048)).toBe('2 KB')
-    expect(formatFileSize(1024 * 1024)).toBe('1 MB')
-    expect(formatFileSize(1024 * 1024 * 1024)).toBe('1 GB')
-  })
-
-  it('returns undefined for missing or invalid sizes', () => {
-    expect(formatFileSize(undefined)).toBeUndefined()
-    expect(formatFileSize(-1)).toBeUndefined()
-    expect(formatFileSize(Number.NaN)).toBeUndefined()
   })
 })

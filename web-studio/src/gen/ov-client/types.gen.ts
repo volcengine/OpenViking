@@ -511,6 +511,26 @@ export type ImportRequest = {
 };
 
 /**
+ * CpRequest
+ *
+ * Request model for cp.
+ */
+export type CpRequest = {
+    /**
+     * From Uri
+     */
+    from_uri: string;
+    /**
+     * To Uri
+     */
+    to_uri: string;
+    /**
+     * Recursive
+     */
+    recursive?: boolean;
+};
+
+/**
  * MkdirRequest
  *
  * Request model for mkdir.
