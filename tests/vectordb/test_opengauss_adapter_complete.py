@@ -271,13 +271,9 @@ def test_catalog_verification_failure_never_saves_metadata():
     collection._distributed = False
     collection._distance = "cosine"
     collection._name = "context"
-    collection._distance = "cosine"
-    collection._distributed = False
     collection._indexes = {}
-    collection._pending_indexes = {}
     collection._physical_index_definition = Mock(side_effect=[None, None])
     collection._execute = Mock()
-    collection._save_index_meta = Mock()
     collection._lock = threading.RLock()
     collection._cursor = Mock(return_value=Mock())
     collection._conn = Mock()
@@ -285,10 +281,14 @@ def test_catalog_verification_failure_never_saves_metadata():
         "default",
         {"VectorIndex": {"IndexType": "hnsw", "Distance": "cosine"}},
     )
+    collection._pending_indexes = {"default": meta}
 
-    with pytest.raises(RuntimeError, match="catalog verification failed"):
-        collection._materialize_index("default", meta)
-    collection._save_index_meta.assert_not_called()
+    with patch.object(collection, "_persist_index_meta_and_scalar_indexes") as persist:
+        with pytest.raises(RuntimeError, match="catalog verification failed"):
+            collection._materialize_index("default", meta)
+        persist.assert_not_called()
+    assert "default" not in collection._indexes
+    assert collection._pending_indexes == {"default": meta}
 
 
 def test_materialized_index_is_not_published_before_metadata_persists():

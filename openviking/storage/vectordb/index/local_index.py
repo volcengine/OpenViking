@@ -18,7 +18,6 @@ from openviking.storage.vectordb.index.cuvs_index import (
     CuVSNativeRouteError,
     CuVSSearchTelemetry,
     CuVSUnavailableError,
-    UnsupportedCuVSFilterError,
 )
 from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
@@ -991,14 +990,6 @@ class LocalIndex(IIndex):
                             logger.debug(
                                 "cuVS auto mode selected native dense search: %s",
                                 type(exc).__name__,
-                            )
-                        except UnsupportedCuVSFilterError as exc:
-                            if cuvs_telemetry is not None:
-                                cuvs_telemetry.route_reason = "native_unsupported_filter"
-                            if not self.dense_search.fallback_to_native:
-                                raise
-                            logger.info(
-                                "Falling back to native dense search: %s", type(exc).__name__
                             )
                     elif not self.dense_search.fallback_to_native:
                         if cuvs_telemetry is not None:
