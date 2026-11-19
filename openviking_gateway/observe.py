@@ -144,9 +144,17 @@ def classify(error):
     if isinstance(error, ClientDisconnect):
         return 499, "client_disconnected", "client", "The client closed the request.", {}
     if isinstance(error, STORE_ERRORS):
-        logger.warning("OpenViking Gateway state store failed: %s", type(error).__name__)
+        logger.error(
+            "gateway state store unavailable; request failed error_type=%s",
+            type(error).__name__,
+            extra={"error_type": type(error).__name__},
+        )
         return 503, "store_unavailable", "gateway", STORE_DETAIL, {}
-    logger.error("OpenViking Gateway request failed", exc_info=error)
+    logger.error(
+        "gateway request failed error_type=%s",
+        type(error).__name__,
+        extra={"error_type": type(error).__name__},
+    )
     return 500, "internal_error", "gateway", INTERNAL_DETAIL, {}
 
 
@@ -335,6 +343,8 @@ class RequestRecord:
         try:
             await state.management.log(self.account, self.metrics, user_id=self.user_id)
         except Exception:
-            logger.exception("OpenViking Gateway request record failed")
+            logger.info(
+                "gateway request record write failed; preserving response", extra={"degraded": True}
+            )
             if stats:
                 stats.records_failed += 1

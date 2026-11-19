@@ -755,6 +755,8 @@ async def test_provider_binds_isolation_before_prefetch(peer_id):
 async def test_compile_task_apply_outcomes(
     monkeypatch,
     language_config,
+    caplog,
+    request,
     change,
     has_error,
     has_operations,
@@ -770,8 +772,11 @@ async def test_compile_task_apply_outcomes(
     monkeypatch.setattr(
         "openviking.service.memory_compile.tracer.get_trace_id", lambda: "test-trace"
     )
-    warning = Mock()
-    monkeypatch.setattr("openviking.service.memory_compile.logger.warning", warning)
+    from openviking.service import memory_compile as log_module
+
+    log_module.logger.addHandler(caplog.handler)
+    request.addfinalizer(lambda: log_module.logger.removeHandler(caplog.handler))
+    caplog.set_level("INFO", logger="openviking.service.memory_compile")
     directory = "viking://user/u1/memories/entities"
     uri = f"{directory}/person/alice.md"
     operations = ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
@@ -857,12 +862,15 @@ async def test_compile_task_apply_outcomes(
     else:
         apply.assert_not_awaited()
         viking_fs._async_agfs.pathlock_release.assert_not_awaited()
-    if change and has_error:
-        warning.assert_any_call(
-            "Memory-mode compile %s partially succeeded: %s", task.task_id, ["write failed"]
-        )
-    else:
-        assert not any("partially succeeded" in call.args[0] for call in warning.call_args_list)
+    partial = [
+        record
+        for record in caplog.records
+        if getattr(record, "task_id", None) == task.task_id and getattr(record, "failed", None) == 1
+    ]
+    assert len(partial) == int(bool(change and has_error))
+    if partial:
+        assert partial[0].levelname == "INFO" and partial[0].degraded is True
+        assert "write failed" not in partial[0].getMessage()
 
 
 @pytest.mark.asyncio

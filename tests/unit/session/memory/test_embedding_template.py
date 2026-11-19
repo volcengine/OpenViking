@@ -77,7 +77,9 @@ class TestContentTemplateRendering:
 
         assert rendered.startswith("Road Trip | Body content | 2026")
 
-    def test_content_template_render_failure_is_logged_before_plain_content_fallback(self):
+    def test_content_template_render_failure_is_logged_before_plain_content_fallback(
+        self, caplog, request
+    ):
         memory_file = MemoryFile(
             content="Body content",
             extra_fields={"title": "Road Trip", "ranges": "0-1"},
@@ -86,19 +88,24 @@ class TestContentTemplateRendering:
             get_year=Mock(side_effect=RuntimeError("template render failed"))
         )
 
-        with patch(
-            "openviking.session.memory.utils.memory_file_utils.logger.exception"
-        ) as mock_logger_exception:
+        from openviking.session.memory.utils import memory_file_utils as log_module
+
+        log_module.logger.addHandler(caplog.handler)
+        request.addfinalizer(lambda: log_module.logger.removeHandler(caplog.handler))
+        with caplog.at_level("INFO", logger="openviking.session.memory.utils.memory_file_utils"):
             rendered = MemoryFileUtils.write(
                 memory_file,
                 content_template="{{ title }} | {{ content }} | {{ extract_context.get_year(ranges) }}",
                 extract_context=extract_context,
             )
-
         assert rendered.startswith("Body content")
-        mock_logger_exception.assert_called_once_with(
-            "Failed to render memory content template; using plain content fallback"
-        )
+        records = [
+            record
+            for record in caplog.records
+            if record.name == "openviking.session.memory.utils.memory_file_utils"
+        ]
+        assert len(records) == 1 and records[0].levelname == "INFO"
+        assert "Body content" not in records[0].getMessage()
 
 
 class TestEmbeddingTextConstruction:
