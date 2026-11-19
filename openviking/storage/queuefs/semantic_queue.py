@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Optional
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.pyagfs.async_client import AsyncAGFSClient
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking_cli.utils.logger import get_logger
@@ -31,9 +32,11 @@ async def is_semantic_coalesce_stale(
         return False
     try:
         latest = await agfs.revision_latest(semantic_revision_key(coalesce_key))
-    except Exception:
+    except Exception as _log_error:
         # Coalescing is an optimization: uncertainty must not discard valid work.
-        logger.warning("Cannot read semantic revision; retaining work", exc_info=True)
+        logger.info(
+            "Cannot read semantic revision; retaining work error_type=%s", type(_log_error).__name__
+        )
         return False
     return coalesce_version < latest
 
@@ -63,10 +66,9 @@ class SemanticQueue(NamedQueue):
                 last = self._memory_parent_semantic_last.get(key, 0.0)
                 if now - last < _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC:
                     logger.debug(
-                        "[SemanticQueue] Skipping duplicate memory semantic enqueue for %s "
-                        "(within %.0fs dedupe window; see #769)",
-                        msg.uri,
-                        _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC,
+                        "Skipping duplicate memory semantic enqueue for %s (within %ss dedupe window; see #769)",
+                        safe_uri_for_log(str(msg.uri)),
+                        type(_MEMORY_PARENT_SEMANTIC_DEDUPE_SEC).__name__,
                     )
                     return "deduplicated"
                 self._memory_parent_semantic_last[key] = now
@@ -100,11 +102,14 @@ class SemanticQueue(NamedQueue):
                     semantic_revision_key(payload["coalesce_key"]),
                     payload["coalesce_version"],
                 )
-            except Exception:
+            except Exception as _log_error:
                 # The message already exists. Reporting enqueue failure would
                 # trigger unnecessary duplicates; an unpublished revision only
                 # permits older work to run.
-                logger.warning("Semantic work persisted but revision publish failed", exc_info=True)
+                logger.info(
+                    "Semantic work persisted but revision publish failed error_type=%s",
+                    type(_log_error).__name__,
+                )
         return message_id
 
     async def dequeue(self) -> Optional[SemanticMsg]:
@@ -117,13 +122,13 @@ class SemanticQueue(NamedQueue):
             try:
                 return SemanticMsg.from_json(data_dict["data"])
             except Exception as e:
-                logger.debug(f"[SemanticQueue] Failed to parse message data: {e}")
+                logger.debug("Failed to parse message data: %s", type(e).__name__)
                 return None
 
         try:
             return SemanticMsg.from_dict(data_dict)
         except Exception as e:
-            logger.debug(f"[SemanticQueue] Failed to create SemanticMsg from dict: {e}")
+            logger.debug("Failed to create SemanticMsg from dict: %s", type(e).__name__)
             return None
 
     async def peek(self) -> Optional[SemanticMsg]:

@@ -68,3 +68,28 @@ async def test_usage_audit_worker_close_waits_for_inflight_batch_after_timeout()
 
     assert store.calls == 1
     assert [[event.event_name for event in batch] for batch in store.batches] == [["demo"]]
+
+
+async def test_existing_store_failure_logs_first_error_then_info(caplog):
+    import logging
+
+    class FailedStore:
+        async def record_batch(self, events):
+            raise RuntimeError("private-key /private/path")
+
+    logger = logging.getLogger("openviking.observability.usage_audit.worker")
+    previous_level = logger.level
+    logger.addHandler(caplog.handler)
+    logger.setLevel(logging.INFO)
+    try:
+        worker = UsageAuditWorker(FailedStore())
+        batch = [ObservabilityEvent(event_name="http.request.completed", payload={})]
+        await worker._flush(batch)
+        await worker._flush(batch)
+    finally:
+        logger.removeHandler(caplog.handler)
+        logger.setLevel(previous_level)
+    records = [record for record in caplog.records if record.name == logger.name]
+    assert [record.levelno for record in records] == [logging.ERROR, logging.INFO]
+    assert all(record.total == 1 and record.error_type == "RuntimeError" for record in records)
+    assert "private-key" not in caplog.text and "/private/path" not in caplog.text

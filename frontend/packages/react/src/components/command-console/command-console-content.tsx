@@ -27,7 +27,9 @@ import { findCommandConsoleCommand } from './command-definitions.js';
 export function CommandConsoleContent({
   records,
   value,
+  history = records,
   disabled = false,
+  busy = false,
   emptyState,
   quickCommands,
   locale: localeProp,
@@ -65,8 +67,9 @@ export function CommandConsoleContent({
     onValueChange?.(next);
   };
   const readOnly = !onValueChange;
+  const inputDisabled = disabled || busy;
   const fillInput = (next: string) => {
-    if (disabled || readOnly) return;
+    if (inputDisabled || readOnly) return;
     updateValue(next);
     composerRef.current
       ?.querySelector('textarea')
@@ -76,7 +79,7 @@ export function CommandConsoleContent({
     fillInput(formatCommandConsoleCommandInput(next, commands));
   const completion = useCommandConsoleCompletion(
     value,
-    !disabled && !readOnly && dismissedValue !== value,
+    !inputDisabled && !readOnly && dismissedValue !== value,
     commands,
     commandGroups,
     paletteScope,
@@ -138,7 +141,7 @@ export function CommandConsoleContent({
                 onOpenUri={onOpenUri}
                 onCopy={onCopy}
                 onPickCommand={
-                  disabled || readOnly
+                  inputDisabled || readOnly
                     ? undefined
                     : (command) => fillCommand(`${command} `)
                 }
@@ -149,7 +152,7 @@ export function CommandConsoleContent({
               emptyState={emptyState}
               commands={pickCommandConsoleCommands(quickCommands, commands)}
               labels={text}
-              disabled={disabled || readOnly}
+              disabled={inputDisabled || readOnly}
               onPick={(value) => {
                 track('console_command_preset_select');
                 fillInput(value);
@@ -178,19 +181,20 @@ export function CommandConsoleContent({
           anchorRef={composerRef}
           onFocus={() => setDismissedValue(null)}
           value={value}
-          history={records.map((record) =>
+          history={history.map((record) =>
             formatCommandConsoleCommandInput(record.command, commands),
           )}
           labels={text}
           completion={completion}
           disabled={disabled}
+          busy={busy}
           readOnly={readOnly}
           canSubmit={Boolean(onSubmit) && !readOnly}
           activeIndex={activeIndex}
           onActiveIndexChange={setActiveIndexSafely}
           onValueChange={onValueChange ? updateValue : undefined}
           onSubmit={(command) => {
-            if (disabled || readOnly) return;
+            if (inputDisabled || readOnly) return;
             track('command_console_command_submit');
             followOutput.current = true;
             onSubmit?.(command);

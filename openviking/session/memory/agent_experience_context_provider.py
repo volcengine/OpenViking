@@ -22,7 +22,6 @@ from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.storage.viking_fs import VikingFS
-from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
@@ -159,7 +158,12 @@ All memory content must be written in {output_language}.
                 result["uri"] = uri
                 results.append(result)
             except Exception as e:
-                tracer.error(f"Failed to read source trajectory {uri}: {e}")
+                logger.info(
+                    "memory operation failed stage=%s error_type=%s",
+                    "_load_source_trajectories",
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
+                )
         return results
 
     def _build_context_result(
@@ -180,7 +184,7 @@ All memory content must be written in {output_language}.
 
     async def prefetch(self) -> List[Dict]:
         if not isinstance(self.messages, list):
-            tracer.error(f"Expected List[Message], got {type(self.messages)}")
+            logger.info("memory operation failed stage=%s", "prefetch", extra={"degraded": True})
             return []
 
         ctx = self._ctx
@@ -219,7 +223,12 @@ All memory content must be written in {output_language}.
                     if _is_directory_not_found_error(e):
                         candidate_uris = []
                     else:
-                        tracer.error(f"Failed to list experiences in {experience_dir}: {e}")
+                        logger.info(
+                            "memory operation failed stage=%s error_type=%s",
+                            "prefetch",
+                            type(e).__name__,
+                            extra={"degraded": True, "error_type": type(e).__name__},
+                        )
 
         prefetch_messages: List[Dict[str, Any]] = [self._build_conversation_message()]
         add_tool_call_pair_to_messages(

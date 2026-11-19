@@ -463,6 +463,7 @@ impl HttpClient {
         wait: bool,
         use_snapshot: bool,
         processing_mode: &str,
+        defer_processing: bool,
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
@@ -470,6 +471,9 @@ impl HttpClient {
         let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
         if use_snapshot {
             body["use_snapshot"] = json!(true);
+        }
+        if defer_processing {
+            body["defer_processing"] = Value::from(true);
         }
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
@@ -872,6 +876,7 @@ impl HttpClient {
         tags: Option<Vec<String>>,
         read_content: bool,
         events_time_decay_protection: Option<String>,
+        args: Option<&Map<String, Value>>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -892,6 +897,7 @@ impl HttpClient {
             "tags": tags,
             "read_content": read_content.then_some(true),
             "events_time_decay_protection": events_time_decay_protection,
+            "args": args,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -2252,11 +2258,13 @@ impl HttpClient {
         &self,
         branch: &str,
         limit: u32,
+        offset: u32,
         paths: Option<&[String]>,
     ) -> Result<Value> {
         let mut params = vec![
             ("branch".to_string(), branch.to_string()),
             ("limit".to_string(), limit.to_string()),
+            ("offset".to_string(), offset.to_string()),
         ];
         if let Some(paths) = paths {
             for path in paths {
@@ -2598,6 +2606,7 @@ mod tests {
                 None,
                 false,
                 None,
+                None,
             )
             .await
             .expect("list search should succeed");
@@ -2633,6 +2642,7 @@ mod tests {
                 Some(vec!["project=openviking".to_string()]),
                 false,
                 Some("7d".to_string()),
+                None,
             )
             .await
             .expect("context search should succeed");

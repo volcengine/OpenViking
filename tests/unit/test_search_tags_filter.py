@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from openviking.server.routers.search import _resolve_search_filter
+from openviking.server.routers.search import resolve_search_filter
 from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
     build_search_tags_filter,
@@ -75,10 +75,10 @@ def test_search_tag_accepts_long_keys_and_values(key_length, value_length):
     assert normalize_search_tag(f"{key}={value}") == f"{key}={value}"
 
 
-def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
+def test_discard_invalid_search_tags_logs_one_summary_for_batch(caplog):
     tags_module.logger.addHandler(caplog.handler)
     try:
-        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
+        with caplog.at_level(logging.INFO, logger="openviking.utils.tags"):
             result = normalize_search_tags(
                 ["bad-one", "also-bad", "team=search"],
                 discard_invalid=True,
@@ -87,18 +87,19 @@ def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
         tags_module.logger.removeHandler(caplog.handler)
 
     assert result == ["team=search"]
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert warnings[0].invalid_tags == ["bad-one", "also-bad"]
-    assert "Discarded invalid search tags" in warnings[0].message
-    assert "bad-one" in warnings[0].message
-    assert "also-bad" in warnings[0].message
+    summaries = [record for record in caplog.records if record.levelno == logging.INFO]
+    assert len(summaries) == 1
+    assert summaries[0].skipped == 2
+    assert summaries[0].degraded is True
+    assert "invalid_tags" not in summaries[0].__dict__
+    assert "bad-one" not in summaries[0].getMessage()
+    assert "also-bad" not in summaries[0].getMessage()
 
 
 def test_merge_search_tags_applies_ordered_patches_and_discards_invalid_tags(caplog):
     tags_module.logger.addHandler(caplog.handler)
     try:
-        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
+        with caplog.at_level(logging.INFO, logger="openviking.utils.tags"):
             result = merge_search_tags(
                 ["bad-existing", "team=old", "score=0.1"],
                 [
@@ -115,9 +116,12 @@ def test_merge_search_tags_applies_ordered_patches_and_discards_invalid_tags(cap
         tags_module.logger.removeHandler(caplog.handler)
 
     assert result == ["team=old", "score=-0.5", "count=1", "owner=alice"]
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert warnings[0].invalid_tags == ["bad-existing"]
+    summaries = [record for record in caplog.records if record.levelno == logging.INFO]
+    assert len(summaries) == 1
+    assert summaries[0].skipped == 1
+    assert summaries[0].degraded is True
+    assert "invalid_tags" not in summaries[0].__dict__
+    assert "bad-existing" not in summaries[0].getMessage()
 
     with pytest.raises(InvalidArgumentError):
         merge_search_tags(result, ["owner+=1"])
@@ -133,7 +137,7 @@ def test_preserve_memory_type_tag_does_not_reapply_tag_operations():
 
 
 def test_find_tags_filter_requires_all_tags():
-    result = _resolve_search_filter(
+    result = resolve_search_filter(
         request_filter=None,
         context_type=None,
         since=None,
@@ -154,7 +158,7 @@ def test_find_tags_filter_requires_all_tags():
 def test_find_tags_filter_ands_all_tags_with_existing_filter():
     existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
 
-    result = _resolve_search_filter(
+    result = resolve_search_filter(
         request_filter=existing_filter,
         context_type=None,
         since=None,

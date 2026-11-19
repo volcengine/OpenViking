@@ -4,7 +4,7 @@
 
 import asyncio
 import math
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, Path, Query, status
 from fastapi import Response as FastAPIResponse
@@ -21,7 +21,7 @@ from openviking.service.compile_service import (
     CompileCreateRequest,
     CompileRequest,
 )
-from openviking.service.compile_targets import COMPILE_NAME_PATTERN
+from openviking.service.compile_targets import CompileName
 from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["compile"])
@@ -77,7 +77,7 @@ __all__ = ["router"]
 
 @router.get("/compile/config")
 async def get_compile_config(
-    compile_name: str = Query(..., pattern=COMPILE_NAME_PATTERN),
+    compile_name: Annotated[CompileName, Query()],
     ctx: RequestContext = Depends(get_request_context),
 ):
     return Response(status="ok", result=await get_service().compile.get_config(compile_name, ctx))
@@ -96,7 +96,7 @@ async def list_compile_configs(
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     scope: Literal["user", "account"] = Query("user"),
-    compile_name: str | None = Query(None, pattern=COMPILE_NAME_PATTERN),
+    compile_name: CompileName | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
     """List the caller's configurations, or all configurations in the account for ADMIN."""
@@ -110,7 +110,7 @@ async def list_compile_configs(
 
 @router.get("/compile/runs")
 async def list_compile_runs(
-    compile_name: str = Query(..., pattern=COMPILE_NAME_PATTERN),
+    compile_name: Annotated[CompileName, Query()],
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
@@ -121,8 +121,8 @@ async def list_compile_runs(
 
 @router.get("/compile/runs/{task_id}")
 async def get_compile_run(
+    compile_name: Annotated[CompileName, Query()],
     task_id: str = Path(..., min_length=1, max_length=128, pattern=r"^cmp_[0-9a-f]+$"),
-    compile_name: str = Query(..., pattern=COMPILE_NAME_PATTERN),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Read a frozen run without exposing execution credentials or private checkpoints."""
@@ -132,8 +132,8 @@ async def get_compile_run(
 
 @router.get("/compile/runs/{task_id}/outputs")
 async def run_outputs(
+    compile_name: Annotated[CompileName, Query()],
     task_id: str = Path(..., min_length=1, max_length=128, pattern=r"^cmp_[0-9a-f]+$"),
-    compile_name: str = Query(..., pattern=COMPILE_NAME_PATTERN),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
@@ -199,6 +199,7 @@ async def compile_embeddings(
     """
     from openviking.core.namespace import classify_uri
     from openviking.models.embedder.base import embed_compat
+    from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 
     target = validate_request_viking_uri(resolve_path_variables(request.target_uri), _ctx)
     classification = classify_uri(target)
@@ -216,9 +217,10 @@ async def compile_embeddings(
     # Small chunks also bound providers whose embed_async implementation has no limiter.
     vectors = []
     for start in range(0, len(request.texts), 4):
-        batch = await asyncio.gather(
-            *(embed_compat(embedder, text) for text in request.texts[start : start + 4])
-        )
+        with bind_dashboard_token_source_type("compile"):
+            batch = await asyncio.gather(
+                *(embed_compat(embedder, text) for text in request.texts[start : start + 4])
+            )
         for result in batch:
             vector = result.dense_vector
             if not vector or len(vector) > 8192 or not all(math.isfinite(x) for x in vector):

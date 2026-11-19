@@ -6,18 +6,18 @@
 
 通过一条提示词，将 OpenViking 接入你正在使用的编程 Agent。Agent 会在本机检测到的各个 Agent 里安装 OpenViking 记忆插件，检查连接，问你要不要导入近期工作，再告诉你怎么重启。重启后，你问的第一个问题就能用上 OpenViking。
 
-Agent 按一份简短的指南执行。指南以纯 Markdown 发布，任何 Agent 都能直接获取：
+Agent 按一份简短的指南执行。指南以纯 Markdown 发布，任何 Agent 都能直接获取。个人版和团队版各有一份，安装命令相同，只有指南不同：
 
-- 中文：`https://docs.openviking.ai/agents/zh/onboarding.md`
-- 英文：`https://docs.openviking.ai/agents/en/onboarding.md`
+- 个人版：`https://docs.openviking.ai/agents/zh/onboarding.md`（英文把 `zh` 换成 `en`）
+- 团队版：`https://docs.openviking.ai/agents/zh/onboarding-team.md`（英文同上）
 
 两份也都可以从 `docs.openviking.net` 访问，中国大陆访问通常更快。
 
 ## 提示词
 
-复制提示词，发送前把 `<API_KEY>` 换成你的 key，在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_07-agent-onboarding)的**用户管理 → API Key** 中获取。
+先在提示词标题栏选版本：自己一个人用选**个人版**；你是团队里的一名成员，和同事共用一个 OpenViking 账号下的共享目录，选**团队版**。复制提示词，发送前把 `<API_KEY>` 换成你的 key：个人版和团队管理员在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_07-agent-onboarding)的**用户管理 → API Key** 中获取，团队成员在团队分发给你的 OpenViking 工作台中获取。
 
-<AgentPrompt>
+<AgentPrompt editions="个人版|团队版" ids="personal|team">
 
 ```text
 帮我安装 OpenViking 记忆插件，并带我开始使用。OpenViking 是为 Agent 提供的上下文数据库（https://github.com/volcengine/OpenViking），下面的命令和链接来自它的官方文档。
@@ -30,6 +30,17 @@ Agent 按一份简短的指南执行。指南以纯 Markdown 发布，任何 Age
 API key 是我在 OpenViking 控制台给自己生成的，安装器会把它存到本机的 ~/.openviking/ovcli.conf。命令里原样使用就行，回复里不用再显示它，也不要写进别的文件或规则。全程用中文和我交流。
 ```
 
+```text
+帮我安装 OpenViking 记忆插件，并带我开始使用。OpenViking 是为 Agent 提供的上下文数据库（https://github.com/volcengine/OpenViking），下面的命令和链接来自它的官方文档。
+
+1. 运行官方安装器。它需要联网并写入我的主目录，如果被你的沙箱拦住，请向我申请批准：
+   curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang zh --url https://api.vikingdb.cn-beijing.volces.com/openviking --api-key <API_KEY>
+2. 装好后读 OpenViking 的接入引导，按它带我完成设置。导入历史、写协作规则这类选择，引导会让你先问我。docs.openviking.ai 和 docs.openviking.net 是同一个文档站，哪个打得开用哪个：
+   https://docs.openviking.ai/agents/zh/onboarding-team.md
+
+API key 是我在 OpenViking 控制台或工作台拿到的我自己的 key，安装器会把它存到本机的 ~/.openviking/ovcli.conf。命令里原样使用就行，回复里不用再显示它，也不要写进别的文件或规则。全程用中文和我交流。
+```
+
 </AgentPrompt>
 
 安装器会给本机检测到的所有受支持的 Agent 都装上插件，所以你装过的其他 Agent 也会装上；每个 Agent 都要各自重启后，插件才会在里面生效。安装器还会同时安装 `ov` 命令，Agent 要用它检查连接、添加文件。`--lang` 设置安装器的语言，安装器最后打印的引导链接也随之选择语言。想只装其中几个，加上 `--harness` 并用逗号分隔列出，例如 `--harness claude,cli`，详见[统一安装器](../agent-integrations/16-capability-reference.md#_3-1-2-统一安装器)。
@@ -40,11 +51,19 @@ API key 是我在 OpenViking 控制台给自己生成的，安装器会把它存
 
 ## 已经装好
 
-如果插件已经装好，在 Agent 里开一个新会话，发送：
+如果插件已经装好，在 Agent 里开一个新会话，按你的版本发送：
 
-```text
+::: code-group
+
+```text [个人版]
 按 https://docs.openviking.ai/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
 ```
+
+```text [团队版]
+按 https://docs.openviking.ai/agents/zh/onboarding-team.md 带我完成 OpenViking 首次使用。
+```
+
+:::
 
 ## Agent 会做什么
 
@@ -55,7 +74,9 @@ API key 是我在 OpenViking 控制台给自己生成的，安装器会把它存
 5. **告诉你怎么重启。** 插件要在 Agent 重新启动后才会加载。Agent 会给出你正在对话的这个 Agent 的具体操作：Codex 里先信任 OpenViking 的 hooks（CLI 在会话里输入 `/hooks`，桌面版点输入框下方的 hooks 图标），再退出、回到同一段对话（CLI 运行 `codex resume --last`），说一句「已重启」，如果仍出现「Hooks need review」，选 **Trust all and continue**；Claude Code 和其他 Agent 开一个新会话，发它给你的第一句话。安装器如果还装进了其他 Agent，它会告诉你那些也需要重启。
 6. **让你看到 OpenViking 在起作用。** 重启之后，你的第一个问题会基于召回的上下文回答，Agent 会告诉你在哪里能看到：Claude Code 的来源卡片、Codex 的 OV-Usage 行，等等。
 
-Agent 只在需要你做决定时提问：带入哪些工作（看到数量后再确认一次），以及要不要写入协作规则；每次都会先讲清对你有什么用、会发送或改动什么。已经选过的不会重复问。
+**团队版多出来的部分。** 第 1 步会讲清你自己的空间和团队共享目录的区别：你的记忆、会话和个人资料只有你能看到；团队共享的资料在 `viking://resources/`，共享的 Agent 技能在 `viking://agent/skills/`，每次提问前召回的上下文里也包括它们。导入历史之后多一步：Agent 先列出团队共享目录里同事已经贡献了什么、有哪些共享技能，再问你要不要把刚导入的项目（没导入时是当前项目）的方案文档和一份进展摘要贡献到 `viking://resources/<你的用户名>/<项目名>/`，团队成员都能看到。协作规则默认把重要决定、进展和产出存进团队目录下你自己的文件夹，草稿和你说不共享的内容留在个人空间；你也可以改成「默认存个人空间，共享前先问我」。重启后可以选「了解团队共享的上下文」。
+
+Agent 只在需要你做决定时提问：带入哪些工作（看到数量后再确认一次）、团队版里要不要贡献给团队，以及要不要写入协作规则；每次都会先讲清对你有什么用、会发送或改动什么。已经选过的不会重复问。
 
 ## 另请参阅
 

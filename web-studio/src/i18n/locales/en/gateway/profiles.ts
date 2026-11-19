@@ -80,10 +80,15 @@ const profiles = {
       description:
         'Give the model your OpenViking profile when a conversation starts. This works independently of memory recall.',
     },
+    soul: {
+      label: 'Soul at conversation start',
+      description:
+        'Give the model your soul.md, the standing instructions you keep in OpenViking, when a conversation starts. The model is told to follow it. It is added whole and does not count against the opening context budget.',
+    },
     profileMaxTokens: {
       label: 'Opening context budget',
       description:
-        'Limit the profile and memory and skill catalogs provided at the start. Catalogs require the read tool. This budget is separate from recall; 0 omits all three.',
+        'Limit the profile and memory and skill catalogs provided at the start. Catalogs require the read tool. This budget is separate from recall; 0 omits all three. The soul is not counted.',
     },
     showRecall: {
       label: 'Show recall summary',
@@ -148,19 +153,19 @@ const profiles = {
     description:
       'Write finished turns to an OpenViking session so OpenViking can extract memories.',
     idleSeconds: {
-      label: 'Save the latest reply after',
+      label: 'Commit when idle for',
       description:
-        'A turn is saved as soon as the next message arrives. The latest reply waits this long for a follow-up; then it is saved and OpenViking starts extracting memories.',
+        'Once no turn has ended for this long, everything saved is committed and memories are extracted. When the gateway leaves commits to OpenViking (openviking_auto_commit), values below 300 seconds count as 300 and the server needs session auto-commit enabled.',
     },
     commitTokens: {
       label: 'Commit after',
       description:
-        'Commit once this much saved conversation is waiting. OpenViking extracts memories when a commit happens.',
+        'When uncommitted messages reach this many tokens at the end of a turn, they are committed and memories are extracted, keeping the latest messages.',
     },
     keepRecentMessages: {
       label: 'Keep recent messages',
       description:
-        'Each commit leaves at least this many of the latest messages, in whole turns, in the session.',
+        'How many of the latest messages stay in the session when Commit after is reached.',
     },
   },
   longConversations: {

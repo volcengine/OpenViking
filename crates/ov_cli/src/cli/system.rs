@@ -88,6 +88,8 @@ pub(crate) enum SnapshotCmd {
         branch: String,
         #[arg(long, default_value_t = 20)]
         limit: u32,
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
         /// Show only commits touching any of these viking:// URIs (comma-separated); accepts files and directories.
         #[arg(long, value_delimiter = ',')]
         paths: Option<Vec<String>>,

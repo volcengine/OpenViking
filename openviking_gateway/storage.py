@@ -21,7 +21,7 @@ import orjson
 from openviking.crypto.encryptor import MAGIC
 
 from .cache import TTLCache
-from .capture_store import CaptureQueue, SQLiteCaptureQueue
+from .capture_store import CaptureStore, SQLiteCaptureStore
 from .replay_store import ReplayStore, SQLiteReplayStore
 from .state_store import SQLiteStateStore, StateStore
 
@@ -33,6 +33,15 @@ ENCRYPTION_ACCOUNT = "_gateway"
 LEGACY_KEY_ENVIRONMENT = "OPENVIKING_GATEWAY_ENCRYPTION_KEY"
 
 
+try:
+    from redis.exceptions import RedisClusterException, RedisError
+except ImportError:
+    RedisClusterException = RedisError = None
+# What a failing state store raises: the request cannot be served until the store is back.
+# RedisClusterException does not derive from RedisError.
+STORE_ERRORS = (sqlite3.Error,) + ((RedisError, RedisClusterException) if RedisError else ())
+
+
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -41,7 +50,7 @@ class KernelStore(Protocol):
     """Composition port; adapters may pipeline the independent reads."""
 
     replay: ReplayStore
-    capture: CaptureQueue
+    capture: CaptureStore
     state: StateStore
 
     async def initialize(self) -> None: ...
@@ -290,7 +299,7 @@ class SQLiteKernelStore(Database):
     def __init__(self, path, encryptor=None):
         super().__init__(path, encryptor)
         self.replay = SQLiteReplayStore(self)
-        self.capture = SQLiteCaptureQueue(self)
+        self.capture = SQLiteCaptureStore(self)
         self.state = SQLiteStateStore(self)
         self._loads = []
 
@@ -314,6 +323,8 @@ class SQLiteKernelStore(Database):
                         scope TEXT, key TEXT, value BLOB NOT NULL, version INTEGER NOT NULL,
                         touched REAL NOT NULL,
                         PRIMARY KEY(scope,key));
+                    -- ready is when the session's idle commit is due. lease and owner are
+                    -- unused: earlier versions leased deliveries here.
                     CREATE TABLE IF NOT EXISTS capture (
                         scope TEXT, session TEXT, value BLOB NOT NULL, version INTEGER NOT NULL,
                         ready REAL, lease REAL NOT NULL DEFAULT 0, owner TEXT,

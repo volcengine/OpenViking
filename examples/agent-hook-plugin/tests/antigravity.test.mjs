@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { expectExit, runHookScript } from "../../memory-plugin-shared/testing/support.mjs";
+import { antigravityTranscriptPath, resolveAntigravityTurnStep } from "../hosts/antigravity.mjs";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const hookEntry = join(pluginRoot, "scripts", "hook.mjs");
@@ -179,6 +180,44 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     assert.match(noTranscript.injectSteps?.[0]?.systemMessage?.systemMessage || "", /antigravity memory/);
   } finally {
     server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity treats an input the transcript has not recorded yet as a new turn", () => {
+  // The previous turn is answered; the new turn's USER_INPUT step is not on disk.
+  assert.equal(resolveAntigravityTurnStep(firstTurn, 5, "What is the retry budget?"), null);
+  assert.equal(resolveAntigravityTurnStep(firstTurn, 5, "  What is the\nretry budget?  "), null);
+  assert.equal(resolveAntigravityTurnStep(firstTurn, 5, "And the timeout?"), undefined);
+  assert.equal(resolveAntigravityTurnStep(firstTurn, 5), null);
+
+  // transcript.jsonl keeps only the head and tail of a long record, which can
+  // not be compared with the input, so it stays a wakeup.
+  const truncated = step(0, {
+    source: "USER_EXPLICIT",
+    type: "USER_INPUT",
+    content: "<USER_REQUEST>\nWhat is the …",
+    truncated_fields: ["content"],
+  }) + step(1, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Three." });
+  assert.equal(resolveAntigravityTurnStep(truncated, 2, "What is the retry budget?"), null);
+
+  // Only the SessionStart steps are on disk before the first turn is written.
+  const startOnly = step(0, { source: "SYSTEM_SDK", type: "SYSTEM_MESSAGE", content: "<openviking-context>start</openviking-context>" });
+  assert.equal(resolveAntigravityTurnStep(startOnly, 1, "First prompt"), undefined);
+});
+
+test("Antigravity reads transcript_full.jsonl in place of the truncated transcript", () => {
+  const root = mkdtempSync(join(tmpdir(), "openviking-antigravity-transcript-"));
+  try {
+    const short = join(root, "transcript.jsonl");
+    writeFileSync(short, "");
+    assert.equal(antigravityTranscriptPath(short), short);
+    writeFileSync(join(root, "transcript_full.jsonl"), "");
+    assert.equal(antigravityTranscriptPath(short), join(root, "transcript_full.jsonl"));
+    const other = join(root, "late_transcript.jsonl");
+    assert.equal(antigravityTranscriptPath(other), other);
+    assert.equal(antigravityTranscriptPath(undefined), "");
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

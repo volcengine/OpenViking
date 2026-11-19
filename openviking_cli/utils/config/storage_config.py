@@ -103,9 +103,9 @@ class StorageConfig(BaseModel):
         if isinstance(data, dict) and "task_tracker" in data:
             data = dict(data)
             data.pop("task_tracker", None)
-            logger.warning(
-                "StorageConfig: 'task_tracker' is deprecated and ignored. "
-                "Task records are always persisted."
+            logger.info(
+                "'task_tracker' is deprecated and ignored. Task records are always persisted.",
+                extra={"degraded": True},
             )
         return data
 
@@ -113,9 +113,9 @@ class StorageConfig(BaseModel):
     def resolve_paths(self):
         """Normalize storage paths and map legacy transaction settings into native pathlock config."""
         if "lock_timeout" in self.transaction.model_fields_set:
-            logger.warning(
-                "StorageConfig: 'transaction.lock_timeout' is deprecated and ignored. "
-                "The runtime wait timeout is fixed at 0.0 seconds."
+            logger.info(
+                "'transaction.lock_timeout' is deprecated and ignored. The runtime wait timeout is fixed at 0.0 seconds.",
+                extra={"degraded": True},
             )
 
         if (
@@ -123,21 +123,19 @@ class StorageConfig(BaseModel):
             and "lock_expire_secs" not in self.agfs.pathlock.model_fields_set
         ):
             self.agfs.pathlock.lock_expire_secs = self.transaction.lock_expire
-            logger.warning(
-                "StorageConfig: 'transaction.lock_expire' is deprecated. "
-                "Mapped to 'storage.agfs.pathlock.lock_expire_secs'."
+            logger.info(
+                "'transaction.lock_expire' is deprecated. Mapped to 'storage.agfs.pathlock.lock_expire_secs'."
             )
         elif "lock_expire" in self.transaction.model_fields_set:
-            logger.warning(
-                "StorageConfig: 'transaction.lock_expire' is deprecated and ignored because "
-                "'storage.agfs.pathlock.lock_expire_secs' is set."
+            logger.info(
+                "'transaction.lock_expire' is deprecated and ignored because 'storage.agfs.pathlock.lock_expire_secs' is set.",
+                extra={"degraded": True},
             )
 
         if "redo_recovery_enabled" in self.transaction.model_fields_set:
-            logger.warning(
-                "StorageConfig: 'transaction.redo_recovery_enabled' is deprecated and ignored. "
-                "Session commit phase-2 recovery now resumes from the persistent "
-                "'session_commit' queue."
+            logger.info(
+                "'transaction.redo_recovery_enabled' is deprecated and ignored. Session commit phase-2 recovery now resumes from the persistent 'session_commit' queue.",
+                extra={"degraded": True},
             )
 
         # Update paths to use workspace (expand ~ first)

@@ -13,6 +13,7 @@ from tempfile import TemporaryFile
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.expr import (
     And,
@@ -207,14 +208,20 @@ class CollectionAdapter(ABC):
                 try:
                     coll.drop_index(index_name)
                 except Exception as e:
-                    logger.warning("Failed to drop index %s: %s", index_name, e)
+                    logger.info(
+                        "Failed to drop index %s: %s", short_hash(str(index_name)), type(e).__name__
+                    )
         except Exception as e:
-            logger.warning("Failed to list indexes before dropping collection: %s", e)
+            logger.info("Failed to list indexes before dropping collection: %s", type(e).__name__)
 
         try:
             coll.drop()
-        except NotImplementedError:
-            logger.warning("Collection drop is not supported by backend mode=%s", self.mode)
+        except NotImplementedError as _log_error:
+            logger.info(
+                "Collection drop is not supported by backend mode=%s error_type=%s",
+                self.mode,
+                type(_log_error).__name__,
+            )
             return False
         self._collection = None
         return True
@@ -706,17 +713,20 @@ class CollectionAdapter(ABC):
         output_fields: Optional[list[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[list[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         compiled_filter = self._compile_filter(filter)
         logger.debug(
-            "search_by_keywords: keywords=%s query=%s limit=%s offset=%s filter=%s output_fields=%s",
-            keywords,
-            query,
+            "Keyword search prepared keyword_count=%d query_length=%d limit=%s offset=%s has_filter=%s",
+            # input params choose either keywords or query
+            len(keywords or ()),
+            len(query or ""),
             limit,
             offset,
-            json.dumps(compiled_filter, ensure_ascii=False),
-            output_fields,
+            bool(compiled_filter),
         )
         result = coll.search_by_keywords(
             index_name=self._index_name,
@@ -728,6 +738,9 @@ class CollectionAdapter(ABC):
             offset=offset,
             filters=compiled_filter,
             output_fields=output_fields,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
+            advance=advance,
         )
         records: list[Dict[str, Any]] = []
         for item in result.data:

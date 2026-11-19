@@ -4,8 +4,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.store.store import IKVStore
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class FileStore(IKVStore):
@@ -43,8 +46,12 @@ class FileStore(IKVStore):
         if self.base_path is not None:
             try:
                 path.relative_to(self.base_path)
-            except ValueError:
-                logger.error(f"Path traversal attempt detected: {key}")
+            except ValueError as _log_error:
+                logger.debug(
+                    "Path traversal attempt detected: %s error_type=%s",
+                    short_hash(str(key)),
+                    type(_log_error).__name__,
+                )
                 raise ValueError(f"Invalid path: {key} is outside base directory")
 
         return path
@@ -69,15 +76,21 @@ class FileStore(IKVStore):
         except FileNotFoundError:
             # logger.warning(f"File not found: {key}")
             return None
-        except PermissionError:
-            logger.error(f"Permission denied reading file: {key}")
+        except PermissionError as _log_error:
+            logger.error(
+                "Permission denied reading file: %s error_type=%s",
+                short_hash(str(key)),
+                type(_log_error).__name__,
+            )
             return None
         except ValueError as e:
             # Path validation failed
-            logger.error(str(e))
+            logger.info("get path rejected error_type=%s", type(e).__name__)
             return None
         except Exception as e:
-            logger.error(f"Unexpected error reading file {key}: {e}")
+            logger.error(
+                "Unexpected error reading file %s: %s", short_hash(str(key)), type(e).__name__
+            )
             return None
 
     def put(self, key: str, value: bytes) -> bool:
@@ -110,8 +123,12 @@ class FileStore(IKVStore):
             # Atomic replace
             os.replace(tmp_path, path)
             return True
-        except PermissionError:
-            logger.error(f"Permission denied writing file: {key}")
+        except PermissionError as _log_error:
+            logger.error(
+                "Permission denied writing file: %s error_type=%s",
+                short_hash(str(key)),
+                type(_log_error).__name__,
+            )
             if tmp_path and tmp_path.exists():
                 try:
                     tmp_path.unlink()
@@ -120,7 +137,7 @@ class FileStore(IKVStore):
             return False
         except OSError as e:
             # Handle disk full, path too long, and other system errors
-            logger.error(f"OS error writing file {key}: {e}")
+            logger.error("OS error writing file %s: %s", short_hash(str(key)), type(e).__name__)
             if tmp_path and tmp_path.exists():
                 try:
                     tmp_path.unlink()
@@ -129,10 +146,12 @@ class FileStore(IKVStore):
             return False
         except ValueError as e:
             # Path validation failed
-            logger.error(str(e))
+            logger.info("put path rejected error_type=%s", type(e).__name__)
             return False
         except Exception as e:
-            logger.error(f"Unexpected error writing file {key}: {e}")
+            logger.error(
+                "Unexpected error writing file %s: %s", short_hash(str(key)), type(e).__name__
+            )
             if tmp_path and tmp_path.exists():
                 try:
                     tmp_path.unlink()
@@ -159,13 +178,19 @@ class FileStore(IKVStore):
             # Idempotency: deleting a non-existent file is a success
             # logger.debug(f"File not found for deletion (ignored): {key}")
             return True
-        except PermissionError:
-            logger.error(f"Permission denied deleting file: {key}")
+        except PermissionError as _log_error:
+            logger.error(
+                "Permission denied deleting file: %s error_type=%s",
+                short_hash(str(key)),
+                type(_log_error).__name__,
+            )
             return False
         except ValueError as e:
             # Path validation failed
-            logger.error(str(e))
+            logger.info("delete path rejected error_type=%s", type(e).__name__)
             return False
         except Exception as e:
-            logger.error(f"Unexpected error deleting file {key}: {e}")
+            logger.error(
+                "Unexpected error deleting file %s: %s", short_hash(str(key)), type(e).__name__
+            )
             return False

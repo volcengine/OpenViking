@@ -18,11 +18,12 @@ from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.observability.log_safety import short_hash
 from openviking.pyagfs.exceptions import AGFSInternalError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import (
-    COMPILE_NAME_PATTERN,
     CompileLifecycle,
+    CompileName,
     UpdateSchedule,
     execution_signature,
     is_versioned,
@@ -143,9 +144,8 @@ class CompileInputs(BaseModel):
 class CompileCreateRequest(CompileInputs):
     """Save complete inputs under a caller-supplied configuration name unique to its creator within the account."""
 
-    compile_name: str = Field(
-        pattern=COMPILE_NAME_PATTERN,
-        description="Case-sensitive configuration name: 1–64 ASCII letters, digits, underscores or hyphens. The first character cannot be a hyphen.",
+    compile_name: CompileName = Field(
+        description="Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Maximum length: 64 characters for ASCII-only names, 32 for names containing Han characters.",
     )
 
 
@@ -154,9 +154,8 @@ class CompileRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    compile_name: str | None = Field(
+    compile_name: CompileName | None = Field(
         default=None,
-        pattern=COMPILE_NAME_PATTERN,
         description="Saved configuration name; omit for a one-off execution with complete inputs.",
     )
     from_: list[str] = Field(default_factory=list, alias="from")
@@ -487,7 +486,7 @@ class CompileService:
             base_url=base_url.rstrip("/"),
             gateway_token=gateway_token,
             http_timeout_seconds=10.0,
-            poll_interval_ms=30000,
+            poll_interval_ms=self._config.poll_interval_ms,
             local=True,
         )
 
@@ -663,16 +662,14 @@ class CompileService:
         compile_name = request.compile_name
         owner_user_id = (request.args or {}).get("owner_user_id", ctx.user.user_id)
         if compile_name and locked_record is None:
-            configuration = await self._configuration(
-                compile_name, ctx, action=AclAction.WRITE, owner_user_id=owner_user_id
-            )
+            lifecycle = self._require_lifecycle()
+            await lifecycle.store.require_config_exists(ctx.account_id, owner_user_id, compile_name)
             task = None
             try:
-                async with self._require_lifecycle().store.edit(
-                    ctx.account_id,
-                    configuration["execution_context"]["owner_user_id"],
-                    compile_name,
+                async with lifecycle.store.edit(
+                    ctx.account_id, owner_user_id, compile_name
                 ) as record:
+                    await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
                     task = await self.create(
                         request,
                         connection=connection,
@@ -685,11 +682,12 @@ class CompileService:
             except (AGFSInternalError, ValueError) as exc:
                 if task is None or task.error == ENQUEUE_FAILURE or not _lost_state_lease(exc):
                     raise
-                logger.warning(
-                    "Queued Compile task %s lost the state.json lease for %s",
+                logger.info(
+                    "queued compile task state lease lost; retaining accepted task task_id=%s name_hash=%s error_type=%s",
                     task.task_id,
-                    compile_name,
-                    exc_info=True,
+                    short_hash(str(compile_name)),
+                    type(exc).__name__,
+                    extra={"error_type": type(exc).__name__},
                 )
             return task
         if compile_name:
@@ -753,6 +751,7 @@ class CompileService:
             submission_payload=submitted if idempotency_key else None,
             submission_private_payload={} if compile_name else None,
             on_task_created=record_created if compile_name else None,
+            retry_enqueue=trigger == "scheduled",
         )
 
     async def on_start(self, task: TaskRecord) -> str | ExternalTaskSnapshot | None:
@@ -780,7 +779,12 @@ class CompileService:
                     ),
                 )
             except ExternalTaskError as exc:
-                logger.warning("Failed to archive Compile session %s: %s", session_id, exc.code)
+                logger.info(
+                    "compile session archive failed session_hash=%s error_code=%s",
+                    short_hash(str(session_id)),
+                    exc.code,
+                    extra={"degraded": True},
+                )
         if self._lifecycle is None:
             return snapshot
         return await self._lifecycle.on_finish(task, snapshot)
@@ -1110,7 +1114,7 @@ class CompileService:
     async def list_runs(
         self, compile_name: str, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        await self._configuration(compile_name, ctx, action=None)
+        """Page the caller's run history."""
         runs = await self._require_lifecycle().store.list_runs(
             ctx.account_id, ctx.user.user_id, compile_name, cursor=cursor, limit=limit + 1
         )
@@ -1118,8 +1122,7 @@ class CompileService:
         return {"runs": page, "next_cursor": page[-1]["task_id"] if len(runs) > limit else None}
 
     async def get_run(self, compile_name: str, task_id: str, ctx: RequestContext) -> dict[str, Any]:
-        """Return one frozen run belonging to the caller's named configuration."""
-        await self._configuration(compile_name, ctx, action=None)
+        """Return the caller's frozen run, raising NotFoundError when the run is absent."""
         run = await self._require_lifecycle().store.get_run(
             ctx.account_id, ctx.user.user_id, compile_name, task_id
         )

@@ -6,8 +6,10 @@ import asyncio
 import logging
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
+import async_timeout
 import orjson
 
 from .blocks import RECALL_PROVENANCE_NOTE, block, gateway_note, history_hint, token_estimate
@@ -28,11 +30,14 @@ from .compaction import (
 )
 from .models import Policy
 from .notices import recall_notice
+from .observe import degrade
 from .profile import build_profile
 from .protocols import (
+    appended_request,
     classify,
     clean_text,
     client_openviking_tools,
+    codex_turn,
     is_user,
     plugin_present,
     prefix_chain,
@@ -77,7 +82,6 @@ class Prepared:
     anonymous: bool = False
     capture: Document = field(default_factory=Document)
     observation: Document = field(default_factory=Document)
-    capture_target: str = ""
     tools_active: bool = False
     # Definitions and hidden history replay, but the tool loop refuses every gateway call.
     tools_closed: bool = False
@@ -100,9 +104,43 @@ class Prepared:
     peer: str | None = None
 
 
+class Budget:
+    """A time limit for memory preparation that a compaction summary call does not use up."""
+
+    def __init__(self, seconds):
+        self.deadline = asyncio.get_running_loop().time() + seconds if seconds else None
+        self.timeout = None
+
+    def limit(self):
+        self.timeout = async_timeout.timeout_at(self.deadline)
+        return self.timeout
+
+    @property
+    def expired(self):
+        return self.timeout is not None and self.timeout.expired
+
+    @contextmanager
+    def paused(self):
+        """Lift the limit inside; on exit, push the deadline back by the time spent there."""
+        if self.deadline is None or self.timeout is None:
+            yield
+            return
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        # reject() and update() exist on async_timeout's Timeout on every Python;
+        # reschedule() only on 3.11+.
+        self.timeout.reject()
+        try:
+            yield
+        finally:
+            self.deadline += loop.time() - started
+            self.timeout.update(self.deadline)
+
+
 class MemoryKernel:
-    def __init__(self, store: KernelStore, viking):
+    def __init__(self, store: KernelStore, viking, auto_commit=False, management=None):
         self.store, self.viking = store, viking
+        self.capture = CapturePipeline(store.capture, viking, auto_commit, management)
 
     @staticmethod
     def degraded_body(body, protocol):
@@ -111,13 +149,25 @@ class MemoryKernel:
             return {**body, adapter.field: strip_thinking(body.get(adapter.field, []))}
         return body
 
-    async def enhance(self, body, protocol, *args, **kwargs):
+    async def enhance(self, body, protocol, *args, budget=None, **kwargs):
+        budget = budget or Budget(0)
         try:
-            prepared = await self.prepare(body, protocol, *args, **kwargs)
+            async with budget.limit():
+                prepared = await self.prepare(body, protocol, *args, budget=budget, **kwargs)
             return prepared.body, prepared, prepared.metrics
-        except Exception:
-            logger.exception("OpenViking Gateway preparation failed")
-            return self.degraded_body(body, protocol), None, {"degradation": "memory_store_failure"}
+        except Exception as error:
+            metrics = {}
+            if isinstance(error, asyncio.TimeoutError) and budget.expired:
+                logger.info("gateway preparation timed out; forwarding without memory")
+                degrade(metrics, "prepare_timeout")
+            else:
+                logger.info(
+                    "gateway preparation failed; forwarding without memory error_type=%s",
+                    type(error).__name__,
+                    extra={"degraded": True, "error_type": type(error).__name__},
+                )
+                degrade(metrics, "memory_store_failure")
+            return self.degraded_body(body, protocol), None, metrics
 
     async def sent_history(self, scope, messages, protocol):
         """The history as the gateway relayed it: thinking a client resent as text is dropped.
@@ -169,12 +219,14 @@ class MemoryKernel:
         ]
         owners = await self.store.replay.replies(scope, endpoints) if endpoints else {}
         anonymous = sid is None
+        source = "header"
         if anonymous:
             latest = next((owners[a] for a in reversed(endpoints) if a in owners), set())
             sid = next(iter(latest)) if len(latest) == 1 else "anonymous-" + uuid.uuid4().hex
+            source = "reply_match" if len(latest) == 1 else "new"
         # A reply two sessions produced, such as a greeting, proves no inheritance.
         ancestors = sorted({next(iter(o)) for o in owners.values() if len(o) == 1} - {sid})
-        return sid, anonymous, chain, body_chain, ancestors
+        return sid, anonymous, chain, body_chain, ancestors, source
 
     async def prepare(
         self,
@@ -188,8 +240,12 @@ class MemoryKernel:
         upstreams=(),
         summarize=None,
         peer=None,
+        budget=None,
     ):
-        """Build the upstream body; ``summarize(prepared, body)`` sends a summary request."""
+        """Build the upstream body; ``summarize(prepared, body)`` sends a summary request.
+
+        ``budget`` is the caller's preparation limit; a compaction does not count against it.
+        """
         adapter = tool_protocol(protocol)
         sent = adapter.messages(body)
         if not isinstance(sent, list) or not all(isinstance(m, dict) for m in sent):
@@ -201,7 +257,7 @@ class MemoryKernel:
         # Anchors, capture and recall read the history as the gateway relayed it;
         # the upstream still gets exactly what the client sent.
         messages, thinking = await self.sent_history(scope, sent, protocol)
-        sid, anonymous, chain, body_chain, ancestors = await self.identity(
+        sid, anonymous, chain, body_chain, ancestors, source = await self.identity(
             scope, messages, protocol, headers
         )
         as_text = (
@@ -268,7 +324,6 @@ class MemoryKernel:
             capture_chain=body_chain,
             capture=capture,
             observation=observations.get(sid, Document()),
-            capture_target=capture.value.get("ov_session", ""),
             upstream=upstream,
             ancestors=ancestors,
             thinking=thinking,
@@ -280,6 +335,7 @@ class MemoryKernel:
                 "recall_count": 0,
                 "recall_ms": 0,
                 "session": sid,
+                "session_source": source,
                 "protocol": protocol,
                 "credential_id": credential["id"],
             },
@@ -289,7 +345,19 @@ class MemoryKernel:
         self.replay(prepared)
         self.configure_tools(prepared, policy, owner)
         if not disabled and policy.capture and kind == "user" and anchor >= 0:
-            await CapturePipeline(self.store.capture).confirm(prepared, credential, policy)
+            await self.capture.open(prepared)
+        if kind == "auxiliary" and messages and appended_request(messages[-1]):
+            # Claude Code compacts by appending its request to a tool result: the history
+            # before it is saved as at a cut, and neither the request nor its reply is.
+            *before, last = messages
+            last = {**last, "content": last["content"][:-1]}
+            kept = [*body_chain[:-1], *hidden_chain([last], protocol, body_chain[:-1])]
+            await self.capture.save_cut(prepared, credential, kept[-1], [*before, last], kept)
+        elif (codex_turn(headers).get("compaction") or {}).get("phase") == "mid_turn":
+            # Codex sends its request as a user message of its own, after the turn so far.
+            turn = next((i for i in range(anchor - 1, -1, -1) if is_user(messages[i])), -1)
+            cut = next((a for a in reversed(body_chain[: max(anchor, 0)]) if a), "")
+            await self.capture.save_cut(replace(prepared, anchor=turn), credential, cut)
         if kind in {"user", "continuation"}:
             prepared.context_window = window_size(prepared, policy)
             prepared.context_tokens = await self.measure(prepared)
@@ -302,7 +370,8 @@ class MemoryKernel:
                 and not disabled
                 and prepared.context_tokens >= policy.compaction_threshold * prepared.context_window
             ):
-                await self.compact(prepared, credential, policy, summarize)
+                with (budget or Budget(0)).paused():
+                    await self.compact(prepared, credential, policy, summarize)
         # Recall and window signals come after any new cut, so they describe the
         # context the model actually gets.
         if not disabled:
@@ -374,15 +443,17 @@ class MemoryKernel:
                 return {**root, "tools": [], "tool_skip_reason": ""}
             if tool_block_reason(body, protocol, upstream):
                 return {**root, "tools": [], "tool_skip_reason": ""}
-            # A failed load leaves the session without tools.
-            tools, reason = [], ""
             try:
                 tools = select_tools(await self.viking.tools(credential["openviking_key"]), policy)
             except VikingError:
-                reason = "tools_unavailable"
-            decision = await self.store.replay.put(
-                scope, sid, K.TOOLS, "", {"tools": tools, "tool_skip_reason": reason}
-            )
+                # Nothing is stored, so the conversation's next request loads again.
+                return {**root, "tools": [], "tool_skip_reason": "tools_unavailable"}
+            value = {"tools": tools, "tool_skip_reason": ""}
+            # Tools that arrive after the first injection are announced on the next one.
+            if any(kind == K.INJECTION for kind, _ in records):
+                value["late"] = True
+            decision = await self.store.replay.put(scope, sid, K.TOOLS, "", value)
+            records[K.TOOLS, ""] = decision
         tools, reason = decision["tools"], decision.get("tool_skip_reason", "")
         closed = records.get((K.TOOLS_CLOSED, ""))
         # Client OpenViking tools may appear late, as when MCP servers connect after the
@@ -464,9 +535,9 @@ class MemoryKernel:
         if reason:
             request.body[adapter.field] = strip_thinking(messages)
             request.strip_replayed_thinking = True
-            request.metrics["degradation"] = reason
+            degrade(request.metrics, reason)
         if request.disabled:
-            request.metrics["degradation"] = "plugin_present"
+            degrade(request.metrics, "plugin_present")
 
     async def recall(self, request, credential, policy):
         started = time.monotonic()
@@ -522,6 +593,8 @@ class MemoryKernel:
         overhead = token_estimate(block("gateway-recall", lead + "\n"))
         # The search entries a recall returned, for the notice.
         entries = []
+        # Whether this turn's opening tells the model about the gateway tools.
+        noted = False
 
         async def retrieve():
             if not reserved:
@@ -555,28 +628,38 @@ class MemoryKernel:
                 return {**decision, "reason": getattr(error, "reason", "recall_timeout")}
 
         async def opening():
+            nonlocal noted
             if existing:
-                return "", []
+                late = request.records.get((K.TOOLS, ""), {}).get("late")
+                if not (late and tools) or any(v.get("tools_noted") for _, v in existing):
+                    return "", []
+                noted = True
+                return block("gateway-session-start", gateway_note(policy, tools)), []
+            noted = bool(tools)
             profile = await build_profile(self.viking, credential["openviking_key"], policy, tools)
             request.metrics["profile_reason"] = profile["reason"]
             # After client-side compaction, the capture document still names the earlier sessions.
             hint = history_hint(
                 credential["user_id"], lineage(request.capture.value), tools, policy.capture
             )
+            note = gateway_note(policy, tools, "soul" in profile["parts"])
             text = block(
                 "gateway-session-start",
-                "\n\n".join(
-                    part for part in (gateway_note(policy, tools), hint, profile["text"]) if part
-                ),
+                "\n\n".join(part for part in (note, hint, profile["text"]) if part),
             )
             return text, [*profile["parts"], *(["history"] if hint else [])]
 
         decision, (start, parts) = await asyncio.gather(retrieve(), opening())
+        if decision["reason"].startswith("openviking_") or decision["reason"] == "recall_timeout":
+            # Recall went on without OpenViking's answer; ``degradation`` keeps its meaning.
+            degrade(request.metrics, "recall_failed", primary=False)
         status, reminder = status_line(request, policy)
         recalled = block("gateway-recall", "\n\n".join(p for p in (decision["text"], status) if p))
         # The opening block is immutable with recall but has its own budget, and
         # the window status line costs nothing.
         decision["text"] = "\n\n".join(part for part in (start, recalled) if part)
+        if noted:
+            decision["tools_noted"] = True
         if reminder:
             decision["reminder"] = reminder
         if policy.show_recall:
@@ -719,17 +802,25 @@ class MemoryKernel:
         await self.update_observation(request, observe)
         if request.ancestors or request.thinking:
             await self.store.keep(request.scope, request.ancestors, request.thinking)
+
+    async def save(self, request, credential, response):
+        """Write the turn this reply ends to OpenViking; returns how many messages went.
+
+        A reply that hands the turn to client tools ends nothing: the continuation
+        that answers saves the whole turn.
+        """
         if (
             request.disabled
             or request.kind not in {"user", "continuation"}
             or not response.complete
             or not response.message
             or request.anchor < 0
+            or not Policy.model_validate(request.root["policy"]).capture
         ):
-            return
-        policy = Policy.model_validate(request.root["policy"])
-        if policy.capture:
-            await CapturePipeline(self.store.capture).stage(request, response, policy)
+            return 0
+        messages = [*request.messages, *response.output]
+        chain = reply_chain(request, response.output)
+        return await self.capture.save(request, credential, messages, chain)
 
     @staticmethod
     def assemble(request):
@@ -754,7 +845,7 @@ class MemoryKernel:
             cleaned = adapter.omit_hidden_history(messages)
             if cleaned != messages:
                 messages = cleaned
-                request.metrics.setdefault("degradation", "hidden_tool_history_unavailable")
+                degrade(request.metrics, "hidden_tool_history_unavailable", keep=True)
         request.body[adapter.field] = messages
 
     @staticmethod
@@ -847,16 +938,20 @@ class MemoryKernel:
             if not summary:
                 raise SummaryError("summary_empty")
         except SummaryError as error:
+            request.metrics["compaction_ms"] = round((time.monotonic() - started) * 1000, 2)
             await self.compaction_failed(request, error.reason)
             return
         except Exception:
-            logger.exception("OpenViking Gateway summary failed")
+            logger.info(
+                "gateway summary failed; using compaction fallback", extra={"degraded": True}
+            )
+            request.metrics["compaction_ms"] = round((time.monotonic() - started) * 1000, 2)
             await self.compaction_failed(request, "summary_failed")
             return
         anchor = request.capture_chain[cut]
-        if policy.capture and in_progress:
+        if in_progress:
             # First, so the hint names the session that receives the part being cut.
-            await CapturePipeline(self.store.capture).confirm_cut(request, anchor)
+            await self.capture.save_cut(request, credential, anchor)
         hint = cut_hint(request, credential["user_id"], policy)
         opening = opening_block(request.records, request.chain)
         text = replacement_text(summary, hint, opening, in_progress)

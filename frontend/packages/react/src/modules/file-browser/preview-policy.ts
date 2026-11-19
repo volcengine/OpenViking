@@ -1,9 +1,10 @@
-import { normalizeResourceUri } from './fs-uri.js';
+import {
+  isSystemUri,
+  normalizeResourceUri,
+} from '../../shared/resource-uri.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import { isExperienceFile } from './experience-data.js';
 
-export const isSystemUri = (uri: string) =>
-  /^viking:\/\/system(?:\/|$)/i.test(normalizeResourceUri(uri));
 export const isSummaryUri = (uri: string) =>
   /\/(?:\.abstract|\.overview)\.md$/i.test(normalizeResourceUri(uri));
 export const isEditableText = (uri: string) =>
@@ -45,7 +46,9 @@ export function previewPolicy({
   const summary = isSummaryUri(uri);
   const experience = isFile && isExperienceFile(uri);
   const wiki = dashboard?.kind === 'wiki';
-  const fileHistory = isFile && supportsFileHistory(uri);
+  const resource =
+    /^viking:\/\/(?:resources|(?:user\/[^/]+|~)\/resources)(?:\/|$)/.test(uri);
+  const fileHistory = isFile && supportsFileHistory(uri) && (!resource || wiki);
   return {
     system,
     edit: isFile && !system && !summary && !experience && canWrite,

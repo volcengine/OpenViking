@@ -61,7 +61,7 @@ async def test_commit_wm_override_only_changes_queued_wm_field(session, monkeypa
     session.add_message("user", [TextPart("remember this preference")])
     queued = []
 
-    async def enqueue(_name, data):
+    async def enqueue(_name, data, *, group_key):
         queued.append(data)
         return data["task_id"]
 

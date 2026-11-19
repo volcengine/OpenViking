@@ -1,9 +1,10 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { useOvClient } from '../../client/provider.js';
 import type { OvRequestOptions } from '../../client/types.js';
-import { nameFromUri } from './fs-model.js';
-import { DirectoryQueries } from './directory-queries.js';
-import { useQueryScope } from './use-query-scope.js';
+import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { DirectoryQueries } from '../../shared/directory-tree/directory-queries.js';
+import { useQueryScope } from '../../shared/request/use-query-scope.js';
+import { useUserRootMode } from '../../shared/directory-tree/user-root-context.js';
 
 const noSubscribe = () => () => {};
 const noSnapshot = () => undefined;
@@ -12,6 +13,7 @@ export function useSearchScopePage(
   uri: string | undefined,
   requestOptions?: OvRequestOptions,
 ) {
+  const userRootMode = useUserRootMode();
   const { request, error, aborted } = useQueryScope(
     useOvClient('local'),
     requestOptions,
@@ -20,8 +22,10 @@ export function useSearchScopePage(
   const [target, setTarget] = useState<string>();
   const session = useMemo(
     () =>
-      request && target ? new DirectoryQueries(request, target) : undefined,
-    [request, target],
+      request && target
+        ? new DirectoryQueries(request, target, undefined, userRootMode)
+        : undefined,
+    [request, target, userRootMode],
   );
   const dirs = useSyncExternalStore(
     aborted ? noSubscribe : (session?.subscribe ?? noSubscribe),

@@ -11,7 +11,15 @@ ACCOUNT_CASES = {
     "test_mysql_load_creates_default_account",
     "test_distributed_authentication_state_is_shared_and_service_scoped",
 }
-GROUPS = ("accounts", "redis_mysql", "task_work_mysql", "task_work_postgres", "watch_mysql")
+GROUPS = (
+    "accounts",
+    "redis_mysql",
+    "task_work_mysql",
+    "task_work_postgres",
+    "watch_mysql",
+    "watch_runtime_mysql",
+    "watch_process_mysql",
+)
 
 
 def schema_statements(sql):
@@ -91,8 +99,11 @@ def database_group(case):
     if "mysql" in parameters:
         if module == "tests.service.test_task_work_contract":
             return "task_work_mysql"
-        if module == "tests.resource.test_watch_store":
-            return "watch_mysql"
+        return {
+            "tests.resource.test_watch_store": "watch_mysql",
+            "tests.resource.test_watch_main_integration": "watch_runtime_mysql",
+            "tests.resource.test_watch_process": "watch_process_mysql",
+        }.get(module)
     return None
 
 

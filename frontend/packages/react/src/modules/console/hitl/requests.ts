@@ -70,10 +70,14 @@ export function builtinRequest(
     };
   }
   if (cardType !== 'compile_schedule') return;
-  const initial =
-    p.initial_value === undefined
-      ? { frequency: 'disabled' }
-      : object(p.initial_value);
+  if (p.initial_value === undefined)
+    return {
+      kind: 'schedule',
+      question,
+      initialValue: { mode: 'none' },
+      timezone: 'Asia/Shanghai',
+    };
+  const initial = object(p.initial_value);
   if (
     !initial ||
     !['disabled', 'daily', 'weekly'].includes(String(initial.frequency))

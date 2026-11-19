@@ -14,10 +14,6 @@
     var(--ov-ui-connect-muted-default)
   );
   --ov-ui-agent-connect-bg: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
-  --ov-ui-agent-connect-card: var(
-    --ov-ui-color-connect-card,
-    var(--ov-ui-connect-card-default)
-  );
   --ov-ui-agent-connect-tabs: var(
     --ov-ui-color-connect-tabs,
     var(--ov-ui-connect-tabs-default)
@@ -268,27 +264,43 @@
 }
 .ov-agent-connect__instructions-header {
   display: flex;
-  height: 34px;
+  min-height: 34px;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: space-between;
 }
 .ov-agent-connect__instructions-title {
+  min-width: 0;
   margin: 0;
   color: inherit;
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.ov-agent-connect__copy.ov-button {
+  max-width: 100%;
+  min-height: var(--ov-ui-button-height);
+  height: auto;
+  padding-block: 2px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .ov-agent-connect__copy svg {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
 }
+.ov-agent-connect__body,
+.ov-agent-connect__code-block,
+.ov-agent-connect__markdown :where(pre, table) {
+  border-radius: 8px;
+  background: var(--ov-ui-agent-connect-bg);
+}
 .ov-agent-connect__body {
   padding: 12px 16px;
   box-shadow: inset 0 0 0 1px var(--ov-ui-agent-connect-border);
-  border-radius: 12px;
-  background: var(--ov-ui-agent-connect-card);
   color: var(--ov-ui-agent-connect-secondary);
   font-size: 13px;
   line-height: 22px;
@@ -362,8 +374,6 @@
 }
 .ov-agent-connect__markdown pre {
   padding: 12px;
-  border-radius: 6px;
-  background: var(--ov-ui-agent-connect-bg);
   font-size: 12px;
   line-height: 20px;
   white-space: pre-wrap;
@@ -378,12 +388,27 @@
 }
 .ov-agent-connect__markdown table {
   width: 100%;
-  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid var(--ov-ui-agent-connect-border);
+  border-collapse: separate;
+  border-spacing: 0;
 }
 .ov-agent-connect__markdown :where(td, th) {
   padding: 6px;
-  border: 1px solid var(--ov-ui-agent-connect-border);
+  border: 0;
+  border-right: 1px solid var(--ov-ui-agent-connect-border);
+  border-bottom: 1px solid var(--ov-ui-agent-connect-border);
   text-align: left;
+}
+.ov-agent-connect__markdown :where(td, th):last-child {
+  border-right: 0;
+}
+.ov-agent-connect__markdown
+  table
+  > :last-child
+  > tr:last-child
+  > :where(td, th) {
+  border-bottom: 0;
 }
 
 .ov-agent-connect__guides {
@@ -463,11 +488,5 @@
   }
   .ov-agent-connect__guides {
     flex-wrap: wrap;
-  }
-  .ov-agent-connect__instructions-header {
-    height: auto;
-    min-height: 34px;
-    flex-wrap: wrap;
-    gap: 8px;
   }
 }

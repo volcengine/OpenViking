@@ -468,7 +468,8 @@ int IndexManagerImpl::handle_sorter_query(const SearchContext& ctx,
                                           const BitmapPtr& bitmap,
                                           SearchResult& result,
                                           const std::string& dsl) {
-  if (ctx.sorter_op->op_name() == "count" && !ctx.filter_op) {
+  const auto* counter = dynamic_cast<const CounterOp*>(ctx.sorter_op.get());
+  if (counter && counter->is_total_count() && !ctx.filter_op) {
     uint64_t valid_data_num = vector_index_->get_data_num();
 
     JsonDoc json_result;

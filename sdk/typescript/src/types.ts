@@ -174,6 +174,8 @@ export interface WriteOptions extends WaitOptions {
   processingMode?: ProcessingMode;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
+  resolveConflicts?: boolean;
+  deferProcessing?: boolean;
   extra?: JsonObject;
 }
 /** One file write in a batch. */
@@ -182,6 +184,9 @@ export interface BatchWriteOperation {
   content?: string;
   contentBase64?: string;
   mode?: "replace" | "append" | "create" | "upsert";
+  expectedSha256?: string;
+  ifAbsent?: boolean;
+  resolveConflicts?: boolean;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
   acl?: AclSpec;
@@ -191,6 +196,7 @@ export interface BatchWriteOptions extends WaitOptions {
   useSnapshot?: boolean;
   deferProcessing?: boolean;
   processingMode?: ProcessingMode;
+  skipConflicts?: boolean;
   extra?: JsonObject;
 }
 /** Full compilation inputs; creation accepts scheduling controls in args. */
@@ -259,6 +265,8 @@ export interface FindOptions {
 export interface SearchOptions extends FindOptions {
   sessionId?: string;
   searchType?: "semantic" | "keywords";
+  /** Advanced keyword-search engine options; only with searchType="keywords". */
+  args?: JsonObject;
 }
 /** Server-side context assembly options. */
 export interface SearchContextOptions {

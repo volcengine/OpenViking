@@ -28,6 +28,7 @@
 补充约定：
 
 - `ERROR` 和 `CRITICAL` 都不允许在正常控制流里出现。如果一次失败能通过重试、降级或前端提示解决，它就不是 `ERROR`。
+- 模型回复成功不能兜住对话或记忆写入失败。如果恢复依赖客户端后续轮次重发历史，仍可能丢失数据，写入失败记 `ERROR`。
 - `WARNING` 是**受控级别**，语义边界由本文件第 3 节锁定。任何「我觉得值得注意」的记录都不能进 `WARNING`，那是 `INFO`。
 - `INFO` 承载「系统自己扛住了」的信号。兜底、重试、退避、熔断的状态变化必须可观测，但不需要人立刻处理。
 - `DEBUG` 是默认的业务过程出口。写业务代码时，先假设它属于 `DEBUG`，再判断是否命中第 3 节的审计清单或第 5 节的兜底与拒绝清单。
@@ -63,6 +64,7 @@ DEBUG
 | 切到备 provider 后结果质量下降/字段缺失 | `INFO` + 明确字段标记，不升级为 `WARNING` | 仍属兜底，不是审计 |
 | 依赖不可用但走了默认值（如摘要为空） | `INFO` | 兜底 |
 | 依赖不可用且无兜底、功能整体不可用 | `ERROR` | 故障 |
+| 对话或记忆写入失败，但模型回复成功 | `ERROR` | 返回回复不能保证持久化，客户端后续轮次不是有保障的重试 |
 | 慢调用超阈值 | `INFO`（需要长期观测时）或 `DEBUG` | 不是错误 |
 | 观测/指标写入自身失败 | `INFO`，首次 `ERROR` | 旁路通道，不得污染业务级别 |
 | 缓存锁抢不到、回源数据库 | `INFO` | 兜底 |
@@ -146,6 +148,8 @@ DEBUG
 
 ### 3.3 输出形式
 
+当前范围：日志规范改造只调整现有日志的级别、内容、格式和初始化。已有 Usage/Audit 存储会保存用量及 HTTP 请求记录，但尚未处理本节的 `audit.*` 安全操作事件。对应的辅助函数、事件覆盖、schema、落库、查询和保留期管理记为独立功能待办，本轮日志改造不新增这些能力。
+
 审计需要**双写**，不能只有其中一路：
 
 1. **结构化事件**：目标是经事件总线发出，再由 `usage_audit` 投影持久化，形成可查询、可保留期管理的主通道。现有 `try_publish_event()` 是 best-effort，现有投影也尚未处理这些 `audit.*` 事件；落地时必须补齐事件识别、持久化和失败反馈，不能把「调用发布函数」等同于「审计已落盘」。
@@ -183,6 +187,9 @@ log_audit(
 - 字段校验、发布或持久化失败由审计设施在失败边界记录一条安全的 `ERROR`，并且不能回滚业务事务；不能吞掉失败后宣称双写成功。
 - 审计记录不得被业务层的 `except Exception` 静默吞掉。
 - 审计消息里禁止出现明文密钥、密码、Token、完整请求体。
+
+
+
 
 ### 3.4 反例
 
@@ -391,13 +398,13 @@ logger.info("rebuild failed user=%s peer=%s", user_id, short_hash(peer_id))
 
 | 出口 | 现有防护 | 要求 |
 | --- | --- | --- |
-| 日志文件/stdout | 无统一入口 | 按本节执行；建议新增 `log_safety.py` |
+| 日志文件/stdout | 公共 formatter 与 `log_safety.py` 字段白名单 | 调用点仍负责消息内容安全；formatter 无法脱敏任意文本 |
 | OTel trace 属性 | `to_log_fields()` 已排除 `url_path`、`url_query` | 新增 span 属性同样受本节约束；`url.path` 只在确有需要时保留 |
 | 审计存储 | `sanitize_public_http_error()`、`sanitize_error()`、`SENSITIVE_TASK_KEYS` 的局部防护 | 仍须按本节校验/转换字段；不能假定现有函数覆盖路径、peer 与正文 |
 
 ### 4.10 建议的实现与检查
 
-- 新增 `openviking/observability/log_safety.py`：`short_hash()`、`safe_uri_for_log()`、`safe_path_for_log()`、`safe_log_fields()`；为异常摘要定义按场景提取允许字段的接口，不承诺用通用正则清洗任意异常文本。
+- 使用 `openviking/observability/log_safety.py`：`short_hash()`、`safe_uri_for_log()`、`safe_path_for_log()`、`safe_log_fields()`；为异常摘要定义按场景提取允许字段的接口，不承诺用通用正则清洗任意异常文本。
 - `repr=False` 只作兜底，不能当防线。
 - CI：用 AST 扫描 logger 调用，命中禁用标识符（`peer_id`、`api_key`、`token`、`prompt`、`content`、`messages`、绝对路径变量）先告警，稳定后阻断。
 - 测试：脱敏函数补单测；审计路径与 `log_payloads` 路径各补一条失败用例。
@@ -548,7 +555,9 @@ if logger.isEnabledFor(logging.DEBUG):
 
 结论：不是「`WARNING` 用错了地方」这么简单，而是**审计能力本身缺失**。这是优先级最高的一项。
 
-### 7.4 实现层面的不一致
+### 7.4 分模块改造前的实现基线
+
+以下清单保留 PR #7769 和日志基础批次之前的基线。基础批次已将默认级别改为 `INFO`，将 tracer 迁到 stdlib logging，统一 Python/root 与 Rust/C++ 输出，并关闭独立服务器重复的 Uvicorn 访问日志；bootstrap 状态提示保留直接控制台打印。安全操作审计能力记为独立功能待办，剩余现有日志调用点整改继续按后续批次推进。
 
 1. **默认级别压制了 `INFO`**：`LogConfig.level` 默认 `WARNING`（`openviking_cli/utils/config/log_config.py:12`），而 `_load_log_config()` 的兜底值是 `INFO`（`openviking_cli/utils/logger.py:684`）。按新规范把兜底/重试放进 `INFO` 后，默认部署将完全看不到这些信号。
 2. **惰性格式化违规**：启用 ruff 的 `G` 规则可扫出 480 处，其中 `G004`（f-string 日志）449 处、`G201`（`.error(..., exc_info=True)` 应为 `.exception()`）27 处、`G001` 4 处。当前 `pyproject.toml` 只启用了 `E/W/F/I/C/B`，这些问题不会被 CI 拦住。
@@ -649,6 +658,8 @@ logger.info(
 
 ### 8.10 统一输出格式与初始化
 
+Bootstrap 的启动进度、依赖检查、启动结果及失败提示使用直接 `print(..., flush=True)`，确保不受 `log.level` 和文件日志输出配置影响。错误写 stderr，其余状态写 stdout。控制台消息仍遵守第 4 节内容边界，并与格式化运行日志分开验收。
+
 以下是 server 日志的目标规范，覆盖 Python、Rust、C++、TypeScript、第三方依赖和并入 server 日志的子进程输出。独立运行的 CLI/SDK 的宿主边界见 8.10.4–8.10.5。格式转换必须在初始化与适配层完成，不能让业务代码手工拼日志头。
 
 #### 8.10.1 时间
@@ -686,11 +697,11 @@ logger.info(
 - 可空字段在文本中写 `-`，结构化事件和未来 JSON 输出使用 `null`；`request_id`、`trace_id` 不可用时也遵守这一规则。后台和启动日志不能编造请求标识。
 - `message` 及追加字段中的字符串值按 JSON 字符串规则引用和转义；数字、布尔值保持类型。换行、回车和控制字符不能破坏记录边界，所有值仍须先经过第 4 节的安全处理。
 - 关联字段只由统一适配层注入，不再向消息正文重复拼接。代码文件与行号如需输出，按 4.2 显式登记为可选字段，路径仍受 4.7 约束。
-- 自定义 `log.format` 也必须保留这些必填字段与时间、级别约定；不支持的跨运行时转换应明确报错，不能静默落回各组件默认格式。未来 JSON formatter 使用同样的字段名和语义，不另起一套 schema。
+- 当前适配器只接受公共格式，并在加载时归一旧内建格式；其他自定义格式校验失败。未来支持的自定义 `log.format` 必须保留必需字段及时间、级别约定；不支持的跨运行时转换应明确报错，不能静默退回组件默认值。未来 JSON formatter 使用相同字段和语义。
 
 #### 8.10.4 初始化与输出归属
 
-- server 入口拥有日志配置，在加载会配置日志的依赖、创建组件之前安装最小统一输出；读取配置后沿用同一格式契约。配置加载失败也要通过该出口报告。
+- server 入口拥有日志配置，在加载会配置日志的依赖、创建组件之前安装最小统一输出；读取配置后沿用同一格式契约。bootstrap 配置加载失败直接通过 `print(..., flush=True)` 写 stderr。
 - Python root 与受管 logger 统一接入，至少覆盖 Uvicorn、MCP、APScheduler。明确 handler 与 `propagate` 归属，一条事件在每个目标出口只出现一次；审计双写与 OTel 导出是不同出口。
 - 禁止业务模块另装 `basicConfig`、RichHandler 或独立 formatter。对依赖的初始化副作用由集成层处理，不能任由后加载的组件改变输出格式或阈值。
 - 自有 loguru 调用迁到 `get_logger()`；暂时保留时，只能经单向桥接进入统一出口，并移除重复 sink。Rust/C++ 在原生适配层实现同一契约，不能仅替换 `%l` / `%(levelname)s` 就宣称格式一致。
@@ -702,7 +713,7 @@ logger.info(
 
 - server 的 stdout/stderr、文件、systemd 和容器采集输出统一 UTF-8，不使用 ANSI 颜色、Rich 分栏、自动折行、进度条或重复时间省略。一条事件占一条物理行；查看器自行换行不属于应用输出。
 - 允许输出的异常堆栈先按 4.8 脱敏，再把换行转义到同一记录中；不得产生无法归属事件的裸续行。JSON 模式同样使用一行一个对象。
-- 启动/关闭、依赖检查、子进程管理等运行日志必须经过统一 logger，禁止 `print()`、`console.print()` 或直接写 stdout/stderr 绕过格式、级别和脱敏。
+- Bootstrap 的启动进度、依赖检查、启动结果及其管理的进程提示保留直接 `print(..., flush=True)`；其他运行日志经过统一 logger。控制台消息仍须保证内容安全，不打印原始凭证、异常全文或子进程正文。
 - 交互式 CLI 的帮助、命令结果、进度展示可使用专用终端渲染；这不属于 server 运行日志。机器可读结果和 stdio 协议占用 stdout 时，诊断日志必须写 stderr，不能污染协议流。
 
 #### 8.10.6 第三方语义与审计隔离
@@ -717,7 +728,7 @@ logger.info(
 对日志初始化与适配层的改动，捕获实际 stdout/stderr 或日志文件，至少验证：
 
 - 在 UTC 与 Asia/Shanghai 环境下，固定事件时间都输出同一 UTC 时间戳，精度和格式一致。
-- 启动、配置失败、正常请求、异常、关闭阶段，以及 Python、MCP/APScheduler、Rust/C++ 的输出都满足必填字段和单行约定。
+- 正常请求、异常、关闭及 Python、MCP/APScheduler、Rust/C++ 的格式化运行日志满足必填字段和单行约定。bootstrap 启动/配置失败提示单独验收：高日志阈值和文件输出下仍直接显示在 stdout/stderr。
 - 非 TTY 重定向下无 ANSI、Rich 分栏、隐去的时间或裸续行；各组件遵守 `INFO`、`WARNING` 等阈值，原生级别映射的限制有独立用例。
 - 重复初始化、配置重载和多 worker 下，同一事件在每个目标出口恰好一次，PID 正确，请求关联字段不串到其他请求。
 - 一条第三方 `WARNING` 保留为运行告警，一条 `openviking.audit` 事件进入审计，两者不混淆。
@@ -728,6 +739,21 @@ logger.info(
 
 ## 9. 落地路线
 
+按模块分组依次提交，开始每组前同步上游，减少文件重叠和冲突。第 3、4 批合并到同一个 PR；后续批次在前一组合入后再开始。
+
+| 批次 | 范围 | 状态 |
+| --- | --- | --- |
+| 1 | 模型日志及安全 payload 摘要 | 已合入 #7769 |
+| 2 | 日志初始化、观测日志、Python/Rust/C++ 输出 | 已合入 #7778；C++ 兼容性修复 #7794 |
+| 3 | 认证、账号、ACL、ROOT 相关现有日志 | 已与第 4 批一同合入 #7806，不新增审计能力 |
+| 4 | 业务服务现有日志 | 已与第 3 批一同合入 #7806 |
+| 5 | 解析、导入、连接器 | 已合入 #7899 |
+| 6 | 存储与队列，包括 Watch | 已合入 #7933 |
+| 7 | 检索、核心与工具 | 已合入 #7937 |
+| 8 | 会话、记忆、编译、CLI、Gateway | 已实现；独立 PR |
+
+以下优先级清单保留原始规范待办。现有日志整改按上述模块批次落实；新增审计能力不纳入本轮改造。
+
 | 优先级 | 事项 | 影响面 | 说明 |
 | --- | --- | --- | --- |
 | P0 | 补齐审计事件（账号、成员、角色、ACL、API Key、配置、删除） | 新增代码，不改现有日志 | 对应 7.3 的缺口，收益最大、风险最低 |
@@ -737,12 +763,12 @@ logger.info(
 | P0 | 引入 `openviking.audit` logger 与 `log_audit()` 帮助函数 | 审计接入的前置能力 | 统一 schema、字段转换、事件投影与双写失败反馈，验证实际持久化后再接入业务事件 |
 | P1 | 启用 ruff `G` 规则 | CI | 先 `per-file-ignores` 圈定存量，再逐步清零 480 处 |
 | P1 | 新增 `log_safety.py`（`short_hash`、`safe_uri_for_log`、`safe_path_for_log`、`safe_log_fields`） | 新增模块 | 给 4.4–4.8 的转换提供唯一入口 |
-| P1 | 统一 server 日志初始化与最终输出 | Python/root、Uvicorn、MCP/APScheduler、tracer、Rust/C++ | 落实 8.10；包含启动路径 `print()` 迁移、tracer loguru 迁移/桥接、审计隔离和实际输出验收，不等待全仓整改 |
+| P1 | 统一 server 日志初始化与最终输出 | Python/root、Uvicorn、MCP/APScheduler、tracer、Rust/C++ | 落实 8.10；包含 bootstrap 控制台提示可见性、tracer loguru 迁移/桥接和实际输出验收，不等待全仓整改 |
 | P2 | 按 7.2 清单把 `WARNING` 下沉到 `INFO`/`DEBUG` | ~190 处 | 建议按模块分批，每批附一条回归测试 |
 | P2 | 循环内日志收敛 | ~30 个文件 | 汇总 + 明细 |
 | P2 | 整改路径类日志（34 处）与 `peer_id` 间接泄露 | ~34 处 | 改为相对路径 + 短哈希 |
 | P3 | 访问日志去重 | 2 处 | 明确由 `uvicorn.access` 还是 `observability.http` 承担 |
-| P3 | 清理其余运行日志的 `print()` | 全仓剩余调用点 | server 启动路径已纳入 P1；交互式 CLI 展示与协议输出按 8.10.5 区分，不机械替换 |
+| P3 | 清理其余运行日志的 `print()` | 全仓剩余调用点 | bootstrap 控制台提示保留；交互式 CLI 展示与协议输出按 8.10.5 区分，不机械替换 |
 | P4 | JSON 格式化输出选项 | 1 个 handler | 便于采集侧按字段切分 |
 
 ### PR 评审清单

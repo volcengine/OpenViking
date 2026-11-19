@@ -59,6 +59,7 @@ from .options import (
     AddResourceOptions,
     AddSkillOptions,
     BatchAddMessagesOptions,
+    BatchWriteOperation,
     BatchWriteOptions,
     CommitSessionOptions,
     CompileOptions,
@@ -593,8 +594,7 @@ class AsyncHTTPClient:
         extra = dict(option_values.pop("extra", {}) or {})
         payload = dict(fixed or {})
         protected_fields = set(payload) | set(protected or ())
-        official_fields = allowed - {"extra"}
-        conflicts = sorted(set(extra) & (official_fields | protected_fields))
+        conflicts = sorted(set(extra) & (set(option_values) | protected_fields))
         if conflicts:
             raise ValueError(f"extra cannot override '{conflicts[0]}'")
 
@@ -1627,7 +1627,7 @@ class AsyncHTTPClient:
     async def batch_write(
         self,
         root_uri: str,
-        operations: List[Dict[str, Any]],
+        operations: Sequence[Union[BatchWriteOperation, Mapping[str, Any]]],
         wait: bool = True,
         timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
@@ -2703,7 +2703,7 @@ class AsyncHTTPClient:
 
         # Binary branch: server sets application/octet-stream + X-Snapshot-* headers.
         content_type = response.headers.get("content-type", "")
-        if content_type.startswith("application/octet-stream"):
+        if response.is_success and content_type.startswith("application/octet-stream"):
             return {
                 "oid": response.headers.get("x-snapshot-oid", ""),
                 "size": int(response.headers.get("x-snapshot-size", "0")),
@@ -2717,10 +2717,11 @@ class AsyncHTTPClient:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Walk commit history newest-first."""
-        params: Dict[str, Any] = {"branch": branch, "limit": limit}
+        """Walk commit history newest-first, skipping ``offset`` matches."""
+        params: Dict[str, Any] = {"branch": branch, "limit": limit, "offset": offset}
         if paths:
             params["paths"] = paths
         response = await self._request(
@@ -3361,7 +3362,7 @@ class SyncHTTPClient:
     def batch_write(
         self,
         root_uri: str,
-        operations: List[Dict[str, Any]],
+        operations: Sequence[Union[BatchWriteOperation, Mapping[str, Any]]],
         wait: bool = True,
         timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
@@ -3958,9 +3959,10 @@ class AsyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._client.git_log(branch=branch, limit=limit, paths=paths)
+        return await self._client.git_log(branch=branch, limit=limit, offset=offset, paths=paths)
 
     async def diff(
         self,
@@ -4064,9 +4066,10 @@ class SyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
+        return run_async(self._ns().log(branch=branch, limit=limit, offset=offset, paths=paths))
 
     def diff(
         self,

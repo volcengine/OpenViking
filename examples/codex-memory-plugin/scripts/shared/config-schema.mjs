@@ -277,6 +277,7 @@ export const HARNESS_KEYS = {
   pi: "pi",
   openclaw: "openclaw",
   qoder: "qoder",
+  antigravity: "antigravity",
 };
 
 export function harnessKey(harness) {

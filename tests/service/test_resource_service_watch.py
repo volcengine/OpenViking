@@ -74,12 +74,6 @@ class MockSkillProcessor:
         return {"status": "ok"}
 
 
-class MockVikingFS:
-    """Mock VikingFS for testing."""
-
-    pass
-
-
 class MockVikingDB:
     """Mock VikingDBManager for testing."""
 
@@ -181,12 +175,12 @@ def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest_asyncio.fixture
 async def resource_service(
-    watch_manager: WatchManager, runtime_config_manager
+    watch_manager: WatchManager, watch_vfs, runtime_config_manager
 ) -> AsyncGenerator[ResourceService, None]:
     """Create ResourceService instance with watch support."""
     service = ResourceService(
         vikingdb=MockVikingDB(),
-        viking_fs=MockVikingFS(),
+        viking_fs=watch_vfs,
         resource_processor=MockResourceProcessor(),
         skill_processor=MockSkillProcessor(),
         runtime_config_manager=runtime_config_manager,
@@ -339,6 +333,7 @@ class TestWatchTaskCreation:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("tags", "tag_mode"), [(["team=search"], "replace"), (None, "clear")])
+    @pytest.mark.usefixtures("public_resource_dns")
     async def test_watch_task_persists_tag_policy_for_refresh(
         self,
         resource_service: ResourceService,
@@ -434,6 +429,7 @@ class TestAddResourceArgs:
     """Tests for parser-specific add_resource args."""
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("public_resource_dns")
     async def test_feishu_user_token_watch_stores_private_auth_state(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -473,7 +469,7 @@ class TestAddResourceArgs:
         async def preflight(_self, _source, *, feishu_access_token=None, **kwargs):
             assert feishu_access_token == expected_token
             assert kwargs["feishu_config"].domain == "https://open.feishu.cn"
-            return SimpleNamespace(source_name=None, source_format="file")
+            return SimpleNamespace(source_name=None, source_format="file", doc_type="docx")
 
         monkeypatch.setattr(
             "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
@@ -640,7 +636,7 @@ class TestAddResourceArgs:
         ):
             seen["access_token"] = feishu_access_token
             seen["config_domain"] = feishu_config.domain
-            return SimpleNamespace(source_name=None, source_format="file")
+            return SimpleNamespace(source_name=None, source_format="file", doc_type="docx")
 
         resource_service._runtime_config_manager = SimpleNamespace(resolve_account=resolve_account)
         monkeypatch.setattr(
@@ -704,7 +700,11 @@ class TestAddResourceArgs:
         )
         monkeypatch.setattr(
             "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
-            AsyncMock(return_value=SimpleNamespace(source_name=None, source_format="file")),
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    source_name=None, source_format="file", doc_type="docx"
+                )
+            ),
         )
 
         await resource_service.add_resource(
@@ -745,7 +745,7 @@ class TestAddResourceArgs:
         )
 
         async def preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
-            return SimpleNamespace(source_name="Feishu", source_format="file")
+            return SimpleNamespace(source_name="Feishu", source_format="file", doc_type="docx")
 
         monkeypatch.setattr(
             "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
@@ -1524,14 +1524,16 @@ class TestResourceProcessingIndependence:
     """Tests that resource processing is independent of watch task management."""
 
     @pytest.mark.asyncio
-    async def test_resource_added_even_if_watch_fails(self, request_context: RequestContext):
+    async def test_resource_added_even_if_watch_fails(
+        self, request_context: RequestContext, watch_vfs
+    ):
         """Test that resource is added even if watch task creation fails."""
         failing_watch_manager = MagicMock(spec=WatchManager)
         failing_watch_manager.get_task_by_uri = AsyncMock(side_effect=Exception("DB error"))
 
         service = ResourceService(
             vikingdb=MockVikingDB(),
-            viking_fs=MockVikingFS(),
+            viking_fs=watch_vfs,
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
             watch_manager=failing_watch_manager,
@@ -1551,11 +1553,13 @@ class TestResourceProcessingIndependence:
         assert "root_uri" in result
 
     @pytest.mark.asyncio
-    async def test_resource_added_without_watch_manager(self, request_context: RequestContext):
+    async def test_resource_added_without_watch_manager(
+        self, request_context: RequestContext, watch_vfs
+    ):
         """Test that resource is added when watch_manager is None."""
         service = ResourceService(
             vikingdb=MockVikingDB(),
-            viking_fs=MockVikingFS(),
+            viking_fs=watch_vfs,
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
             watch_manager=None,
@@ -1577,6 +1581,7 @@ class TestResourceProcessingIndependence:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("encrypted", [False, True])
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_external_feishu_auth_survives_queue_and_multiple_watches(
     monkeypatch, resource_service, request_context, encrypted, watch_vfs
 ):
@@ -1625,7 +1630,7 @@ async def test_external_feishu_auth_survives_queue_and_multiple_watches(
         assert feishu_access_token == fetched[-1]
         assert kwargs["feishu_config"].domain == "https://open.feishu.cn"
         assert auth.current_feishu_token.get() is not None
-        return SimpleNamespace(source_name=None, source_format="file")
+        return SimpleNamespace(source_name=None, source_format="file", doc_type="docx")
 
     monkeypatch.setattr(
         "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source", preflight

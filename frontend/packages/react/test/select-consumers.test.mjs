@@ -99,7 +99,9 @@ test('search mode uses the menu inside the dialog without clearing the query or 
       input.dispatchEvent(new window.Event('input', { bubbles: true }));
     });
     const trigger = () =>
-      dialog.querySelector('.ov-file-browser-search__switch');
+      dialog.querySelector(
+        '.ov-file-browser-search__summary button[role="combobox"]',
+      );
     await act(async () => new Promise((resolve) => setTimeout(resolve, 450)));
     await settle();
     await key(trigger(), 'ArrowDown');
@@ -120,12 +122,8 @@ test('search mode uses the menu inside the dialog without clearing the query or 
     await click(grep);
     assert.equal(menu(), null);
     assert.ok(dialog.isConnected);
-    assert.equal(document.activeElement, input);
-    await settle();
-    assert.equal(
-      dialog.querySelector('.ov-file-browser-search__mode-chip').textContent,
-      'grep',
-    );
+    assert.equal(document.activeElement, trigger());
+    assert.match(trigger().getAttribute('aria-label'), /grep/);
     assert.equal(input.value, 'profile');
   } finally {
     await view.unmount();

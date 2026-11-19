@@ -27,6 +27,7 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
           exportPack: '导出 .ovpack',
           deleted: '已模拟删除',
           simulate: '模拟删除失败',
+          snapshotFailure: '模拟快照失败',
           demo: '离线模拟：仅修改本页数据，刷新页面可恢复；历史、配置及 ovpack 使用原生接口形状的模拟数据。',
         }
       : {
@@ -46,12 +47,16 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
           exportPack: 'Export .ovpack',
           deleted: 'Simulated deletion',
           simulate: 'Simulate deletion failure',
+          snapshotFailure: 'Simulate snapshot failure',
           demo: 'Offline simulation: only page data changes; reload to restore. History, configuration and ovpack use simulated native API responses.',
         };
   const [mode, setMode] = useState('default');
   const [fail, setFail] = useState(false);
   const failRef = useRef(false);
   failRef.current = fail;
+  const [snapshotFailure, setSnapshotFailure] = useState(false);
+  const snapshotFailureRef = useRef(false);
+  snapshotFailureRef.current = snapshotFailure;
   const [hint, setHint] = useState<{
     kind:
       | 'copied'
@@ -65,14 +70,21 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
   }>();
   const fetch = useMemo(
     () => (input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'DELETE' && failRef.current)
+      const snapshot =
+        new URL(
+          input instanceof Request ? input.url : input,
+          'https://demo.openviking.test',
+        ).pathname === '/api/v1/snapshot/commit' && snapshotFailureRef.current;
+      if ((init?.method === 'DELETE' && failRef.current) || snapshot)
         return Promise.resolve(
           new Response(
             JSON.stringify({
               status: 'error',
               error: {
-                code: 'DEMO_DELETE_FAILED',
-                message: 'Demo deletion unavailable',
+                code: snapshot ? 'DEMO_SNAPSHOT_FAILED' : 'DEMO_DELETE_FAILED',
+                message: snapshot
+                  ? 'Demo snapshot unavailable; retry after clearing the failure control'
+                  : 'Demo deletion unavailable',
               },
             }),
             {
@@ -169,6 +181,9 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
         <Checkbox checked={fail} onChange={(next) => setFail(next)}>
           {' '}
           {text.simulate}
+        </Checkbox>
+        <Checkbox checked={snapshotFailure} onChange={setSnapshotFailure}>
+          {text.snapshotFailure}
         </Checkbox>
         <p>{text.demo}</p>
         {hint ? (

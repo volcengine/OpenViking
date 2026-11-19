@@ -172,7 +172,7 @@ class StatsAggregator:
                 ctx=ctx,
             )
         except Exception as e:
-            logger.error("Error querying memories: %s", e)
+            logger.error("Error querying memories: %s", type(e).__name__)
             return []
 
 

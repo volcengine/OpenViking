@@ -164,3 +164,27 @@ async def test_parent_refresh_preserves_semantic_roots(
     assert plan.await_args.kwargs["dir_uri"] == expected_parent
     assert plan.await_args.kwargs["lock_timeout_secs"] == 1.0
     get_queue_manager.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_refresh_carries_dashboard_source_after_detaching_task(monkeypatch):
+    enqueue = AsyncMock()
+    queue_manager = SimpleNamespace(
+        SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: SimpleNamespace(enqueue=enqueue)
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
+    parent_uri = "viking://agent/skills/demo"
+    msg = SemanticMsg(
+        uri=f"{parent_uri}/reference",
+        context_type="skill",
+        generation_trigger="skill_ingest",
+    )
+
+    await SemanticProcessor()._enqueue_directory_refresh(
+        msg, parent_uri, changes={"modified": [msg.uri]}
+    )
+
+    refresh = enqueue.await_args.args[0]
+    restored = SemanticMsg.from_json(refresh.to_json())
+    assert restored.generation_trigger == "parent_refresh"
+    assert restored.dashboard_source_type == "add_skill"

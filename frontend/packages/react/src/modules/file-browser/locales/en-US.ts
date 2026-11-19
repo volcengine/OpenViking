@@ -51,6 +51,7 @@ const messages = {
   searchVia: 'Vector retrieval',
   searchSwitchMode: 'Switch',
   searchAdvancedLabel: 'Advanced filters',
+  searchAdvancedLabelWithCount: (label, count) => `${label} (${count})`,
   loading: 'Loading…',
   searchDismiss: 'Esc to close',
   searchLoading: 'Searching…',
@@ -73,11 +74,18 @@ const messages = {
   resizeTree: 'Resize the directory tree',
   l0Summary: 'L0 Summary',
   l1Overview: 'L1 Overview',
+  emptyL0Summary: 'No L0 summary',
+  emptyL1Overview: 'No L1 overview',
   summaryEmpty: 'No summary generated yet',
   summaryFailed: 'The summary could not be loaded.',
 } satisfies Required<ShellLabels>;
 
 export default messages;
+
+export const emptySummaries = {
+  l0: 'No L0 summary available',
+  l1: 'No L1 overview available',
+};
 
 export const stackedEmpty = 'Select a file above to preview it';
 

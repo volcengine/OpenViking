@@ -18,7 +18,8 @@ import { FileBrowserToolbar } from './file-browser-toolbar.js';
 import { WikiBookIcon } from '../../icons/index.js';
 import { DashboardIndicator } from './dashboard-indicator.js';
 import { fileTypeIcon } from './fs-icon.js';
-import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
+import type { FileBrowserApi } from './file-browser-state-types.js';
+import type { FileBrowserDashboardLabels } from './types.js';
 
 /**
  * 左栏：内置操作栏、搜索行与目录树。

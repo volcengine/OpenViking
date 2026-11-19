@@ -225,10 +225,12 @@ class TrustedAuthPlugin(AuthPlugin):
     def validate_config(self, config) -> None:
         if config.root_api_key and config.root_api_key.strip():
             return
-        logger.error(
+        print(
             "Cannot start OpenViking: trusted mode requires a non-empty server.root_api_key, "
             "including on localhost. Set server.root_api_key in the server's ov.conf and "
-            "restart. Configure clients and Web Studio to use the same key."
+            "restart. Configure clients and Web Studio to use the same key.",
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 
@@ -279,10 +281,9 @@ class TrustedAuthPlugin(AuthPlugin):
             if manager is None or await manager.get_account(account_id) is None:
                 raise
         if self._pending_count + self._in_flight_count >= self._pending_max_size:
-            logger.warning(
-                "Trusted identity registration queue is full; dropping %s/%s",
-                account_id,
-                user_id,
+            logger.info(
+                "Trusted identity registration queue is full; skipping identity",
+                extra={"queue_depth": self._pending_count + self._in_flight_count},
             )
             return
         self._pending.setdefault(account_id, set()).add(user_id)
@@ -310,7 +311,10 @@ class TrustedAuthPlugin(AuthPlugin):
             self._pending_count += self._in_flight_count
             if not isinstance(exc, Exception):
                 raise
-            logger.warning("Trusted identity batch registration failed; will retry", exc_info=True)
+            logger.info(
+                "Trusted identity batch registration failed; will retry",
+                extra={"error_type": type(exc).__name__, "total": self._in_flight_count},
+            )
         finally:
             self._in_flight = {}
             self._in_flight_count = 0

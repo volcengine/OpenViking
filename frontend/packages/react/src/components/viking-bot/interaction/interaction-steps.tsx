@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { NotificationScope } from '../../../shared/feedback/notification-scope.js';
+import { ViewActivity, useViewActive } from '../../../shared/view-activity.js';
 import { VikingBotInteractionView } from './viking-bot-interaction.js';
 import type { InteractionLabels } from './labels.js';
 import type {
@@ -18,6 +19,7 @@ export function InteractionSteps({
   request: Extract<VikingBotInteractionRequest, { kind: 'steps' }>;
   labels: InteractionLabels;
 }) {
+  const active = useViewActive();
   const root = useRef<HTMLDivElement>(null);
   const inFlight = useRef(false);
   const [index, setIndex] = useState(0);
@@ -32,11 +34,12 @@ export function InteractionSteps({
   // useEffect 必要性：步骤切换后将浏览器焦点移到新问题；新 DOM 在提交后才可聚焦，
   // 点击处理器无法访问尚未渲染的题目。仅导航或整组重置后聚焦，首次展示不抢焦点；无订阅需要清理。
   useEffect(() => {
+    if (!active) return;
     const step = `${index}:${generation}`;
     if (focusedStep.current === step) return;
     focusedStep.current = step;
     root.current?.querySelector<HTMLElement>('[data-active-step] h3')?.focus();
-  }, [index, generation]);
+  }, [active, index, generation]);
 
   return (
     <div
@@ -52,62 +55,64 @@ export function InteractionSteps({
           hidden={stepIndex !== index}
           data-active-step={stepIndex === index ? '' : undefined}
         >
-          <NotificationScope active={stepIndex === index}>
-            <VikingBotInteractionView
-              {...props}
-              className={undefined}
-              request={step}
-              index={stepIndex}
-              total={request.steps.length}
-              disabled={blocked || stepIndex !== index}
-              submitting={props.submitting || pending}
-              labels={{
-                ...labels,
-                submit:
-                  stepIndex === request.steps.length - 1
-                    ? labels.submit
-                    : labels.next,
-              }}
-              onPrevious={
-                stepIndex > 0
-                  ? () => {
-                      if (!blocked) setIndex(stepIndex - 1);
-                    }
-                  : undefined
-              }
-              onCancel={
-                onCancel
-                  ? () => {
-                      if (blocked) return;
-                      setIndex(0);
-                      setVisited(1);
-                      setAnswers([]);
-                      setGeneration((value) => value + 1);
-                      onCancel();
-                    }
-                  : undefined
-              }
-              onSubmit={async (answer) => {
-                if (blocked || inFlight.current || answer.kind === 'steps')
-                  return;
-                const value = [...answers.slice(0, stepIndex), answer];
-                setAnswers(value);
-                if (stepIndex < request.steps.length - 1) {
-                  setVisited((count) => Math.max(count, stepIndex + 2));
-                  setIndex(stepIndex + 1);
-                  return;
+          <ViewActivity active={stepIndex === index}>
+            <NotificationScope active={stepIndex === index}>
+              <VikingBotInteractionView
+                {...props}
+                className={undefined}
+                request={step}
+                index={stepIndex}
+                total={request.steps.length}
+                disabled={blocked || stepIndex !== index}
+                submitting={props.submitting || pending}
+                labels={{
+                  ...labels,
+                  submit:
+                    stepIndex === request.steps.length - 1
+                      ? labels.submit
+                      : labels.next,
+                }}
+                onPrevious={
+                  stepIndex > 0
+                    ? () => {
+                        if (!blocked) setIndex(stepIndex - 1);
+                      }
+                    : undefined
                 }
-                inFlight.current = true;
-                setPending(true);
-                try {
-                  await onSubmit?.({ kind: 'steps', value });
-                } finally {
-                  inFlight.current = false;
-                  setPending(false);
+                onCancel={
+                  onCancel
+                    ? () => {
+                        if (blocked) return;
+                        setIndex(0);
+                        setVisited(1);
+                        setAnswers([]);
+                        setGeneration((value) => value + 1);
+                        onCancel();
+                      }
+                    : undefined
                 }
-              }}
-            />
-          </NotificationScope>
+                onSubmit={async (answer) => {
+                  if (blocked || inFlight.current || answer.kind === 'steps')
+                    return;
+                  const value = [...answers.slice(0, stepIndex), answer];
+                  setAnswers(value);
+                  if (stepIndex < request.steps.length - 1) {
+                    setVisited((count) => Math.max(count, stepIndex + 2));
+                    setIndex(stepIndex + 1);
+                    return;
+                  }
+                  inFlight.current = true;
+                  setPending(true);
+                  try {
+                    await onSubmit?.({ kind: 'steps', value });
+                  } finally {
+                    inFlight.current = false;
+                    setPending(false);
+                  }
+                }}
+              />
+            </NotificationScope>
+          </ViewActivity>
         </div>
       ))}
     </div>
