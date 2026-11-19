@@ -71,7 +71,7 @@ describe('/tasks', () => {
     tasks.settleReports({ taskIds: ['t3'] });
     const text = run('').text;
     assert.match(text, /^后台任务：进行中 2 · 共 3 个 · worker 槽位 1\/3（跟进预留 0\/1）\n/);
-    assert.match(text, /\n进行中\nt1 运行 不到 1 分钟（第 1 轮）「排查飞书 Watch 令牌刷新失败」陈晓斌 · OpenViking 用户群 · 话题\n/);
+    assert.match(text, /\n进行中\nt1 运行 不到 1 分钟（第 1 次运行）「排查飞书 Watch 令牌刷新失败」陈晓斌 · OpenViking 用户群 · 话题\n/);
     assert.match(text, /\nt2 等 Bob 回复 不到 1 分钟「核实账号能否改名」Bob · OpenViking 用户群 · 话题 · 结果待 router 转发\n/);
     assert.match(text, /\n最近结束\nt3 完成 · 不到 1 分钟前「解读 0\.5\.4 更新」Carol · OpenViking 用户群 · 话题 · 跟进 t1 · 结果已了结\n/);
     assert.match(text, /\n用法：\/tasks 查看任务/);
@@ -95,9 +95,22 @@ describe('/tasks', () => {
     assert.match(text, /^t1「查 X」\n状态：完成 · 不到 1 分钟前\n请求人：Alice · OpenViking 用户群 · 话题 · 创建于 \d\d-\d\d \d\d:\d\d\nrouter 备注：Alice 只要上周\n请求：\n  查一下 X 为什么慢\n/);
     assert.match(text, /追加（3）：\n  .* 追加：只看上周的\n  .* 已退回：帮我订个会议室\n  .* 背景：我们这边也慢\n/);
     assert.match(text, /结果：\n  .* 完成 · 待 router 转发：慢在缺索引\n/);
-    assert.match(text, /产出：https:\/\/github\.com\/x\/pull\/1\nworker 轮数：1 · 目录：/);
+    assert.match(text, /产出：https:\/\/github\.com\/x\/pull\/1\nworker 运行次数：1 · 目录：/);
     assert.match(run('t9').text, /^没有任务 t9。/);
     assert.match(run('nonsense').text, /^用法：/);
+  });
+
+  it('shows the requests that reopened a task after it ended, each with its fate', async (t) => {
+    const { tasks, turns, row, run } = setup(t);
+    tasks.create({ rows: [row({ content: '实现 slugify 并开个 PR' })], title: 'slugify PR', requester: 'Alice', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: 'PR 已开' });
+    turns[0].finish({ text: '' });
+    await settle();
+    tasks.route('t1', [row({ content: '函数改名叫 toSlug' })], 'owner', { requester: 'Bob' });
+    const { text } = run('t1');
+    assert.match(text, /\n请求：\n  实现 slugify 并开个 PR\n之后的请求（1）：\n  \d\d-\d\d \d\d:\d\d 第 2 次 · Bob（进行中）：函数改名叫 toSlug\n/);
+    assert.doesNotMatch(text, /追加/, 'a request that reopened the task is not a follow-up');
+    assert.match(run('').text, /\nt1 运行 不到 1 分钟（第 2 次运行）「slugify PR」Alice · OpenViking 用户群 · 话题 · 2 次请求\n/);
   });
 
   it('shows how much the task directories take, and a directory that was cleaned', async (t) => {

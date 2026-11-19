@@ -121,7 +121,7 @@ reports.
 Status: `queued` (waiting for a slot), `running`, `waiting` (a question for a
 person), `blocked`, and the ended `done`, `dropped`, `failed`, `stopped`.
 
-### A task is one piece of work, not a conversation
+### A task is one result, pushed forward in rounds
 
 A week of online traffic (221 tasks) showed what happens when a task takes
 whatever arrives near it: 307 of 398 follow-ups reopened a task that had
@@ -132,20 +132,82 @@ among themselves went to the worker as if it were the requester's. A follow-up
 sent to a task that was still working waited for that turn to end: four
 minutes at the median and over two hours at p90.
 
-So a task takes only what changes or answers the work it is doing:
+Refusing every input to an ended task fixed that, at a cost. Work that keeps
+going on one result after it was delivered (a pull request reviewed, fixed and
+rebased over a dozen exchanges) became a chain of tasks, each following the
+last. A replay of twelve such exchanges on one pull request made ten tasks:
+the router was shown three same-thread tasks with near-identical titles, every
+task cloned the repository again (17 clones), and every task's first turn
+copied the whole chain's session (1.7 MB of sessions for a final session of
+265 KB). The copy did not even keep the prefix cache: the first model call of
+each forked task read the inherited history uncached (2048 of up to 52k tokens
+cached), because the system prompt named each task's own directory (see
+Workers), while the router, carrying on its own session, had nearly all of it
+cached.
 
-- **Owner input reaches a working task, nothing reaches an ended one.**
-  `task_route` refuses an ended task. More work on it is a new task that
-  **follows** it (`task_create` with `follows`, `parent_id`): its brief carries
-  that task's request, summary, last answer, artifacts and directory, so a
-  wrong split costs nothing, while a wrong merge makes a worker do unrelated
-  work and keeps the person waiting behind it. A follows task may take the
-  follow-up slot.
-- **The router decides by what an input asks for.** The `[daemon tasks]` line
-  lists the tasks near an input (same thread, a reply to their messages,
-  waiting for this person) and what each is doing (`working`, `waiting for
-  …`, `done 12m ago`); "same requester" is no longer a reason, and similar
-  words only rank what an exact signal found, or point the owner across chats.
+So a task is one result someone keeps pushing forward (an answer, a fix, a
+pull request, a document), and it takes only what is about that result:
+
+- **The router decides by what an input asks for.** Input that changes,
+  narrows, corrects or adds a condition to a task's work, or answers its
+  question, is `owner` input for it while it works. After it reported, more
+  work on what it delivered (a change, fix or re-run of its pull request,
+  branch or document; the fix for what its investigation found) is `owner`
+  input too, and reopens it. Another result (another question or answer, a
+  review, a document, a fix or change of something else) is a new task, which
+  **follows** the task it builds on (`task_create` with `follows`,
+  `parent_id`): its brief carries that task's request, its last round's
+  request, summary, last answer, artifacts and directory. When unsure, the
+  router creates the new task: a wrong split costs a fresh start from that
+  task's work, a wrong merge makes a worker do unrelated work and keeps the
+  person waiting behind it. People's talk, a remark on a result included,
+  never reopens a task. The `[daemon tasks]` line lists the tasks near an
+  input (same thread as any of their rounds, a reply to their messages,
+  waiting for this person), what each is doing (`working`, `waiting for …`,
+  `done 12m ago, 3 rounds`) and the first 40 characters of what its current
+  round asks (`now on:`) or its last one asked (`last asked:`): a title is
+  written when a task is created and says nothing of its later rounds. A
+  reply to a message the router sent for a task counts as a reply to that
+  task's message whether the router decided on the round's origin or on a
+  later input there: the delivery that settled the task's report names that
+  message (about 4% of relayed results in replays were otherwise not linked).
+  "Same requester" is no longer a reason, and similar words only rank what an
+  exact signal found, or point the owner across chats. Similar words look only
+  at the working set (live tasks and the 32 that ended last, about a day of
+  tasks online); the exact signals reach past it: the task a line replies to,
+  and the latest ten tasks asked in its thread, however long ago. Every one of
+  these reads goes through an index (the working set by end time, a message's
+  task, a thread's tasks), so a hint costs about the same with 100 000 tasks as
+  with 1 000 (1.5 ms measured; reading the working set by status took 89 ms at
+  100 000). The rule for a working task is the one from before rounds,
+  unchanged.
+- **An ended task takes a new request as a round.** `owner` input to a task
+  that is `done`, `dropped` or `failed` reopens it for its next round
+  (`task_rounds`); `context` reopens nothing, and a `stopped` task stays
+  stopped (work on it again is a new task that follows it). A round records
+  where it was asked and by whom: its report says `round=N`, its origin is that
+  round's message, so the answer goes there and an answer there settles that
+  round's report. A delivery that names the task (`task_ids`) settles the
+  reports of the round it answers, never the task's other rounds: the round
+  it was decided on (its origin, or another input of it), else the rounds
+  asked where it went; only an answer given where no round was asked settles
+  every round. So when two rounds' reports wait, asked in two threads, the
+  reply in one leaves the other offered. Reports of earlier rounds stay
+  deliverable while the task works on the next. The working task holds its directory again: what the sweep did to it
+  is undone where it can be (a removed directory is made again, empty, and its
+  clean-up marks are cleared) and the brief says what is gone. The worker's
+  session carries on when it is still there and under 4 MB; otherwise
+  (deleted with the directory, cleaned up by Claude Code, Codex or TraeX themselves,
+  or too large) the round starts a fresh session from the task record, round
+  by round. A turn whose CLI says the session it resumed is gone ("No
+  conversation found", "no rollout found") runs again the same way instead of
+  failing the task. A round may take the follow-up slot.
+- **A round that is not the task's never happened.** When the worker hands
+  back every request line of a round, nothing of that round is relayed (a
+  report it filed is kept, settled as handed back), and the task goes back to
+  how it ended, with the summary and answer of its last real round (not of an
+  earlier round handed back too). The router
+  decides on the handed-back lines as new inputs.
 - **One request, one live task.** `task_create` refuses a line a live task
   already holds as part of its request; `task_route` refuses lines from another
   chat than the task's unless the owner wrote them.
@@ -155,12 +217,12 @@ So a task takes only what changes or answers the work it is doing:
   model step or tool call and when the run is about to end, and adds them to the
   session; at the second point the run goes on instead of ending.
   - Pi: `pi-mcp-extension.mjs` on `turn_end` and `agent_before_settle`.
-  - Claude Code and Codex: `task-input-hook.mjs` as a `PostToolUse` hook
+  - Claude Code, Codex and TraeX: `task-input-hook.mjs` as a `PostToolUse` hook
     (`additionalContext`) and a `Stop` hook (`decision: block`), the hook format
-    both CLIs share. Claude Code gets them in the worker's `--settings`; Codex as
-    `-c hooks.<event>=[…]` overrides for that run, which need
+    the three CLIs share. Claude Code gets them in the worker's `--settings`;
+    Codex and TraeX as `-c hooks.<event>=[…]` overrides for that run, which need
     `--dangerously-bypass-hook-trust` (worker runs already bypass approvals and
-    the sandbox). Nothing is written to `~/.codex` or `~/.claude`.
+    the sandbox). Nothing is written to `~/.codex`, `~/.trae` or `~/.claude`.
   Both points are where Pi's own `steer` delivers too; a long tool call still
   finishes first.
 - **Workers hand back what is not theirs.** `task_handback` (worker) returns
@@ -173,8 +235,8 @@ So a task takes only what changes or answers the work it is doing:
 
 | Tool | Does |
 |---|---|
-| `task_create` | A task from the named input lines (`trigger_ids`, the first one is the origin), a title, an optional note, and `follows` when it builds on a task. |
-| `task_route` | More lines for a working or waiting task: `owner` (changes, narrows or answers the work it is doing) or `context` (background). Refused for an ended task. |
+| `task_create` | A task from the named input lines (`trigger_ids`, the first one is the origin), a title, an optional note, and `follows` when it builds on a task's result as a separate one. |
+| `task_route` | Lines for a task: `owner` (something on the result it works toward or delivered; for an ended task, a new round) or `context` (background for a task at work). Refused for a stopped task, and `context` for an ended one. |
 | `task_stop` | Stops a task and its worker; only when the requester or the owner asks. |
 | `task_list` | The working set (every live task and the 32 most recently ended), one task in detail, the tasks one person asked for (`for_event`), or a search over titles. Each line says how long a task has been working and whether its latest result was sent (how long ago, as which message). |
 
@@ -187,15 +249,41 @@ it.
 A worker turn is one run of the router's runtime CLI in its non-interactive
 mode, resuming the task's own session (`worker-executor.mjs`):
 
-| Runtime | Turn |
-|---|---|
-| Pi | `pi --mode json -p --session-id <task> ...` |
-| Codex | `codex exec --json ...`, then `codex exec resume <thread>` |
-| Claude Code | `claude --print --output-format stream-json --session-id/--resume <task>` |
+| Runtime | Turn | First turn of a task that follows one on the same runtime |
+|---|---|---|
+| Pi | `pi --mode json -p --session-id <task> ...` | `--fork <its session file>` |
+| Codex | `codex exec --json ...`, then `codex exec resume <thread>` | `codex exec ... fork <its thread>` |
+| TraeX | `traex exec --json ...`, then `traex exec resume <thread>` | `traex exec ... fork <its thread>` |
+| Claude Code | `claude --print --output-format stream-json --session-id/--resume <task>` | `--resume <its session> --fork-session --session-id <task>` |
+
+A task that follows another starts from a copy of that task's session when the
+session is still there and at most 4 MB, else from the summary in its brief.
+The copy is meant to keep the provider's prefix cache, and how much it keeps
+depends on the runtime. First model call of a copy into another task's
+directory, measured:
+
+- **Pi: 97% cached.** Pi names the working directory at the end of the system
+  prompt and records a new one as a later system update, but folds that update
+  into the first system message for providers without mid-conversation system
+  messages (`openai-completions` by default): one changed character before all
+  the history, and only 2048 tokens were cached. So every worker's system
+  prompt names the same directory, "the task directory your brief names"
+  (`pi-mcp-extension.mjs`, on `before_agent_start`); the brief names it, and
+  the worker's shell and file tools start there.
+- **Claude Code: the whole copy.** It appends the change of directory after
+  the copied history.
+- **TraeX: 98% cached.** Its exec is Codex's (the same flags, events, hooks
+  and thread files, in `~/.trae/cli/sessions`), but the copy keeps its cache;
+  measured through the daemon's executor, a follows task's first turn into
+  another task's directory.
+- **Codex: only its fixed prefix** (system prompt and tools, about 12k
+  tokens). Codex keys the prompt cache by thread (`prompt_cache_key`), which a
+  fork changes, and nothing sets it. Resuming a task's own thread, as each
+  later turn and round does, is 99% cached.
 
 No process runs between turns, so an idle task holds nothing; Durable,
-OpenCode, TraeX and Ark have no worker mode, and `task_create` tells the router
-to handle the request itself there. A task keeps the runtime it started on.
+OpenCode and Ark have no worker mode, and `task_create` tells the router to
+handle the request itself there. A task keeps the runtime it started on.
 Three turns run at once, plus one slot only a follow-up to an existing task may
 take. Each task works in a directory under `<workspace>/tasks/` (see Task
 directories).
@@ -205,7 +293,10 @@ wait. Pi's `bash` alone has no default timeout, so a Pi worker's command
 without a `timeout` is stopped after 300 seconds and none may ask for more than
 3600; the worker's policy says so, for builds and test runs that need longer.
 Codex returns a long command's output after at most 30 seconds and lets it run
-on; Claude Code gives a command 2 minutes unless it asks for up to 10.
+on; Claude Code gives a command 2 minutes unless it asks for up to 10. TraeX
+waits for a command to end, so a TraeX worker's commands are stopped after an
+hour (`--shell-tool-timeout`), the longest a Pi worker's may run, and its
+policy says so.
 Every worker is told to search with the bundled `rg` rather than `grep -r`, in
 its own directory first, and never over a whole home directory, `/`, or the
 OpenViking SuperAgent installation and data. Its working directory is its task
@@ -267,15 +358,17 @@ to install again what it needs.
 The daemon sweeps a minute after it starts and every hour. Measuring runs in
 the background; choosing what to delete and moving it to a trash folder next
 to it happen in one step, so a task never starts in, or reads, a directory
-being deleted, and the trash is emptied after. A directory a task used while
+being deleted, and the trash is emptied after. A round that reopens a task
+makes it live again in that step's sense: what was already moved away is gone
+(the round is told so), nothing more is. A directory a task used while
 it was being measured waits for the next sweep. `/tasks` shows how much the
-task directories took at the last sweep. Claude Code and Codex keep their own
-session files in their homes; those are not swept.
+task directories took at the last sweep. Claude Code, Codex and TraeX keep
+their own session files in their homes; those are not swept.
 
 ### What the router sees
 
 ```
-[task report] task=t3 state=done title="排查飞书名字泄露" requester=陈锦
+[task report] task=t3 round=2 state=done title="排查飞书名字泄露" requester=陈锦
 origin: chat=oc_... thread=omt_... source=lark msg=om_... event=...
 summary:
 | ...
@@ -283,7 +376,8 @@ draft:
 | ...
 ```
 
-Worker text is quoted (`| `), so it cannot pass for an input line. The router
+`round=` appears once a task has had more than one round; the origin is that
+round's. Worker text is quoted (`| `), so it cannot pass for an input line. The router
 receives the full stored draft (up to the 20,000-character reporting limit)
 and relays it with `reply_message` to the origin `msg=`.
 
@@ -337,8 +431,8 @@ the reply text, so a rewritten reply is a new message).
   tools (`bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`); past them the
   call is refused with a pointer to `task_create` (a `tool_call` handler in
   `pi-mcp-extension.mjs`). A per-command cap alone did not stop a router from
-  investigating with many short commands. Core reads are not counted. On Codex
-  and Claude Code this is policy text only.
+  investigating with many short commands. Core reads are not counted. On Codex,
+  TraeX and Claude Code this is policy text only.
 - **Restart.** Tasks, inputs and reports are in SQLite. A turn cut by a
   shutdown is not reported; at start its task runs again from the persisted
   request history, told to check what it already did before repeating an outside
@@ -350,7 +444,8 @@ ended ones, slots, whether each result reached the requester), one task with
 `/tasks t12`, and stops one with `/tasks stop t12`; `/status` counts the tasks
 at work. The Core answers these without the model.
 
-Activities: `task.created` (with `parent`), `task.turn_started`,
-`task.turn_completed` (with usage), `task.reported`, `task.handed_back`,
-`task.report_unrelayed`, `task.ended`, `task.dirs_cleaned` (what a sweep
-deleted and freed).
+Activities: `task.created` (with `parent`), `task.reopened` (round, the
+status it had, what it found of its directory and session),
+`task.turn_started`, `task.turn_completed` (with usage), `task.reported`,
+`task.handed_back`, `task.round_handed_back`, `task.report_unrelayed`,
+`task.ended`, `task.dirs_cleaned` (what a sweep deleted and freed).

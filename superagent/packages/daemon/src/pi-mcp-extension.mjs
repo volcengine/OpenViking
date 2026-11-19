@@ -11,6 +11,9 @@ import { PI_MCP_STATUS } from './pi-runtime.mjs';
 // ~/.pi or the workspace, and no tools are reimplemented in this extension.
 // Pi's own tools that do work, as against the Core tools a router routes with.
 const WORK_TOOLS = new Set(['bash', 'read', 'edit', 'write', 'grep', 'find', 'ls']);
+// A worker's working directory as its system prompt names it: the same for
+// every task, so that one task's session copied into another keeps its prefix.
+export const WORKER_CWD = 'the task directory your brief names ("Your directory: …"); your shell and file tools start there';
 
 export default function personalAgentMcp(pi) {
   const config = JSON.parse(process.env.PERSONAL_AGENT_MCP_CONFIG);
@@ -78,6 +81,14 @@ export default function personalAgentMcp(pi) {
     };
     pi.on('turn_end', pull);
     pi.on('agent_before_settle', pull);
+    // Every worker's system prompt names the same working directory. A task
+    // that follows another starts from a copy of that task's session, in its
+    // own directory; Pi records the new directory as a later system update,
+    // but folds it into the first system message for providers without
+    // mid-conversation system messages, and then nothing of the copied
+    // history is in the provider's prefix cache. The brief names the task's
+    // directory, and its shell and file tools start there.
+    pi.on('before_agent_start', (event) => { event.systemPromptOptions.cwd = WORKER_CWD; });
   }
 
   pi.on('session_start', (_event, ctx) => {

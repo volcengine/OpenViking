@@ -245,6 +245,11 @@ function shellSection(config, { runtime = null, worker = false } = {}) {
   if (runtime === 'pi' && (worker || config.scheduler !== 'workers')) {
     lines.push(`- A shell command without a \`timeout\` of its own is stopped after ${PI_SHELL_DEFAULT_S / 60} minutes, and none runs longer than ${PI_SHELL_MAX_S / 60}: give a build, test run or install that needs more its own \`timeout\` (in seconds).`);
   }
+  // A TraeX worker waits for each command, so each is stopped after the
+  // longest a Pi worker's may run (worker-executor.mjs).
+  if (runtime === 'traex' && worker) {
+    lines.push(`- A shell command is stopped after ${PI_SHELL_MAX_S / 60} minutes: a build, test run or install must finish within that, and nothing you start may be left waiting for input or running for good (a server, a watcher).`);
+  }
   return ['## Shell', '', ...lines].join('\n');
 }
 

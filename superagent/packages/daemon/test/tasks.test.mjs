@@ -156,25 +156,218 @@ describe('TaskManager', () => {
     assert.equal(executor.turns.length, 1, 'inputs it read need no catch-up turn');
   });
 
-  it('takes no inputs for an ended task: more work on it is a task that follows it', async (t) => {
+  it('reopens an ended task for a new round: its session goes on, and the answer goes where that round was asked', async (t) => {
+    const { tasks, executor, relayed, activities } = setup(t);
+    const first = row({ thread_id: 'omt_1', content: '实现 slugify 并开个 PR' });
+    tasks.create({ rows: [first], title: 'slugify PR', requester: 'Alice', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', summary: '实现在 src/slugify.js', draft: 'PR 已开', artifacts: ['feat/slugify'] });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.equal(tasks.get('t1').status, 'done');
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], by: 'reply_message' }), 1);
+    const again = row({ thread_id: 'omt_2', sender_id: 'ou_bob', content: '@TestBot @Alice 函数改名叫 toSlug' });
+    assert.equal(tasks.route('t1', [again], 'owner', { requester: 'Bob' }).status, 'running');
+    assert.equal(tasks.get('t1').round, 2);
+    assert.equal(tasks.get('t1').ended_at_ms, null);
+    assert.deepEqual(activities.filter((entry) => entry.kind === 'task.reopened').map((entry) => entry.metadata),
+      [{ task: 't1', round: 2, from: 'done', workdir: 'kept', session: 'kept' }]);
+    const brief = executor.turns[1].prompt;
+    assert.match(brief, /^\[task t1\] Round 2: a new request on this task, from Bob\. Your result for the previous round went to the requester; this is more work on the same task\.\n/);
+    assert.match(brief, /\[chat=oc_a msg=om_\d+ event=e\d+\] @TestBot @Alice 函数改名叫 toSlug\nBefore you start, check the state of your directory/);
+    assert.equal(executor.turns[1].task.native_session, tasks.get('t1').session_id, 'the session carries on');
+    assert.ok(tasks.liveScopes().has(again.scope_key), 'OnIt stays where the round was asked');
+    assert.match(tasks.hintFor({ chatId: 'oc_a', threadId: 'omt_2', content: 'x', senderId: 'ou_bob' }), /t1 \[working, 2 rounds\] "slugify PR" now on: "函数改名叫 toSlug" \(same thread\)/);
+    assert.match(tasks.list({ requester: { id: 'ou_bob', chatId: 'oc_a', direct: false } })[0], /^t1 \[running\] "slugify PR" for Alice in chat=oc_a thread=omt_1 \(2 rounds\)/);
+    tasks.report('t1', { state: 'done', draft: '已改名' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+    const report = relayed.at(-1);
+    assert.match(report.item.text, /^\[task report\] task=t1 round=2 state=done title="slugify PR" requester=Bob\n/);
+    assert.match(report.item.text, new RegExp(`\\norigin: chat=oc_a thread=omt_2 source=lark msg=${again.message_id} event=${again.event_id}\\n`));
+    assert.equal(report.meta.threadId, 'omt_2');
+    assert.equal(report.item.scopeKey, again.scope_key);
+    assert.equal(tasks.settleReports({ seqs: [first.seq], by: 'reply_message' }), 0, 'an answer on round 1 does not answer round 2');
+    assert.equal(tasks.settleReports({ seqs: [again.seq], by: 'reply_message' }), 1);
+    assert.deepEqual(tasks.rounds('t1').map((round) => [round.round, round.requester_name, round.outcome]), [[1, 'Alice', 'done'], [2, 'Bob', 'done']]);
+    assert.throws(() => tasks.route('t1', [row()], 'context'), (error) => error.code === 'task_ended' && /a context line does not reopen it/.test(error.message));
+    tasks.route('t1', [row({ content: '再补个测试' })], 'owner');
+    tasks.stop('t1', 'Alice said stop');
+    assert.equal(tasks.rounds('t1').at(-1).outcome, 'stopped');
+    assert.throws(() => tasks.route('t1', [row()], 'owner'), (error) => error.code === 'task_ended' && /t1 was stopped\. Work on it again is a new task: task_create with follows=t1/.test(error.message));
+  });
+
+  it('starts a round from the task record when its directory and session were cleaned up, or its session grew too large', async (t) => {
+    const day = 86_400_000;
+    let now = Date.parse('2026-11-01T00:00:00Z');
+    const { tasks, executor, activities } = setup(t, { now: () => now });
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-data-'));
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    tasks.config.dataDir = dataDir;
+    const states = new Map();
+    executor.sessionState = (task) => states.get(task.id) ?? 'kept';
+    for (const title of ['A', 'B', 'C']) {
+      tasks.create({ rows: [row({ content: `做 ${title}` })], title, requester: 'Alice', runtime: 'pi' });
+      const task = tasks.get(`t${title.charCodeAt(0) - 64}`);
+      fs.mkdirSync(path.join(task.workdir, 'repo', 'node_modules', 'x'), { recursive: true });
+      fs.writeFileSync(path.join(task.workdir, 'repo', 'index.js'), 'x');
+      fs.mkdirSync(path.join(dataDir, 'workers', task.id), { recursive: true });
+      fs.writeFileSync(path.join(dataDir, 'workers', task.id, `x_${task.session_id}.jsonl`), '{}');
+      tasks.report(task.id, { state: 'done', summary: `${title} 的结论`, draft: `${title} 做完了`, artifacts: [`branch-${title}`] });
+      executor.turns.at(-1).finish({ text: '' });
+      await settle();
+    }
+    now += 4 * day;
+    await tasks.sweepDirs();
+    assert.ok(!fs.existsSync(path.join(tasks.get('t2').workdir, 'repo', 'node_modules')), 'B pruned');
+    tasks.route('t2', [row({ content: '再改一下 B' })], 'owner', { requester: 'Alice' });
+    assert.match(executor.turns.at(-1).prompt, /^\[task t2\] Round 2: [\s\S]*\nThe dependency folders in your directory \(node_modules, virtual environments, build caches\) were deleted to save disk after the task ended: install again only what you need\.\n/);
+    assert.equal(tasks.dirState(tasks.get('t2').workdir), null, 'a reopened directory starts its clean-up afresh');
+    states.set('t3', 'large');
+    const before = tasks.get('t3').session_id;
+    tasks.route('t3', [row({ content: '再改一下 C' })], 'owner', { requester: 'Bob' });
+    const large = executor.turns.at(-1);
+    assert.equal(large.task.native_session, null);
+    assert.notEqual(large.task.session_id, before, 'a fresh session');
+    assert.match(large.prompt, /^Your session from the earlier rounds of this task grew too long to carry on: you start a fresh one from this brief, rebuilt from the task record\.\n\[task t3\] C\n/);
+    now += 11 * day;
+    await tasks.sweepDirs();
+    const dir = tasks.get('t1').workdir;
+    assert.ok(!fs.existsSync(dir) && !fs.existsSync(path.join(dataDir, 'workers', 't1')), 'A removed with its sessions');
+    assert.equal(tasks.get('t1').native_session, null, 'its checkpoint went with its session');
+    tasks.route('t1', [row({ content: '再加个参数' })], 'owner', { requester: 'Bob' });
+    assert.ok(fs.existsSync(dir), 'the directory is there again');
+    assert.equal(tasks.dirState(dir), null, 'and is swept again after the task ends');
+    assert.deepEqual(activities.filter((entry) => entry.kind === 'task.reopened').map((entry) => [entry.metadata.task, entry.metadata.workdir, entry.metadata.session]),
+      [['t2', 'pruned', 'kept'], ['t3', 'pruned', 'large'], ['t1', 'removed', 'deleted']]);
+    const brief = executor.turns.at(-1).prompt;
+    assert.match(brief, /^Your session from the earlier rounds of this task was deleted to save disk some days after it ended: this brief is rebuilt from the task record\.\n\[task t1\] A\n/);
+    assert.match(brief, /This task has had 2 rounds, each a request on the same work, answered in turn; the last is the one to do now\. The requests, as the agent received them:\nRound 1, from Alice \(done\):\n\[chat=oc_a msg=om_\d+ event=e\d+\] 做 A\nRound 2 \(now\), from Bob:\n\[chat=oc_a msg=om_\d+ event=e\d+\] 再加个参数\n/);
+    assert.match(brief, new RegExp(`Your directory: ${dir}\\nYour directory \\(${dir}\\) was deleted to save disk some days after the task ended, and is empty again: start from your results`));
+    assert.match(brief, /What your earlier rounds found:\n\| A 的结论\nYour answer to the previous round \(the requester has it\):\n\| A 做完了\nPrevious artifacts: \["branch-A"\]\nWork on the request of round 2, then finish with task_report: its result answers that request\./);
+  });
+
+  it('takes a round its worker hands back entirely as one that never happened: nothing relayed, the task as it was', async (t) => {
+    const { tasks, executor, relayed } = setup(t);
+    tasks.create({ rows: [row({ content: '实现 slugify' })], title: 'slugify', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', summary: 'S1', draft: 'D1' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    tasks.settleReports({ taskIds: ['t1'], by: 'reply_message' });
+    const other = row({ content: '基于这个函数写份新人培训文档' });
+    tasks.route('t1', [other], 'owner');
+    tasks.handBack('t1', tasks.inputsBySeq('t1', [other.seq]).map((input) => input.id), 'another result');
+    tasks.report('t1', { state: 'dropped', summary: 'not this task', draft: '不是这个任务' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+    assert.match(relayed.at(-1).item.text, /^\[task handback\] task=t1 /);
+    assert.ok(!relayed.some((entry) => /^\[task report\] task=t1 round=2/.test(entry.item.text)), 'no report of that round');
+    const task = tasks.get('t1');
+    assert.deepEqual([task.status, task.summary, task.draft], ['done', 'S1', 'D1']);
+    assert.equal(tasks.rounds('t1')[1].outcome, 'handed_back');
+    assert.equal(tasks.delivery(task).state, 'sent', 'its last result is still the one of round 1');
+    tasks.restore();
+    assert.ok(!relayed.some((entry) => /^\[task report\] task=t1 round=2/.test(entry.item.text)), 'nor after a restart');
+    tasks.route('t1', [row({ content: '改个名' })], 'owner');
+    assert.equal(tasks.get('t1').round, 3);
+    assert.match(executor.turns[2].prompt, /^\[task t1\] Round 3: /);
+  });
+
+  it('settles only the rounds an answer covers: a reply in one thread leaves another round\'s report offered', async (t) => {
+    const { tasks, executor, db } = setup(t);
+    db.exec('ALTER TABLE connector_events ADD COLUMN scope_key TEXT');
+    const ingest = (input) => db.prepare('INSERT INTO connector_events(seq, message_id, scope_key) VALUES (?, ?, ?)').run(input.seq, input.message_id, input.scope_key);
+    const unsettled = () => db.prepare(`SELECT r.round FROM task_report_deliveries d JOIN task_reports r ON r.id = d.report_id
+      WHERE d.settled_at_ms IS NULL ORDER BY r.round`).all().map((row) => row.round);
+    const first = row({ thread_id: 'omt_A', content: '实现功能' });
+    ingest(first);
+    tasks.create({ rows: [first], title: 'PR', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: '功能已提交' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    // Before the router relays round 1, the work goes on from thread B.
+    const second = row({ thread_id: 'omt_B', content: '再补上测试' });
+    ingest(second);
+    tasks.route('t1', [second], 'owner');
+    tasks.report('t1', { state: 'done', draft: '测试已补齐并通过' });
+    executor.turns[1].finish({ text: '' });
+    await settle();
+    assert.deepEqual(unsettled(), [1, 2]);
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], seqs: [first.seq], by: 'reply_message' }), 1);
+    assert.deepEqual(unsettled(), [2], 'round 2, asked in thread B, is still to be relayed');
+    // Decided on another line of thread B (no input of the task): the thread says which round.
+    const chatter = row({ thread_id: 'omt_B', content: '辛苦' });
+    ingest(chatter);
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], seqs: [chatter.seq], by: 'reply_message' }), 1);
+    assert.deepEqual(unsettled(), []);
+  });
+
+  it('keeps the last real result when two rounds in a row are handed back', async (t) => {
+    const { tasks, executor } = setup(t);
+    tasks.create({ rows: [row({ content: '实现 slugify' })], title: 'slugify', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', summary: 'S1', draft: 'D1' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    for (const [index, content] of ['写份培训文档', '再做个演示视频'].entries()) {
+      const other = row({ content });
+      tasks.route('t1', [other], 'owner');
+      tasks.handBack('t1', tasks.inputsBySeq('t1', [other.seq]).map((input) => input.id), 'another result');
+      tasks.report('t1', { state: 'dropped', summary: `not mine ${index}`, draft: `不是这个任务 ${index}` });
+      executor.turns.at(-1).finish({ text: '' });
+      await settle();
+    }
+    const task = tasks.get('t1');
+    assert.deepEqual([task.status, task.summary, task.draft], ['done', 'S1', 'D1']);
+    assert.deepEqual(tasks.rounds('t1').map((round) => round.outcome), ['done', 'handed_back', 'handed_back']);
+  });
+
+  it('starts a new session from the task record when the session a round resumes is gone', async (t) => {
+    const { tasks, executor } = setup(t);
+    tasks.create({ rows: [row({ content: '实现 slugify' })], title: 'slugify', runtime: 'claude' });
+    tasks.report('t1', { state: 'done', summary: 'S1', draft: 'D1' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    tasks.route('t1', [row({ content: '改个名' })], 'owner');
+    const resumed = executor.turns[1];
+    assert.equal(resumed.task.native_session, tasks.get('t1').session_id, 'it tries the session first');
+    resumed.finish({ text: '', error: 'error_during_execution', sessionLost: true });
+    await settle();
+    assert.equal(executor.turns.length, 3, 'and runs again instead of failing');
+    const fresh = executor.turns[2];
+    assert.equal(fresh.task.native_session, null);
+    assert.notEqual(fresh.task.session_id, resumed.task.session_id);
+    assert.match(fresh.prompt, /^The previous worker session could not be safely resumed\. Check existing work before repeating any outside action\.\n\[task t1\] slugify\n/);
+    assert.match(fresh.prompt, /Round 2 \(now\), from unknown:\n\[chat=oc_a msg=om_\d+ event=e\d+\] 改个名/);
+    tasks.report('t1', { state: 'done', draft: '改好了' });
+    fresh.finish({ text: '' });
+    await settle();
+    assert.equal(tasks.get('t1').status, 'done');
+  });
+
+  it('lets a report of an earlier round go out while the task works on the next', async (t) => {
+    const { tasks, executor } = setup(t);
+    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: 'round 1' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    tasks.route('t1', [row()], 'owner');
+    assert.deepEqual(tasks.working(['t1']), [], 'round 1 answers its own request');
+    tasks.settleReports({ taskIds: ['t1'], by: 'reply_message' });
+    assert.deepEqual(tasks.working(['t1']), ['t1'], 'with nothing of an earlier round left, a delivery waits for this round');
+  });
+
+  it('starts a separate result that follows a task from that work', async (t) => {
     const { tasks, executor } = setup(t);
     tasks.create({ rows: [row({ content: '查一下 X' })], title: '查 X', runtime: 'pi' });
     tasks.report('t1', { state: 'done', summary: 'X 慢在索引', draft: 'X 慢是因为缺索引', artifacts: ['notes.md'] });
     executor.turns[0].finish({ text: '' });
     await settle();
-    assert.equal(tasks.get('t1').status, 'done');
-    assert.throws(() => tasks.route('t1', [row({ content: '提个 PR 修一下' })], 'owner'),
-      (error) => error.code === 'task_ended' && /follows=t1/.test(error.message));
-    assert.throws(() => tasks.route('t1', [row()], 'context'), /has ended/);
-    tasks.create({ rows: [row({ content: '提个 PR 修一下' })], title: '修 X', runtime: 'pi', parent: 't1' });
+    tasks.create({ rows: [row({ content: '基于这个写份手册' })], title: '写手册', runtime: 'pi', parent: 't1' });
     assert.equal(tasks.get('t2').parent_id, 't1');
     const brief = executor.turns[1].prompt;
-    assert.match(brief, /^\[task t2\] 修 X\n/);
+    assert.match(brief, /^\[task t2\] 写手册\n/);
     assert.match(brief, /This task follows t1 "查 X" \(done\), earlier work it builds on\. Its request:\n\| \[chat=oc_a msg=om_\d+ event=e\d+\] 查一下 X/);
     assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nIts directory, with whatever it left there: .*tasks\/t1\n/);
-    assert.match(tasks.list()[0], /^t2 \[running\] "修 X" for unknown in chat=oc_a \(follows t1\) · working for 0m$/);
-    tasks.stop('t2', 'Alice said stop');
-    assert.throws(() => tasks.route('t2', [row()], 'owner'), /has ended \(stopped\)/);
+    assert.match(tasks.list()[0], /^t2 \[running\] "写手册" for unknown in chat=oc_a \(follows t1\) · working for 0m$/);
   });
 
   it('deletes what ended tasks left in stages: dependency folders, then the directory and its sessions, never what a task uses', async (t) => {
@@ -400,7 +593,7 @@ describe('TaskManager', () => {
     executor.turns[0].finish({ text: '' });
     await settle();
     const inThread = { chatId: 'oc_a', threadId: 'omt_9', senderId: 'ou_alice', scopeKey: origin.scope_key, content: '要' };
-    assert.equal(tasks.hintFor(inThread, {}), '[daemon tasks] near this input: t1 [waiting for Alice] "排查飞书名字泄露问题" (same thread, waiting for this person)');
+    assert.equal(tasks.hintFor(inThread, {}), '[daemon tasks] near this input: t1 [waiting for Alice] "排查飞书名字泄露问题" now on: "排查飞书名字泄露" (same thread, waiting for this person)');
     const reply = { chatId: 'oc_a', threadId: null, senderId: 'ou_bob', scopeKey: 'lark:oc_a:', content: 'ok', parentId: origin.message_id };
     assert.match(tasks.hintFor(reply, {}), /t1 \[waiting for Alice\] .*\(replies to its message\)/);
     const sameChat = { chatId: 'oc_a', threadId: null, senderId: 'ou_alice', scopeKey: 'lark:oc_a:', content: '飞书名字泄露那个怎么样了' };
@@ -410,7 +603,54 @@ describe('TaskManager', () => {
     assert.match(tasks.hintFor(elsewhere, { owner: true }), /t1 .*similar words/);
     tasks.report('t1', { state: 'done', draft: 'ok' });
     tasks.setStatus('t1', 'done');
-    assert.match(tasks.hintFor(inThread, {}), /t1 \[done 0m ago\]/);
+    assert.match(tasks.hintFor(inThread, {}), /t1 \[done 0m ago\] "排查飞书名字泄露问题" last asked: "排查飞书名字泄露" \(same thread\)/);
+  });
+
+  it('knows a reply to the message that relayed a task\'s result, whatever input the router decided it on', async (t) => {
+    const { tasks, ingest, executor, db } = setup(t);
+    const origin = row({ content: '帮我查下 X 为什么慢' });
+    ingest(origin);
+    tasks.create({ rows: [origin], title: '查 X 变慢', runtime: 'pi' });
+    const later = row({ content: '只看上周的' });
+    ingest(later);
+    tasks.route('t1', [later], 'owner');
+    tasks.check('t1');
+    tasks.report('t1', { state: 'done', draft: '慢在缺索引' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    // The router relayed it to the origin message, deciding on the newest input there.
+    db.prepare('INSERT INTO outbox(id, inbound_seq, remote_message_id) VALUES (1, ?, ?)').run(later.seq, 'om_bot_result');
+    const reply = { chatId: 'oc_a', threadId: null, senderId: 'ou_alice', scopeKey: 'lark:oc_a:', content: '那按这个结论提个 PR', parentId: 'om_bot_result' };
+    assert.equal(tasks.hintFor(reply, {}), '', 'not before the delivery names it');
+    tasks.settleReports({ taskIds: ['t1'], by: 'reply_message', outboxId: 1 });
+    assert.equal(tasks.hintFor(reply, {}), '[daemon tasks] near this input: t1 [done 0m ago] "查 X 变慢" last asked: "帮我查下 X 为什么慢" (replies to its message)');
+  });
+
+  it('finds a task an exact signal names past the working set: its thread, or a reply to the message that relayed its result', async (t) => {
+    let now = Date.parse('2026-11-01T00:00:00Z');
+    const { tasks, ingest, executor, db } = setup(t, { now: () => now });
+    const old = row({ thread_id: 'omt_old', content: '实现 slugify 并开个 PR' });
+    ingest(old);
+    tasks.create({ rows: [old], title: 'slugify PR', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', draft: 'PR 已开' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    db.prepare('INSERT INTO outbox(id, inbound_seq, remote_message_id) VALUES (7, ?, ?)').run(old.seq, 'om_bot_old');
+    tasks.settleReports({ taskIds: ['t1'], by: 'reply_message', outboxId: 7 });
+    // Forty tasks end after it: it is long out of the working set.
+    for (let index = 0; index < 40; index += 1) {
+      now += 60_000;
+      const id = tasks.create({ rows: [row({ thread_id: `omt_${index}` })], title: `other ${index}`, runtime: 'pi' }).id;
+      tasks.report(id, { state: 'done', draft: 'ok' });
+      executor.turns.at(-1).finish({ text: '' });
+      await settle();
+    }
+    assert.ok(!tasks.workingSet().some((task) => task.id === 't1'));
+    const inThread = { chatId: 'oc_a', threadId: 'omt_old', senderId: 'ou_alice', scopeKey: old.scope_key, content: 'CI 又挂了' };
+    assert.equal(tasks.hintFor(inThread, {}), '[daemon tasks] near this input: t1 [done 40m ago] "slugify PR" last asked: "实现 slugify 并开个 PR" (same thread)');
+    const reply = { chatId: 'oc_a', threadId: null, senderId: 'ou_alice', scopeKey: 'lark:oc_a:', content: '那再补个测试', parentId: 'om_bot_old' };
+    assert.match(tasks.hintFor(reply, {}), /^\[daemon tasks\] near this input: t1 \[done 40m ago\] "slugify PR" .*\(replies to its message\)$/);
+    assert.equal(tasks.hintFor({ ...inThread, chatId: 'oc_b' }, {}), '', 'the same thread id in another chat is another thread');
   });
 
   it('settles a report when the router answers for its task, and offers one it was shown and left again', async (t) => {
