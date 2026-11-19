@@ -19,7 +19,7 @@ const messages = {
   searchEmpty: '没有匹配的资源',
   searchFailed: '搜索失败',
   searchInvalidPattern:
-    '正则表达式无效。请使用 test.* 匹配 test 开头的内容；查找星号本身请用 \\*。',
+    '正则表达式无效。请使用 ^test.* 匹配行首为 test 的内容；查找星号本身请用 \\*。',
   searchErrorDetails: '错误详情',
   searchModePlaceholders: {
     find: '搜索文件或目录',

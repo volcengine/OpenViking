@@ -21,7 +21,7 @@ const messages = {
   searchEmpty: 'No matching resources',
   searchFailed: 'Failed to run the search',
   searchInvalidPattern:
-    'Invalid regular expression. Use test.* to match text starting with test, or \\* to find a literal asterisk.',
+    'Invalid regular expression. Use ^test.* to match test at the start of a line, or \\* to find a literal asterisk.',
   searchErrorDetails: 'Error details',
   searchModePlaceholders: {
     find: 'Search files or directories',

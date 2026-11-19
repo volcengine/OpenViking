@@ -95,8 +95,8 @@ for (const [locale, prefix] of [
       assert.match(
         alert.querySelector('p:nth-child(2)').textContent,
         locale === 'zh-CN'
-          ? /正则表达式无效.*test\.\*/
-          : /Invalid regular expression.*test\.\*/,
+          ? /正则表达式无效.*\^test\.\*.*行首/
+          : /Invalid regular expression.*\^test\.\*.*start of a line/,
       );
       assert.equal(alert.querySelector('details').open, false);
       assert.equal(alert.querySelector('details p').textContent, rawMessage);
