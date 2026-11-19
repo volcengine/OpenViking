@@ -213,15 +213,15 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 #### 内置卡片
 
-| card_type           | 默认表单字段                | 协议中的 value                                                 |
-| ------------------- | --------------------------- | -------------------------------------------------------------- |
-| compile_name        | `value`，文本               | `string`                                                       |
-| compile_output_type | `value`，单选               | 选项的 `value`                                                 |
-| compile_source      | `value`，多选目录           | 去空值、去重后的 `string[]`                                    |
-| compile_target      | `value`，推荐或自定义目录   | `string`                                                       |
-| compile_skill       | `value`，推荐或自定义 Skill | `string`                                                       |
-| compile_instruction | `value`，多行文本           | `string`                                                       |
-| compile_schedule    | `mode`、`time`、`weekday`   | `{ frequency: 'disabled' }` 或包含频率、时间、星期和时区的对象 |
+| card_type           | 默认表单字段                  | 协议中的 value                                                 |
+| ------------------- | ----------------------------- | -------------------------------------------------------------- |
+| compile_name        | `value`，文本                 | `string`                                                       |
+| compile_output_type | `value`，单选                 | 选项的 `value`                                                 |
+| compile_source      | `value`，多选目录             | 去空值、去重后的 `string[]`                                    |
+| compile_target      | `value`，推荐或自定义目录     | `string`                                                       |
+| compile_skill       | `value`，推荐或自定义 Skill   | `string`                                                       |
+| compile_instruction | `value`，可选多行文本，可留空 | `string`                                                       |
+| compile_schedule    | `mode`、`time`、`weekday`     | `{ frequency: 'disabled' }` 或包含频率、时间、星期和时区的对象 |
 
 工具结果支持直接 JSON、MCP `structuredContent` 或文本 `content`，`schema_version` 必须为 `'1.0'`。优先读取 `structuredContent`；一组中任一问题无效或未注册时，整组保留为工具结果。原生服务接受裸工具名及 `mcp_openviking-mcp_request_user_input`；自定义适配器应保留工具调用的唯一 `id`，将服务名设为 `openviking-mcp`、工具名设为 `request_user_input`。
 

@@ -213,15 +213,15 @@ Every adapter method receives an `AbortSignal`, must honor cancellation, and thr
 
 #### Built-in cards
 
-| card_type           | Default form fields                    | Protocol value                                                                      |
-| ------------------- | -------------------------------------- | ----------------------------------------------------------------------------------- |
-| compile_name        | `value`, text                          | `string`                                                                            |
-| compile_output_type | `value`, single choice                 | The option's `value`                                                                |
-| compile_source      | `value`, multiple folders              | A `string[]` with blank entries and duplicates removed                              |
-| compile_target      | `value`, suggested or custom directory | `string`                                                                            |
-| compile_skill       | `value`, suggested or custom Skill     | `string`                                                                            |
-| compile_instruction | `value`, multiline text                | `string`                                                                            |
-| compile_schedule    | `mode`, `time`, `weekday`              | `{ frequency: 'disabled' }` or an object with frequency, time, weekday and timezone |
+| card_type           | Default form fields                                    | Protocol value                                                                      |
+| ------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| compile_name        | `value`, text                                          | `string`                                                                            |
+| compile_output_type | `value`, single choice                                 | The option's `value`                                                                |
+| compile_source      | `value`, multiple folders                              | A `string[]` with blank entries and duplicates removed                              |
+| compile_target      | `value`, suggested or custom directory                 | `string`                                                                            |
+| compile_skill       | `value`, suggested or custom Skill                     | `string`                                                                            |
+| compile_instruction | `value`, optional multiline text; empty string allowed | `string`                                                                            |
+| compile_schedule    | `mode`, `time`, `weekday`                              | `{ frequency: 'disabled' }` or an object with frequency, time, weekday and timezone |
 
 Tool results may be direct JSON, MCP `structuredContent` or text `content`, with `schema_version: '1.0'`. Structured content takes precedence. If any card is invalid or unregistered, the entire group remains an ordinary tool result. The native service accepts the bare tool name and `mcp_openviking-mcp_request_user_input`. Custom adapters should preserve unique tool call IDs and normalize the server to `openviking-mcp` and the name to `request_user_input`.
 
