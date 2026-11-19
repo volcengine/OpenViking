@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.core.path_variables import CalendarVariableProvider
+from openviking.observability.log_safety import safe_log_fields, safe_path_for_log, safe_uri_for_log
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.prompts import render_prompt
@@ -285,13 +286,12 @@ async def generate_image_summary(
         # SVG format is not supported by VolcEngine VLM API, skip VLM analysis
         if _is_svg(image_bytes):
             logger.info(
-                f"[MediaUtils.generate_image_summary] SVG format detected, skipping VLM analysis: {image_uri}"
+                "SVG unsupported; skipping VLM analysis target=%s degraded=true",
+                safe_uri_for_log(image_uri),
             )
             return {"name": file_name, "summary": "SVG image (format not supported by VLM)"}
 
-        logger.info(
-            f"[MediaUtils.generate_image_summary] Generating summary for image: {image_uri}"
-        )
+        logger.debug("Generating image summary target=%s", safe_uri_for_log(image_uri))
 
         # Render prompt
         prompt = render_prompt(
@@ -311,22 +311,22 @@ async def generate_image_summary(
                 ],
             )
 
-        logger.info(
-            f"[MediaUtils.generate_image_summary] VLM response received, length: {len(response)}"
-        )
+        logger.debug("Image summary received length=%d", len(response))
         return {"name": file_name, "summary": response.strip()}
 
     except ValueError as e:
         if "SVG format" in str(e) or "not supported" in str(e):
-            logger.warning(
-                f"[MediaUtils.generate_image_summary] Unsupported image format for {image_uri}: {e}"
+            logger.info(
+                "Image format unsupported; using default summary target=%s error_type=%s degraded=true",
+                safe_uri_for_log(image_uri),
+                type(e).__name__,
             )
             return {"name": file_name, "summary": f"Unsupported image format: {str(e)}"}
         raise
     except Exception as e:
-        logger.error(
-            f"[MediaUtils.generate_image_summary] Failed to generate image summary: {e}",
-            exc_info=True,
+        logger.info(
+            "Image summary generation failed; using default summary error_type=%s degraded=true",
+            type(e).__name__,
         )
         return {"name": file_name, "summary": "Image summary generation failed"}
 
@@ -450,9 +450,9 @@ async def _generate_media_summary(
         supports_media = await supports_media
     if not supports_media:
         logger.info(
-            "Skipping unsupported or disabled %s understanding input: %s",
+            "Media unsupported or disabled; using empty summary media_type=%s path=%s degraded=true",
             media_type,
-            original_filename,
+            safe_path_for_log(str(original_filename)),
         )
         return result
 
@@ -498,19 +498,17 @@ async def _generate_media_summary(
     except (_InvalidMediaContentError, _MediaTooLargeError):
         return result
     except Exception as error:
-        error_type, status, code, request_id = _exception_metadata(error)
-        model = str(vlm.model).replace("\r", " ").replace("\n", " ")[:128]
-        logger.warning(
-            "Media understanding failed: stage=provider_call model=%s "
-            "media_type=%s error_type=%s status=%s code=%s request_id=%s. "
-            "Verify that the model supports this media type and that provider "
-            "access/configuration is valid.",
-            model,
+        error_type, status, code, _ = _exception_metadata(error)
+        logger.info(
+            "Media understanding failed; using empty summary media_type=%s degraded=true",
             media_type,
-            error_type,
-            status,
-            code,
-            request_id,
+            extra=safe_log_fields(
+                {
+                    "error_type": error_type,
+                    "http_status_code": int(status) if status.isdecimal() else None,
+                    "error_code": code,
+                }
+            ),
         )
         return result
     finally:
@@ -518,15 +516,11 @@ async def _generate_media_summary(
             try:
                 temporary_path.unlink(missing_ok=True)
             except OSError as cleanup_error:
-                error_type, status, code, request_id = _exception_metadata(cleanup_error)
-                logger.warning(
-                    "Media understanding cleanup failed: stage=local_cleanup "
-                    "media_type=%s error_type=%s status=%s code=%s request_id=%s",
+                error_type, _, code, _ = _exception_metadata(cleanup_error)
+                logger.info(
+                    "Media temporary file cleanup failed media_type=%s",
                     media_type,
-                    error_type,
-                    status,
-                    code,
-                    request_id,
+                    extra=safe_log_fields({"error_type": error_type, "error_code": code}),
                 )
 
     result["summary"] = _normalize_media_markdown(

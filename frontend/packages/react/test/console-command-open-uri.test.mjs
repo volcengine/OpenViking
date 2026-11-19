@@ -46,6 +46,35 @@ test('command mode falls back to the Console callback without a command override
   }
 });
 
+test('search content preserves raw text while title and excerpt links navigate', async () => {
+  const content = `See ${uri}, for details.\n[Notes](${uri})\nviking://resources/a;b,(c)[d].md.`;
+  const opened = [];
+  const host = await mount(
+    async () =>
+      ok({
+        resources: [{ uri, abstract: `See ${uri}, for details.`, content }],
+      }),
+    { onOpenUri: (value) => opened.push(value) },
+  );
+  try {
+    await host.execute('ov find notes --read-content');
+    const record = host.records.at(-1);
+    const body = record.querySelector('.ov-command-console__search-content');
+    assert.equal(body.textContent, content);
+    assert.equal(body.querySelector('a'), null);
+    await click(record.querySelector('.ov-command-console__search-open'));
+    await host.execute('ov find notes');
+    await click(
+      host.records
+        .at(-1)
+        .querySelector('.ov-command-console__search-preview a'),
+    );
+    assert.deepEqual(opened, [uri, uri]);
+  } finally {
+    await host.dispose();
+  }
+});
+
 test('a command override leaves conversation mode on the Console callback', async () => {
   const shared = [];
   const commands = [];

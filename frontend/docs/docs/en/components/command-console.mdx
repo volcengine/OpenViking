@@ -53,6 +53,7 @@ When host content fails to render, the component shows the default fallback: an 
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------ |
 | records          | Command records to display, in submission order                                                                                                                  | `readonly CommandConsoleRecord[]`                                     | Required                       |
 | value            | Text in the input area (controlled)                                                                                                                              | `string`                                                              | Required                       |
+| history          | Commands recalled by the arrow keys, in submission order                                                                                                         | `readonly Pick<CommandConsoleRecord, 'command'>[]`                    | `records`                      |
 | disabled         | Disables input and submission, and shows `labels.unavailableMessage` below the input area                                                                        | `boolean`                                                             | `false`                        |
 | busy             | Locks input and submission while result cards show progress, without an unavailable message                                                                      | `boolean`                                                             | `false`                        |
 | emptyState       | Content shown when there are no records; replaces the built-in empty state, and `null` shows no empty state                                                      | `ReactNode`                                                           | -                              |
@@ -124,6 +125,7 @@ The union of execution results, distinguished by `variant`.
 | scoreLabel   | Score text, formatted by your app                                                | `string`    | -        |
 | scoreDetails | Score details shown on hover, focus or click of the score; requires `scoreLabel` | `ReactNode` | -        |
 | preview      | Content excerpt below the title                                                  | `string`    | -        |
+| content      | Multiline body shown in place of the excerpt                                     | `string`    | -        |
 | uri          | Resource URI, shown as a link that calls `onOpenUri` when clicked                | `string`    | -        |
 
 ### CommandConsoleResourcePreviewContent
@@ -181,11 +183,13 @@ The union of execution results, distinguished by `variant`.
 
 ### CommandConsoleWriteResultContent
 
-| Property | Description                                                                      | Type                   | Default  |
-| -------- | -------------------------------------------------------------------------------- | ---------------------- | -------- |
-| variant  | Result type, always `'write-result'`                                             | `'write-result'`       | Required |
-| lines    | Result lines, each in its own block; resource addresses in a string become links | `readonly ReactNode[]` | Required |
-| title    | Title; hidden when it equals the command name                                    | `string`               | -        |
+| Property | Description                                                                                         | Type                                                         | Default  |
+| -------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------- |
+| variant  | Result type, always `'write-result'`                                                                | `'write-result'`                                             | Required |
+| lines    | Each line is shown in its own block. Use an explicit URI line to preserve spaces in resource paths. | `readonly (ReactNode \| CommandConsoleWriteResultUriLine)[]` | Required |
+| title    | Title; hidden when it equals the command name                                                       | `string`                                                     | -        |
+
+`CommandConsoleWriteResultUriLine` takes a `label` and a `uri`, both strings.
 
 ### CommandConsoleCommandHelpContent
 
@@ -233,6 +237,8 @@ The union of execution results, distinguished by `variant`.
 | examples    | Example commands, shown in the parameter help; clicking one fills the input without submitting                                                               | `readonly (string \| CommandConsoleCommandExample)[]`                                                              | -                     |
 | quickStart  | Ordered steps and optional documentation link shown in the parameter help in place of the examples. A step's command fills the input when clicked            | `{ documentation?: { label: string; href: string }; steps: readonly { description: string; command?: string }[] }` | -                     |
 | skeleton    | Loading skeleton shown while the command runs, matching search, resource preview, resource tree, status, write result or a generic shape                     | `'search' \| 'resource' \| 'tree' \| 'status' \| 'write' \| 'generic'`                                             | `'generic'`           |
+
+The optional `resolveUriArguments(text)` callback receives the text after the command prefix. Return `{ start, end, uri }` entries in text order with non-overlapping ranges (UTF-16 offsets, end exclusive) to preserve complete parameter values in input and command history links. Other text uses token-based link detection.
 
 ### CommandConsoleCommandParam
 

@@ -22,8 +22,8 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 | [聊天客户端和 SDK](#chat-clients-and-sdks) | Chat Completions（或 SDK 使用的 API） | `https://ov.example.com/gateway/v1` | `X-OpenViking-Session`，需要自己发送 |
 | [Open WebUI](#open-webui) | Chat Completions | `https://ov.example.com/gateway/v1` | 在连接上配置 `X-OpenViking-Session` 请求头 |
 | [OpenCode](#opencode) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1` | OpenCode 的会话请求头 |
-| [pi](#pi) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 通常根据对话历史匹配 |
-| [DSH](#dsh) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 通常根据对话历史匹配 |
+| [pi](#pi) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 使用 Responses 时用 pi 的会话请求头，否则根据对话历史匹配 |
+| [DSH](#dsh) | Chat Completions、Anthropic Messages 或 Responses | `https://ov.example.com/gateway/v1`（Anthropic Messages 用 `https://ov.example.com/gateway`） | 使用 Responses 时用 DSH 的会话请求头，否则根据对话历史匹配 |
 | [火山方舟与 BytePlus 方舟 SDK](#volcano-engine-ark-and-byteplus-modelark-sdks) | 三种均可 | `https://ov.example.com/gateway/api/v3` 或 `https://ov.example.com/gateway/api/compatible` | 取决于客户端发送的请求头 |
 
 最后一列的含义见[网关如何识别对话](#how-conversations-are-recognized)。
@@ -258,7 +258,7 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 | Anthropic Messages | `anthropic-messages` | `https://ov.example.com/gateway` |
 
 - `apiKey` 从环境变量 `OPENVIKING_GATEWAY_KEY` 读取网关密钥，启动 pi 前先导出它。开头的 `$` 不能省，否则 pi 会把这个字符串本身当作密钥发送。
-- pi 通常不发送会话请求头，网关根据历史匹配它的对话（见[网关如何识别对话](#how-conversations-are-recognized)）。
+- 使用 Responses 时，pi 发送 `session-id`，网关据此识别它的对话；使用 Chat Completions 和 Anthropic Messages 时不发送会话请求头，网关根据历史匹配它的对话（见[网关如何识别对话](#how-conversations-are-recognized)）。
 - pi 自己的 OpenViking 扩展启用时，网关会让出这些对话，两者选一个即可。
 
 配好后，[检查接入是否生效](#check-the-connection)。
@@ -286,7 +286,7 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 - 也可以在 Web UI 的 Settings → Models → Add model provider → Custom model API 中添加，写入的是同一个文件。
 - Desktop 看不到在终端里 export 的变量。macOS 上把 `OPENVIKING_GATEWAY_KEY` 写进 shell 启动文件（`~/.zprofile` 或 `~/.zshrc`）；Windows 上用 `setx` 设置。然后用 ⌘Q 或托盘菜单退出 Desktop，再重新打开。Desktop 的恢复对话框会把 `cordis.patch.yml` 挪成 `.bak-<时间戳>` 文件，运行过恢复后需要重新添加服务商。
 - DSH 的一个服务商只使用一种协议。要通过多种协议使用网关，就为每种协议各声明一个服务商。
-- 除非 DSH 发送了某个会话请求头，否则网关根据历史匹配它的对话（见[网关如何识别对话](#how-conversations-are-recognized)）。
+- 使用 Responses 时，DSH 发送 `session_id`，网关据此识别它的对话；使用 Chat Completions 和 Anthropic Messages 时不发送会话请求头，网关根据历史匹配它的对话（见[网关如何识别对话](#how-conversations-are-recognized)）。
 - 同一个 profile 里装了 [OpenViking 的 DSH 插件](../agent-integrations/17-dsh.md)时，网关会让出这些对话，两者选一个即可。
 
 配好后，[检查接入是否生效](#check-the-connection)。
@@ -319,7 +319,7 @@ client = Ark(base_url="https://ov.example.com/gateway/api/v3", api_key="<gateway
 
 1. 在客户端的同一段对话（同一个聊天或同一个 Agent 会话）里发两条消息。应该能正常收到回复。
 2. 在 Studio 中打开**请求日志**标签页。两个请求都应显示为**新消息**，状态码为 200。
-3. 展开这两个请求。它们的**对话**应该相同，**保存**一栏应显示**正常**，表示保存已开启且运行正常。第二条消息到达后第一轮就会保存；要看到它，请以密钥所属用户的身份登录 Studio，在**会话**页面找到 `gateway-…` 会话（见[确认记忆生效](02-quickstart.md#confirm-that-memory-works)）。
+3. 展开这两个请求。它们的**对话**应该相同，**保存**一栏应显示**正常**，表示保存已开启且运行正常。每一轮在回复结束后就会保存；要看到它，请以密钥所属用户的身份登录 Studio，在**会话**页面找到 `gateway-…` 会话（见[确认记忆生效](02-quickstart.md#confirm-that-memory-works)）。
 
 如果结果不对：
 
@@ -331,14 +331,16 @@ client = Ark(base_url="https://ov.example.com/gateway/api/v3", api_key="<gateway
 
 ## 网关如何识别对话 {#how-conversations-are-recognized}
 
-对话是网关当作同一次聊天处理的一系列请求：一段对话固定使用同一份上下文配置和同一个上游，并保存到一个 OpenViking 会话，某些情况下改存到新会话，例如客户端改写历史时（见[保存状态](10-overview-and-requests.md#saving-status)）。为了判断请求属于哪段对话，网关按以下顺序取第一个出现的请求头：
+对话是网关当作同一次聊天处理的一系列请求：一段对话固定使用同一份上下文配置和同一个上游，并保存到一个 OpenViking 会话，客户端改写历史后也不换会话，只有[重新同步对话](10-overview-and-requests.md#resync-a-conversation)会换。为了判断请求属于哪段对话，网关按以下顺序取第一个出现的请求头：
 
 1. `X-OpenViking-Session`
 2. `thread-id`
 3. `x-claude-code-session-id`（Claude Code）
 4. `x-opencode-session-id`（OpenCode）
-5. `x-session-id`
-6. `session-id`（Codex CLI）
+5. `x-deepseek-harness-session-id`（使用内置 DeepSeek 服务商的 DSH）
+6. `x-session-id`
+7. `session-id`（Codex CLI，以及使用 Responses 的 pi）
+8. `session_id`（使用 Responses 的 DSH；网关前面的反向代理要放行带下划线的请求头，nginx 需设置 `underscores_in_headers on`）
 
 这些请求头都没有时，网关查看历史中最近一条助手回复：如果恰好有一段之前的对话产生过这条回复，请求就并入那段对话，否则开始一段新对话。开场消息相同的两段对话不会因此被合并。普通的一问一答这样就能识别，但重试、重新生成和内容完全相同的对话存在歧义，可能被当成新对话。所以只要客户端允许设置请求头，就发送 `X-OpenViking-Session`。
 

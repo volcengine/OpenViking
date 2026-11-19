@@ -60,7 +60,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 
 ### 日志记录 {#log-records}
 
-日志只记元数据，不含消息内容、密钥和错误信息。发往模型路由的每个请求（`.../models` 除外）无论怎样结束都恰好写一条记录：正常回复、被网关拒绝、服务商失败、流式回复中途断开，或者客户端提前离开。对话的保存状态变化时也写一条（`kind` 为 `capture`）。使用默认的 `request_log_sink: store` 时，密钥确认之前就失败的请求没有账户，不会保存；`stdout` 和 `file` 输出会照常写出，`account` 和 `user_id` 为 `null`。字段不适用时省略。
+日志只记元数据，不含消息内容、密钥和错误信息。发往模型路由的每个请求（`.../models` 除外）无论怎样结束都恰好写一条记录：正常回复、被网关拒绝、服务商失败、流式回复中途断开，或者客户端提前离开。使用默认的 `request_log_sink: store` 时，密钥确认之前就失败的请求没有账户，不会保存；`stdout` 和 `file` 输出会照常写出，`account` 和 `user_id` 为 `null`。字段不适用时省略。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -68,7 +68,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `event`、`schema` | 请求记录为 `request` 和 `2` |
 | `request_id` | 网关为请求分配的 ID；模型路由的错误响应体里也带有它 |
 | `received_at`、`method`、`endpoint` | 网关收到请求的时间（Unix 时间戳，秒）、HTTP 方法，以及 `messages`、`count_tokens`、`chat`、`responses`、`responses_item` 或 `other` |
-| `kind` | `user`、`continuation`、`auxiliary`、`subagent`、`count`、`passthrough` 或 `capture`，见[请求日志](../gateway/10-overview-and-requests.md#requests) |
+| `kind` | `user`、`continuation`、`auxiliary`、`subagent`、`count` 或 `passthrough`，见[请求日志](../gateway/10-overview-and-requests.md#requests) |
 | `model`、`stream` | 客户端发送的模型名，以及是否要求流式回复 |
 | `status` | 客户端收到的 HTTP 状态码：网关转发的是服务商的状态码，网关自身的错误是网关的状态码，客户端在收到任何响应前离开时为 `499` |
 | `upstream_attempted`、`upstream_status` | 网关是否向服务商发出了请求（包括压缩摘要请求），以及服务商应答时的 HTTP 状态码 |
@@ -84,7 +84,8 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `session_source` | 对话是怎样确定的：`header`（`X-OpenViking-Session`）、`reply_match`（历史延续了某个对话的回复）或 `new` |
 | `recall_reason`、`recall_count`、`recall_ms` | 记忆检索的结果代码、补充的条数和检索耗时，见[没有补充记忆](../gateway/12-troubleshooting.md#no-memory-is-added) |
 | `replay_hits` | 原样放回记忆的历史消息数 |
-| `capture_status`、`capture_reason`、`capture_retry_at` | 保存状态（`active`、`disabled`、`retrying`、`paused`，[保存记录](#capture-records)中还可能是 `lost`）、原因，以及下次重试时间（Unix 时间戳，秒），见[保存状态](../gateway/10-overview-and-requests.md#saving-status) |
+| `capture_status`、`capture_reason` | 保存状态：`active`、`disabled`，或者这次请求结束了一轮、写入 OpenViking 却失败时为 `failed`；以及原因：失败时为失败原因（例如 `openviking_http_503`、`openviking_unavailable`、`openviking_circuit_open`、`save_timeout` 或 `save_failed`），否则为对话记下的原因（例如 `manual_reset`）。见[保存状态](../gateway/10-overview-and-requests.md#saving-status) |
+| `capture_messages`、`openviking_session` | 这次请求保存了一轮时，写入 OpenViking 的消息数和 OpenViking 会话 ID |
 | `tool_skip_reason` | 请求没有拿到 OpenViking 工具的原因，见[什么时候不提供工具](../gateway/04-openviking-tools.md#when-tools-are-not-offered) |
 | `tool_stop_reason` | 工具 Token 预算用完、后续调用被拒绝时为 `token_budget`，见[上限](../gateway/04-openviking-tools.md#limits) |
 | `compaction_failed` | 压缩失败的原因（`still_over_threshold` 时摘要已保留），见[长对话超出上下文长度](../gateway/12-troubleshooting.md#long-conversations-hit-the-context-limit) |
@@ -94,23 +95,11 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `read_ms`、`auth_ms`、`route_ms`、`prepare_ms` | 读取请求体、检查密钥（含向 OpenViking 确认）、选择上游、准备记忆（含检索和压缩）的耗时 |
 | `added_ms`、`upstream_ttfb_ms`、`first_chunk_ms`、`total_ms` | 从收到请求到开始请求服务商、从开始请求到收到服务商响应头、从收到请求到第一段流式数据送达客户端、从收到请求到写入记录的耗时 |
 | `compaction_ms` | 压缩耗时，压缩失败时也记录 |
-| `bookkeeping_failed` | 回复发出后失败的步骤：`completed`（保存这一轮）、`responses`（记住 Responses ID）或 `capture_status` |
+| `bookkeeping_failed` | 回复发出后失败的步骤：`completed`（记下这次回复的用量和状态）或 `responses`（记住 Responses ID）。保存失败不在这里，见 `capture_status` |
 
 以 `first_upstream_` 和 `hidden_upstream_` 开头的字段把 token 用量拆成首次服务商调用和 OpenViking 工具轮次两部分，首次调用缓存命中率按前者计算。
 
-`/overview` 由这些记录汇总而来。除用量和缓存数据外，还返回 `degradations`（异常代码 → 次数）、`capture_issues`（正在重试或已暂停保存的对话数）、`cache_alerts`、`openviking`（OpenViking 的 `status`，降级时另有 `reason`）和 `log_retention_days`。
-
-### 保存记录 {#capture-records}
-
-`kind` 和 `event` 为 `capture` 的记录描述保存，而不是请求。它包含 `session`、`protocol`、`credential_id`、`capture_status` 和 `capture_reason`（见[保存状态](../gateway/10-overview-and-requests.md#saving-status)）。对话的保存状态变化时写一条；一轮已完成的对话没能排入保存队列时，也写一条 `capture_status: lost`、`capture_reason: stage_failed` 的记录。设置 `capture_delivery_records: true` 后，每次保存（`delivered`）、每次提交（`committed`）和每次失败的尝试也各写一条。
-
-| 字段 | 含义 |
-| --- | --- |
-| `attempts` | 到目前为止连续失败的次数，出现在失败记录中 |
-| `turns`、`messages` | 这次保存写入的轮数和消息数，随 `delivered` 出现 |
-| `lag_ms` | 被保存的轮次中最早的一轮排入队列到这次保存的时间，随 `delivered` 出现。作为最新回复先排入队列的回复，会在下一个请求确认它时重新排入 |
-| `request_id` | 排入第一轮被保存内容的请求，随 `delivered` 出现（已知时）。OpenViking 收到的每一轮写入都带有该轮请求的 `X-Request-ID` |
-| `openviking_session` | 写入的 OpenViking 会话，随 `delivered` 和 `committed` 出现 |
+`/overview` 由这些记录汇总而来。除用量和缓存数据外，还返回 `degradations`（异常代码 → 次数）、`capture_issues`（`{"failed": n}`：最新一条记录显示这一轮没有保存成功的对话数）、`cache_alerts`、`openviking`（OpenViking 的 `status`，降级时另有 `reason`）和 `log_retention_days`。
 
 ### 状态行 {#status-line}
 
@@ -127,8 +116,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
  "records_unlogged": 0, "records_failed": 0, "records_dropped": 0,
  "store_errors": 1,
  "openviking": {"state": "ok", "reason": "", "open_circuits": 0},
- "capture": {"delivered": 18, "failed": 0, "due": 3, "scheduled": 41,
-             "oldest_due_age_s": 12.5, "workers": 4}}
+ "capture": {"delivered": 18, "failed": 0}}
 ```
 
 | 字段 | 含义 |
@@ -143,11 +131,8 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `store_errors` | 因状态存储出错而失败或失去记忆的请求（`store_unavailable`，或异常 `memory_store_failure`） |
 | `openviking.state`、`openviking.reason` | 网关最近一次 OpenViking 状态检查的结果：`ok`、`degraded` 或 `starting`，降级时附原因 |
 | `openviking.open_circuits` | 因持续无响应、调用正被跳过的 OpenViking 账号数；见[OpenViking 异常](../gateway/12-troubleshooting.md#openviking-is-degraded) |
-| `capture.delivered` | 本区间内本进程把待保存轮次写入 OpenViking 的对话数 |
-| `capture.failed` | 本区间内本进程失败的保存尝试次数。`capture.delivered` 和 `capture.failed` 按进程统计，可以跨进程相加 |
-| `capture.due`、`capture.scheduled` | 现在该保存的对话数，以及有任何待保存安排的对话数。读不到存储时与 `oldest_due_age_s` 一起省略。它们描述的是共享存储，从任意一个进程读取即可（使用 Redis 时把它们相加，积压会按副本数重复计算） |
-| `capture.oldest_due_age_s` | 已到期且带有计划时间的保存中，最早那条已等待的秒数；没有时为 `0`。与 `capture.due` 一样描述共享存储。保存在重试期间，它和 `capture.due` 都不会增长，因为重试被安排在之后的时间；判断保存是否卡住，看 `capture.failed` 与 `capture.delivered` 的对比 |
-| `capture.workers` | 本进程仍在运行的保存 worker 数；可以跨进程相加 |
+| `capture.delivered` | 本区间内本进程写入 OpenViking 的已完成轮次数 |
+| `capture.failed` | 本区间内本进程写入 OpenViking 失败的已完成轮次数。`capture.delivered` 和 `capture.failed` 按进程统计，可以跨进程相加 |
 
 ## 上游和上下文配置 {#upstreams-and-context-profiles}
 
@@ -239,7 +224,7 @@ Anthropic 测试同时在 `x-api-key` 和 `Authorization: Bearer` 中发送密�
 | GET | `/gateway/admin/keys/{identifier}` | 读取单个可见密钥 |
 | POST | `/gateway/admin/keys` | 签发密钥，响应中的 `key` 是唯一一次返回的完整密钥 |
 | DELETE | `/gateway/admin/keys/{identifier}` | 吊销密钥，保留用户数据 |
-| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话重新开始保存 |
+| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话改存到新的 OpenViking 会话，下一轮结束时写入完整历史 |
 | DELETE | `/gateway/admin/users/{user_id}/data` | admin 或 root：吊销该用户的全部密钥，删除其对话状态和日志 |
 | DELETE | `/gateway/admin/account/data` | root：删除账号的全部网关对象、密钥、对话状态和日志 |
 
@@ -287,9 +272,9 @@ curl -X POST "$SERVER_URL/gateway/admin/keys?account_id=team" \
 
 用户的 OpenViking API 密钥重新生成或用户被删除后，绑定它的网关密钥会失效并被删除，用户数据保留，见[网关密钥](../gateway/09-gateway-keys.md#gateway-keys)。
 
-**重置保存。** 请求体为 `{"session":"<会话请求头的值或日志中的 session>","protocol":"chat"}`，`protocol` 取 `chat`、`anthropic` 或 `responses`。成功返回 `{"status":"ready","message":"…"}`，网关会在这段对话的下一个请求里，把完整历史写入一个新的 OpenViking 会话。找不到这段对话时返回 404 `not_found`。
+**重置保存。** 请求体为 `{"session":"<会话请求头的值或日志中的 session>","protocol":"chat"}`，`protocol` 取 `chat`、`anthropic` 或 `responses`。成功返回 `{"status":"ready","message":"…"}`，这段对话下一轮结束时，网关把完整历史写入一个新的 OpenViking 会话。找不到这段对话时返回 404 `not_found`。
 
-**删除数据。** 两个删除接口会清掉网关里尚未保存的对话内容和日志，不影响已经存入 OpenViking 的会话和记忆。保留期和其他删除途径见[安全与数据](../gateway/11-security-and-data.md)。
+**删除数据。** 两个删除接口会清掉网关里的对话状态和日志，不影响已经存入 OpenViking 的会话和记忆。保留期和其他删除途径见[安全与数据](../gateway/11-security-and-data.md)。
 
 ## 错误 {#errors}
 

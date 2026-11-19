@@ -1,5 +1,5 @@
 import { Button } from '../../shared/primitives/button/button.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useOvClient,
   useOvIdentity,
@@ -22,6 +22,7 @@ import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 export function useFileBrowserAcl({
   uri,
   acl,
+  readOnly,
   locale,
   labels,
   requestOptions,
@@ -29,6 +30,7 @@ export function useFileBrowserAcl({
 }: {
   uri: string | null;
   acl?: boolean | FileBrowserAclOptions;
+  readOnly?: boolean;
   locale: Locale;
   labels?: FileBrowserAclLabels;
   requestOptions?: OvRequestOptions;
@@ -70,48 +72,66 @@ export function useFileBrowserAcl({
         : undefined,
     [client, baseURL, apiKey, accountId, userId, resourceId, signal],
   );
-  const enabled = Boolean(acl) && Boolean(client) && isAclTarget(uri);
+  const aclEnabled = Boolean(acl);
+  const enabled = aclEnabled && Boolean(client) && isAclTarget(uri);
   const resolver = options?.resolvePermission;
+  const loadPermission = useCallback(
+    async (target: string, requestSignal: AbortSignal) => {
+      if (!context || !permissionClient) return undefined;
+      const request = {
+        client: permissionClient,
+        requestOptions: {
+          ...context.requestOptions,
+          signal: signal
+            ? AbortSignal.any([requestSignal, signal])
+            : requestSignal,
+        },
+      };
+      request.requestOptions.signal.throwIfAborted();
+      const level = await (resolver
+        ? resolver(target, request)
+        : readPermission(request.client, target, request.requestOptions));
+      request.requestOptions.signal.throwIfAborted();
+      return level;
+    },
+    [context, permissionClient, resolver, signal],
+  );
+  const checkWrite = useCallback(
+    async (target: string, requestSignal: AbortSignal) => {
+      if (readOnly) return false;
+      if (
+        !aclEnabled ||
+        (target !== 'viking://resources' && !isAclTarget(target))
+      )
+        return true;
+      const level = await loadPermission(target, requestSignal);
+      return level === 'write' || level === 'manage';
+    },
+    [aclEnabled, loadPermission, readOnly],
+  );
   // Sync the active resource with the permission service, including navigation
   // and account changes that do not originate in a click. Abort on scope change
   // or unmount; aborted responses never publish a permission for the next scope.
   useEffect(() => {
-    if (!enabled || !uri || !context || !permissionClient) return;
+    if (!enabled || !uri) return;
     const controller = new AbortController();
-    const composed = signal
-      ? AbortSignal.any([controller.signal, signal])
-      : controller.signal;
-    const request = {
-      ...context,
-      client: permissionClient,
-      requestOptions: { ...context.requestOptions, signal: composed },
-    };
-    const load = resolver
-      ? resolver(uri, request)
-      : readPermission(request.client, uri, request.requestOptions);
-    void load.then(
+    void loadPermission(uri, controller.signal).then(
       (level) => {
-        if (!composed.aborted) setPermission({ key, level });
+        if (!controller.signal.aborted && !signal?.aborted)
+          setPermission({ key, level });
       },
       () => {
-        if (!composed.aborted) setPermission({ key, error: true });
+        if (!controller.signal.aborted && !signal?.aborted)
+          setPermission({ key, error: true });
       },
     );
     return () => controller.abort();
-  }, [
-    enabled,
-    key,
-    uri,
-    resolver,
-    signal,
-    generation,
-    context,
-    permissionClient,
-  ]);
+  }, [enabled, key, uri, signal, generation, loadPermission]);
   const level =
     enabled && permission?.key === key ? permission.level : undefined;
   const text = aclLabels(locale, labels);
   return {
+    checkWrite,
     canDelete: !enabled || level === 'manage',
     canEdit: !enabled || level === 'write' || level === 'manage',
     titleExtra:

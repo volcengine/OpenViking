@@ -12,6 +12,8 @@ export default {
   latest: '最新',
   rollback: '回滚至此版本',
   rollbackBadge: '回滚',
+  deletedBadge: '已删除',
+  deletedVersion: '此版本的文件已被删除，暂无正文',
   rollbackTitle: '回滚此文档至此版本？',
   rollbackConfirm: '确定回滚',
   rollbackHint:
@@ -21,6 +23,8 @@ export default {
   importChoose: '选择文件',
   importDrop: '点击选择或拖入文件',
   importFormat: '支持 .ovpack 格式',
+  importInvalidFormat: '请选择有效的 .ovpack 文件。',
+  importWriteRequired: '导入 .ovpack 需要目标目录的写入权限。',
   configure: '编译配置',
   configuration: '编译配置',
   configurationEmpty: '当前用户下没有关联此目录的编译配置。',

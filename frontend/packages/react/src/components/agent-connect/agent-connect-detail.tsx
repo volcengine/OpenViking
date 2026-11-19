@@ -12,6 +12,7 @@ interface DetailViewProps {
   apiKey: string;
   locale: AgentConnectLocale;
   baseUrl: string;
+  isEnterprise: boolean;
   agreementUrl?: string;
   onCopy?: (text: string) => void;
 }
@@ -22,6 +23,7 @@ export function AgentConnectDetailView({
   apiKey,
   locale,
   baseUrl,
+  isEnterprise,
   agreementUrl,
   onCopy,
 }: DetailViewProps) {
@@ -34,6 +36,7 @@ export function AgentConnectDetailView({
     apiKey,
     baseUrl,
     activeGuide?.id,
+    isEnterprise,
   );
   const [credentials, setCredentials] = useState({
     apiKey,
@@ -101,7 +104,7 @@ export function AgentConnectDetailView({
         </div>
       ) : null}
       <AgentConnectInstructionsView
-        key={`${selected.id}:${activeGuide?.id ?? ''}:${credentials.revision}`}
+        key={`${selected.id}:${activeGuide?.id ?? ''}:${isEnterprise}:${credentials.revision}`}
         instructions={instructions}
         apiKey={apiKey}
         locale={locale}

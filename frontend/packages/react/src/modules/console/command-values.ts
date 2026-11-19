@@ -76,6 +76,16 @@ function parseObject(
   );
 }
 
+function parseArray(argument: Argument, value: string): unknown[] {
+  try {
+    const items: unknown = JSON.parse(value);
+    if (Array.isArray(items)) return items;
+  } catch {
+    // JSON and type errors both indicate an invalid command argument.
+  }
+  throw new ConsoleCommandError('invalidArgument', argument.name);
+}
+
 export function parseValue(
   argument: Argument,
   value: string,
@@ -128,6 +138,8 @@ export function parseValue(
       );
     case 'json-object':
       return parseObject(argument, value);
+    case 'json-array':
+      return parseArray(argument, value);
     default:
       return value;
   }

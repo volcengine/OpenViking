@@ -26,6 +26,11 @@ export interface DirState {
   error: Error | null;
 }
 
+export interface DirectoryExpansionSnapshot {
+  expandedUris: readonly string[];
+  collapsedUris: readonly string[];
+}
+
 export interface UseDirectoryTreeOptions {
   client: OvClient | null;
   rootUri: string;
@@ -37,5 +42,9 @@ export interface UseDirectoryTreeOptions {
    * Omitting it leaves only the root expanded.
    */
   defaultExpandedUri?: string;
+  defaultExpandedUris?: readonly string[];
+  defaultExpansionSnapshot?: DirectoryExpansionSnapshot;
+  onExpandedUrisChange?: (uris: readonly string[]) => void;
+  onExpansionSnapshotChange?: (snapshot: DirectoryExpansionSnapshot) => void;
   requestOptions?: OvRequestOptions;
 }

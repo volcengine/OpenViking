@@ -55,6 +55,26 @@ impl RAGFSBindingClient {
         git::show_response_to_pydict(py, resp)
     }
 
+    /// Check the tree entry mode at a commit OID without reading the blob.
+    #[pyo3(signature = (*, account, commit_oid, path))]
+    fn git_path_is_file(
+        &self,
+        py: Python<'_>,
+        account: &str,
+        commit_oid: &str,
+        path: &str,
+    ) -> PyResult<bool> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let oid = gix_hash::ObjectId::from_hex(commit_oid.as_bytes())
+            .map_err(|_| PyValueError::new_err("commit_oid must be a full commit OID"))?;
+        py_detach_blocking(py, move || {
+            self.rt.block_on(svc.path_is_file(account, &oid, path))
+        })
+        .map_err(|e| git::map_git_error(py, e))
+    }
+
     /// Build a bounded unified text diff outside the Python interpreter.
     #[pyo3(signature = (**kwargs))]
     fn git_diff_text(

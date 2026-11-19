@@ -44,12 +44,13 @@ export function FileBrowserDetail({
   onActiveKeyChange,
   onSave,
 }: FileBrowserDetailProps) {
-  const pendingEdit = useRef<string | null>(null);
+  const pendingEdit = useRef<{ key: string; matchText: string } | null>(null);
   const onFileReady = useCallback(
-    (key: string, startEditing?: () => void) => {
-      if (pendingEdit.current !== key) return;
+    (key: string, startEditing?: (matchText?: string) => void) => {
+      const pending = pendingEdit.current;
+      if (pending?.key !== key) return;
       pendingEdit.current = null;
-      if (canEditConflict) startEditing?.();
+      if (canEditConflict) startEditing?.(pending.matchText);
     },
     [canEditConflict],
   );
@@ -63,8 +64,8 @@ export function FileBrowserDetail({
       )
     : undefined;
   const editFile = conflictFile
-    ? () => {
-        pendingEdit.current = conflictFile.key;
+    ? (matchText: string) => {
+        pendingEdit.current = { key: conflictFile.key, matchText };
         onActiveKeyChange(conflictFile.key);
       }
     : null;

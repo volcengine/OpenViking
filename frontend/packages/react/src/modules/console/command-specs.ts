@@ -5,10 +5,14 @@ import type { CommandConsoleSkeletonKind } from '../../components/command-consol
 import { CORE_COMMAND_SPECS } from './core-command-specs.js';
 import { FILESYSTEM_COMMAND_SPECS } from './filesystem-command-specs.js';
 import { SEARCH_COMMAND_SPECS } from './search-command-specs.js';
+import { SESSION_COMMAND_SPECS } from './session-command-specs.js';
+import { TRANSFER_COMMAND_SPECS } from './transfer-command-specs.js';
+import type { CommandExecution } from './command-files.js';
 import type { Argument, ArgumentValues } from './command-parser.js';
 
 export interface CommandSpec {
   name: keyof typeof enUS.commands;
+  admin?: boolean;
   positional?: readonly Argument[];
   flags?: readonly Argument[];
   /** Parameter help may prefer the current workflow over legacy signatures. */
@@ -18,7 +22,8 @@ export interface CommandSpec {
   request?: (values: ArgumentValues) => OvRequestSpec;
   execute?: (
     values: ArgumentValues,
-    request: (spec: OvRequestSpec) => Promise<Record<string, unknown>>,
+    request: CommandExecution['request'],
+    execution: CommandExecution,
   ) => Promise<unknown>;
 }
 
@@ -43,6 +48,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   ...FILESYSTEM_COMMAND_SPECS,
   ...SEARCH_COMMAND_SPECS,
+  ...SESSION_COMMAND_SPECS,
+  ...TRANSFER_COMMAND_SPECS,
   {
     name: 'task list',
     flags: [

@@ -46,8 +46,8 @@ client-visible events. `ToolProtocol` declares the full adapter contract; `end()
 a `ToolRound` so the loop does not inspect partial protocol state. Relayed replies go
 through the same assemblers via `ResponseCapture`, so completion follows one rule on every
 path: a reply ending in client tool calls hands the turn off (finished, not complete), and
-only a reply that ends the user's turn is staged for capture. All event producers
-return native JSON (or the Chat `[DONE]` marker); only `encode()` returns bytes. No storage
+only the request whose reply ends the user's turn writes it to OpenViking, once the reply
+is sent. All event producers return native JSON (or the Chat `[DONE]` marker); only `encode()` returns bytes. No storage
 port or record kind is protocol-specific. A hidden record's required `visible_count` makes an entire
 Responses output array one replayable span. Responses requires full input history and
 `store: false`; native reasoning items remain intact. Anthropic joins gateway and client
@@ -194,28 +194,40 @@ the supplied release tag. It does not rebuild native extensions or Studio.
 | Scenario | Standalone | Cluster |
 | --- | --- | --- |
 | 1. Eight alternating session turns | Yes | Yes |
-| 2. Graceful deletion during a stream | Yes | Yes |
+| 2. Graceful deletion during a stream; the draining Pod writes the turn and commits nothing; another Pod runs the idle commit within two minutes of its due time | Yes | Yes |
 | 3. Truncation under a 25-second grace (negative control) | Yes | — |
 | 4. Rollout with short, chat, keep-alive, and 60-second stream traffic | Yes | Yes |
 | 5. Eviction under 30 MiB and credential reconstruction | Yes | — |
-| 6. AOF restart with pending capture | Yes | — |
-| 7. Data loss without AOF | Yes | — |
+| 6. AOF restart keeps the capture cursor; the next turn writes only itself | Yes | — |
+| 7. Capture document loss without AOF | Yes | — |
 | 8. Isolation of libraries with the same OV identity | Yes | Yes |
-| 9. Revocation, paused capture, and replacement key | Yes | — |
+| 9. Revocation, no background use of the revoked key, and replacement key | Yes | — |
 | 10. Startup recovery from 503; refusal of dev mode and 404 | Yes | — |
 | 11. Forty-second silence with Python SDKs and Codex; compressed SSE; a stream that stalls ends with an SDK error; a provider that never answers gets a JSON 504 | Yes | — |
-| 12. One hundred captures with eight workers | Yes | Yes |
+| 12. One hundred sessions, each turn written once by the request that ends it | Yes | Yes |
 | 13. Existing unordered key returns 402 before upstream dispatch | Yes | — |
 | 14. Hidden tool deduplication, missing receipts, and Responses chains | Yes | Yes |
 | 15. Studio and management changes across the cache window | Yes | — |
 | 16. Shared root key and missing-key startup failure | Yes | — |
+| 17. A turn that ends during an OpenViking outage is not retried and is written by the next turn | Yes | — |
+| 18. A turn past `commit_tokens` commits at once, keeping `keep_recent_messages`; the idle commit follows `idle_seconds` after the last turn, on the Pod that saved it | Yes | — |
+| 19. With `openviking_auto_commit`, the session carries OpenViking's automatic commit policy and the gateway does not commit it | Yes | — |
 
 Assertions inspect raw mock calls, source message IDs, Redis keys, Pod lifecycle,
 and client completion markers. Missing SDKs, incomplete streams, and failed
 infrastructure are failures when the suite is opted in. A Redis outage may
 produce either a logged `memory_store_failure` passthrough or a JSON HTTP 503
 `store_unavailable` with `Retry-After`; scenario 6 records the observed proportions.
-Scenario 7 asserts loss of an undelivered tail when persistence is disabled.
+Scenario 7 asserts that a turn is in OpenViking before Redis, without persistence, loses
+the capture document that points to it.
+
+The gateway runs with the default commit setting: it creates OpenViking sessions with
+automatic commits off and calls the commit endpoint itself. Only scenario 19 redeploys
+with `openviking_auto_commit: true`. A Pod that stops commits nothing; the capture document
+keeps the idle commit's due time, and every Pod looks once a minute for commits that have
+been due for a minute. The default
+profile keeps the 600-second `idle_seconds`, so other scenarios see no idle commit;
+scenarios 2, 18 and 19 set shorter values per conversation with `X-OpenViking-Context`.
 
 The `gateway-e2e.yml` workflow runs nightly against `ghcr.io/volcengine/openviking:main`.
 Manual dispatch can build the selected ref over a release image. Both paths

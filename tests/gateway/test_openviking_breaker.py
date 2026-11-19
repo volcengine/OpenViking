@@ -254,7 +254,11 @@ async def test_one_budget_covers_identity_recall_and_profile(tmp_path, gateway_b
         release, hung = asyncio.Event(), []
 
         async def handler(request):
-            if is_openviking_call(request):
+            # The model call comes once the request path gave up on OpenViking; the
+            # save after the reply then finds it answering.
+            if request.path == CHAT:
+                release.set()
+            elif is_openviking_call(request) and not release.is_set():
                 hung.append(request.path)
                 await asyncio.wait_for(release.wait(), 10)
 
@@ -266,7 +270,8 @@ async def test_one_budget_covers_identity_recall_and_profile(tmp_path, gateway_b
             elapsed = time.monotonic() - started
             release.set()
         assert response.status_code == 200, response.text
-        assert elapsed < budget + 0.3
+        # The time includes saving the turn after the reply, three quick calls here.
+        assert elapsed < budget + 0.5
         assert ("/health" in hung) is not cached
         assert "/api/v1/search/search" in hung or not cached
         logs = (await client.get("/admin/logs", headers=admin)).json()
@@ -297,7 +302,8 @@ async def test_breaker_and_budget_are_off_by_default(tmp_path, gateway_backend):
         headers = {"Authorization": "Bearer " + issued["key"]}
         for _ in range(4):
             assert (await post(client, headers)).status_code == 200
-        assert len(checks) == 4
+        # Each request checks its key, and its save the server version.
+        assert len(checks) == 8
         assert app.state.viking.budget(5) == 5
 
 

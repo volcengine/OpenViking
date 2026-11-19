@@ -27,7 +27,7 @@ const editableBody = (editor) =>
     .map((line) => line.textContent)
     .join('\n');
 
-test('the FileBrowser editor keeps Wiki metadata outside the draft and reports save progress', async () => {
+test('the FileBrowser editor keeps Wiki metadata outside the draft and confirms a successful save', async () => {
   const writing = deferred();
   const { view, fetch } = await mountWikiFile({}, undefined, writing.promise);
   const dashboard = () =>
@@ -83,6 +83,7 @@ test('the FileBrowser editor keeps Wiki metadata outside the draft and reports s
     await act(() => new Promise((resolve) => setTimeout(resolve, 240)));
     await settle();
     assert.equal(wikiSaveNotice(), null);
+    assert.equal(wikiSaveNotice('success')?.content, 'Saved successfully.');
     const write = fetch.calls.find(({ path }) =>
       path.endsWith('/content/write'),
     );

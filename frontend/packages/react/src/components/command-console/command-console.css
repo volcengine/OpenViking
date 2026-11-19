@@ -686,6 +686,11 @@
   white-space: nowrap;
 }
 
+.ov-command-console__search-content {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* 资源树与写入结果。 */
 .ov-command-console__tree,
 .ov-command-console__write,

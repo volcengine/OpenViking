@@ -5,6 +5,7 @@ const kinds: Record<string, TaskReference['kind']> = {
   'add-resource': 'resource',
   'add-skill': 'skill',
   'add-memory': 'memory',
+  'session commit': 'memory',
   compile: 'compile',
   openviking_add_resource: 'resource',
   openviking_add_skill: 'skill',

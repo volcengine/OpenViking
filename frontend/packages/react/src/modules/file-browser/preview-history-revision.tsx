@@ -1,6 +1,7 @@
 import { useId, type ReactNode } from 'react';
 import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { LazyContent } from '../../shared/lazy-content.js';
 import { PreviewLoading, PreviewQueryState } from './preview-query-state.js';
 import { PreviewHistoryTabs } from './preview-history-tabs.js';
@@ -32,7 +33,7 @@ export function PreviewHistoryRevision({
   loading = false,
   queryState,
 }: {
-  content: DashboardQuery<string>;
+  content: DashboardQuery<string | null>;
   loading?: boolean;
   queryState?: ReactNode;
   current: DashboardQuery<unknown>;
@@ -53,6 +54,8 @@ export function PreviewHistoryRevision({
   locale: Locale;
 }) {
   const id = useId();
+  const deleted = content.data === null;
+  const displayedChanges = compare && !identical ? changes : undefined;
   const ready =
     !loading &&
     content.data !== undefined &&
@@ -82,7 +85,7 @@ export function PreviewHistoryRevision({
               size="small"
               type="outline"
               icon={<CopyIcon aria-hidden="true" />}
-              disabled={content.data === undefined}
+              disabled={typeof content.data !== 'string'}
               loading={copy.pending}
               onClick={onCopy}
             >
@@ -114,27 +117,34 @@ export function PreviewHistoryRevision({
               showLoading={false}
             />
           ) : null}
-          {compare && identical ? (
+          {compare && identical && !deleted ? (
             <p className="ov-file-history__no-diff-notice" role="status">
               {text.noChanges}
             </p>
           ) : null}
-          {ready ? (
+          {ready && deleted && !displayedChanges?.length ? (
+            <Empty
+              size="compact"
+              illustration="tray"
+              title={text.deletedVersion}
+            />
+          ) : ready ? (
             <LazyContent
               load={load}
               contentProps={{
-                content: content.data!,
-                changes: compare && !identical ? changes : undefined,
+                content: content.data ?? '',
+                changes: displayedChanges,
                 view,
                 locale,
                 path: selectedPath,
                 addedFile,
+                deletedFile: deleted,
               }}
               fallback={<PreviewLoading label={text.loading} />}
             />
           ) : null}
         </div>
-        {compare && changes && !identical ? (
+        {displayedChanges?.length ? (
           <div className="ov-file-history__legend">
             <span className="ov-file-history__removed-legend">
               <i />

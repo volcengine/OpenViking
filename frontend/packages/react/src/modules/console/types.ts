@@ -78,10 +78,39 @@ export interface ConsoleCommandProps {
   onOpenUri?: (uri: string) => void;
 }
 
+export interface ConsoleCommandFiles {
+  pickFile(options: {
+    name: string;
+    accept?: string;
+    signal?: AbortSignal;
+  }): Promise<File | undefined>;
+  download(blob: Blob, filename: string): void | Promise<void>;
+}
+
+export interface ConsoleCommandOptions {
+  /** Administrator commands require explicit opt-in and server-side authorization. */
+  allowAdminCommands?: boolean;
+  /** The default uses the browser's file picker and downloads. */
+  files?: ConsoleCommandFiles;
+  /** The host can reuse its OVPack import dialog to confirm the local file. */
+  choosePackFile?: (
+    targetUri: string,
+    signal?: AbortSignal,
+  ) => Promise<File | undefined>;
+  onPackImported?: (uri: string) => void;
+}
+
+export interface ConsoleHistoryEntry {
+  id: string;
+  command: string;
+  createdAtMs: number;
+}
+
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
   /** Task queries use native HTTP by default; hosts can adapt another backend. */
   taskService?: ConsoleTaskService;
+  commandOptions?: ConsoleCommandOptions;
   locale?: Locale;
   /** Enabled modes, in toolbar order. Omitted enables both; an empty list renders no panels. */
   modes?: readonly ConsoleMode[];
@@ -90,6 +119,8 @@ export interface ConsoleOptions {
   defaultMode?: ConsoleMode;
   /** Change with the identity when using dynamic credential/identity functions. */
   scopeKey?: string;
+  /** Opt in to tab-session command history. Provide a stable, credential-free key for the environment and identity. */
+  commandHistoryKey?: string;
   onModeChange?: (mode: ConsoleMode) => void;
   requestOptions?: OvRequestOptions;
 }
@@ -123,9 +154,10 @@ export interface ConsoleProps
   labels?: ConsoleLabels;
 }
 
-/** Local state. Records and drafts are never persisted by the module. */
+/** Terminal state with recall history separate from execution records. */
 export interface ConsoleState {
   records: readonly CommandConsoleRecord[];
+  history: readonly ConsoleHistoryEntry[];
   command: string;
   conversationDraft: string;
   isExecuting: boolean;

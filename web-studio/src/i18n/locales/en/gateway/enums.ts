@@ -33,6 +33,7 @@ const enums = {
   captureStatus: {
     active: 'On',
     disabled: 'Off',
+    failed: 'Failed',
     retrying: 'Retrying',
     paused: 'Paused',
     lost: 'Lost',
@@ -48,9 +49,10 @@ const enums = {
     delivery_recovered: 'Saving works again',
     delivery_failed: 'Saving to OpenViking failed',
     invalid_archive_id: 'OpenViking returned an unexpected archive',
-    gateway_key_missing:
-      "The key's record is missing; saving retries until the user's next request",
+    gateway_key_missing: "The key's record was missing",
     stage_failed: "A finished turn couldn't be queued for saving",
+    save_timeout: 'Saving to OpenViking timed out',
+    save_failed: 'Saving to OpenViking failed',
     delivered: 'Saved to OpenViking',
     committed: 'Committed in OpenViking',
   },

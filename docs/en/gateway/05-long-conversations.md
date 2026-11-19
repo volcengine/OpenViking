@@ -71,7 +71,7 @@ Where the cut falls depends on the request:
 | New user message | Right before that message | The system and developer messages, the summary as one user message, and the new message |
 | Tool step | After the latest tool result | The system and developer messages and the summary, from which it continues the task |
 
-The summary message starts by saying that the gateway replaced the earlier part of the conversation and that the user did not write it. It ends with the conversation's opening gateway note and user profile, so these survive compaction.
+The summary message starts by saying that the gateway replaced the earlier part of the conversation and that the user did not write it. It ends with the conversation's opening gateway note, soul and user profile, so these survive compaction.
 
 Every later request that resends this history, including housekeeping and token-count requests, gets the same replacement; sub-agents usually send their own separate history and are not affected. Each compaction costs one provider cache miss at the cut, and caching works normally after that.
 
@@ -108,7 +108,7 @@ Each reason and its fix are listed under [Long conversations hit the context lim
 
 ## Side effects {#side-effects}
 
-**No Working Memory summaries.** The gateway's own model generates its summaries. On OpenViking Server 0.5.0+, gateway commits set `enable_working_memory=false`: they still archive messages and extract memories under the resolved memory policy. New gateway sessions inherit the user's policy unless `capture_memory_types` explicitly sets a session policy. Older servers retain the legacy session-level Working Memory override. Existing sessions keep their stored policies; start a new conversation to inherit the user's policy.
+**No Working Memory summaries.** The gateway's own model writes its summaries. On OpenViking Server 0.5.0+, the gateway's commits set `enable_working_memory=false`: they still archive messages and extract memories under the resolved memory policy. New gateway sessions follow the user's own memory policy unless `capture_memory_types` sets a session policy (see [Save conversations](08-context-profiles.md#save-conversations)); with `openviking_auto_commit: true`, OpenViking's own commits follow that policy for Working Memory too, which leaves it off unless the user turns it on. On older servers the gateway creates the session with Working Memory off. Existing sessions keep their stored policies; start a new conversation to inherit the user's policy.
 
 **The memory budget starts over.** **Budget per context window** (see [Recall memory](08-context-profiles.md#recall-memory)) resets after each compaction, so memory added before the cut may be added again.
 
@@ -116,7 +116,7 @@ Each reason and its fix are listed under [Long conversations hit the context lim
 
 **Very long sessions can hit the request size limit.** Because the client's history keeps growing, a very long session can eventually exceed the request size limit: request bodies over 32 MiB are rejected with HTTP 413 (see [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway)). Operators can change the limit with `max_body_bytes` (see [Gateway fields](13-configuration.md#gateway-fields)); a reverse proxy in front of the gateway must allow bodies at least as large (see [Reverse proxy and HTTPS](../guides/22-gateway-operations.md#reverse-proxy-and-https)).
 
-**A client's own compaction starts a new session.** When the client compacts or edits its history, the gateway saves the new history to a new OpenViking session. If the search tools are available, the opening gateway note of the new history tells the model where the earlier sessions are.
+**A client's own compaction keeps the session.** When the client compacts or edits its history, the gateway goes on saving to the same OpenViking session from the turn's latest user message. What was saved before stays in the session.
 
 ## Experimental: agent-managed context windows {#experimental-agent-managed-context-windows}
 

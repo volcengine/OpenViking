@@ -6,10 +6,10 @@ import copy
 import orjson
 import pytest
 from aiohttp import web
-from conftest import make_due, replay_records
-from test_review_regressions import worker_for
+from conftest import replay_records
 
 from openviking_gateway.blocks import block, history_hint
+from openviking_gateway.capture import reset_capture
 from openviking_gateway.client import VikingClient
 from openviking_gateway.compaction import (
     HEADER,
@@ -20,6 +20,7 @@ from openviking_gateway.compaction import (
     estimate,
     opening_block,
 )
+from openviking_gateway.models import Policy
 from openviking_gateway.protocols import text_content, usage_of
 from openviking_gateway.state_store import get_state
 from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain, tool_protocol
@@ -115,7 +116,7 @@ async def test_user_cut_replaces_the_history_before_the_latest_user_message(
 async def test_continuation_cut_keeps_thinking_and_delivers_the_cut_part_at_once(
     setup_kernel, credential, policy
 ):
-    kernel, store, viking, encryption = setup_kernel
+    kernel, store, viking, _ = setup_kernel
     policy.update(context_window=1024, recall=False)
     thinking = {"type": "enabled", "budget_tokens": 2000}
     call = {
@@ -157,11 +158,9 @@ async def test_continuation_cut_keeps_thinking_and_delivers_the_cut_part_at_once
         '<openviking-context source="gateway-compaction">\n' + HEADER + " " + IN_PROGRESS
     )
     # The replaced part is saved before the turn ends, so the model can search it now.
-    worker = await worker_for(store, encryption, credential, viking)
-    assert await worker.once()
     state = (await store.capture.get(second.scope, second.session)).value
-    assert state["delivered"] and not state["pending"]
-    assert viking.write_sessions == [second.capture_target]
+    assert [[m["role"] for m in batch] for batch in viking.writes] == [["user", "assistant"]]
+    assert viking.write_sessions == [state["ov_session"]]
     # The tool result travels with its call.
     assert viking.writes[0][-1]["parts"][-1]["tool_output"] == "blue ok"
 
@@ -577,9 +576,9 @@ async def test_gateway_disables_working_memory_without_replacing_user_policy(ver
         return {}
 
     client.request = request
-    await client.create_session("key", "session")
-    await client.create_session("key", "session", ["events"])
-    await client.create_session("key", "session", [])
+    await client.create_session("key", "session", Policy())
+    await client.create_session("key", "session", Policy(capture_memory_types=["events"]))
+    await client.create_session("key", "session", Policy(capture_memory_types=[]))
     await client.commit("key", "session", keep=2)
     if version == "0.4.23":
         assert bodies[0]["memory_policy"] == {"working_memory": {"enabled": False}}
@@ -650,61 +649,32 @@ async def test_proxy_sends_the_summary_with_vendor_alias_and_headers(running_gat
 
 
 async def test_hints_name_the_sessions_that_hold_earlier_history(setup_kernel, credential, policy):
-    kernel, store, viking, encryption = setup_kernel
+    kernel, store, _, _ = setup_kernel
     policy.update(context_window=1024, gateway_tools=True)
-    worker = await worker_for(store, encryption, credential, viking)
     reply = {"role": "assistant", "content": "Blue."}
     messages = [{"role": "user", "content": "How do I deploy?"}]
     first = await prepare(kernel, "chat", messages, credential, policy)
-    await kernel.completed(first, credential, ResponseCapture("chat", reply, complete=True))
-    messages += [reply, {"role": "user", "content": "And staging?"}]
-    await prepare(kernel, "chat", messages, credential, policy)
-    assert await worker.once()
+    response = ResponseCapture("chat", reply, complete=True)
+    await kernel.completed(first, credential, response)
+    await kernel.save(first, credential, response)
+    saved = (await store.capture.get(first.scope, first.session)).value["ov_session"]
     # The client compacts its own history: the new history's opening block points
-    # to the session that holds the old one.
+    # to the session that holds the old one, which goes on receiving it.
     messages = [{"role": "user", "content": "Summary of our deploy work. Continue."}]
     fresh = await prepare(kernel, "chat", messages, credential, policy)
-    assert fresh.capture_target != first.capture_target
+    assert fresh.capture.value["ov_session"] == saved
     tools = fresh.root["tools"]
-    hint = history_hint("alice", [first.capture_target], tools, True)
+    hint = history_hint("alice", [saved], tools, True)
     assert hint and hint in opening_block(fresh.records, fresh.chain)
-    # A gateway cut names the current session first: the replaced part is queued for it.
+    # After a manual reset a gateway cut names the new session first.
+    current = await reset_capture(store.capture, fresh.scope, fresh.session, "manual_reset")
     await answered(kernel, fresh, credential, reply)
     messages += [reply, {"role": "user", "content": "Next?"}]
     second = await prepare(
         kernel, "chat", messages, credential, policy, summarize=Summarizer("chat")
     )
-    hint = history_hint("alice", [fresh.capture_target, first.capture_target], tools, True)
+    hint = history_hint("alice", [current["ov_session"], saved], tools, True)
     summary_block = second.body["messages"][0]["content"].split("</openviking-context>")[0]
-    assert summary_block.endswith("\n\n" + hint + "\n")
-
-
-async def test_a_cut_that_moves_capture_to_a_new_session_names_it_first(
-    setup_kernel, credential, policy
-):
-    kernel, store, viking, encryption = setup_kernel
-    policy.update(context_window=1024, gateway_tools=True, recall=False, commit_tokens=1000000)
-    worker = await worker_for(store, encryption, credential, viking)
-    messages = [{"role": "user", "content": "Fix the build"}]
-    first = await prepare(kernel, "chat", messages, credential, policy)
-    function = {"name": "run", "arguments": "{}"}
-    step = {
-        "role": "assistant",
-        "content": "Step 0",
-        "tool_calls": [{"id": "call-0", "type": "function", "function": function}],
-    }
-    await answered(kernel, first, credential, step)
-    # The tool runs long enough for the turn to be saved while idle, without its call.
-    await make_due(store)
-    assert await worker.once()
-    messages += [step, {"role": "tool", "tool_call_id": "call-0", "content": "ok"}]
-    cut = await prepare(kernel, "chat", messages, credential, policy, summarize=Summarizer("chat"))
-    state = (await store.capture.get(cut.scope, cut.session)).value
-    assert state["reason"] == "continued_after_idle"
-    hint = history_hint(
-        "alice", [state["ov_session"], first.capture_target], cut.root["tools"], True
-    )
-    summary_block = cut.body["messages"][0]["content"].split("</openviking-context>")[0]
     assert summary_block.endswith("\n\n" + hint + "\n")
 
 

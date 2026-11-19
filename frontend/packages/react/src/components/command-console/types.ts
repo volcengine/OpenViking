@@ -74,6 +74,11 @@ export interface CommandConsoleSearchResultItem {
    */
   preview?: string;
   /**
+   * 多行正文，提供时取代摘录。
+   * Multiline body shown in place of the excerpt when provided.
+   */
+  content?: string;
+  /**
    * 该结果对应的资源 URI，可用于打开。
    * URI of the result, which can be opened.
    */
@@ -276,6 +281,12 @@ export interface CommandConsoleStatusContent {
   title?: string;
 }
 
+/** 带完整资源目标的结果行。A result line with an explicit resource target. */
+export interface CommandConsoleWriteResultUriLine {
+  label: string;
+  uri: string;
+}
+
 /** 写入结果。A write result. */
 export interface CommandConsoleWriteResultContent {
   /**
@@ -284,10 +295,10 @@ export interface CommandConsoleWriteResultContent {
    */
   variant: 'write-result';
   /**
-   * 结果行，由宿主渲染。
-   * Result lines, rendered by the host.
+   * 结果行，可明确指定完整 URI。
+   * Result lines, optionally with an explicit URI.
    */
-  lines: readonly ReactNode[];
+  lines: readonly (ReactNode | CommandConsoleWriteResultUriLine)[];
   /**
    * 卡片标题。
    * Card title.
@@ -402,6 +413,8 @@ export interface CommandConsoleRecord {
  * Replaceable interface copy, following locale.
  */
 export interface CommandConsoleLabels {
+  /** Hint for entering a value that contains spaces. */
+  quoteArguments?: string;
   /** Cancelled task label. */
   cancelled?: string;
   /**
@@ -532,6 +545,8 @@ export interface CommandConsoleProps extends Omit<
    * Controlled input value.
    */
   value: string;
+  /** Keyboard recall entries in submission order. Defaults to the displayed records. */
+  history?: readonly Pick<CommandConsoleRecord, 'command'>[];
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**

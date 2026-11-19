@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 
 import openviking.service.reindex_executor as reindex_mod
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
@@ -433,7 +434,71 @@ async def test_show_path_not_found_returns_404(client_with_resource):
         },
     )
     assert resp.status_code == 404
-    assert resp.json()["status"] == "error"
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["details"] == {
+        "type": "git_blob",
+        "resource": "viking://resources/does_not_exist.txt",
+        "reason": "path_not_found",
+        "deleted_file": False,
+    }
+
+
+@pytest.mark.parametrize("was_directory", [False, True], ids=["large-file", "directory"])
+async def test_show_deleted_path_reports_whether_first_parent_had_a_file(
+    client_with_resource, service, was_directory
+):
+    client, _ = client_with_resource
+    path = "viking://resources/recreated_wiki.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    vfs = service.viking_fs
+    if was_directory:
+        await vfs.mkdir(path, ctx=ctx)
+        await vfs.write_file(f"{path}/page.md", b"a directory child\n", ctx=ctx)
+    else:
+        await vfs.write_file(path, b"large Markdown file\n" * 100_001, ctx=ctx)
+    await vfs.commit(message="original path", paths=[path], ctx=ctx)
+
+    await vfs.rm(path, recursive=was_directory, ctx=ctx)
+    deletion = await vfs.commit(message="removed path", paths=[path], ctx=ctx)
+    await vfs.write_file(path, b"recreated as file\n", ctx=ctx)
+    await vfs.commit(message="recreated file", paths=[path], ctx=ctx)
+
+    response = await client.get(
+        "/api/v1/snapshot/show",
+        params={"target_ref": deletion["commit_oid"], "path": path, "raw": "false"},
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["details"] == {
+        "type": "git_blob",
+        "resource": path,
+        "reason": "path_not_found",
+        "deleted_file": not was_directory,
+    }
+
+
+async def test_show_missing_snapshot_object_does_not_report_missing_tree_path(
+    snapshot_router_client, monkeypatch
+):
+    from openviking.server.routers import snapshot
+
+    path = "viking://resources/tracked.txt"
+    show_mock = AsyncMock(side_effect=AGFSNotFoundError("object not found"))
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(show_blob_raw=show_mock)),
+    )
+
+    response = await snapshot_router_client.get(
+        "/api/v1/snapshot/show",
+        params={"target_ref": "b" * 40, "path": path},
+    )
+    assert response.status_code == 404
+    error = response.json()["error"]
+    assert error["code"] == "NOT_FOUND"
+    assert error["details"] == {"type": "git_blob", "resource": path}
 
 
 async def test_diff_returns_unified_diff_for_path(client_with_resource, service):
