@@ -84,11 +84,12 @@ function parseInstances(raw, fallbackHost, fallbackPort) {
 
 export function getConfig() {
   const host = process.env.OV_SUPERAGENT_WEB_HOST || '127.0.0.1';
+  const apiKey = process.env.OV_SUPERAGENT_WEB_API_KEY || null;
   const port = intEnv('OV_SUPERAGENT_WEB_PORT', 3737, { min: 1, max: 65535 });
   const daemonHost = process.env.OV_SUPERAGENT_WEB_DAEMON_HOST || '127.0.0.1';
   const daemonPort = intEnv('OV_SUPERAGENT_WEB_DAEMON_PORT', 3738, { min: 1, max: 65535 });
-  // The page has no login, so it never listens beyond this machine.
-  assertLoopbackHost('OV_SUPERAGENT_WEB_HOST', host);
+  // Without an API key the page has no login, so it never listens beyond this machine.
+  if (!apiKey) assertLoopbackHost('OV_SUPERAGENT_WEB_HOST', host);
   assertLoopbackHost('OV_SUPERAGENT_WEB_DAEMON_HOST', daemonHost);
   const instances = parseInstances(process.env.OV_SUPERAGENT_WEB_INSTANCES, daemonHost, daemonPort);
   const defaultInstance = process.env.OV_SUPERAGENT_WEB_DEFAULT_INSTANCE || instances[0].id;
@@ -102,6 +103,7 @@ export function getConfig() {
   return {
     host,
     port,
+    apiKey,
     instances,
     defaultInstance,
     publicDir,

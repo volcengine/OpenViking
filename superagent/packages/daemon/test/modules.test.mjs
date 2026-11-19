@@ -131,6 +131,7 @@ describe('module boundaries', () => {
     assert.equal(beta.env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID, 'env-beta-self-hosted');
     assert.equal(web.env.OV_SUPERAGENT_WEB_HOST, '127.0.0.1');
     assert.equal(web.env.OV_SUPERAGENT_WEB_PORT, '3737');
+    assert.equal(web.env.OV_SUPERAGENT_WEB_API_KEY, '');
     assert.equal(web.env.OV_SUPERAGENT_WEB_DEFAULT_INSTANCE, 'beta');
     const effectiveWebEnv = Object.fromEntries(Object.entries({
       ...env,

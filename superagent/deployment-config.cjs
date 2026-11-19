@@ -13,7 +13,8 @@ const INSTANCE_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const RESERVED_INSTANCE_IDS = Object.freeze(['all', 'web', 'updater']);
 const CONTROL_ENV_MAX_BYTES = 262_144;
 const DEPLOYMENT_MANIFEST_MAX_BYTES = 1_048_576;
-const TOP_LEVEL_FIELDS = Object.freeze(['version', 'defaultInstance', 'env', 'agents']);
+const TOP_LEVEL_FIELDS = Object.freeze(['version', 'defaultInstance', 'env', 'agents', 'web']);
+const WEB_FIELDS = Object.freeze(['host']);
 const DAEMON_ENV_FIELDS = Object.freeze([
   'LARK_CLI_BIN',
   'CODEX_BIN',
@@ -181,12 +182,12 @@ function resolveSecretsFilePath(env = process.env) {
   return path.join(path.normalize(home), '.ov-superagent', 'secrets.env');
 }
 
-function loadSecretsFile(env = process.env) {
+function loadSecretsFile(env = process.env, fields = DAEMON_SECRET_ENV_FIELDS) {
   const secretsPath = resolveSecretsFilePath(env);
   if (!secretsPath) return {};
   let raw;
   try { raw = fs.readFileSync(secretsPath, 'utf8'); } catch { return {}; }
-  const allowed = new Set(DAEMON_SECRET_ENV_FIELDS);
+  const allowed = new Set(fields);
   const result = {};
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -506,6 +507,27 @@ function assertIsolatedAgentStorage(agents) {
   }
 }
 
+function parseWebSettings(value, ignored) {
+  if (value === undefined || value === null) return Object.freeze({ host: '127.0.0.1' });
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('deployment manifest web must be an object');
+  }
+  ignoreUnknownFields(value, WEB_FIELDS, 'web.', ignored);
+  const host = value.host === undefined ? '127.0.0.1' : manifestString(value.host, 'deployment manifest web.host', { maxLength: 253 });
+  if (!/^(?:[0-9a-f.:]+|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)$/i.test(host)) {
+    throw new Error('deployment manifest web.host is invalid');
+  }
+  return Object.freeze({ host });
+}
+
+// The Web's API key lives in secrets.env; empty overrides any key in pm2's own environment.
+function webProcessEnv(deployment, sourceEnv = process.env) {
+  return {
+    OV_SUPERAGENT_WEB_HOST: deployment.web.host,
+    OV_SUPERAGENT_WEB_API_KEY: loadSecretsFile(sourceEnv, ['OV_SUPERAGENT_WEB_API_KEY']).OV_SUPERAGENT_WEB_API_KEY || '',
+  };
+}
+
 function loadDeploymentManifest(env) {
   env = env ?? process.env;
   const manifestPath = resolveDeploymentManifestPath(env);
@@ -535,6 +557,7 @@ function loadDeploymentManifest(env) {
   }
   const defaultInstance = manifestString(value.defaultInstance, 'deployment manifest defaultInstance');
   const daemonEnv = parseDaemonEnv(value.env, ignored);
+  const web = parseWebSettings(value.web, ignored);
   const agents = value.agents.map((agent, index) => parseAgent(agent, index, ignored));
   assertUniqueAgentFields(agents);
   assertIsolatedAgentStorage(agents);
@@ -543,6 +566,7 @@ function loadDeploymentManifest(env) {
     defaultInstance,
     env: daemonEnv,
     agents: Object.freeze(agents),
+    web,
     manifestPath,
     // Paths such as `env.OV_SUPERAGENT_OLD_SETTING` or `agents[0].oldField`, for a warning.
     ignoredFields: Object.freeze(ignored),
@@ -697,6 +721,8 @@ module.exports = {
   DAEMON_SHELL_ENV_FIELDS,
   DEPLOYMENT_MANIFEST_MAX_BYTES,
   TOP_LEVEL_FIELDS,
+  parseWebSettings,
+  webProcessEnv,
   applyDeploymentAgentEnv,
   applyDeploymentDaemonEnv,
   deploymentDaemonEnvOverrides,
