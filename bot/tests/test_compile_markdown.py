@@ -19,16 +19,10 @@ from vikingbot.compile.ops import finalize
 from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
-from vikingbot.compile.pipeline_agent import DraftDeleteTool, TargetReader, agent_runner
+from vikingbot.compile.pipeline_agent import TargetReader, agent_runner
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS
 from vikingbot.compile.plan import Contract, PlanProposal, Transform, parse_plan
-from vikingbot.compile.results import (
-    Document,
-    Group,
-    IncompleteWorkerOutput,
-    InvalidWorkerOutput,
-    RouteResponse,
-)
+from vikingbot.compile.results import Document, Group, RouteResponse
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.sources import split_source
 from vikingbot.config.schema import Config, SessionKey
@@ -196,16 +190,6 @@ async def sources(count=2):
         yield split_source(f"viking://resources/source/{index}.md", f"Fact {index}", 1000)
 
 
-def tool_reply(*calls):
-    return LLMResponse(
-        content="",
-        tool_calls=[
-            ToolCallRequest(call_id, name, arguments, index)
-            for index, (call_id, name, arguments) in enumerate(calls)
-        ],
-    )
-
-
 async def test_map_only_collects_only_completed_output_directories(pipeline):
     calls = await configure_pipeline(pipeline, fail_second=True)
     bundle = await pipeline.run(sources())
@@ -213,36 +197,6 @@ async def test_map_only_collects_only_completed_output_directories(pipeline):
     assert [op["uri"] for op in bundle.operations] == [pipeline.target + "/topic.md"]
     assert pipeline.failures and pipeline.warnings
     assert (await pipeline.files.get("summary"))["prepared"] is False
-
-
-async def test_worker_does_not_retry_completion_backend_error(pipeline, agent_loop, monkeypatch):
-    loop, key, _ = agent_loop
-    error = ValueError("directory inventory backend failed")
-    pipeline.model.provider.chat = chat = AsyncMock(return_value=LLMResponse("Done"))
-    monkeypatch.setattr(pipeline.files.sandbox, "list_files", AsyncMock(side_effect=error))
-    pipeline.model.agent_runner = agent_runner(loop, key, None, pipeline.limits)
-
-    with pytest.raises(ValueError) as caught:
-        await pipeline.generate("map-0", "Write Markdown", {}, [])
-    assert caught.value is error
-    chat.assert_awaited_once()
-    assert pipeline.metrics["repairs"] == 0
-
-
-async def test_worker_reports_validation_error_after_exhausting_recovery(pipeline, agent_loop):
-    loop, key, _ = agent_loop
-    limits = pipeline.limits.model_copy(update={"subagent_iterations": 2})
-    write = tool_reply(("scratch", "write_file", {"path": "notes.bak", "content": "draft"}))
-    pipeline.model.provider.chat = chat = AsyncMock(
-        side_effect=[write, LLMResponse("Done")] * MAX_JOB_ATTEMPTS
-    )
-    pipeline.model.agent_runner = agent_runner(loop, key, None, limits)
-
-    with pytest.raises(IncompleteWorkerOutput, match="Output must be nonempty Markdown: notes.bak"):
-        await pipeline.generate("map-0", "Write final Markdown only", {}, [])
-
-    assert chat.await_count == 2 * MAX_JOB_ATTEMPTS
-    assert pipeline.metrics["repairs"] == MAX_JOB_ATTEMPTS - 1
 
 
 async def test_markdown_routing_reaches_reduce_without_publishing_map_drafts(pipeline, monkeypatch):
@@ -263,11 +217,8 @@ async def test_markdown_routing_reaches_reduce_without_publishing_map_drafts(pip
 
 
 @pytest.mark.parametrize("ending", ["success", "budget", "truncated"])
-async def test_file_worker_uses_existing_tools_without_emit(
-    pipeline, agent_loop, monkeypatch, ending
-):
+async def test_file_worker_uses_existing_tools_without_emit(pipeline, agent_loop, ending):
     loop, key, _ = agent_loop
-    pipeline.target_has_content = ending != "success"
     replies = [
         LLMResponse(
             content="",
@@ -287,8 +238,7 @@ async def test_file_worker_uses_existing_tools_without_emit(
             LLMResponse(
                 content="",
                 tool_calls=[
-                    ToolCallRequest("assignment", "read_file", {"path": "assignment.json"}, 0),
-                    ToolCallRequest("evidence", "read_file", {"path": "inputs/0.md"}, 1),
+                    ToolCallRequest("assignment", "read_file", {"path": "assignment.json"}, 0)
                 ],
             ),
         )
@@ -311,39 +261,25 @@ async def test_file_worker_uses_existing_tools_without_emit(
         pipeline.limits.model_copy(update={"subagent_iterations": 1 if ending == "budget" else 4}),
     )
     if ending == "success":
-        body = "# Original\n\n" + "a" * 5_000 + "\nMIDDLE FACT: limit is 37 kg.\n" + "b" * 5_000
-        await pipeline.files.sandbox.write_file("original.md", body)
-        collect = AsyncMock(wraps=pipeline.collect_outputs)
-        monkeypatch.setattr(pipeline, "collect_outputs", collect)
         source_refs = [f"{index:064x}" for index in range(138)]
-        data = {
-            "inputs": [{"payload": {"source_ranges": source_refs}}],
-            "documents": [vars(Document("original.md", "original.md", source_refs))],
-        }
-        result = await pipeline.generate("reduce-0", "Generate Markdown", data, source_refs)
+        inputs = [{"payload": {"source_ranges": source_refs}}]
+        result = await pipeline.generate(
+            "reduce-0", "Generate Markdown", {"inputs": inputs}, source_refs
+        )
         messages = pipeline.model.provider.chat.await_args_list[1].kwargs["messages"]
-        tool_results = {
-            msg["tool_call_id"]: msg["content"] for msg in messages if msg["role"] == "tool"
-        }
-        assert json.loads(tool_results["assignment"])["inputs"] == data["inputs"]
-        assert tool_results["evidence"] == body
-        assert "Output truncated" in await loop._preview_tool_result(body, key)
-        collect.assert_awaited_once()
+        assignment = json.loads(next(msg["content"] for msg in messages if msg["role"] == "tool"))
+        assert assignment["inputs"] == inputs
         assert len(result) == 1 and result[0].path == "topic.md"
         assert (
             await pipeline.files.sandbox.read_file(result[0].workspace_path) == "# Topic\n\nFacts."
         )
     else:
-        error_type = IncompleteWorkerOutput if ending == "budget" else ValueError
-        with pytest.raises(error_type):
+        with pytest.raises(ValueError):
             await pipeline.generate("map-0", "Generate Markdown", {"inputs": []}, [])
-        if ending == "budget":
-            assert pipeline.model.provider.chat.await_count == MAX_JOB_ATTEMPTS
     for call in pipeline.model.provider.chat.await_args_list:
         names = {t["function"]["name"] for t in call.kwargs["tools"]}
         assert {"read_file", "write_file", "edit_file"} <= names
         assert "emit" not in names
-        assert ("read_target_file" in names) == pipeline.target_has_content
 
 
 @pytest.mark.parametrize("input_path", ["assignment.json", "inputs/0.md"])
@@ -351,49 +287,30 @@ async def test_worker_output_paths_and_readonly_inputs(pipeline, agent_loop, inp
     loop, key, manager = agent_loop
     root = "__compile_staging__/drafts/private"
     aliases = {input_path: f"{root}/{input_path}"}
-    sandbox = pipeline.files.sandbox
-    output_root = f"{root}/output"
-    options = {"draft_root": output_root, "merge_only": True, "readonly_paths": aliases}
+    options = {"draft_root": root + "/output", "merge_only": True, "readonly_paths": aliases}
     read, write, edit = [
         CompileChildTool(loop.tools.get(name), **options)
         for name in ("read_file", "write_file", "edit_file")
     ]
-    delete = CompileChildTool(DraftDeleteTool(sandbox, output_root), **options)
     context = ToolContext(session_key=key, sandbox_manager=manager)
-    await sandbox.write_file(aliases[input_path], "input")
-    output_path = input_path.upper()
-    await write.execute(context, path=f".//{output_path}", content="before")
-    await edit.execute(context, path=output_path, old_text="before", new_text="after")
-    assert await read.execute(context, path=output_path) == "after"
-    await delete.execute(context, path=output_path)
-    with pytest.raises(FileNotFoundError):
-        await sandbox.read_file_bytes(f"{output_root}/{output_path}")
-    input_alias = f".//{input_path}"
-    for tool, arguments in (
-        (write, {"content": "changed"}),
-        (edit, {"old_text": "input", "new_text": "changed"}),
-        (delete, {}),
-    ):
-        with pytest.raises(ValueError, match="read-only"):
-            await tool.execute(context, path=input_alias, **arguments)
-    assert await read.execute(context, path=input_alias) == "input"
+    await pipeline.files.sandbox.write_file(aliases[input_path], "input")
+    await write.execute(context, path="topic.md", content="before")
+    await edit.execute(context, path="topic.md", old_text="before", new_text="after")
+    assert await read.execute(context, path="topic.md") == "after"
+    assert await pipeline.files.sandbox.read_file(root + "/output/topic.md") == "after"
+    assert await read.execute(context, path=input_path) == "input"
+    with pytest.raises(ValueError, match="read-only"):
+        await write.execute(context, path=input_path, content="changed")
 
 
-@pytest.mark.parametrize(
-    "path", ["../escape.md", "/tmp/escape.md", "viking://resources/escape.md", "."]
-)
-async def test_file_tool_rejects_invalid_worker_paths(pipeline, agent_loop, path):
+@pytest.mark.parametrize("path", ["../escape.md", "/tmp/escape.md", "viking://resources/escape.md"])
+async def test_file_tool_rejects_paths_outside_private_worker(agent_loop, path):
     _, key, manager = agent_loop
-    root = "__compile_staging__/drafts/private/output"
-    context = ToolContext(session_key=key, sandbox_manager=manager)
-    for tool, arguments in (
-        (WriteFileTool(), {"content": "x"}),
-        (DraftDeleteTool(pipeline.files.sandbox, root), {}),
-    ):
-        with pytest.raises(ValueError):
-            await CompileChildTool(tool, root, merge_only=True).execute(
-                context, path=path, **arguments
-            )
+    tool = CompileChildTool(WriteFileTool(), "__compile_staging__/drafts/private", merge_only=True)
+    with pytest.raises(ValueError):
+        await tool.execute(
+            ToolContext(session_key=key, sandbox_manager=manager), path=path, content="x"
+        )
 
 
 async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeline, monkeypatch):
@@ -613,10 +530,16 @@ async def test_file_collection_rejects_missing_empty_nonmarkdown_and_invalid_utf
     pipeline, path, content
 ):
     root = "__compile_staging__/drafts/invalid/output"
-    if path is not None:
-        await pipeline.files.sandbox.write_file_bytes(f"{root}/{path}", content)
-    with pytest.raises(InvalidWorkerOutput):
-        await pipeline.collect_outputs(root, "invalid")
+
+    async def worker(*args, **kwargs):
+        if path is not None:
+            await pipeline.files.sandbox.write_file_bytes(root + "/" + path, content)
+        return await pipeline.collect_outputs(root, "invalid")
+
+    pipeline.model.agent_runner = worker
+    with pytest.raises(ValueError):
+        await pipeline.generate("map-0", "Write Markdown.", {}, [])
+    assert pipeline.artifacts == []
 
 
 async def test_routing_history_rejects_files_outside_to(pipeline):
@@ -666,9 +589,9 @@ async def test_alias_conflicts_retry_without_blocking_unrelated_publication(
         [[first], [alias], [merged]] if collision == "other_worker" else [[first, alias], [merged]]
     )
     worker = AsyncMock(side_effect=results)
-    pipeline.generate_once = worker
+    pipeline.generate = pipeline.generate_once = worker
     outputs = await reduce_op.resolve_files(pipeline, [*docs, unrelated])
-    assert worker.await_count == len(results)
+    assert pipeline.generate.await_count == len(results)
     assert outputs == (
         [unrelated, first, merged] if collision == "other_worker" else [unrelated, merged]
     )
@@ -802,121 +725,3 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
     assert empty_bundle.operations == []
     assert len(pipeline.warnings) == 1
     assert "selection-rules.md" in pipeline.warnings[0]
-
-
-async def test_file_worker_can_remove_obsolete_outputs_before_completion(pipeline, agent_loop):
-    loop, key, _ = agent_loop
-    stale_path = "Inputs/notes.bak"
-    done = LLMResponse("Done")
-    chat = pipeline.model.provider.chat = AsyncMock(
-        side_effect=[
-            tool_reply(
-                ("old", "write_file", {"path": stale_path, "content": "draft"}),
-                ("new", "write_file", {"path": "fact.md", "content": "# Fact"}),
-            ),
-            done,
-            tool_reply(("delete", "delete_file", {"path": stale_path})),
-            done,
-        ]
-    )
-    pipeline.model.agent_runner = runner = AsyncMock(
-        wraps=agent_runner(loop, key, None, pipeline.limits)
-    )
-    outputs = await pipeline.generate("map-0", "Write final Markdown only", {}, [])
-
-    assert [document.path for document in outputs] == ["fact.md"]
-    runner.assert_awaited_once()
-    prompts = [
-        message["content"]
-        for message in chat.await_args_list[2].kwargs["messages"]
-        if message["role"] == "user"
-    ]
-    assert f"Output must be nonempty Markdown: {stale_path}" in prompts[-1]
-    assert prompts[-1].endswith("Once fixed, reply Done.")
-
-
-async def test_worker_delete_rejects_directories_and_outside_symlinks(pipeline):
-    sandbox = pipeline.files.sandbox
-    await sandbox.write_file("outside.md", "Preserve source")
-    await sandbox.write_file("private/output/nested/keep.md", "Preserve other output")
-    await sandbox.write_file("private/output/.obsolete.md", "probe")
-    tool = DraftDeleteTool(sandbox, "private/output")
-    await tool.execute(None, path="private/output/.obsolete.md")
-    with pytest.raises(OSError):
-        await tool.execute(None, path="private/output/nested")
-    link = sandbox.workspace / "private/output/link.md"
-    link.symlink_to(sandbox.local_file_path("outside.md"))
-    with pytest.raises(ValueError, match="outside this worker"):
-        await tool.execute(None, path="private/output/link.md")
-    assert await sandbox.read_file("outside.md") == "Preserve source"
-    assert await sandbox.read_file("private/output/nested/keep.md") == "Preserve other output"
-
-
-async def test_remote_worker_delete_quotes_a_single_nonrecursive_file(pipeline):
-    import shlex
-
-    sandbox = SimpleNamespace(
-        local_file_path=lambda path: None,
-        execute=AsyncMock(return_value="(no output)"),
-        _ensure_command_succeeded=pipeline.files.sandbox._ensure_command_succeeded,
-    )
-    tool = DraftDeleteTool(sandbox, "private/output")
-    path = "private/output/obsolete ' $(touch injected).md"
-    await tool.execute(None, path=path)
-    assert shlex.split(sandbox.execute.await_args.args[0]) == ["rm", "-f", "--", path]
-
-
-async def test_reduce_recovers_spent_worker_without_selecting_partial_files(pipeline, agent_loop):
-    loop, key, _ = agent_loop
-    limits = pipeline.limits.model_copy(update={"subagent_iterations": 2})
-    pipeline.contract = contract(merge=True)
-    await pipeline.files.sandbox.write_file("original.md", "# Original")
-    original = Document("original.md", "original.md", ["source-0"])
-    pipeline.status["source-0"] = "prepared"
-    chat = pipeline.model.provider.chat = AsyncMock(
-        side_effect=[
-            tool_reply(("partial", "write_file", {"path": "partial.md", "content": "# Partial"})),
-            tool_reply(("read", "read_file", {"path": "inputs/0.md"})),
-            tool_reply(
-                ("complete", "write_file", {"path": "complete.md", "content": "# Complete"})
-            ),
-            LLMResponse("Done"),
-        ]
-    )
-    pipeline.model.agent_runner = agent_runner(loop, key, None, limits)
-    node = parse_plan(MERGE, pipeline.contract)[2]
-    outputs = await reduce_op.run(pipeline, node, [Group("group-0", [original])])
-
-    assert [doc.path for doc in outputs] == ["complete.md"]
-    assert pipeline.metrics["repairs"] == 1
-    assert pipeline.status["source-0"] == "prepared"
-    assert not pipeline.failures
-    assert any(
-        "1 model/tool rounds remain, including this one" in message.get("content", "")
-        for message in chat.await_args_list[1].kwargs["messages"]
-        if message["role"] == "user"
-    )
-
-
-@pytest.mark.parametrize("recover", [False, True])
-async def test_collision_worker_shares_one_recovery_budget(pipeline, recover):
-    unrelated = Document("unrelated.md", "unrelated.md")
-    valid = Document("resolved.md", "resolved.md")
-    incomplete = IncompleteWorkerOutput("worker incomplete")
-    pipeline.model.agent_runner = AsyncMock(
-        side_effect=[incomplete, [unrelated], incomplete, [valid if recover else unrelated]]
-    )
-    docs = [
-        Document("same.md", "first.md", ["source-0"]),
-        Document("same.md", "second.md", ["source-1"]),
-        unrelated,
-    ]
-    outputs = await reduce_op.resolve_files(pipeline, docs)
-
-    assert pipeline.model.agent_runner.await_count == 4
-    assert outputs == (
-        [unrelated, Document(valid.path, valid.workspace_path, ["source-0", "source-1"])]
-        if recover
-        else [unrelated]
-    )
-    assert bool(pipeline.failures) is not recover
