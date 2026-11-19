@@ -1,3 +1,5 @@
+import { compileHelp } from './compile-help.js';
+import { transferSession } from './transfer-session.zh-CN.js';
 import { coreParameters } from './core-parameters.js';
 import filesystemParameters from './filesystem-parameters.js';
 import { SEARCH_PARAMETERS_ZH_CN } from './search-parameters.js';
@@ -24,6 +26,19 @@ const messages: typeof enUS = {
       | 'quickStart'
     >
   >,
+  telemetryResult: (value: string) => `遥测：${value}`,
+  memoryCommit: {
+    idle: '提交会话',
+    pending: '会话提交中',
+    submitted: '会话提交中',
+    success: '会话已提交',
+    empty: '当前会话暂无可生成的新记忆',
+    skipped: '本轮未生成新记忆',
+    failed: '会话提交失败',
+    completed: '记忆提取已完成',
+    saved: '记忆已生成，并保存至目录文件',
+    view: '查看记忆',
+  },
   taskCompletion: {
     title: '任务完成',
     description: '异步任务已完成。',
@@ -41,11 +56,12 @@ const messages: typeof enUS = {
     },
   },
   commands: {
+    ...transferSession,
     'add-resource': '添加路径或 URL 到资源',
     'add-skill': '添加 Skill 到技能目录',
     'add-memory': '直接添加记忆',
-    compile: '按 Skill 编译资料',
-    'compile create': '创建编译配置',
+    compile: '执行编译',
+    'compile create': '创建编译配置，供 compile 执行',
 
     grep: '匹配资源文本',
     glob: '匹配资源路径',
@@ -95,45 +111,10 @@ const messages: typeof enUS = {
         '按搜索词在当前上下文中做语义检索，返回匹配的资源、记忆或技能。',
       examples: ['ov find "OpenViking 有什么价值？"'],
     },
-    'compile create': {
-      description: '保存来源、目标和 Skill 的编译配置，不立即启动编译。',
-      examples: [
-        'ov compile create --compile-name demo-wiki --from viking://resources/source --to viking://resources/wiki --skill viking://system/compile/example-skills/llm-wiki',
-      ],
-    },
-    compile: {
-      description: '按名称执行已保存的编译配置。',
-      examples: ['ov compile --compile-name demo-wiki'],
-      quickStart: {
-        documentation: {
-          label: '操作指南',
-          href: 'https://docs.openviking.ai/zh/context-compilation/01-overview',
-        },
-        steps: [
-          {
-            description:
-              '确认推理配置。确认 OpenViking 已配置编译所需的推理服务。',
-          },
-          { description: '导入资料。使用 add-resource 导入待编译的资料。' },
-          {
-            description:
-              '创建编译配置。create 保存来源、目标和 Skill，供后续执行。',
-            command:
-              'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
-          },
-          {
-            description:
-              '执行编译。使用已保存的来源、目标、Skill、指令、模型和定时计划。',
-            command: 'ov compile --compile-name <name>',
-          },
-          {
-            description: '查询进度。使用返回的 task_id 查询执行状态。',
-            command: 'ov task status <task_id>',
-          },
-        ],
-      },
-    },
+    'compile create': compileHelp['zh-CN'].createGuide,
+    compile: compileHelp['zh-CN'].runGuide,
   },
+  compileArgsHelp: compileHelp['zh-CN'].args,
   parameters: {
     path: '要导入的远程路径或 URL',
     to: '写入的目标 URI',
@@ -142,16 +123,21 @@ const messages: typeof enUS = {
     reason: '导入原因',
     args: '以 JSON 对象提供解析参数',
     'compile-args':
-      'JSON 对象，可保存 model_name、auto_update 和 update_schedule',
+      '合法的 JSON 对象，用于保存模型和定时计划。字段名区分大小写。',
     'target-uri': 'Skill 的目标根目录',
     content: '要写入记忆的纯文本',
     'session-id': '要写入并提交的会话 ID',
     limit: '最多返回的条目数量',
     'compile-name':
-      '汉字、ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符。纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符',
+      '汉字、ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符。纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符。同一用户内不可重名，不支持改名',
     from: '已存在的来源目录 URI，可重复传入 --from，或用英文逗号分隔多个 URI',
-    skill: '用于编译的 Skill URI',
-    instruction: '编译的额外要求',
+    'compile-from':
+      '至少一个已存在且可读的来源目录，不接受单个文件。可重复传入 --from，或用英文逗号分隔多个 URI，重复项自动去重。',
+    'compile-to':
+      '可写的产物输出目录，建议使用独立的 viking://resources/… 目录。目录不存在时，服务端可创建。',
+    skill: '用于编译的 Skill 目录 URI，决定如何读取、整理和输出资料',
+    instruction:
+      '补充语言、结构、引用及处理要求。省略时按 Skill 默认行为执行。',
     'task-type': '按任务类型过滤，例如 add_resource、add_skill',
     'task-status': '按任务状态过滤，例如 pending、running、completed、failed',
     'task-id': '异步任务 ID',
@@ -160,6 +146,8 @@ const messages: typeof enUS = {
     ...SEARCH_PARAMETERS_ZH_CN,
   },
   commandGroups: {
+    transfer: '文件传输',
+    session: '会话',
     core: '核心流程',
     filesystem: '文件系统',
     search: '搜索与上下文',
@@ -167,6 +155,10 @@ const messages: typeof enUS = {
   },
   messages: {
     cancelled: () => '请求已取消；服务端可能仍在处理已接收的操作。',
+    unavailableCommand: (value?: string) => `当前工作台不支持命令：${value}`,
+    invalidOvpack: () => '请选择有效的 .ovpack 文件。',
+    invalidOvpackDownload: () => '服务端未返回有效的 OVPack 压缩包。',
+    missingUploadId: () => '上传未返回临时文件 ID。',
     unknownCommand: () => '未知命令。输入 ov help 查看可用命令。',
     shellSyntax: () => '不支持 Shell 语法。',
     unclosedQuote: () => '引号或转义未闭合。',

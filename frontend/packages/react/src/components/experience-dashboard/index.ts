@@ -3,6 +3,8 @@ export type {
   ExperienceDashboardProps,
   ExperienceDashboardTab,
   ExperienceDashboardState,
+  ExperienceDashboardSections,
+  ExperienceDashboardSectionContext,
   ExperienceDashboardData,
   ExperienceDashboardLabels,
   ExperienceItem,

@@ -362,11 +362,9 @@ class _AnyDocMarkdownRenderer:
             relative = Path(saved_path).relative_to(Path(self.storage.media_dir)).as_posix()
         except Exception as exc:
             self.warnings.append(f"Failed to save AnyDoc image asset {reference}: {exc}")
-            logger.warning(
-                "Failed to save anydoc image asset %s from %s",
-                reference,
-                self.resource_name,
-                exc_info=True,
+            logger.info(
+                "AnyDoc image save failed; omitting image error_type=%s degraded=true",
+                type(exc).__name__,
             )
             self.asset_paths[reference] = None
             return None

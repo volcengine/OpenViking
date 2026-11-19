@@ -53,6 +53,7 @@ import '@openviking/react/components/command-console/style.css';
 | ---------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------ |
 | records          | 要展示的命令记录，按提交顺序排列                                                           | `readonly CommandConsoleRecord[]`                                     | 必填                     |
 | value            | 输入区的文本，受控                                                                         | `string`                                                              | 必填                     |
+| history          | 方向键可回填的命令，按提交顺序排列                                                         | `readonly Pick<CommandConsoleRecord, 'command'>[]`                    | 同 `records`             |
 | disabled         | 禁用输入和提交，并在输入区下方显示 `labels.unavailableMessage`                             | `boolean`                                                             | `false`                  |
 | busy             | 执行中锁定输入与提交，由结果卡片展示进度，不显示不可用提示                                 | `boolean`                                                             | `false`                  |
 | emptyState       | 没有记录时显示的内容，替换内置空态；传 `null` 时不显示空态                                 | `ReactNode`                                                           | -                        |
@@ -124,6 +125,7 @@ import '@openviking/react/components/command-console/style.css';
 | scoreLabel   | 分数文案，由宿主格式化后显示                                    | `string`    | -      |
 | scoreDetails | 分数详情，悬停、聚焦或点击分数时显示；需要同时提供 `scoreLabel` | `ReactNode` | -      |
 | preview      | 标题下方的内容摘录                                              | `string`    | -      |
+| content      | 取代摘录展示的多行正文                                          | `string`    | -      |
 | uri          | 资源 URI，显示为链接，点击时触发 `onOpenUri`                    | `string`    | -      |
 
 ### CommandConsoleResourcePreviewContent
@@ -181,11 +183,13 @@ import '@openviking/react/components/command-console/style.css';
 
 ### CommandConsoleWriteResultContent
 
-| 参数    | 说明                                                     | 类型                   | 默认值 |
-| ------- | -------------------------------------------------------- | ---------------------- | ------ |
-| variant | 结果类型，固定为 `'write-result'`                        | `'write-result'`       | 必填   |
-| lines   | 结果行，每行单独一块显示；字符串中的资源地址自动成为链接 | `readonly ReactNode[]` | 必填   |
-| title   | 标题，与命令名相同时不显示                               | `string`               | -      |
+| 参数    | 说明                                                      | 类型                                                         | 默认值 |
+| ------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------ |
+| variant | 结果类型，固定为 `'write-result'`                         | `'write-result'`                                             | 必填   |
+| lines   | 每行单独一块显示。使用显式 URI 行可保留资源路径中的空格。 | `readonly (ReactNode \| CommandConsoleWriteResultUriLine)[]` | 必填   |
+| title   | 标题，与命令名相同时不显示                                | `string`                                                     | -      |
+
+`CommandConsoleWriteResultUriLine` 包含字符串字段 `label` 和 `uri`。
 
 ### CommandConsoleCommandHelpContent
 
@@ -233,6 +237,8 @@ import '@openviking/react/components/command-console/style.css';
 | examples    | 示例命令，显示在参数帮助里，点击后填入输入区，不提交                                             | `readonly (string \| CommandConsoleCommandExample)[]`                                                              | -                |
 | quickStart  | 参数帮助中可代替示例的有序步骤，可附带文档链接。点击步骤里的命令会填入输入区                     | `{ documentation?: { label: string; href: string }; steps: readonly { description: string; command?: string }[] }` | -                |
 | skeleton    | 命令执行中显示的加载骨架，分别对应检索、资源预览、资源树、状态、写入结果和通用形态               | `'search' \| 'resource' \| 'tree' \| 'status' \| 'write' \| 'generic'`                                             | `'generic'`      |
+
+可选回调 `resolveUriArguments(text)` 接收命令前缀之后的文本。按文本顺序返回范围互不重叠的 `{ start, end, uri }`（UTF-16 偏移，左闭右开），输入和命令历史中的链接即可保留完整参数值。其他文本按 URI 逐项生成链接。
 
 ### CommandConsoleCommandParam
 

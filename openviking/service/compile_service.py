@@ -18,6 +18,7 @@ from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.observability.log_safety import short_hash
 from openviking.pyagfs.exceptions import AGFSInternalError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import (
@@ -485,7 +486,7 @@ class CompileService:
             base_url=base_url.rstrip("/"),
             gateway_token=gateway_token,
             http_timeout_seconds=10.0,
-            poll_interval_ms=30000,
+            poll_interval_ms=self._config.poll_interval_ms,
             local=True,
         )
 
@@ -681,11 +682,12 @@ class CompileService:
             except (AGFSInternalError, ValueError) as exc:
                 if task is None or task.error == ENQUEUE_FAILURE or not _lost_state_lease(exc):
                     raise
-                logger.warning(
-                    "Queued Compile task %s lost the state.json lease for %s",
+                logger.info(
+                    "queued compile task state lease lost; retaining accepted task task_id=%s name_hash=%s error_type=%s",
                     task.task_id,
-                    compile_name,
-                    exc_info=True,
+                    short_hash(str(compile_name)),
+                    type(exc).__name__,
+                    extra={"error_type": type(exc).__name__},
                 )
             return task
         if compile_name:
@@ -777,7 +779,12 @@ class CompileService:
                     ),
                 )
             except ExternalTaskError as exc:
-                logger.warning("Failed to archive Compile session %s: %s", session_id, exc.code)
+                logger.info(
+                    "compile session archive failed session_hash=%s error_code=%s",
+                    short_hash(str(session_id)),
+                    exc.code,
+                    extra={"degraded": True},
+                )
         if self._lifecycle is None:
             return snapshot
         return await self._lifecycle.on_finish(task, snapshot)

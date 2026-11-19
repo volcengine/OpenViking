@@ -139,7 +139,7 @@ A tab that renders `source` by its format. It includes every field of `FilePrevi
 
 #### videoDetails
 
-Renders below a video source. The host supplies transcript entries and frames independently; use an empty array when either has no entries.
+Renders below a video source. The host supplies transcript entries and frames independently; use an empty array when either has no entries. During playback, the active transcript entry is highlighted and scrolled into view. Expand the video to see the transcript alongside the player without interrupting playback. Extracted frames show their filenames.
 
 | Property      | Description                                                                                | Type                                     | Default  |
 | ------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------- | -------- |
@@ -367,6 +367,7 @@ Every field is an optional `string`; omitted fields use the default text of the 
 
 | Property          | Description                                               | Type                        | Default                       |
 | ----------------- | --------------------------------------------------------- | --------------------------- | ----------------------------- |
+| expandVideo       | Opens the expanded video preview                          | `string`                    | Expand video                  |
 | videoTranscript   | Transcript tab                                            | `string`                    | Transcript                    |
 | videoFrames       | Formats the frames tab label with the visible frame count | `(count: number) => string` | Extracted frames              |
 | videoSpeaker      | Fallback speaker name                                     | `string`                    | Speaker                       |
@@ -417,12 +418,13 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 - Markdown links: only Markdown bodies trigger `operations.openUri`, and the component passes the target as written, without resolving relative paths.
 - JSON logs: `.json` and `.jsonl` render as a JSON tree; render structured files that need their own view, such as session logs, in a content tab.
 - Large files: the component does not check file size; FileViewer shows a confirmation state when it needs one, and `slots.confirmFallback` replaces it. Limit the length of editable text in `editing`.
-- Extras: previous/next image, neighbor preloading and video transcripts are not part of the component; compose them outside the preview, or inject them through `slots.actions` and `slots.footer`.
+- Extras: previous/next image and neighbor preloading are not part of the component; compose them outside the preview, or inject them through `slots.actions` and `slots.footer`.
 - FileViewer's own controls: the component hides its download, fullscreen, paging, search and zoom controls; use `getViewerHandle()` for paging, search and zoom, and an injected action for download.
 
 ### Path and breadcrumb
 
 - Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name.
+- URI names: each segment of a URI path is decoded once for display. Encoded slashes stay within their original level, and malformed escapes remain unchanged. Navigation and copying use the original path. Ordinary filesystem paths and explicit titles or file names remain literal.
 - No path: without `source.path` the breadcrumb shows only the file name and there is no copy-path button.
 - Navigation: every ancestor is a button that passes its full URI (for example `viking://a/b`) to `operations.openParent`, not only the direct parent; the buttons are disabled without `operations.openParent`.
 - Absolute paths: the ancestors of `/a/b/c.md` keep the leading `/`, and relative paths stay as written.

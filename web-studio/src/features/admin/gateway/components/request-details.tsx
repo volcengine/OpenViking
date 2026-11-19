@@ -476,16 +476,32 @@ export function RequestDetails({
                 {captureReasonLabel(t, record.capture_reason)}
               </span>
             ) : null}
-            {record.capture_retry_at ? (
-              <span className="text-xs text-muted-foreground">
-                {t('requests.details.nextRetry', {
-                  time: formatDateTime(record.capture_retry_at, locale),
+            {record.capture_messages ? (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {t('requests.details.savedMessages', {
+                  count: record.capture_messages,
                 })}
               </span>
             ) : null}
-            {record.capture_status === 'retrying' ||
-            record.capture_status === 'paused' ||
-            record.capture_status === 'lost' ? (
+            {record.openviking_session ? (
+              <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                <span className="shrink-0">
+                  {t('requests.details.openvikingSession')}
+                </span>
+                <span
+                  className="truncate font-mono"
+                  title={record.openviking_session}
+                >
+                  {shortenId(record.openviking_session, 16)}
+                </span>
+                <CopyButton
+                  value={record.openviking_session}
+                  label={t('requests.details.copyOpenvikingSession')}
+                />
+              </span>
+            ) : null}
+            {record.capture_status !== 'active' &&
+            record.capture_status !== 'disabled' ? (
               <DetailDocs section="savingStatus" />
             ) : null}
           </DetailItem>

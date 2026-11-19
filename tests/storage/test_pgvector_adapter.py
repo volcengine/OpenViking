@@ -277,10 +277,12 @@ def test_creation_cleanup_preserves_original_error(monkeypatch, failure_stage, c
     adapter._execute_cleanup.assert_called_once_with()
     assert adapter._initializing_collection is None
     if cleanup_fails:
-        logger.exception.assert_called_once()
-        assert logger.exception.call_args.args[1] == adapter._collection_name
+        from openviking.observability.log_safety import short_hash
+
+        logger.info.assert_called_once()
+        assert logger.info.call_args.args[1] == short_hash(adapter._collection_name)
     else:
-        logger.exception.assert_not_called()
+        logger.info.assert_not_called()
 
 
 def test_concurrent_initialization_and_writes(adapter):

@@ -609,8 +609,30 @@ _EVENTS_TIME_DECAY_DESCRIPTION = (
 _QUOTAS_DESCRIPTION = (
     "In mode='context', set first-pass result ceilings for explicitly listed "
     "categories: events, entities, preferences, experiences, resources, or skills; "
-    "unused slots may be filled by other listed categories, and explicit quotas take "
-    "precedence over purpose presets."
+    "unused slots may be filled by other listed categories. Explicit quotas replace "
+    "the purpose preset (unlisted categories are not retrieved), and their sum caps "
+    "the results instead of limit."
+)
+_PURPOSE_DESCRIPTION = (
+    "In mode='context', retrieve across all six categories with quotas preset for "
+    "'chat' or 'coding' instead of limit; ignored when quotas is given."
+)
+_DETAIL_DESCRIPTION = (
+    "In mode='context', pin every category to abstract, overview, or full detail instead "
+    "of its default ('auto'); entries still drop to a lower tier when the token budget "
+    "runs short."
+)
+_QUERY_EXPANSION_DESCRIPTION = (
+    "In mode='context' with session_id, 'auto' may expand the query using session "
+    "context and 'off' searches the query as given."
+)
+_MAX_TOKENS_DESCRIPTION = "In mode='context', token budget for the assembled context."
+_EXCLUDE_URIS_DESCRIPTION = (
+    "In mode='context', URIs to leave out of the assembled context, such as ones already "
+    "served; a directory URI excludes its whole subtree."
+)
+_REWRITE_MAX_BULLETS_DESCRIPTION = (
+    "In mode='context' with rewrite='auto', maximum number of bullets in the digest."
 )
 _DETAIL_BY_CATEGORY_DESCRIPTION = (
     "In mode='context', request abstract, overview, or full detail per category "
@@ -637,14 +659,25 @@ _OTHER_PEER_PENALTIES_DESCRIPTION = (
     "their defaults; do not combine with other_peer_penalty."
 )
 _REWRITE_DESCRIPTION = (
-    "In mode='context', use 'auto' to ask the account model for a cited bullet digest; "
-    "on failure the assembled context is returned unchanged, while 'off' skips rewriting."
+    "In mode='context', use 'auto' to get a cited bullet digest from the account's query "
+    "planner model; without one configured, or on failure, the assembled context is "
+    "returned unchanged, while 'off' skips rewriting."
 )
 
 
 def _format_tags(tags: Optional[List[str]]) -> str:
     normalized = normalize_search_tags(tags, discard_invalid=True)
     return f" tags={json.dumps(normalized, ensure_ascii=False)}"
+
+
+def _strict_tag_filter(tags: Optional[List[str]]) -> Optional[List[str]]:
+    """Validate a tag filter the way find and search do.
+
+    The filesystem service discards malformed tags, and a filter left with none of
+    them returns every entry. Rejecting the call here keeps a mistyped filter from
+    reading as a successful, filtered listing.
+    """
+    return normalize_search_tags(tags) or None
 
 
 @_mcp_error_results()
@@ -752,14 +785,26 @@ async def search(
         Field(description=_TAG_FILTER_DESCRIPTION),
     ] = None,
     mode: Literal["list", "context"] = "list",
-    query_expansion: Literal["off", "auto"] = "auto",
-    max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
+    query_expansion: Annotated[
+        Literal["off", "auto"],
+        Field(description=_QUERY_EXPANSION_DESCRIPTION),
+    ] = "auto",
+    max_tokens: Annotated[
+        int,
+        Field(ge=64, le=32000, description=_MAX_TOKENS_DESCRIPTION),
+    ] = DEFAULT_MAX_TOKENS,
     quotas: Annotated[
         Optional[Dict[str, int]],
         Field(description=_QUOTAS_DESCRIPTION),
     ] = None,
-    purpose: Optional[Literal["chat", "coding"]] = None,
-    detail: Literal["auto", "abstract", "overview", "full"] = "auto",
+    purpose: Annotated[
+        Optional[Literal["chat", "coding"]],
+        Field(description=_PURPOSE_DESCRIPTION),
+    ] = None,
+    detail: Annotated[
+        Literal["auto", "abstract", "overview", "full"],
+        Field(description=_DETAIL_DESCRIPTION),
+    ] = "auto",
     detail_by_category: Annotated[
         Optional[Dict[str, str]],
         Field(description=_DETAIL_BY_CATEGORY_DESCRIPTION),
@@ -768,7 +813,10 @@ async def search(
         int,
         Field(ge=0, le=100, description=_DEDUP_TURNS_DESCRIPTION),
     ] = 0,
-    exclude_uris: Annotated[Optional[List[str]], Field(max_length=MAX_EXCLUDE_URIS)] = None,
+    exclude_uris: Annotated[
+        Optional[List[str]],
+        Field(max_length=MAX_EXCLUDE_URIS, description=_EXCLUDE_URIS_DESCRIPTION),
+    ] = None,
     peer_scope: Annotated[
         Literal["actor", "all"],
         Field(description=_PEER_SCOPE_DESCRIPTION),
@@ -785,7 +833,10 @@ async def search(
         Literal["off", "auto"],
         Field(description=_REWRITE_DESCRIPTION),
     ] = "off",
-    rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
+    rewrite_max_bullets: Annotated[
+        int,
+        Field(ge=1, le=20, description=_REWRITE_MAX_BULLETS_DESCRIPTION),
+    ] = 6,
     read_content: bool = False,
     events_time_decay_protection: Annotated[
         Optional[str],
@@ -855,7 +906,9 @@ async def search(
                 exclude_uris=resolved_exclude_uris,
                 peer_scope=peer_scope,
                 other_peer_penalty=other_peer_penalties or other_peer_penalty,
-                rewrite=rewrite == "auto",
+                # The assembler resolves "auto" per account, as it does for the REST API;
+                # True would force a rewrite on accounts with no planner model.
+                rewrite="auto" if rewrite == "auto" else False,
                 rewrite_max_bullets=rewrite_max_bullets,
             ),
         )
@@ -1468,6 +1521,8 @@ async def ls(
     if limit is not None and limit <= 0:
         raise InvalidArgumentError("limit must be greater than 0")
 
+    tags = _strict_tag_filter(tags)
+
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -1559,12 +1614,14 @@ async def tree(
         limit: Optional result limit that overrides node_limit.
 
     Returns:
-        An indented directory tree.
+        An indented directory tree; with tags, one matching path per line.
     """
     if offset < 0:
         raise InvalidArgumentError("offset must be greater than or equal to 0")
     if limit is not None and limit <= 0:
         raise InvalidArgumentError("limit must be greater than 0")
+
+    tags = _strict_tag_filter(tags)
 
     service = get_service()
     ctx = _get_ctx()
@@ -1594,9 +1651,15 @@ async def tree(
     ]
     for e in entries:
         rel = (e.get("rel_path") or e.get("name") or "?").strip("/")
-        name = rel.rsplit("/", 1)[-1]
-        depth = len([part for part in rel.split("/") if part])
-        indent = "  " * max(0, depth - 1)
+        if tags:
+            # A tag filter keeps matching entries only, so the directories an indent
+            # would hang from are usually gone. Print each match's path from the tree root.
+            name = rel
+            indent = ""
+        else:
+            name = rel.rsplit("/", 1)[-1]
+            depth = len([part for part in rel.split("/") if part])
+            indent = "  " * max(0, depth - 1)
         if e.get("isDir"):
             label = f"{indent}{name}/"
         else:
@@ -2484,6 +2547,8 @@ async def grep(
 ) -> str:
     """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. Use this for exact text matching; use the search tool for semantic retrieval."""
     import asyncio
+
+    tags = _strict_tag_filter(tags)
 
     service = get_service()
     ctx = _get_ctx()

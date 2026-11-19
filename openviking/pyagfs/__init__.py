@@ -209,10 +209,10 @@ try:
     RAGFSBindingClient, BindingFileHandle = get_binding_client()
     # Backward compatibility alias
     AGFSBindingClient = RAGFSBindingClient
-except Exception:
-    _logger.warning(
-        "Failed to initialize RAGFSBindingClient during module import; "
-        "RAGFSBindingClient will be None. Use get_binding_client() for explicit handling."
+except Exception as _log_error:
+    _logger.info(
+        "Failed to initialize RAGFSBindingClient during module import; RAGFSBindingClient will be None. Use get_binding_client() for explicit handling. error_type=%s",
+        type(_log_error).__name__,
     )
     RAGFSBindingClient = None
     AGFSBindingClient = None

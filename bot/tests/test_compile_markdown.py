@@ -12,8 +12,9 @@ from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
+from vikingbot.compile import simple
 from vikingbot.compile.file_ops import DocumentReader
-from vikingbot.compile.models import CompileLimits, SanitizedCompileRequest
+from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
@@ -303,7 +304,10 @@ async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeli
     async def chat(**kwargs):
         data = json.loads(kwargs["messages"][1]["content"])
         assert all("Retry limit: 7" in d["markdown"] for d in data["documents"])
-        assert all("scope" not in d and "routing_text" not in d for d in data["documents"])
+        assert all(
+            "scope" not in d and "routing_text" not in d and "path" not in d
+            for d in data["documents"]
+        )
         return LLMResponse(
             content=json.dumps(
                 {
@@ -334,8 +338,83 @@ async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeli
         )
 
     pipeline.model.ask = malicious
-    with pytest.raises(ValueError, match="supplied candidates"):
-        await Shuffle(pipeline).run(node, docs)
+    groups = await Shuffle(pipeline).run(node, docs)
+    assert [group.documents for group in groups] == [[docs[0]], [docs[1]]]
+    assert "Related documents must be supplied candidates" in pipeline.warnings[-1]
+
+
+@pytest.mark.parametrize("fail_all", [False, True])
+async def test_failed_routes_keep_completed_drafts_through_finalization(
+    pipeline, monkeypatch, agent_loop, fail_all
+):
+    from vikingbot.compile.ops import reduce as reduce_op
+
+    pipeline.contract = contract(True)
+    pipeline.limits = pipeline.limits.model_copy(update={"shuffle_batch_size": 1})
+    seeded = await pipeline.seed(sources(3))
+    docs = [
+        Document(f"{i}.md", f"drafts/{i}.md", [source.source_id]) for i, source in enumerate(seeded)
+    ]
+    for i, doc in enumerate(docs):
+        await pipeline.files.sandbox.write_file(doc.workspace_path, f"# Fact {i}\n")
+        pipeline.status[doc.source_refs[0]] = "prepared"
+    monkeypatch.setattr(Shuffle, "vectors", AsyncMock(return_value=[[1.0, 0.0]] * 3))
+
+    async def ask(stage, system, data, schema, validate, **kwargs):
+        item = data["assignments"][0]
+        if fail_all or item["document"] == docs[0].workspace_path:
+            raise ValueError("route: Return exactly one decision per assigned document")
+        response = RouteResponse(
+            decisions=[{"document": item["document"], "related": item["candidates"]}]
+        )
+        validate(response)
+        return response
+
+    pipeline.model.ask = ask
+    nodes = parse_plan(MERGE, pipeline.contract)
+    groups = await Shuffle(pipeline).run(nodes[1], docs)
+    expected = [[doc] for doc in docs] if fail_all else [[docs[0]], docs[1:]]
+    assert [group.documents for group in groups] == expected
+    assert all(not group.target_uris for group in groups)
+    assert "processed independently" in pipeline.warnings[-1]
+    assert "Return exactly one decision" in pipeline.warnings[-1]
+    assert not pipeline.failures
+
+    loop, key, _ = agent_loop
+    current_path = None
+
+    async def chat(**kwargs):
+        nonlocal current_path
+        tools = [m["content"] for m in kwargs["messages"] if m["role"] == "tool"]
+        if not tools:
+            calls = [ToolCallRequest("assignment", "read_file", {"path": "assignment.json"}, 0)]
+        elif tools[-1].startswith("{"):
+            assignment = json.loads(tools[-1])
+            current_path = assignment["documents"][0]["path"]
+            calls = [
+                ToolCallRequest(str(i), "read_file", {"path": d["content_file"]}, i)
+                for i, d in enumerate(assignment["documents"])
+            ]
+        elif tools[-1].startswith("# Fact"):
+            content = "\n".join(t for t in tools if t.startswith("# Fact"))
+            calls = [
+                ToolCallRequest(
+                    "write", "write_file", {"path": current_path, "content": content}, 0
+                )
+            ]
+        else:
+            return LLMResponse(content="Done", finish_reason="stop")
+        return LLMResponse(content="", tool_calls=calls)
+
+    pipeline.model.provider.chat = AsyncMock(side_effect=chat)
+    pipeline.model.agent_runner = agent_runner(loop, key, None, pipeline.limits)
+    outputs = await reduce_op.run(pipeline, nodes[2], groups)
+    bundle = await finalize.run(pipeline, outputs)
+    assert all(
+        f"# Fact {i}" in "\n".join(op["content"] for op in bundle.operations) for i in range(3)
+    )
+    await pipeline.write_coverage([op["uri"] for op in bundle.operations])
+    assert (await pipeline.files.get("coverage"))["counts"] == {"delivered": 3}
 
 
 async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline):
@@ -465,3 +544,128 @@ async def test_reduce_failure_keeps_map_drafts_out_of_final_outputs(pipeline):
     )
     assert outputs == [] and pipeline.status["input"] == "failed"
     assert pipeline.failures
+
+
+@pytest.mark.parametrize(
+    "content,expected_pattern",
+    [
+        (
+            "---\ntype: concept\ntitle: Rules\n description: leading space breaks YAML\n---\n\nBody\n",
+            r"invalid YAML frontmatter: .*mapping values are not allowed here \(line 4, column 13\)",
+        ),
+        (
+            "---\n type: concept\ntitle: Rules\n---\n\nBody\n",
+            r"invalid YAML frontmatter: .*line 3, column 1",
+        ),
+    ],
+)
+async def test_compile_write_tool_rejects_invalid_okf_frontmatter(content, expected_pattern):
+    from vikingbot.compile.simple import CompileWriteTool
+
+    client = SimpleNamespace(
+        read_raw=AsyncMock(side_effect=NotFoundError("not found")),
+        write=AsyncMock(),
+    )
+    tool = CompileWriteTool(client, "viking://resources/distill", AsyncMock())
+    ctx = ToolContext(session_key=SessionKey(type="cli", channel_id="test", chat_id="fm"))
+
+    with pytest.raises(ValueError, match=expected_pattern):
+        await tool.execute(ctx, path="selection-rules.md", content=content)
+    client.write.assert_not_awaited()
+    assert tool.outcomes == {}
+
+
+async def test_compile_write_tool_allows_valid_okf_frontmatter():
+    from vikingbot.compile.simple import CompileWriteTool
+
+    uri = "viking://resources/distill/selection-rules.md"
+    client = SimpleNamespace(
+        read_raw=AsyncMock(side_effect=NotFoundError("not found")),
+        write=AsyncMock(return_value={"uri": uri, "content_updated": True}),
+    )
+    tool = CompileWriteTool(client, "viking://resources/distill", AsyncMock())
+    ctx = ToolContext(session_key=SessionKey(type="cli", channel_id="test", chat_id="fm"))
+    valid = "---\ntype: concept\ntitle: Rules\ndescription: Valid YAML\n---\n\nBody\n"
+
+    outcome = await tool.execute(ctx, path="selection-rules.md", content=valid)
+    assert outcome == f"created: {uri}"
+    client.write.assert_awaited_once()
+
+
+async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
+    pipeline, agent_loop
+):
+    loop, session_key, _ = agent_loop
+    pipeline.client.write = AsyncMock()
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write",
+                        "openviking_write",
+                        {
+                            "path": "selection-rules.md",
+                            "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
+                        },
+                        0,
+                    )
+                ],
+            ),
+            LLMResponse(content="Done"),
+        ]
+    )
+
+    with pytest.raises(CompileFailure, match=r"selection-rules\.md.*line 4, column 13") as caught:
+        await simple.run(
+            loop,
+            pipeline.client,
+            pipeline.request,
+            pipeline.request.from_,
+            pipeline.skill,
+            session_key,
+            None,
+            AsyncMock(),
+            {},
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    pipeline.client.write.assert_not_awaited()
+
+
+async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
+    pipeline.evidence["input"] = {"uri": "viking://resources/source/a.md"}
+    pipeline.status["input"] = "prepared"
+    valid_draft = "__compile_staging__/drafts/valid/valid.md"
+    invalid_draft = "__compile_staging__/drafts/invalid/selection-rules.md"
+    await pipeline.files.sandbox.write_file_bytes(
+        valid_draft,
+        b"---\ntype: concept\ntitle: Valid\ndescription: Clean YAML\n---\n\nBody\n",
+    )
+    await pipeline.files.sandbox.write_file_bytes(
+        invalid_draft,
+        b"---\ntype: concept\ntitle: Rules\n description: leading space\n---\n\nBody\n",
+    )
+
+    bundle = await finalize.run(
+        pipeline,
+        [
+            Document("valid.md", valid_draft, ["input"]),
+            Document("selection-rules.md", invalid_draft, ["input"]),
+        ],
+    )
+    assert [op["uri"] for op in bundle.operations] == ["viking://resources/wiki/valid.md"]
+    assert bundle.created == ["viking://resources/wiki/valid.md"]
+    assert len(pipeline.warnings) == 1
+    assert "selection-rules.md" in pipeline.warnings[0]
+    assert "mapping values are not allowed here (line 4, column 13)" in pipeline.warnings[0]
+
+    pipeline.warnings.clear()
+    empty_bundle = await finalize.run(
+        pipeline,
+        [Document("selection-rules.md", invalid_draft, ["input"])],
+    )
+    assert empty_bundle.operations == []
+    assert len(pipeline.warnings) == 1
+    assert "selection-rules.md" in pipeline.warnings[0]

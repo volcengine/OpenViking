@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.volcengine_collection import (
     get_or_create_volcengine_collection,
 )
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_or_create_volcengine_project(
@@ -64,7 +67,11 @@ class VolcengineProject:
         self.project_name = project_name
         self.collections = ThreadSafeDictManager[Collection]()
 
-        logger.info(f"Initialized Volcengine project: {project_name} in region {region}")
+        logger.debug(
+            "Initialized Volcengine project: %s in region %s",
+            short_hash(str(project_name)),
+            short_hash(str(region)),
+        )
 
     def close(self):
         """Close project and release all collection resources"""
@@ -132,8 +139,9 @@ class VolcengineProject:
             ValueError: If collection already exists
         """
         if self.has_collection(collection_name):
-            logger.warning(
-                f"Collection {collection_name} already exists, returning existing collection"
+            logger.info(
+                "Collection %s already exists, returning existing collection",
+                short_hash(str(collection_name)),
             )
             return self.get_collection(collection_name)
 
@@ -151,7 +159,7 @@ class VolcengineProject:
             "ProjectName": self.project_name,
         }
 
-        logger.info(f"Creating Volcengine collection: {collection_name}")
+        logger.debug("Creating Volcengine collection: %s", short_hash(str(collection_name)))
         collection = get_or_create_volcengine_collection(config=config, meta_data=updated_meta)
 
         self.collections.set(collection_name, collection)
@@ -179,7 +187,7 @@ class VolcengineProject:
             collection_name: Collection name
         """
         if not self.has_collection(collection_name):
-            logger.warning(f"Collection {collection_name} does not exist")
+            logger.info("Collection %s does not exist", short_hash(str(collection_name)))
             return
 
         collection = self.get_collection(collection_name)
@@ -187,4 +195,4 @@ class VolcengineProject:
             collection.close()
 
         self.collections.remove(collection_name)
-        logger.info(f"Dropped Volcengine collection: {collection_name}")
+        logger.debug("Dropped Volcengine collection: %s", short_hash(str(collection_name)))

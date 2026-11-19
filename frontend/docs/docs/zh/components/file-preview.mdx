@@ -139,7 +139,7 @@ import '@openviking/react/components/file-preview/style.css';
 
 #### videoDetails
 
-显示在视频源下方。宿主分别提供文稿与帧图，没有条目时传入空数组。
+显示在视频源下方。宿主分别提供文稿与帧图，没有条目时传入空数组。 播放时会高亮当前文稿并自动滚动。放大视频后，弹窗会同时显示播放器和文稿，播放保持连续。抽帧图片下方显示文件名。
 
 | 参数          | 说明                                                   | 类型                                     | 默认值  |
 | ------------- | ------------------------------------------------------ | ---------------------------------------- | ------- |
@@ -367,6 +367,7 @@ import '@openviking/react/components/file-preview/style.css';
 
 | 参数              | 说明                           | 类型                        | 默认值       |
 | ----------------- | ------------------------------ | --------------------------- | ------------ |
+| expandVideo       | 放大视频预览                   | `string`                    | 放大视频     |
 | videoTranscript   | 转录文稿页签                   | `string`                    | 转录文稿     |
 | videoFrames       | 按可见图片数格式化抽帧页签名称 | `(count: number) => string` | 抽帧图片     |
 | videoSpeaker      | 未标注发言人时的名称           | `string`                    | 说话人       |
@@ -417,12 +418,13 @@ import '@openviking/react/components/file-preview/style.css';
 - Markdown 链接：只有 Markdown 触发 `operations.openUri`，组件传出 Markdown 里写的原始地址，不补全相对路径。
 - JSON 日志：`.json` 和 `.jsonl` 渲染为 JSON 树，会话日志等需要自己呈现的结构化文件，用内容页签渲染。
 - 大文件：组件不判断文件大小，FileViewer 需要确认时显示确认态，可用 `slots.confirmFallback` 替换；编辑文本的长度上限由宿主在 `editing` 里处理。
-- 增强功能：上一张与下一张、相邻图片预加载和视频转录不在组件内，在预览区外组合，或通过 `slots.actions`、`slots.footer` 注入。
+- 增强功能：上一张与下一张和相邻图片预加载不在组件内，在预览区外组合，或通过 `slots.actions`、`slots.footer` 注入。
 - FileViewer 自带的控件：组件不显示它的下载、全屏、翻页、搜索和缩放入口；翻页、搜索、缩放用 `getViewerHandle()`，下载用注入的操作。
 
 ### 路径与面包屑
 
 - 层级：`source.path` 按 `/` 拆成层级，协议前缀（如 `viking://`）显示在首层，最后一级是当前文件名。
+- URI 名称：URI 路径的每一段仅解码一次用于显示，编码的斜杠不会拆出新层级，无效编码保持原样。导航和复制使用原始路径，普通文件路径及显式传入的标题、文件名按原文显示。
 - 没有路径：省略 `source.path` 时面包屑只显示文件名，也没有复制路径按钮。
 - 导航：每个祖先层级都是按钮，点击时把该层级的完整 URI（如 `viking://a/b`）传给 `operations.openParent`，不限于直接父级；没有 `operations.openParent` 时按钮禁用。
 - 绝对路径：`/a/b/c.md` 的祖先保留开头的 `/`，相对路径保持原样。

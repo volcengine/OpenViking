@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
-import type { OvRequestOptions } from '../../client/types.js';
+import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
   VikingBotReference,
   VikingBotReferences,
@@ -22,16 +22,18 @@ export function useConversationReferences({
   requestOptions,
   scopeKey,
   selection,
+  directoryClient,
 }: {
   enabled: boolean;
   requestOptions?: OvRequestOptions;
   scopeKey?: string;
   selection?: ConsoleChatOptions['referenceSelection'];
+  directoryClient?: OvClient;
 }) {
   const inheritedClient = useOvClient('local');
   const inheritedSignal = useOvSignal();
   const [fallback] = useState(createOvClient);
-  const client = inheritedClient ?? fallback;
+  const client = directoryClient ?? inheritedClient ?? fallback;
   const {
     baseURL,
     apiKey,
@@ -156,6 +158,18 @@ export function useConversationReferences({
   const result =
     search?.scope === scope && search.keyword === keyword ? search : undefined;
   const hidden = collapsed?.result === result ? collapsed?.uris : undefined;
+  const expandDirectory = (uri: string) => {
+    if (keyword) {
+      const uris = new Set(hidden);
+      if (!uris.delete(uri)) uris.add(uri);
+      setCollapsed({ result, uris });
+    } else {
+      const row = tree.rows.find(
+        (item) => item.kind === 'entry' && item.uri === uri,
+      );
+      if (row?.kind === 'entry') return tree.toggleExpand(row);
+    }
+  };
   const references: VikingBotReferences = {
     rows: keyword
       ? (result?.rows ?? [])
@@ -175,18 +189,7 @@ export function useConversationReferences({
     onChange: onSelectionChange ?? onChange,
     onOpenChange,
     onQueryChange: setQuery,
-    onExpand: (uri) => {
-      if (keyword) {
-        const uris = new Set(hidden);
-        if (!uris.delete(uri)) uris.add(uri);
-        setCollapsed({ result, uris });
-      } else {
-        const row = tree.rows.find(
-          (item) => item.kind === 'entry' && item.uri === uri,
-        );
-        if (row?.kind === 'entry') void tree.toggleExpand(row);
-      }
-    },
+    onExpand: (uri) => void expandDirectory(uri),
     onLoadMore: (uri) => tree.loadMore(uri),
     onRetry: (uri) => {
       if (!keyword) return tree.retry(uri ?? MENTION_ROOT);
@@ -196,5 +199,5 @@ export function useConversationReferences({
     isLoading: keyword ? !result : !tree.isReady && tree.isInitializing,
     error: keyword ? result?.error : tree.error?.message,
   };
-  return { references, clearReferences };
+  return { references, clearReferences, expandDirectory };
 }

@@ -27,6 +27,8 @@ import '@openviking/react/components/agent-connect/style.css';
 
 示例中的 `apiKey` 仅用于演示，请换成宿主自己的密钥。
 
+勾选「企业版数据库」后，支持官方安装器的 Agent 使用团队接入文案，中文引导链接为 `https://docs.openviking.net/agents/zh/onboarding-team.md`，英文为 `https://docs.openviking.ai/agents/en/onboarding-team.md`。安装命令仍使用当前 Agent、`apiKey` 和 `baseUrl`，展示默认脱敏，复制保留原值；其他接入说明保持原有内容。
+
 ## API
 
 ### AgentConnect
@@ -35,6 +37,7 @@ import '@openviking/react/components/agent-connect/style.css';
 | ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
 | apiKey           | 写入接入说明的 API Key，界面脱敏显示，复制时使用原值                                               | `string`                                    | 必填                                                    |
 | baseUrl          | OpenViking 服务地址，替换接入说明里的默认地址                                                      | `string`                                    | `https://api.vikingdb.cn-beijing.volces.com/openviking` |
+| isEnterprise     | 企业版数据库标识，为支持官方安装器的 Agent 使用团队接入文案                                        | `boolean`                                   | `false`                                                 |
 | agreementUrl     | 用户协议链接，提供后页脚显示协议链接，省略时只显示数据访问提示                                     | `string`                                    | -                                                       |
 | showOverseasTag  | 「境外」标签的范围：省略时标记 Codex 和 Claude Code，`true` 标记全部适用的 Agent，`false` 隐藏标签 | `boolean`                                   | -                                                       |
 | activeTabId      | 受控的当前页签，省略时由组件维护                                                                   | `'mainstream' \| 'custom'`                  | `'mainstream'`                                          |
@@ -62,11 +65,13 @@ import '@openviking/react/components/agent-connect/style.css';
 - Agent 目录、接入说明和图标内置，不提供增删或替换的 prop。语言只能通过 `locale` 切换，组件没有语言选择界面。
 - 接入内容和图标随组件打包，不需要配置资源地址，运行时不请求远端文档。组件不执行说明里的命令，只负责展示和复制。
 - 默认最大宽度 1000px，宽布局最小高度 949px；容器宽度小于 720px 时纵向排列，Agent 列表可横向滚动。
+- 说明标题栏随内容增高，复制按钮在可用宽度内换行，不受其他组件样式引入顺序影响。
+- 说明卡片、代码块和表格统一使用 8px 圆角与主题面板背景，浅色模式下为白色，深色模式跟随主题。表格保留单层外框和单元格分隔线，边框随圆角裁切，仅有表头的表格也保持单层外框。
 - 代码块里的 API Key 默认显示为 `••••••••`，点击代码块上的「显示 API Key」查看原值，同一份说明里一次只显示一个代码块的密钥。复制始终使用原始密钥，与显示状态无关。
 - 组件不持久化 `apiKey`，也不把它写进 DOM 属性。`onCopy` 收到的文本包含原始 API Key，宿主按凭据处理，不要写入日志。
 - 复制使用 Clipboard API，需要安全上下文（如 HTTPS）和剪贴板权限。失败时显示「复制失败，请重试」，不会调用 `onCopy`。
 - DeerFlow 和 CLI 的详情带有说明页签：DeerFlow 为 MemoryManager 与 MCP，CLI 为「手动终端安装」与「通过 AI Agent 安装」。默认选中第一个，复制的是当前选中的说明。
-- 切换条目、说明页签、语言、`apiKey` 或 `baseUrl` 后，密钥显示和复制反馈恢复初始状态。此前发起的复制完成后不再更新界面，也不调用 `onCopy`。
+- 切换条目、说明页签、语言、`apiKey`、`baseUrl` 或 `isEnterprise` 后，密钥显示和复制反馈恢复初始状态。此前发起的复制完成后不再更新界面，也不调用 `onCopy`。
 - TRAE 的安装命令面向国际版。
 - Hermes 使用自定义 `baseUrl`（不同于默认地址）时，说明改用 Custom 连接步骤。
 - 「境外」标签显示在详情标签行的末尾，按 Agent 产品的归属标记，不根据它使用的模型推断部署地区。`showOverseasTag` 为 `true` 时，除 Codex 和 Claude Code 外，还标记 Cursor、OpenClaw、Hermes Agent、OpenCode 和 pi。

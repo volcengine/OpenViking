@@ -5,7 +5,7 @@ import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
 import { fileTypeIcon } from './fs-icon.js';
 import { readFileContent } from './fs-read-content.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
-import { createFileEditing } from './fs-file-editing.js';
+import { createFileEditing, type WikiSaveStatus } from './fs-file-editing.js';
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
 import { toFileTab } from './fs-model.js';
 
@@ -28,7 +28,7 @@ export async function readFile(
   openParent?: (uri: string) => Promise<void>,
   onSave?: () => void,
   isWiki = false,
-  onWikiSaving?: (saving: boolean) => void,
+  onWikiSaveStatus?: (status?: WikiSaveStatus) => void,
 ): Promise<FilePreviewFileTab> {
   const name = nameFromUri(uri);
   const icon = fileTypeIcon(name);
@@ -65,7 +65,7 @@ export async function readFile(
       options,
       onSave,
       wiki,
-      onWikiSaving,
+      onWikiSaveStatus,
     ),
   };
 }

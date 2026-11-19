@@ -17,6 +17,7 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
     uri_parts,
 )
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log, short_hash
 from openviking.observability.reporting.facts import emit_file_change, file_exists_before
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
@@ -212,8 +213,12 @@ class _OpsMixin:
             result = hook(uri, ctx, written_at_ms)
             if inspect.isawaitable(result):
                 await result
-        except Exception:
-            logger.exception("[VikingFS] Post-write hook failed for %s", uri)
+        except Exception as _log_error:
+            logger.info(
+                "Post-write hook failed for %s error_type=%s",
+                safe_uri_for_log(str(uri)),
+                type(_log_error).__name__,
+            )
 
     async def mkdir(
         self,
@@ -289,7 +294,7 @@ class _OpsMixin:
                 filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
                 return await vector_store.count(filter=filter_expr, ctx=real_ctx)
             except Exception as e:
-                logger.warning(f"[VikingFS] Failed to count nodes before delete: {e}")
+                logger.info("Failed to count nodes before delete: %s", type(e).__name__)
                 return 0
 
         async def _finish_missing_delete() -> Dict[str, Any]:
@@ -305,7 +310,7 @@ class _OpsMixin:
                 await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
             else:
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-            logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
+            logger.info("rm target not found, cleaned orphan index: %s", safe_uri_for_log(str(uri)))
             return {"estimated_deleted_count": estimated_count}
 
         # Check existence and determine lock strategy
@@ -539,8 +544,12 @@ class _OpsMixin:
                         await self._cleanup_transfer_target(
                             new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
                         )
-                    except Exception:
-                        logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
+                    except Exception as _log_error:
+                        logger.info(
+                            "Failed to clean copy target %s error_type=%s",
+                            safe_uri_for_log(str(new_uri)),
+                            type(_log_error).__name__,
+                        )
                     raise
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
@@ -559,12 +568,11 @@ class _OpsMixin:
                     "restored": vector_result.restored,
                     "batches": vector_result.batches,
                 }
-            logger.info(
-                "Filesystem transfer completed: operation_id=%s operation=copy "
-                "object_type=%s recursive=%s result=success",
-                operation_id,
-                "directory" if is_dir else "file",
-                is_dir,
+            logger.debug(
+                "Filesystem transfer completed: operation_id=%s operation=copy object_type=%s recursive=%s result=success",
+                short_hash(str(operation_id)),
+                type("directory" if is_dir else "file").__name__,
+                safe_path_for_log(str(is_dir)),
             )
             return result
         finally:
@@ -872,13 +880,16 @@ class _OpsMixin:
                 if is_not_found_error(transfer_error):
                     try:
                         await self._delete_from_vector_store(uris_to_move, ctx=ctx)
-                    except Exception:
-                        logger.warning(
-                            "Failed to clean orphan move vectors for %s", old_uri, exc_info=True
+                    except Exception as _log_error:
+                        logger.info(
+                            "Failed to clean orphan move vectors for %s error_type=%s",
+                            safe_uri_for_log(str(old_uri)),
+                            type(_log_error).__name__,
                         )
                     else:
                         logger.info(
-                            f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}"
+                            "mv source not found, cleaned orphan index: %s",
+                            safe_uri_for_log(str(old_uri)),
                         )
                 raise
 
@@ -903,8 +914,12 @@ class _OpsMixin:
                     await self._cleanup_transfer_target(
                         new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
                     )
-                except Exception:
-                    logger.warning("Failed to clean move target %s", new_uri, exc_info=True)
+                except Exception as _log_error:
+                    logger.info(
+                        "Failed to clean move target %s error_type=%s",
+                        safe_uri_for_log(str(new_uri)),
+                        type(_log_error).__name__,
+                    )
                 raise
 
             # Old mv semantics: source deletion is the last step, with no copy-back on failure.
@@ -930,12 +945,11 @@ class _OpsMixin:
                     "restored": vector_result.restored,
                     "batches": vector_result.batches,
                 }
-            logger.info(
-                "Filesystem transfer completed: operation_id=%s operation=move "
-                "object_type=%s recursive=%s result=success",
-                operation_id,
-                "directory" if is_dir else "file",
-                is_dir,
+            logger.debug(
+                "Filesystem transfer completed: operation_id=%s operation=move object_type=%s recursive=%s result=success",
+                short_hash(str(operation_id)),
+                type("directory" if is_dir else "file").__name__,
+                safe_path_for_log(str(is_dir)),
             )
             emit_file_change(
                 new_uri, ctx, "modified", old_uri=old_uri, is_dir=is_dir, operation="move"
@@ -1228,7 +1242,7 @@ class _OpsMixin:
                                 ctx=real_ctx,
                             )
                 except Exception as e:
-                    logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
+                    logger.info("Failed to count nodes for directory stat: %s", type(e).__name__)
         return result
 
     async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
@@ -1424,7 +1438,7 @@ class _OpsMixin:
                 ctx=ctx,
             )
         except Exception as exc:
-            logger.warning("glob vikingdb step failed, falling back to fs: %s", exc)
+            logger.info("glob vikingdb step failed, falling back to fs: %s", type(exc).__name__)
             return None
 
         entries = self._remote_glob_records_to_entries(
@@ -1474,8 +1488,11 @@ class _OpsMixin:
 
         try:
             backend = await vector_store.get_account_backend(ctx.account_id)
-        except Exception:
-            logger.debug("glob engine=auto: backend lookup failed, falling back to fs", exc_info=True)
+        except Exception as _log_error:
+            logger.info(
+                "glob engine=auto: backend lookup failed, falling back to fs error_type=%s",
+                type(_log_error).__name__,
+            )
             return False
         if getattr(backend, "enable_path_glob", False) is not True:
             return False
@@ -1490,9 +1507,10 @@ class _OpsMixin:
         try:
             scoped_uri = self._remote_glob_scoped_uri(uri, pattern)
             count = await self._get_cached_count(scoped_uri, ctx)
-        except Exception:
-            logger.debug(
-                "glob engine=auto: count() check failed, falling back to fs", exc_info=True
+        except Exception as _log_error:
+            logger.info(
+                "glob engine=auto: count() check failed, falling back to fs error_type=%s",
+                type(_log_error).__name__,
             )
             return False
         return count >= threshold
@@ -1506,9 +1524,10 @@ class _OpsMixin:
             return any(
                 field.get("FieldName") == "uri" for field in fields if isinstance(field, dict)
             )
-        except Exception:
-            logger.debug(
-                "Failed to check collection uri field, assuming no path_glob support", exc_info=True
+        except Exception as _log_error:
+            logger.info(
+                "Failed to check collection uri field, assuming no path_glob support error_type=%s",
+                type(_log_error).__name__,
             )
             return False
 
@@ -1987,7 +2006,11 @@ class _OpsMixin:
                 fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             )
         except Exception as e:
-            logger.debug(f"Failed to ensure parent directories for {path}: {e}")
+            logger.info(
+                "Failed to ensure parent directories for %s: %s",
+                safe_path_for_log(str(path)),
+                type(e).__name__,
+            )
             parent = path.rstrip("/").rsplit("/", 1)[0]
             await self._mkdir_path_with_parents(parent, ctx=ctx, lease_ref=lease_ref)
 
@@ -2011,7 +2034,11 @@ class _OpsMixin:
                 message = str(e).lower()
                 if "exist" in message or "already" in message:
                     continue
-                logger.debug(f"Failed to create parent directory {current}: {e}")
+                logger.info(
+                    "Failed to create parent directory %s: %s",
+                    type(current).__name__,
+                    type(e).__name__,
+                )
 
     # ========== Batch Read (backward compatible) ==========
 
@@ -2278,7 +2305,9 @@ class _OpsMixin:
                 written_at_ms = time.time_ns() // 1_000_000
 
         except Exception as e:
-            logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
+            logger.debug(
+                "Failed to append to file %s: %s", safe_uri_for_log(str(uri)), type(e).__name__
+            )
             mapped = map_exception(e, resource=uri, resource_type="file")
             if mapped is not None:
                 raise mapped from e
@@ -2543,7 +2572,11 @@ class _OpsMixin:
                             ctx=real_ctx,
                         )
                 except Exception as e:
-                    logger.warning(f"[VikingFS] Failed to count nodes for {entry_uri}: {e}")
+                    logger.debug(
+                        "Failed to count nodes for %s: %s",
+                        safe_uri_for_log(str(entry_uri)),
+                        type(e).__name__,
+                    )
 
         if need_locked and lock_paths:
             for i, path in lock_paths:
@@ -2621,7 +2654,9 @@ class _OpsMixin:
         try:
             await self._async_agfs.rm(path, recursive=True, fs_ctx=fs_ctx)
         except Exception as e:
-            logger.warning(f"[VikingFS] Failed to delete temp {temp_uri}: {e}")
+            logger.info(
+                "Failed to delete temp %s: %s", safe_uri_for_log(str(temp_uri)), type(e).__name__
+            )
 
     @staticmethod
     def _filter_ls_entries(path: str, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

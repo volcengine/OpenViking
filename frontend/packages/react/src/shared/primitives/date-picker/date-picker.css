@@ -161,7 +161,7 @@
   cursor: pointer;
 }
 
-.ov-date-picker__cell:hover {
+.ov-date-picker__cell:enabled:hover {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
 }
 
@@ -182,6 +182,12 @@
   );
 }
 
-.ov-date-picker__cell--selected:hover {
+.ov-date-picker__cell--selected:enabled:hover {
   background: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-date-picker__cell:disabled {
+  background: transparent;
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+  cursor: not-allowed;
 }

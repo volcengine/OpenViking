@@ -18,6 +18,7 @@ from openviking.core.namespace import (
     is_session_uri,
     user_space_fragment,
 )
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.global_policy import ensure_global_policy_file
 from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext
@@ -420,18 +421,26 @@ class DirectoryInitializer:
                 else:
                     contents[name] = body_for_preview(raw)
         except AbstractOverviewFormatError as exc:
-            logger.warning(
-                "[VikingFS] Directory %s (account=%s) has invalid L0/L1 metadata; "
-                "preserving existing contents: %s",
-                target.uri,
+            logger.info(
+                "directory metadata invalid; preserving existing contents uri=%s account_id=%s error_type=%s",
+                safe_uri_for_log(target.uri),
                 target.ctx.account_id,
-                exc,
+                type(exc).__name__,
+                extra={
+                    "degraded": True,
+                    "account_id": target.ctx.account_id,
+                    "error_type": type(exc).__name__,
+                },
             )
             return None
         if not missing:
-            logger.debug(f"[VikingFS] Directory {target.uri} already exists")
+            logger.debug("directory metadata already exists uri=%s", safe_uri_for_log(target.uri))
             return None
-        logger.debug(f"[VikingFS] Creating directory: {target.uri} for scope {target.scope}")
+        logger.debug(
+            "creating directory metadata uri=%s scope=%s",
+            safe_uri_for_log(target.uri),
+            target.scope,
+        )
         await viking_fs.write_context(
             uri=target.uri,
             **missing,

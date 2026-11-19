@@ -3,6 +3,7 @@ import type { FilePreviewLabels } from '../types.js';
 const messages = {
   previewImage: 'Enlarge image',
   closePreview: 'Close preview',
+  expandVideo: 'Expand video',
   videoTranscript: 'Transcript',
   videoFrames: (count: number) =>
     count ? `Extracted frames (${count})` : 'Extracted frames',

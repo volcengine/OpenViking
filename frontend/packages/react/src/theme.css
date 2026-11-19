@@ -96,6 +96,10 @@
   --ov-ui-on-primary-default: #ffffff;
 
   /* 文字：正文、次级、弱化、禁用。 */
+  --ov-ui-text-accent-default: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default)
+  );
   --ov-ui-text-1-default: #0b0b0f;
   --ov-ui-text-2-default: #3f3f51;
   --ov-ui-text-3-default: #6e718c;
@@ -152,6 +156,9 @@
 
   /* 浮层。 */
   --ov-ui-overlay-default: rgb(0 0 0 / 40%);
+  --ov-ui-video-background-default: #000000;
+  --ov-ui-video-control-text-default: #ffffff;
+  --ov-ui-video-control-hover-default: #303136;
   --ov-ui-tooltip-bg-default: #1f2329;
   --ov-ui-tooltip-text-default: #ffffff;
 
@@ -250,6 +257,7 @@ html.dark .ov-error-boundary,
   --ov-ui-connect-glow-pink-default: rgb(251 79 188 / 3%);
   --ov-ui-connect-glow-pink-soft-default: rgb(251 79 188 / 2%);
 
+  --ov-ui-text-accent-default: #8086ff;
   --ov-ui-text-1-default: #c7ccd6;
   --ov-ui-text-2-default: #9da3af;
   --ov-ui-text-3-default: #737a87;
@@ -661,4 +669,14 @@ html.dark .ov-notification-stack {
 
 .ov-toast-stack {
   --ov-ui-toast-shadow-default: var(--ov-ui-overlay-shadow-default);
+}
+
+/* VikingBot activation cover, shown when the host supplies no tutorial media. */
+.ov-console {
+  --ov-ui-activation-preview-sky-default: #7ab7f6;
+  --ov-ui-activation-preview-haze-default: #dce1f6;
+}
+.dark .ov-console {
+  --ov-ui-activation-preview-sky-default: #315b92;
+  --ov-ui-activation-preview-haze-default: #292841;
 }

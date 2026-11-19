@@ -58,6 +58,14 @@ export function consoleTransport(): typeof fetch {
         task_id: 'demo-compile',
         status: 'completed',
       },
+      '/api/v1/tasks/demo-memory': {
+        task_id: 'demo-memory',
+        status: 'completed',
+        result: {
+          memory_diff_uri:
+            'viking://session/demo/history/archive_001/memory_diff.json',
+        },
+      },
       '/api/v1/search/glob': {
         matches: resource.uri.includes(keyword ?? '') ? [resource.uri] : [],
       },
@@ -66,31 +74,33 @@ export function consoleTransport(): typeof fetch {
       writes[path] ??
       (path.endsWith('/messages') ? { message_count: 1 } : undefined) ??
       (path.endsWith('/commit')
-        ? { task_id: 'demo-memory', status: 'pending' }
+        ? { task_id: 'demo-memory', status: 'accepted' }
         : undefined);
     const result =
       writeResult ??
-      (path.endsWith('/ls') || path.endsWith('/tree')
-        ? menuEntries
-        : ['/read', '/abstract', '/overview'].some((suffix) =>
-              path.endsWith(suffix),
-            )
-          ? '# OpenViking\n\nA fixed public demo resource. / 固定公开示例资源。'
-          : path.endsWith('/find') || path.endsWith('/search')
-            ? {
-                memories: [],
-                skills: [],
-                resources: [
-                  {
-                    ...resource,
-                    context_type: 'resource',
-                    level: 2,
-                    score: 0.93,
-                    abstract: 'A fixed demo match / 固定模拟匹配',
-                  },
-                ],
-              }
-            : { state: 'ready', demonstration: true });
+      (path === '/api/v1/fs/stat'
+        ? { uri, isDir: true }
+        : path.endsWith('/ls') || path.endsWith('/tree')
+          ? menuEntries
+          : ['/read', '/abstract', '/overview'].some((suffix) =>
+                path.endsWith(suffix),
+              )
+            ? '# OpenViking\n\nA fixed public demo resource. / 固定公开示例资源。'
+            : path.endsWith('/find') || path.endsWith('/search')
+              ? {
+                  memories: [],
+                  skills: [],
+                  resources: [
+                    {
+                      ...resource,
+                      context_type: 'resource',
+                      level: 2,
+                      score: 0.93,
+                      abstract: 'A fixed demo match / 固定模拟匹配',
+                    },
+                  ],
+                }
+              : { state: 'ready', demonstration: true });
     return Response.json({ status: 'ok', result });
   };
 }

@@ -9,9 +9,13 @@ export function getCommandConsoleSafeHref(
   uri: string | undefined,
 ): string | undefined {
   const href = uri?.trim();
-  return href && /^(?:viking|https?):\/\/[^\s]+$/i.test(href)
-    ? href
-    : undefined;
+  if (
+    href &&
+    /^viking:\/\/[^\s\p{Cc}][^\p{Cc}\r\n\u2028\u2029]*$/iu.test(href)
+  ) {
+    return href;
+  }
+  return href && /^https?:\/\/[^\s]+$/i.test(href) ? href : undefined;
 }
 
 /** 复制文本到剪贴板；不可用时返回 `false`，不抛出。 */

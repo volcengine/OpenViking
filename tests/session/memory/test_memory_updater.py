@@ -679,17 +679,13 @@ class TestMemoryUpdater:
         )
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        with patch("openviking.session.memory.memory_updater.tracer.error") as tracer_error:
-            result = await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
 
         assert result.written_uris == [resolved_uri]
         assert len(result.errors) == 1
         error_target, error = result.errors[0]
         assert error_target == "events(page_id=102)"
         assert str(error) == "Missing resolved URI"
-        tracer_error.assert_called_once_with(
-            "Skipping unresolved memory operation: events(page_id=102): Missing resolved URI"
-        )
 
     @pytest.mark.asyncio
     async def test_apply_operations_reports_expected_empty_uri_as_skip(self):

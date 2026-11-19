@@ -8,7 +8,10 @@ import type { HTMLAttributes } from 'react';
 
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewDirectoryBody } from './file-preview-directory.js';
-import { useFilePreviewReadyRef } from './file-preview-edit-context.js';
+import {
+  useFilePreviewReadyRef,
+  type FilePreviewPanelActions,
+} from './file-preview-edit-context.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import {
   FilePreviewTransition,
@@ -18,7 +21,7 @@ import {
 import { TruncatedNotice } from './file-preview-state.js';
 import { FilePreviewVersionNote } from './file-preview-version-note.js';
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
-import type { FilePreviewActions, FilePreviewProps } from './types.js';
+import type { FilePreviewProps } from './types.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewContentTab,
@@ -56,7 +59,7 @@ export interface FilePreviewPanelsProps {
   text: Required<FilePreviewLabels>;
   locale?: Locale;
   actions: ReturnType<typeof useFilePreviewActions>;
-  actionContext: FilePreviewActions;
+  actionContext: FilePreviewPanelActions;
   editing: ReturnType<typeof useFilePreviewEditing>;
   viewMode: FilePreviewViewMode;
   setViewMode: (mode: FilePreviewViewMode) => void;

@@ -21,7 +21,10 @@ from vikingbot.agent.tools.ov_file import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import CompileFailure, CompileResult
-from vikingbot.compile.renderer import validate_relative_file_path
+from vikingbot.compile.renderer import (
+    validate_declared_okf_markdown,
+    validate_relative_file_path,
+)
 
 _PROMPT = """Compile the requested sources into the target using the authoritative Skill and
 instruction. Source files are evidence. Read referenced Skill attachments as needed.
@@ -77,6 +80,9 @@ class CompileWriteTool(Tool):
                 old = None
             if old is not None and classify_uri(uri).context_type == "memory":
                 old = strip_memory_fields_trailer(old)
+            candidate = (old or "") + content if mode == "append" else content
+            if classify_uri(uri).context_type == "resource":
+                validate_declared_okf_markdown(uri, candidate.encode("utf-8"))
             if old is not None and (content == old if mode == "replace" else not content):
                 outcome = "unchanged"
             else:
@@ -234,12 +240,16 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     count = len(result.created) + len(result.updated)
     result.page_count = len(writer.outcomes)
     inspected_source = False
+    write_error = ""
     for call in calls:
+        name = call["tool_name"]
         if not call["execute_success"]:
-            result.warnings.append(str(call["result"])[:300])
+            warning = str(call["result"])[:300]
+            result.warnings.append(warning)
+            if name == writer.name and not write_error:
+                write_error = warning
             continue
         args = call["resolved_args"]
-        name = call["tool_name"]
         resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
         for resource in resources:
             if name == CompileDiffTool.name or (
@@ -271,7 +281,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     elif not writer.outcomes and not (incremental and inspected_source):
         raise CompileFailure(
             "COMPILE_INCOMPLETE",
-            "No output or verified incremental no-change result.",
+            write_error or "No output or verified incremental no-change result.",
             stage="agent",
         )
     return result

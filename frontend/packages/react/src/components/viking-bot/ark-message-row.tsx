@@ -32,7 +32,9 @@ function MessageActions({
           type="default"
           key={`${messageId}:${action.key}`}
           htmlType="button"
-          className="ov-viking-bot__message-action"
+          className={`ov-viking-bot__message-action${action.appearance === 'pill' ? ' ov-viking-bot__message-action--pill' : ''}`}
+          icon={action.icon}
+          loading={action.loading}
           disabled={
             Boolean(action.disabledReason) ||
             action.status === 'pending' ||

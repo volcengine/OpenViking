@@ -19,6 +19,17 @@ from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
 
+def test_local_compile_uses_configured_poll_interval():
+    from openviking.service.compile_service import CompileService
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+
+    config = CompileApiConfig(poll_interval_ms=250)
+    service = CompileService(config, ExternalTaskService(), SimpleNamespace())
+    service.configure_local_backend("http://localhost:1", "")
+
+    assert service.poll_interval_seconds == 0.25
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "wait_at",

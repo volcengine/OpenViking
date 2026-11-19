@@ -4,6 +4,7 @@ import copy
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb.collection.result import (
@@ -19,7 +20,9 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApi,
 )
 from openviking.utils.search_filters import VALID_TIME_FIELDS
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[str, Any]):
@@ -52,7 +55,7 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
     try:
         params = {"Action": "CreateVikingdbCollection", "Version": VIKING_DB_VERSION}
         response = client.do_req("POST", req_params=params, req_body=meta_data)
-        logger.info(f"Create collection response: {response.text}")
+        logger.debug("Collection creation response received http_status=%d", response.status_code)
         if response.status_code != 200:
             result = response.json()
             if "AlreadyExists" in result.get("ResponseMetadata", {}).get("Error", {}).get(
@@ -64,10 +67,10 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
                     f"Failed to create collection: {response.status_code} {response.text}"
                 )
     except Exception as e:
-        logger.error(f"Failed to create collection: {e}")
+        logger.debug("Failed to create collection: %s", type(e).__name__)
         raise e
 
-    logger.info(f"Collection {collection_name} created successfully")
+    logger.debug("Collection %s created successfully", short_hash(str(collection_name)))
     return Collection(
         VolcengineCollection(
             ak,
@@ -126,7 +129,7 @@ class VolcengineCollection(ICollection):
         params = {"Action": action, "Version": VIKING_DB_VERSION}
         response = self.console_client.do_req("POST", req_params=params, req_body=data)
         if response.status_code != 200:
-            logger.error(str(self._build_response_error(response, action)))
+            logger.debug("Vector provider request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
@@ -152,7 +155,7 @@ class VolcengineCollection(ICollection):
         if response.status_code != 200:
             if raise_on_error:
                 raise self._build_response_error(response, action)
-            logger.error(str(self._build_response_error(response, action)))
+            logger.debug("Vector provider request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
@@ -292,7 +295,7 @@ class VolcengineCollection(ICollection):
         response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             error = self._build_response_error(response, path)
-            logger.error(str(error))
+            logger.debug("Vector provider request failed error_type=%s", type(error).__name__)
             if raise_for_status:
                 raise error
             return {}
@@ -307,7 +310,7 @@ class VolcengineCollection(ICollection):
     def _data_get(self, path: str, params: Dict[str, Any]):
         response = self.data_client.do_req("GET", path, req_params=params)
         if response.status_code != 200:
-            logger.error(f"Request to {path} failed: {response.text}")
+            logger.debug("Vector provider request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()

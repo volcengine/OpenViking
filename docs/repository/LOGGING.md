@@ -28,6 +28,7 @@ A record's level is decided by **what the record is for**, not by how serious it
 Additional rules:
 
 - `ERROR` and `CRITICAL` must not appear on a normal control-flow path. If a retry, a fallback, or a client-side message resolves the failure, it is not `ERROR`.
+- A successful model response does not resolve a failed conversation or memory write. Log a failed write at `ERROR` when recovery depends on a future client turn resending the history, since the data may be lost.
 - `WARNING` is a **restricted level**. Its boundary is fixed by section 3. Anything that merely "seems worth noting" is `INFO`.
 - `INFO` carries the signal "the system handled it itself". Fallbacks, retries, backoff, and circuit-breaker transitions must be visible there, but must not require immediate action.
 - `DEBUG` is the default outlet for business process. Assume `DEBUG` first, then check the audit list in section 3 and the fallback and rejection list in section 5.
@@ -63,6 +64,7 @@ DEBUG
 | Backup succeeds but output quality drops or fields are missing | `INFO` plus an explicit field | Still a fallback, not audit |
 | Dependency unavailable, default value used (e.g. empty summary) | `INFO` | Fallback |
 | Dependency unavailable, nothing to fall back to, feature is down | `ERROR` | Fault |
+| Conversation or memory write fails, while the model response succeeds | `ERROR` | Returning a response does not ensure persistence; a later client turn is not a guaranteed retry |
 | Call exceeds a slow-call threshold | `INFO` (if needed for trend) or `DEBUG` | Not an error |
 | Telemetry/metrics write itself fails | `INFO`; `ERROR` on first occurrence | Side channel must not pollute business levels |
 | Cache lock unavailable, read through to the database | `INFO` | Fallback |
@@ -741,12 +743,12 @@ Submit module groups in order and refresh from upstream before starting each gro
 | --- | --- | --- |
 | 1 | Model logs and safe payload summaries | Merged in #7769 |
 | 2 | Logging initialization, observability logs, Python/Rust/C++ output | Merged in #7778; C++ compatibility fixes in #7794 |
-| 3 | Existing authentication, account, ACL, and ROOT-related logs | Implemented; shares a PR with batch 4, adds no audit capabilities |
-| 4 | Existing business service logs | Implemented; shares a PR with batch 3 |
-| 5 | Parsing, ingestion, and connectors | After batch 4 merges |
-| 6 | Storage and queues | After batch 5 merges |
-| 7 | Retrieval, core, and utilities | After batch 6 merges |
-| 8 | Sessions, memory, compilation, CLI, and Gateway | After batch 7 merges |
+| 3 | Existing authentication, account, ACL, and ROOT-related logs | Merged in #7806 with batch 4; adds no audit capabilities |
+| 4 | Existing business service logs | Merged in #7806 with batch 3 |
+| 5 | Parsing, ingestion, and connectors | Merged in #7899 |
+| 6 | Storage and queues, including Watch | Merged in #7933 |
+| 7 | Retrieval, core, and utilities | Merged in #7937 |
+| 8 | Sessions, memory, compilation, CLI, and Gateway | Implemented; independent PR |
 
 The priority inventory below is the original policy backlog. Apply existing-log remediation within the module batches above; new audit capabilities remain outside this rollout.
 

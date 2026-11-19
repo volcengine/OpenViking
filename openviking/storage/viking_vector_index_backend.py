@@ -20,6 +20,7 @@ from openviking.core.namespace import (
     uri_parts,
     visible_roots,
 )
+from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log, short_hash
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.acl import (
@@ -308,7 +309,9 @@ def _backend_operation(method):
                 if owns_metric:
                     VikingDBEventDataSource.record_operation(
                         backend=self._mode,
-                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        access_mode=str(
+                            getattr(self._adapter, "config", {}).get("mode") or "default"
+                        ),
                         operation=method.__name__,
                         duration_seconds=time.perf_counter() - started_at,
                         error=error,
@@ -318,7 +321,9 @@ def _backend_operation(method):
                 if owns_metric:
                     VikingDBEventDataSource.record_operation(
                         backend=self._mode,
-                        access_mode=str(getattr(self._adapter, "config", {}).get("mode") or "default"),
+                        access_mode=str(
+                            getattr(self._adapter, "config", {}).get("mode") or "default"
+                        ),
                         operation=method.__name__,
                         duration_seconds=time.perf_counter() - started_at,
                         result=result,
@@ -368,9 +373,9 @@ class _SingleAccountBackend:
         self._collection_name = config.name or "context"
         self._index_name = config.index_name or DEFAULT_INDEX_NAME
 
-        logger.info(
+        logger.debug(
             "_SingleAccountBackend initialized (bound_account_id=%s, mode=%s)",
-            bound_account_id,
+            short_hash(str(bound_account_id)),
             self._mode,
         )
 
@@ -555,10 +560,12 @@ class _SingleAccountBackend:
                 "schema": schema,
             }
             await self._refresh_meta_data_async()
-            logger.info("Created collection: %s", name)
+            logger.debug("Created collection: %s", short_hash(str(name)))
             return True
         except Exception as e:
-            logger.error("Error creating collection %s: %s", name, e)
+            logger.error(
+                "Error creating collection %s: %s", short_hash(str(name)), type(e).__name__
+            )
             _record_handled_vikingdb_error(e)
             return False
 
@@ -571,7 +578,7 @@ class _SingleAccountBackend:
                 self._meta_data_cache = {}
             return dropped
         except Exception as e:
-            logger.error("Error dropping collection: %s", e)
+            logger.error("Error dropping collection: %s", type(e).__name__)
             _record_handled_vikingdb_error(e)
             return False
 
@@ -659,7 +666,7 @@ class _SingleAccountBackend:
         try:
             payload = self._bind_upsert_payload(data)
         except (PermissionError, ValueError) as exc:
-            logger.warning("Rejecting upsert: %s", exc)
+            logger.info("Rejecting upsert: %s", type(exc).__name__)
             _record_handled_vikingdb_error(exc)
             return ""
 
@@ -673,7 +680,9 @@ class _SingleAccountBackend:
                         if record.get("account_id") == self._bound_account_id
                     ]
             except Exception as e:
-                logger.error("Error reading existing record before partial update: %s", e)
+                logger.debug(
+                    "Error reading existing record before partial update: %s", type(e).__name__
+                )
                 raise
 
             if existing_records:
@@ -740,7 +749,8 @@ class _SingleAccountBackend:
         try:
             payload = dict(data)
             logger.debug(
-                f"[_SingleAccountBackend.update] Input data.account_id={payload.get('account_id')}, bound_account_id={self._bound_account_id}"
+                "Vector update account scope resolved",
+                extra=safe_log_fields({"account_id": self._bound_account_id}),
             )
 
             if self._bound_account_id and not payload.get("account_id"):
@@ -778,7 +788,7 @@ class _SingleAccountBackend:
                 error_message=message,
             )
         except Exception as e:
-            logger.error("Error updating record: %s", e)
+            logger.error("Error updating record: %s", type(e).__name__)
             _record_handled_vikingdb_error(e)
             return UpdateResult(
                 ok=False,
@@ -796,7 +806,7 @@ class _SingleAccountBackend:
                 records = [r for r in records if r.get("account_id") == self._bound_account_id]
             return records
         except Exception as e:
-            logger.error("Error getting records: %s", e)
+            logger.debug("Error getting records: %s", type(e).__name__)
             raise
 
     def _with_account_filter(
@@ -880,7 +890,7 @@ class _SingleAccountBackend:
 
             return await self._async_adapter.call("delete", ids=ids)
         except Exception as e:
-            logger.error("Error deleting records: %s", e)
+            logger.debug("Error deleting records: %s", type(e).__name__)
             raise
 
     @_backend_operation
@@ -889,7 +899,7 @@ class _SingleAccountBackend:
         try:
             return await self._async_adapter.call("delete", filter=filter)
         except Exception as e:
-            logger.error("Error deleting by filter: %s", e)
+            logger.debug("Error deleting by filter: %s", type(e).__name__)
             raise
 
     @_backend_operation
@@ -908,7 +918,9 @@ class _SingleAccountBackend:
                 return records[0]
             return None
         except Exception as e:
-            logger.error("Error fetching record by URI %s: %s", uri, e)
+            logger.debug(
+                "Error fetching record by URI %s: %s", safe_uri_for_log(str(uri)), type(e).__name__
+            )
             raise
 
     @_backend_operation
@@ -926,9 +938,7 @@ class _SingleAccountBackend:
     ) -> List[Dict[str, Any]]:
         self._validate_vector_dimension(query_vector)
         try:
-            logger.debug(
-                f"[_SingleAccountBackend.query] Called with bound_account_id={self._bound_account_id}, filter={filter}"
-            )
+            logger.debug("Vector query prepared has_filter=%s", bool(filter))
             if self._bound_account_id:
                 account_filter = Eq("account_id", self._bound_account_id)
                 if filter:
@@ -937,9 +947,7 @@ class _SingleAccountBackend:
                     filter = And([account_filter, filter])
                 else:
                     filter = account_filter
-                logger.debug(
-                    f"[_SingleAccountBackend.query] Applied account filter, final filter={filter}"
-                )
+                logger.debug("Vector query account filter applied")
 
             return await self._async_adapter.call(
                 "query",
@@ -954,7 +962,7 @@ class _SingleAccountBackend:
                 advance=advance,
             )
         except Exception as e:
-            logger.error("Error querying collection: %s", e, exc_info=True)
+            logger.debug("Error querying collection: %s", type(e).__name__)
             raise
 
     @_backend_operation
@@ -976,7 +984,7 @@ class _SingleAccountBackend:
                 advance=advance,
             )
         except Exception as e:
-            logger.error("Error searching collection by random: %s", e, exc_info=True)
+            logger.debug("Error searching collection by random: %s", type(e).__name__)
             raise
 
     @_backend_operation
@@ -1039,7 +1047,7 @@ class _SingleAccountBackend:
                 total_deleted += await self.delete(ids)
             return total_deleted
         except Exception as e:
-            logger.error("Error removing URI %s: %s", uri, e)
+            logger.debug("Error removing URI %s: %s", safe_uri_for_log(str(uri)), type(e).__name__)
             raise
 
     async def _remove_descendants(self, parent_uri: str) -> int:
@@ -1098,7 +1106,7 @@ class _SingleAccountBackend:
 
             return await self._async_adapter.call("count", filter=filter)
         except Exception as e:
-            logger.error("Error counting records: %s", e)
+            logger.debug("Error counting records: %s", type(e).__name__)
             raise
 
     @_backend_operation
@@ -1108,12 +1116,12 @@ class _SingleAccountBackend:
                 return await self.delete_by_filter(Eq("account_id", self._bound_account_id)) > 0
             return await self._async_adapter.call("clear")
         except Exception as e:
-            logger.error("Error clearing collection: %s", e)
+            logger.debug("Error clearing collection: %s", type(e).__name__)
             raise
 
     @_backend_operation
     async def optimize(self) -> bool:
-        logger.info("Optimization requested")
+        logger.debug("Optimization requested")
         return True
 
     @_backend_operation
@@ -1150,7 +1158,7 @@ class _SingleAccountBackend:
                 output_fields=output_fields,
             )
         except Exception as e:
-            logger.error("Error searching by keywords: %s", e)
+            logger.debug("Error searching by keywords: %s", type(e).__name__)
             raise
 
     async def close(self) -> None:
@@ -1163,7 +1171,7 @@ class _SingleAccountBackend:
         await self._async_adapter.call("close")
         self._collection_config = {}
         self._meta_data_cache = {}
-        logger.info("_SingleAccountBackend closed")
+        logger.debug("_SingleAccountBackend closed")
 
     @_backend_operation
     async def health_check(self) -> bool:
@@ -1187,7 +1195,7 @@ class _SingleAccountBackend:
                 "bound_account_id": self._bound_account_id,
             }
         except Exception as e:
-            logger.error("Error getting stats: %s", e)
+            logger.error("Error getting stats: %s", type(e).__name__)
             _record_handled_vikingdb_error(e)
             return {
                 "collections": 0,
@@ -1233,9 +1241,7 @@ class VikingVectorIndexBackend:
         self._shared_async_adapter = _AsyncVectorAdapter(self._shared_adapter)
         self._closing = False
 
-        logger.info(
-            "VikingVectorIndexBackend facade initialized",
-        )
+        logger.debug("VikingVectorIndexBackend facade initialized")
 
     @property
     def collection_name(self) -> str:
@@ -1406,10 +1412,10 @@ class VikingVectorIndexBackend:
         """
         options = normalize_upsert_options(options)
         logger.debug(
-            "[VikingVectorIndexBackend.upsert] uri=%s partial_update=%s search_tag_mode=%s",
-            data.get("uri", ""),
-            options.partial_update,
-            options.search_tag_mode,
+            "uri=%s partial_update=%s search_tag_mode=%s",
+            type(data.get("uri", "")).__name__,
+            type(options.partial_update).__name__,
+            type(options.search_tag_mode).__name__,
         )
         data = {key: value for key, value in data.items() if key not in ACL_CONTEXT_FIELDS}
         data = (
@@ -1420,10 +1426,7 @@ class VikingVectorIndexBackend:
             )
         )[0]
         backend = await self._get_backend_for_context(ctx)
-        logger.debug(
-            "[VikingVectorIndexBackend.upsert] Using backend for account_id=%s",
-            ctx.account_id,
-        )
+        logger.debug("Using backend for account_id=%s", short_hash(str(ctx.account_id)))
         result = await backend.upsert(
             data,
             options=options,
@@ -1433,11 +1436,9 @@ class VikingVectorIndexBackend:
             # own record exists, converge all stored inherited grants as well.
             await self.acl_manager.refresh_context_subtree(options.acl_update.uri, ctx)
         logger.debug(
-            "[VikingVectorIndexBackend.upsert] Completed with partial_update=%s, "
-            "search_tag_mode=%s, result=%s",
+            "Vector upsert completed partial_update=%s tag_mode=%s",
             options.partial_update,
             options.search_tag_mode,
-            result,
         )
         return result
 
@@ -1454,8 +1455,8 @@ class VikingVectorIndexBackend:
         be preserved from existing records.
         """
         logger.debug(
-            "[VikingVectorIndexBackend.upsert_many] Called with ctx.account_id=%s, count=%s",
-            ctx.account_id,
+            "Called with ctx.account_id=%s, count=%s",
+            short_hash(str(ctx.account_id)),
             len(data_list),
         )
         data_list = [
@@ -1464,11 +1465,7 @@ class VikingVectorIndexBackend:
         ]
         data_list = await self._materialize_acl_fields(data_list, ctx)
         result = await self._upsert_many_raw(data_list, ctx=ctx)
-        logger.debug(
-            "[VikingVectorIndexBackend.upsert_many] Completed with count=%s, result_count=%s",
-            len(data_list),
-            len(result),
-        )
+        logger.debug("Completed with count=%s, result_count=%s", len(data_list), len(result))
         return result
 
     async def _upsert_many_raw(
@@ -1491,16 +1488,11 @@ class VikingVectorIndexBackend:
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""
         data = {key: value for key, value in data.items() if key not in ACL_CONTEXT_FIELDS}
-        logger.debug(
-            "[VikingVectorIndexBackend.update] uri=%s",
-            data.get("uri", ""),
-        )
+        logger.debug("uri=%s", type(data.get("uri", "")).__name__)
         backend = await self._get_backend_for_context(ctx)
-        logger.debug(
-            f"[VikingVectorIndexBackend.update] Using backend for account_id={ctx.account_id}"
-        )
+        logger.debug("Using backend for account_id=%s", short_hash(str(ctx.account_id)))
         result = await backend.update(data)
-        logger.debug(f"[VikingVectorIndexBackend.update] Completed, result={result}")
+        logger.debug("Vector update completed result_type=%s", type(result).__name__)
         return result
 
     @asynccontextmanager
@@ -1584,11 +1576,11 @@ class VikingVectorIndexBackend:
 
             full_records = await self.get([str(record["id"])], ctx=ctx)
             if not full_records:
-                logger.warning(
+                logger.debug(
                     "update_search_tags failed to fetch full exact record uri=%s account_id=%s id=%s",
-                    uri,
-                    ctx.account_id,
-                    record.get("id"),
+                    safe_uri_for_log(str(uri)),
+                    short_hash(str(ctx.account_id)),
+                    type(record.get("id")).__name__,
                 )
                 return []
 
@@ -1608,14 +1600,10 @@ class VikingVectorIndexBackend:
             except InvalidArgumentError:
                 raise
             except Exception as exc:
-                logger.warning(
-                    "update_search_tags failed to merge exact record tags uri=%s "
-                    "account_id=%s existing_tags=%s incoming_tags=%s error=%s",
-                    uri,
-                    ctx.account_id,
-                    updated_record.get("search_tags"),
-                    tags,
-                    exc,
+                logger.info(
+                    "Search tag merge failed; returning no updates target=%s error_type=%s",
+                    safe_uri_for_log(uri),
+                    type(exc).__name__,
                 )
                 return []
 
@@ -1646,12 +1634,12 @@ class VikingVectorIndexBackend:
                 continue
             full_record = full_records_by_id.get(str(record["id"]))
             if not full_record:
-                logger.warning(
+                logger.debug(
                     "update_search_tags failed to fetch full leveled record uri=%s account_id=%s level=%s id=%s",
-                    uri,
-                    ctx.account_id,
-                    record.get("level"),
-                    record.get("id"),
+                    safe_uri_for_log(str(uri)),
+                    short_hash(str(ctx.account_id)),
+                    type(record.get("level")).__name__,
+                    type(record.get("id")).__name__,
                 )
                 continue
             updated_record = dict(full_record)
@@ -1670,15 +1658,10 @@ class VikingVectorIndexBackend:
             except InvalidArgumentError:
                 raise
             except Exception as exc:
-                logger.warning(
-                    "update_search_tags failed to merge leveled record tags uri=%s "
-                    "account_id=%s level=%s existing_tags=%s incoming_tags=%s error=%s",
-                    uri,
-                    ctx.account_id,
-                    updated_record.get("level"),
-                    updated_record.get("search_tags"),
-                    tags,
-                    exc,
+                logger.info(
+                    "Search tag merge failed; returning no updates target=%s error_type=%s",
+                    safe_uri_for_log(uri),
+                    type(exc).__name__,
                 )
                 return []
             # Tags do not replace summaries or vectors produced concurrently.
@@ -1988,7 +1971,7 @@ class VikingVectorIndexBackend:
         self._retiring_backends.clear()
         self._initializing_accounts.clear()
         self._root_backend = None
-        logger.info("VikingVectorIndexBackend facade closed")
+        logger.debug("VikingVectorIndexBackend facade closed")
 
     async def health_check(self) -> bool:
         return await self._get_default_backend().health_check()
@@ -2333,12 +2316,13 @@ class VikingVectorIndexBackend:
         include_direct_children: bool = False,
         expected_levels: Optional[Mapping[str, set[int]]] = None,
     ) -> Dict[str, Dict[str, Any]]:
-        """Scan once by timestamp, recover missing known URIs, and verify the count.
+        """Read incremental inventory by timestamp and recover missing known URIs.
 
         The timestamp is an inclusive lower bound; offset only skips records
         already visited at that timestamp. Ties can still reorder, so known
         file/directory levels identify URIs to read again with an exact query.
-        A remaining count mismatch (including an unseen orphan) fails closed.
+        The records returned by these reads are authoritative. A separate count
+        can observe a different index state and must not gate incremental writes.
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -2363,7 +2347,6 @@ class VikingVectorIndexBackend:
             ]
         )
         what = f"Incremental inventory under {canonical_uri}"
-        expected_count = await self._strict_transfer_count(ctx, scope)
         backend = await self._get_backend_for_context(ctx)
         page_fields = list(dict.fromkeys([*projection, "updated_at"]))
         records: Dict[str, Dict[str, Any]] = {}
@@ -2417,10 +2400,6 @@ class VikingVectorIndexBackend:
                         "md5": str(record.get("md5") or ""),
                     }
                 )
-            if len(records) > expected_count:
-                raise RuntimeError(
-                    f"{what} returned {len(records)} unique records but count was {expected_count}"
-                )
             if len(page) < batch_size:
                 break
             last_timestamp = page[-1]["updated_at"]
@@ -2430,7 +2409,7 @@ class VikingVectorIndexBackend:
                 timestamp = last_timestamp
                 offset = sum(record["updated_at"] == timestamp for record in page)
 
-        if len(records) < expected_count and expected_levels:
+        if expected_levels:
             found_levels: Dict[str, set[int]] = {}
             for record in records.values():
                 found_levels.setdefault(record["uri"], set()).add(record["level"])
@@ -2454,10 +2433,6 @@ class VikingVectorIndexBackend:
             for uri_records in recovered.values():
                 for record_id, record in uri_records.items():
                     records.setdefault(record_id, record)
-        if len(records) != expected_count:
-            raise RuntimeError(
-                f"{what} returned {len(records)} unique records but count was {expected_count}"
-            )
         return records
 
     async def get_reindex_inventory_under_uri(
@@ -2908,9 +2883,9 @@ class VikingVectorIndexBackend:
                     f"{len(residual)} records"
                 )
             if batch_deleted != len(batch):
-                logger.info(
+                logger.debug(
                     "Vector cleanup removed %s of %s attempted IDs; remaining IDs were never written",
-                    batch_deleted,
+                    type(batch_deleted).__name__,
                     len(batch),
                 )
             deleted += batch_deleted

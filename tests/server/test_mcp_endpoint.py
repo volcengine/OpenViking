@@ -463,6 +463,23 @@ async def test_retrieval_tools_expose_tag_parameters_with_compatible_defaults():
         assert "include_tags" not in tools[tool_name].description
 
 
+async def test_search_marks_every_context_only_parameter_in_its_description():
+    from openviking.server.routers.search import CONTEXT_ONLY_FIELDS
+
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    properties = tools["search"].inputSchema["properties"]
+    context_only = {*CONTEXT_ONLY_FIELDS, *mcp_endpoint._MCP_CONTEXT_ONLY_ALIASES}
+
+    # List mode rejects these, and the parameter description is the only place a
+    # caller reading the schema can learn that before spending a failed call.
+    unmarked = sorted(
+        name
+        for name in context_only
+        if "mode='context'" not in properties[name].get("description", "")
+    )
+    assert unmarked == []
+
+
 async def test_recall_tool_is_replaced_by_search_context_mode():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
@@ -845,7 +862,7 @@ async def test_find_tool_leaves_a_uri_outside_a_skill_package_alone(service, mon
 
     result = await mcp_endpoint.find(query="review", context_type="skill")
 
-    assert f"- [skill 40%] {hit_uri}\n" in result
+    assert f"- [skill 40%] {hit_uri} tags=[]\n" in result
     assert "SKILL.md/SKILL.md" not in result
 
 
@@ -1088,7 +1105,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
             {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
         ],
     }
-    assert params.rewrite is True
+    assert params.rewrite == "auto"
     assert params.rewrite_max_bullets == 4
 
 
@@ -1158,8 +1175,9 @@ async def test_retrieval_tools_describe_advanced_parameters_without_changing_con
     assert search_properties["quotas"]["description"] == (
         "In mode='context', set first-pass result ceilings for explicitly listed "
         "categories: events, entities, preferences, experiences, resources, or skills; "
-        "unused slots may be filled by other listed categories, and explicit quotas take "
-        "precedence over purpose presets."
+        "unused slots may be filled by other listed categories. Explicit quotas replace "
+        "the purpose preset (unlisted categories are not retrieved), and their sum caps "
+        "the results instead of limit."
     )
     assert search_properties["detail_by_category"]["description"] == (
         "In mode='context', request abstract, overview, or full detail per category "
@@ -1186,8 +1204,9 @@ async def test_retrieval_tools_describe_advanced_parameters_without_changing_con
         "their defaults; do not combine with other_peer_penalty."
     )
     assert search_properties["rewrite"]["description"] == (
-        "In mode='context', use 'auto' to ask the account model for a cited bullet digest; "
-        "on failure the assembled context is returned unchanged, while 'off' skips rewriting."
+        "In mode='context', use 'auto' to get a cited bullet digest from the account's query "
+        "planner model; without one configured, or on failure, the assembled context is "
+        "returned unchanged, while 'off' skips rewriting."
     )
 
     decay_description = (
@@ -1824,6 +1843,31 @@ async def test_list_forwards_and_renders_tags(service, monkeypatch):
     assert captured["tags"] == ["team=search"]
     assert captured["include_tags"] is True
     assert result == '[file] guide.md tags=["team=search"]\n[file] untagged.md tags=[]'
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "fs_method"),
+    [
+        ("list", {"uri": "viking://resources"}, "ls"),
+        ("tree", {"uri": "viking://resources"}, "tree"),
+        ("grep", {"uri": "viking://resources", "pattern": "text"}, "grep"),
+    ],
+)
+async def test_filesystem_tools_reject_a_malformed_tag_filter(
+    service, monkeypatch, tool_name, arguments, fs_method
+):
+    # The service drops a malformed tag, and a filter left empty returns every entry.
+    fs_call = AsyncMock()
+    monkeypatch.setattr(service.fs, fs_method, fs_call)
+
+    result = await mcp_endpoint.mcp.call_tool(tool_name, {**arguments, "tags": ["team:search"]})
+
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    assert result.content[0].text == (
+        "INVALID_ARGUMENT: invalid search tag 'team:search': expected strict k=v format"
+    )
+    fs_call.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -3327,3 +3371,21 @@ async def test_tree_forwards_and_renders_tags(service, monkeypatch):
     assert captured["tags"] == ["team=search"]
     assert captured["include_tags"] is True
     assert '\nguide.md (12 B) tags=["team=search"]' in result
+
+
+async def test_tree_with_tag_filter_prints_each_match_as_a_path(service, monkeypatch):
+    # Only the tagged entries survive the filter; the directories above them do not.
+    async def fake_tree(uri, **kwargs):
+        return ListingPage(
+            entries=[
+                {"rel_path": "events/2026/launch.md", "isDir": False, "size": 12},
+                {"rel_path": "entities/people", "isDir": True},
+            ],
+            has_more=False,
+        )
+
+    monkeypatch.setattr(service.fs, "tree", fake_tree)
+
+    result = await tree(uri="viking://user/test_user/memories", tags=["Team=Search"])
+
+    assert result.splitlines()[1:] == ["events/2026/launch.md (12 B)", "entities/people/"]

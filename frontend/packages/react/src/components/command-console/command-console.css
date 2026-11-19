@@ -686,6 +686,11 @@
   white-space: nowrap;
 }
 
+.ov-command-console__search-content {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* 资源树与写入结果。 */
 .ov-command-console__tree,
 .ov-command-console__write,
@@ -1495,10 +1500,18 @@
   color: var(--ov-ui-command-console-muted);
 }
 
+.ov-command-console__hint-table :is(th, td):first-child {
+  min-width: 96px;
+}
+
 .ov-command-console__hint-table :is(th, td):nth-child(2) {
   min-width: 52px;
   text-align: center;
   white-space: nowrap;
+}
+
+.ov-command-console__hint-table :is(th, td):nth-child(3) {
+  min-width: 128px;
 }
 
 .ov-command-console__hint-table :is(th, td):last-child {

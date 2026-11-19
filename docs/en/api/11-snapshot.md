@@ -144,10 +144,12 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| branch | str | No | `main` | Branch to walk |
+| branch | str | No | `main` | Branch or commit ID to start from |
 | limit | int | No | 20 | Max commits to return. The HTTP endpoint accepts values from 1 to 500 |
 | offset | int | No | 0 | Number of matching commits to skip; must be a non-negative integer. For pages of 10, use `offset=10` for the second page |
 | paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; USER/ADMIN callers must provide it, while local ROOT mode may omit it for account-wide history. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
+
+For each supplied `paths` URI, the server compares the tree entry at that exact path with the entry at the same path in `parents[0]`. Merge commits use only the first parent. A commit without parents is compared with an empty tree.
 
 Path filtering and commit de-duplication happen before `offset` and `limit` are applied. With `paths=[X]`, `offset=10`, and `limit=10`, the result contains matches 11–20 for X. Unrelated commits do not advance the offset; a commit touching multiple requested paths counts once. Once traversal reaches the end of history, an offset beyond the matching commits returns an empty list.
 
@@ -298,6 +300,8 @@ Without `path`, the response is commit metadata JSON. With `path`, the response 
 - `X-Snapshot-Time-Seconds`: the resolved commit's `committer.time_seconds`, an integer Unix timestamp in seconds
 
 The timestamp describes the requested snapshot, not the file's last modification or the run's completion time. Branches and tags are resolved once so the body and commit headers refer to the same snapshot. The commit headers also apply to `raw=false`; stripping memory fields only changes the body and its size.
+
+When the commit tree has no entry for the requested file path, the server returns HTTP 404 with `error.code: "NOT_FOUND"`, `error.details.type: "git_blob"`, and `error.details.reason: "path_not_found"`. The boolean `error.details.deleted_file` is `true` when the first parent (`parents[0]`) has a file at that exact path. It is `false` if the first parent has a directory or no entry there, or the commit has no parent. A missing backing object for the requested file has no `path_not_found` reason. Gateways can preserve these distinctions by forwarding the error details.
 
 **CLI**
 

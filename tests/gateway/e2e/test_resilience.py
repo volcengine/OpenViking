@@ -14,9 +14,11 @@ from .harness import (
     control,
     credential_keys,
     document,
+    message_text,
     records,
     session_keys,
     wait_for,
+    wait_written,
     written_messages,
 )
 from .sdk_probe import probe, stall_probe
@@ -31,12 +33,20 @@ def stream_body(model="mock-long", messages=None):
 
 
 def read_stream(
-    harness, pod, model="mock-silent", session="stream", after_first=None, messages=None
+    harness,
+    pod,
+    model="mock-silent",
+    session="stream",
+    after_first=None,
+    messages=None,
+    headers=None,
 ):
     lines, timestamps = [], []
     try:
         with harness.stream(
-            pod, stream_body(model, messages), headers={"X-OpenViking-Session": session}
+            pod,
+            stream_body(model, messages),
+            headers={"X-OpenViking-Session": session, **(headers or {})},
         ) as response:
             encoding = response.headers.get("content-encoding")
             for line in response.iter_lines():
@@ -50,14 +60,14 @@ def read_stream(
     return {"lines": lines, "times": timestamps, "encoding": encoding, "truncated": False}
 
 
-def test_02_default_grace_finishes_stream_and_other_pod_delivers(harness):
-    harness.redeploy({"default_profile": {"idle_seconds": 45}})
+def test_02_default_grace_finishes_stream_and_another_pod_commits_its_turn(harness):
     victim, _ = harness.pods()
-    victim_ip = next(
-        p["status"]["podIP"] for p in harness.pod_objects() if p["metadata"]["name"] == victim
-    )
-    history = [{"role": "user", "content": "first pending turn"}]
-    history.append(chat(harness, victim, "graceful", history))
+    ips = {p["metadata"]["name"]: p["status"]["podIP"] for p in harness.pod_objects()}
+    victim_ip = ips[victim]
+    # Longer than the 40-second stream, so no idle commit is due while the victim drains.
+    idle = 60
+    history = [{"role": "user", "content": "first turn"}]
+    history.append(chat(harness, victim, "graceful", history, idle_seconds=idle))
     history.append({"role": "user", "content": "finish during termination"})
     result = read_stream(
         harness,
@@ -65,31 +75,41 @@ def test_02_default_grace_finishes_stream_and_other_pod_delivers(harness):
         session="graceful",
         messages=history,
         after_first=lambda: harness.kubectl("delete", "pod", victim, "--wait=false"),
+        headers={"X-OpenViking-Context": json.dumps({"idle_seconds": idle})},
     )
     assert "data: [DONE]" in result["lines"] and not result["truncated"]
-    snapshot = wait_for(
-        lambda: value if len(written_messages(value := records(harness))) == 4 else None,
-        timeout=110,
-    )
+    snapshot = wait_written(harness, 4, timeout=110)
     assert len(snapshot["libraries"]["library-a"]["sessions"]) == 1
     writes = [r for r in snapshot["requests"] if r["path"].endswith("/messages/batch")]
     ids = [
         source for r in writes for m in r["body"]["messages"] for source in m["source_message_ids"]
     ]
     assert len(ids) == len(set(ids)) == 4
-    # The next request confirms the first turn, so the victim may deliver it
-    # immediately. Only the final, idle-delayed tail must survive on another Pod.
-    tail_ids = {
-        source
-        for message in written_messages(snapshot)[-2:]
-        for source in message["source_message_ids"]
-    }
-    tail_writes = [
-        r
-        for r in writes
-        if any(tail_ids.intersection(m["source_message_ids"]) for m in r["body"]["messages"])
+    # The request that ends a turn writes it, so the draining Pod writes the streamed turn.
+    assert len(writes) == 2 and all(r["source_pod"] == victim_ip for r in writes), writes
+    (session,) = snapshot["libraries"]["library-a"]["sessions"]
+    wait_for(lambda: victim not in harness.kubectl("get", "pods", "-o", "name"), timeout=60)
+    # Shutdown commits nothing; the capture document keeps the due time.
+    assert not any(r["path"].endswith("/commit") for r in records(harness)["requests"])
+
+    def commits():
+        value = records(harness)
+        return value["libraries"]["library-a"]["sessions"][session]["commits"] and value
+
+    # Each remaining Pod looks once a minute for commits that have been due for a minute.
+    wait_for(commits, timeout=idle + 180)
+    # Two Pods may find the same overdue commit; the later one archives nothing.
+    time.sleep(3)
+    snapshot = records(harness)
+    first, *rest = snapshot["libraries"]["library-a"]["sessions"][session]["commits"]
+    assert first["keep_recent_count"] == 0
+    assert first["source_pod"] != victim_ip
+    assert first["time"] - writes[-1]["time"] >= idle
+    assert [message_text(m) for m in first["messages"]] == [
+        message_text(m) for m in written_messages(snapshot)
     ]
-    assert tail_writes and all(r["source_pod"] != victim_ip for r in tail_writes), tail_writes
+    assert all(c["keep_recent_count"] == 0 and c["messages"] == [] for c in rest), rest
+    assert snapshot["libraries"]["library-a"]["sessions"][session]["pending"] == []
 
 
 @pytest.mark.standalone
@@ -108,11 +128,9 @@ def test_03_short_grace_truncates_stream_without_splitting_next_turn(harness):
     assert result["times"][-1] - result["times"][0] < 40
     pod = next(p for p in harness.pods() if p != victim)
     chat(harness, pod, "short-grace", [{"role": "user", "content": "continue after truncation"}])
-    _, capture = session_keys(harness, "short-grace")
-    wait_for(lambda: not document(harness, capture).get("pending"))
-    sessions = records(harness)["libraries"]["library-a"]["sessions"]
+    # The truncated reply never ended its turn, so only this turn is written.
+    sessions = wait_written(harness, 2)["libraries"]["library-a"]["sessions"]
     assert len(sessions) == 1
-    assert len(next(iter(sessions.values()))["messages"]) == 2
 
 
 ROLLOUT_CLIENT = """
@@ -228,6 +246,7 @@ def test_05_eviction_keeps_permanent_state_and_recovers_credentials(harness):
     pods = harness.pods()
     permanent = "ovgw:v1:m:{a-e2e}:o:policies:permanent"
     tombstone = "ovgw:v1:kd:{deleted-e2e}"
+    # Earlier versions queued deliveries here.
     ready = "ovgw:v1:k:{cap}:ready"
     harness.redis("HSET", permanent, "v", '{"name":"permanent"}', "rev", 1)
     harness.redis("SET", tombstone, 1)
@@ -240,7 +259,6 @@ def test_05_eviction_keeps_permanent_state_and_recovers_credentials(harness):
             pods[number % 2],
             f"eviction-{number}",
             [{"role": "user", "content": f"{number}: {big}"}],
-            idle_seconds=120,
         )
 
     with ThreadPoolExecutor(max_workers=12) as executor:
@@ -252,39 +270,23 @@ def test_05_eviction_keeps_permanent_state_and_recovers_credentials(harness):
     assert harness.redis("EXISTS", permanent) == "1"
     assert harness.redis("EXISTS", tombstone) == "1"
     assert harness.redis("TTL", permanent) == harness.redis("TTL", tombstone) == "-1"
-    assert harness.redis("TYPE", ready) == "zset" and harness.redis("TTL", ready) == "-1"
+    assert harness.redis("EXISTS", ready) == "0"
     chat(harness, pods[1], "eviction-0", [{"role": "user", "content": "continue after eviction"}])
     harness.redis("CONFIG", "SET", "maxmemory", "96mb")
-    chat(
-        harness,
-        pods[0],
-        "credential-rebuild",
-        [{"role": "user", "content": "pending before key deletion"}],
-    )
+    history = [{"role": "user", "content": "saved before key deletion"}]
+    history.append(chat(harness, pods[0], "credential-rebuild", history))
     _, capture = session_keys(harness, "credential-rebuild")
+    saved = wait_for(lambda: (value := document(harness, capture)).get("delivered") and value)
     for key in credential_keys(harness, "key-a"):
         harness.redis("DEL", key)
-    # OpenViking never rejected the key, so delivery keeps retrying until a request returns.
-    wait_for(
-        lambda: (
-            (document(harness, capture).get("error") or {}).get("reason") == "gateway_key_missing"
-        ),
-        timeout=40,
-    )
-    chat(
-        harness,
-        pods[1],
-        "credential-rebuild",
-        [{"role": "user", "content": "new request restores key"}],
-    )
+    # Past the gateway's two-second management cache.
+    time.sleep(2.2)
+    history.append({"role": "user", "content": "new request restores key"})
+    chat(harness, pods[1], "credential-rebuild", history)
     assert credential_keys(harness, "key-a")
-    wait_for(
-        lambda: (
-            not document(harness, capture).get("error")
-            and not document(harness, capture).get("pending")
-        ),
-        timeout=90,
-    )
+    # The rebuilt key writes the turn to the same OpenViking session.
+    wait_for(lambda: document(harness, capture)["delivered"] != saved["delivered"])
+    assert document(harness, capture)["ov_session"] == saved["ov_session"]
     assert "KeyError" not in harness.logs()
 
 
@@ -333,11 +335,12 @@ def outage_requests(harness, pod):
 
 
 @pytest.mark.standalone
-def test_06_aof_restart_preserves_management_tombstones_and_pending_capture(harness):
-    harness.redeploy({"default_profile": {"idle_seconds": 45}})
+def test_06_aof_restart_preserves_management_tombstones_and_capture_cursor(harness):
     pod = harness.pods()[0]
-    chat(harness, pod, "aof-tail", [{"role": "user", "content": "persist this pending tail"}])
+    history = [{"role": "user", "content": "persist this capture cursor"}]
+    history.append(chat(harness, pod, "aof-tail", history))
     _, capture = session_keys(harness, "aof-tail")
+    saved = wait_for(lambda: (value := document(harness, capture)).get("delivered") and value)
     keys = credential_keys(harness, "key-a")
     tombstone = "ovgw:v1:kd:{aof-deleted-scope}"
     harness.redis("SET", tombstone, 1)
@@ -347,19 +350,34 @@ def test_06_aof_restart_preserves_management_tombstones_and_pending_capture(harn
     harness.kubectl("rollout", "status", "statefulset/redis", "--timeout=90s")
     assert harness.redis("EXISTS", tombstone) == "1"
     assert all(harness.redis("EXISTS", key) == "1" for key in keys)
-    assert document(harness, capture)
-    wait_for(lambda: len(written_messages(records(harness))) >= 2, timeout=90)
-    assert not document(harness, capture).get("pending")
+    assert document(harness, capture) == saved
+    # The cursor survived, so the next turn writes only itself to the same session.
+    history.append({"role": "user", "content": "continue after the restart"})
+    history.append(chat(harness, pod, "aof-tail", history))
+    session = saved["ov_session"]
+
+    def written():
+        sessions = records(harness)["libraries"]["library-a"]["sessions"]
+        return len(sessions[session]["messages"]) == 4 and sessions[session]["messages"]
+
+    messages = wait_for(written, timeout=30)
+    assert [(m["role"], message_text(m)) for m in messages] == [
+        (m["role"], m["content"]) for m in history
+    ]
+    ids = [source for m in messages for source in m["source_message_ids"]]
+    assert len(ids) == len(set(ids)) == 4
 
 
 @pytest.mark.standalone
-def test_07_restart_without_aof_loses_tail_but_recreates_key(harness):
-    harness.redeploy({"default_profile": {"idle_seconds": 120}})
+def test_07_restart_without_aof_loses_capture_document_but_recreates_key(harness):
     pod = harness.pods()[0]
-    chat(harness, pod, "lost-tail", [{"role": "user", "content": "nonpersistent pending tail"}])
+    chat(harness, pod, "lost-tail", [{"role": "user", "content": "saved before data loss"}])
     _, capture = session_keys(harness, "lost-tail")
+    # The turn is in OpenViking before Redis loses the document that points to it.
+    wait_written(harness, 2)
+    wait_for(lambda: document(harness, capture).get("delivered"))
     old_keys = harness.redis_keys("ovgw:*")
-    assert old_keys and document(harness, capture)["pending"]
+    assert old_keys
     stop_redis(harness, aof=False)
     harness.kubectl("scale", "statefulset/redis", "--replicas=1")
     harness.kubectl("rollout", "status", "statefulset/redis", "--timeout=90s")

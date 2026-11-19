@@ -57,6 +57,8 @@ def _configure_test_env(monkeypatch, tmp_path):
     config_path.write_text(
         json.dumps(
             {
+                # Session endpoint tests use an AGFS mock without leader leases.
+                "enable_watch_scheduler": False,
                 "storage": {
                     "workspace": str(tmp_path / "workspace"),
                     "agfs": {"backend": "local"},
@@ -1263,6 +1265,37 @@ async def test_add_message_persistence_regression(client: httpx.AsyncClient, ser
     assert len(session.messages) == 2
     assert session.messages[0].content == "Message A"
     assert session.messages[1].content == "Message B"
+
+
+@pytest.mark.parametrize("batch", [False, True])
+async def test_interrupted_assistant_reply_survives_session_history_reload(
+    client: httpx.AsyncClient, service, batch: bool
+):
+    created = await client.post("/api/v1/sessions", json={})
+    assert created.status_code == 200
+    session_id = created.json()["result"]["session_id"]
+    endpoint = f"/api/v1/sessions/{session_id}/messages"
+    replies = [
+        {"role": "assistant", "content": "Partial reply", "interrupted": True},
+        {"role": "assistant", "content": "Completed reply"},
+    ]
+
+    if batch:
+        result = await client.post(f"{endpoint}/batch", json={"messages": replies})
+        assert result.status_code == 200
+    else:
+        for reply in replies:
+            result = await client.post(endpoint, json=reply)
+            assert result.status_code == 200
+
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+    history = service.sessions.session(ctx, session_id)
+    await history.load()
+    partial, completed = history.messages
+    assert partial.content == "Partial reply"
+    assert partial.to_dict()["interrupted"] is True
+    assert completed.content == "Completed reply"
+    assert "interrupted" not in completed.to_dict()
 
 
 async def test_get_session_pending_tokens_counts_tool_only_messages(

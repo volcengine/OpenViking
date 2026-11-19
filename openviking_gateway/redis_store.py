@@ -17,18 +17,17 @@ k:{<scope>}:r:<anchor>              set     sessions with reply:<anchor>;     ke
                                             ttl                               kernel_replies_prune
 k:{<scope>}:st:<h(key)>             hash    v, ver; ttl                       kernel_state_swap,
                                                                               kernel_keep
-k:{cap}:<scope>:<h(session)>        hash    v, ver, ready (epoch s), lease    kernel_capture_*
-                                            (epoch ms), owner; ttl
-k:{cap}:ready                       zset    scope NUL session -> due ms       kernel_capture_*
+k:{cap}:<scope>:<h(session)>        hash    v, ver; ttl                       kernel_capture_swap
+k:{cap}:ready                       zset    scope NUL session -> idle commit  kernel_capture_swap,
+                                            due (epoch s)                     kernel_capture_forget
 
-Capture keys share the ``{cap}`` slot so a claim can read the ready queue in one script; the
+Capture keys share the ``{cap}`` slot so a swap can update the waiting set in one script; the
 tombstone is mirrored there because a script may only touch one slot. For the same reason
 the credential pointer is a plain SET after obj_save rather than part of it.
 """
 
 import asyncio
 import time
-import uuid
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
@@ -45,7 +44,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from openviking.server.account_stores.redis_client import create_redis_client
 from openviking_cli.utils.config.agfs_config import RedisCacheConfig
 
-from .capture_store import Document, LeaseLost, backlog_counts
+from .capture_store import Document
 from .records import RecordKind as K
 from .replay_store import INHERITED
 from .storage import AsyncCodec, digest
@@ -307,12 +306,14 @@ class RedisKernelStore:
         self.replay, self.state, self.capture = (
             RedisReplayStore(self),
             RedisStateStore(self),
-            RedisCaptureQueue(self),
+            RedisCaptureStore(self),
         )
         self.touched = OrderedDict()
 
     async def initialize(self):
         await self.client.ping()
+        # Earlier versions scored their delivery queue in milliseconds, far past any due time.
+        await self.client.zremrangebyscore(f"{self.prefix}k:{{cap}}:ready", 1e11, "+inf")
 
     def tombstone(self, scope, capture=False):
         return f"{self.prefix}kd:{{cap}}:{scope}" if capture else f"{self.prefix}kd:{{{scope}}}"
@@ -332,8 +333,6 @@ class RedisKernelStore:
         except ResponseError as error:
             if "OVGW_DELETED" in str(error):
                 raise RuntimeError("Gateway user data has been deleted") from error
-            if "OVGW_LEASE_LOST" in str(error):
-                raise LeaseLost from error
             raise
 
     async def touch(self, key):
@@ -479,17 +478,10 @@ class RedisStateStore:
         )
 
 
-class RedisCaptureQueue:
+class RedisCaptureStore:
     def __init__(self, store):
         self.store = store
         self.ready = f"{store.prefix}k:{{cap}}:ready"
-
-    def keys(self, scope, session):
-        return [
-            self.store.tombstone(scope, capture=True),
-            self.store.capture_key(scope, session),
-            self.ready,
-        ]
 
     async def get(self, scope, session):
         value, version = await self.store.client.hmget(
@@ -501,16 +493,20 @@ class RedisCaptureQueue:
             else Document()
         )
 
-    async def swap(self, scope, session, previous, value, ready, owner=None):
+    async def swap(self, scope, session, previous, value):
+        due = value.get("idle_at")
         result = await self.store.script(
             "kernel_capture_swap",
-            self.keys(scope, session),
+            [
+                self.store.tombstone(scope, capture=True),
+                self.store.capture_key(scope, session),
+                self.ready,
+            ],
             [
                 previous.version,
                 await self.store.codec.encode(value),
-                "" if ready is None else repr(ready),
-                owner or "",
                 self.store.ttl,
+                "" if due is None else repr(due),
                 scope + "\0" + session,
             ],
         )
@@ -518,38 +514,13 @@ class RedisCaptureQueue:
             await self.store.touch(self.store.replay_key(scope, session))
         return bool(result)
 
-    async def claim(self, lease_seconds=120):
-        candidates = await self.store.client.zrangebyscore(
-            self.ready, "-inf", time.time() * 1000, start=0, num=8
-        )
-        for member in candidates:
-            scope, session = member.decode().split("\0", 1)
-            owner = uuid.uuid4().hex
-            result = await self.store.script(
-                "kernel_capture_claim",
-                self.keys(scope, session),
-                [owner, lease_seconds * 1000, member],
-            )
-            if result:
-                return {
-                    "scope": scope,
-                    "session": session,
-                    "owner": owner,
-                    "document": Document(await self.store.codec.decode(result[0]), int(result[1])),
-                }
-        return None
+    async def waiting(self, before):
+        members = await self.store.client.zrangebyscore(self.ready, "-inf", before)
+        return [tuple(member.decode().split("\0", 1)) for member in members]
 
-    async def backlog(self, now):
-        client, due = self.store.client, now * 1000
-        scheduled = await client.zcard(self.ready)
-        count = await client.zcount(self.ready, "-inf", due)
-        # Scores are ready times in ms, or 0 for a capture due at once.
-        oldest = await client.zrangebyscore(self.ready, "(0", due, start=0, num=1, withscores=True)
-        return backlog_counts(scheduled, count, oldest[0][1] / 1000 if oldest else 0, now)
-
-    async def release(self, item):
+    async def forget(self, scope, session, version):
         await self.store.script(
-            "kernel_capture_release",
-            self.keys(item["scope"], item["session"]),
-            [item["owner"], item["scope"] + "\0" + item["session"]],
+            "kernel_capture_forget",
+            [self.store.capture_key(scope, session), self.ready],
+            [version, scope + "\0" + session],
         )

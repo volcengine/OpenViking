@@ -233,8 +233,10 @@ def make_task(
 @pytest.fixture
 async def registered(setup):
     """Create a saved configuration and its unstarted task for lifecycle scenarios."""
-    record = new_record(PARAMS)
-    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    compile_name = await setup.store.create(
+        "acme", "alice", new_record(PARAMS), compile_name="wiki"
+    )
+    record = await setup.store.get("acme", "alice", compile_name)
     return record, compile_name, make_task(setup, compile_name=compile_name, record=record)
 
 
@@ -424,7 +426,7 @@ async def test_acceptance_times_are_idempotent_and_never_move_backwards(setup, r
     )
     await setup.lifecycle.record_queued(first)
     current = await setup.store.get("acme", "alice", compile_name)
-    assert current["task_first_create_time"] == 100
+    assert current["task_first_create_time"] == record["task_first_create_time"]
     assert current["last_run_time"] == 300
     runs = await setup.store.list_runs("acme", "alice", compile_name)
     assert [run["meta"]["trigger"] for run in runs] == ["scheduled", "manual", "initial"]
@@ -784,7 +786,7 @@ async def test_initial_run_uses_config_state_without_listing_tasks(setup, regist
     assert initial["meta"]["trigger"] == "initial"
     assert scheduled["meta"]["trigger"] == "scheduled"
     state = await setup.store.get("acme", "alice", compile_name)
-    assert state["task_first_create_time"] == first.created_at
+    assert state["task_first_create_time"] == record["task_first_create_time"]
     list_tasks.assert_not_awaited()
 
 
@@ -837,7 +839,7 @@ async def test_finalization_does_not_search_conflicts(setup, registered, status)
 @pytest.mark.parametrize("run_exists", [False, True])
 async def test_cancel_before_start_repairs_registration(setup, registered, run_exists):
     """Cancellation without a start repairs missing runs and unpersisted acceptance times."""
-    _, compile_name, task = registered
+    record, compile_name, task = registered
     if run_exists:
         await setup.store.put_run("acme", "alice", compile_name, new_run(task))
 
@@ -845,7 +847,8 @@ async def test_cancel_before_start_repairs_registration(setup, registered, run_e
 
     assert result.status == "cancelled"
     state = await setup.store.get("acme", "alice", compile_name)
-    assert state["task_first_create_time"] == state["last_run_time"] == task.created_at
+    assert state["task_first_create_time"] == record["task_first_create_time"]
+    assert state["last_run_time"] == task.created_at
     assert state["progress"] == {}
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["status"] == "cancelled"

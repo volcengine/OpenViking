@@ -641,6 +641,15 @@ async def test_vikingfs_rejects_empty_query_before_initialization(method_name: s
         await method(query=" ")
 
 
+async def test_ranked_search_requires_query_with_context_type_filter(client: httpx.AsyncClient):
+    resp = await client.post("/api/v1/search/search", json={"context_type": ["resource"]})
+
+    assert resp.status_code == 400
+    error = resp.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    assert "must not be empty" in error["message"]
+
+
 async def test_find_with_since_compiles_time_range(client: httpx.AsyncClient, service, monkeypatch):
     captured = {}
 

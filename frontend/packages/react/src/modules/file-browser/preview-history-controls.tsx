@@ -5,7 +5,10 @@ import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { Select, SelectOption } from '../../shared/primitives/select/index.js';
 import type { usePreviewHistory } from './use-preview-history.js';
 import type { PreviewHistoryProps } from './preview-history.js';
-import type { PreviewHistoryEntry } from './preview-workflow-types.js';
+import type {
+  FileBrowserWorkflowLabels,
+  PreviewHistoryEntry,
+} from './preview-workflow-types.js';
 export function historyVersionLabel(
   entry: PreviewHistoryEntry,
   locale: PreviewHistoryProps['locale'],
@@ -23,6 +26,16 @@ export function historyVersionLabel(
     parts.find((item) => item.type === type)?.value;
   return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}`;
 }
+
+export function historyVersionBadge(
+  entry: PreviewHistoryEntry,
+  deleted: boolean,
+  text: FileBrowserWorkflowLabels,
+) {
+  if (deleted) return text.deletedBadge;
+  return entry.restored ? text.rollbackBadge : undefined;
+}
+
 export function PreviewHistoryControls({
   history,
   text,
@@ -59,16 +72,23 @@ export function PreviewHistoryControls({
       >
         {entries
           .filter((entry) => !comparison || entry.id !== history.selected?.id)
-          .map((entry) => (
-            <SelectOption key={entry.id} value={entry.id}>
-              {historyVersionLabel(entry, locale)}
-              {entry.restored ? (
-                <span className="ov-file-history__version-badge">
-                  {text.rollbackBadge}
-                </span>
-              ) : null}
-            </SelectOption>
-          ))}
+          .map((entry) => {
+            const badge = historyVersionBadge(
+              entry,
+              history.deletedIds.has(entry.id),
+              text,
+            );
+            return (
+              <SelectOption key={entry.id} value={entry.id}>
+                {historyVersionLabel(entry, locale)}
+                {badge ? (
+                  <span className="ov-file-history__version-badge">
+                    {badge}
+                  </span>
+                ) : null}
+              </SelectOption>
+            );
+          })}
       </Select>
       {!comparison ? (
         <>

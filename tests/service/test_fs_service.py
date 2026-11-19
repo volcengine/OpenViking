@@ -1274,6 +1274,27 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 
 
 @pytest.mark.asyncio
+async def test_resource_rm_skips_refresh_when_freshness_lock_is_busy(request_context, monkeypatch):
+    viking_fs = _FakeVikingFS()
+    service = FSService(viking_fs=viking_fs)
+    queue_manager = _FakeQueueManager()
+    monkeypatch.setattr(fs_module, "get_queue_manager", lambda: queue_manager)
+    monkeypatch.setattr(
+        fs_module,
+        "plan_abstract_overview_refresh",
+        AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy")),
+    )
+    service._wait_for_refresh = AsyncMock()
+
+    result = await service.rm("viking://resources/docs/a.md", ctx=request_context, wait=True)
+
+    assert len(viking_fs.rm_calls) == 1
+    assert result["semantic_status"] == "skipped"
+    assert queue_manager.messages == []
+    service._wait_for_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
     service = FSService(viking_fs=_FakeVikingFS())
     service._enqueue_delete_refresh = AsyncMock()

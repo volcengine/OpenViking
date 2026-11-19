@@ -1172,18 +1172,16 @@ async def test_incremental_inventory_recovers_known_uris_without_rescanning(
     # complete inventory; it remains available for the planner to repair.
     expected[f"{root}/unindexed.py"] = {2}
 
+    records = await backend.get_incremental_inventory_under_uri(
+        root, ctx=_ctx(), batch_size=3, expected_levels=expected
+    )
+    expected_ids = set(backend.records)
     if known_missing_uri:
-        records = await backend.get_incremental_inventory_under_uri(
-            root, ctx=_ctx(), batch_size=3, expected_levels=expected
-        )
-        assert set(records) == set(backend.records)
         assert records["deleted-l2"]["md5"] == "old"
     else:
-        with pytest.raises(RuntimeError, match="4 unique records but count was 5"):
-            await backend.get_incremental_inventory_under_uri(
-                root, ctx=_ctx(), batch_size=3, expected_levels=expected
-            )
-    assert count.await_count == 1
+        expected_ids.remove("deleted-l2")
+    assert set(records) == expected_ids
+    count.assert_not_awaited()
     assert len(scan_calls) == (1 if incomplete_scan == "short" else 2)
     if incomplete_scan == "duplicate":
         assert Range("updated_at", gte=11) in scan_calls[1]["filter"].conds
@@ -1193,19 +1191,16 @@ async def test_incremental_inventory_recovers_known_uris_without_rescanning(
 
 
 @pytest.mark.asyncio
-async def test_incremental_inventory_rejects_count_undershoot_without_retry(monkeypatch):
-    root = "viking://resources/docs"
-    backend = _MemoryTransferBackend(
-        [_record("root-l0", root, level=0), _record("root-l1", root, level=1)]
+async def test_incremental_inventory_returns_file_record_without_count(monkeypatch):
+    uri = "viking://resources/docs/manifest.json"
+    backend = _MemoryTransferBackend([_record("manifest-l2", uri)])
+    count = AsyncMock(return_value=0)
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    records = await backend.get_incremental_inventory_under_uri(
+        uri, ctx=_ctx(), recursive=False, expected_levels={uri: {2}}
     )
-    monkeypatch.setattr(
-        backend,
-        "_strict_transfer_count",
-        AsyncMock(return_value=1),
-    )
-    with pytest.raises(RuntimeError, match="2 unique records but count was 1"):
-        await backend.get_incremental_inventory_under_uri(root, ctx=_ctx(), batch_size=2)
-    assert backend._strict_transfer_count.await_count == 1
+    assert set(records) == {"manifest-l2"}
+    count.assert_not_awaited()
 
 
 @pytest.mark.asyncio

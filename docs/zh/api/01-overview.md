@@ -598,7 +598,7 @@ JSON 输出 - 错误：
 | PUT / DELETE | `/gateway/admin/policies/{identifier}` | 创建/替换或删除上下文配置 |
 | GET / POST | `/gateway/admin/keys` | 列出调用方可见的网关密钥，或签发新密钥 |
 | DELETE | `/gateway/admin/keys/{identifier}` | 吊销网关密钥 |
-| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话重新开始保存 |
+| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话改存到新的 OpenViking 会话，下一轮结束时写入完整历史 |
 | DELETE | `/gateway/admin/users/{user_id}/data` | admin 或 root：删除某个用户的网关数据 |
 | DELETE | `/gateway/admin/account/data` | root：删除整个账号的网关数据 |
 

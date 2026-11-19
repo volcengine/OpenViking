@@ -4,6 +4,7 @@ import type { FilePreviewLabels } from '../types.js';
 const messages = {
   previewImage: '放大图片',
   closePreview: '关闭预览',
+  expandVideo: '放大视频',
   videoTranscript: '转录文稿',
   videoFrames: (count: number) => (count ? `抽帧图片 (${count})` : '抽帧图片'),
   videoSpeaker: '说话人',

@@ -12,6 +12,7 @@ import { Modal } from '../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
 import { FileBrowserSearchAdvanced } from './file-browser-search-advanced.js';
 import { FileBrowserSearchHeader } from './file-browser-search-header.js';
+import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
 import { useSearchHighlight } from './use-search-highlight.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
 import {
@@ -153,13 +154,9 @@ export function FileBrowserSearch({
     inputRef.current?.focus();
     search.retry();
   };
+  const retryOnEnter = search.error ? retry : undefined;
   const { active, activeIndex, listId, onHighlight, onKeyDown } =
-    useSearchHighlight(
-      hits,
-      composing,
-      openResult,
-      search.error ? retry : undefined,
-    );
+    useSearchHighlight(hits, composing, openResult, retryOnEnter);
 
   return (
     <Modal
@@ -208,27 +205,27 @@ export function FileBrowserSearch({
               message={useRenderErrors(locale).search}
               resetKeys={[rootUri, query, mode]}
             >
+              <FileBrowserSearchModeRow
+                mode={mode}
+                count={search.result === null ? null : hits.length}
+                text={text}
+                onSelectMode={(next) => {
+                  setMode(next);
+                  setFilters((current) => normalizeFilters(current, next));
+                }}
+              />
               <FileBrowserSearchResults
                 open={open}
-                mode={mode}
                 hits={hits}
                 listId={listId}
                 activeIndex={activeIndex}
                 query={query.trim()}
                 onHighlight={onHighlight}
                 onRetry={retry}
-                fallbackFocusRef={inputRef}
                 loading={search.loading || (awaitingQuery && !!draft.trim())}
                 error={search.error}
                 searched={search.result !== null}
                 text={text}
-                onSelectMode={(next) => {
-                  setMode(next);
-                  // 切模式时把筛选收敛到新模式真正会用的形态，显示与请求才不会脱节。
-                  // Collapse the filters to what the new mode actually uses, so the display
-                  // and the request cannot drift apart.
-                  setFilters((current) => normalizeFilters(current, next));
-                }}
                 onOpen={openResult}
               />
             </ErrorBoundary>

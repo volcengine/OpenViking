@@ -8,18 +8,18 @@ import logging
 import queue
 import sys
 import time
-import traceback
 from collections import Counter
 from importlib.metadata import PackageNotFoundError, version
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 
 import orjson
 
+from openviking_cli.utils.logger import CommonLogFormatter, TraceContextFilter
+
 from .client import CALL
 
 logger = logging.getLogger(__name__)
 snapshot_logger = logging.getLogger("openviking_gateway.snapshot")
-snapshot_logger.setLevel(logging.INFO)
 QUEUE_SIZE = 10000
 BACKUPS = 4
 LOG_MAX_BYTES = 256 * 1024 * 1024
@@ -103,7 +103,7 @@ class Stats:
     def reset(self):
         self.requests = self.rejected_overload = self.store_errors = 0
         self.records_unlogged = self.records_failed = self.records_dropped = 0
-        # Conversations whose turns were written to OpenViking, and failed delivery attempts.
+        # Finished turns written to OpenViking, and ones whose write failed.
         self.capture_delivered = self.capture_failed = 0
         self.errors, self.degradations, self.stream_errors = Counter(), Counter(), Counter()
 
@@ -144,7 +144,6 @@ class Stats:
             "store_errors": self.store_errors,
         }
         delivered, failed = self.capture_delivered, self.capture_failed
-        # Reset before the store is read, so counts made meanwhile go to the next line.
         self.since = now
         self.reset()
         state = app.state
@@ -155,14 +154,7 @@ class Stats:
             "reason": health.get("reason", ""),
             "open_circuits": breaker.open_count() if breaker else 0,
         }
-        capture = {"delivered": delivered, "failed": failed}
-        try:
-            capture.update(await state.store.capture.backlog(time.time()))
-        except Exception as error:
-            # The line still goes out; only the backlog is missing from it.
-            logger.warning("OpenViking Gateway capture backlog failed: %s", type(error).__name__)
-        capture["workers"] = sum(not task.done() for task in getattr(state, "captures", []))
-        line["capture"] = capture
+        line["capture"] = {"delivered": delivered, "failed": failed}
         return line
 
 
@@ -197,41 +189,48 @@ async def snapshot_loop(app, interval, sleep=asyncio.sleep):
         try:
             write_snapshot(app, await app.state.stats.snapshot(app))
         except Exception:
-            logger.exception("OpenViking Gateway snapshot failed")
+            logger.info("gateway snapshot failed; retrying next interval", extra={"degraded": True})
 
 
 class JsonQueueHandler(DroppingQueueHandler):
-    """Turn a log record into its JSON line in the caller's task, where the request ID is set."""
+    """Format application records in the caller's task, preserving Gateway context."""
 
     def prepare(self, record):
         call = CALL.get()
-        value = {
-            "time": record.created,
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
+        record = logging.makeLogRecord(record.__dict__.copy())
         if call and call.request_id:
-            value["request_id"] = call.request_id
-        if record.exc_info:
-            value["exc"] = "".join(traceback.format_exception(*record.exc_info))
-        record = logging.makeLogRecord(
-            {"name": record.name, "levelno": record.levelno, "levelname": record.levelname}
-        )
-        record.msg, record.args = orjson.dumps(value).decode(), None
-        return record
+            record.request_id = call.request_id
+        TraceContextFilter().filter(record)
+        return super().prepare(record)
 
 
-def configure_logging(path, max_bytes=LOG_MAX_BYTES):
-    """Send the application log to ``path`` as JSON lines through a background thread."""
+def configure_logging(path=None, max_bytes=LOG_MAX_BYTES):
+    """Own standalone application output; request-record sinks retain their schema."""
     channel = queue.Queue(maxsize=QUEUE_SIZE)
     handler = JsonQueueHandler(channel)
-    listener = _Listener(channel, rotating_file(path, max_bytes, logging.Formatter("%(message)s")))
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(CommonLogFormatter())
+    output = (
+        rotating_file(path, max_bytes, logging.Formatter("%(message)s"))
+        if path
+        else logging.StreamHandler(sys.stderr)
+    )
+    listener = _Listener(channel, output)
+    handler.listener = listener
     root = logging.getLogger()
     for old in root.handlers[:]:
+        previous = getattr(old, "listener", None)
+        if isinstance(previous, _Listener):
+            previous.stop()
+            for destination in previous.handlers:
+                destination.close()
         root.removeHandler(old)
     root.addHandler(handler)
     root.setLevel(logging.INFO)
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        component = logging.getLogger(name)
+        component.handlers.clear()
+        component.propagate = True
     listener.start()
     atexit.register(listener.stop)
     return listener

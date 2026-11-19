@@ -22,6 +22,7 @@ import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { loadVideoDetails } from './fs-video-details.js';
 import { abortError, readPreviewStat } from './fs-stat.js';
+import { useWikiSaveFeedback } from './use-wiki-save-feedback.js';
 
 export interface UseFsPreviewOptions {
   client: OvClient | null;
@@ -102,7 +103,11 @@ export function useFsPreview({
   const [error, setError] = useState<Error | null>(null);
   const [stat, setStat] = useState<{ uri: string; updatedAt: string }>();
   const [saveGeneration, setSaveGeneration] = useState(0);
-  const [wikiSaving, setWikiSaving] = useState(false);
+  const [wikiSaveFeedback, wikiSave] = useWikiSaveFeedback(
+    client,
+    uri,
+    requestOptions,
+  );
 
   // useEffect 必要性：按 URI、资源类型与请求配置同步远端正文和目录摘要。
   // URI 也会由宿主属性改变，点击事件无法覆盖这些变化，渲染本身不能发请求。
@@ -110,7 +115,7 @@ export function useFsPreview({
   useEffect(() => {
     setDirectory(null);
     setStat(undefined);
-    setWikiSaving(false);
+    wikiSave.reset();
     if (!client || !uri) {
       setTabs(null);
       setActiveKey(null);
@@ -127,19 +132,20 @@ export function useFsPreview({
     setTabs([loadingTab(uri, resourceType !== 'file')]);
     setActiveKey(uri);
     setError(null);
-    const options = { ...requestOptions, signal: controller.signal };
+    const { options, onStatus } = wikiSave.bind(controller.signal);
+    const { signal } = options;
     if (contentKind === 'pending') return () => controller.abort();
     const operation = beginWorkflow(
       client,
       'file_browser_preview_load',
-      controller.signal,
+      signal,
     );
     if (operation) operation.identity = uri;
     setMonitoring(operation);
     const api = operation?.client(client) ?? client;
     const metadata = readPreviewStat(api, uri, options);
     void metadata.then((result) => {
-      if (!controller.signal.aborted && result?.updatedAt)
+      if (!signal.aborted && result?.updatedAt)
         setStat({ uri, updatedAt: result.updatedAt });
     });
 
@@ -158,7 +164,7 @@ export function useFsPreview({
         resourceType === 'unknown'
           ? (await metadata)?.isDirectory
           : resourceType === 'directory';
-      if (controller.signal.aborted) throw abortError();
+      if (signal.aborted) throw abortError();
       if (isDir)
         return isSystemUri(uri)
           ? { tab: toSystemDirectoryTab(uri, openParent) }
@@ -170,13 +176,10 @@ export function useFsPreview({
           options,
           openParent,
           () => {
-            if (!controller.signal.aborted)
-              setSaveGeneration((value) => value + 1);
+            if (!signal.aborted) setSaveGeneration((value) => value + 1);
           },
           contentKind === 'wiki',
-          (saving) => {
-            if (!controller.signal.aborted) setWikiSaving(saving);
-          },
+          onStatus,
         ),
       };
     })();
@@ -194,7 +197,7 @@ export function useFsPreview({
     // no result may land after it.
     void read.then(
       (result) => {
-        if (controller.signal.aborted) return;
+        if (signal.aborted) return;
         if (result.summary) {
           setDirectory({
             uri,
@@ -218,8 +221,8 @@ export function useFsPreview({
         ).catch(() => undefined);
       },
       (cause: unknown) => {
-        if (isAbort(cause) || controller.signal.aborted) return;
-        operation?.fail(cause, 'protocol', controller.signal);
+        if (isAbort(cause) || signal.aborted) return;
+        operation?.fail(cause, 'protocol', signal);
         setTabs([]);
         setError(cause instanceof Error ? cause : new Error(String(cause)));
       },
@@ -234,7 +237,7 @@ export function useFsPreview({
     openParent,
     generation,
     saveGeneration,
-    requestOptions,
+    wikiSave,
   ]);
 
   const directoryTab =
@@ -266,7 +269,7 @@ export function useFsPreview({
     tabs: directoryTab ? [directoryTab] : tabs,
     activeKey,
     error,
-    wikiSaving,
+    wikiSaveFeedback,
     footer: count === undefined ? undefined : formatCharacterCount(count),
     updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
     setActiveKey,

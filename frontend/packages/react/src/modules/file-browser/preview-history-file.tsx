@@ -28,6 +28,7 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
     retry: props.retryText,
   };
   const selected = history.selected;
+  const deleted = history.content.data === null;
   const comparison =
     history.compare && (history.query.data?.length ?? 0) > 1 ? (
       <PreviewHistoryControls
@@ -57,6 +58,7 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
             query={history.query}
             showContent={props.showContent}
             selectedId={selected?.id}
+            deletedIds={history.deletedIds}
             compare={history.requestedCompare}
             canCompare={history.canCompare}
             text={text}
@@ -124,7 +126,9 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
             view={view}
             compare={history.compare}
             changes={history.changes}
-            addedFile={!history.base}
+            addedFile={
+              !deleted && (!history.base || history.current.data === null)
+            }
             identical={history.identical}
             copy={copy}
             copied={Boolean(copiedId && copiedId === selected?.id)}
@@ -138,7 +142,9 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
                   selected={selected}
                   current={history.query.data?.[0]}
                   disabled={
-                    history.content.loading || Boolean(history.content.error)
+                    deleted ||
+                    history.content.loading ||
+                    Boolean(history.content.error)
                   }
                   onRestored={(unchanged) => {
                     toast.success({
@@ -155,7 +161,7 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
             }
             onCopy={() => {
               const body = history.content.data;
-              if (body !== undefined && selected)
+              if (typeof body === 'string' && selected)
                 void copy.run(
                   async () => navigator.clipboard.writeText(body),
                   () => setCopiedId(selected.id),

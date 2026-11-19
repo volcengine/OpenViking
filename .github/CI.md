@@ -42,13 +42,13 @@ and container image for its consumers; no extra selector job or token is needed.
 Studio, both musl CLI targets, other tests/checks and source packaging stay hosted. Native ARM,
 macOS and Windows assignments are unchanged.
 
-Self-hosted builds and tests require Docker access and use disposable containers with
+Linux builds and tests using CI images require Docker access and use disposable containers with
 job-local HOME/Cargo/Rustup directories and post-job ownership cleanup.
 Wheels retain Ubuntu 20.04/glibc 2.31. API native runtime preparation uses Ubuntu
 24.04 on both destinations so its artifact remains compatible with hosted tests.
-Self-hosted API, database and cuVS consumers also use Ubuntu 24.04 containers;
-hosted consumers retain their existing host execution. Database consumers use
-service-container DNS inside containers and loopback on hosted runners.
+API, database and cuVS consumers use Ubuntu 24.04 containers on both destinations.
+Linux Full Test, API Effect Tests and CodeQL analysis also use the same image on
+hosted runners. Database consumers use service-container DNS on both destinations.
 The Linux wheel execution timeout is 60 minutes and native preparation is limited
 to 45 minutes, with a 15-minute limit on system package installation. Timeouts start when execution begins, not while queued; there is
 no automatic queue fallback.
@@ -85,18 +85,24 @@ immutable digest reference printed in the workflow summary:
 | Image | Repository variable | Consumers |
 | --- | --- | --- |
 | Ubuntu 20.04 amd64 | `CI_UBUNTU20_IMAGE` | Linux x86_64 wheels on hosted and self-hosted runners |
-| Ubuntu 24.04 amd64 | `CI_UBUNTU24_IMAGE` | API native producer and self-hosted API/database/cuVS consumers |
+| Ubuntu 24.04 amd64 | `CI_UBUNTU24_IMAGE` | API native producer and Linux API/database/cuVS on hosted and eligible self-hosted runners; Full Test, API Effect Tests and CodeQL analysis on hosted runners only |
 
 Another reachable public
 registry can also host the image; avoid mutable `latest` tags.
 
-The API native producer uses the Ubuntu 24.04 image and passes it to its self-hosted test
-consumers. Each bootstrap checks actual dpkg installation status: complete images
+The API native producer uses the Ubuntu 24.04 image and passes it to its Linux test
+consumers regardless of runner pool. Other Linux test/analysis jobs select the
+same variable directly. Lite Test accepts an explicit `linux_container` override;
+an empty override uses the configured image. Each bootstrap checks actual dpkg installation status: complete images
 skip apt, while incomplete images install the required packages. With no image
-variable, the producer uses stock `ubuntu:24.04` and installs packages as before.
+variable, these jobs use stock `ubuntu:24.04` and install their required packages.
 With no `CI_UBUNTU20_IMAGE`, x86_64 wheels fall back to stock `ubuntu:20.04`.
-The first pull still downloads the image; subsequent jobs on the same host reuse
-Docker's cached layers. Rebuild and validate periodically for OS package updates,
+GitHub-hosted jobs start on fresh machines and pull the image for each job;
+there is no Docker layer cache shared between jobs. Self-hosted jobs on the same
+host can reuse Docker's cached layers after the first pull. On hosted runners,
+the image primarily fixes system package versions and aligns the environments;
+skipping apt alone does not establish an end-to-end speedup.
+Rebuild and validate periodically for OS package updates,
 then update the digest variable. Remove the variable to return to stock Ubuntu.
 The Ubuntu 20.04 Dockerfile can be built with the same local command below by
 substituting `ubuntu20-ci.Dockerfile` and `openviking-ci-ubuntu20`.
@@ -164,9 +170,24 @@ output into new immutable entries. Prefix restores select the newest compatible
 cache, preferring the same Cargo lockfile before other entries for that toolchain.
 Only non-PR runs on the official repository's `main`
 branch save these caches; PR, fork and tag runs restore only. Ccache is capped at
-256 MiB per entry and Cargo incremental output is disabled. Older main entries
-remain subject to GitHub's cache quota and eviction. Source changes still rebuild
-correctly through Cargo/ccache input validation.
+256 MiB per entry and Cargo incremental output is disabled. After a successful
+macOS Intel warmup, a separate job removes superseded `cargo-v3-*` main entries,
+keeping the two newest per OS/architecture/target/cache-format version plus all
+entries created within 24 hours. Older toolchain and lockfile variants share
+this retention group. Other main cache families are untouched. PR-scoped caches
+are removed only for closed/merged PRs and only after the cache is seven days old.
+Unknown key formats and refs are preserved; PR lookup errors abort cleanup.
+Only the cleanup job receives `actions: write`; warmup remains read-only.
+Preview the current deletion plan locally with
+`python3 .github/scripts/cache_maintenance.py --repo volcengine/OpenViking`
+(authenticated `gh` required); `--apply` performs deletion. GitHub's cache quota
+and eviction still apply, including during bursts inside the retention windows.
+Source changes still rebuild correctly through Cargo/ccache input validation.
+Rust, C/C++ compiler or CMake upgrades change the toolchain fingerprint and can
+miss both Cargo and ccache restores until main warmup finishes. A cold build
+after such an upgrade is expected; compare timings with the same fingerprint.
+Non-Linux wheel jobs have a 90-minute timeout and the shared Studio job has a
+15-minute timeout, so a stuck producer cannot indefinitely block later warmups.
 Wheel building compiles each native component once.
 Studio is built once per distribution workflow and downloaded by each wheel job.
 Bootstrap/version/repair/test commands use `uv run --no-sync`; test environments
@@ -185,10 +206,14 @@ python3 -m pip install pytest PyYAML
 python3 -m pytest --noconftest -q -o addopts='' \
   tests/misc/test_abi3_packaging_config.py \
   tests/misc/test_release_tag_selection.py \
-  tests/misc/test_linux_runner.py
+  tests/misc/test_linux_runner.py \
+  tests/misc/test_macos_wheel_cache.py \
+  tests/misc/test_cli_model_query_retry.py \
+  tests/misc/test_cache_maintenance.py
 actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
   .github/workflows/_build.yml .github/workflows/_test_lite.yml \
-  .github/workflows/_test_full.yml .github/workflows/rust-cli.yml
+  .github/workflows/_test_full.yml .github/workflows/rust-cli.yml \
+  .github/workflows/macos-wheel-cache.yml
 ```
 
 Compare wall time, runner queue time, compiler cache hits and native build counts

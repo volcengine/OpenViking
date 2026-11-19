@@ -11,3 +11,4 @@
 
 @import '../../shared/primitives/notification/style.css';
 @import './task-notifications.css';
+@import './activation-card/activation-card.css';

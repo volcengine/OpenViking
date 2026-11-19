@@ -22,6 +22,7 @@ from openviking.core.namespace import (
 )
 from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import TextPart
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_updater import MemoryUpdateResult
@@ -373,7 +374,12 @@ class ResourceMemoryLinkService:
                 recursive=recursive,
             )
         except Exception as exc:
-            logger.warning("Resource deletion memory commit failed for %s: %s", resource_uri, exc)
+            logger.info(
+                "resource deletion memory commit failed; continuing reference cleanup uri=%s error_type=%s",
+                safe_uri_for_log(resource_uri),
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
             commit_result = {"status": "failed", "error": str(exc)}
 
         post_commit_matches = await self._find_referencing_memories(
@@ -466,9 +472,10 @@ class ResourceMemoryLinkService:
             resource_uri=resource_uri,
         )
         if candidate_uris is None:
-            logger.warning(
-                "Skipping resource memory reference scan for %s because grep is unavailable",
-                resource_uri,
+            logger.info(
+                "resource memory reference scan skipped; grep unavailable uri=%s",
+                safe_uri_for_log(resource_uri),
+                extra={"degraded": True},
             )
             return []
         return await self._read_referencing_memory_matches(
@@ -506,10 +513,11 @@ class ResourceMemoryLinkService:
             except (NotFoundError, FileNotFoundError):
                 continue
             except Exception as exc:
-                logger.debug(
-                    "Resource memory grep failed for %s, skipping reference scan: %s",
-                    memory_root,
-                    exc,
+                logger.info(
+                    "resource memory grep failed; skipping reference scan uri=%s error_type=%s",
+                    safe_uri_for_log(memory_root),
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
                 )
                 return None
 

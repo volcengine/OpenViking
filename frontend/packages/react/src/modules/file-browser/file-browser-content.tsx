@@ -1,7 +1,6 @@
 import { useExposureRef } from '../../shared/analytics/use-exposure.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
+import { forwardRef, useMemo, useState, type CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
@@ -13,15 +12,12 @@ import {
 } from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
-import {
-  resolveLabels,
-  resolvePreviewLabels,
-  resolveSummaryLabels,
-} from './file-browser-labels.js';
+import { resolveLabels, resolvePaneLabels } from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js';
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
+import { usePackImportPicker } from './use-pack-import-picker.js';
 import { useFileBrowserHandle } from './use-file-browser-handle.js';
 import { useFileBrowserUri } from './use-file-browser-uri.js';
 import type {
@@ -51,25 +47,28 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     defaultUri,
     rootUri = 'viking://',
     defaultExpandedUri,
+    defaultExpandedUris,
+    defaultExpansionSnapshot,
     locale: localeProp,
     agentConnect,
     agentConnectOpen,
     onAgentConnectOpenChange,
     dashboardKinds,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     acl,
     readOnly,
     previewActions,
     onUriChange,
     onSelect,
+    onExpandedUrisChange,
+    onExpansionSnapshotChange,
     onImportResources,
     renderImportResources,
     previewSlots,
     labels,
     requestOptions,
-    className,
-    style,
     ...rest
   }: FileBrowserProps,
   ref,
@@ -79,9 +78,8 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     useFileBrowserUri(uri, defaultUri, onUriChange);
   const [preferredTreeWidth, setPreferredTreeWidth] =
     useState(TREE_DEFAULT_WIDTH);
-  const { ref: layoutRef, width: layoutWidth } =
-    useContainerWidth<HTMLDivElement>();
-  const stacked = layoutWidth > 0 && layoutWidth < SIDE_BY_SIDE_MIN_WIDTH;
+  const { ref: layoutRef, width } = useContainerWidth<HTMLDivElement>();
+  const stacked = width > 0 && width < SIDE_BY_SIDE_MIN_WIDTH;
   const text = resolveLabels(labels, locale, stacked);
 
   // 上限随容器变化：宿主把整个模块塞进窄栏时，树不能继续按 520px 抢地方。当前
@@ -91,28 +89,20 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   // must not have the tree keep claiming 520px. The current width is re-clamped
   // rather than discarded, so the tree returns to where it was dragged once the
   // container widens again.
-  const treeMaxWidth = resolveTreeMaxWidth(layoutWidth);
+  const treeMaxWidth = resolveTreeMaxWidth(width);
   const treeWidth = Math.min(preferredTreeWidth, treeMaxWidth);
 
-  // 摘要文案只影响展示，不作为预览请求的依赖。
-  // Summary copy changes presentation without restarting preview requests.
-  const summaryLabels = useMemo(
-    () => resolveSummaryLabels(locale, labels),
-    [locale, labels],
-  );
-
-  // 宿主文案和语言未变时，保留预览覆盖对象的引用。
-  // Preserve the preview overrides while the host copy and language are unchanged.
-  const previewLabels = useMemo(
-    () => resolvePreviewLabels(resolveLabels(labels, locale)),
+  // Keep preview and summary copy stable until locale or host overrides change.
+  const { summaryLabels, previewLabels } = useMemo(
+    () => resolvePaneLabels(labels, locale),
     [labels, locale],
   );
-
   const browser = useFileBrowser({
     rootUri,
     locale,
     dashboardKinds,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     dashboardLabels: labels?.dashboard,
     controlled: isControlled,
@@ -120,6 +110,10 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     formatCharacterCount: text.formatCharacterCount,
     accessLabels: text,
     defaultExpandedUri,
+    defaultExpandedUris,
+    defaultExpansionSnapshot,
+    onExpandedUrisChange,
+    onExpansionSnapshotChange,
     currentUri,
     requestOptions,
     onUriChange: changeUri,
@@ -128,17 +122,21 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   const permissions = useFileBrowserAcl({
     uri: browser.currentUri,
     acl,
+    readOnly,
     locale,
     labels: labels?.acl,
     requestOptions,
     refresh: browser.actions.refresh,
   });
+  const pack = usePackImportPicker(layoutRef, text, locale, permissions);
   const navigation = useFileBrowserHandle(
     browser,
     ref,
     rootUri,
     uri,
     reportedUri,
+    pack.choosePackFile,
+    defaultExpansionSnapshot !== undefined || defaultExpandedUris !== undefined,
   );
 
   const search = useFileBrowserSearchDialog(layoutRef);
@@ -152,11 +150,11 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
       <div
         {...rest}
         ref={exposure}
-        className={className ? `${baseClass} ${className}` : baseClass}
+        className={[baseClass, rest.className].filter(Boolean).join(' ')}
         {...search.shortcut}
         style={
           {
-            ...style,
+            ...rest.style,
             // 分隔条是独立一列，树宽只作用在自己身上，两者相加才是左栏占用。
             // The divider is its own column: the tree width applies to the tree alone
             // and the two together are what the left side occupies.
@@ -216,20 +214,17 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
         />
       </div>
       {permissions.drawer}
+      {pack.dialog}
       <FileBrowserSearch
         key={search.session}
-        open={search.open}
+        {...search.dialog}
         locale={locale}
         rootUri={rootUri}
-        triggerRef={layoutRef}
         text={text}
         requestOptions={requestOptions}
-        advancedOpen={search.advanced}
-        onToggleAdvanced={search.setAdvanced}
         onOpenResource={(target) => {
           void navigation.openResource(target).catch(() => {});
         }}
-        onClose={search.close}
       />
     </LocaleProvider>
   );

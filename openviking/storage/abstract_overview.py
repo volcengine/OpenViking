@@ -27,6 +27,7 @@ from urllib.parse import quote, unquote, urlsplit
 import yaml
 
 from openviking.core.context import ContextLevel
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
@@ -536,7 +537,9 @@ async def _read_existing_document(
     try:
         return parse_abstract_overview(raw) if raw is not None else None
     except AbstractOverviewFormatError as exc:
-        logger.warning("[Semantic] Ignoring malformed sidecar %s: %s", uri, exc)
+        logger.info(
+            "Ignoring malformed sidecar %s: %s", safe_uri_for_log(str(uri)), type(exc).__name__
+        )
         return None
 
 
@@ -561,7 +564,11 @@ async def write_abstract_overview(
     """
 
     if is_stale is not None and await is_stale():
-        logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
+        logger.info(
+            "%s Skipping stale semantic write for %s",
+            short_hash(str(log_prefix)),
+            safe_uri_for_log(str(dir_uri)),
+        )
         return AbstractOverviewWriteResult(wrote=False)
 
     overview_uri = f"{dir_uri}/.overview.md"
@@ -576,7 +583,11 @@ async def write_abstract_overview(
         sidecar_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
     try:
         if is_stale is not None and await is_stale():
-            logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
+            logger.info(
+                "%s Skipping stale semantic write for %s",
+                short_hash(str(log_prefix)),
+                safe_uri_for_log(str(dir_uri)),
+            )
             return AbstractOverviewWriteResult(wrote=False)
 
         existing_overview = (
