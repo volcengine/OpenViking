@@ -101,8 +101,9 @@ def _serialize_with_metadata(
             )
             content = render_template(content_template, template_vars, extract_context)
         except Exception:
-            logger.exception(
-                "Failed to render memory content template; using plain content fallback"
+            logger.info(
+                "failed to render memory content template; using plain content fallback",
+                extra={"degraded": True},
             )
 
     clean_metadata = {k: v for k, v in metadata.items() if v is not None}

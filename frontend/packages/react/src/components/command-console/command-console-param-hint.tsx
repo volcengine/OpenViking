@@ -105,7 +105,12 @@ export function CommandConsoleParamHint({
           {details?.usage ?? command.usage}
         </code>
         {params.length ? (
-          <ParameterTable params={params} labels={labels} />
+          <>
+            <div className="ov-command-console__hint-desc">
+              {labels.quoteArguments}
+            </div>
+            <ParameterTable params={params} labels={labels} />
+          </>
         ) : (
           <div className="ov-command-console__hint-empty">
             {labels.noParameters}

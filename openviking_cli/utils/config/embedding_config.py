@@ -711,9 +711,8 @@ class EmbeddingConfig(BaseModel):
                 "At least one embedding configuration (dense, sparse, or hybrid) is required"
             )
         if self.text_source == "summary_only":
-            logger.warning(
-                "embedding.text_source=summary_only is deprecated; use summary_first instead. "
-                "Files without a summary still fall back to content for vectorization."
+            logger.info(
+                "embedding.text_source=summary_only is deprecated; use summary_first instead. Files without a summary still fall back to content for vectorization."
             )
             self.text_source = TEXT_SOURCE_SUMMARY_FIRST
         if self.text_source not in TEXT_SOURCES:

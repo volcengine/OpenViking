@@ -145,3 +145,117 @@
 .ov-viking-bot__user-message-group--answers {
   width: 100%;
 }
+
+.ov-viking-bot__compile-card .ov-viking-bot__interaction-footer {
+  margin-top: 44px;
+}
+.ov-viking-bot__compile-card--compile_name .ov-form-field__label,
+.ov-viking-bot__compile-card--compile_source .ov-form-field__label,
+.ov-viking-bot__compile-card--compile_target .ov-form-field__label {
+  margin: 0;
+}
+.ov-viking-bot__compile-card--compile_target .ov-viking-bot__interaction-card {
+  padding-inline: 12px;
+}
+.ov-viking-bot__compile-card--compile_target .ov-viking-bot__interaction-title {
+  padding-inline: 12px;
+}
+.ov-viking-bot__compile-card--compile_target
+  .ov-viking-bot__interaction-footer {
+  margin-top: 0;
+}
+.ov-viking-bot__compile-source {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.ov-viking-bot__compile-source:has(.ov-viking-bot__compile-source-tags) {
+  gap: 6px;
+  padding-inline: 8px;
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 6px;
+}
+.ov-viking-bot__compile-source-trigger.ov-button {
+  min-height: 36px;
+  padding-inline: 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.ov-viking-bot__compile-source-trigger > svg:first-child {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__compile-source-trigger > svg:last-child {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__compile-source-tags {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-block: 4px;
+}
+.ov-viking-bot__compile-source-tag {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding-inline: 6px 0;
+  border-radius: 4px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 12px;
+}
+.ov-viking-bot__compile-source-tag > :first-child {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-viking-bot__compile-source-tag > .ov-button {
+  min-height: 24px;
+  padding-inline: 4px;
+  font-size: inherit;
+}
+.ov-viking-bot__compile-source-tags + .ov-viking-bot__compile-source-trigger {
+  width: 24px;
+  flex: none;
+  padding: 0;
+  justify-content: center;
+  border: 0;
+}
+.ov-viking-bot__compile-source-tags
+  + .ov-viking-bot__compile-source-trigger
+  > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+}
+.ov-viking-bot__compile-source-tags
+  + .ov-viking-bot__compile-source-trigger
+  > svg:first-child {
+  display: none;
+}
+.ov-viking-bot__compile-skill {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.ov-viking-bot__compile-skill-upload .ov-modal__panel {
+  inline-size: min(480px, calc(100vw - 32px));
+}
+.ov-viking-bot__compile-skill-drop {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px dashed var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 6px;
+  text-align: center;
+}
+.ov-viking-bot__compile-skill-drop input {
+  min-width: 0;
+  width: 100%;
+}

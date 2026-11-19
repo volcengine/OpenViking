@@ -25,6 +25,7 @@ export function useFileBrowserHandle(
   controlledUri: string | undefined,
   reportedUri: RefObject<string | undefined>,
   choosePackFile: FileBrowserHandle['choosePackFile'],
+  restoreSelection: boolean,
 ) {
   const treeRef = useRef<FileTreeHandle>(null);
   const treeScrollRef = useRef<HTMLDivElement>(null);
@@ -33,7 +34,8 @@ export function useFileBrowserHandle(
   const { openResource: open, reveal, cancelReveal } = browser.actions;
   const { rows, currentUri, selectedId, identifyUri, isReady } = browser;
   const previousUri = useRef(controlledUri);
-  const pendingUri = useRef<string | undefined>(undefined);
+  const pendingUri = useRef(restoreSelection ? controlledUri : undefined);
+  const preserveInitialExpansion = useRef(restoreSelection);
   const cancelScroll = useCallback(() => {
     active.current?.resolve(false);
     active.current = null;
@@ -82,6 +84,7 @@ export function useFileBrowserHandle(
   useEffect(() => {
     if (previousUri.current !== controlledUri) {
       previousUri.current = controlledUri;
+      preserveInitialExpansion.current = false;
       const fromBrowser =
         controlledUri !== undefined && reportedUri.current === controlledUri;
       reportedUri.current = undefined;
@@ -97,7 +100,11 @@ export function useFileBrowserHandle(
     if (!target || !isReady) return;
     pendingUri.current = undefined;
     // The preview already follows the prop. Listing failures are rendered in the tree.
-    void navigate(target, () => reveal(target)).catch(() => {});
+    const preserveExpansion = preserveInitialExpansion.current;
+    preserveInitialExpansion.current = false;
+    void navigate(target, () => reveal(target, preserveExpansion)).catch(
+      () => {},
+    );
   }, [
     controlledUri,
     isReady,

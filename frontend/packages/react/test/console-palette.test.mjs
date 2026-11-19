@@ -31,6 +31,7 @@ test('slash palette uses the built-in group order and keeps cross-group commands
     assert.deepEqual(names(groups[0]), [
       'add-resource',
       'add-skill',
+      'compile create',
       'compile',
       'find',
       'read',
@@ -73,11 +74,7 @@ test('slash palette uses the built-in group order and keeps cross-group commands
     ];
     assert.deepEqual(
       commands.map((button) => button.textContent),
-      [
-        'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
-        'ov compile --compile-name <name>',
-        'ov task status <task_id>',
-      ],
+      ['ov compile --compile-name <name>', 'ov task status <task_id>'],
     );
     await click(commands[0]);
     assert.equal(host.input.value, commands[0].textContent);
@@ -120,6 +117,7 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       'add-skill',
       'add-memory',
       'find',
+      'compile create',
       'compile',
     ]);
     assert.equal(
@@ -142,8 +140,13 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       );
     await pick('add-resource');
     assert.match(host.input.value, /^ov add-resource https:\/\//);
+    await pick('compile create');
+    assert.equal(
+      host.input.value,
+      'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
+    );
     await pick('compile');
-    assert.equal(host.input.value, 'ov compile ');
+    assert.equal(host.input.value, 'ov compile --compile-name <name>');
     assert.equal(host.records.length, 0);
 
     await host.render({

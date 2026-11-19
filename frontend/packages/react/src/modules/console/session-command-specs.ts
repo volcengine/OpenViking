@@ -3,7 +3,32 @@ import { ConsoleCommandError } from './command-messages.js';
 import type { Argument, ArgumentValues } from './command-parser.js';
 import type { CommandSpec } from './command-specs.js';
 
-const session: Argument = { name: 'session-id', valueKey: 'session_id' };
+import {
+  SESSION_MESSAGE_COMMAND_SPECS,
+  sessionIdArgument as session,
+  sessionTelemetryArgument as telemetry,
+} from './session-message-command-specs.js';
+
+const autoCreate: Argument = {
+  name: 'auto-create',
+  valueKey: 'auto_create',
+  kind: 'boolean',
+  hidden: true,
+};
+const memoryPolicy: Argument = {
+  name: 'memory-policy',
+  valueKey: 'memory_policy',
+  kind: 'json-object',
+  hidden: true,
+};
+const keepRecentCount: Argument = {
+  name: 'keep-recent-count',
+  valueKey: 'keep_recent_count',
+  kind: 'integer',
+  min: 0,
+  max: 10_000,
+  hidden: true,
+};
 const eventTags: Argument = {
   name: 'event-tags',
   valueKey: 'event_tags',
@@ -56,43 +81,27 @@ function sessionConfiguration(values: ArgumentValues, required?: boolean) {
   };
 }
 
-function parseMessages(input: string) {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(input);
-  } catch {
-    return [{ role: 'user', content: input }];
-  }
-  const messages = Array.isArray(parsed)
-    ? parsed
-    : parsed &&
-        typeof parsed === 'object' &&
-        ('role' in parsed || 'content' in parsed)
-      ? [parsed]
-      : [{ role: 'user', content: input }];
-  return messages.map((message: unknown) => {
-    if (
-      !message ||
-      typeof message !== 'object' ||
-      !('role' in message) ||
-      typeof message.role !== 'string' ||
-      !('content' in message) ||
-      typeof message.content !== 'string'
-    )
-      throw new ConsoleCommandError('invalidArgument', '<messages-json>');
-    return { role: message.role, content: message.content };
-  });
-}
-
 export const SESSION_COMMAND_SPECS: readonly CommandSpec[] = [
   {
     name: 'session new',
-    flags: [session, eventTags, autoCommitPolicy, noAutoCommit],
+    flags: [
+      { ...session, aliases: ['--sessionid', '--id'] },
+      eventTags,
+      autoCommitPolicy,
+      noAutoCommit,
+      memoryPolicy,
+      telemetry,
+    ],
     skeleton: 'write',
     request: (values) => ({
       method: 'POST',
       path: OV_PATHS.sessions,
-      body: { session_id: values.session_id, ...sessionConfiguration(values) },
+      body: {
+        session_id: values.session_id,
+        ...sessionConfiguration(values),
+        memory_policy: values.memory_policy,
+        telemetry: values.telemetry,
+      },
     }),
   },
   {
@@ -103,10 +112,15 @@ export const SESSION_COMMAND_SPECS: readonly CommandSpec[] = [
   ...(['get', 'delete'] as const).map((action): CommandSpec => ({
     name: `session ${action}`,
     positional: [session],
+    flags: action === 'get' ? [autoCreate] : undefined,
     skeleton: action === 'get' ? 'status' : 'write',
-    request: ({ session_id }) => ({
+    request: ({ session_id, auto_create }) => ({
       method: action === 'get' ? 'GET' : 'DELETE',
       path: OV_PATH_BUILDERS.session(session_id as string),
+      query:
+        action === 'get'
+          ? { auto_create: auto_create as boolean | undefined }
+          : undefined,
     }),
   })),
   {
@@ -140,53 +154,23 @@ export const SESSION_COMMAND_SPECS: readonly CommandSpec[] = [
       ),
     }),
   },
-  {
-    name: 'session add-message',
-    positional: [session],
-    flags: [
-      { name: 'role', required: true },
-      { name: 'content', required: true, placeholder: 'text' },
-      { name: 'peer-id', valueKey: 'peer_id' },
-    ],
-    skeleton: 'write',
-    request: ({ session_id, ...body }) => ({
-      method: 'POST',
-      path: OV_PATH_BUILDERS.sessionMessages(session_id as string),
-      body,
-    }),
-  },
-  {
-    name: 'session add-messages',
-    positional: [session, { name: 'messages-json', optional: true }],
-    preferredPositional: [session, { name: 'messages-json' }],
-    flags: [{ name: 'messages', hidden: true }],
-    skeleton: 'write',
-    request: ({ session_id, 'messages-json': input, messages: legacy }) => {
-      if (input !== undefined && legacy !== undefined)
-        throw new ConsoleCommandError('duplicateArgument', '<messages-json>');
-      if (input === undefined && legacy === undefined)
-        throw new ConsoleCommandError('missingArgument', '<messages-json>');
-      return {
-        method: 'POST',
-        path: `${OV_PATH_BUILDERS.sessionMessages(session_id as string)}/batch`,
-        body: { messages: parseMessages((input ?? legacy) as string) },
-      };
-    },
-  },
+  ...SESSION_MESSAGE_COMMAND_SPECS,
   {
     name: 'session commit',
     positional: [session],
-    flags: [eventTags, noEventTags],
+    flags: [eventTags, noEventTags, keepRecentCount, telemetry],
     skeleton: 'write',
     request: (values) => {
       const tags = sessionTags(values);
       return {
         method: 'POST',
         path: OV_PATH_BUILDERS.sessionCommit(values.session_id as string),
-        body:
-          tags === undefined
-            ? {}
-            : { extraction_metadata: { event: { tags } } },
+        body: {
+          extraction_metadata:
+            tags === undefined ? undefined : { event: { tags } },
+          keep_recent_count: values.keep_recent_count,
+          telemetry: values.telemetry,
+        },
       };
     },
   },

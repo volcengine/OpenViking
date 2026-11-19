@@ -139,7 +139,7 @@ def validate_task_id(task_id: str) -> str:
 
 
 def new_record(payload: Mapping[str, Any], execution_context: Optional[dict] = None) -> dict:
-    """Build a configuration; run times and successful progress are initially absent."""
+    """Build configuration inputs and empty lifecycle fields for persistence."""
     return {
         "from": list(payload["from"]),
         "to": payload["to"],
@@ -349,6 +349,7 @@ class CompileStateStore:
     ) -> str:
         """Publish a named configuration, atomically rejecting duplicates for the same creator.
 
+        The creation timestamp records publication time in Unix seconds.
         ``before_publish`` registers scheduling under the same state lock; its failure
         leaves the configuration unpublished. This method does not execute Compile.
         """
@@ -363,6 +364,7 @@ class CompileStateStore:
                 raise ConflictError("Compile configuration already exists")
             if before_publish is not None:
                 await before_publish()
+            record["task_first_create_time"] = time.time()
             await self.write_json(path, record, lease)
         return compile_name
 
@@ -772,7 +774,7 @@ class CompileLifecycle:
         run = await self._store.get_run(
             task.account_id, self._owner_user_id(task), compile_name, task.task_id
         )
-        if locked_record["task_first_create_time"] is None:
+        if locked_record["last_run_time"] is None:
             # A persisted initial run survives a failed state.json acceptance write.
             history = await self._store.list_runs(
                 task.account_id, self._owner_user_id(task), compile_name
@@ -782,15 +784,12 @@ class CompileLifecycle:
                 None,
             )
             if initial is not None:
-                locked_record["task_first_create_time"] = initial["created_at"]
-        is_first = locked_record["task_first_create_time"] is None
+                locked_record["last_run_time"] = initial["created_at"]
         if run is None:
             run = new_run(task)
-            if is_first:
+            if locked_record["last_run_time"] is None:
                 run["meta"]["trigger"] = "initial"
             await self._store.put_run(task.account_id, self._owner_user_id(task), compile_name, run)
-        if is_first:
-            locked_record["task_first_create_time"] = task.created_at
         locked_record["last_run_time"] = max(
             locked_record["last_run_time"] or task.created_at, task.created_at
         )
@@ -1280,7 +1279,7 @@ class CompileLifecycle:
                         written_paths=restored, deleted_paths=deleted, project_dir=to, real_ctx=ctx
                     )
                 except Exception:
-                    logger.exception("Compile rollback reindex scheduling failed")
+                    logger.error("compile rollback reindex scheduling failed")
                     self._fs._schedule_vector_rebuild(written=restored, deleted=deleted, ctx=ctx)
 
     async def _commit(

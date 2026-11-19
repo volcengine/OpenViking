@@ -165,7 +165,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 | HTTP API | 结果 |
 |----------|------|
-| `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度与调用时间 |
+| `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度、创建与执行时间 |
 | `POST /api/v1/compile/config/update` | 按请求体 `compile_name` 替换配置 |
 | `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`；按配置名称的字典序划分页，每页内部按 `last_run_time` 倒序排列（null 置后） |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` 和 `next_cursor`，按 `created_at`、`task_id` 从新到旧排序 |
@@ -182,12 +182,12 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 嵌套 `args` 的私有字段在公开响应中脱敏并加密保存供执行使用：公开参数不变时保留私有值，修改含私有字段的嵌套子树时须重新传入这些私有字段，删除子树则同时删除其保存的私有值。
 
-两个调用时间都使用 Unix 秒：
+创建与执行时间使用 Unix 秒。
 
-- `task_first_create_time`：第一次成功受理的执行 task 的 `created_at`；未执行时为 null，首次设置后不变。
-- `last_run_time`：最近一次成功受理的新 task 的 `created_at`。后续失败或取消不回退，幂等重放不刷新。
+- `task_first_create_time` 记录 `POST /api/v1/compile/create` 保存配置的时间，保存后保持固定。
+- `last_run_time` 记录最近一次成功受理的新 task 的 `created_at`。首次受理前为 null。后续失败或取消不回退，幂等重放不刷新。
 
-手动与定时提交均更新这些时间。`last_triggered_slot`、`next_triggered_slot` 仅用于调度，手动执行不推进 slot。
+手动与定时提交均更新 `last_run_time`。`last_triggered_slot`、`next_triggered_slot` 仅用于调度，手动执行不推进 slot。
 
 run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、`finished_at`、`params`、`result`、`error`、`meta`。`params` 是本次受理时的完整公开输入及调度配置；`result` 包含 `created`、`updated`、`deleted` 数量。`meta` 仅包含：
 

@@ -99,7 +99,6 @@ export function FileBrowserSearch({
       ? filters
       : { ...filters, scopes: scopes_ };
   }, [filters, scopes]);
-
   const awaitingQuery = !composing && draft.trim() !== query.trim();
   const search = useFsSearch({
     client,
@@ -176,6 +175,7 @@ export function FileBrowserSearch({
         text={text}
         inputRef={inputRef}
         advancedOpen={advancedOpen}
+        filters={effectiveFilters}
         inputProps={{
           role: 'combobox',
           'aria-autocomplete': 'list',

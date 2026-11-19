@@ -63,6 +63,10 @@ export interface CommandConsoleCommandDefinition {
     };
   };
   skeleton?: CommandConsoleSkeletonKind;
+  /** Resolves URI values and their character ranges in the text after the command prefix. */
+  resolveUriArguments?: (
+    text: string,
+  ) => readonly { start: number; end: number; uri: string }[];
 }
 
 export interface CommandConsoleParsedCommandInput {

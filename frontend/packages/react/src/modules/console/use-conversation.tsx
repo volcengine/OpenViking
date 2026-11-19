@@ -5,6 +5,7 @@ import { useLocale } from '../../shared/locale-context.js';
 import type { ReactNode, SetStateAction } from 'react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useVikingBotChat } from './chat/use-viking-bot-chat.js';
+import { useMemoryCommit } from './chat/use-memory-commit.js';
 import { useVikingBotSessions } from './chat/use-viking-bot-sessions.js';
 import { useHitl } from './hitl/use-hitl.js';
 import { useAttachmentUpload } from './chat/use-attachment-upload.js';
@@ -13,6 +14,7 @@ import { useConversationReferences } from './use-conversation-references.js';
 import {
   conversationSessions,
   useSessionActionScope,
+  useSessionSelection,
 } from './conversation-sessions.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
@@ -54,6 +56,15 @@ export function useConversation(
     enabled && conversation?.interaction === undefined,
     useLocale(options.locale),
     chatOptions?.hitl,
+    {
+      requestOptions: {
+        ...options.requestOptions,
+        signal: chat.signal ?? options.requestOptions?.signal,
+      },
+      scopeKey: options.scopeKey,
+      onOpenUri: conversation?.onOpenUri,
+      customChat: Boolean(chatOptions?.service),
+    },
   );
   const uploads = useAttachmentUpload(
     enabled &&
@@ -65,18 +76,6 @@ export function useConversation(
     chat.signal,
   );
   const clearUploads = uploads.clear;
-  const { sessionId, reset, selectSession } = chat;
-  const activeId = useRef(sessionId);
-  activeId.current = sessionId;
-  const selection = useMemo(
-    () => ({
-      prop: undefined as string | undefined,
-      notified: undefined as string | undefined,
-      pending: false,
-      select: selectSession,
-    }),
-    [selectSession],
-  );
   const hostSessions = conversation?.sessions;
   const sessions = useVikingBotSessions({
     ...options,
@@ -98,39 +97,26 @@ export function useConversation(
       owner.active = false;
     };
   }, [owner]);
-  const selectedId = hostSessions?.currentId;
-  // Follow the host's URL-selected remote session, including Back/Forward.
-  // A key would also tear down the stream when the URL echoes a newly created ID.
-  // The controller cancels old requests on selection changes and unmount.
-  useEffect(() => {
-    if (!enabled || selection.prop === selectedId) return;
-    selection.prop = selectedId;
-    selection.pending = sessionId !== selectedId;
-    if (!selection.pending) return;
-    resetInput();
-    if (selectedId) selection.select(selectedId);
-    else reset();
-  }, [enabled, selection, selectedId, sessionId, reset, resetInput]);
-  const onSelect = hostSessions?.onSelect;
-  // Report asynchronously created remote IDs to the host router while streaming,
-  // before send() settles. No event handler receives that intermediate ID.
-  // This starts no resources; notified suppresses duplicate router callbacks.
-  useEffect(() => {
-    if (!enabled || (selection.pending && sessionId !== selection.prop)) return;
-    selection.pending = false;
-    if (selection.notified === sessionId) return;
-    selection.notified = sessionId;
-    if (sessionId && sessionId !== selectedId) onSelect?.(sessionId);
-  }, [enabled, selection, selectedId, sessionId, onSelect]);
+  const { activeId, select, switching } = useSessionSelection({
+    chat,
+    host: hostSessions,
+    enabled,
+    resetInput,
+  });
+  const memoryCommit = useMemoryCommit({
+    chat,
+    messages: hitl.messages,
+    enabled: enabled && chatOptions?.memoryCommit !== false,
+    switching,
+    locale: conversationLocale,
+    options,
+  });
   if (!enabled) {
     const scoped = hostSessions && { ...hostSessions, scopeKey: sessionScope };
     return scoped
       ? { ...conversation, sessions: scoped }
       : (conversation ?? {});
   }
-  const switching = Boolean(
-    selectedId && selection.prop !== selectedId && sessionId !== selectedId,
-  );
   const isSending =
     switching || chat.status === 'streaming' || chat.status === 'loading';
   return {
@@ -144,7 +130,11 @@ export function useConversation(
       setDraft,
     }),
     references: conversation?.references ?? references,
-    messages: hitl.messages,
+    messages: memoryCommit.messages,
+    onMessageAction: (id, key) => {
+      if (!memoryCommit.onMessageAction(id, key))
+        conversation?.onMessageAction?.(id, key);
+    },
     messageList:
       conversation?.messageList === undefined
         ? renderConversationHistory(chat, switching, conversationLocale)
@@ -190,16 +180,18 @@ export function useConversation(
       sessions,
       scopeKey: sessionScope,
       activeId,
-      select: (id) => {
-        selection.notified = id;
-        chat.selectSession(id);
-      },
-      reset,
+      select,
+      reset: chat.reset,
       resetInput,
     }),
-    feedback: renderConversationFeedback(chat, validation.feedback, {
-      locale: feedbackLocale,
-      scopeKey,
-    }),
+    feedback: (
+      <>
+        {renderConversationFeedback(chat, validation.feedback, {
+          locale: feedbackLocale,
+          scopeKey,
+        })}
+        {memoryCommit.feedback}
+      </>
+    ),
   };
 }

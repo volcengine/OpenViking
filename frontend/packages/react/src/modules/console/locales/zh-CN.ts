@@ -26,6 +26,19 @@ const messages: typeof enUS = {
       | 'quickStart'
     >
   >,
+  telemetryResult: (value: string) => `遥测：${value}`,
+  memoryCommit: {
+    idle: '提交会话',
+    pending: '会话提交中',
+    submitted: '会话提交中',
+    success: '会话已提交',
+    empty: '当前会话暂无可生成的新记忆',
+    skipped: '本轮未生成新记忆',
+    failed: '会话提交失败',
+    completed: '记忆提取已完成',
+    saved: '记忆已生成，并保存至目录文件',
+    view: '查看记忆',
+  },
   taskCompletion: {
     title: '任务完成',
     description: '异步任务已完成。',
@@ -47,8 +60,8 @@ const messages: typeof enUS = {
     'add-resource': '添加路径或 URL 到资源',
     'add-skill': '添加 Skill 到技能目录',
     'add-memory': '直接添加记忆',
-    compile: '按 Skill 编译资料',
-    'compile create': '创建编译配置',
+    compile: '执行编译',
+    'compile create': '创建编译配置，供 compile 执行',
 
     grep: '匹配资源文本',
     glob: '匹配资源路径',
@@ -98,7 +111,8 @@ const messages: typeof enUS = {
         '按搜索词在当前上下文中做语义检索，返回匹配的资源、记忆或技能。',
       examples: ['ov find "OpenViking 有什么价值？"'],
     },
-    compile: compileHelp['zh-CN'].guide,
+    'compile create': compileHelp['zh-CN'].createGuide,
+    compile: compileHelp['zh-CN'].runGuide,
   },
   compileArgsHelp: compileHelp['zh-CN'].args,
   parameters: {
@@ -115,11 +129,12 @@ const messages: typeof enUS = {
     'session-id': '要写入并提交的会话 ID',
     limit: '最多返回的条目数量',
     'compile-name':
-      '汉字、ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符。纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符',
+      '汉字、ASCII 字母、数字、下划线或连字符，区分大小写，首字符不能为连字符。纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符。同一用户内不可重名，不支持改名',
     from: '已存在的来源目录 URI，可重复传入 --from，或用英文逗号分隔多个 URI',
     'compile-from':
-      '至少一个已存在且可读的来源目录。可重复传入 --from，或用英文逗号分隔多个 URI，重复项自动去重。',
-    'compile-to': '可写的产物输出目录。目录不存在时，服务端可创建。',
+      '至少一个已存在且可读的来源目录，不接受单个文件。可重复传入 --from，或用英文逗号分隔多个 URI，重复项自动去重。',
+    'compile-to':
+      '可写的产物输出目录，建议使用独立的 viking://resources/… 目录。目录不存在时，服务端可创建。',
     skill: '用于编译的 Skill 目录 URI，决定如何读取、整理和输出资料',
     instruction:
       '补充语言、结构、引用及处理要求。省略时按 Skill 默认行为执行。',

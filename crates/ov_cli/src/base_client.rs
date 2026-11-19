@@ -1001,6 +1001,40 @@ mod tests {
 
         assert_eq!(entry, "scripts/check_bounding_boxes.py");
     }
+
+    #[tokio::test]
+    async fn socks5_proxy_is_attempted_not_rejected() {
+        // A listener that accepts the proxy connection but never completes the
+        // SOCKS5 handshake. With reqwest's `socks` feature enabled the request
+        // is routed through the proxy and fails on the handshake; without it
+        // every request fails immediately with "unsupported scheme socks5".
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
+
+        let proxy = reqwest::Proxy::all(format!("socks5://{address}")).unwrap();
+        let client = ReqwestClient::builder()
+            .proxy(proxy)
+            .timeout(Duration::from_millis(500))
+            .build()
+            .unwrap();
+
+        let error = client
+            .get("http://127.0.0.1:9/")
+            .send()
+            .await
+            .expect_err("the request should fail without a working proxy");
+        let message = format!("{error:?}");
+
+        assert!(
+            !message.contains("unsupported scheme"),
+            "socks5 proxy should be attempted, not rejected as an unsupported scheme: {message}"
+        );
+    }
 }
 
 // ============ FileUploader ============

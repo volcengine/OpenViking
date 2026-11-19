@@ -130,13 +130,13 @@ const otherLibrary = { resourceId: 'library-b' };
 
 ### Basic usage
 
-Places FileBrowser and Console side by side. Select `handbook` or `research` in the tree to add a removable directory reference to the VikingBot composer. Click the reference to reveal its directory.
+Places FileBrowser and Console side by side. Use `@` to add references. The composer shows the first five and folds the rest into `+N`. Select a directory in the left tree to replace all references with that directory. Click a reference to reveal its directory.
 
 ```tsx file="../../_demos/modules-basic.tsx" preview
 
 ```
 
-The example uses simulated data. The host receives the directory entry from `FileBrowser.onSelect` and supplies the reference through `Console.conversation.references`. Removing the reference edits the draft. Select the directory again to add it back, or send the draft and inspect the URI below the panels.
+The example uses simulated data. The host replaces the selection through `FileBrowser.onSelect` and passes the list to `Console.conversation.references`. The `@` picker and removal controls update the same list through `references.onChange`. Send the draft to see the submitted URIs below the panels.
 
 ### Shared query cache
 

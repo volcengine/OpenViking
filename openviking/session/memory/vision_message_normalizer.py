@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from openviking.message import Message
 from openviking.message.part import ImagePart, TextPart
+from openviking.observability.log_safety import short_hash
 
 IMAGE_DESCRIPTION_PROMPT = (
     "Describe this image for later memory extraction. Focus on durable, user-relevant "
@@ -71,7 +72,12 @@ async def describe_image_message(
         return description or fallback_image_description(message)
     except Exception as exc:
         if logger is not None:
-            logger.warning("Failed to describe image message %s: %s", message.id, exc)
+            logger.info(
+                "image description failed; retaining image placeholder message_hash=%s error_type=%s",
+                short_hash(str(message.id)),
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
         return fallback_image_description(message)
 
 

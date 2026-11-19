@@ -2,6 +2,7 @@ import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 
 import { FilePreviewBreadcrumbMenu } from './file-preview-breadcrumb-menu.js';
 import type { PathSegment } from './file-preview-path.js';
+import { pathSegmentLabel } from './file-preview-path.js';
 
 /** 祖先段在溢出时的最大宽度，超出就省略号截断。 */
 const MAX_ANCESTOR_WIDTH = 160;
@@ -213,7 +214,7 @@ export function FilePreviewBreadcrumb({
               key={segment.uri}
               className="ov-file-preview__breadcrumb-part"
             >
-              <span>{segment.isFirst ? `${segment.uri}` : segment.label}</span>
+              <span>{pathSegmentLabel(segment)}</span>
               <span className="ov-file-preview__breadcrumb-separator">/</span>
             </span>
           ))}
@@ -238,7 +239,7 @@ export function FilePreviewBreadcrumb({
                 title={segment.uri}
                 onClick={() => onOpen(segment.uri)}
               >
-                {segment.isFirst ? `${segment.uri}` : segment.label}
+                {pathSegmentLabel(segment)}
               </button>
               <span className="ov-file-preview__breadcrumb-separator">/</span>
             </span>

@@ -13,6 +13,7 @@ export interface ConsoleMessage {
 export type ConsoleRecord = CommandConsoleRecord & {
   localMessage?: ConsoleMessage;
   taskKeys?: readonly string[];
+  telemetry?: Record<string, unknown>;
 };
 
 export function formatConsoleMessage(message: ConsoleMessage, locale: Locale) {
@@ -32,10 +33,29 @@ export class ConsoleCommandError extends Error implements ConsoleMessage {
   }
 }
 
-export function commandErrorText(error: unknown) {
-  return isOvClientError(error)
-    ? `${error.code}: ${error.message}`
-    : error instanceof Error
-      ? error.message
-      : String(error);
+export function cancelledCommandRecord(): Partial<ConsoleRecord> {
+  const localMessage: ConsoleMessage = { code: 'cancelled' };
+  return {
+    status: 'error',
+    localMessage,
+    content: {
+      variant: 'text',
+      text: formatConsoleMessage(localMessage, 'en-US'),
+    },
+  };
+}
+
+export function failedCommandRecord(error: unknown): Partial<ConsoleRecord> {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    status: 'error',
+    localMessage:
+      error instanceof ConsoleCommandError
+        ? { code: error.code, value: error.value, usage: error.usage }
+        : undefined,
+    content: {
+      variant: 'text',
+      text: !message.trim() && isOvClientError(error) ? error.code : message,
+    },
+  };
 }

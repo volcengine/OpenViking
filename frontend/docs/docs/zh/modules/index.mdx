@@ -130,13 +130,13 @@ const otherLibrary = { resourceId: 'library-b' };
 
 ### 基础用法
 
-并排放置 FileBrowser 和 Console。点击目录树中的 `handbook` 或 `research`，选中目录会作为可移除的引用出现在 VikingBot 输入区；点击引用可定位回目录。
+并排放置 FileBrowser 和 Console。通过 `@` 添加引用，输入区直接显示前 5 个，其余收进 `+N`。点击左侧目录树中的目录，会清空已有引用，只保留本次点选的目录。点击引用可定位回目录。
 
 ```tsx file="../../_demos/modules-basic.tsx" preview
 
 ```
 
-示例使用模拟数据。宿主在 `FileBrowser.onSelect` 中读取目录条目，通过 `Console.conversation.references` 传入引用。移除引用只修改本次输入，重新选中该目录可再次添加，发送后可在面板下方查看传入的 URI。
+示例使用模拟数据。宿主通过 `FileBrowser.onSelect` 替换引用列表，并通过 `Console.conversation.references` 传入。`@` 选择器和移除按钮通过 `references.onChange` 更新同一列表。发送后可在面板下方查看本次提交的 URI。
 
 ### 共享查询缓存
 

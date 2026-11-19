@@ -12,8 +12,16 @@ from unittest.mock import AsyncMock
 import pytest
 import requests
 
+from openviking.core.context import Context
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.models.model_error import ModelError, ModelErrorKind, brief_for
+from openviking.observability.events import (
+    register_event_subscriber,
+    try_publish_event,
+    unregister_event_subscriber,
+)
+from openviking.observability.reporting.runtime import make_subscriber
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import (
@@ -32,6 +40,7 @@ from openviking.storage.errors import (
 from openviking.storage.expr import Eq
 from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
@@ -183,6 +192,58 @@ def _build_queue_payload_for_account(account_id: str) -> dict:
         telemetry_id="telemetry-1",
     )
     return {"data": json.dumps(msg.to_dict())}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_source_is_restored_from_each_embedding_delivery(monkeypatch):
+    class _ReportingEmbedder(_DummyEmbedder):
+        def embed(self, text, is_query=False):
+            try_publish_event("embedding.call", {"source_type": None, "prompt_tokens": 3})
+            return super().embed(text, is_query=is_query)
+
+    class _VikingDB:
+        is_closing = False
+
+        async def upsert(self, data, *, ctx, options=UpsertOptions()):
+            return data["id"]
+
+    embedder = _ReportingEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config", lambda: _DummyConfig(embedder)
+    )
+    handler = TextEmbeddingHandler(_VikingDB())
+    with bind_dashboard_token_source_type("create_collection"):
+        message = EmbeddingMsgConverter.from_context(
+            Context(uri="viking://resources/sample", abstract="summary"), action=IndexAction.UPSERT
+        )
+    assert message is not None
+
+    exported, original = [], []
+    register_event_subscriber(
+        "test-dashboard-token-source",
+        make_subscriber(SimpleNamespace(report=exported.append), {}),
+    )
+    register_event_subscriber("test-raw-token-source", original.append)
+    try:
+        with bind_dashboard_token_source_type("workspace_init"):
+            for payload in (
+                {"data": message.to_json()},
+                {"data": message.to_json()},
+                _build_queue_payload(),
+            ):
+                assert (await handler.on_dequeue(payload)).outcome is ProcessOutcome.SUCCESS
+    finally:
+        unregister_event_subscriber("test-dashboard-token-source")
+        unregister_event_subscriber("test-raw-token-source")
+
+    assert [event["source_type"] for event in exported] == [
+        "create_collection",
+        "create_collection",
+        "unknown",
+    ]
+    assert [
+        event.payload["source_type"] for event in original if event.event_name == "embedding.call"
+    ] == [None, None, None]
 
 
 def _build_operation_payload(msg: EmbeddingMsg) -> dict:
@@ -1326,7 +1387,10 @@ async def test_embedding_handler_honors_existing_record_id_override(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_generates_id_and_reports_written_context(monkeypatch):
+@pytest.mark.parametrize("write_result", ["stored-record", "", None])
+async def test_embedding_handler_generates_id_and_reports_written_context(
+    monkeypatch, write_result
+):
     captured = {}
 
     class _CapturingVikingDB:
@@ -1335,7 +1399,7 @@ async def test_embedding_handler_generates_id_and_reports_written_context(monkey
 
         async def upsert(self, data, *, ctx, options=UpsertOptions()):
             captured["data"] = dict(data)
-            return data["id"]
+            return write_result
 
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
@@ -1351,7 +1415,14 @@ async def test_embedding_handler_generates_id_and_reports_written_context(monkey
     result = await TextEmbeddingHandler(_CapturingVikingDB()).on_dequeue(payload)
 
     assert captured["data"]["id"] == vector_record_id("acct-new-id", "viking://resources/sample", 2)
-    assert result.value == {"vector_written": True}
+    if write_result:
+        assert result.outcome is ProcessOutcome.SUCCESS
+        assert result.value == {"vector_written": True}
+    else:
+        assert result.outcome is ProcessOutcome.FAILED
+        assert result.value is None
+        assert result.errors
+        assert result.error and "no record ID" in result.error
 
 
 def test_context_collection_uses_acl_mode_and_excludes_parent_uri():

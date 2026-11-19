@@ -1,3 +1,5 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
+import type { FileBrowserExpansionSnapshot } from './types.js';
 import type { DirectorySummaryLabels } from './file-browser-labels.js';
 import type { ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/index.js';
@@ -12,12 +14,13 @@ import type { FileBrowserDashboard } from './dashboard-model.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
 import type { FileBrowserDashboardLabels, FileBrowserLabels } from './types.js';
+import type { WikiSaveFeedback } from './use-wiki-save-feedback.js';
 
 /** View data and operations for the composed FileBrowser. */
 export interface FileBrowserApi {
   treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
   previewMonitoring?: Workflow<'file_browser_preview_load'>;
-  wikiSaving: boolean;
+  wikiSaveFeedback?: WikiSaveFeedback;
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
@@ -70,7 +73,7 @@ export interface FileBrowserActions {
     uri: string,
     options?: FileBrowserOpenResourceOptions,
   ) => Promise<boolean>;
-  reveal: (uri: string) => Promise<boolean>;
+  reveal: (uri: string, preserveExpansion?: boolean) => Promise<boolean>;
   cancelReveal: () => void;
   openUri: (uri: string) => Promise<void>;
   openDashboard: (uri: string) => void;
@@ -98,6 +101,7 @@ export interface UseFileBrowserOptions {
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   /** Overrides individual requests for the built-in experience dashboard. */
   experienceDataSource?: FileBrowserExperienceDataSource;
+  experienceDashboardSlots?: ExperienceDashboardProps['slots'];
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**
    * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时
@@ -128,6 +132,10 @@ export interface UseFileBrowserOptions {
   formatCharacterCount?: (count: number) => string;
   /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
   defaultExpandedUri?: string;
+  defaultExpandedUris?: readonly string[];
+  defaultExpansionSnapshot?: FileBrowserExpansionSnapshot;
+  onExpandedUrisChange?: (uris: readonly string[]) => void;
+  onExpansionSnapshotChange?: (snapshot: FileBrowserExpansionSnapshot) => void;
   currentUri: string | null;
   requestOptions?: OvRequestOptions;
   onUriChange: (uri: string | null) => void;
