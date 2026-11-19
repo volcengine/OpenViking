@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { MAX_OCCURRENCE_CHECK_ATTEMPTS, OCCURRENCE_CHECK_RETENTION_MS, TimerSchedule } from './timers.mjs';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// A 409 means another writer holds the file during indexing; give it time to
+// finish instead of hammering the same lock three times in a row.
+const CONFLICT_RETRY_DELAY_MS = 250;
+
 export class OVTimerRepository {
   constructor(client, instanceId) {
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(instanceId)) throw new Error('OV timers require a valid instance id');
@@ -12,6 +17,7 @@ export class OVTimerRepository {
     this.state = { timers: [], timer_occurrence_checks: [] };
     this.needsRefresh = false;
     this.barrier = Promise.resolve();
+    this.retryDelayMs = CONFLICT_RETRY_DELAY_MS;
   }
 
   run(operation) {
@@ -50,12 +56,14 @@ export class OVTimerRepository {
 
   mutate(change) {
     return this.run(async () => {
-      if (this.needsRefresh) await this.readState();
-      const state = structuredClone(this.state);
-      const result = change(state);
-      if (isDeepStrictEqual(state, this.state)) return result;
       let failure;
       for (let attempt = 0; attempt < 3; attempt += 1) {
+        // A 409 means another writer changed the file under us, so the snapshot
+        // we cloned is stale. Retrying it verbatim can only conflict again.
+        if (this.needsRefresh) await this.readState();
+        const state = structuredClone(this.state);
+        const result = change(state);
+        if (isDeepStrictEqual(state, this.state)) return result;
         try {
           await this.client.json('/api/v1/content/write', {
             uri: this.uri, content: JSON.stringify(state), mode: 'replace',
@@ -65,6 +73,9 @@ export class OVTimerRepository {
           return result;
         } catch (error) {
           failure = error;
+          if (error.httpStatus !== 409) continue;
+          this.needsRefresh = true;
+          if (attempt < 2) await sleep(this.retryDelayMs * (attempt + 1));
         }
       }
       this.needsRefresh = true;
