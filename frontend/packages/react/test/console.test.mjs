@@ -52,7 +52,11 @@ test('Console uses native requests, validates before sending and resubmits after
     assert.equal(calls.length, 1);
     failure = true;
     await host.execute('/read viking://resources/demo');
-    assert.match(host.records.at(-1).textContent, /DENIED: No access/);
+    assert.equal(
+      host.records.at(-1).querySelector('.ov-command-console__result-body')
+        .textContent,
+      'No access',
+    );
     assert.equal(host.container.querySelector('.ov-console__error'), null);
     assert.equal(host.button('Retry command'), undefined);
     failure = false;

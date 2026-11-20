@@ -144,23 +144,33 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| branch | str | No | `main` | Branch to walk |
+| branch | str | No | `main` | Branch or commit ID to start from |
 | limit | int | No | 20 | Max commits to return. The HTTP endpoint accepts values from 1 to 500 |
+| offset | int | No | 0 | Number of matching commits to skip; must be a non-negative integer. For pages of 10, use `offset=10` for the second page |
 | paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; USER/ADMIN callers must provide it, while local ROOT mode may omit it for account-wide history. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
 
-Filtering happens before the result limit is applied, so `limit=10` with `paths=[X]` returns up to 10 commits related to X rather than filtering only the 10 newest commits.
+For each supplied `paths` URI, the server compares the tree entry at that exact path with the entry at the same path in `parents[0]`. Merge commits use only the first parent. A commit without parents is compared with an empty tree.
+
+Path filtering and commit de-duplication happen before `offset` and `limit` are applied. With `paths=[X]`, `offset=10`, and `limit=10`, the result contains matches 11–20 for X. Unrelated commits do not advance the offset; a commit touching multiple requested paths counts once. Once traversal reaches the end of history, an offset beyond the matching commits returns an empty list.
 
 When `paths` is provided, the server can use the optional path history index
 configured by `git.snapshot.log` in `ov.conf`. The index is derived from
-snapshot commits and does not change this API's request or response format.
+snapshot commits and does not change the response format:
 
-To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
+- With a current index, the server queries matching commits directly.
+- With an index behind HEAD, the server scans the newer commits and combines their matches with indexed history. This tail scan has no 1,000-commit cap.
+- When no usable index is available, the legacy filtered scan still inspects at most 1,000 candidate commits, including unrelated commits and matches skipped by `offset`. If the requested page is incomplete and older uninspected history remains, it returns `INVALID_ARGUMENT` without partial results.
+
+Without `paths`, queries are not subject to the 1,000-commit scan limit above.
+
+For pages of 10, omit `offset` for the first page and use `offset=10` for the next page, as shown below. Each request starts from the current branch HEAD; new commits between requests can shift page boundaries.
 
 **Python SDK (HTTP)**
 
 ```python
 history = client.snapshot.log(
     limit=10,
+    offset=10,
     paths=["viking://resources/a.md", "viking://resources/docs"],
 )
 for commit in history:
@@ -171,23 +181,24 @@ for commit in history:
 
 ```typescript
 console.log(
-  await client.gitLog("main", 20, [
+  await client.gitLog("main", 10, [
     "viking://resources/a.md",
     "viking://resources/docs",
-  ]),
+  ], 10),
 );
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/snapshot/log?branch={branch}&limit={limit}&paths={uri1}&paths={uri2}
+GET /api/v1/snapshot/log?branch={branch}&limit={limit}&offset={offset}&paths={uri1}&paths={uri2}
 ```
 
 ```bash
 curl --get "http://localhost:1933/api/v1/snapshot/log" \
   --data-urlencode "branch=main" \
   --data-urlencode "limit=10" \
+  --data-urlencode "offset=10" \
   --data-urlencode "paths=viking://resources/a.md" \
   --data-urlencode "paths=viking://resources/docs" \
   -H "X-API-Key: your-key"
@@ -196,7 +207,7 @@ curl --get "http://localhost:1933/api/v1/snapshot/log" \
 **CLI**
 
 ```bash
-ov snapshot log --limit 10 \
+ov snapshot log --limit 10 --offset 10 \
   --paths viking://resources/a.md,viking://resources/docs \
   -o json
 ```
@@ -289,6 +300,8 @@ Without `path`, the response is commit metadata JSON. With `path`, the response 
 - `X-Snapshot-Time-Seconds`: the resolved commit's `committer.time_seconds`, an integer Unix timestamp in seconds
 
 The timestamp describes the requested snapshot, not the file's last modification or the run's completion time. Branches and tags are resolved once so the body and commit headers refer to the same snapshot. The commit headers also apply to `raw=false`; stripping memory fields only changes the body and its size.
+
+When the commit tree has no entry for the requested file path, the server returns HTTP 404 with `error.code: "NOT_FOUND"`, `error.details.type: "git_blob"`, and `error.details.reason: "path_not_found"`. The boolean `error.details.deleted_file` is `true` when the first parent (`parents[0]`) has a file at that exact path. It is `false` if the first parent has a directory or no entry there, or the commit has no parent. A missing backing object for the requested file has no `path_not_found` reason. Gateways can preserve these distinctions by forwarding the error details.
 
 **CLI**
 

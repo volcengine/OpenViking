@@ -4,7 +4,7 @@ OpenViking owns Compile configuration, task submission, snapshots and recovery. 
 
 ## Compile configuration and execution
 
-A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain 1–64 ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique for each user within an account. Whitespace is rejected rather than trimmed. The first character cannot be a hyphen. Different users or accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
+A caller-provided `compile_name` identifies saved configuration and its successful incremental baseline. Names contain Han characters, ASCII letters, digits, underscores, or hyphens, are case-sensitive, and are unique for each user within an account. Whitespace is rejected rather than trimmed. ASCII-only names allow up to 64 characters. A name containing any Han character allows up to 32 characters in total. The first character cannot be a hyphen. Different users or accounts can use the same name. A `task_id` identifies one accepted execution and uses the `cmp_` prefix. Multiple configurations can share the same `to`; each configuration keeps its own history and baseline.
 
 Ordinary Compile validates normalized directory URIs when creating or updating configuration and when submitting a new manual or scheduled execution:
 
@@ -165,12 +165,14 @@ The Python example uses `SyncHTTPClient`; use `await` with `AsyncHTTPClient`.
 
 | HTTP API | Result |
 |----------|--------|
-| `GET /api/v1/compile/config?compile_name={compile_name}` | Public saved inputs, scheduling and invocation times |
+| `GET /api/v1/compile/config?compile_name={compile_name}` | Public saved inputs, scheduling, creation and execution times |
 | `POST /api/v1/compile/config/update` | Replace configuration identified by body `compile_name` |
 | `GET /api/v1/compile/configs` | `configs` and `next_cursor`; page boundaries follow configuration name order, with each page ordered by `last_run_time` descending (null last) |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` and `next_cursor`, newest first by `created_at` and `task_id` |
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | One frozen run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | Changed output files derived from run snapshots; `outputs` and `next_cursor` |
+
+Run history queries use the caller's account and user scope. An absent runs directory returns an empty list; an absent run returns 404 for run details and outputs.
 
 List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id`, `latest_snapshot_id` and `change_type`. `snapshot_id` is the frozen run snapshot; `latest_snapshot_id` is the file’s latest change commit at query time (null if no history). It may identify a later deletion, in which case reading that version returns 404. History errors propagate; only returned page items require history reads.
 
@@ -180,12 +182,12 @@ At creation, `state.json` records the configuration owner’s user ID in the top
 
 Private fields in nested `args` are redacted from public responses and encrypted for execution: unchanged public arguments preserve their private values, editing a nested subtree containing private fields requires resending those fields, and deleting the subtree removes its saved private values.
 
-The two invocation times are Unix seconds:
+Creation and execution times are in Unix seconds.
 
-- `task_first_create_time`: the first accepted execution task's `created_at`; null until first execution and then immutable.
-- `last_run_time`: the most recently accepted new task's `created_at`. Failed or cancelled executions retain this time; idempotent replay does not advance it.
+- `task_first_create_time` records when `POST /api/v1/compile/create` saves the configuration. The value remains fixed after creation.
+- `last_run_time` records the most recently accepted new task's `created_at`. It is null until the first acceptance. Failed or cancelled executions retain this time, and idempotent replay does not advance it.
 
-Manual and scheduled submissions both update these fields. `last_triggered_slot` and `next_triggered_slot` belong only to scheduling; manual execution does not advance them.
+Manual and scheduled submissions both update `last_run_time`. `last_triggered_slot` and `next_triggered_slot` belong only to scheduling. Manual execution does not advance them.
 
 A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `finished_at`, `params`, `result`, `error`, and `meta`. `params` contains the full public inputs and scheduling configuration accepted for that run. `result` contains `created`, `updated`, and `deleted` counts. Its metadata is limited to:
 
@@ -207,7 +209,7 @@ The only Compile business files are:
 /local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-`configuration_directory` is the lowercase hexadecimal encoding of the name's ASCII bytes (`compile_name.encode("ascii").hex()`), with no prefix. This preserves case-sensitive names even on case-insensitive storage. Public APIs receive and return the original `compile_name`, not its directory encoding.
+ASCII names use their lowercase hexadecimal bytes as `configuration_directory`. Names containing Han characters use `u-` followed by the unpadded lowercase Base32 encoding of their UTF-8 bytes. Both directory formats preserve case distinctions on case-insensitive storage.
 
 Configurations are stored in account and user directories. Public APIs locate configurations by their original `compile_name`.
 

@@ -1,7 +1,15 @@
 export * from './console.js';
+export {
+  ConsoleSkeleton,
+  type ConsoleSkeletonProps,
+} from './console-skeleton.js';
 export type {
   ConsoleChatOptions,
+  ConsoleBotActivation,
+  ConsoleBotActivationStatus,
   ConsoleCommandProps,
+  ConsoleCommandOptions,
+  ConsoleCommandFiles,
   ConsoleLabels,
   ConsoleMode,
   ConsoleProps,

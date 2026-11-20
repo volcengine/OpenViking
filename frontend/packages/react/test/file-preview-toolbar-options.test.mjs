@@ -36,6 +36,10 @@ test('built-in editing is shown by default and component toolbar flags can hide 
     assert.equal(view.container.querySelector('[toolbar]'), null);
     await view.render(tree({ edit: true }));
     await click('Edit');
+    assert.equal(
+      view.container.querySelector('.ov-file-preview__switch'),
+      null,
+    );
     await waitForEditor(view.container);
     assert.equal(
       view.container.querySelector('.cm-content').textContent,

@@ -1405,7 +1405,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
-| `watch_store` | object | Watch 存储：`file`（单节点）或 `mysql`（多节点共享） | `{"provider":"file"}` |
+| `watch_store` | object | Watch 存储：`file`（单节点）、`mysql` 或 `postgres`（多节点共享） | `{"provider":"file"}` |
 
 
 ```json
@@ -1526,11 +1526,11 @@ task ID 绑定。所有节点必须使用同一密钥，更换密钥会导致已
 `running()` 只读取归属和运行 ID、开始时间、Connector 标记、
 instruction 及数据库时间，不搬运或解密鉴权、Connector 状态和 checkpoint。
 
-MySQL 持久化占用、真实 Task 关联和终态结算，本轮 checkpoint 版本与之前一样
+MySQL 和 PostgreSQL 持久化占用、真实 Task 关联和终态结算，本轮 checkpoint 版本与之前一样
 保存在 payload 中，结算不会用旧 checkpoint 覆盖新配置。缺失 Task
 沿用现有宽限期及重试语义，创建 Task 后、关联 Watch 前崩溃的窗口仍可能造成重复导入。
 
-Watch 列表分页使用建表脚本中的 `list` 和 `list_all` 索引。若此前已创建 Watch 表，
+MySQL Watch 列表分页使用建表脚本中的 `list` 和 `list_all` 索引。若此前已创建 MySQL Watch 表，
 需执行一次索引更新；自定义表名时同步替换表名及索引名：
 
 ```sql
@@ -1561,14 +1561,76 @@ ALTER TABLE ov_watch_tasks
 }
 ```
 
+使用 PostgreSQL 时，安装 `openviking[postgres]` 并执行
+`openviking/service/sql/001_watch_tasks_postgres.sql`（PostgreSQL 14+）。
+初始化会检查必需列的类型、可空性、排序规则和复合主键，在缺表、缺列或表结构不匹配时
+给出建表/迁移提示，并在索引缺失、无效或定义不匹配时发出警告，
+不会自动创建或迁移表及索引；自定义 `params.table` 时同步替换脚本中的表名和索引名。
+
+已有 PostgreSQL Watch 表若缺少账号/用户分页索引，需要由管理员执行以下迁移（不能放在事务中）：
+
+```sql
+CREATE INDEX CONCURRENTLY ix_ov_watch_tasks_list
+    ON ov_watch_tasks (service_name, md5(account_id), md5(user_id), deleted, created_at, task_id);
+```
+
+请使用配置中的表名和对应索引名。哈希用于限制 B-tree 索引键宽度；查询仍保留完整账号/用户等值校验，
+并按 `(created_at, task_id)` 扫描游标范围。分页继续返回精确的 `total`。
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "postgres",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "maxsize": 10,
+        "connect_timeout": 10,
+        "sslmode": "verify-full",
+        "sslrootcert": "/etc/openviking/postgres-ca.pem",
+        "table": "ov_watch_tasks",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+PostgreSQL 必须配置 `user`、`database`，以及所有节点一致的 32 字节
+`credential_encryption_key`。数据库鉴权允许时可以省略 `password`。
+连接默认值为 host `127.0.0.1`、端口 `5432`、连接池大小 `10`、连接超时 `10` 秒、
+`sslmode=prefer`。TLS 参数为 `sslmode`、`sslrootcert`、`sslcert`、`sslkey`；
+需要验证 TLS 时使用 `verify-full` 并指定 CA。应用角色需要已有表的
+SELECT/INSERT/UPDATE/DELETE 权限，以及 schema 的 USAGE 权限。
+可以执行一次
+`python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`
+生成密钥，再通过部署的密钥配置注入。
+
+事务采用 READ COMMITTED；调度使用 PostgreSQL 的语句级稳定时钟 `statement_timestamp()`，
+同一语句内各行及表达式共享时间值，且该时钟可作为索引范围条件。URI 精确匹配和路径范围使用
+`"C"` 排序规则；前缀索引只覆盖前 128 个字符，实际匹配始终检查完整 URI 和 `/` 边界。
+更长前缀仍正确过滤，但不使用该前缀范围优化。非 root 分页使用 `list` 索引，
+通过账号/用户哈希等值条件及 `(created_at, task_id)` 游标范围扫描，并保留完整账号/用户校验。
+root 的全局分页使用 `list_all` 索引。公开列表在 SQL 层排除鉴权、Connector 状态和大型 checkpoint。
+File、MySQL 和 PostgreSQL 使用相同的鉴权、运行结算与 checkpoint 版本规则。
+
+此配置只切换 Watch 元数据，不切换 Task/Work、Account、PathLock、调度选主、文件或向量存储。
+PostgreSQL Watch 存储不依赖 Redis 或 pgvector；多节点部署仍需配置可共享的 Task/Work 状态、
+文件/索引后端和适合该部署的协调机制。切换 provider 不会迁移已有 Watch；
+同一部署不要同时使用不同 provider 作为写入端。
+
 所有节点都提供 Watch API。`enable_watch_scheduler=true` 的节点可以运行后台 Watch
 调度器，通过 [AGFS coordination](#coordination-配置) 选主。
-leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL 共用 Runtime
+leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File、MySQL 和 PostgreSQL 共用 Runtime
 的轮询与有限并发派发流程。后台派发在 leader 内存中维护
 未结束的 Watch 运行和提交中的协程占用（默认上限 4）。接管时通过已有运行扫描
-恢复占用（File 为本进程状态，MySQL 为持久化行），后续派发不额外查询占用。
+恢复占用（File 为本进程状态，MySQL/PostgreSQL 为持久化行），后续派发不额外查询占用。
 手动触发和首次导入独立受理，扫描发现后计入
-后台占用。File 目标移动没有 1000 条 Watch 上限，MySQL 仍保留该事务限制。
+后台占用。File 目标移动没有 1000 条 Watch 上限，MySQL 和 PostgreSQL 仍保留该事务限制。
 一次运行就是
 对应的 ingestion Task：运行占用目标期间，Watch 行记录该 Task ID，且只有在持有
 目标 Tree PathLock 时才能开始运行。提交在创建 Task 前停止（服务停机、身份删除、
@@ -1668,18 +1730,20 @@ Python 配置层仍接受旧 sync、retry、operations、excludes 和 redirects
 的 QueueFS，以及使用 cache 的 PathLock、coordination 和多写 metadata 都会从它生成
 Redis 命名空间。
 
-全局 `cache` 与 `storage` 并列，标准配置只包含 Provider 名称和 Provider 自有参数：
+全局 `cache` 与 `storage` 并列，保存命名的 Provider 条目：
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | 全局 Cache Provider；本期支持 `redis` | 必填 |
-| `params` | object | Provider 自有参数；当 `provider=redis` 时解析为 Redis 连接参数 | `{}` |
+| `instances` | object | 命名 Runtime Provider，必须包含 `default` | 必填 |
+| `instances.<name>.provider` | str | 一个命名 Runtime 的 Provider；本期支持 `redis` 和 `dynamic` | 必填 |
+| `instances.<name>.params` | object | Provider 自有参数；Provider 为 `redis` 时解析为 Redis 连接参数 | `{}` |
 
 `storage.agfs.cachefs` 只控制 CacheFS 业务行为：
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `backend` | str | `local` 完全沿用原文件系统；`cache` 启用 CacheFS wrapper | `local` |
+| `instance` | str | `backend=cache` 时选择的 Runtime | `"default"` |
 | `shared_redis_ttl_seconds` | int | 统一覆盖查询 bucket 的 TTL；`0` 表示沿用 Provider 默认 TTL。仅当 CacheFS 与 QueueFS、cache PathLock 或 expiry 调度共用同一个 Redis 服务时生效 | `0` |
 
 `storage.agfs.pathlock` 选择 PathLock 存储 Provider：
@@ -1687,6 +1751,7 @@ Redis 命名空间。
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `provider` | str | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache`；`postgres` 直连 PostgreSQL，`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `instance` | str | `provider=cache` 时选择的 Runtime，必须使用 Redis | `"default"` |
 | `sqlite_path` | str / null | 可显式覆盖本地共享锁数据库的绝对路径。见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
 | `postgres_dsn_env` | str / null | `postgres` 必填；保存 PostgreSQL DSN 的环境变量名。见 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
@@ -1720,7 +1785,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 ```
 
 所有参与者必须连接同一可写 PostgreSQL 主库，使用相同的顶层 `service_name`
-和过期时长。PostgreSQL PathLock 独立于 `cache.provider/cache.params`，
+和过期时长。PostgreSQL PathLock 独立于 `cache.instances`，
 不会启用 CacheFS，也不会改变 QueueFS、业务文件存储或向量后端的并发限制。
 特别是默认 SQLite 队列不适合在 EFS 上跨主机共享。
 配置和验证步骤见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
@@ -1733,32 +1798,40 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 {
   "service_name": "production",
   "cache": {
-    "provider": "redis",
-    "params": {
-      "mode": "sentinel",
-      "endpoints": [
-        "redis://sentinel-1:26379",
-        "redis://sentinel-2:26379"
-      ],
-      "master_name": "mymaster",
-      "password_env": "OPENVIKING_REDIS_PASSWORD",
-      "connect_timeout_ms": 1000,
-      "command_timeout_ms": 1000
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "mode": "sentinel",
+          "endpoints": [
+            "redis://sentinel-1:26379",
+            "redis://sentinel-2:26379"
+          ],
+          "master_name": "mymaster",
+          "password_env": "OPENVIKING_REDIS_PASSWORD",
+          "connect_timeout_ms": 1000,
+          "command_timeout_ms": 1000
+        }
+      }
     }
   },
   "storage": {
     "agfs": {
       "cachefs": {
-        "backend": "cache"
+        "backend": "cache",
+        "instance": "default"
       },
       "queuefs": {
-        "backend": "cache"
+        "backend": "cache",
+        "instance": "default"
       },
       "coordination": {
-        "provider": "cache"
+        "provider": "cache",
+        "instance": "default"
       },
       "pathlock": {
         "provider": "cache",
+        "instance": "default",
         "lock_expire_secs": 30.0
       }
     }
@@ -1766,9 +1839,11 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 }
 ```
 
-标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不解析 `cache.params`，也不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
+标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时，会从 `cache.instances` 初始化 CacheRuntime。Cache PathLock 选择的实例必须使用 `redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
+Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
+只配置 `cache.instances` 不会建立独立的 Provider 连接。
 
-请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，用顶层 `service_name` 生成共享 Redis 名称，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
+请把 Provider 参数迁移到 `cache.instances.<name>`，用顶层 `service_name` 生成共享 Redis 名称，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 
 ##### QueueFS 配置
 
@@ -1776,6 +1851,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 |------|------|------|--------|
 | `mode` | str | QueueFS 命名空间模式：`"shared"` 使用 `/queue`；`"worker"` 为每个 worker 隔离到 `/queue/worker-<index\|pid>` | `"shared"` |
 | `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"` 或 `"cache"` | `"sqlite"` |
+| `instance` | str | `backend="cache"` 时选择的 Runtime | `"default"` |
 | `db_path` | str（可选） | 当 backend 为 `"sqlite"` 或 `"sqlite3"` 时使用的 QueueFS sqlite 数据库路径 | `null` |
 | `recover_stale_sec` | int | 启动时恢复超过该秒数的 `processing` 队列消息；`0` 表示恢复全部 stale processing 消息 | `0` |
 | `busy_timeout_ms` | int | QueueFS sqlite 的 busy timeout，单位毫秒 | `5000` |
@@ -1786,7 +1862,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 - `mode=shared` 会继续使用历史上的全局队列命名空间 `/queue`；`mode=worker` 会为每个 worker 隔离到 `/queue/worker-<index|pid>`。
 - `db_path` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
 - `recover_stale_sec` 和 `busy_timeout_ms` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
-- `queuefs.backend=cache` 自动绑定顶层 `cache.provider + cache.params`，并使用顶层 `service_name` 作为 key 前缀。
+- `queuefs.backend=cache` 从 `cache.instances` 选择 `queuefs.instance`，并使用顶层 `service_name` 作为 key 前缀。
 - Redis Cluster 模式的 endpoints 是初始节点，且必须配置 `db=0`；slot 路由、`MOVED`/`ASK`、拓扑更新和重连由 Fred RedisProvider 处理。
 - Redis Sentinel 模式的 endpoints 是 Sentinel 节点，并且必须配置非空 `master_name`；master 发现和故障切换后的重连由 Fred RedisProvider 处理。
 - `username` 和 `password` 用于 Redis 数据节点；`sentinel_username` 和 `sentinel_password` 仅用于 Sentinel 节点。
@@ -2287,6 +2363,7 @@ ov add-resource ./docs --exclude "*.tmp"
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://~/skills` 和 `viking://agent/skills`。 | `null` |
 | `user_config_defaults.memory_policy` | object | Session 和 User 都未显式配置策略时使用的部署级默认记忆抽取策略。 | `null` |
 | `user_config_defaults.auto_commit_policy` | object | 新建 Session 未显式指定策略时使用的部署级自动 Commit 默认策略。 | `null` |
+| `user_config_defaults.privacy` | object | 用户未显式配置时使用的部署级默认隐私处理策略。 | `mode=off`、`restore=true` |
 | `agent_evolution.enabled` | bool | Agent 进化的集群启动默认值，运行时可由 Account 或 Cluster Admin settings 覆盖。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭后已有记忆仍可读取和检索。 | `false` |
 
 MySQL Provider 默认保存高熵 API Key 的带版本 SHA-256 摘要，并通过独立摘要索引
@@ -2374,7 +2451,7 @@ Task、Work 和 Watch 的存储配置分别独立。
 `standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
 
 MySQL 是数据来源，Redis 缓存鉴权结果、用户信息、组和删除状态。缓存未命中或
-Redis 读取失败时会查询 MySQL。通过 `cache.params.ttl_seconds` 配置缓存有效期，
+Redis 读取失败时会查询 MySQL。通过 `server.account_store.params.cache.params.ttl_seconds` 配置缓存有效期，
 默认 60 秒；命中不会延长有效期。
 
 凭据、权限和删除状态变更会失效相关缓存。如果失效操作失败，缓存可能保持旧值
@@ -2382,9 +2459,9 @@ Redis 读取失败时会查询 MySQL。通过 `cache.params.ttl_seconds` 配置�
 缓存版本元数据不会自动过期，需要计入 Redis 容量规划。旧的 `lock_ttl_seconds`
 和 `lock_wait_seconds` 配置兼容接受，但不再使用。
 
-Redis 连接和命令超时分别通过 `cache.params.connect_timeout_ms` 和
-`cache.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
-总超时。`cache.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
+Redis 连接和命令超时分别通过 `server.account_store.params.cache.params.connect_timeout_ms` 和
+`server.account_store.params.cache.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
+总超时。`server.account_store.params.cache.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
 使用 100；连接池耗尽会触发连接错误并转为查询 MySQL。
 
 ```json

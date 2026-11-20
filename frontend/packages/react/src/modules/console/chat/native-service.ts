@@ -26,7 +26,10 @@ const sessionView = (item: SessionDTO): VikingBotSession => ({
 export function createNativeBotService(
   client: OvClient,
   options: OvRequestOptions,
-): VikingBotChatService & VikingBotSessionService {
+): VikingBotChatService &
+  VikingBotSessionService & {
+    patchSessionTitle: NonNullable<VikingBotSessionService['renameSession']>;
+  } {
   const request = <T>(spec: OvRequestSpec, signal: AbortSignal) =>
     client.request<T>({ ...spec, options: { ...options, signal } });
   return nativeService(
@@ -56,6 +59,16 @@ export function createNativeBotService(
         return items
           .map(sessionView)
           .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+      },
+      async patchSessionTitle(id, title, signal) {
+        await request(
+          {
+            method: 'PATCH',
+            path: OV_PATH_BUILDERS.session(id),
+            body: { title },
+          },
+          signal,
+        );
       },
       async removeSession(id, signal) {
         await request(
@@ -131,12 +144,41 @@ export function createNativeBotService(
               parts,
               turn_id: message.turnId,
               created_at: message.createdAt,
+              ...(message.role === 'assistant' &&
+                message.interrupted && { interrupted: true }),
               message_kind:
                 message.role === 'user' ? 'user_query' : 'assistant_step',
             },
           },
           signal,
         );
+      },
+      async commitSession(id, signal) {
+        const result = await request<{
+          status?: unknown;
+          reason?: unknown;
+          task_id?: unknown;
+        }>(
+          {
+            method: 'POST',
+            path: OV_PATH_BUILDERS.sessionCommit(id),
+            body: { keep_recent_count: 0 },
+          },
+          signal,
+        );
+        if (
+          result?.status === 'accepted' &&
+          typeof result.task_id === 'string' &&
+          result.task_id.trim()
+        )
+          return { status: 'accepted', taskId: result.task_id };
+        if (result?.status === 'skipped')
+          return {
+            status: 'skipped',
+            reason:
+              typeof result.reason === 'string' ? result.reason : undefined,
+          };
+        throw new Error('Invalid session commit response');
       },
       interrupt: (id, signal) =>
         request(

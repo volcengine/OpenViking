@@ -6,7 +6,7 @@ import {
   isNativeService,
 } from '../../../shared/monitoring/service.js';
 import { persistenceSpan } from './reply-monitoring.js';
-import type { VikingBotChatService } from './types.js';
+import type { VikingBotChatService, VikingBotChatState } from './types.js';
 
 export function createPersistence(
   service: VikingBotChatService,
@@ -22,6 +22,22 @@ export function createPersistence(
   return {
     get pending() {
       return pending;
+    },
+    commit(
+      submit: VikingBotChatService['commitSession'],
+      getState: () => VikingBotChatState | undefined,
+    ): VikingBotChatService['commitSession'] {
+      if (!submit) return;
+      return async (id, callerSignal) => {
+        const signal = AbortSignal.any([callerSignal, options.signal()]);
+        await pending;
+        signal.throwIfAborted();
+        const state = getState();
+        if (state?.sessionId !== id || state.status !== 'idle')
+          throw new DOMException('The session changed', 'AbortError');
+        if (state.persistenceError) throw state.persistenceError;
+        return submit(id, signal);
+      };
     },
     save(
       sessionId: string,

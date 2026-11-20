@@ -1013,24 +1013,74 @@ async def test_submit_plans_cross_session_writes_and_deletes_together(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_merge_requests_rejects_uri_conflicts_between_operation_kinds():
-    updater = StreamingMemoryUpdater(registry=_registry())
+@pytest.mark.parametrize(
+    "case,calls,expected",
+    [
+        ("add_delete", 0, "conflict content"),
+        ("add_edit", 1, "merged"),
+        ("edit_delete", 1, "merged"),
+        ("forget", 1, None),
+        ("parse_error", 2, "old conflict"),
+        ("unchanged", 0, "old conflict"),
+        ("write_failure", 0, "old conflict"),
+    ],
+)
+async def test_same_session_uri_conflicts(monkeypatch, case, calls, expected):
+    add, edit = _note_op("conflict"), _note_update_op("conflict")
+    target, other = edit.old_memory_file_content, _note_delete_file("obsolete")
+    fs = InMemoryVikingFS({f.uri: MemoryFileUtils.write(f) for f in (target, other)})
+    monkeypatch.setattr("openviking.storage.viking_fs._base._instance", fs)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", OpenVikingConfig())
+    monkeypatch.setattr(PatchMergeContextProvider, "search_files", AsyncMock(return_value=[]))
+    upserts = [edit] if case in {"edit_delete", "forget", "unchanged", "parse_error"} else [add]
+    deletes = [] if case == "add_edit" else [target]
+    if case == "add_edit":
+        upserts.append(edit)
+    if case == "unchanged":
+        edit.memory_fields["content"].blocks[0].replace = "old conflict"
+        deletes.append(other)
+    if case == "write_failure":
+        fs.write_file = AsyncMock(side_effect=OSError("injected write failure"))
+
+    program = "notes_1.content.edit(search='old conflict', replace='merged')"
+    if case == "forget":
+        program = "notes_1.delete()"
+    elif case == "parse_error":
+        program = "invalid response!"
+    resolver = _TestVLMResolver()
+    resolver.get_completion_async = AsyncMock(return_value=program + "\nsdk.commit()")
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        vlm_resolver=resolver,
+        config=StreamingMemoryUpdaterConfig(max_operations_per_update=1),
+    )
     request = MemoryUpdateRequest(
         operations=ResolvedOperations(
-            upsert_operations=[_note_op("conflict")],
-            delete_file_contents=[_note_delete_file("conflict")],
+            upsert_operations=upserts,
+            delete_file_contents=deletes,
+            resolved_links=[StoredLink(from_uri=target.uri, to_uri=other.uri)]
+            if case == "parse_error"
+            else [],
             errors=[],
         ),
         messages=[],
         ctx=_ctx(),
         metadata={"session_id": "session-a"},
     )
-
-    merged = await updater._merge_requests([request])
-
-    assert merged.upsert_operations == []
-    assert merged.delete_file_contents == []
-    assert "Conflicting add/update/delete results" in merged.errors[0]
+    try:
+        result = await updater.submit(request)
+    finally:
+        await updater.close()
+    assert resolver.get_completion_async.await_count == calls
+    assert bool(result.apply_result.errors) == (case == "write_failure")
+    if case == "parse_error":
+        assert not fs.writes
+        assert [op.reason_code for op in result.apply_result.skipped_operations] == [
+            MemoryOperationSkipCode.PARSE_ERROR
+        ]
+    assert (other.uri in fs.files) == (case != "unchanged")
+    raw = fs.files.get(target.uri)
+    assert (MemoryFileUtils.read(raw).plain_content() if raw is not None else None) == expected
 
 
 def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source():

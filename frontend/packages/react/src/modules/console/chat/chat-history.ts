@@ -25,7 +25,7 @@ export async function loadHistory(options: {
   update({
     status: 'loading',
     historyKey: {},
-    responseComplete: false,
+    responseComplete: undefined,
     error: undefined,
   });
   try {
@@ -39,7 +39,7 @@ export async function loadHistory(options: {
     if (current()) {
       // Persisted messages do not prove that the generating stream completed normally.
       update(
-        { messages, status: 'idle', responseComplete: false },
+        { messages, status: 'idle', responseComplete: undefined },
         operation?.span,
       );
       operation?.ready({ messageCount: messages.length });

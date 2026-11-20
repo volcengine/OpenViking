@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import io
+import json
 import sys
 import types
 import zipfile
@@ -8,6 +10,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 from starlette.responses import PlainTextResponse
+
+from openviking.server.config import UserSettingsPatch
+from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import patch_user_config
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.fixture(autouse=True)
@@ -194,6 +201,100 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert missing_privacy_response.status_code == 404
 
 
+async def test_skill_ownership_and_change_history_survive_update_and_delete(client):
+    created = await client.post(
+        "/api/v1/skills",
+        headers={"X-Request-ID": "skill-create-request"},
+        json={
+            "data": _skill_md("history-skill", "Original description"),
+            "source_metadata": {
+                "type": "api",
+                "owner_user_id": "payload-must-not-be-trusted",
+                "created_by": "payload-must-not-be-trusted",
+            },
+            "wait": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    created_result = created.json()["result"]
+    assert created_result["owner_user_id"] == "default"
+    assert created_result["created_by"] == "default"
+    original_created_at = created_result["created_at"]
+
+    listed = await client.get("/api/v1/skills")
+    skill = next(
+        item for item in listed.json()["result"]["skills"] if item["name"] == "history-skill"
+    )
+    assert skill["owner_user_id"] == "default"
+    assert skill["updated_by"] == "default"
+    assert skill["created_at"] == original_created_at
+
+    updated = await client.put(
+        "/api/v1/skills/history-skill",
+        headers={"X-Request-ID": "skill-update-request"},
+        json={
+            "data": _skill_md("history-skill", "Updated description", "Changed instructions"),
+            "wait": True,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    shown = await client.get("/api/v1/skills/history-skill")
+    shown_result = shown.json()["result"]
+    assert shown_result["owner_user_id"] == "default"
+    assert shown_result["created_at"] == original_created_at
+    assert shown_result["current_revision"] != created_result["current_revision"]
+    assert [event["operation"] for event in shown_result["history"]] == ["create", "update"]
+    assert shown_result["history"][0]["before_hash"] is None
+    assert shown_result["history"][1]["before_hash"] == created_result["current_revision"]
+    assert shown_result["history"][1]["after_hash"] == shown_result["current_revision"]
+    assert shown_result["history"][1]["request_id"] == "skill-update-request"
+
+    deleted = await client.delete(
+        "/api/v1/skills/history-skill",
+        headers={"X-Request-ID": "skill-delete-request"},
+    )
+    assert deleted.status_code == 200, deleted.text
+    audit = await client.get("/api/v1/skills/history-skill/audit")
+    assert audit.status_code == 200, audit.text
+    record = audit.json()["result"]
+    assert record["deleted"] is True
+    assert record["owner_user_id"] == "default"
+    assert record["created_at"] == original_created_at
+    assert [event["operation"] for event in record["events"]] == ["create", "update", "delete"]
+    assert record["events"][-1]["before_hash"] == shown_result["current_revision"]
+    assert record["events"][-1]["after_hash"] is None
+    assert record["events"][-1]["request_id"] == "skill-delete-request"
+
+
+async def test_generic_mutation_apis_cannot_bypass_skill_history(client):
+    write = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": "viking://agent/skills/example/SKILL.md",
+            "content": "untracked change",
+        },
+    )
+    assert write.status_code == 400
+    assert "use the Skill API" in write.json()["error"]["message"]
+
+    removed = await client.delete(
+        "/api/v1/fs",
+        params={"uri": "viking://agent/skills/example", "recursive": True},
+    )
+    assert removed.status_code == 400
+    assert "use the Skill API" in removed.json()["error"]["message"]
+
+    restored = await client.post(
+        "/api/v1/snapshot/restore",
+        json={
+            "path": "viking://agent/skills/example/SKILL.md",
+            "restore_commit_id": "0" * 40,
+        },
+    )
+    assert restored.status_code == 400
+    assert "use the Skill API" in restored.json()["error"]["message"]
+
+
 async def test_skills_api_update_requires_matching_name(client):
     await _add_skill(client, "update-skill", "Original description")
 
@@ -306,10 +407,18 @@ async def test_skills_api_update_keeps_replacement_when_metadata_write_fails(cli
     shown = show_response.json()["result"]
     assert shown["description"] == "Updated description"
     assert "This replacement remains after failure." in shown["content"]
-    assert (await client.get(endpoint)).status_code == 404
+    current = (await client.get(endpoint)).json()["result"]["current"]
+    assert current == seeded.json()["result"]
 
 
-async def test_skills_api_update_removes_privacy_when_replacement_has_no_secrets(client):
+async def test_skills_api_update_retains_privacy_until_explicit_delete(client, service):
+    from openviking.message import TextPart
+    from openviking.privacy.reference import build_privacy_field_reference
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
     await _add_skill(client, "privacy-update-skill", "Original description")
 
     privacy_response = await client.post(
@@ -318,6 +427,14 @@ async def test_skills_api_update_removes_privacy_when_replacement_has_no_secrets
     )
     assert privacy_response.status_code == 200, privacy_response.text
 
+    reference = build_privacy_field_reference(
+        ctx.user.user_id, "skill", "privacy-update-skill", "api_key"
+    )
+    session = await service.sessions.create(ctx, "privacy-history")
+    await session.add_message_async("user", [TextPart(reference)])
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "off"}})
+    )
     update_response = await client.put(
         "/api/v1/skills/privacy-update-skill",
         json={
@@ -331,21 +448,21 @@ async def test_skills_api_update_removes_privacy_when_replacement_has_no_secrets
     )
     assert update_response.status_code == 200, update_response.text
 
-    current_privacy_response = await client.get(
-        "/api/v1/privacy-configs/skill/privacy-update-skill"
-    )
-    assert current_privacy_response.status_code == 404
-
-    show_response = await client.get(
-        "/api/v1/skills/privacy-update-skill",
-        params={"include_content": True},
-    )
-    assert show_response.status_code == 200, show_response.text
-    shown = show_response.json()["result"]
-    assert "Configured but not referenced in content" not in shown["content"]
+    target = "/api/v1/privacy-configs/skill/privacy-update-skill"
+    current = (await client.get(target)).json()["result"]["current"]
+    assert current == privacy_response.json()["result"]
+    assert (await client.get(target + "/versions/1")).status_code == 200
+    restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx)
+    assert json.loads(restored)["parts"][0]["text"] == "secret-1"
+    response = await client.delete(target)
+    assert response.status_code == 200 and response.json()["result"]["deleted"]
+    assert (await client.get(target)).status_code == 404
+    assert (await client.get(target + "/versions")).status_code == 404
 
 
-async def test_skills_api_update_keeps_privacy_after_post_write_failure(client, monkeypatch):
+async def test_skills_api_update_keeps_privacy_after_post_write_failure(
+    client, service, monkeypatch
+):
     from openviking.storage.queuefs import get_queue_manager
     from openviking.utils.skill_processor import SkillProcessor
 
@@ -361,38 +478,37 @@ async def test_skills_api_update_keeps_privacy_after_post_write_failure(client, 
     )
     assert seeded_privacy.status_code == 200, seeded_privacy.text
 
-    original_prepare = SkillProcessor.prepare_skill_privacy
+    await patch_user_config(
+        service.viking_fs,
+        RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}}),
+    )
+    secret = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     original_apply = SkillProcessor.apply_skill_privacy
-
-    async def _prepare_new_privacy(self, skill_dict, ctx):
-        if skill_dict.get("name") == "failed-privacy-write-skill":
-            return skill_dict, {"api_key": "secret-new"}
-        return await original_prepare(self, skill_dict, ctx)
 
     async def _apply_then_fail(
         self,
         skill_dict,
-        privacy_values,
+        preparation,
         ctx,
         *,
         change_reason,
-        delete_if_empty,
         owner_lease_ref=None,
+        previous_versions=None,
     ):
         result = await original_apply(
             self,
             skill_dict,
-            privacy_values,
+            preparation,
             ctx,
             change_reason=change_reason,
-            delete_if_empty=delete_if_empty,
             owner_lease_ref=owner_lease_ref,
+            previous_versions=previous_versions,
         )
         if skill_dict.get("name") == "failed-privacy-write-skill":
             raise RuntimeError("privacy post-write failure")
         return result
 
-    monkeypatch.setattr(SkillProcessor, "prepare_skill_privacy", _prepare_new_privacy)
     monkeypatch.setattr(SkillProcessor, "apply_skill_privacy", _apply_then_fail)
 
     response = await client.put(
@@ -401,7 +517,7 @@ async def test_skills_api_update_keeps_privacy_after_post_write_failure(client, 
             "data": _skill_md(
                 "failed-privacy-write-skill",
                 "Updated description",
-                'api_key: "secret-new"\n',
+                f'api_key: "{secret}"\n',
             ),
             "wait": True,
         },
@@ -412,7 +528,10 @@ async def test_skills_api_update_keeps_privacy_after_post_write_failure(client, 
 
     privacy_response = await client.get("/api/v1/privacy-configs/skill/failed-privacy-write-skill")
     assert privacy_response.status_code == 200, privacy_response.text
-    assert privacy_response.json()["result"]["current"]["values"]["api_key"] == "secret-new"
+    assert set(privacy_response.json()["result"]["current"]["values"].values()) == {
+        "secret-old",
+        secret,
+    }
 
     show_response = await client.get(
         "/api/v1/skills/failed-privacy-write-skill",
@@ -578,56 +697,85 @@ async def test_skills_api_add_accepts_source_metadata_override(client, monkeypat
     assert len(downloads) == count
 
 
-async def test_skills_api_update_accepts_binary_auxiliary_files(client, tmp_path):
-    await _add_skill(client, "binary-skill", "Original binary skill")
+async def test_skills_api_update_accepts_binary_auxiliary_files(client, service):
+    from openviking.privacy.skill_placeholder import build_placeholder
 
-    skill_dir = tmp_path / "binary-skill"
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text(
-        _skill_md("binary-skill", "Updated binary skill"),
-        encoding="utf-8",
+    owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    reader = RequestContext(user=UserIdentifier(owner.account_id, "reader"), role=Role.USER)
+    await patch_user_config(
+        service.viking_fs, owner, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
     )
-    (skill_dir / "preview.bin").write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01")
-
-    archive = tmp_path / "binary-skill.zip"
-    with zipfile.ZipFile(archive, "w") as zip_file:
-        for path in skill_dir.rglob("*"):
-            zip_file.write(path, path.relative_to(skill_dir).as_posix())
-
-    with archive.open("rb") as handle:
-        upload_response = await client.post(
-            "/api/v1/resources/temp_upload",
-            files={"file": ("binary-skill.zip", handle, "application/zip")},
-        )
-    assert upload_response.status_code == 200, upload_response.text
-    temp_file_id = upload_response.json()["result"]["temp_file_id"]
-
-    update_response = await client.put(
-        "/api/v1/skills/binary-skill",
-        json={"temp_file_id": temp_file_id, "wait": True},
+    name = "binary-skill"
+    created = await client.post(
+        "/api/v1/skills",
+        json={
+            "data": _skill_md(name, "Original binary skill"),
+            "target_uri": "viking://agent/skills",
+            "wait": True,
+        },
     )
-    assert update_response.status_code == 200, update_response.text
-    root_uri = update_response.json()["result"]["root_uri"]
-
-    download_response = await client.get(
-        "/api/v1/content/download",
-        params={"uri": f"{root_uri}/preview.bin"},
+    assert created.status_code == 200, created.text
+    original = "ghp_aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    rotated = "ghp_cD4fG6hJ8kM0nP2qR5sU7vW9xY1zA3bE"
+    binary = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("SKILL.md", _skill_md(name, "Binary skill", f'key="{original}"'))
+        archive.writestr("preview.bin", binary)
+    archive_bytes = buffer.getvalue()
+    upload = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("binary-skill.zip", archive_bytes, "application/zip")},
     )
-    assert download_response.status_code == 200, download_response.text
-    assert download_response.content.startswith(b"\xff\xd8\xff\xe0")
+    assert upload.status_code == 200, upload.text
+    source = {
+        "temp_file_id": upload.json()["result"]["temp_file_id"],
+        "target_uri": "viking://agent/skills",
+        "wait": True,
+    }
+    added = await client.put("/api/v1/skills/" + name, json=source)
+    assert added.status_code == 200, added.text
+    root = added.json()["result"]["root_uri"]
+    current = await service.privacy_configs.get_current(owner, "skill", name)
+    [field] = current.values
+    await service.privacy_configs.patch_values(owner, "skill", name, {field: rotated})
+    await service.privacy_configs.upsert(reader, "skill", name, {field: "MemberSetting42"})
+    current = await service.privacy_configs.get_current(owner, "skill", name)
+    stored = await service.viking_fs.read_file(root + "/SKILL.md", ctx=owner)
 
-    replace_response = await client.put(
-        "/api/v1/skills/binary-skill",
-        json={"data": _skill_md("binary-skill", "Updated without auxiliary files"), "wait": True},
+    upload = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("binary-skill.zip", archive_bytes, "application/zip")},
     )
-    assert replace_response.status_code == 200, replace_response.text
-    replaced_root_uri = replace_response.json()["result"]["root_uri"]
+    assert upload.status_code == 200, upload.text
+    source["temp_file_id"] = upload.json()["result"]["temp_file_id"]
+    rejected = await client.put("/api/v1/skills/" + name, json=source)
+    assert rejected.status_code == 409, rejected.text
+    assert original not in rejected.text and rotated not in rejected.text
+    assert await service.viking_fs.read_file(root + "/SKILL.md", ctx=owner) == stored
+    download = await client.get("/api/v1/content/download", params={"uri": root + "/preview.bin"})
+    assert download.status_code == 200 and download.content == binary
 
-    stale_download_response = await client.get(
-        "/api/v1/content/download",
-        params={"uri": f"{replaced_root_uri}/preview.bin"},
+    replaced = await client.put(
+        "/api/v1/skills/" + name,
+        json={
+            "data": _skill_md(
+                name, "Updated without auxiliary files", build_placeholder(name, field)
+            ),
+            "target_uri": "viking://agent/skills",
+            "wait": True,
+        },
     )
-    assert stale_download_response.status_code == 404
+    assert replaced.status_code == 200, replaced.text
+    assert (
+        await client.get("/api/v1/content/download", params={"uri": root + "/preview.bin"})
+    ).status_code == 404
+    assert (await service.privacy_configs.get_current(owner, "skill", name)) == current
+    assert (await service.privacy_configs.get_version(owner, "skill", name, 1)).values == {
+        field: original
+    }
+    assert rotated in await service.fs.read(root + "/SKILL.md", ctx=owner)
+    assert "MemberSetting42" in await service.fs.read(root + "/SKILL.md", ctx=reader)
 
 
 async def test_skills_api_validate_inline_skill(client):

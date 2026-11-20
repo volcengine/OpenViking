@@ -295,7 +295,11 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
+| `cache.instances` | object | 启用 cache consumer 时必填 | 命名 CacheRuntime Provider，必须包含 `default` |
+| `agfs.cachefs.instance` | 实例名 | `"default"` | `cachefs.backend="cache"` 时使用的 Runtime |
+| `agfs.queuefs.instance` | 实例名 | `"default"` | `queuefs.backend="cache"` 时使用的 Runtime |
 | `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`postgres`、`cache` | `filesystem` | 路径锁存储；`postgres` 直连 PostgreSQL，`cache` 使用 Redis |
+| `agfs.pathlock.instance` | 实例名 | `"default"` | `pathlock.provider="cache"` 时使用的 Runtime，必须是 Redis |
 | `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | 使用 `sqlite` 时为 `{workspace}/_system/pathlock/pathlock.db` | SQLite 共享锁数据库，可显式覆盖 |
 | `agfs.pathlock.postgres_dsn_env` | 环境变量名 / `null` | `null` | `postgres` 必填；指定服务进程中保存 PostgreSQL DSN 的环境变量名 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb`、`opengauss`、`pgvector` | `local` | 向量数据库后端；参见 [pgvector 配置](../guides/25-pgvector.md) |
@@ -303,6 +307,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
+| `watch_store.provider` | `file`、`mysql`、`postgres` | `file` | Watch 元数据和运行占用；关系型 provider 共享持久化记录 |
+
+PostgreSQL Watch 存储需要安装 `openviking[postgres]`，并执行
+`openviking/service/sql/001_watch_tasks_postgres.sql` 建表。在
+`storage.watch_store.params` 中配置连接字段和所有节点共用的
+`credential_encryption_key`（base64 编码的 32 字节密钥）。
+它独立于 Task/Work、Account、PathLock 和向量存储。
+完整示例、TLS 参数与部署要求见[Watch 存储配置](../guides/01-configuration.md#watch-store)。
 
 同机本地磁盘上的路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
 `{"provider":"sqlite"}`。数据库默认位于
@@ -417,7 +429,8 @@ PathLock 不提供租约失效后的存储侧 fencing，也不改变 CachedFileS
 #### Redis PathLock
 
 使用 Redis 协调时，
-设置 `storage.agfs.pathlock.provider="cache"` 和顶层 `cache.provider="redis"`。
+设置 `storage.agfs.pathlock.provider="cache"`，并通过
+`storage.agfs.pathlock.instance` 选择 `cache.instances` 中的 Redis 实例。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
 参见[共享 Redis 配置示例](../guides/01-configuration.md)。
 无论选择哪种 PathLock，共享 QueueFS 都需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
@@ -496,6 +509,39 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 |---|---|---:|---|
 | `max_concurrent` | integer | `10` | 同时消费的外部异步任务数，必须大于 `0`；修改后需重启服务 |
 
+## 日志配置
+
+`log` 统一控制独立服务器的 Python、Rust 和 C++ 输出。默认级别为 `INFO`，
+便于看到兜底和重试；业务过程使用 `DEBUG`。第三方日志保留原级别语义。
+Bootstrap 启动结果和失败提示直接打印到 stdout/stderr，即使设置高日志阈值
+或文件输出也会显示。
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `level` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | `INFO` | 输出阈值；大小写不敏感，兼容 `WARN` 和 `FATAL` |
+| `format` | 公共格式字符串 | 见下文 | Python、Rust、C++ 使用同一日志头 |
+| `output` | `stdout`、`stderr`、`file` 或文件路径 | `stdout` | `file` 写入 `storage.workspace/log/openviking.log` |
+| `rotation` | boolean | `true` | Python 文件输出轮转，并通知 Rust 重开文件 |
+| `rotation_days` | integer | `3` | Python 保留的轮转文件数量 |
+| `rotation_interval` | `midnight`、`H`、`D`、`W0`–`W6` | `midnight` | Python 文件轮转周期；C++ 文件 sink 不参与轮转 |
+
+公共 `format` 的精确值：
+
+```text
+%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s
+```
+
+输出时间为 UTC 毫秒，消息及附加字符串按 JSON 规则转义，每条事件占一行，
+不含终端颜色。缺失的关联字段显示 `-`。升级时，旧内建格式
+`%(asctime)s - %(name)s - %(levelname)s - %(message)s` 自动转为公共格式；
+其他自定义格式和未知级别会导致配置校验失败。
+
+原生输出配置改变后需要重启服务；Python 重配不能代表原生组件已经更新。
+Rust 没有 `CRITICAL`，该阈值仍映射到 `ERROR`，输出仍标为 `ERROR`。
+已有 `server.observability.usage_audit` 配置管理用量及 HTTP 请求记录；
+安全操作审计落库记为独立功能待办。
+SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING_CN.md)。
+
 ## Compile API 配置
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -523,7 +569,7 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
     "host": "127.0.0.1",
     "port": 1933,
     "workers": 1,
-    "executor_threads": 0,
+    "executor_threads": 64,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -541,7 +587,7 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 | `host` | IP / hostname | `"127.0.0.1"` | HTTP 监听地址 |
 | `port` | integer | `1933` | HTTP 监听端口 |
 | `workers` | integer | `1` | 服务进程数量 |
-| `executor_threads` | 非负整数 | `0` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
+| `executor_threads` | 非负整数 | `64` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
 | `timeout_keep_alive` | integer（秒） | `5` | 空闲 HTTP keep-alive 超时；应调大到超过上游空闲连接寿命 |
 | `auth_mode` | `dev`、`api_key`、`trusted` / `null` | `null` | 鉴权模式；空值根据 `root_api_key` 自动判断 |
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |

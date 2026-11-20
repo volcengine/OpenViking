@@ -1,7 +1,8 @@
 import type { ComponentPropsWithoutRef, RefObject } from 'react';
+import { useLocale } from '../../shared/locale-context.js';
 
 import FilterIcon from '../../../../icons/svg/file-browser/search-filter.svg?react';
-import type { SearchMode } from './search-types.js';
+import type { SearchFilters, SearchMode } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
 /**
@@ -28,6 +29,7 @@ export interface FileBrowserSearchHeaderProps {
   text: ResolvedLabels;
   inputRef: RefObject<HTMLInputElement | null>;
   advancedOpen: boolean;
+  filters: SearchFilters;
   inputProps: Pick<
     ComponentPropsWithoutRef<'input'>,
     | 'onKeyDown'
@@ -49,10 +51,19 @@ export function FileBrowserSearchHeader({
   text,
   inputRef,
   advancedOpen,
+  filters,
   inputProps,
   onChange,
   onToggleAdvanced,
 }: FileBrowserSearchHeaderProps) {
+  const locale = useLocale();
+  const filterCount =
+    filters.scopes.length +
+    filters.levels.length +
+    Number(Boolean(filters.since)) +
+    Number(Boolean(filters.until)) +
+    Number(filters.caseInsensitive);
+  const formattedCount = new Intl.NumberFormat(locale).format(filterCount);
   return (
     <div className="ov-file-browser-search__header">
       <input
@@ -68,11 +79,26 @@ export function FileBrowserSearchHeader({
       <button
         type="button"
         className="ov-file-browser-search__advanced-toggle"
-        aria-label={text.searchAdvancedLabel}
+        aria-label={
+          filterCount
+            ? text.searchAdvancedLabelWithCount(
+                text.searchAdvancedLabel,
+                formattedCount,
+              )
+            : text.searchAdvancedLabel
+        }
         aria-expanded={advancedOpen}
         onClick={onToggleAdvanced}
       >
         <FilterIcon width={28} height={28} aria-hidden="true" />
+        {filterCount > 0 ? (
+          <span
+            className="ov-file-browser-search__filter-count"
+            aria-hidden="true"
+          >
+            {formattedCount}
+          </span>
+        ) : null}
       </button>
     </div>
   );

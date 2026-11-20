@@ -413,6 +413,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/skills/find` | Search skills |
 | POST | `/api/v1/skills/validate` | Validate skill data |
 | GET | `/api/v1/skills/{skill_name}` | Get a skill |
+| GET | `/api/v1/skills/{skill_name}/audit` | Get skill ownership and change history |
 | PUT | `/api/v1/skills/{skill_name}` | Update a skill |
 | DELETE | `/api/v1/skills/{skill_name}` | Delete a skill |
 

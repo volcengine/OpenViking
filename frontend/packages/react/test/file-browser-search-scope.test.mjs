@@ -66,10 +66,16 @@ test('switching accounts cancels the previous search and rejects its late result
 
 test('choosing a subdirectory limits the search and clearing restores the root', async () => {
   const rootUri = 'viking://resources/project';
-  const child = `${rootUri}/docs`;
+  const child = `${rootUri}/%E4%B8%AD%E6%96%87%E7%9B%AE%E5%BD%95`;
+  const childDisplay = `${rootUri}/中文目录`;
+  const encodedSlashChild = `${rootUri}/%E9%A1%B9%E7%9B%AE%2F%E5%BD%92%E6%A1%A3`;
+  const encodedSlashDisplay = `${rootUri}/项目%2F归档`;
   const fetch = recordingFetch(({ path, uri }) => {
     if (path === '/api/v1/fs/ls' && uri === rootUri)
-      return ok([{ uri: child, isDir: true }]);
+      return ok([
+        { uri: child, isDir: true },
+        { uri: encodedSlashChild, isDir: true },
+      ]);
     if (path === '/api/v1/search/find') return ok({ resources: [] });
     return ok([]);
   });
@@ -77,7 +83,13 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     h(
       OpenVikingProvider,
       { baseURL: 'https://ov.test', fetch },
-      h(FileBrowser, { rootUri }),
+      h(FileBrowser, {
+        rootUri,
+        labels: {
+          searchAdvancedLabelWithCount: (label, count) =>
+            `${label} — ${count} selected`,
+        },
+      }),
     ),
   );
   const modal = () => document.querySelector('.ov-file-browser-search');
@@ -106,14 +118,69 @@ test('choosing a subdirectory limits the search and clearing restores the root',
       modal().querySelector('.ov-file-browser-search__scope-trigger'),
     );
     const menu = () =>
-      modal().querySelector('.ov-file-browser-search__scope-menu');
-    await click(menu().querySelector(`[title="${rootUri}"]`));
-    await click(menu().querySelector(`[title="${child}"]`));
-    await click(menu().querySelector(`[title="${child}"][aria-pressed]`));
+      document.querySelector('.ov-file-browser-search__scope-menu');
+    const root = () => menu().querySelector(`label[title="${rootUri}"]`);
+    await click(
+      root()
+        .closest('.ov-file-browser-search__scope-row')
+        .querySelector('button'),
+    );
+    await settle();
+    assert.ok(menu().querySelector(`[title="${encodedSlashDisplay}"]`));
+    assert.equal(menu().querySelector(`[title="${rootUri}/项目/归档"]`), null);
+    const childInput = () =>
+      menu().querySelector(`[title="${childDisplay}"] input`);
+    await click(childInput());
+    assert.ok(root().classList.contains('ov-checkbox--indeterminate'));
+    assert.deepEqual(targets(), [rootUri], 'draft changes do not run a search');
+    const actions = () =>
+      menu().querySelectorAll('.ov-file-browser-search__scope-actions button');
+    await click(actions()[0]);
+    assert.equal(menu(), null, 'cancel closes the draft');
+    await click(
+      modal().querySelector('.ov-file-browser-search__scope-trigger'),
+    );
+    await click(
+      root()
+        .closest('.ov-file-browser-search__scope-row')
+        .querySelector('button'),
+    );
+    await settle();
+    assert.equal(
+      childInput().checked,
+      false,
+      'cancel preserves the applied selection',
+    );
+    await click(childInput());
+    await click(actions()[1]);
+    await settle();
+    const selectedScope = modal().querySelector(
+      `.ov-file-browser-search__options [title="${childDisplay}"]`,
+    );
+    assert.equal(selectedScope?.textContent, childDisplay);
+    assert.equal(selectedScope?.getAttribute('title'), childDisplay);
     assert.deepEqual(targets().at(-1), [child]);
+    const filterToggle = () =>
+      modal().querySelector('.ov-file-browser-search__advanced-toggle');
+    const filterCount = () =>
+      filterToggle().querySelector('.ov-file-browser-search__filter-count');
+    assert.equal(filterCount().textContent, '1');
+    assert.equal(
+      filterToggle().getAttribute('aria-label'),
+      'Advanced filters — 1 selected',
+    );
+    await click(
+      modal().querySelector('.ov-file-browser-search__advanced-close'),
+    );
+    assert.equal(filterToggle().getAttribute('aria-expanded'), 'false');
+    assert.equal(filterCount().textContent, '1');
+    assert.deepEqual(targets().at(-1), [child]);
+    await click(filterToggle());
     await click(
       modal().querySelector('.ov-file-browser-search__advanced-clear'),
     );
+    assert.equal(filterCount(), null);
+    assert.equal(filterToggle().getAttribute('aria-label'), 'Advanced filters');
     assert.deepEqual(
       targets(),
       [rootUri, [child]],

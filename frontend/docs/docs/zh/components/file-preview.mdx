@@ -45,6 +45,10 @@ import '@openviking/react/components/file-preview/style.css';
 
 示例使用固定的模拟数据；「空文件」和「图片失败」演示对应的状态。
 
+### 会话记录
+
+完整内容可读、`source.fileName` 为 `messages.jsonl`，且 `source.path` 指向 `viking://user/<user>/sessions/<session>/` 或 `viking://~/sessions/<session>/` 下的原生会话文件（含归档）时，预览模式按角色展示消息气泡、时间和 ID。支持原生 `parts` 中的文本、工具结果、图片和上下文引用，以及旧格式字符串 `content`，保留原文和换行。图片和上下文引用以可读文本展示原始字段，包括 URL、detail、URI、引用类型和摘要，不自动加载图片或打开资源。源码模式仍展示原始 JSONL。大文件或已截断文件保留原有准入行为，其他 JSONL 文件、不支持或内容冲突的记录继续使用普通 JSON 预览，不丢弃其中的 part。
+
 ### 注入操作
 
 通过 `actions` 注入宿主操作：一个操作显示为按钮，多个操作收进「…」菜单。切换操作布局，勾选「模拟失败」查看失败提示，其余复选框控制内置入口的显隐。
@@ -56,6 +60,8 @@ import '@openviking/react/components/file-preview/style.css';
 模拟操作等待 2 秒；执行期间切换页签或勾选「自定义工具栏」，同一资源的操作仍保持锁定。
 
 ### 代码编辑
+
+编辑时隐藏预览／源码切换，只在源码中编辑；取消或保存后恢复正常预览操作。
 
 选择代码文件，使用 CodeMirror 6 编辑 44 种语法，支持行号、撤销和 Prism 语法高亮。
 
@@ -121,17 +127,51 @@ import '@openviking/react/components/file-preview/style.css';
 | -------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ------- |
 | kind           | 页签类型，固定为 `'file'`                                                            | `'file'`                                                      | 必填    |
 | source         | 要预览的内容与文件信息，有可用的 `levels` 时渲染当前层级的 `source`                  | `FilePreviewSource`                                           | 必填    |
+| emptyLabel     | 覆盖正文为空时的默认提示。                                                           | `string`                                                      | -       |
 | loading        | 正文还在读取：正文区显示加载态，页签行和路径行照常显示，此时 `source` 可以没有内容   | `boolean`                                                     | `false` |
 | operations     | 异步执行能力，省略的方法对应的入口不可用                                             | `FilePreviewOperations`                                       | -       |
 | resources      | 伴随资源，按 `key` 匹配 Markdown 里的图片地址，可以是相对路径或 `viking://` URI      | `readonly FileViewerResource[]`                               | -       |
 | levels         | 分级内容，每级有自己的 `source`、`resources` 和 `editing`                            | `readonly FilePreviewLevel[]`                                 | -       |
 | activeLevelKey | 受控的当前层级，省略时使用第一个未禁用的层级                                         | `string`                                                      | -       |
+| videoDetails   | 视频转录文稿与抽帧图片                                                               | `FilePreviewFileTab['videoDetails']`                          | -       |
 | resolveImage   | 解析 Markdown 里的图片地址并返回可访问的 URL，请求、取消和 Blob URL 的回收由宿主负责 | `(src: string, source: FilePreviewSource) => Promise<string>` | -       |
 | editing        | 编辑能力，省略时只读，是否可编辑只取决于它；启用 `levels` 后只取当前层级的 `editing` | `FilePreviewEditing`                                          | -       |
 | actions        | 标题行里的宿主操作，数组或接收上下文的函数，规则见「注意」                           | `FilePreviewActionSource`                                     | -       |
 | onLevelChange  | 切换层级时触发，参数为新层级的 `key`，受控时由宿主更新 `activeLevelKey`              | `(key: string) => void`                                       | -       |
 | onOpenUri      | Markdown 里的链接通过 `operations.openUri` 打开后触发，参数为被点击的链接地址        | `(uri: string) => void`                                       | -       |
 | slots          | 标题行、页脚与状态插槽                                                               | `FilePreviewFileTabSlots`                                     | -       |
+
+#### videoDetails
+
+显示在视频源下方。宿主分别提供文稿与帧图，没有条目时传入空数组。 播放时会高亮当前文稿并自动滚动。放大视频后，弹窗会同时显示播放器和文稿，播放保持连续。抽帧图片下方显示文件名。
+
+| 参数          | 说明                                                   | 类型                                     | 默认值  |
+| ------------- | ------------------------------------------------------ | ---------------------------------------- | ------- |
+| segments      | 按展示顺序排列的带时间戳文稿                           | `readonly Segment[]`                     | 必填    |
+| frames        | 按展示顺序排列的抽帧图片                               | `readonly Frame[]`                       | 必填    |
+| framesLoading | 获取帧图时显示加载提示                                 | `boolean`                                | `false` |
+| onLoadFrames  | 选择抽帧页签或重试失败下载时触发                       | `() => void`                             | -       |
+| onFrameError  | 缩略图或放大图片加载、解码失败时，回传帧标识和失败地址 | `(frameId: string, src: string) => void` | -       |
+
+`segments` 中的条目：
+
+| 参数    | 说明                                                    | 类型     | 默认值 |
+| ------- | ------------------------------------------------------- | -------- | ------ |
+| startMs | 开始时间，单位为毫秒，点击条目跳转到该位置              | `number` | 必填   |
+| endMs   | 结束时间，单位为毫秒，从 `startMs` 到该时间之前高亮条目 | `number` | 必填   |
+| text    | 文稿正文                                                | `string` | 必填   |
+| speaker | 发言人名称，空值或省略时使用 `labels.videoSpeaker`      | `string` | -      |
+
+`frames` 中的条目：
+
+| 参数   | 说明                                             | 类型      | 默认值  |
+| ------ | ------------------------------------------------ | --------- | ------- |
+| id     | 稳定且唯一的帧标识                               | `string`  | 必填    |
+| name   | 图片的无障碍名称，图片未就绪时显示该名称         | `string`  | 必填    |
+| src    | 可访问的图片地址，点击图片可放大                 | `string`  | -       |
+| failed | 标记下载失败，加载结束后存在失败帧时显示重试按钮 | `boolean` | `false` |
+
+宿主负责请求、取消和图片地址回收。在 `onLoadFrames` 中更新 `framesLoading` 及每帧的 `src` 或 `failed`，点击重试会再次调用同一回调。图片加载或解码失败时隐藏缩略图并关闭对应的放大预览。在 `onFrameError` 中清除匹配的 `src` 并将该帧标记为 `failed`；帧地址已更新时忽略旧事件。FileBrowser 自动处理失效状态，重试时重新下载失败帧。帧图按需下载，文稿加载中、请求失败或解析失败时仍可访问已发现的帧图。
 
 ### FilePreviewDirectoryTab
 
@@ -146,7 +186,7 @@ import '@openviking/react/components/file-preview/style.css';
 | defaultLevelKey     | 非受控时的初始层级                                             | `string`                                                               | 第一级  |
 | resources           | 各层级共用的伴随资源，层级自己的 `resources` 优先              | `readonly FileViewerResource[]`                                        | -       |
 | resolveImage        | 解析当前层级 Markdown 里的图片地址，规则同文件页签             | `(src: string, source: FilePreviewSource) => Promise<string>`          | -       |
-| operations          | 异步执行能力，目录页签只使用 `openParent`                      | `FilePreviewOperations`                                                | -       |
+| operations          | 异步执行能力，目录页签支持 `openParent` 和 `openUri`           | `FilePreviewOperations`                                                | -       |
 | actions             | 标题行里的宿主操作，上下文里的 `source` 和 `path` 指向当前层级 | `FilePreviewActionSource`                                              | -       |
 | onActiveLevelChange | 层级变化时触发，参数为新层级的 `key`                           | `(key: string) => void`                                                | -       |
 | slots               | 标题行、页脚与状态插槽，与文件页签相同                         | `FilePreviewFileTabSlots`                                              | -       |
@@ -155,11 +195,12 @@ import '@openviking/react/components/file-preview/style.css';
 
 展示宿主自己的内容，例如看板或图谱，包含 `FilePreviewTabBase` 的全部字段。
 
-| 参数    | 说明                                                 | 类型        | 默认值 |
-| ------- | ---------------------------------------------------- | ----------- | ------ |
-| kind    | 页签类型，固定为 `'content'`                         | `'content'` | 必填   |
-| title   | 页签行显示的内容，内容页签没有文件名可以回落         | `ReactNode` | 必填   |
-| content | 页签正文，铺满页签行以下的区域，排版与滚动由宿主负责 | `ReactNode` | 必填   |
+| 参数             | 说明                                                 | 类型        | 默认值  |
+| ---------------- | ---------------------------------------------------- | ----------- | ------- |
+| kind             | 页签类型，固定为 `'content'`                         | `'content'` | 必填    |
+| title            | 页签行显示的内容，内容页签没有文件名可以回落         | `ReactNode` | 必填    |
+| content          | 页签正文，铺满页签行以下的区域，排版与滚动由宿主负责 | `ReactNode` | 必填    |
+| hideWhileEditing | 编辑文件期间隐藏该页签                               | `boolean`   | `false` |
 
 ### FilePreviewSource
 
@@ -192,31 +233,35 @@ import '@openviking/react/components/file-preview/style.css';
 
 目录页签 `levels` 的一级摘要。
 
-| 参数      | 说明                                           | 类型                            | 默认值 |
-| --------- | ---------------------------------------------- | ------------------------------- | ------ |
-| key       | 层级的唯一标识，用于切换与受控状态             | `string`                        | 必填   |
-| label     | 层级切换页签显示的内容，例如「L0 摘要」        | `ReactNode`                     | 必填   |
-| source    | 该层级的正文来源，与文件页签的 `source` 相同   | `FilePreviewSource`             | 必填   |
-| resources | 该层级的伴随资源，省略时使用页签的 `resources` | `readonly FileViewerResource[]` | -      |
+| 参数       | 说明                                           | 类型                            | 默认值 |
+| ---------- | ---------------------------------------------- | ------------------------------- | ------ |
+| key        | 层级的唯一标识，用于切换与受控状态             | `string`                        | 必填   |
+| label      | 层级切换页签显示的内容，例如「L0 摘要」        | `ReactNode`                     | 必填   |
+| source     | 该层级的正文来源，与文件页签的 `source` 相同   | `FilePreviewSource`             | 必填   |
+| emptyLabel | 覆盖正文为空时的默认提示。                     | `string`                        | -      |
+| resources  | 该层级的伴随资源，省略时使用页签的 `resources` | `readonly FileViewerResource[]` | -      |
 
 ### FilePreviewOperations
 
 组件调用这些方法执行操作，Promise 完成后才触发对应的 `onOpenParent`、`onOpenUri`，拒绝时静默，不触发通知。
 
-| 参数       | 说明                                                                                             | 类型                             | 默认值 |
-| ---------- | ------------------------------------------------------------------------------------------------ | -------------------------------- | ------ |
-| openParent | 打开被点击的祖先层级，参数是该层级的完整 URI，省略时面包屑的层级不可点击                         | `(uri: string) => Promise<void>` | -      |
-| openUri    | 打开 Markdown 里被点击的链接，参数是 Markdown 里写的原始地址，传入后由宿主接管导航并解析相对路径 | `(uri: string) => Promise<void>` | -      |
+| 参数       | 说明                                                                                                               | 类型                             | 默认值 |
+| ---------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------ |
+| openParent | 打开被点击的祖先层级，参数是该层级的完整 URI，省略时面包屑的层级不可点击                                           | `(uri: string) => Promise<void>` | -      |
+| openUri    | 打开 Markdown 链接，参数为原始地址；文件页签交给宿主处理所有链接，目录摘要只交给宿主处理 Viking URI 和相对资源链接 | `(uri: string) => Promise<void>` | -      |
 
 ### FilePreviewEditing
 
-| 参数                 | 说明                                                                                                                  | 类型                                                                                           | 默认值  |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------- |
-| save                 | 保存草稿及可选备注。拒绝时保留草稿；返回 `{ warning: 'version-not-created' }` 时显示提示并照常触发 `onSave`。         | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | 必填    |
-| promptForVersionNote | 调用 `save` 前弹出版本备注；取消时保留草稿。                                                                          | `boolean`                                                                                      | `false` |
-| loadContent          | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -       |
-| onSave               | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                                                      | -       |
-| onCancel             | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                                                      | -       |
+| 参数                 | 说明                                                                                                                                    | 类型                                                                                           | 默认值  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------- |
+| save                 | 保存草稿及可选备注。拒绝时保留草稿；返回 `{ warning: 'version-not-created' }` 时显示提示并照常触发 `onSave`。                           | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | 必填    |
+| promptForVersionNote | 调用 `save` 前弹出版本备注；取消时保留草稿。                                                                                            | `boolean`                                                                                      | `false` |
+| loadContent          | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑。不提供任何读取函数时使用 `content` 或 `file` 的文本；只提供 `url` 时需要读取函数 | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -       |
+| loadDocument         | 优先于 `loadContent`，同时提供完整文本和可选的编辑器标注；返回 `undefined` 放弃本次编辑                                                 | `(source: FilePreviewSource) => Promise<FilePreviewEditorDocument \| undefined>`               | -       |
+| onSave               | 保存成功后触发，参数为已保存的文本                                                                                                      | `(value: string) => void`                                                                      | -       |
+| onCancel             | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                                          | `(value: string) => void`                                                                      | -       |
+
+`FilePreviewEditorDocument` 包含 `content` 和可选的 `annotations`、`readOnlySuffix`。编辑器在草稿末尾以只读方式显示尾段，保存回调接收用户编辑后的 `content`。每条标注包含 `matchText`、`description` 和可选的 `reason`。Markdown 编辑器高亮正文中有唯一匹配的行，并在悬停时显示说明。
 
 ### FilePreviewAction
 
@@ -233,11 +278,11 @@ import '@openviking/react/components/file-preview/style.css';
 
 为 `false` 的入口始终隐藏，即使页签提供了对应能力；页签的 `toolbar` 只能进一步隐藏顶层允许显示的入口。
 
-| 参数       | 说明                                            | 类型      | 默认值 |
-| ---------- | ----------------------------------------------- | --------- | ------ |
-| copyPath   | 路径旁的复制按钮，有路径时显示                  | `boolean` | `true` |
-| viewSwitch | 预览与源码切换，当前格式同时支持两种视图时显示  | `boolean` | `true` |
-| edit       | 编辑按钮，当前文件或层级提供了 `editing` 时显示 | `boolean` | `true` |
+| 参数       | 说明                                                   | 类型      | 默认值 |
+| ---------- | ------------------------------------------------------ | --------- | ------ |
+| copyPath   | 路径旁的复制按钮，有路径时显示                         | `boolean` | `true` |
+| viewSwitch | 预览与源码切换，在非编辑态且格式同时支持两种视图时显示 | `boolean` | `true` |
+| edit       | 编辑按钮，当前文件或层级提供了 `editing` 时显示        | `boolean` | `true` |
 
 ### FilePreviewHeaderSlots
 
@@ -274,6 +319,7 @@ import '@openviking/react/components/file-preview/style.css';
 | setViewMode   | 切换视图模式                                                     | `(mode: FilePreviewViewMode) => void` | -      |
 | canSwitchView | 当前格式是否同时支持预览与源码，为 `false` 时不要渲染切换控件    | `boolean`                             | -      |
 | editing       | 是否处于编辑态                                                   | `boolean`                             | -      |
+| draft         | 当前编辑草稿，可以为空字符串，退出编辑后省略                     | `string`                              | -      |
 | busy          | 是否有保存或读取正在进行                                         | `boolean`                             | -      |
 | canEdit       | 是否可以进入编辑：提供了 `editing`，不是图片或视频，且不在编辑态 | `boolean`                             | -      |
 | startEditing  | 进入编辑态，先读取完整文本                                       | `() => void`                          | -      |
@@ -321,6 +367,17 @@ import '@openviking/react/components/file-preview/style.css';
 | noContent              | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`             |
 | truncated              | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`             |
 
+#### 视频预览文案
+
+| 参数              | 说明                           | 类型                        | 默认值       |
+| ----------------- | ------------------------------ | --------------------------- | ------------ |
+| expandVideo       | 放大视频预览                   | `string`                    | 放大视频     |
+| videoTranscript   | 转录文稿页签                   | `string`                    | 转录文稿     |
+| videoFrames       | 按可见图片数格式化抽帧页签名称 | `(count: number) => string` | 抽帧图片     |
+| videoSpeaker      | 未标注发言人时的名称           | `string`                    | 说话人       |
+| videoNoTranscript | 文稿为空时的提示               | `string`                    | 暂无转录文稿 |
+| videoNoFrames     | 图片为空时的提示               | `string`                    | 暂无抽帧图片 |
+
 ### FilePreviewHandle
 
 通过 `ref` 取得，用于命令式切换页签和访问 FileViewer。
@@ -362,15 +419,25 @@ import '@openviking/react/components/file-preview/style.css';
 - Markdown 元数据：开头的 YAML 元数据在预览里显示为代码块，源码、编辑、保存和复制仍使用原文。
 - 点阵背景：Markdown 正文及 PDF、Word、PPT 的页面外围显示点阵背景，随宿主主题切换，底色和点色见下方「主题变量」。
 - Markdown 图片：先匹配 `resources`，未命中再调用 `resolveImage`，`resolveImage` 拒绝时使用图片的原始地址；组件不会把 `viking://` 转成 HTTP 地址。
-- Markdown 链接：只有 Markdown 触发 `operations.openUri`，组件传出 Markdown 里写的原始地址，不补全相对路径。
+- 文件正文链接：传入 `operations.openUri` 后，所有 Markdown 链接（包括外链）均由宿主接管，组件阻止默认跳转，并传出原始地址供宿主解析；省略回调时沿用渲染器的默认行为。
+- 目录摘要链接：`operations.openUri` 接收 Viking URI 和相对资源链接的原始地址。HTTP、HTTPS、邮件、电话和协议相对外链保留浏览器原生交互。
+- 目录锚点：同文档链接可定位带显式 `id` 的 HTML 标题（`h1`–`h6`），无需提供 `operations.openUri`。普通 Markdown 标题不会自动生成 ID，需要链接目标时使用 HTML 标题：
+
+  ```md
+  [详情](#details)
+
+  <h2 id="details">详情</h2>
+  ```
+
 - JSON 日志：`.json` 和 `.jsonl` 渲染为 JSON 树，会话日志等需要自己呈现的结构化文件，用内容页签渲染。
 - 大文件：组件不判断文件大小，FileViewer 需要确认时显示确认态，可用 `slots.confirmFallback` 替换；编辑文本的长度上限由宿主在 `editing` 里处理。
-- 增强功能：上一张与下一张、相邻图片预加载和视频转录不在组件内，在预览区外组合，或通过 `slots.actions`、`slots.footer` 注入。
+- 增强功能：上一张与下一张和相邻图片预加载不在组件内，在预览区外组合，或通过 `slots.actions`、`slots.footer` 注入。
 - FileViewer 自带的控件：组件不显示它的下载、全屏、翻页、搜索和缩放入口；翻页、搜索、缩放用 `getViewerHandle()`，下载用注入的操作。
 
 ### 路径与面包屑
 
 - 层级：`source.path` 按 `/` 拆成层级，协议前缀（如 `viking://`）显示在首层，最后一级是当前文件名。
+- URI 名称：URI 路径的每一段仅解码一次用于显示，编码的斜杠不会拆出新层级，无效编码保持原样。导航和复制使用原始路径，普通文件路径及显式传入的标题、文件名按原文显示。
 - 没有路径：省略 `source.path` 时面包屑只显示文件名，也没有复制路径按钮。
 - 导航：每个祖先层级都是按钮，点击时把该层级的完整 URI（如 `viking://a/b`）传给 `operations.openParent`，不限于直接父级；没有 `operations.openParent` 时按钮禁用。
 - 绝对路径：`/a/b/c.md` 的祖先保留开头的 `/`，相对路径保持原样。

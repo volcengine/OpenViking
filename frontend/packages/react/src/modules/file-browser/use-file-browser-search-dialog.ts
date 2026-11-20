@@ -20,9 +20,14 @@ export function useFileBrowserSearchDialog(
   return {
     open,
     advanced,
-    setAdvanced,
     session,
-    close,
+    dialog: {
+      open,
+      triggerRef: root,
+      advancedOpen: advanced,
+      onToggleAdvanced: setAdvanced,
+      onClose: close,
+    },
     show,
     shortcut,
     showAdvanced: () => {

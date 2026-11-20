@@ -226,7 +226,7 @@ class ResponsesProtocol(ToolProtocol):
         if kind in {"response.completed", "response.incomplete"}:
             return []
         if kind == "response.failed":
-            raise ToolLoopError("Model response failed")
+            raise ToolLoopError("Model response failed", code="tool_upstream_stream_error")
         if "output_index" in value:
             index = value["output_index"]
             if kind == "response.output_item.added":
@@ -266,7 +266,9 @@ class ResponsesProtocol(ToolProtocol):
 
     def end(self):
         if not self.completed or self.finish not in {"completed", "incomplete"}:
-            raise ToolLoopError("Incomplete Responses event stream")
+            raise ToolLoopError(
+                "Incomplete Responses event stream", code="tool_upstream_incomplete"
+            )
         if self.body.get("stream"):
             # Prefer terminal output for opaque fields; done events are complete
             # items when a sparse terminal omits the entire output.
@@ -367,7 +369,8 @@ class ResponsesProtocol(ToolProtocol):
     def terminal(self, final):
         return [{"type": "response." + self.finish, "response": final}]
 
-    def error(self, message) -> list[StreamEvent]:
+    def error(self, message, kind="gateway_tool_error") -> list[StreamEvent]:
+        # Responses clients read error codes from a fixed set; the reason stays in the message.
         return self.failed("server_error", message)
 
     def upstream_error(self, event) -> list[StreamEvent]:

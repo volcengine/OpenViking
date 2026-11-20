@@ -1,6 +1,8 @@
 import type { ResolvedCommandConsoleLabels } from '../command-console-labels.js';
 
 const messages = {
+  quoteArguments:
+    'Wrap paths and text containing spaces in quotes, such as "release notes".',
   placeholder: '>_ Enter CLI commands, e.g. ov find OpenViking',
   unavailableMessage: 'Commands are unavailable right now.',
   send: 'Send',
@@ -18,6 +20,7 @@ const messages = {
   emptyDescription: 'Work directly with your context through the CLI',
   quickStart: 'Quick start:',
   noResult: 'No result returned',
+  codeOutput: 'Command output',
   justNow: 'Just now',
   formatMinutesAgo: (minutes) =>
     `${minutes} minute${minutes === 1 ? '' : 's'} ago`,

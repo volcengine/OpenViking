@@ -2,7 +2,11 @@ import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import { startOperation, errorKind } from '../../shared/analytics/reporter.js';
 import { useEffect, useRef, useState } from 'react';
 
-import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
+import type {
+  FilePreviewEditorDocument,
+  FilePreviewFileTab,
+  FilePreviewTab,
+} from './types.js';
 
 /**
  * 文件页签的编辑态：进入编辑时向宿主取完整文本，保存成功才退出编辑。
@@ -37,6 +41,11 @@ export function useFilePreviewEditing(activeTabKey: string) {
     resolve: (note: string | undefined) => void;
   }>(undefined);
   const [draft, setDraft] = useState('');
+  const [editorDetails, setEditorDetails] = useState<
+    Pick<FilePreviewEditorDocument, 'annotations' | 'readOnlySuffix'> & {
+      initialAnnotation?: string;
+    }
+  >();
   const requestId = useRef(0);
   const loading = useRef(false);
   const pendingSave = useRef(false);
@@ -54,6 +63,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (saveFailure) setSaveFailure(undefined);
     if (versionNotCreated) setVersionNotCreated(false);
     if (draft) setDraft('');
+    if (editorDetails) setEditorDetails(undefined);
   }
 
   // Resolve a pending save confirmation when its tab goes away or unmounts.
@@ -84,12 +94,13 @@ export function useFilePreviewEditing(activeTabKey: string) {
     setSaveFailure(undefined);
     setVersionNotCreated(false);
     setDraft('');
+    setEditorDetails(undefined);
     if (wasEditing)
       analytics.current?.emit('file_preview_edit_cancel', () => ({}));
     if (wasEditing && tab.kind === 'file') tab.editing?.onCancel?.(discarded);
   }
 
-  async function start(tab: FilePreviewFileTab) {
+  async function start(tab: FilePreviewFileTab, initialAnnotation?: string) {
     if (loading.current || pendingSave.current) return;
     const id = ++requestId.current;
     loading.current = true;
@@ -97,19 +108,29 @@ export function useFilePreviewEditing(activeTabKey: string) {
     setEditFailed(false);
     setSaveFailure(undefined);
     setVersionNotCreated(false);
-    let content: string | undefined;
+    let document: FilePreviewEditorDocument | undefined;
     try {
-      content = tab.editing?.loadContent
-        ? await tab.editing.loadContent(tab.source)
-        : (tab.source.content ?? (await tab.source.file?.text()));
+      if (tab.editing?.loadDocument) {
+        document = await tab.editing.loadDocument(tab.source);
+      } else {
+        const content = tab.editing?.loadContent
+          ? await tab.editing.loadContent(tab.source)
+          : (tab.source.content ?? (await tab.source.file?.text()));
+        if (content !== undefined) document = { content };
+      }
     } catch {
       if (id === requestId.current) setEditFailed(true);
     }
     if (id !== requestId.current) return;
     loading.current = false;
     setLoadingEdit(false);
-    if (content !== undefined) {
-      setDraft(content);
+    if (document) {
+      setDraft(document.content);
+      setEditorDetails({
+        annotations: document.annotations,
+        readOnlySuffix: document.readOnlySuffix,
+        initialAnnotation,
+      });
       setEditing(true);
       analytics.current?.emit('file_preview_edit_start', () => ({}));
     }
@@ -174,6 +195,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (current) {
       setEditing(false);
       setDraft('');
+      setEditorDetails(undefined);
       setVersionNotCreated(result?.warning === 'version-not-created');
     }
     capability.onSave?.(value);
@@ -191,6 +213,9 @@ export function useFilePreviewEditing(activeTabKey: string) {
     versionNoteOpen: versionNoteKey === activeTabKey && editing,
     finishVersionNote,
     draft,
+    initialAnnotation: editorDetails?.initialAnnotation,
+    annotations: editorDetails?.annotations,
+    readOnlySuffix: editorDetails?.readOnlySuffix,
     discard,
     start,
     save,

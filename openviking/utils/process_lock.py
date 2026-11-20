@@ -11,6 +11,7 @@ import os
 import sys
 import threading
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -99,5 +100,5 @@ def acquire_data_dir_lock(data_dir: str) -> str:
 
         _LOCKS[lock_path] = (descriptor, 1)
 
-    logger.debug("Acquired data directory lock: %s", lock_path)
+    logger.debug("data directory lock acquired path=%s", safe_path_for_log(lock_path))
     return lock_path

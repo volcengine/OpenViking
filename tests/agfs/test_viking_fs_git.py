@@ -28,8 +28,6 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
-ragfs_python = pytest.importorskip("ragfs_python")
-
 # ----------------------------- helpers -----------------------------
 
 
@@ -56,15 +54,12 @@ author_email = "test@example.com"
 
 [git.local]
 base_dir = "{git_root}"
+
+[git.snapshot.log.sqlite]
+path = "{tmp_root / "snapshot-log.db"}"
 """
     )
     return cfg, fs_root
-
-
-def _build_client(config_path: Path, fs_root: Path):
-    c = ragfs_python.RAGFSBindingClient(git_config_path=str(config_path))
-    c.mount("localfs", "/local", {"local_dir": str(fs_root)})
-    return c
 
 
 # ----------------------------- fixtures -----------------------------
@@ -80,17 +75,18 @@ def workspace():
 
 
 @pytest.fixture
-def vfs(workspace):
+def vfs(workspace, ragfs_client_type):
     cfg, fs_root = _write_workspace(workspace)
-    client = _build_client(cfg, fs_root)
+    client = ragfs_client_type(git_config_path=str(cfg))
     try:
+        client.mount("localfs", "/local", {"local_dir": str(fs_root)})
         yield VikingFS(agfs=client)
     finally:
-        pass
+        client.close()
 
 
 @pytest.fixture
-def vfs_disabled(workspace):
+def vfs_disabled(workspace, ragfs_client_type):
     cfg = workspace / "ragfs.toml"
     cfg.write_text(
         """
@@ -100,77 +96,22 @@ enabled = false
     )
     fs_root = workspace / "fs"
     fs_root.mkdir()
-    client = ragfs_python.RAGFSBindingClient(git_config_path=str(cfg))
-    client.mount("localfs", "/local", {"local_dir": str(fs_root)})
+    client = ragfs_client_type(git_config_path=str(cfg))
     try:
+        client.mount("localfs", "/local", {"local_dir": str(fs_root)})
         yield VikingFS(agfs=client)
     finally:
-        pass
-
-
-# =========================================================================
-# 1. URI <-> tree path
-# =========================================================================
-
-
-class TestUriToTreePath:
-    def test_resources_uri(self, vfs):
-        ctx = _make_ctx()
-        assert vfs._uri_to_tree_path("viking://resources/a.md", ctx=ctx) == "resources/a.md"
-        assert (
-            vfs._uri_to_tree_path("viking://resources/proj_a/docs/a.md", ctx=ctx)
-            == "resources/proj_a/docs/a.md"
-        )
-
-    def test_session_uri(self, vfs):
-        ctx = _make_ctx()
-        assert (
-            vfs._uri_to_tree_path("viking://user/user1/sessions", ctx=ctx) == "user/user1/sessions"
-        )
-
-    def test_trailing_slash_kept_as_directory(self, vfs):
-        # Normalization may strip trailing slash; this is acceptable
-        ctx = _make_ctx()
-        out = vfs._uri_to_tree_path("viking://resources/proj_a/", ctx=ctx)
-        assert out.rstrip("/") == "resources/proj_a"
-
-    def test_internal_scope_rejected(self, vfs):
-        ctx = _make_ctx()
-        for uri in (
-            "viking://temp/x",
-            "viking://queue/y",
-            "viking://upload/z",
-        ):
-            with pytest.raises(ValueError):
-                vfs._uri_to_tree_path(uri, ctx=ctx)
-
-    def test_root_uri_rejected(self, vfs):
-        ctx = _make_ctx()
-        with pytest.raises(ValueError):
-            vfs._uri_to_tree_path("viking://", ctx=ctx)
-
-    def test_tree_path_to_uri_inverse(self, vfs):
-        assert vfs._tree_path_to_uri("resources/a.md") == "viking://resources/a.md"
-        assert vfs._tree_path_to_uri("/resources/a.md/") == "viking://resources/a.md"
-
-    def test_tree_path_empty_rejected(self, vfs):
-        with pytest.raises(ValueError):
-            vfs._tree_path_to_uri("")
-
-
-# =========================================================================
-# 2. commit / show / log
-# =========================================================================
+        client.close()
 
 
 @pytest.mark.asyncio
 class TestCommitShowLog:
     async def test_commit_then_show_roundtrip(self, vfs):
         ctx = _make_ctx()
-        await vfs.write_file("viking://resources/a.md", b"hello", ctx=ctx)
+        await vfs.write_file("viking://resources/proj/docs/a.md", b"hello", ctx=ctx)
         resp = await vfs.commit(
             message="initial",
-            paths=["viking://resources/a.md"],
+            paths=["viking://resources/proj/"],
             ctx=ctx,
         )
         assert resp["result"] == "created"
@@ -178,8 +119,14 @@ class TestCommitShowLog:
         assert len(resp["commit_oid"]) == 40
 
         # show with path -> bytes
-        body = await vfs.show("main", path="viking://resources/a.md", ctx=ctx)
+        body = await vfs.show("main", path="viking://resources/proj/docs/a.md", ctx=ctx)
         assert body == b"hello"
+        raw = await vfs.show_blob_raw(
+            resp["commit_oid"], path="viking://resources/proj/docs/a.md", ctx=ctx
+        )
+        assert raw["bytes"] == body
+        assert raw["size"] == len(body)
+        assert len(raw["oid"]) == 40
 
         # show without path -> commit metadata
         meta = await vfs.show("main", ctx=ctx)
@@ -326,14 +273,21 @@ class TestRestore:
         body = await vfs.read("viking://resources/proj/a.md", ctx=ctx)
         assert body == b"v2"
 
-    async def test_restore_internal_scope_rejected(self, vfs):
+    async def test_snapshot_rejects_internal_scopes_and_explicit_account_root(self, vfs):
         ctx = _make_ctx(account="acct_inv")
-        with pytest.raises(ValueError):
-            await vfs.restore(
-                project_dir="viking://temp/xx",
-                source_commit="main",
-                ctx=ctx,
-            )
+        for scope in ("temp", "queue", "upload"):
+            uri = f"viking://{scope}/untracked"
+            with pytest.raises(ValueError, match=f"rejects internal scope/segment '{scope}'"):
+                await vfs.commit(message="internal data", paths=[uri], ctx=ctx)
+
+        with pytest.raises(ValueError, match="cannot be the account root"):
+            await vfs.commit(message="root", paths=["viking://"], ctx=ctx)
+
+        with pytest.raises(ValueError, match="rejects internal scope/segment 'temp'"):
+            await vfs.restore(project_dir="viking://temp/xx", source_commit="main", ctx=ctx)
+
+        with pytest.raises(AGFSNotFoundError):
+            await vfs.show("main", ctx=ctx)
 
 
 # =========================================================================
@@ -385,37 +339,31 @@ async def test_cross_scope_atomic_commit_and_restore(vfs):
 
 
 # =========================================================================
-# 5. Derived files (.abstract.md etc.) versioned with source
+# 5. Derived summaries are excluded from snapshots
 # =========================================================================
 
 
 @pytest.mark.asyncio
-async def test_derived_files_versioned_with_source(vfs):
+async def test_derived_files_excluded_from_snapshot(vfs):
     ctx = _make_ctx(account="acct_derived")
-    await vfs.write_file("viking://resources/x.md", b"x-body", ctx=ctx)
-    await vfs.write_file("viking://resources/x.md.abstract.md", b"abstract-v1", ctx=ctx)
+    uri = "viking://resources/x.md"
+    summary = "viking://resources/x.md.abstract.md"
+    await vfs.write_file(uri, b"source-v1", ctx=ctx)
+    await vfs.write_file(summary, b"abstract-v1", ctx=ctx)
     c1 = await vfs.commit(message="v1", ctx=ctx)
     assert c1["result"] == "created"
-    assert c1["changed"] == 2
+    assert c1["changed"] == 1
+    with pytest.raises(AGFSNotFoundError):
+        await vfs.show("main", path=summary, ctx=ctx)
 
-    # show finds both
-    assert (
-        await vfs.show("main", path="viking://resources/x.md.abstract.md", ctx=ctx)
-        == b"abstract-v1"
-    )
+    await vfs.write_file(summary, b"abstract-v2", ctx=ctx)
+    assert (await vfs.commit(message="derived only", paths=[summary], ctx=ctx))["result"] == "noop"
+    await vfs.write_file(uri, b"source-v2", ctx=ctx)
+    await vfs.commit(message="v2", ctx=ctx)
 
-    # Update derived file
-    await vfs.write_file("viking://resources/x.md.abstract.md", b"abstract-v2", ctx=ctx)
-    await vfs.commit(message="v2", paths=["viking://resources/x.md.abstract.md"], ctx=ctx)
-
-    # Restore to c1 -> derived file reverts too
-    await vfs.restore(
-        project_dir="viking://resources",
-        source_commit=c1["commit_oid"],
-        ctx=ctx,
-    )
-    body = await vfs.read("viking://resources/x.md.abstract.md", ctx=ctx)
-    assert body == b"abstract-v1"
+    await vfs.restore(project_dir="viking://resources", source_commit=c1["commit_oid"], ctx=ctx)
+    assert await vfs.read(uri, ctx=ctx) == b"source-v1"
+    assert await vfs.read(summary, ctx=ctx) == b"abstract-v2"
 
 
 # =========================================================================
@@ -440,9 +388,9 @@ async def test_account_isolation_show_misses_other_account(vfs):
 
 
 @pytest.fixture
-def vfs_encrypted(workspace):
+def vfs_encrypted(workspace, ragfs_client_type):
     cfg, fs_root = _write_workspace(workspace)
-    client = ragfs_python.RAGFSBindingClient(
+    client = ragfs_client_type(
         git_config_path=str(cfg),
         config={
             "service_name": "snapshot-test",
@@ -623,19 +571,8 @@ class _SpyExecutor:
         return 0
 
 
-def _patch_reindex_executor(monkeypatch, vfs, spy):
-    import openviking.service.reindex_executor as reindex_mod
-
-    vlm_resolver, vector_resolver = object(), object()
-    monkeypatch.setattr(vfs, "_vlm_resolver", vlm_resolver)
-    monkeypatch.setattr(vfs, "_vector_config_resolver", vector_resolver)
-
-    def factory(*, vlm_resolver, vector_config_resolver):
-        assert vlm_resolver is vfs._vlm_resolver
-        assert vector_config_resolver is vfs._vector_config_resolver
-        return spy
-
-    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
+def _patch_reindex_executor(monkeypatch, spy):
+    monkeypatch.setattr("openviking.service.reindex_executor.ReindexExecutor", lambda: spy)
 
 
 class _MemTaskStore(PersistentTaskStore):
@@ -679,104 +616,18 @@ async def restore_reindex_queue(vfs, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_restore_schedules_reindex_for_derived_only_change(vfs, monkeypatch):
-    """When a restore only changes a directory `.abstract.md` (source file
-    unchanged), exactly that directory's L0 vector must be recomputed via
-    reindex_directory_marker — and nothing else (no whole-tree rebuild).
-    """
-    spy = _SpyExecutor()
-
-    _patch_reindex_executor(monkeypatch, vfs, spy)
-
-    ctx = _make_ctx(account="acct_derived_only")
-    await vfs.write_file("viking://resources/proj/x.md", b"body", ctx=ctx)
-    await vfs.write_file("viking://resources/proj/.abstract.md", b"abs-v1", ctx=ctx)
-    c1 = await vfs.commit(message="v1", ctx=ctx)
-    assert c1["result"] == "created"
-
-    # Modify ONLY the directory marker; source file untouched
-    await vfs.write_file("viking://resources/proj/.abstract.md", b"abs-v2", ctx=ctx)
-    c2 = await vfs.commit(
-        message="v2",
-        paths=["viking://resources/proj/.abstract.md"],
-        ctx=ctx,
-    )
-    assert c2["result"] == "created"
-    assert c2["changed"] == 1
-
-    result = await vfs.restore(
-        project_dir="viking://resources/proj",
-        source_commit=c1["commit_oid"],
-        ctx=ctx,
-    )
-    assert result["result"] == "applied"
-    assert "resources/proj/.abstract.md" in result["written_paths"]
-
-    # Let the fire-and-forget tasks run
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert spy.calls == [("reindex_marker", "viking://resources/proj", 0)]
-
-
-@pytest.mark.asyncio
-async def test_restore_schedules_marker_and_files_independently(vfs, monkeypatch):
-    """Ancestor subsumption is gone: a changed directory marker recomputes the
-    directory's L0/L1, while each changed source file independently reindexes
-    its own DETAIL vector — neither subsumes the other.
-    """
-    spy = _SpyExecutor()
-
-    _patch_reindex_executor(monkeypatch, vfs, spy)
-
-    ctx = _make_ctx(account="acct_dedup")
-    await vfs.write_file("viking://resources/proj/x.md", b"v1", ctx=ctx)
-    await vfs.write_file("viking://resources/proj/y.md", b"yv1", ctx=ctx)
-    await vfs.write_file("viking://resources/proj/.abstract.md", b"a-v1", ctx=ctx)
-    c1 = await vfs.commit(message="v1", ctx=ctx)
-
-    await vfs.write_file("viking://resources/proj/x.md", b"v2", ctx=ctx)
-    await vfs.write_file("viking://resources/proj/y.md", b"yv2", ctx=ctx)
-    await vfs.write_file("viking://resources/proj/.abstract.md", b"a-v2", ctx=ctx)
-    await vfs.commit(message="v2", ctx=ctx)
-
-    await vfs.restore(
-        project_dir="viking://resources/proj",
-        source_commit=c1["commit_oid"],
-        ctx=ctx,
-    )
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    # Directory marker recompute + each source file's DETAIL, all independent.
-    assert sorted(spy.calls) == sorted(
-        [
-            ("reindex_marker", "viking://resources/proj", 0),
-            ("reindex_file", "viking://resources/proj/x.md"),
-            ("reindex_file", "viking://resources/proj/y.md"),
-        ]
-    )
-
-
-@pytest.mark.asyncio
 async def test_restore_schedules_siblings_independently(vfs, monkeypatch):
-    """Source files in sibling directories are each scheduled independently;
-    a directory marker change only affects its own directory.
-    """
+    """Restore schedules each changed source file in sibling directories."""
     spy = _SpyExecutor()
 
-    _patch_reindex_executor(monkeypatch, vfs, spy)
+    _patch_reindex_executor(monkeypatch, spy)
 
     ctx = _make_ctx(account="acct_subsume_sibling")
-    # proj_a: source file + directory marker
     await vfs.write_file("viking://resources/proj_a/x.md", b"v1", ctx=ctx)
-    await vfs.write_file("viking://resources/proj_a/.abstract.md", b"a-v1", ctx=ctx)
-    # proj_b: source file only — sibling directory
     await vfs.write_file("viking://resources/proj_b/y.md", b"v1", ctx=ctx)
     c1 = await vfs.commit(message="v1", ctx=ctx)
 
     await vfs.write_file("viking://resources/proj_a/x.md", b"v2", ctx=ctx)
-    await vfs.write_file("viking://resources/proj_a/.abstract.md", b"a-v2", ctx=ctx)
     await vfs.write_file("viking://resources/proj_b/y.md", b"v2", ctx=ctx)
     await vfs.commit(message="v2", ctx=ctx)
 
@@ -791,48 +642,10 @@ async def test_restore_schedules_siblings_independently(vfs, monkeypatch):
 
     assert sorted(spy.calls) == sorted(
         [
-            ("reindex_marker", "viking://resources/proj_a", 0),
             ("reindex_file", "viking://resources/proj_a/x.md"),
             ("reindex_file", "viking://resources/proj_b/y.md"),
         ]
     )
-
-
-@pytest.mark.asyncio
-async def test_restore_deletes_marker_and_source_vectors(vfs, monkeypatch):
-    """Bug 1 regression: restoring to a revision that predates a whole
-    directory must delete BOTH the directory's L0/L1 marker vectors and the
-    deleted source file's DETAIL vector — no orphaned vectors left behind.
-    """
-    spy = _SpyExecutor()
-
-    _patch_reindex_executor(monkeypatch, vfs, spy)
-
-    ctx = _make_ctx(account="acct_del_marker")
-    await vfs.write_file("viking://resources/keep/k.md", b"keep", ctx=ctx)
-    c1 = await vfs.commit(message="v1", ctx=ctx)
-
-    # v2 adds a whole new directory with a source file + directory markers.
-    await vfs.write_file("viking://resources/gone/g.md", b"gone", ctx=ctx)
-    await vfs.write_file("viking://resources/gone/.abstract.md", b"abs", ctx=ctx)
-    await vfs.write_file("viking://resources/gone/.overview.md", b"ovr", ctx=ctx)
-    await vfs.commit(message="v2", ctx=ctx)
-
-    # Restore back to v1: everything under gone/ must be removed.
-    result = await vfs.restore(
-        project_dir="viking://resources",
-        source_commit=c1["commit_oid"],
-        ctx=ctx,
-    )
-    assert result["result"] == "applied"
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert ("delete", "viking://resources/gone", 0) in spy.calls
-    assert ("delete", "viking://resources/gone", 1) in spy.calls
-    assert ("delete", "viking://resources/gone/g.md", 2) in spy.calls
-    # No whole-tree reindex of the deleted dir.
-    assert all(c[0] != "reindex_marker" or c[1] != "viking://resources/gone" for c in spy.calls)
 
 
 @pytest.mark.asyncio
@@ -842,7 +655,7 @@ async def test_restore_relations_json_has_no_vector_side_effect(vfs, monkeypatch
     """
     spy = _SpyExecutor()
 
-    _patch_reindex_executor(monkeypatch, vfs, spy)
+    _patch_reindex_executor(monkeypatch, spy)
 
     ctx = _make_ctx(account="acct_relations")
     await vfs.write_file("viking://resources/proj/.relations.json", b'{"v":1}', ctx=ctx)
@@ -937,10 +750,7 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch, restore_reinde
         )
         assert [item.task_type for item in tasks] == ["snapshot_restore_reindex"]
 
-        follow_up = await ReindexExecutor(
-            vlm_resolver=vfs._vlm_resolver,
-            vector_config_resolver=vfs._vector_config_resolver,
-        ).execute(
+        follow_up = await ReindexExecutor().execute(
             uri="viking://resources/proj/x.md",
             mode="vectors_only",
             wait=True,
@@ -1024,7 +834,7 @@ async def test_restore_concurrent_same_dir_is_rejected(vfs, monkeypatch):
 
     spy = _SpyExecutor()
 
-    _patch_reindex_executor(monkeypatch, vfs, spy)
+    _patch_reindex_executor(monkeypatch, spy)
 
     ctx = _make_ctx(account="acct_lock_same")
     await vfs.write_file("viking://resources/proj/a.md", b"v1", ctx=ctx)
@@ -1084,7 +894,7 @@ async def test_restore_concurrent_sibling_dirs_do_not_block(vfs, monkeypatch):
     """
     spy = _SpyExecutor()
 
-    _patch_reindex_executor(monkeypatch, vfs, spy)
+    _patch_reindex_executor(monkeypatch, spy)
 
     ctx = _make_ctx(account="acct_lock_sibling")
     await vfs.write_file("viking://resources/proj_a/x.md", b"v1", ctx=ctx)

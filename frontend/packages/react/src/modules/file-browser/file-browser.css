@@ -42,6 +42,7 @@
   gap: 8px;
   box-sizing: border-box;
   padding: 8px 8px 12px;
+  background-color: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
 }
 
 /*
@@ -491,14 +492,66 @@ html.dark .ov-file-browser__empty-art {
     var(--ov-ui-dashboard-warning-default)
   );
 }
+.ov-file-browser__dashboard--unknown {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
 .ov-file-browser__dashboard:focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 1px;
 }
 
+.ov-file-preview__edit-actions
+  ~ :is(
+    .ov-file-browser__preview-action--history,
+    .ov-file-browser__preview-action--copy-content
+  ).ov-button:not(:disabled) {
+  color: var(--ov-ui-file-preview-text-secondary);
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--history.ov-button {
+  border-radius: 8px;
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--history.ov-button:not(:hover):not(
+    :focus-visible
+  ) {
+  border-color: transparent;
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--history
+  .ov-file-preview__action-icon
+  > svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--history
+  .ov-file-preview__action-icon
+  > svg
+  path {
+  /* Match the 1.2-unit stroke in the console's 14-unit viewBox. */
+  stroke-width: 1.37;
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--copy-content.ov-button:not(:disabled):not(
+    :hover
+  ) {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+
 .ov-dropdown__item.ov-file-browser__preview-action--danger:not(:disabled) {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }
+.ov-file-browser__preview-pane .ov-file-preview__footer {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
 .ov-file-browser__preview-meta {
   display: flex;
   flex-wrap: wrap;

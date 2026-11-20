@@ -27,6 +27,7 @@ import { findCommandConsoleCommand } from './command-definitions.js';
 export function CommandConsoleContent({
   records,
   value,
+  history = records,
   disabled = false,
   busy = false,
   emptyState,
@@ -34,6 +35,7 @@ export function CommandConsoleContent({
   locale: localeProp,
   commands = [],
   commandGroups = [],
+  inputRef,
   onValueChange,
   onSubmit,
   onOpenUri,
@@ -170,6 +172,7 @@ export function CommandConsoleContent({
           onPick={fillCommand}
         />
         <CommandConsoleComposer
+          inputRef={inputRef}
           onDismiss={dismissCompletion}
           onRequestPalette={() => {
             setDismissedValue(null);
@@ -180,7 +183,7 @@ export function CommandConsoleContent({
           anchorRef={composerRef}
           onFocus={() => setDismissedValue(null)}
           value={value}
-          history={records.map((record) =>
+          history={history.map((record) =>
             formatCommandConsoleCommandInput(record.command, commands),
           )}
           labels={text}

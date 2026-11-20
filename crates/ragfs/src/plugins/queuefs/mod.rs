@@ -31,6 +31,8 @@ use backend::{MemoryBackend, Message, QueueBackend, SQLiteQueueBackend, SQLiteQu
 #[cfg(feature = "cache")]
 use cache_backend::CacheQueueStorage;
 use serde::Serialize;
+#[cfg(feature = "cache")]
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
@@ -118,6 +120,8 @@ struct ParsedBackendConfig {
     sqlite_options: SQLiteQueueOptions,
     #[cfg(feature = "cache")]
     service_name: Option<String>,
+    #[cfg(feature = "cache")]
+    instance: Option<String>,
 }
 
 /// Parsed path information
@@ -685,7 +689,7 @@ impl FileSystem for QueueFileSystem {
 pub struct QueueFSPlugin {
     config_params: Vec<ConfigParameter>,
     #[cfg(feature = "cache")]
-    cache_runtime: Option<Arc<crate::cache_runtime::CacheRuntime>>,
+    cache_runtimes: HashMap<String, Arc<crate::cache_runtime::CacheRuntime>>,
 }
 
 impl QueueFSPlugin {
@@ -722,16 +726,31 @@ impl QueueFSPlugin {
                     "service_name",
                     "OpenViking service name when backend=cache",
                 ),
+                #[cfg(feature = "cache")]
+                ConfigParameter::optional(
+                    "instance",
+                    "string",
+                    "default",
+                    "Named cache runtime selected when backend=cache",
+                ),
             ],
             #[cfg(feature = "cache")]
-            cache_runtime: None,
+            cache_runtimes: HashMap::new(),
         }
     }
 
     #[cfg(feature = "cache")]
     pub(crate) fn with_cache_runtime(runtime: Arc<crate::cache_runtime::CacheRuntime>) -> Self {
+        Self::with_cache_runtimes(HashMap::from([("default".to_string(), runtime)]))
+    }
+
+    /// Create a QueueFS plugin that selects from named cache runtimes.
+    #[cfg(feature = "cache")]
+    pub(crate) fn with_cache_runtimes(
+        cache_runtimes: HashMap<String, Arc<crate::cache_runtime::CacheRuntime>>,
+    ) -> Self {
         let mut plugin = Self::new();
-        plugin.cache_runtime = Some(runtime);
+        plugin.cache_runtimes = cache_runtimes;
         plugin
     }
 
@@ -822,6 +841,21 @@ impl QueueFSPlugin {
             }
             _ => None,
         };
+        #[cfg(feature = "cache")]
+        let instance = match kind {
+            BackendKind::Cache => {
+                let instance = Self::get_string_param(config, "instance")
+                    .unwrap_or("default")
+                    .to_string();
+                if instance.trim().is_empty() {
+                    return Err(Error::config(
+                        "queuefs instance must not be empty when backend=cache".to_string(),
+                    ));
+                }
+                Some(instance)
+            }
+            _ => None,
+        };
 
         Ok(ParsedBackendConfig {
             kind,
@@ -832,6 +866,8 @@ impl QueueFSPlugin {
             },
             #[cfg(feature = "cache")]
             service_name,
+            #[cfg(feature = "cache")]
+            instance,
         })
     }
 }
@@ -892,10 +928,13 @@ impl ServicePlugin for QueueFSPlugin {
     async fn validate(&self, config: &PluginConfig) -> Result<()> {
         let parsed = Self::parse_backend_config(config)?;
         #[cfg(feature = "cache")]
-        if matches!(parsed.kind, BackendKind::Cache) && self.cache_runtime.is_none() {
-            return Err(Error::config(
-                "queuefs backend=cache requires a configured CacheRuntime provider".to_string(),
-            ));
+        if matches!(parsed.kind, BackendKind::Cache) {
+            let instance = parsed.instance.as_deref().expect("cache instance is parsed");
+            if !self.cache_runtimes.contains_key(instance) {
+                return Err(Error::config(format!(
+                    "QueueFS references unknown cache instance '{instance}'"
+                )));
+            }
         }
         #[cfg(not(feature = "cache"))]
         let _ = parsed;
@@ -918,8 +957,8 @@ impl ServicePlugin for QueueFSPlugin {
             BackendKind::Cache => {
                 return Ok(Box::new(
                     QueueFileSystem::with_cache_runtime(
-                        self.cache_runtime
-                            .as_ref()
+                        self.cache_runtimes
+                            .get(parsed.instance.as_deref().expect("cache instance is parsed"))
                             .expect("cache runtime is validated")
                             .clone(),
                         parsed
@@ -1753,7 +1792,7 @@ mod tests {
         let config_params = plugin.config_params();
         assert_eq!(
             config_params.len(),
-            4 + usize::from(cfg!(feature = "cache"))
+            4 + 2 * usize::from(cfg!(feature = "cache"))
         );
         #[cfg(feature = "cache")]
         assert!(config_params

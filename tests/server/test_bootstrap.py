@@ -19,7 +19,7 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingl
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 
-def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
+def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch, capsys):
     config = ServerConfig(host="127.0.0.1", port=1933)
     captured: dict[str, object] = {}
 
@@ -70,6 +70,7 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
 
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 1933
+    assert "OpenViking HTTP Server is running on 127.0.0.1:1933" in capsys.readouterr().out
 
 
 def test_main_coerces_cli_host_all_to_none(monkeypatch):
@@ -226,7 +227,7 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         assert os.environ[app_module.WORKER_BOT_API_URL_ENV] == "http://127.0.0.1:19000"
 
 
-def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys):
+def test_main_prints_safe_config_diagnostics_on_validation_error(monkeypatch, capsys):
     """An unknown top-level config field must exit 1 with actionable diagnostics."""
     config = ServerConfig(host="127.0.0.1", port=1933)
 
@@ -262,8 +263,9 @@ def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys)
 
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "/tmp/ov.conf" in err
-    assert "Unknown config field 'claude_code'" in err
+    assert "Failed to load OpenViking server configuration (ValueError)." in err
+    assert "/tmp/ov.conf" not in err
+    assert "Unknown config field 'claude_code'" not in err
     assert "openviking-server doctor" in err
     assert "examples/ov.conf.example" in err
 
@@ -366,7 +368,7 @@ def test_configure_default_executor_keeps_python_default_when_zero(monkeypatch):
         lambda: pytest.fail("event loop should not be touched when the setting is zero"),
     )
 
-    app_module._configure_default_executor(ServerConfig())
+    app_module._configure_default_executor(ServerConfig(executor_threads=0))
 
 
 def test_restartable_server_drains_uvicorn_before_returning(monkeypatch):

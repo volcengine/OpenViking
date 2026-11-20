@@ -52,7 +52,11 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
                 if isinstance(fields, dict):
                     result.update(fields)
             except Exception as e:
-                tracer.warning(f"Failed to parse MEMORY_FIELDS JSON: {e}")
+                logger.info(
+                    "memory fields metadata parse failed; keeping content error_type=%s",
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
+                )
 
     # Remove the comment from content
     content_without_comment = MEMORY_FIELDS_COMMENT_RE.sub("", content).strip()

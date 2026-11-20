@@ -110,7 +110,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             True if enqueued successfully, False otherwise
         """
         if not embedding_msg:
-            logger.warning("Embedding message is None, skipping enqueuing")
+            logger.info("Embedding message is None, skipping enqueuing")
             return False
 
         if not self._queue_manager:
@@ -121,10 +121,10 @@ class VikingDBManager(VikingVectorIndexBackend):
             if not embedding_queue:
                 raise RuntimeError("Embedding queue not initialized")
             await embedding_queue.enqueue(embedding_msg)
-            logger.debug(f"Enqueued embedding message: {embedding_msg.id}")
+            logger.debug("Enqueued embedding message: %s", type(embedding_msg.id).__name__)
             return True
         except Exception as e:
-            logger.error(f"Error enqueuing embedding message: {e}")
+            logger.error("Error enqueuing embedding message: %s", type(e).__name__)
             return False
 
     async def get_embedding_queue_size(self) -> int:
@@ -141,7 +141,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             embedding_queue = self._queue_manager.get_queue("embedding")
             return await embedding_queue.size()
         except Exception as e:
-            logger.error(f"Error getting embedding queue size: {e}")
+            logger.info("Error getting embedding queue size: %s", type(e).__name__)
             return 0
 
 
@@ -449,6 +449,7 @@ class VikingDBManagerProxy:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         return await self._manager.search_by_keywords_in_tenant(
             self._ctx,
@@ -459,6 +460,7 @@ class VikingDBManagerProxy:
             level=level,
             limit=limit,
             offset=offset,
+            keywords_args=keywords_args,
         )
 
     async def filter_in_tenant(

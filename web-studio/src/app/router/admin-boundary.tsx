@@ -8,7 +8,8 @@ import { useTranslation } from 'react-i18next'
 export function AdminRoute() {
   const { t } = useTranslation('appShell')
   const { canManage } = useStudioMode()
-  const { isConnectionRoleLoading, isGatewayHost } = useAppConnection()
+  const { isConnectionRoleLoading, isGatewayHost, serverMode } =
+    useAppConnection()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   // A standalone gateway keeps its independent /access authorization.
   const standaloneGateway =
@@ -19,9 +20,17 @@ export function AdminRoute() {
   if (!canManage)
     return (
       <section className="mx-auto grid w-full max-w-xl gap-4 rounded-xl border bg-card p-6">
-        <h1 className="text-lg font-medium">{t('modes.unavailable')}</h1>
+        <h1 className="text-lg font-medium">
+          {t(
+            serverMode === 'dev' ? 'modes.devUnavailable' : 'modes.unavailable',
+          )}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          {t('modes.unavailableDescription')}
+          {t(
+            serverMode === 'dev'
+              ? 'modes.devUnavailableDescription'
+              : 'modes.unavailableDescription',
+          )}
         </p>
         <Button
           nativeButton={false}

@@ -2278,11 +2278,21 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     monkeypatch.setattr(fs, "_ensure_access", check_access)
     user_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
     lightweight_admin_app.state.config.user_config_defaults = UserConfig(
-        add_targets={"resource_uri": "viking://resources/default", "skill_uri": "viking://~/skills"}
+        add_targets={
+            "resource_uri": "viking://resources/default",
+            "skill_uri": "viking://~/skills",
+        },
+        privacy={"mode": "registered", "restore": False, "never_mask": ["public-value"]},
     )
     loaded = await client.get(url, headers=user_headers)
     assert loaded.status_code == 200, loaded.text
     assert loaded.json()["result"]["add_targets"]["resource_uri"] == "viking://resources/default"
+    assert loaded.json()["result"]["privacy"] == {
+        "mode": "registered",
+        "restore": False,
+        "custom_rules": [],
+        "never_mask": ["public-value"],
+    }
     other_acct = _uid()
     created = await client.post(
         "/api/v1/admin/accounts",
@@ -2293,7 +2303,9 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     before = dict(fs.files)
     for method in ("GET", "PATCH"):
         body = (
-            {"json": {"memory_policy": {"memory_types": ["events"]}}} if method == "PATCH" else {}
+            {"json": {"memory_policy": {"memory_types": ["events"]}, "privacy": {"mode": "auto"}}}
+            if method == "PATCH"
+            else {}
         )
         for headers, target in (
             (user_headers, url.replace("/bob/", "/alice/")),
@@ -2326,6 +2338,10 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
             json={
                 "add_targets": {"resource_uri": "viking://~/peers/first/resources/project-a"},
                 "memory_policy": {"memory_types": ["experiences"]},
+                "privacy": {
+                    "mode": "auto",
+                    "custom_rules": [{"id": "corp", "prefix": "corp_", "min_length": 12}],
+                },
                 "ttl": {"sessions": 7, "peer_events": 3, "user_events": "disabled"},
             },
             headers=user_headers,
@@ -2345,6 +2361,26 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         persisted = await read_user_config(fs, user_ctx)
         assert persisted.ttl.sessions == 7
         assert persisted.memory_policy["memory_types"] == settings["memory_policy"]["memory_types"]
+        assert settings["privacy"]["mode"] == "auto" and settings["privacy"]["restore"] is False
+        assert persisted.privacy.model_dump(exclude_none=True) == {
+            "mode": "auto",
+            "custom_rules": [{"id": "corp", "prefix": "corp_", "min_length": 12}],
+        }
+        before_rules = dict(fs.files)
+        rejected_rules = await client.patch(
+            url,
+            headers=user_headers,
+            json={
+                "privacy": {
+                    "custom_rules": [
+                        {"id": f"costly{i}", "regex": "[a-z0-9]{100000}"} for i in range(20)
+                    ]
+                }
+            },
+        )
+        assert rejected_rules.status_code == 422, rejected_rules.text
+        assert "compiled size budget" in rejected_rules.text
+        assert fs.files == before_rules
         backup = json.loads(fs.files[user_config_backup_uri(user_ctx)])
         assert backup["memory_policy"]["memory_types"] == ["profile"]
         assert persisted.add_targets.resource_uri == settings["add_targets"]["resource_uri"]
@@ -2371,13 +2407,24 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         )
         assert noop.status_code == 200 and len(fs.writes) == writes_before_noop
         patched = await client.patch(
-            url, json={"ttl": {"sessions": None, "peer_events": "disabled"}}, headers=root_headers()
+            url,
+            json={
+                "ttl": {"sessions": None, "peer_events": "disabled"},
+                "privacy": {"restore": True},
+            },
+            headers=root_headers(),
         )
         assert patched.status_code == 200, patched.text
         assert patched.json()["result"]["ttl"] == {
             "peer_events": "disabled",
             "user_events": "disabled",
         }
+        assert patched.json()["result"]["privacy"]["mode"] == "auto"
+        assert patched.json()["result"]["privacy"]["restore"] is True
+        assert (
+            json.loads(fs.files[user_config_backup_uri(user_ctx)])["privacy"]
+            == persisted.privacy.model_dump()
+        )
         assert (await engine.policy(acct, "viking://user/bob/sessions")).days == 30
         assert not (await engine.policy(acct, first_peer)).enabled
         assert patched.json()["result"]["memory_policy"] == settings["memory_policy"]
@@ -2409,11 +2456,21 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         lightweight_admin_app.state.config.user_config_defaults = UserConfig(
             add_targets={"resource_uri": "viking://resources/default"},
             memory_policy={"memory_types": ["events"]},
+            privacy={"mode": "registered", "restore": False},
         )
-        reset = await client.patch(url, json={"memory_policy": None}, headers=root_headers())
+        reset = await client.patch(
+            url, json={"memory_policy": None, "privacy": None}, headers=root_headers()
+        )
         assert reset.status_code == 200, reset.text
         assert reset.json()["result"]["memory_policy"]["memory_types"] == ["events"]
         assert (await read_user_config(fs, user_ctx)).memory_policy is None
+        assert (await read_user_config(fs, user_ctx)).privacy.model_dump(exclude_none=True) == {}
+        assert reset.json()["result"]["privacy"] == {
+            "mode": "registered",
+            "restore": False,
+            "custom_rules": [],
+            "never_mask": [],
+        }
         assert json.loads(fs.files[user_config_backup_uri(user_ctx)])["memory_policy"][
             "memory_types"
         ] == ["cases", "experiences", "trajectories"]
@@ -3601,6 +3658,69 @@ async def test_user_list_hides_other_prefixes_and_mismatched_keys():
         "acme", hide_other_keys=True, viewer_account_id="acme", viewer_user_id="alice"
     )
     assert page["users"] == [{"user_id": "alice"}, {"user_id": "hashed"}]
+
+
+@pytest.mark.parametrize("scope", ["account", "user"])
+async def test_sqlite_identity_cleanup_with_tasks_exceeding_variable_limit(
+    admin_client, admin_service, admin_app, monkeypatch, tmp_path, scope
+):
+    from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+    from openviking.service.task_tracker import TaskTracker, set_task_tracker
+    from tests.service.test_task_store_sql_deletion import _LimitedConnection, _seed, _snapshot
+
+    original_tracker = get_task_tracker()
+    store = SQLiteTaskWorkStore(params={"path": str(tmp_path / "tasks.db"), "maxsize": 1})
+    store._engine_options["connect_args"]["factory"] = _LimitedConnection
+    await store.load()
+    set_task_tracker(TaskTracker(store))
+    try:
+        await admin_app.state.deletion_service.initialize()
+        acct = _uid()
+        response = await admin_client.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": acct, "admin_user_id": "alice"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        response = await admin_client.post(
+            f"/api/v1/admin/accounts/{acct}/users",
+            json={"user_id": "bob", "role": "user"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        await _seed(store, [f"task-{i:03}" for i in range(80)], account=acct, user="bob")
+        await _seed(store, ["alice-task"], account=acct, user="alice")
+        ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+        uri = "viking://user/bob/memories/private.md"
+        await admin_service.viking_fs.write_file(uri, "private", ctx=ctx)
+        await _agfs_write(admin_service, "/local/other/resources/keep.md", "keep")
+
+        vectors = admin_service.viking_fs.vector_store
+        method = "delete_account_data" if scope == "account" else "delete_user_data"
+        delete_vectors = AsyncMock(wraps=getattr(vectors, method))
+        monkeypatch.setattr(vectors, method, delete_vectors)
+        endpoint = f"/api/v1/admin/accounts/{acct}"
+        if scope == "user":
+            endpoint += "/users/bob"
+        response = await admin_client.delete(endpoint, headers=root_headers())
+        assert response.status_code == 202, response.text
+        task = await _wait_for_task(admin_client, response.json()["result"]["task_id"])
+        assert task["status"] == "completed", task
+        assert task["result"] == {"deleted": True}
+        assert delete_vectors.await_count == 1
+        assert not await admin_service.viking_fs.exists(uri, ctx=ctx)
+        assert await _agfs_exists(admin_service, "/local/other/resources/keep.md")
+        manager = admin_app.state.api_key_manager
+        assert not await manager.has_user(acct, "bob")
+        assert await manager.get_deletion(acct, None if scope == "account" else "bob") is None
+        snapshot = await _snapshot(store)
+        for rows in snapshot.values():
+            assert not any(row["task_id"].startswith("task-") for row in rows)
+        alice = await store.get_task("alice-task", account_id=acct, user_id="alice")
+        assert (alice is None) == (scope == "account")
+    finally:
+        set_task_tracker(original_tracker)
+        await store.close()
 
 
 async def test_remove_user(

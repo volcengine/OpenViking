@@ -105,8 +105,11 @@ pub(crate) async fn build_inactive_multi_write_fs(
         "cache" => {
             #[cfg(feature = "cache")]
             {
-                let runtime = build_ctx.cache_runtime.clone().ok_or_else(|| {
-                    Error::config("backups.provider = 'cache' requires a top-level CacheRuntime")
+                let runtime = build_ctx.cache_runtimes.get(&bc.instance).cloned().ok_or_else(|| {
+                    Error::config(format!(
+                        "multi-write references unknown cache instance '{}'",
+                        bc.instance
+                    ))
                 })?;
                 Arc::new(CacheProvider::new(
                     metadata_store.clone(),

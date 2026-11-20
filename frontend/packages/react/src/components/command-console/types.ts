@@ -2,7 +2,7 @@ import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 export type CommandConsoleTask = TaskSnapshot;
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode, Ref } from 'react';
 import type {
   CommandConsoleCommandDefinition,
   CommandConsoleCommandGroup,
@@ -73,6 +73,11 @@ export interface CommandConsoleSearchResultItem {
    * Short excerpt shown under the title.
    */
   preview?: string;
+  /**
+   * 多行正文，提供时取代摘录。
+   * Multiline body shown in place of the excerpt when provided.
+   */
+  content?: string;
   /**
    * 该结果对应的资源 URI，可用于打开。
    * URI of the result, which can be opened.
@@ -276,6 +281,12 @@ export interface CommandConsoleStatusContent {
   title?: string;
 }
 
+/** 带完整资源目标的结果行。A result line with an explicit resource target. */
+export interface CommandConsoleWriteResultUriLine {
+  label: string;
+  uri: string;
+}
+
 /** 写入结果。A write result. */
 export interface CommandConsoleWriteResultContent {
   /**
@@ -284,10 +295,10 @@ export interface CommandConsoleWriteResultContent {
    */
   variant: 'write-result';
   /**
-   * 结果行，由宿主渲染。
-   * Result lines, rendered by the host.
+   * 结果行，可明确指定完整 URI。
+   * Result lines, optionally with an explicit URI.
    */
-  lines: readonly ReactNode[];
+  lines: readonly (ReactNode | CommandConsoleWriteResultUriLine)[];
   /**
    * 卡片标题。
    * Card title.
@@ -402,6 +413,8 @@ export interface CommandConsoleRecord {
  * Replaceable interface copy, following locale.
  */
 export interface CommandConsoleLabels {
+  /** Hint for entering a value that contains spaces. */
+  quoteArguments?: string;
   /** Cancelled task label. */
   cancelled?: string;
   /**
@@ -476,6 +489,8 @@ export interface CommandConsoleLabels {
   quickStart?: string;
   /** 无返回结果时的提示。Message for an empty command result. */
   noResult?: string;
+  /** 代码输出滚动区域的无障碍名称。Accessible name for the code output scroll region. */
+  codeOutput?: string;
   /** 刚刚发送的时间文案。Time label for a just-sent record. */
   justNow?: string;
   /** 命令帮助的标题与操作提示。Command-help heading and hint. */
@@ -532,6 +547,8 @@ export interface CommandConsoleProps extends Omit<
    * Controlled input value.
    */
   value: string;
+  /** Keyboard recall entries in submission order. Defaults to the displayed records. */
+  history?: readonly Pick<CommandConsoleRecord, 'command'>[];
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
@@ -571,6 +588,8 @@ export interface CommandConsoleProps extends Omit<
   commands?: readonly CommandConsoleCommandDefinition[];
   /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */
   commandGroups?: readonly CommandConsoleCommandGroup[];
+  /** 获取实际命令输入框，可用于程序聚焦。Accesses the command textarea for programmatic focus. */
+  inputRef?: Ref<HTMLTextAreaElement>;
   /**
    * 输入值变化时触发，包括接受命令或示例；行内占位不改变值，也不提交。省略时输入框
    * 只读，用于展示历史记录。

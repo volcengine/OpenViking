@@ -26,6 +26,7 @@ function AgentConnectView({
   apiKey,
   locale: localeProp,
   baseUrl = DEFAULT_BASE_URL,
+  isEnterprise = false,
   agreementUrl,
   showOverseasTag,
   activeTabId: controlledTabId,
@@ -127,7 +128,7 @@ function AgentConnectView({
         </header>
         <div
           id={`${id}-panel`}
-          className="ov-agent-connect__layout"
+          className={`ov-agent-connect__layout${activeTabId === 'custom' ? ' ov-agent-connect__layout--custom' : ''}`}
           role="tabpanel"
           aria-labelledby={`${id}-tab-${activeIndex}`}
         >
@@ -157,6 +158,7 @@ function AgentConnectView({
             apiKey={apiKey}
             locale={locale}
             baseUrl={baseUrl}
+            isEnterprise={isEnterprise}
             agreementUrl={agreementUrl}
             onCopy={onCopy}
           />

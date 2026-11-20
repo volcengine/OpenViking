@@ -79,7 +79,11 @@ class ExternalTaskSnapshot:
 
 
 class CompileDependencyFailure(ExternalTaskError):
-    """A Compile Runtime HTTP 424 ends remote polling and requires local rollback."""
+    """A Compile Runtime failure that ends remote polling and requires local rollback."""
+
+    def __init__(self, code: str, message: str, *, http_status: int) -> None:
+        super().__init__(code, message, transient=False)
+        self.http_status = http_status
 
 
 @dataclass(frozen=True)
@@ -265,11 +269,14 @@ class ExternalTaskService:
         submission_private_payload: Mapping[str, Any] | None = None,
         task_id: str | None = None,
         on_task_created: Callable[[TaskRecord], Awaitable[None]] | None = None,
+        retry_enqueue: bool = False,
     ) -> TaskRecord:
         """Match retries against submitted inputs, independently of resolved execution inputs.
 
         An explicit empty ``submission_private_payload`` excludes configuration-owned secrets
-        from the submission identity while still encrypting them for execution.
+        from the submission identity while still encrypting them for execution. With an
+        idempotency key, retry_enqueue leaves a prepared task pending on queue failure
+        so a later submission with the same key can deliver it.
         """
 
         async def create_task():
@@ -285,6 +292,7 @@ class ExternalTaskService:
                 submission_private_payload=submission_private_payload,
                 task_id=task_id,
                 on_task_created=on_task_created,
+                retry_enqueue=retry_enqueue,
             )
 
         if not idempotency_key and task_id is None:
@@ -311,6 +319,7 @@ class ExternalTaskService:
         submission_private_payload: Mapping[str, Any] | None = None,
         task_id: str | None = None,
         on_task_created: Callable[[TaskRecord], Awaitable[None]] | None = None,
+        retry_enqueue: bool = False,
     ) -> TaskRecord:
         # QueueFS imports parsers/VikingFS; providers must be importable without them.
         from openviking.storage.queuefs import QueueManager, get_queue_manager
@@ -356,7 +365,7 @@ class ExternalTaskService:
             # deliveries are safe: execute claims each task before submitting.
             await self._resume_submission(task, ctx)
             return task
-        enqueued = False
+        fail_on_error = True
         try:
             if on_task_created is not None:
                 await on_task_created(task)
@@ -367,6 +376,7 @@ class ExternalTaskService:
                 user_id=ctx.user.user_id,
             )
             with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                fail_on_error = not (retry_enqueue and idempotency_key)
                 await get_queue_manager().enqueue(
                     QueueManager.EXTERNAL_TASK,
                     {
@@ -376,7 +386,7 @@ class ExternalTaskService:
                     },
                     serial_key=self.queue_serial_key(task),
                 )
-            enqueued = True
+            fail_on_error = False
             current = await tracker.get(
                 task.task_id,
                 account_id=ctx.account_id,
@@ -385,7 +395,7 @@ class ExternalTaskService:
             if current is not None:
                 task = current
         except BaseException:
-            if not enqueued:
+            if fail_on_error:
                 current = await tracker.get(
                     task.task_id,
                     account_id=ctx.account_id,
@@ -640,7 +650,7 @@ class ExternalTaskService:
             if isinstance(failure, CompileDependencyFailure):
                 await self._record_dependency_failure(task_id, account_id, user_id, failure)
                 session_id = auth.get("external_task_id")
-                if session_id:
+                if session_id and failure.http_status != 404:
                     task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
                     if task is not None:
                         try:
@@ -651,8 +661,13 @@ class ExternalTaskService:
                                 **self._session_request(task, auth),
                             )
                         except ExternalTaskError as exc:
-                            logger.warning(
-                                "Failed to stop Compile session %s: %s", session_id, exc.code
+                            if isinstance(exc, CompileDependencyFailure) and exc.http_status == 404:
+                                await self._record_dependency_failure(
+                                    task_id, account_id, user_id, exc
+                                )
+                            logger.info(
+                                "Compile session cancellation failed; continuing recovered cleanup",
+                                extra={"task_id": task_id, "error_type": type(exc).__name__},
                             )
             elif saved_failure:
                 failure = ExternalTaskError(
@@ -724,14 +739,14 @@ class ExternalTaskService:
     async def _record_dependency_failure(
         task_id: str, account_id: str, user_id: str, failure: CompileDependencyFailure
     ) -> None:
-        """Checkpoint the redacted failure before remote cleanup; only active tasks accept it."""
+        """Persist the redacted failure so recovery can resume local rollback."""
         snapshot = ExternalTaskSnapshot(
             status="failed",
             error_code=sanitize_error(failure.code),
             error_message=sanitize_error(str(failure)),
         )
         patch = TaskPatch(
-            meta={"compile_runtime_http_status": 424},
+            meta={"compile_runtime_http_status": failure.http_status},
             auth={"external_terminal_snapshot": asdict(snapshot)},
         )
         saved = await run_to_completion(
@@ -1052,12 +1067,16 @@ class ExternalTaskService:
                         sanitize_error(str(exc) or type(exc).__name__),
                         transient=False,
                     ) from exc
-                logger.warning(
-                    "External task %s will retry task=%s code=%s: %s",
-                    operation_name,
-                    task_id,
-                    getattr(exc, "code", type(exc).__name__),
-                    sanitize_error(str(exc)),
+                logger.info(
+                    "External task operation will retry",
+                    extra={
+                        "task_id": task_id,
+                        "operation": operation_name,
+                        "error_type": type(exc).__name__,
+                        "attempt": attempt + 1,
+                        "retry_limit": max_attempts,
+                        "delay": delay,
+                    },
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 30.0)
