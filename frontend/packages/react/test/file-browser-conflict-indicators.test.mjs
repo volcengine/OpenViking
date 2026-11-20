@@ -114,7 +114,7 @@ test('descendant conflicts mark every collapsed Wiki ancestor across pages and c
     assert.equal(row('deep'), undefined);
     await toggle('concept');
     assert.equal(pending('deep'), true);
-    await toggle('deep');
+    assert.equal(row('deep').getAttribute('aria-expanded'), 'true');
     assert.equal(pending('conflict.md'), true);
     await toggle('concept');
     await toggle('wiki');

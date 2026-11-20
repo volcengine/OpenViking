@@ -122,3 +122,76 @@ for (const mode of ['paged', 'error'])
       await view.unmount();
     }
   });
+
+test('folding before the first listing resolves stops child expansion', async () => {
+  const pending = deferred();
+  const fetch = fixture({}, (call) =>
+    call.uri === folder ? pending.promise : undefined,
+  );
+  const view = await mount(element(fetch));
+  try {
+    await toggle(view, folder);
+    assert.equal(row(view, folder).getAttribute('aria-expanded'), 'true');
+    await toggle(view, folder);
+    assert.equal(row(view, folder).getAttribute('aria-expanded'), 'false');
+    await act(async () => pending.resolve(await ok([dir(child)])));
+    await settle();
+    assert.equal(row(view, child), null);
+    assert.equal(
+      fetch.calls.some((call) => call.uri === child),
+      false,
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('opening a sibling preserves an in-flight expansion chain', async () => {
+  const sibling = root + '/sibling';
+  const pending = deferred();
+  const fetch = fixture(
+    { [folder]: [dir(child)], [sibling]: [dir(sibling + '/nested')] },
+    (call) => {
+      if (call.uri === root) return ok([dir(folder), dir(sibling)]);
+      if (call.uri === child) return pending.promise;
+    },
+  );
+  const view = await mount(element(fetch));
+  try {
+    await toggle(view, folder);
+    assert.equal(row(view, child).getAttribute('aria-expanded'), 'true');
+    await toggle(view, sibling);
+    await act(async () => pending.resolve(await ok([dir(leaf)])));
+    await settle();
+    assert.equal(row(view, leaf).getAttribute('aria-expanded'), 'true');
+    assert.equal(
+      row(view, sibling + '/nested').getAttribute('aria-expanded'),
+      'true',
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('a malformed listing that points back to an ancestor stays finite', async () => {
+  const fetch = fixture({ [folder]: [dir(child)], [child]: [dir(folder)] });
+  const view = await mount(element(fetch));
+  try {
+    await toggle(view, folder);
+    assert.equal(row(view, child).getAttribute('aria-expanded'), 'true');
+    assert.equal(
+      view.container.querySelectorAll(
+        '[role="treeitem"][data-file-tree-row-id="' + folder + '"]',
+      ).length,
+      1,
+    );
+    assert.equal(
+      fetch.calls.filter(
+        (call) => call.uri === folder && call.path.endsWith('/fs/ls'),
+      ).length,
+      1,
+    );
+  } finally {
+    await view.unmount();
+  }
+});

@@ -20,26 +20,35 @@ export function useFsTree(options: UseDirectoryTreeOptions): FsTreeState {
     requestSignal: requestOptions?.signal,
   });
   const { cancelReveal } = navigation;
-  const expansionRun = useRef(0);
+  const activeChains = useRef(new Set<{ parent: string }>());
   const toggleExpand = useCallback<FsTreeState['toggleExpand']>(
     async (row) => {
       if (row.disabled) return;
       cancelReveal();
-      const run = ++expansionRun.current;
       const scope = inputs.scope.current();
       const opening = !inputs.isExpanded(row.uri);
-      await toggleTree(row);
-      if (!opening) return;
-      // Release the clicked row's pending operation while descendants load,
-      // so the user can fold the parent and invalidate this chain.
+      const firstPage = toggleTree(row);
+      if (!opening) {
+        for (const chain of activeChains.current) {
+          if (
+            chain.parent === row.uri ||
+            chain.parent.startsWith(row.uri + '/')
+          )
+            activeChains.current.delete(chain);
+        }
+        return firstPage;
+      }
+      const chain = { parent: row.uri };
+      activeChains.current.add(chain);
       const expandChildren = async () => {
-        let parent = row.uri;
-        const visited = new Set([parent]);
+        await firstPage;
+        const visited = new Set([row.uri]);
         while (
-          run === expansionRun.current &&
+          activeChains.current.has(chain) &&
           inputs.scope.current() === scope &&
           !scope.controller.signal.aborted
         ) {
+          const parent = chain.parent;
           const page = inputs.dirs.current[parent];
           if (!page?.ready || page.loading || page.error || page.hasMore)
             return;
@@ -53,11 +62,11 @@ export function useFsTree(options: UseDirectoryTreeOptions): FsTreeState {
             return;
           visited.add(child.uri);
           inputs.expandForNavigation(child.uri);
+          chain.parent = child.uri;
           await inputs.fetchPage(child.uri, 0);
-          parent = child.uri;
         }
       };
-      void expandChildren();
+      void expandChildren().finally(() => activeChains.current.delete(chain));
     },
     [cancelReveal, inputs, toggleTree],
   );
