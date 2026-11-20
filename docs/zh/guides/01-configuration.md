@@ -1068,6 +1068,16 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 代码骨架提取内置在代码摘要流程中，不再提供解析器级配置。OpenViking 会在语言存在维护中的 `tags.scm` 时优先使用 tags query；不存在对应的 `tags.scm` 时，使用 `tree-sitter-language-pack.process()`；当前提取路线无可用结果时，才将 `semantic.code_summary` 作为兜底处理。
 
+将顶层配置 `semantic.code_summary_llm_enabled` 设为 `false`，可在没有可用代码骨架时直接返回空摘要（降级），不调用 LLM。默认值为 `true`，保留现有的兜底行为。可用代码骨架、文档摘要和目录概览的行为不变。
+
+```json
+{
+  "semantic": {
+    "code_summary_llm_enabled": false
+  }
+}
+```
+
 当前保留的 `code` 配置字段用于远程代码资源的网络防护和代码托管白名单。提取路线详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取)。
 
 #### 远程资源网络防护

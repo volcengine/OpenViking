@@ -5,6 +5,7 @@
 
 import pytest
 
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from openviking_cli.utils.config.parser_config import SemanticConfig
 
 
@@ -20,6 +21,14 @@ def test_semantic_config_defaults():
     assert config.overview_max_chars == 4000
     assert config.memory_chunk_chars == 2000
     assert config.memory_chunk_overlap == 200
+
+
+@pytest.mark.parametrize("enabled", [None, True, False])
+def test_code_summary_llm_policy_config_roundtrip(enabled):
+    semantic = {} if enabled is None else {"code_summary_llm_enabled": enabled}
+    config = OpenVikingConfig.from_dict({"semantic": semantic})
+    restored = OpenVikingConfig.from_dict(config.to_dict())
+    assert restored.semantic.code_summary_llm_enabled is (enabled is not False)
 
 
 @pytest.mark.parametrize("ratio", [0, -0.1, 1.1])
