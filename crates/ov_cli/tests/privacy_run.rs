@@ -419,7 +419,7 @@ async fn a_terminal_interrupts_once_and_stays_readable_with_redirected_stdin() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
-async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
+async fn a_masked_pipeline_flushes_non_prefix_prompts_and_stops_on_group_interrupt() {
     use std::process::Stdio;
 
     let dir = tempfile::tempdir().unwrap();
@@ -447,7 +447,7 @@ async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
         stdout.read_line(&mut echo).await.unwrap();
         assert_eq!(echo, format!("{TOKEN}\n"));
         let up_pid = wait_pid_file(&dir.path().join("up.pid")).await;
-        assert_eq!(posix::kill(child.id().unwrap() as i32, posix::SIGINT), 0);
+        assert_eq!(posix::kill(-(child.id().unwrap() as i32), posix::SIGINT), 0);
         assert!(matches!(child.wait().await.unwrap().code(), Some(0 | 130)));
         stdout.read_to_end(&mut Vec::new()).await.unwrap();
         wait_until_stopped(up_pid).await;
@@ -458,86 +458,115 @@ async fn a_masked_pipeline_can_prompt_for_input_and_be_interrupted_by_pid() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+fn has_group_ov_process(pgid: i32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(entries) = fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                if let Ok(stat) = fs::read_to_string(entry.path().join("stat"))
+                    && let Some((head, tail)) = stat.rsplit_once(") ")
+                    && head.ends_with("(ov")
+                    && tail.split_whitespace().nth(2) == Some(&pgid.to_string())
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("ps")
+            .args(["-axo", "pgid=,comm="])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().any(|line| {
+            let mut parts = line.split_whitespace();
+            parts.next() == Some(&pgid.to_string())
+                && parts
+                    .next()
+                    .is_some_and(|comm| comm == "ov" || comm.ends_with("/ov"))
+        })
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn non_terminal_signals_and_background_lifecycle() {
     use std::process::Stdio;
 
     let dir = tempfile::tempdir().unwrap();
 
-    // 1. Group SIGTERM delivers once and preserves clean child exit status.
-    let script = "c=0; trap 'c=$((c + 1))' TERM; echo ready; while [ \"$c\" -eq 0 ]; do :; done; echo \"$c\"; exit 0";
-    let mut child = detached_sh(dir.path(), "http://127.0.0.1:1", false, script)
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    timeout(Duration::from_secs(5), async {
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut line = String::new();
-        stdout.read_line(&mut line).await.unwrap();
-        assert_eq!(line, "ready\n");
-        assert_eq!(
-            posix::kill(-(child.id().unwrap() as i32), posix::SIGTERM),
-            0
+    // 1. Direct-PID SIGTERM forwards once, and group SIGINT is not duplicated into child cleanup.
+    for (sig_name, group, sig) in [
+        ("TERM", false, posix::SIGTERM),
+        ("INT", true, posix::SIGINT),
+    ] {
+        let script = format!(
+            "c=0; trap 'c=$((c + 1))' {sig_name}; echo ready; while [ \"$c\" -eq 0 ]; do :; done; i=0; while [ \"$i\" -lt 5000 ]; do i=$((i + 1)); done; echo \"$c\"; exit 0"
         );
-        line.clear();
-        stdout.read_line(&mut line).await.unwrap();
-        assert_eq!(line, "1\n");
-        assert_eq!(child.wait().await.unwrap().code(), Some(0));
-    })
-    .await
-    .unwrap();
+        let mut child = detached_sh(dir.path(), "http://127.0.0.1:1", false, &script)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        timeout(Duration::from_secs(5), async {
+            let mut stdout = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            stdout.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "ready\n");
+            let id = child.id().unwrap() as i32;
+            assert_eq!(posix::kill(if group { -id } else { id }, sig), 0);
+            line.clear();
+            stdout.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "1\n", "{sig_name}");
+            assert_eq!(child.wait().await.unwrap().code(), Some(0));
+        })
+        .await
+        .unwrap();
+    }
 
-    // 2. Single-PID SIGKILL on ov terminates file-redirected foreground children via guard.
+    // 2. Process-group SIGKILL terminates file-redirected child trees cleanly.
     let log = fs::File::create(dir.path().join("direct.log")).unwrap();
     let mut direct_child = detached_sh(
         dir.path(),
         "http://127.0.0.1:1",
         false,
-        "printf '%s\\n' \"$$\" > direct.pid; exec /bin/sleep 30",
+        "printf '%s\\n' \"$$\" > direct.pid; /bin/sleep 30",
     )
     .stdout(Stdio::from(log.try_clone().unwrap()))
     .stderr(Stdio::from(log))
     .spawn()
     .unwrap();
+    let direct_pgid = direct_child.id().unwrap() as i32;
     let direct_pid = wait_pid_file(&dir.path().join("direct.pid")).await;
-    assert_eq!(
-        posix::kill(direct_child.id().unwrap() as i32, posix::SIGKILL),
-        0
-    );
+    assert_eq!(posix::kill(-direct_pgid, posix::SIGKILL), 0);
     direct_child.wait().await.unwrap();
     wait_until_stopped(direct_pid).await;
 
-    // 3. Normal return preserves a background service; outer job SIGKILL cleans it up.
+    // 3. Masked background service stays alive with zero leftover ov processes until group kill.
     fs::write(
         dir.path().join("worker.sh"),
-        "printf '%s\\n' \"$$\" > worker.pid\n/bin/sleep 2 && : > worker.done\n",
+        "printf '%s\\n' \"$$\" > worker.pid\n/bin/sleep 5 && : > worker.done\n",
     )
     .unwrap();
-    let mut outer = Command::new("/bin/sh");
-    detach_session(
-        outer
-            .current_dir(dir.path())
-            .env("HOME", dir.path())
-            .env("USERPROFILE", dir.path())
-            .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
-            .env("OPENVIKING_LANG", "en")
-            .args([
-                "-c",
-                r#""$1" privacy run -- /bin/sh -c '/bin/sh ./worker.sh >job.log 2>&1 &'; printf '%s\n' "$$" > outer.pid; exec /bin/sleep 10"#,
-                "sh",
-                env!("CARGO_BIN_EXE_ov"),
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true),
-    );
-    let mut outer_child = outer.spawn().unwrap();
+    let (url, server) = resolver([(TOKEN, Some("bg-secret".into()))]).await;
+    let mut bg = detached_sh(
+        dir.path(),
+        &url,
+        true,
+        "/bin/sh ./worker.sh >job.log 2>&1 &",
+    )
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .unwrap();
+    let bg_pgid = bg.id().unwrap() as i32;
+    assert_eq!(bg.wait().await.unwrap().code(), Some(0));
+    server.await.unwrap();
     let worker_pid = wait_pid_file(&dir.path().join("worker.pid")).await;
-    let outer_pgid = wait_pid_file(&dir.path().join("outer.pid")).await;
     assert!(!process_stopped(worker_pid));
-    assert_eq!(posix::kill(-outer_pgid, posix::SIGKILL), 0);
-    outer_child.wait().await.unwrap();
+    assert!(!has_group_ov_process(bg_pgid));
+    assert_eq!(posix::kill(-bg_pgid, posix::SIGKILL), 0);
     wait_until_stopped(worker_pid).await;
     assert!(!dir.path().join("worker.done").exists());
 }

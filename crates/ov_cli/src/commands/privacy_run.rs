@@ -238,7 +238,6 @@ fn spawn_child(command: &mut Command) -> Result<tokio::process::Child> {
 
 #[cfg(unix)]
 async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Result<i32> {
-    use std::io::IsTerminal;
     use std::os::fd::AsRawFd;
     use std::process::Stdio;
     use tokio::signal::unix::{SignalKind, signal};
@@ -246,47 +245,35 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
-    // With a terminal job, the child stays in the shell's group so it can read /dev/tty and
-    // follow Ctrl-Z and fg. Otherwise, its own group lets ov signal the whole command once.
-    let caller_pgrp = unix_pgrp::getpgrp();
-    let job = caller_pgrp == std::process::id() as i32
-        || std::io::stdin().is_terminal()
-        || std::io::stdout().is_terminal()
-        || std::io::stderr().is_terminal();
-    let terminal = std::fs::File::open("/dev/tty").ok().filter(|_| job);
-    if terminal.is_none() {
-        command.process_group(0);
-    }
-    let pipe_out = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stdout()));
-    let pipe_err = masker.is_some() || (terminal.is_none() && is_pipe_or_socket(std::io::stderr()));
-    let combined_rx = if pipe_out && pipe_err && shared_non_tty_outputs() {
-        let (tx, rx) = tokio::net::unix::pipe::pipe()?;
-        // Clear O_NONBLOCK so the child inherits standard blocking descriptors.
-        let write_fd = tx.into_blocking_fd()?;
-        command.stdout(Stdio::from(write_fd.try_clone()?));
-        command.stderr(Stdio::from(write_fd));
-        Some(rx)
+    let caller_pgrp = unix_signal::getpgrp();
+    let terminal = std::fs::File::open("/dev/tty").ok();
+    let combined_rx = if masker.is_some() {
+        if shared_non_tty_outputs() {
+            let (tx, rx) = tokio::net::unix::pipe::pipe()?;
+            // Clear O_NONBLOCK so the child inherits standard blocking descriptors.
+            let write_fd = tx.into_blocking_fd()?;
+            command.stdout(Stdio::from(write_fd.try_clone()?));
+            command.stderr(Stdio::from(write_fd));
+            Some(rx)
+        } else {
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            None
+        }
     } else {
-        if pipe_out {
-            command.stdout(Stdio::piped());
-        }
-        if pipe_err {
-            command.stderr(Stdio::piped());
-        }
         None
     };
     let mut child = spawn_child(&mut command)?;
     // Drop configured Stdio handles immediately so the parent holds no write end to combined_rx.
     drop(command);
     let pid = child.id().expect("just spawned") as i32;
-    let guard = terminal
-        .is_none()
-        .then(|| unix_pgrp::spawn_guard(pid))
-        .flatten();
     let wait = async {
-        match combined_rx {
-            Some(rx) => relay_stream(rx, tokio::io::stdout(), masker).await?,
-            None => relay_child_output(child.stdout.take(), child.stderr.take(), masker).await?,
+        if let Some(masker) = masker {
+            match combined_rx {
+                Some(rx) => relay_stream(rx, tokio::io::stdout(), masker).await?,
+                None => {
+                    relay_child_output(child.stdout.take(), child.stderr.take(), masker).await?
+                }
+            }
         }
         child.wait().await.map(exit_code)
     };
@@ -294,45 +281,22 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
     loop {
         let sig = tokio::select! {
             biased;
-            status = &mut wait => {
-                if terminal.is_none() {
-                    if status.is_err() {
-                        unix_pgrp::kill(-pid, unix_pgrp::SIGKILL);
-                    } else {
-                        for (raw, rx) in [
-                            (SignalKind::interrupt().as_raw_value(), &mut interrupt),
-                            (SignalKind::terminate().as_raw_value(), &mut terminate),
-                            (SignalKind::hangup().as_raw_value(), &mut hangup),
-                        ] {
-                            if rx.recv().now_or_never().is_some() {
-                                unix_pgrp::kill(-pid, raw);
-                            }
-                        }
-                    }
-                }
-                if let Some(guard) = guard {
-                    unix_pgrp::finish_guard(guard, pid, status.is_ok());
-                }
-                return Ok(status?);
-            }
+            status = &mut wait => return Ok(status?),
             _ = interrupt.recv() => SignalKind::interrupt(),
             _ = terminate.recv() => SignalKind::terminate(),
             _ = hangup.recv() => SignalKind::hangup(),
         };
-        let target = match &terminal {
-            None => -pid,
-            // Ctrl-C reaches every process in the terminal's foreground job, the child included.
-            // A SIGINT sent only to a foreground ov is therefore not forwarded.
-            Some(tty)
-                if sig == SignalKind::interrupt()
-                    && unix_pgrp::tcgetpgrp(tty.as_raw_fd()) == caller_pgrp =>
-            {
-                continue;
-            }
-            Some(_) => pid,
-        };
-        // A child that already exited is reported by the wait above.
-        unix_pgrp::kill(target, sig.as_raw_value());
+        // Skip forwarding SIGINT when ov leads its own group (setsid/killpg) or shares the
+        // terminal's foreground job, where group SIGINT already reached the child once.
+        if sig == SignalKind::interrupt()
+            && (caller_pgrp == std::process::id() as i32
+                || terminal
+                    .as_ref()
+                    .is_some_and(|tty| unix_signal::tcgetpgrp(tty.as_raw_fd()) == caller_pgrp))
+        {
+            continue;
+        }
+        unix_signal::kill(pid, sig.as_raw_value());
     }
 }
 
@@ -345,7 +309,13 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
     }
     let mut child = spawn_child(&mut command)?;
     drop(command);
-    let output = relay_child_output(child.stdout.take(), child.stderr.take(), masker);
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let output = async {
+        match masker {
+            Some(masker) => relay_child_output(stdout, stderr, masker).await,
+            None => Ok(()),
+        }
+    };
     let wait = async {
         tokio::select! {
             status = child.wait() => status.map(exit_code),
@@ -362,7 +332,7 @@ async fn run_child(mut command: Command, masker: Option<&OutputMasker>) -> Resul
 async fn relay_child_output(
     stdout: Option<tokio::process::ChildStdout>,
     stderr: Option<tokio::process::ChildStderr>,
-    masker: Option<&OutputMasker>,
+    masker: &OutputMasker,
 ) -> std::io::Result<()> {
     let out = async {
         match stdout {
@@ -382,7 +352,7 @@ async fn relay_child_output(
 async fn relay_stream<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     reader: R,
     writer: W,
-    masker: Option<&OutputMasker>,
+    masker: &OutputMasker,
 ) -> std::io::Result<()> {
     match relay_output(reader, writer, masker).await {
         // Like a shell pipeline (`| head`), closing a stream's reader stops that stream
@@ -395,12 +365,12 @@ async fn relay_stream<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 async fn relay_output<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     mut reader: R,
     mut writer: W,
-    masker: Option<&OutputMasker>,
+    masker: &OutputMasker,
 ) -> std::io::Result<()> {
     let mut pending = Vec::new();
     let mut buffer = vec![0; 65536];
     loop {
-        // Flush prompts before waiting for more input, and batch consecutive ready reads.
+        // Flush ready non-prefix output before awaiting more bytes, and batch consecutive ready reads.
         let size = match reader.read(&mut buffer).now_or_never() {
             Some(size) => size?,
             None => {
@@ -408,13 +378,9 @@ async fn relay_output<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                 reader.read(&mut buffer).await?
             }
         };
-        if let Some(masker) = masker {
-            writer
-                .write_all(&masker.mask(&mut pending, &buffer[..size], size == 0))
-                .await?;
-        } else if size > 0 {
-            writer.write_all(&buffer[..size]).await?;
-        }
+        writer
+            .write_all(&masker.mask(&mut pending, &buffer[..size], size == 0))
+            .await?;
         if size == 0 {
             return writer.flush().await;
         }
@@ -445,16 +411,6 @@ fn with_borrowed_file<T>(
     let mut file =
         std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd.as_raw_fd()) });
     f(&mut file).ok()
-}
-
-#[cfg(unix)]
-fn is_pipe_or_socket(fd: impl std::os::fd::AsRawFd) -> bool {
-    use std::os::unix::fs::FileTypeExt;
-
-    with_borrowed_file(fd, |f| f.metadata()).is_some_and(|meta| {
-        let kind = meta.file_type();
-        kind.is_fifo() || kind.is_socket()
-    })
 }
 
 #[cfg(unix)]
@@ -548,345 +504,12 @@ fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
     p1 <= p2 && p2 <= p3
 }
 
-#[cfg(any(target_os = "linux", test))]
-fn parse_proc_stat(stat: &[u8]) -> Option<(u8, i32)> {
-    let end = stat.windows(2).rposition(|w| w == b") ")?;
-    let (&state, rest) = stat.get(end + 2..)?.split_first()?;
-    let rest = rest.strip_prefix(b" ")?;
-    let pgrp = rest.get(rest.iter().position(|&b| b == b' ')? + 1..)?;
-    let len = pgrp
-        .iter()
-        .position(|&b| b == b' ' || b == b'\n')
-        .unwrap_or(pgrp.len());
-    Some((
-        state,
-        std::str::from_utf8(pgrp.get(..len)?).ok()?.parse().ok()?,
-    ))
-}
-
 #[cfg(unix)]
-mod unix_pgrp {
-    use std::ffi::{c_char, c_long, c_void};
-    use std::io::{PipeWriter, Write};
-    use std::os::fd::AsRawFd;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    pub const SIGKILL: i32 = 9;
-    const SIGPIPE: i32 = 13;
-    const TRACKED_SIGNALS: [i32; 4] = [1, 2, 3, 15]; // SIGHUP, SIGINT, SIGQUIT, SIGTERM
-
-    #[repr(C)]
-    struct Timespec {
-        tv_sec: c_long,
-        tv_nsec: c_long,
-    }
-
+mod unix_signal {
     unsafe extern "C" {
         pub safe fn kill(pid: i32, sig: i32) -> i32;
         pub safe fn getpgrp() -> i32;
         pub safe fn tcgetpgrp(fd: i32) -> i32;
-        fn fork() -> i32;
-        safe fn setpgid(pid: i32, pgid: i32) -> i32;
-        fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
-        fn open(path: *const c_char, oflag: i32, ...) -> i32;
-        safe fn close(fd: i32) -> i32;
-        safe fn dup2(oldfd: i32, newfd: i32) -> i32;
-        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
-        fn read(fd: i32, buf: *mut c_void, count: usize) -> isize;
-        fn write(fd: i32, buf: *const c_void, count: usize) -> isize;
-        fn signal(sig: i32, handler: usize) -> usize;
-        fn nanosleep(req: *const Timespec, rem: *mut Timespec) -> i32;
-        safe fn _exit(status: i32) -> !;
-    }
-
-    static SIGNALS: AtomicU32 = AtomicU32::new(0);
-
-    extern "C" fn record_signal(sig: i32) {
-        if (1..32).contains(&sig) {
-            SIGNALS.fetch_or(1u32 << sig, Ordering::Relaxed);
-        }
-    }
-
-    fn retry_eintr(mut op: impl FnMut() -> isize) -> isize {
-        loop {
-            let rc = op();
-            if rc >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
-            {
-                return rc;
-            }
-        }
-    }
-
-    fn detach_stdio(mut keep_fd: i32) -> i32 {
-        if (0..=2).contains(&keep_fd) {
-            // SAFETY: F_DUPFD (0) duplicates keep_fd to the lowest free descriptor >= 3.
-            let moved = unsafe { fcntl(keep_fd, 0, 3) };
-            if moved >= 3 {
-                close(keep_fd);
-                keep_fd = moved;
-            }
-        }
-        // SAFETY: c"/dev/null" is NUL-terminated; O_RDWR (2) takes no mode argument.
-        let null_fd = unsafe { open(c"/dev/null".as_ptr(), 2) };
-        if null_fd >= 0 {
-            for fd in 0..=2 {
-                if fd != keep_fd {
-                    dup2(null_fd, fd);
-                }
-            }
-            if null_fd > 2 && null_fd != keep_fd {
-                close(null_fd);
-            }
-        }
-        if keep_fd > 3 && dup2(keep_fd, 3) == 3 {
-            close(keep_fd);
-            keep_fd = 3;
-        }
-        close_above(keep_fd);
-        keep_fd
-    }
-
-    fn close_above(keep_fd: i32) {
-        #[cfg(all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        ))]
-        {
-            unsafe extern "C" {
-                fn syscall(num: c_long, ...) -> c_long;
-            }
-            let first = keep_fd.max(2) + 1;
-            // SAFETY: SYS_close_range (436) closes [first, u32::MAX] in-kernel without allocations.
-            if keep_fd <= 3
-                && unsafe { syscall(436, first as c_long, u32::MAX as c_long, 0 as c_long) } == 0
-            {
-                return;
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            unsafe extern "C" {
-                safe fn getpid() -> i32;
-                fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buf: *mut c_void, sz: i32) -> i32;
-            }
-            let (pid, mut buf) = (getpid(), [[0_i32; 2]; 128]);
-            loop {
-                // SAFETY: PROC_PIDLISTFDS (1) writes 8-byte [proc_fd, proc_fdtype] pairs into buf.
-                let n = unsafe {
-                    proc_pidinfo(pid, 1, 0, buf.as_mut_ptr().cast(), size_of_val(&buf) as i32)
-                };
-                if n <= 0 {
-                    break;
-                }
-                let mut any = false;
-                for &[fd, _] in &buf[..n as usize / 8] {
-                    if fd > 2 && fd != keep_fd {
-                        close(fd);
-                        any = true;
-                    }
-                }
-                if !any || (n as usize) < size_of_val(&buf) {
-                    return;
-                }
-            }
-        }
-        for fd in 3..1024 {
-            if fd != keep_fd {
-                close(fd);
-            }
-        }
-    }
-
-    fn group_alive(pgid: i32, cached_pid: &mut i32) -> bool {
-        (kill(-pgid, 0) == 0
-            || std::io::Error::last_os_error().kind() == std::io::ErrorKind::PermissionDenied)
-            && linux_group_alive(pgid, cached_pid)
-    }
-
-    #[cfg(not(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    )))]
-    fn linux_group_alive(_pgid: i32, _cached_pid: &mut i32) -> bool {
-        true
-    }
-
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ))]
-    fn linux_group_alive(pgid: i32, cached_pid: &mut i32) -> bool {
-        unsafe extern "C" {
-            fn openat(dirfd: i32, path: *const c_char, oflag: i32, ...) -> i32;
-            fn syscall(num: c_long, ...) -> c_long;
-        }
-        const SYS_GETDENTS64: c_long = if cfg!(target_arch = "x86_64") {
-            217
-        } else {
-            61
-        };
-        fn stat_alive(proc_fd: i32, name: &[u8], pgid: i32) -> bool {
-            let mut path = [0u8; 28];
-            path[..name.len()].copy_from_slice(name);
-            path[name.len()..name.len() + 6].copy_from_slice(b"/stat\0");
-            // SAFETY: path is NUL-terminated on stack; O_RDONLY is 0.
-            unsafe {
-                let fd = openat(proc_fd, path.as_ptr().cast(), 0);
-                if fd < 0 {
-                    return false;
-                }
-                let mut stat = [0u8; 256];
-                let m = read(fd, stat.as_mut_ptr().cast(), stat.len());
-                close(fd);
-                m > 0
-                    && super::parse_proc_stat(&stat[..m as usize])
-                        .is_some_and(|(st, pg)| pg == pgid && !matches!(st, b'Z' | b'X' | b'x'))
-            }
-        }
-        // SAFETY: Uses only stack buffers and async-signal-safe syscalls after fork().
-        unsafe {
-            let proc_fd = open(c"/proc".as_ptr(), 0);
-            if proc_fd < 0 {
-                return true;
-            }
-            if *cached_pid > 0 {
-                let (mut digits, mut n, mut i) = ([0u8; 10], *cached_pid as u32, 10);
-                while n > 0 {
-                    i -= 1;
-                    digits[i] = b'0' + (n % 10) as u8;
-                    n /= 10;
-                }
-                if stat_alive(proc_fd, &digits[i..], pgid) {
-                    close(proc_fd);
-                    return true;
-                }
-            }
-            let (mut buf, mut alive, mut saw_pid) = ([0u8; 4096], false, false);
-            while !alive {
-                let n = syscall(
-                    SYS_GETDENTS64,
-                    proc_fd as c_long,
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                );
-                if n <= 0 {
-                    break;
-                }
-                let mut rest = &buf[..n as usize];
-                while rest.len() > 19 {
-                    let reclen = u16::from_ne_bytes([rest[16], rest[17]]) as usize;
-                    let Some((rec, tail)) = (reclen >= 20)
-                        .then(|| rest.split_at_checked(reclen))
-                        .flatten()
-                    else {
-                        break;
-                    };
-                    rest = tail;
-                    let name = &rec[19..];
-                    let len = name.iter().position(|&b| b == 0).unwrap_or(0);
-                    if (1..=20).contains(&len) && name[..len].iter().all(u8::is_ascii_digit) {
-                        saw_pid = true;
-                        if stat_alive(proc_fd, &name[..len], pgid) {
-                            *cached_pid = std::str::from_utf8(&name[..len])
-                                .ok()
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(0);
-                            alive = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            close(proc_fd);
-            !saw_pid || alive
-        }
-    }
-
-    pub fn spawn_guard(target_pid: i32) -> Option<(i32, PipeWriter)> {
-        let (rx, tx) = std::io::pipe().ok()?;
-        let (rx_fd, tx_fd) = (rx.as_raw_fd(), tx.as_raw_fd());
-        // SAFETY: Child uses only async-signal-safe syscalls before _exit(0).
-        let pid = unsafe { fork() };
-        if pid < 0 {
-            return None;
-        }
-        if pid == 0 {
-            setpgid(0, 0);
-            close(tx_fd);
-            let rx_fd = detach_stdio(rx_fd);
-            // SAFETY: SIG_IGN (1) is valid for non-fatal job signals and SIGPIPE.
-            unsafe {
-                signal(SIGPIPE, 1);
-                for sig in TRACKED_SIGNALS {
-                    signal(sig, 1);
-                }
-            }
-            let mut byte = 0u8;
-            // SAFETY: &raw mut byte points to a 1-byte stack slot.
-            let disarmed = retry_eintr(|| unsafe { read(rx_fd, (&raw mut byte).cast(), 1) }) == 1
-                && byte == b'D';
-            close(rx_fd);
-            if !disarmed {
-                kill(-target_pid, SIGKILL);
-            }
-            _exit(0);
-        }
-        setpgid(pid, pid);
-        drop(rx);
-        Some((pid, tx))
-    }
-
-    pub fn finish_guard((guard_pid, mut tx): (i32, PipeWriter), target_pid: i32, clean_exit: bool) {
-        let mut cached_pid = target_pid;
-        if clean_exit
-            && group_alive(target_pid, &mut cached_pid)
-            && handoff_sentinel(tx.as_raw_fd(), target_pid, cached_pid)
-        {
-            return;
-        }
-        let _ = tx.write_all(b"D");
-        drop(tx);
-        // SAFETY: null status ignores child exit status.
-        retry_eintr(|| unsafe { waitpid(guard_pid, std::ptr::null_mut(), 0) } as isize);
-    }
-
-    fn handoff_sentinel(tx_fd: i32, target_pid: i32, mut cached_pid: i32) -> bool {
-        // SAFETY: Child uses only async-signal-safe syscalls before _exit(0).
-        let pid = unsafe { fork() };
-        if pid != 0 {
-            return pid > 0;
-        }
-        SIGNALS.store(0, Ordering::Relaxed);
-        // SAFETY: SIG_IGN (1) and record_signal (async-signal-safe) are valid handlers.
-        unsafe {
-            signal(SIGPIPE, 1);
-            for sig in TRACKED_SIGNALS {
-                signal(sig, record_signal as *const () as usize);
-            }
-        }
-        let tx_fd = detach_stdio(tx_fd);
-        let pause = Timespec {
-            tv_sec: 0,
-            tv_nsec: 50_000_000,
-        };
-        loop {
-            let pending = SIGNALS.swap(0, Ordering::Relaxed);
-            for sig in TRACKED_SIGNALS {
-                if (pending & (1u32 << sig)) != 0 {
-                    kill(-target_pid, sig);
-                }
-            }
-            if !group_alive(target_pid, &mut cached_pid) {
-                // SAFETY: c"D" points to a valid 1-byte static buffer.
-                retry_eintr(|| unsafe { write(tx_fd, c"D".as_ptr().cast(), 1) });
-                close(tx_fd);
-                _exit(0);
-            }
-            if SIGNALS.load(Ordering::Relaxed) == 0 {
-                // SAFETY: pause is valid and null ignores remaining time on EINTR.
-                unsafe { nanosleep(&pause, std::ptr::null_mut()) };
-            }
-        }
     }
 }
 
@@ -1075,23 +698,6 @@ mod tests {
             actual.extend(masker.mask(&mut pending, &[], true));
             assert_eq!(actual, expected, "step {step}");
         }
-    }
-
-    #[test]
-    fn parses_proc_stat_across_comm_shapes() {
-        assert_eq!(
-            super::parse_proc_stat(b"42 (sh) S 1 42 40 0 -1\n"),
-            Some((b'S', 42))
-        );
-        assert_eq!(
-            super::parse_proc_stat(b"42 (sh (worker) ) Z 1 777 700 0 -1\n"),
-            Some((b'Z', 777))
-        );
-        assert_eq!(
-            super::parse_proc_stat(b"99 (done) X 1 888 800\n"),
-            Some((b'X', 888))
-        );
-        assert_eq!(super::parse_proc_stat(b"malformed"), None);
     }
 
     #[cfg(unix)]
