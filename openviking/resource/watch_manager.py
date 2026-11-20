@@ -72,6 +72,15 @@ _SOURCE_RECOVERY_LEGACY_KEY = "recovery_attempts"
 _SOURCE_RECOVERY_FAILURES = frozenset({"failed", "partial", "error"})
 
 
+class _WatchRefreshError(Exception):
+    """Preserve the confirmed source identity when refresh raises before a Task."""
+
+    def __init__(self, cause: Exception, checkpoint: Optional[Dict[str, Any]]) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.checkpoint = checkpoint
+
+
 def _checkpoint_core(checkpoint: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not isinstance(checkpoint, dict):
         return None
@@ -665,24 +674,42 @@ class WatchManager:
             await self.settle_record(actual_run, record)
             return WatchReceipt(task_id, actual_run.run_id, False)
         except Exception as exc:
+            cause = exc.cause if isinstance(exc, _WatchRefreshError) else exc
+            error = str(cause)
             if actual_run.run_id is not None:
                 owner = {"account_id": task.account_id, "user_id": task.user_id}
                 record = await self.tracker.get(actual_run.run_id, **owner)
                 if record is not None and not record.is_terminal():
-                    await self.tracker.fail(actual_run.run_id, str(exc), **owner)
+                    await self.tracker.fail(actual_run.run_id, error, **owner)
                     record = await self.tracker.get(actual_run.run_id, **owner)
                 await self.settle_record(actual_run, record)
+            counted = (
+                isinstance(exc, _WatchRefreshError)
+                and actual_run.run_id is None
+                and exc.checkpoint is not None
+            )
+            if counted:
+                outcome = self.result(
+                    run.task,
+                    "failed",
+                    {"source_checkpoint": exc.checkpoint},
+                    error,
+                )
+            else:
+                outcome = WatchRunResult(
+                    status="failed",
+                    error=error,
+                    deactivate=isinstance(cause, FileNotFoundError)
+                    or getattr(cause, "code", None) == GIT_AUTH_FAILED,
+                )
             await self.finish_run(
                 task_id,
                 None,
-                WatchRunResult(
-                    status="failed",
-                    error=str(exc),
-                    deactivate=isinstance(exc, FileNotFoundError)
-                    or getattr(exc, "code", None) == GIT_AUTH_FAILED,
-                ),
+                outcome,
                 started_at=run.started_at,
             )
+            if cause is not exc:
+                raise cause from exc
             raise
 
     async def _reuse(
@@ -766,6 +793,7 @@ class WatchManager:
             if connector_auth is not None:
                 kwargs["connector_auth_config"] = connector_auth
             kwargs["connector_states"] = task.connector_states
+        checkpoint = None
         if not connector:
             checkpoint = await self._probe_git_checkpoint(task, kwargs, ctx)
             if checkpoint is not None:
@@ -773,7 +801,7 @@ class WatchManager:
                 decision = _same_source_action(checkpoint, task)
                 if decision == "skip":
                     return WatchRunResult(status="completed", execution_task_id=task.last_task_id)
-                if decision == "exhausted":
+                if decision == "exhausted" and not run.manual:
                     logger.debug(
                         "Git Watch recovery exhausted: watch_id=%s attempts=%d",
                         short_hash(task.task_id),
@@ -794,23 +822,26 @@ class WatchManager:
                         short_hash(task.task_id),
                         task.recovery_attempts + 1,
                     )
-        return await self._resource_service.refresh_resource(
-            path=task.path,
-            ctx=ctx,
-            to=task.to_uri,
-            to_is_directory=task.to_is_directory,
-            parent=task.parent_uri,
-            reason=task.reason,
-            instruction=task.instruction,
-            build_index=task.build_index,
-            summarize=task.summarize,
-            processing_mode=task.processing_mode,
-            watch_interval=task.watch_interval,
-            enforce_public_remote_targets=True,
-            wait_for_completion=False,
-            on_task_created=on_task_created,
-            **kwargs,
-        )
+        try:
+            return await self._resource_service.refresh_resource(
+                path=task.path,
+                ctx=ctx,
+                to=task.to_uri,
+                to_is_directory=task.to_is_directory,
+                parent=task.parent_uri,
+                reason=task.reason,
+                instruction=task.instruction,
+                build_index=task.build_index,
+                summarize=task.summarize,
+                processing_mode=task.processing_mode,
+                watch_interval=task.watch_interval,
+                enforce_public_remote_targets=True,
+                wait_for_completion=False,
+                on_task_created=on_task_created,
+                **kwargs,
+            )
+        except Exception as exc:
+            raise _WatchRefreshError(exc, checkpoint) from exc
 
     async def _probe_git_checkpoint(
         self, task: WatchTask, kwargs: Dict[str, Any], ctx: RequestContext

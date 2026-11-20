@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+﻿# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """Transactional Watch operations shared by relational store providers.
 
@@ -405,7 +405,7 @@ class SQLWatchStore(WatchStore):
             async with session.begin():
                 yield session
 
-    # ── Row mapping ─────────────────────────────────────────────────────
+    # 鈹€鈹€ Row mapping 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     @property
     def _scope(self) -> Any:
@@ -486,7 +486,7 @@ class SQLWatchStore(WatchStore):
     async def _rows(self, session: Any, statement: Any) -> list[Any]:
         return list((await session.execute(statement)).mappings().all())
 
-    # ── API reads and writes ────────────────────────────────────────────
+    # 鈹€鈹€ API reads and writes 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     async def get_state(self, task_id: str) -> Optional[WatchState]:
         c = self._tasks.c
@@ -835,7 +835,7 @@ class SQLWatchStore(WatchStore):
             )
         )
 
-    # ── Run occupancy ───────────────────────────────────────────────────
+    # 鈹€鈹€ Run occupancy 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     @staticmethod
     def _candidate(row: Any) -> WatchCandidate:
@@ -1119,7 +1119,7 @@ class SQLWatchStore(WatchStore):
             )
             return bool(rows)
 
-    # ── Target transfers (caller holds the transfer's PathLock) ─────────
+    # 鈹€鈹€ Target transfers (caller holds the transfer's PathLock) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
     async def _plan_move(
         self,
@@ -1245,3 +1245,4 @@ class SQLWatchStore(WatchStore):
             )
             rows = await self._rows(session, select(*self._tasks.c).where(*where))
             return [self._task(row) for row in rows]
+

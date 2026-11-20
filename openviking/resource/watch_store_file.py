@@ -634,6 +634,7 @@ class FileWatchStore(WatchStore):
                 run_id=None,
                 task=begun.task.model_copy(deep=True),
                 started_at=begun.run_started_at,
+                manual=manual,
             )
 
     async def attach_task(

@@ -271,6 +271,7 @@ class WatchRun:
     run_id: Optional[str]
     task: WatchTask
     started_at: Optional[float] = None
+    manual: bool = False
 
 
 @dataclass(frozen=True)
