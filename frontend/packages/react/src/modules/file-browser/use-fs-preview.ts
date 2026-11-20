@@ -10,7 +10,6 @@ import type {
   FilePreviewTab,
 } from '../../components/file-preview/index.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { isAbort } from '../../shared/request/fs-errors.js';
 import { toDirectoryTab, type DirectorySummary } from './fs-model.js';
@@ -23,6 +22,7 @@ import { readFile } from './fs-read-file.js';
 import { loadVideoDetails } from './fs-video-details.js';
 import { abortError, readPreviewStat } from './fs-stat.js';
 import { useWikiSaveFeedback } from './use-wiki-save-feedback.js';
+import type { readDashboardHint } from './dashboard-resource.js';
 
 export interface UseFsPreviewOptions {
   client: OvClient | null;
@@ -42,6 +42,7 @@ export interface UseFsPreviewOptions {
    * repeatedly. The three-state value is a stable string, so that cannot happen.
    */
   resourceType?: 'directory' | 'file' | 'unknown';
+  dashboardHint?: Awaited<ReturnType<typeof readDashboardHint>>;
   contentKind?: 'plain' | 'wiki' | 'pending';
   activeLevelKey?: string;
   onActiveLevelChange?: (key: string) => void;
@@ -83,6 +84,7 @@ export function useFsPreview({
   uri,
   resourceType = 'file',
   contentKind = 'plain',
+  dashboardHint,
   activeLevelKey = 'l0',
   onActiveLevelChange,
   labels = resolveSummaryLabels('en-US'),
@@ -98,7 +100,9 @@ export function useFsPreview({
     summary: DirectorySummary;
     resolveImage: FilePreviewDirectoryTab['resolveImage'];
   } | null>(null);
-  const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
+  const [tabs, setTabs] = useState<
+    (FilePreviewTab & { compileOutput?: boolean })[] | null
+  >(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [stat, setStat] = useState<{ uri: string; updatedAt: string }>();
@@ -180,6 +184,7 @@ export function useFsPreview({
           },
           contentKind === 'wiki',
           onStatus,
+          dashboardHint,
         ),
       };
     })();
@@ -234,6 +239,7 @@ export function useFsPreview({
     uri,
     resourceType,
     contentKind,
+    dashboardHint,
     openParent,
     generation,
     saveGeneration,
@@ -242,25 +248,18 @@ export function useFsPreview({
 
   const directoryTab =
     directory?.uri === uri
-      ? {
-          ...toDirectoryTab(
-            directory.uri,
-            directory.summary,
-            labels,
-            openParent,
-            directoryIcon(),
-          ),
+      ? toDirectoryTab(directory.uri, directory.summary, labels, openParent, {
           resolveImage: directory.resolveImage,
           activeLevelKey,
           onActiveLevelChange,
-        }
+        })
       : undefined;
   const current = tabs?.[0];
+  const level = directoryTab?.levels.find(
+    (item) => item.key === activeLevelKey,
+  );
   const count = directoryTab
-    ? (
-        directoryTab.levels.find((level) => level.key === activeLevelKey)
-          ?.source.content ?? ''
-      ).length
+    ? (level?.source.content ?? '').length
     : current?.key === uri && current.kind === 'file' && !current.loading
       ? current.source.content?.length
       : undefined;
@@ -270,7 +269,8 @@ export function useFsPreview({
     activeKey,
     error,
     wikiSaveFeedback,
-    directorySummary: directoryTab && directory?.summary,
+    hasDirectorySummary: Boolean(level?.hasSummary),
+    isCompileOutput: current?.key === uri && Boolean(current.compileOutput),
     footer: count === undefined ? undefined : formatCharacterCount(count),
     updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
     setActiveKey,

@@ -56,16 +56,12 @@ export async function findCompileTarget(
   client: OvClient,
   uri: string,
   options: OvRequestOptions,
+  hint?: Awaited<ReturnType<typeof readDashboardHint>>,
 ) {
-  uri = await resolveDashboardUri(client, uri, options);
+  uri = hint?.uri ?? (await resolveDashboardUri(client, uri, options));
   while (uri.length > 'viking://'.length) {
-    const result = await client.request<{ attrs?: { tags?: string[] } }>({
-      method: 'GET',
-      path: OV_PATHS.fsAttrs,
-      query: { uri },
-      options,
-    });
-    const tags = result?.attrs?.tags ?? [];
+    const { tags } =
+      hint?.uri === uri ? hint : await readDashboardHint(client, uri, options);
     if (tags.includes('compile_target=true')) return { uri, tags };
     const separator = uri.lastIndexOf('/');
     if (separator < 'viking://'.length) break;

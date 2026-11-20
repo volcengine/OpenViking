@@ -12,7 +12,6 @@ import { useWikiConflictIndicators } from './wiki-conflict-indicators.js';
 import {
   useWikiConflictIndex,
   useDashboardHint,
-  useCompileTarget,
 } from './use-dashboard-metadata.js';
 import {
   type FileBrowserDashboard,
@@ -115,8 +114,6 @@ export function useBrowserDashboards({
       }),
   );
   const resolved = uri ? resolve(uri) : undefined;
-  const targetUri = !resolved && !hint.loading ? uri : null;
-  const target = useCompileTarget(targetUri, generation, requestOptions);
   const current =
     resolved &&
     (dashboardKinds === undefined || dashboardKinds.includes(resolved.kind))
@@ -181,12 +178,14 @@ export function useBrowserDashboards({
         onOpenDashboard: open,
       })
     : undefined;
+  const contentKind: 'pending' | 'wiki' | 'plain' =
+    uri && /\.md$/i.test(uri) && !resolved && hint.loading
+      ? 'pending'
+      : resolved?.kind === 'wiki'
+        ? 'wiki'
+        : 'plain';
   return {
-    isWiki: resolved?.kind === 'wiki',
-    previewIsCompile: resolved?.kind === 'wiki' || Boolean(target),
-    contentPending: Boolean(
-      uri && /\.md$/i.test(uri) && !resolved && hint.loading,
-    ),
+    previewOptions: { dashboardHint: hint.data, contentKind },
     dashboards,
     current,
     tab,

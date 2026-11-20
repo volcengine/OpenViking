@@ -100,14 +100,9 @@ export function renderPreviewFooter(
 ) {
   const uri = browser.currentUri;
   const modelNotice = previewModelNotice(uri, text.previewModelNotice);
-  const summary = browser.previewDirectorySummary;
-  const hasDirectorySummary =
-    tab?.kind === 'directory' && tab.activeLevelKey === 'l1'
-      ? Boolean(summary?.overview && summary.overviewError === undefined)
-      : Boolean(summary?.abstract && summary.abstractError === undefined);
   const aiGenerated =
     tab?.kind === 'directory'
-      ? hasDirectorySummary
+      ? browser.previewHasDirectorySummary
       : isAiGeneratedPreview(uri, browser.previewIsCompile);
   return tab &&
     tab.kind !== 'content' &&

@@ -97,19 +97,20 @@ test('AI notice follows generated document scope and locale', async () => {
       return ok({
         uri,
         attrs: {
-          tags: uri?.startsWith('viking://resources/wiki')
-            ? ['compile_target=true']
-            : [],
+          tags:
+            uri === 'viking://resources/wiki' ? ['compile_target=true'] : [],
         },
       });
     if (path === '/api/v1/fs/stat')
       return ok({
         modTime: fileTime,
-        tags: uri?.startsWith('viking://resources/wiki')
-          ? ['compile_target=true']
-          : [],
+        tags: uri === 'viking://resources/wiki' ? ['compile_target=true'] : [],
       });
-    return ok('sample');
+    return ok(
+      uri === 'viking://resources/wiki/chapter.md'
+        ? 'sample\n<!-- CONFLICTS_CONTENT\n-->'
+        : 'sample',
+    );
   });
   const page = (uri, locale = 'zh-CN', dashboardKinds) =>
     h(

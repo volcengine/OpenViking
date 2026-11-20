@@ -3,8 +3,13 @@ import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
 import { joinLines, splitLines } from './fs-lines.js';
 import { splitWikiMetadata } from './wiki-metadata.js';
-import { readCompileTargets } from './dashboard-data.js';
-import { findCompileTarget } from './dashboard-resource.js';
+import { readCompileCatalog } from './dashboard-data.js';
+import { within } from './dashboard-model.js';
+import {
+  findCompileTarget,
+  resolveDashboardUri,
+  type readDashboardHint,
+} from './dashboard-resource.js';
 import { isOvClientError } from '../../client/errors.js';
 
 /** Read and project text once for preview, editing and Wiki business data. */
@@ -14,6 +19,7 @@ export async function readFileContent(
   options: OvRequestOptions,
   limit = -1,
   isWiki = false,
+  hint?: Awaited<ReturnType<typeof readDashboardHint>>,
 ) {
   const read = async (lineLimit: number) => {
     const value = await client.request<string>({
@@ -45,9 +51,15 @@ export async function readFileContent(
   const projection = candidate || wiki ? splitWikiMetadata(body) : undefined;
   if (!wiki && projection?.payloads.length) {
     try {
-      wiki =
-        Boolean(await findCompileTarget(client, uri, options)) ||
-        (await readCompileTargets(client, uri, options)).length > 0;
+      const scope =
+        hint?.uri ?? (await resolveDashboardUri(client, uri, options));
+      wiki = Boolean(await findCompileTarget(client, scope, options, hint));
+      if (!wiki) {
+        const catalog = await readCompileCatalog(client, scope, options);
+        wiki =
+          !catalog.named &&
+          catalog.targets.some((target) => within(scope, target.to));
+      }
     } catch (error) {
       // An old server without Compile cannot establish Wiki ownership.
       // Other failures must not expose unclassified metadata as trusted body text.
@@ -64,5 +76,8 @@ export async function readFileContent(
     // Keep full Wiki data separate from the projected preview and draft content.
     wikiSource: wiki ? body : undefined,
     wiki,
+    // A Compile destination can contain uploads. The Wiki trailer identifies the output file.
+    compileOutput:
+      wiki && Boolean(projection?.complete && projection.payloads.length),
   };
 }

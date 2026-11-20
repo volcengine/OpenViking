@@ -181,11 +181,7 @@ export function useFileBrowser({
     openParent,
     generation: refreshGeneration,
     requestOptions,
-    contentKind: boards.contentPending
-      ? 'pending'
-      : boards.isWiki
-        ? 'wiki'
-        : 'plain',
+    ...boards.previewOptions,
   });
 
   const { open: openDashboard, close: closeDashboard } = boards;
@@ -292,8 +288,8 @@ export function useFileBrowser({
     previewError,
     dashboards: boards.dashboards,
     previewDashboard: boards.current,
-    previewIsCompile: boards.previewIsCompile,
-    previewDirectorySummary: preview.directorySummary,
+    previewIsCompile: preview.isCompileOutput,
+    previewHasDirectorySummary: preview.hasDirectorySummary,
     dashboardError: boards.error,
     refreshWikiConflicts: boards.refreshConflicts,
     previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),

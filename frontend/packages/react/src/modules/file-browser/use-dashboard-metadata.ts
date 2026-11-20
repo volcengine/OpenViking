@@ -5,13 +5,10 @@ import type {
   FileTreeRow,
 } from '../../components/file-tree/types.js';
 import { within } from './dashboard-model.js';
-import {
-  isSystemUri,
-  normalizeResourceUri,
-} from '../../shared/resource-uri.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { readWikiConflictIndex } from './wiki-conflict-index.js';
-import { findCompileTarget, readDashboardHint } from './dashboard-resource.js';
+import { readDashboardHint } from './dashboard-resource.js';
 
 export function useDashboardHint({
   uri,
@@ -58,27 +55,6 @@ export function useDashboardHint({
       row.kind === 'entry' && row.uri === canonicalUri && row.type === 'file',
   );
   return { hint, canonicalUri, knownRows, isFile };
-}
-
-// Run provenance discovery independently of the preview body and dashboard.
-export function useCompileTarget(
-  uri: string | null,
-  generation: number,
-  requestOptions?: OvRequestOptions,
-) {
-  const load = useCallback(
-    (client: OvClient, options: OvRequestOptions) =>
-      uri
-        ? findCompileTarget(client, uri, options)
-        : Promise.resolve(undefined),
-    [uri],
-  );
-  return useDashboardQuery(
-    load,
-    requestOptions,
-    uri !== null && !isSystemUri(uri),
-    generation,
-  ).data;
 }
 
 export function useWikiConflictIndex({
