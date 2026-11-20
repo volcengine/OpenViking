@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Focused tests for core service behavior."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -71,21 +72,19 @@ def test_service_loads_account_store_runtime_from_config_file(monkeypatch) -> No
     """Forward the configured Account Store Runtime instance to the AGFS binding builder."""
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = object()
-    server_config = SimpleNamespace(
-        account_store=SimpleNamespace(
-            provider="redis_mysql",
-            params={"cache": {"instance": "accountstore"}},
-        )
-    )
+    account_store = {
+        "provider": "redis_mysql",
+        "params": {"cache": {"instance": "accountstore"}},
+    }
     calls = []
 
     monkeypatch.setattr(
         "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
-        lambda: "/tmp/ov.conf",
+        lambda: Path("/tmp/ov.conf"),
     )
     monkeypatch.setattr(
-        "openviking.service.core.load_server_config",
-        lambda path: server_config,
+        "openviking.service.core.load_json_config",
+        lambda path: {"server": {"account_store": account_store}},
     )
     monkeypatch.setattr(
         "openviking.service.core.build_runtime_ragfs_binding_config",

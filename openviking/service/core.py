@@ -20,7 +20,7 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
-from openviking.server.config import UserConfigDefaults, load_server_config
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
@@ -68,6 +68,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
+from openviking_cli.utils.config.config_loader import load_json_config
 from openviking_cli.utils.config.config_utils import DEFAULT_SERVICE_NAME
 from openviking_cli.utils.config.git_config import GitConfig
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
@@ -245,14 +246,14 @@ class OpenVikingService:
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
         config_file = OpenVikingConfigSingleton.get_config_file()
-        server_config = load_server_config(str(config_file)) if config_file is not None else None
-
         account_store_cache_instance = None
-        if server_config is not None and server_config.account_store.provider == "redis_mysql":
+        server = load_json_config(config_file).get("server") if config_file is not None else None
+        account_store = server.get("account_store") if isinstance(server, dict) else None
+        if isinstance(account_store, dict) and account_store.get("provider") == "redis_mysql":
             from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
 
             account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(
-                server_config.account_store.params
+                account_store.get("params")
             )
 
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(
