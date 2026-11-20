@@ -100,7 +100,7 @@ class PgvectorCollection(OpenGaussCollection):
             f'AND EXISTS (SELECT 1 FROM {table} WHERE "id" = p.id '
             f"AND {condition}{vector_guard}))",
             "sparse_candidates AS (SELECT id AS _ov_candidate_id FROM sparse_matches "
-            "GROUP BY id HAVING SUM(score) > 0 ORDER BY SUM(score) DESC, id LIMIT %s)",
+            + "GROUP BY id HAVING SUM(score) > 0 ORDER BY SUM(score) DESC, id LIMIT %s)",
         ]
         return ctes, [table, terms, *filter_params, terms, terms, *filter_params, budget]
 
