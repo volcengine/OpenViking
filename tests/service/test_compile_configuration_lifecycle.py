@@ -465,8 +465,9 @@ async def test_full_execution_never_touches_compile_storage_or_source_snapshots(
     setup.finalize.assert_not_awaited()
 
 
-async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_completion(
-    setup, registered
+@pytest.mark.parametrize("source_changed", [False, True])
+async def test_scheduled_run_without_output_changes_preserves_manual_baseline(
+    setup, registered, source_changed
 ):
     record, compile_name, first = registered
     setup.files.write = AsyncMock(wraps=setup.files.write)
@@ -476,30 +477,36 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
         first.meta["request"], "acme", first.task_id, "alice"
     )
     assert first_plan["execution"]["mode"] == "full"
+    setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
     await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
     paths = [call.args[0] for call in setup.files.write.await_args_list]
     assert sum(path.endswith("/state.json") for path in paths) == 2
     state = await setup.store.get("acme", "alice", compile_name)
     assert state["progress"]["source_commit"] == first_plan["head"]
+    setup.fs.output_changes = []
+    if source_changed:
+        setup.fs.source_changes = [{"uri": SOURCE + "/source.md", "change_type": "modified"}]
     second = make_task(
         setup, compile_name=compile_name, record=state, created_at=200, trigger="scheduled"
     )
     await setup.lifecycle.record_queued(second)
     outcome = await setup.lifecycle.on_start(second)
-    assert isinstance(outcome, ExternalTaskSnapshot) and outcome.status == "completed"
+    if source_changed:
+        assert outcome == "proceed"
+        outcome = ExternalTaskSnapshot(status="completed")
+    else:
+        assert isinstance(outcome, ExternalTaskSnapshot) and outcome.status == "completed"
     await setup.lifecycle.on_finish(second, outcome)
     run = await setup.store.get_run("acme", "alice", compile_name, second.task_id)
     await CompileLifecycle(setup.store, setup.fs).on_finish(
-        first, ExternalTaskSnapshot(status="completed")
+        second, ExternalTaskSnapshot(status="completed")
     )
     setup.find.assert_not_awaited()
     assert run["meta"]["trigger"] == "scheduled"
     assert run["meta"]["base_snapshot"] == first_plan["head"]
-    assert run["meta"]["finish_snapshot"] == run["meta"]["start_snapshot"]
-    assert len(setup.fs.commits) == 3
-    assert (await setup.store.get("acme", "alice", compile_name))["progress"][
-        "source_commit"
-    ] == run["meta"]["start_snapshot"]
+    assert (run["meta"]["finish_snapshot"] == run["meta"]["start_snapshot"]) != source_changed
+    assert run["result"] == {"created": 0, "updated": 0, "deleted": 0}
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"] == state["progress"]
 
 
 async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen_inputs(setup):
@@ -533,6 +540,7 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
         await resumed.runtime_changes(task.meta["request"], "acme", task.task_id, "alice") == plan
     )
     assert len(setup.fs.commits) == 1
+    setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
     await resumed.on_finish(stale_task, ExternalTaskSnapshot(status="completed"))
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
@@ -862,6 +870,7 @@ async def test_prepared_finalization_reads_state_only_for_progress(setup, regist
     """A durable preparation checkpoint avoids acceptance reads even with stale worker auth."""
     _, _, task = registered
     await setup.lifecycle.on_start(task)
+    setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
     task.auth = {}
     reads = setup.files.read = AsyncMock(wraps=setup.files.read)
 
@@ -879,6 +888,7 @@ async def test_progress_publication_recovers_after_state_write_failure(
     """A durable finished run retries its successful baseline after a state write fails."""
     _, compile_name, task = registered
     await setup.lifecycle.on_start(task)
+    setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
     write = setup.files.write
     fail = True
 

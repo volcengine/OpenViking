@@ -1218,9 +1218,11 @@ class CompileLifecycle:
         )
 
     async def _advance_progress(self, task: Any, run: dict) -> None:
-        """Advance only the matching configuration's unchanged successful predecessor."""
+        """Publish a successful run's baseline when target stats show changes and the predecessor still matches."""
         compile_name = self._compile_name(task)
         if not compile_name or run["status"] != "completed" or not run["meta"]["start_snapshot"]:
+            return
+        if not any((run.get("result") or {}).get(key, 0) for key in _RESULT_KEYS.values()):
             return
         from openviking.service.task_tracker import get_task_tracker
 
