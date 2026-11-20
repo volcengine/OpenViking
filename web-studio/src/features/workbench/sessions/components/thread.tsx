@@ -59,7 +59,9 @@ function SessionThread({
       mounted.current = false
     }
   }, [])
-  const { data: session } = useSession(historyId)
+  const { data: session } = useSession(
+    botOwned && !draft ? sessionId : historyId,
+  )
   const {
     data: historyMessages,
     isPending: historyLoading,
