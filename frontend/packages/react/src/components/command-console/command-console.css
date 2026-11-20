@@ -1068,6 +1068,42 @@
   opacity: 0.72;
 }
 
+.ov-command-console__quick-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-block-end: 8px;
+}
+
+.ov-command-console__quick-action {
+  max-inline-size: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: var(--ov-ui-command-console-neutral-bg);
+  padding: 2px 8px;
+  color: inherit;
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.ov-command-console__quick-action:hover:not(:disabled) {
+  background: var(--ov-ui-command-console-hover);
+}
+
+.ov-command-console__quick-action:focus-visible {
+  outline: 2px solid var(--ov-ui-command-console-focus);
+  outline-offset: 2px;
+}
+
+.ov-command-console__quick-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .ov-command-console__input-row {
   position: relative;
   display: grid;
