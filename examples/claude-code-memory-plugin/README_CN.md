@@ -153,7 +153,7 @@ claude
 | `OPENVIKING_LOG_RANKING_DETAILS`       | `false`       | 每候选打分日志（很啰嗦）                                           |
 | `OPENVIKING_RECALL_MAX_TOKENS`         | `1600`        | 服务端组装上下文块的 token 预算（与本地压缩输入上限相互独立）         |
 | `OPENVIKING_RECALL_DEDUP_TURNS`        | `5`           | 跨轮冷却：最近 N 轮已注入过的 URI 本轮跳过                           |
-| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | `auto` | 自动召回遇到明确查询近期事件的请求时传入 `7d` 保护期。明确的日期或记录编号优先，这类查询沿用普通评分。设为 `off` 关闭衰减，或指定 `30d`、`12h` 等固定保护期。 |
+| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | `30d` | 自动召回时，事件更新后在保护期内保持原分，超过保护期后开始衰减。设为 `off` 关闭衰减，或指定 `7d`、`12h` 等其他保护期。 |
 | `OPENVIKING_RECALL_QUERY_EXPANSION`    | `auto`        | `auto` 让服务端结合会话上下文扩展短提问；`off` 关闭                   |
 | `OPENVIKING_RECALL_COMPRESS`           | `auto`        | digest 压缩：`off`、`client`（本地宿主 CLI）、`server`、`auto`（本地优先、失败回落服务端） |
 | `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`         | digest 条数上限                                                     |
