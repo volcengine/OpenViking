@@ -1,3 +1,9 @@
+const demoNotes =
+  '# OpenViking\n\nA fixed public demo resource. / 固定公开示例资源。';
+const demoNoteLines = demoNotes
+  .split('\n')
+  .map((content, index) => ({ line: index + 1, content }));
+
 /** Fixed, public demo responses. No request reaches an OpenViking service. */
 export function consoleTransport(): typeof fetch {
   return async (input, init) => {
@@ -46,14 +52,19 @@ export function consoleTransport(): typeof fetch {
         : undefined;
     const keyword = pattern?.slice(4, -1).replace(/\[([a-z])[A-Z]\]/g, '$1');
     if (path === '/api/v1/search/grep' && typeof init?.body === 'string') {
-      const { pattern, case_insensitive, include_tags } = JSON.parse(
-        init.body,
-      ) as {
+      const {
+        pattern,
+        case_insensitive,
+        include_tags,
+        before_context = 0,
+        after_context = 0,
+      } = JSON.parse(init.body) as {
         pattern: string;
         case_insensitive?: boolean;
         include_tags?: boolean;
+        before_context?: number;
+        after_context?: number;
       };
-      const content = '# OpenViking';
       let expression: RegExp;
       try {
         expression = new RegExp(pattern, case_insensitive ? 'i' : '');
@@ -69,24 +80,31 @@ export function consoleTransport(): typeof fetch {
           { status: 400 },
         );
       }
-      const matches = expression.test(content)
-        ? [
-            {
-              uri: resource.uri,
-              line: 1,
-              content,
-              ...(include_tags
-                ? {
-                    tags: [
-                      'getting-started',
-                      'resource-search',
-                      'console-example',
-                    ],
-                  }
-                : {}),
-            },
-          ]
-        : [];
+      const tags = include_tags
+        ? ['getting-started', 'resource-search', 'console-example']
+        : undefined;
+      const matches = demoNoteLines.flatMap((entry, index) =>
+        expression.test(entry.content)
+          ? [
+              {
+                ...entry,
+                uri: resource.uri,
+                tags,
+                before_context:
+                  before_context > 0
+                    ? demoNoteLines.slice(
+                        Math.max(0, index - before_context),
+                        index,
+                      )
+                    : undefined,
+                after_context:
+                  after_context > 0
+                    ? demoNoteLines.slice(index + 1, index + 1 + after_context)
+                    : undefined,
+              },
+            ]
+          : [],
+      );
       return Response.json({ status: 'ok', result: { matches } });
     }
     const demoTask = {
@@ -138,7 +156,7 @@ export function consoleTransport(): typeof fetch {
           : ['/read', '/abstract', '/overview'].some((suffix) =>
                 path.endsWith(suffix),
               )
-            ? '# OpenViking\n\nA fixed public demo resource. / 固定公开示例资源。'
+            ? demoNotes
             : path.endsWith('/find') || path.endsWith('/search')
               ? {
                   memories: [],
