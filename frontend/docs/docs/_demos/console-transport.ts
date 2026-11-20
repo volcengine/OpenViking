@@ -45,6 +45,16 @@ export function consoleTransport(): typeof fetch {
         ? (JSON.parse(init.body) as { pattern: string }).pattern
         : undefined;
     const keyword = pattern?.slice(4, -1).replace(/\[([a-z])[A-Z]\]/g, '$1');
+    const grepPattern =
+      path === '/api/v1/search/grep' && typeof init?.body === 'string'
+        ? (JSON.parse(init.body) as { pattern: string }).pattern
+        : undefined;
+    const demoTask = {
+      task_id: 'demo-compile',
+      task_type: 'compile',
+      status: 'completed',
+      updated_at_iso: '2026-01-01T00:00:00Z',
+    };
     const writes: Record<string, unknown> = {
       '/api/v1/resources': { task_id: 'demo-resource', root_uri: resource.uri },
       '/api/v1/skills': { root_uri: 'viking://agent/skills/llm-wiki' },
@@ -54,10 +64,13 @@ export function consoleTransport(): typeof fetch {
         status: 'pending',
         resource_id: 'viking://resources/demo-wiki',
       },
-      '/api/v1/tasks/demo-compile': {
-        task_id: 'demo-compile',
-        status: 'completed',
-      },
+      '/api/v1/tasks': [demoTask].filter((task) =>
+        (['task_type', 'status'] as const).every(
+          (key) =>
+            !searchParams.has(key) || searchParams.get(key) === task[key],
+        ),
+      ),
+      '/api/v1/tasks/demo-compile': demoTask,
       '/api/v1/tasks/demo-memory': {
         task_id: 'demo-memory',
         status: 'completed',
@@ -65,6 +78,12 @@ export function consoleTransport(): typeof fetch {
           memory_diff_uri:
             'viking://session/demo/history/archive_001/memory_diff.json',
         },
+      },
+      '/api/v1/search/grep': {
+        matches:
+          grepPattern && '# OpenViking'.includes(grepPattern)
+            ? [{ uri: resource.uri, line: 1, content: '# OpenViking' }]
+            : [],
       },
       '/api/v1/search/glob': {
         matches: resource.uri.includes(keyword ?? '') ? [resource.uri] : [],

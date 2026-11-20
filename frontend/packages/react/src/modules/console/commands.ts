@@ -113,5 +113,5 @@ export async function executeCommand(
     }
   }
   onTasks?.(readTaskReferences(spec.name, data));
-  return { content: formatResult(spec.name, data, values), telemetry };
+  return { content: formatResult(spec.name, data, values, locale), telemetry };
 }

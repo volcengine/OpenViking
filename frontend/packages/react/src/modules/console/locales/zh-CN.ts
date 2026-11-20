@@ -28,6 +28,8 @@ const messages: typeof enUS = {
       | 'quickStart'
     >
   >,
+  noTasks: '暂无任务',
+  grepLimitReached: '已达到搜索上限，可能还有其他匹配结果。',
   telemetryResult: (value: string) => `遥测：${value}`,
   taskResult: '任务结果',
   memoryCommit: {

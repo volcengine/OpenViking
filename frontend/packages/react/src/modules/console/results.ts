@@ -3,6 +3,9 @@ import type {
   CommandConsoleRecordContent,
   CommandConsoleSearchResultItem,
 } from '../../components/command-console/index.js';
+import type { Locale } from '../../shared/locale.js';
+import { formatGrepResult } from './grep-result.js';
+import { resolveConsoleLocale } from './labels.js';
 import type { ArgumentValues } from './command-parser.js';
 
 function object(value: unknown): Record<string, unknown> {
@@ -20,6 +23,7 @@ export function formatResult(
   name: string,
   data: unknown,
   values: ArgumentValues,
+  locale: Locale,
 ): CommandConsoleRecordContent {
   if (['read', 'abstract', 'overview'].includes(name)) {
     const uri = values.uri as string;
@@ -48,7 +52,31 @@ export function formatResult(
         };
       }),
     };
+  if (name === 'task list' && Array.isArray(data)) {
+    if (!data.length) {
+      return { variant: 'text', text: resolveConsoleLocale(locale).noTasks };
+    }
+    return {
+      variant: 'search-list',
+      items: data.map((entry, index) => {
+        const task = object(entry);
+        return {
+          id: String(index),
+          title: text(task.task_id ?? ''),
+          typeLabel: text(task.status ?? ''),
+          content: [task.task_type, task.updated_at_iso, task.error]
+            .filter((value) => typeof value === 'string' && value.length > 0)
+            .join('\n'),
+        };
+      }),
+    };
+  }
   const result = object(data);
+  if (name === 'grep') {
+    return (
+      formatGrepResult(result, locale) ?? { variant: 'text', text: text(data) }
+    );
+  }
   if (
     [
       'add-resource',
