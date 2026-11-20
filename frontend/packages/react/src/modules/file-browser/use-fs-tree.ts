@@ -67,6 +67,7 @@ export function useFsTree(options: UseDirectoryTreeOptions): FsTreeState {
         }
       };
       void expandChildren().finally(() => activeChains.current.delete(chain));
+      return firstPage;
     },
     [cancelReveal, inputs, toggleTree],
   );
