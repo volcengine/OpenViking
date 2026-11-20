@@ -630,7 +630,9 @@ ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 
 ### Run external commands with Privacy references
 
-`ov privacy run` executes a local external command without exposing plaintext sensitive values to the caller or Agent: before launch, it resolves Privacy references (`{{ov_privacy:...}}`, obtained via `ov privacy reference` or `ov privacy tree --references`) in environment variables or command arguments, injects the resolved values into the child process, and masks matching values in child `stdout`/`stderr` back into references.
+`ov privacy run` lets callers or Agents run local external commands (such as `gh` or `curl`) directly with Privacy references (<code v-pre>{{ov_privacy:...}}</code>, obtained via `ov privacy reference` or `ov privacy tree --references`). Before launching the external command, `ov privacy run` resolves references in environment variables or arguments and injects the sensitive values; in the command's `stdout`/`stderr` output, matching sensitive values are replaced back with their corresponding Privacy references in real time.
+
+> Output replacement applies only to the external command's `stdout` and `stderr`, not to files it writes or data it sends over the network.
 
 ```bash
 # 1. Pass via environment variable (recommended to keep sensitive values out of argv)
@@ -647,7 +649,7 @@ ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credent
   sh -c 'curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.example.com | jq .login'
 ```
 
-> References in command arguments are expanded before launch and may be visible to other local processes (prefer `--env` / `--env-file`). The CLI masks only child `stdout`/`stderr`, not files written or network payloads sent by the child.
+> In examples 3 and 4 above, the sensitive value still ends up in `curl`'s process arguments (via `ov privacy run` expanding the argument reference in example 3, or `sh` expanding `$GITHUB_TOKEN` in example 4), which may be visible to other local processes, other containers, or the host. Prefer `--env` / `--env-file` so the target program reads environment variables directly (as in examples 1 and 2), and set `OPENVIKING_PRIVACY_RUN_STRICT=1` to reject references in `ov privacy run` command arguments.
 
 ---
 
