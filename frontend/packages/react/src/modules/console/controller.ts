@@ -1,3 +1,4 @@
+import type { ConsoleCommandOptions } from './types.js';
 import { observeCommand, tagCommandRecords } from './command-monitoring.js';
 import type { MonitoringSpan } from '../../shared/monitoring/trace/span.js';
 import type { CommandAnalytics } from './use-command-analytics.js';
@@ -50,7 +51,11 @@ export function createConsoleController(
       failedCommand: undefined,
     });
   };
-  async function execute(input = state.command, locale: Locale = 'en-US') {
+  async function execute(
+    input = state.command,
+    locale: Locale = 'en-US',
+    commandOptions?: ConsoleCommandOptions,
+  ) {
     const command = input.trim();
     if (!active || running || !command) return;
     try {
@@ -126,6 +131,7 @@ export function createConsoleController(
           if (current() && !signal.aborted && trackTask)
             taskKeys = tasks.map((task) => trackTask(task, monitoring?.span));
         },
+        commandOptions,
       );
       if (!current() || signal.aborted) return;
       monitoring?.finish(content);
@@ -194,9 +200,9 @@ export function createConsoleController(
             ? conversationDraft(state.conversationDraft)
             : conversationDraft,
       }),
-    retry: (locale: Locale) =>
+    retry: (locale: Locale, commandOptions?: ConsoleCommandOptions) =>
       state.failedCommand
-        ? execute(state.failedCommand, locale)
+        ? execute(state.failedCommand, locale, commandOptions)
         : Promise.resolve(),
   };
 }

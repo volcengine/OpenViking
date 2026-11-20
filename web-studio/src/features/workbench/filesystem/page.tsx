@@ -285,6 +285,19 @@ function FilesystemWorkbench() {
     }
   }, [search.upload])
 
+  const openResourceImport = useCallback((entry: ResourceImportEntry) => {
+    setUploadTarget(undefined)
+    setImportEntry(entry)
+    setUploadDialogOpen(true)
+  }, [])
+  const openLocalResourceImport = useCallback(
+    () => openResourceImport({ mode: 'upload' }),
+    [openResourceImport],
+  )
+  const onOpenLocalResourceImport = canUseLocalTools
+    ? openLocalResourceImport
+    : undefined
+
   const handleUploadDialogOpenChange = useCallback(
     (open: boolean) => {
       setUploadDialogOpen(open)
@@ -759,11 +772,7 @@ function FilesystemWorkbench() {
               ? (trigger) => (
                   <ResourceImportMenu
                     trigger={trigger}
-                    onImport={(entry) => {
-                      setUploadTarget(undefined)
-                      setImportEntry(entry)
-                      setUploadDialogOpen(true)
-                    }}
+                    onImport={openResourceImport}
                     onImportSkill={() => setSkillImportScope(identityScopeKey)}
                   />
                 )
@@ -798,6 +807,7 @@ function FilesystemWorkbench() {
               activePanel={activePanel}
               onCollapse={toggleRightCollapsed}
               onOpenResource={openExternalResource}
+              onOpenLocalResourceImport={onOpenLocalResourceImport}
               onFilesystemWrite={refreshBrowser}
               onPanelChange={handlePanelChange}
               onSessionChange={(sessionId) =>
@@ -815,6 +825,7 @@ function FilesystemWorkbench() {
           activePanel={activePanel}
           onClose={() => setActionPanelOpen(false)}
           onOpenResource={openExternalResource}
+          onOpenLocalResourceImport={onOpenLocalResourceImport}
           onFilesystemWrite={refreshBrowser}
           onPanelChange={handlePanelChange}
           onSessionChange={(sessionId) => syncSearch({ session: sessionId })}
@@ -1049,6 +1060,7 @@ function FilesystemActionPanel({
   activePanel,
   onCollapse,
   onOpenResource,
+  onOpenLocalResourceImport,
   onFilesystemWrite,
   onPanelChange,
   onSessionChange,
@@ -1058,6 +1070,7 @@ function FilesystemActionPanel({
   activePanel: FilesystemPanel
   onCollapse: () => void
   onOpenResource: ResourceOpenHandler
+  onOpenLocalResourceImport?: () => void
   onFilesystemWrite: () => void
   onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
@@ -1083,6 +1096,7 @@ function FilesystemActionPanel({
     <FilesystemActionContent
       activePanel={activePanel}
       onOpenResource={onOpenResource}
+      onOpenLocalResourceImport={onOpenLocalResourceImport}
       onFilesystemWrite={onFilesystemWrite}
       onPanelChange={onPanelChange}
       onSessionChange={onSessionChange}
@@ -1097,6 +1111,7 @@ function FilesystemMobileActionScreen({
   activePanel,
   onClose,
   onOpenResource,
+  onOpenLocalResourceImport,
   onFilesystemWrite,
   onPanelChange,
   onSessionChange,
@@ -1107,6 +1122,7 @@ function FilesystemMobileActionScreen({
   activePanel: FilesystemPanel
   onClose: () => void
   onOpenResource: ResourceOpenHandler
+  onOpenLocalResourceImport?: () => void
   onFilesystemWrite: () => void
   onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
@@ -1122,6 +1138,7 @@ function FilesystemMobileActionScreen({
       <FilesystemActionContent
         activePanel={activePanel}
         onOpenResource={onOpenResource}
+        onOpenLocalResourceImport={onOpenLocalResourceImport}
         onFilesystemWrite={onFilesystemWrite}
         onPanelChange={onPanelChange}
         onSessionChange={onSessionChange}
@@ -1147,6 +1164,7 @@ function FilesystemMobileActionScreen({
 function FilesystemActionContent({
   activePanel,
   onOpenResource,
+  onOpenLocalResourceImport,
   onFilesystemWrite,
   onPanelChange,
   onSessionChange,
@@ -1157,6 +1175,7 @@ function FilesystemActionContent({
 }: {
   activePanel: FilesystemPanel
   onOpenResource: ResourceOpenHandler
+  onOpenLocalResourceImport?: () => void
   onFilesystemWrite: () => void
   onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
@@ -1177,6 +1196,7 @@ function FilesystemActionContent({
       <WorkbenchConsole
         mode="command"
         onOpenResource={onOpenResource}
+        onOpenLocalResourceImport={onOpenLocalResourceImport}
         onFilesystemWrite={onFilesystemWrite}
         toolbar={toolbar}
       />
@@ -1193,6 +1213,7 @@ function FilesystemActionContent({
             onPanelChange(mode === 'conversation' ? 'agent' : 'terminal')
           }
           onOpenResource={onOpenResource}
+          onOpenLocalResourceImport={onOpenLocalResourceImport}
           onFilesystemWrite={onFilesystemWrite}
           toolbar={toolbar}
         />

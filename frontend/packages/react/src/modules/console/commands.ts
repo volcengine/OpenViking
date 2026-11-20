@@ -10,10 +10,13 @@ import type {
 import type { Locale } from '../../shared/locale.js';
 import { COMMAND_SPECS, type CommandSpec } from './command-specs.js';
 import { parseArguments, tokenize, type Argument } from './command-parser.js';
-import { ConsoleCommandError } from './command-messages.js';
+import {
+  ConsoleCommandError,
+  formatConsoleMessage,
+} from './command-messages.js';
 import { resolveConsoleLocale } from './labels.js';
 import { formatResult } from './results.js';
-import type { ConsoleCommandGuide } from './types.js';
+import type { ConsoleCommandGuide, ConsoleCommandOptions } from './types.js';
 import { parameterExamples } from './parameter-examples.js';
 
 // Command palette order, restricted to the commands this Console can execute.
@@ -70,6 +73,7 @@ export function consoleQuickCommands(
 
 export function consoleCommands(
   locale: Locale,
+  options?: ConsoleCommandOptions,
 ): readonly CommandConsoleCommandDefinition[] {
   const text = resolveConsoleLocale(locale);
   const guides: Partial<Record<CommandSpec['name'], ConsoleCommandGuide>> =
@@ -77,6 +81,8 @@ export function consoleCommands(
   const descriptions: Record<string, string> = text.parameters;
   const catalog = new Map(
     COMMAND_SPECS.map((spec) => {
+      const localImport =
+        spec.name === 'add-resource' && options?.onOpenLocalResourceImport;
       const guide = guides[spec.name];
       const positional = (
         spec.preferredPositional ??
@@ -91,8 +97,12 @@ export function consoleCommands(
         {
           name: spec.name,
           inputText: `ov ${spec.name}`,
-          description: guide?.description ?? text.commands[spec.name],
-          summary: text.commands[spec.name],
+          description: localImport
+            ? text.localResourceImportHelp
+            : (guide?.description ?? text.commands[spec.name]),
+          summary: localImport
+            ? text.localResourceImportSummary
+            : text.commands[spec.name],
           examples: guide?.examples ?? parameterExamples[spec.name],
           quickStart: guide?.quickStart,
           usage: [
@@ -148,8 +158,11 @@ function formatDefault(value: Argument['defaultValue']) {
   return value === undefined ? undefined : String(value);
 }
 
-export function createCommandHelp(locale: Locale): CommandConsoleRecordContent {
-  const commands = consoleCommands(locale);
+export function createCommandHelp(
+  locale: Locale,
+  options?: ConsoleCommandOptions,
+): CommandConsoleRecordContent {
+  const commands = consoleCommands(locale, options);
   return {
     variant: 'command-help',
     sections: consoleCommandGroups(locale).map(({ key, label }) => ({
@@ -172,6 +185,7 @@ export async function executeCommand(
   options: OvRequestOptions,
   locale: Locale,
   onTasks?: (tasks: readonly TaskReference[]) => void,
+  commandOptions?: ConsoleCommandOptions,
 ): Promise<CommandConsoleRecordContent> {
   const tokens = tokenize(input);
   const spec = [...COMMAND_SPECS]
@@ -190,14 +204,37 @@ export async function executeCommand(
       spec.flags,
     );
   } catch (error) {
-    const usage = consoleCommands(locale).find(
+    const usage = consoleCommands(locale, commandOptions).find(
       (item) => item.name === spec.name,
     )!.usage;
     if (error instanceof ConsoleCommandError)
       throw new ConsoleCommandError(error.code, error.value, usage);
     throw error;
   }
-  if (!spec.request && !spec.execute) return createCommandHelp(locale);
+  if (!spec.request && !spec.execute)
+    return createCommandHelp(locale, commandOptions);
+  if (
+    spec.name === 'add-resource' &&
+    commandOptions?.onOpenLocalResourceImport
+  ) {
+    const { path, temp_file_id, ...flags } = values;
+    const remote =
+      typeof path === 'string' &&
+      (path.startsWith('git@') || /^[a-z][a-z\d+.-]*:\/\//i.test(path));
+    if (!temp_file_id && !remote) {
+      if (Object.keys(flags).length)
+        throw new ConsoleCommandError('localResourceImportFlags');
+      options.signal?.throwIfAborted();
+      commandOptions.onOpenLocalResourceImport();
+      return {
+        variant: 'text',
+        text: formatConsoleMessage(
+          { code: 'localResourceImportOpened' },
+          locale,
+        ),
+      };
+    }
+  }
   const data = spec.execute
     ? await spec.execute(values, (request) => {
         options.signal?.throwIfAborted();

@@ -75,10 +75,16 @@ export interface ConsoleCommandProps {
   onOpenUri?: (uri: string) => void;
 }
 
+export interface ConsoleCommandOptions {
+  /** Open the host's local upload page for add-resource without explicit flags. */
+  onOpenLocalResourceImport?: () => void;
+}
+
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
   /** Task queries use native HTTP by default; hosts can adapt another backend. */
   taskService?: ConsoleTaskService;
+  commandOptions?: ConsoleCommandOptions;
   locale?: Locale;
   /** Enabled modes, in toolbar order. Omitted enables both; an empty list renders no panels. */
   modes?: readonly ConsoleMode[];

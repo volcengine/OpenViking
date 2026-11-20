@@ -24,6 +24,7 @@ export function useConsole({
   onModeChange,
   requestOptions = {},
   taskService,
+  commandOptions,
 }: ConsoleOptions = {}): ConsoleResult {
   const event = useTrack();
   const locale = useLocale(localeProp);
@@ -94,8 +95,9 @@ export function useConsole({
       localizeConsoleRecords(
         projectConsoleTasks(state.records, tracking.tasks),
         locale,
+        commandOptions,
       ),
-    [state.records, tracking.tasks, locale],
+    [state.records, tracking.tasks, locale, commandOptions],
   );
   // Format library errors at read time; server errors keep their original identity.
   const error = useMemo(
@@ -120,7 +122,7 @@ export function useConsole({
     records,
     error,
     mode,
-    commands: consoleCommands(locale),
+    commands: consoleCommands(locale, commandOptions),
     setMode(next: ConsoleMode) {
       if (next === mode || !modes.includes(next)) return;
       event(
@@ -133,8 +135,9 @@ export function useConsole({
     },
     setCommand: controller.setCommand,
     setConversationDraft: controller.setConversationDraft,
-    execute: (command?: string) => controller.execute(command, locale),
-    retry: () => controller.retry(locale),
+    execute: (command?: string) =>
+      controller.execute(command, locale, commandOptions),
+    retry: () => controller.retry(locale, commandOptions),
     cancel: controller.cancel,
     clear: controller.clear,
   };

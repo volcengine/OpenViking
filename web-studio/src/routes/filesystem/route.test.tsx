@@ -488,6 +488,28 @@ describe('filesystem workbench', () => {
     })
   })
 
+  it('opens the existing local upload form from a terminal command', async () => {
+    const { WorkbenchConsole } = await vi.importActual<
+      typeof import('#/features/workbench/filesystem/components/workbench-console')
+    >('#/features/workbench/filesystem/components/workbench-console')
+    mocks.search = { panel: 'terminal', uri: parentDirectory }
+    mocks.agent.mockImplementation(({ children }) => children({}))
+    mocks.console.mockImplementation(WorkbenchConsole)
+    const { container } = renderFilesystem()
+
+    const input = container.querySelector('textarea[name="command"]')!
+    fireEvent.change(input, {
+      target: { value: 'ov add-resource "./notes/a file.md"' },
+    })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(mocks.addResource.mock.lastCall?.[0]).toMatchObject({
+        initialMode: 'upload',
+      }),
+    )
+  })
+
   it('checks the parent directory for OVPack import when a file is selected', async () => {
     const uri = 'viking://resources/im/feishu/'
     mocks.search = { file: `${uri}notes.md`, uri }
