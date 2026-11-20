@@ -20,7 +20,7 @@ from openviking.server.routers import filesystem
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.storage.queuefs.queue_manager import get_queue_manager
 from openviking.system_assets import builtin_memory_templates_dir
-from openviking_cli.exceptions import InvalidURIError
+from openviking_cli.exceptions import InvalidURIError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -59,6 +59,22 @@ async def test_file_listing_http_uses_native_storage(client, service, endpoint, 
     assert next_page.status_code == 200, next_page.text
     assert next_page.json()["result"] == []
     assert next_page.json()["has_more"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [0, 100])
+async def test_ls_http_preserves_successful_empty_prefix(client, service, monkeypatch, offset):
+    uri = "viking://resources/missing-prefix"
+    monkeypatch.setattr(service.viking_fs, "_ls_original", AsyncMock(return_value=[]))
+    metadata = AsyncMock(side_effect=NotFoundError(uri, "directory"))
+    monkeypatch.setattr(service.viking_fs, "stat", metadata)
+
+    response = await client.get("/api/v1/fs/ls", params={"uri": uri, "offset": offset})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == []
+    assert response.json()["has_more"] is False
+    assert metadata.await_count == (1 if offset == 0 else 0)
 
 
 @pytest.mark.asyncio

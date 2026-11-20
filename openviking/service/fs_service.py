@@ -45,7 +45,7 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -382,13 +382,23 @@ class FSService:
             retry_directory = True
         if entries or node_limit == 0:
             return entries
+        if not retry_directory and offset > 0 and ctx.role != Role.GLOBAL:
+            # Ordinary successful empty pages are exhausted. Restricted views
+            # still need stat to distinguish traversable directories from files.
+            return entries
 
         # Object stores can return an empty list for a file target. Probe only
         # empty public results so internal directory operations add no stat.
         viking_fs = self._ensure_initialized()
-        entry = dict(
-            await viking_fs.stat(uri, ctx=ctx, skip_count=True, include_vector_fields=False)
-        )
+        try:
+            entry = dict(
+                await viking_fs.stat(uri, ctx=ctx, skip_count=True, include_vector_fields=False)
+            )
+        except NotFoundError:
+            if retry_directory:
+                raise
+            # Preserve backends' successful empty listing for missing prefixes.
+            return entries
         if entry.get("isDir", True):
             return await read_directory() if retry_directory else entries
         if (

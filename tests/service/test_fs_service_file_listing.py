@@ -7,9 +7,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.core.global_policy import PolicyPathScope, PolicyScopePlan
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError, AGFSNotFoundError
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import DataAccessScope, RequestContext, Role
 from openviking.service.fs_service import FSService
+from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -237,6 +239,119 @@ async def test_file_listing_empty_directory_stays_empty(file_listing, method):
 
     assert (await getattr(fs, method)(uri, ctx=_default_ctx())).entries == []
     assert reads[method].await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls", "tree"])
+async def test_successful_empty_listing_preserves_missing_prefix_result(file_listing, method):
+    service, uri, _metadata, reads, stat = file_listing
+    reads[method].side_effect = None
+    reads[method].return_value = []
+    stat.side_effect = AGFSNotFoundError(uri)
+
+    page = await getattr(service, method)(uri, ctx=_default_ctx())
+
+    assert page.entries == []
+    assert page.has_more is False
+    stat.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls", "tree"])
+@pytest.mark.parametrize("offset", [1, 100])
+async def test_successful_empty_tail_page_skips_metadata(file_listing, method, offset):
+    service, uri, _metadata, reads, stat = file_listing
+    reads[method].side_effect = None
+    reads[method].return_value = []
+    stat.side_effect = AssertionError("tail page must not probe metadata")
+
+    page = await getattr(service, method)(uri, ctx=_default_ctx(), offset=offset)
+
+    assert page.entries == []
+    assert page.has_more is False
+    stat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls", "tree"])
+@pytest.mark.parametrize("offset", [0, 100])
+@pytest.mark.parametrize("error", [AGFSNotFoundError("missing"), PermissionDeniedError("denied")])
+async def test_empty_page_does_not_hide_directory_read_errors(file_listing, method, offset, error):
+    service, uri, _metadata, reads, stat = file_listing
+    reads[method].side_effect = error
+
+    with pytest.raises(type(error)) as caught:
+        await getattr(service, method)(uri, ctx=_default_ctx(), offset=offset)
+
+    assert caught.value is error
+    stat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls", "tree"])
+async def test_not_directory_tail_page_still_checks_missing_target(file_listing, method):
+    service, uri, _metadata, _reads, stat = file_listing
+    stat.side_effect = AGFSNotFoundError(uri)
+
+    with pytest.raises(NotFoundError):
+        await getattr(service, method)(uri, ctx=_default_ctx(), offset=100)
+
+    stat.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls", "tree"])
+@pytest.mark.parametrize("error", [PermissionDeniedError("denied"), RuntimeError("backend failed")])
+async def test_empty_listing_does_not_hide_other_metadata_errors(file_listing, method, error):
+    service, uri, _metadata, reads, stat = file_listing
+    reads[method].side_effect = None
+    reads[method].return_value = []
+    stat.side_effect = error
+
+    with pytest.raises(type(error)) as caught:
+        await getattr(service, method)(uri, ctx=_default_ctx())
+
+    assert caught.value is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted_scope", [False, True])
+async def test_empty_tail_page_retains_restricted_view_type_check(file_listing, restricted_scope):
+    service, _uri, _metadata, _reads, _stat = file_listing
+    uri = "viking://user/owner/container"
+    scope = None
+    if restricted_scope:
+        scope = DataAccessScope(
+            owner_user_id="owner",
+            operation=AclAction.READ,
+            plan=PolicyScopePlan("allowed", (PolicyPathScope("container/child.md", False),), ()),
+            policy_hash=None,
+            request_root=uri,
+            requested_targets=(uri,),
+            effective_targets=(f"{uri}/child.md",),
+        )
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user(), role=Role.GLOBAL, data_access=scope
+    )
+    error = PermissionDeniedError("GLOBAL_ACCESS_DENIED: only directories are traversable")
+    metadata = (
+        AsyncMock(wraps=service._viking_fs.stat)
+        if restricted_scope
+        else AsyncMock(side_effect=error)
+    )
+    service._viking_fs.stat = metadata
+
+    with pytest.raises(PermissionDeniedError) as caught:
+        await service._list_directory_or_file(
+            uri,
+            AsyncMock(return_value=[]),
+            ctx=ctx,
+            offset=100,
+            node_limit=10,
+        )
+
+    assert "only directories are traversable" in str(caught.value)
+    metadata.assert_awaited_once()
 
 
 @pytest.mark.asyncio

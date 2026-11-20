@@ -35,8 +35,8 @@ requested; its parent directory's summaries are not loaded. File results have
 Request `extra_fields=id,locked` to include `id` and `isLocked`; files never
 include `count`.
 Explicitly requested hidden files are returned without `show_all_hidden=true`;
-storage-internal names remain hidden. Missing files and denied reads retain the
-existing errors.
+storage-internal names remain hidden. Errors explicitly raised by the directory
+read, including `NOT_FOUND` and `PERMISSION_DENIED`, retain their existing behavior.
 
 File target compatibility is provided by the filesystem service for HTTP, SDK,
 CLI, and MCP calls. Internal `VikingFS.ls/tree` retain their directory listing
@@ -45,8 +45,16 @@ and do not add file-target probes.
 
 Directory reads are attempted first. A Not-a-directory error falls back to file
 metadata. Empty directory results also check the target type because some object
-storage backends return an empty list for file targets. Nonempty public directory
-listings do not add a type-check request.
+storage backends return an empty list for file targets. If a successful empty
+directory read is followed by missing metadata, its empty result is preserved.
+In particular, S3 non-recursive `ls` keeps its existing HTTP 200 and empty array
+for nonexistent prefixes. Metadata permission errors and other backend errors
+still propagate; missing metadata after Not-a-directory still returns `NOT_FOUND`.
+
+Nonempty public directory listings do not add a type-check request. Ordinary
+successful empty pages with `offset>0` return directly without a metadata probe.
+GLOBAL and scoped data views retain type validation because an authorized
+container must be a directory.
 
 **Parameters**
 
