@@ -73,7 +73,7 @@ export async function readFileContent(
     try {
       if (
         isWiki ||
-        (await isCompileOwnedFile(client, uri, options, await readHint?.()))
+        (await isCompileOwnedFile(client, uri, options, readHint))
       ) {
         const result = await readWiki();
         // Directory ownership alone does not turn a manual file into a Wiki draft.

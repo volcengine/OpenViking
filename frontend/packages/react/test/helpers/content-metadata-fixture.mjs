@@ -11,6 +11,7 @@ export async function metadataFixture({
   registry,
   taggedTarget,
   fullRead,
+  attrs,
 }) {
   let browser;
   let document = content;
@@ -20,12 +21,15 @@ export async function metadataFixture({
     if (path.endsWith('/configs'))
       return registry ?? ok({ targets: [{ to: wiki }] });
     if (path.endsWith('/attrs'))
-      return ok({
-        uri: canonical,
-        attrs: {
-          tags: query.uri === taggedTarget ? ['compile_target=true'] : [],
-        },
-      });
+      return (
+        attrs ??
+        ok({
+          uri: canonical,
+          attrs: {
+            tags: query.uri === taggedTarget ? ['compile_target=true'] : [],
+          },
+        })
+      );
     if (path.endsWith('/stat')) return ok({ uri: canonical, isDir: false });
     if (path.endsWith('/ls')) return ok([{ uri: canonical, isDir: false }]);
     if (path.endsWith('/read')) {

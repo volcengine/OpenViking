@@ -4,7 +4,7 @@ import { within } from './dashboard-model.js';
 import {
   resolveDashboardUri,
   findCompileTarget,
-  type readDashboardHint,
+  type ReadDashboardHint,
 } from './dashboard-resource.js';
 
 export interface CompileTarget {
@@ -75,16 +75,17 @@ export async function isCompileOwnedFile(
   client: OvClient,
   uri: string,
   options: OvRequestOptions,
-  hint?: Awaited<ReturnType<typeof readDashboardHint>>,
+  readHint?: ReadDashboardHint,
 ) {
-  const scope = hint?.uri ?? (await resolveDashboardUri(client, uri, options));
   // The Compile namespace supplies ownership; each file still needs a Wiki trailer.
   if (
-    /^viking:\/\/(?:system|user\/[^/]+)(?:\/peers\/[^/]+)?\/compile\/.+/i.test(
-      scope,
+    /^viking:\/\/(?:system|user\/[^/]+|~)(?:\/peers\/[^/]+)?\/compile\/.+/i.test(
+      uri,
     )
   )
-    return !/^viking:\/\/system\/compile\/example-skills(?:\/|$)/i.test(scope);
+    return !/^viking:\/\/system\/compile\/example-skills(?:\/|$)/i.test(uri);
+  const hint = await readHint?.();
+  const scope = hint?.uri ?? (await resolveDashboardUri(client, uri, options));
   if (await findCompileTarget(client, scope, options, hint)) return true;
   const catalog = await readCompileCatalog(client, scope, options);
   return (

@@ -121,3 +121,19 @@ test('a known Wiki keeps the truncation hint when its full read fails', async ()
     await f.view.unmount();
   }
 });
+
+test('a Compile namespace Wiki keeps its label when Dashboard attrs fail', async () => {
+  const f = await metadataFixture({
+    uri: 'viking://system/compile/global/chapter.md',
+    content: body + footer,
+    attrs: Promise.resolve(new Response(null, { status: 503 })),
+  });
+  try {
+    assert.equal(f.fetch.countOf('/api/v1/fs/attrs'), 1);
+    assert.equal(f.fetch.countOf('/api/v1/compile/configs'), 0);
+    assert.equal(f.tab.source.content, body);
+    assert.equal(f.browser.previewIsCompile, true);
+  } finally {
+    await f.view.unmount();
+  }
+});
