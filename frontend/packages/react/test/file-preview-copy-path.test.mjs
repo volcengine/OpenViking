@@ -49,8 +49,9 @@ test('path copying is independent of injected actions and host visibility is a m
     await click(button('Copy path'));
     assert.equal(copied, source.path);
     assert.match(
-      document.querySelector('[role="status"]').textContent,
-      /Copied/,
+      document.querySelector('.ov-path-copy-feedback[role="status"]')
+        .textContent,
+      /Node path copied/,
     );
     await view.render(
       tree(

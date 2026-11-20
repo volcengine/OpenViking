@@ -397,6 +397,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | timezone           | 北京时间说明                       | `string`                     | `'按北京时间（UTC+8）执行，精确到分钟。'`      |
 | historyView        | 历史显示模式的名称                 | `string`                     | `'历史版本正文视图'`                           |
 | copyPath           | 复制文件路径按钮的文案             | `string`                     | `'复制文件路径'`                               |
+| pathCopied         | 历史预览中路径复制成功的反馈       | `string`                     | `'节点路径已复制'`                             |
 | rollbackConfirm    | 确认回滚按钮的文案                 | `string`                     | `'确定回滚'`                                   |
 | target             | 目标目录                           | `string`                     | `'目标目录'`                                   |
 | selectSources      | 选择源目录                         | `string`                     | `'选择源目录'`                                 |
@@ -567,6 +568,7 @@ await browserRef.current?.openResource(directoryUri);
 ### 预览操作区
 
 - 浏览时，标题行右侧依次是「预览 / 源码」切换、编辑按钮和操作菜单，「复制路径」在面包屑旁，权限标签在其后。
+- 文件、目录与历史预览的路径复制使用相同反馈：成功后按钮变为勾号，并在上方显示带绿色勾号的提示气泡，1.5 秒后恢复；失败时显示错误提示。
 - 编辑时隐藏「预览 / 源码」切换，保留保存、取消以及当前文件可用的「版本历史」「复制内容」和「复制路径」。
 - 显隐开关只控制默认按钮是否显示，不改变能力：`previewSlots` 上下文里的 `canDelete`、`deleteFile()` 和编辑方法仍然可用。
 - 编译配置展示源目录、目标目录、编译 Skill 和更新时间，分别通过目录选择器、Skill 选择器和更新策略表单编辑，修改从后续任务生效。

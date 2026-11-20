@@ -107,13 +107,9 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
                 <PreviewHistoryPath
                   path={props.uri}
                   text={text}
-                  onCopy={() => {
-                    void copy.run(
-                      async () => navigator.clipboard.writeText(props.uri),
-                      () => {},
-                      undefined,
-                      copyFailure,
-                    );
+                  onCopy={async () => {
+                    await navigator.clipboard.writeText(props.uri);
+                    return true;
                   }}
                 />
               )

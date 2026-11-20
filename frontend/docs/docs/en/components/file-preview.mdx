@@ -338,7 +338,7 @@ Every field is an optional `string`; omitted fields use the default text of the 
 | closePreview           | Text of the close button in the enlarged-image dialog                                                                | `string` | `'Close preview'`                                          |
 | showHiddenPath         | Accessible name of the "…" button that holds the collapsed breadcrumb levels                                         | `string` | `'Show hidden path levels'`                                |
 | copyPath               | Hint and accessible name of the copy-path button                                                                     | `string` | `'Copy path'`                                              |
-| copied                 | Feedback after the path is copied                                                                                    | `string` | `'Copied'`                                                 |
+| copied                 | Feedback after the path is copied                                                                                    | `string` | `'Node path copied'`                                       |
 | copyFailed             | Feedback when copying the path fails                                                                                 | `string` | `'Could not copy'`                                         |
 | moreActions            | Hint and accessible name of the "…" button that holds collapsed commands                                             | `string` | `'More actions'`                                           |
 | actionFailed           | Message when an injected command fails, followed by the error message                                                | `string` | `'The action failed'`                                      |
@@ -442,7 +442,7 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 - Navigation: every ancestor is a button that passes its full URI (for example `viking://a/b`) to `operations.openParent`, not only the direct parent; the buttons are disabled without `operations.openParent`.
 - Absolute paths: the ancestors of `/a/b/c.md` keep the leading `/`, and relative paths stay as written.
 - Overflow: when the path does not fit, the levels after the first move into a "…" menu, and only if that is still too wide does the first level collapse too; the menu entries also call `operations.openParent`.
-- Copy path: it uses `navigator.clipboard`, which needs a secure context (HTTPS or localhost); a failure shows `labels.copyFailed` and does not call `onCopyPath`.
+- Copy path: after copying succeeds, the button shows a checkmark and a bubble above it shows a green checkmark with `labels.copied`. The feedback resets after 1.5 seconds without adding text to the path row. Copying uses `navigator.clipboard`, which needs a secure context (HTTPS or localhost); a failure shows `labels.copyFailed` and does not call `onCopyPath`.
 
 ### Actions and editing
 

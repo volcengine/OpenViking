@@ -45,6 +45,7 @@ export interface FileBrowserWorkflowLabels {
   removedLines: string;
   copyOriginal: string;
   copyPath: string;
+  pathCopied?: string;
   copied: string;
   historyPreview: string;
   historyView: string;
