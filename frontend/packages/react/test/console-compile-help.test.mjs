@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mount } from './helpers/console-dom.mjs';
-import { act, click, type } from './helpers/command-console-dom.mjs';
+import { act, click, key, type } from './helpers/command-console-dom.mjs';
 
 test('Console shows the Compile guide and extended parameters in the selected locale', async () => {
   for (const [locale, example, help, modelHelp, runtimeHelp] of [
@@ -92,6 +92,10 @@ test('Console shows the Compile guide and extended parameters in the selected lo
       assert.match(rows[2].textContent, help);
       await click(rows[0]);
       assert.equal(host.input.value, 'ov add-resource ');
+      await type(host.input, '/help');
+      await key(host.input, 'Tab');
+      assert.equal(host.input.value, 'ov help ');
+      assert.equal(host.records.length, 1);
     } finally {
       await host.dispose();
     }

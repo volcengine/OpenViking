@@ -77,8 +77,7 @@ test('the add-resource quick action describes the local upload flow available in
       await hover(action()),
       /仅传入本地路径，会打开「本地上传」页面.*选择文件或文件夹/,
     );
-
-    await host.render({ locale: 'en-US' });
+    await host.render({ ...props, locale: 'en-US' });
     assert.match(
       action().textContent,
       /Import a web URL, repository, or local file/,
@@ -86,6 +85,17 @@ test('the add-resource quick action describes the local upload flow available in
     assert.match(
       await hover(action()),
       /For local uploads, choose a file in the browser/,
+    );
+    await host.execute('ov help');
+    assert.match(
+      host.records.at(-1).textContent,
+      /open Local upload for files and folders/,
+    );
+    await host.render(props);
+    await host.execute('ov help');
+    assert.match(
+      host.records.at(-1).textContent,
+      /打开「本地上传」选择文件或文件夹/,
     );
   } finally {
     await host.dispose();
