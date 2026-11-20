@@ -50,6 +50,14 @@ export class RuntimeAdapter {
   cancelTurn() { return Boolean(this.#implementation.cancelTurn?.()); }
   // A daemon line for the next prompt this transport starts; taken once.
   setTurnNotice(text) { this.#implementation.turnNotice = text || null; }
+  // Inputs the transport still holds for a later turn, taken out so that a
+  // retiring backend's stop() cannot drop them: a hard switch hands them to
+  // the next runtime. Every transport keeps them in `queue`, as delivery items
+  // or as batches of them.
+  takeQueued() {
+    const queue = this.#implementation.queue;
+    return Array.isArray(queue) ? queue.splice(0).flat() : [];
+  }
   activate() { return this.#implementation.activateSession?.(); }
   listModels() { return this.#implementation.listModels?.() ?? Promise.resolve([]); }
   // A model change has exactly one entry point: applySettings below. The old

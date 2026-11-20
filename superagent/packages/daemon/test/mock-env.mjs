@@ -258,7 +258,7 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
       }
       if (msg.method === 'turn/start') {
         const text = msg.params.input.map((part) => part.text).join('');
-        fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/start', text }) + '\\n');
+        fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/start', text, pid: process.pid }) + '\\n');
         send({ id: msg.id, result: {} });
         const turnId = 'turn-' + (++turnSeq);
         send({ method: 'turn/started', params: { turn: { id: turnId } } });
@@ -314,6 +314,12 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         } else if (BEHAVIOR === 'inbox') {
           if (/LONG/.test(text)) heldTurn = turnId;
           else replyToNewest(text).then(() => complete(turnId));
+        } else if (BEHAVIOR === 'switch') {
+          // A turn whose input says HOLD works until it is interrupted; the
+          // same input handed on by a /runtime switch (behind its notice) is
+          // answered at once.
+          if (/HOLD/.test(text) && !/\\[daemon notice\\] \\/runtime switched/.test(text)) heldTurn = turnId;
+          else replyToNewest(text).then(() => complete(turnId));
         } else if (BEHAVIOR === 'fail') {
           send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'failed', error: { message: FAIL_BLOB } } } });
         }
@@ -337,6 +343,10 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         return;
       }
       if (msg.method === 'turn/interrupt') {
+        if (BEHAVIOR === 'switch') {
+          fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/interrupt', text: msg.params.turnId, pid: process.pid }) + '\\n');
+          if (heldTurn === msg.params.turnId) heldTurn = null;
+        }
         if (BEHAVIOR === 'loop' || BEHAVIOR === 'reply-loop') {
           interrupted.add(msg.params.turnId);
           fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/interrupt', text: msg.params.turnId }) + '\\n');
@@ -391,6 +401,9 @@ export async function startMockEnv({
     workspace: path.join(dir, 'workspace'),
     larkCliBin: fakeLark,
     codexBin: fakeCodex,
+    // TraeX speaks Codex's app-server protocol: the same fake serves it, so
+    // a test can switch runtimes (each process logs its pid).
+    traexBin: fakeCodex,
     profile: 'test-profile',
     initialModel: '',
     claudeModel: '',

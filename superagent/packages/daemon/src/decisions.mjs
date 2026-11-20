@@ -3,12 +3,54 @@
 
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { opaqueRef, safeError } from './logger.mjs';
+import { formatCognitionJournalLine } from './cognition.mjs';
 
 // Reminder counts by seq in this process. A restart forgets them: the ledger
 // is durable, the reminders are best effort.
 const REMINDER_HISTORY_LIMIT = 10_000;
 // The failure notice for an input a loop-stopped turn held twice.
 const LOOP_STOPPED_ERROR = '模型反复做没有效果的调用，这一轮被 daemon 中止了';
+// What a switch notice quotes of the stopped turn's own deliveries.
+const SENT_LINES = 10;
+const SENT_CHARS = 300;
+
+// What the turn a switch stopped had already sent: the outbound journal from
+// the first input it hands on. A fresh session's history ends before that
+// input (cognitionHistoryPrefix), so the next runtime sees these nowhere else.
+function sentSince(store, firstSeq) {
+  const epoch = store.getCognitionState().epoch;
+  const from = store.cognitionJournalSeqForInbound?.(firstSeq, epoch) ?? 0;
+  if (!from) return [];
+  return store.cognitionJournal(epoch, Number.MAX_SAFE_INTEGER, from)
+    .filter((row) => row.kind === 'outbound')
+    .map((row) => {
+      const line = formatCognitionJournalLine(row);
+      return line.length > SENT_CHARS ? `${line.slice(0, SENT_CHARS - 1)}…` : line;
+    });
+}
+
+// The daemon notice in front of the inputs a /runtime switch hands on.
+export function switchNotice({ from, to, failed = false, sent = [] }) {
+  if (failed) {
+    return `[daemon notice] A /runtime switch to ${to} failed, so you stay on ${from}. It stopped your previous turn;`
+      + ' the inputs that turn was working on are shown again below. Your session still has what you did:'
+      + ' go on from where you were, without sending again what you already sent.';
+  }
+  const shown = sent.slice(-SENT_LINES);
+  const lines = [
+    `[daemon notice] /runtime switched from ${from} to you while ${from} was working. Its turn was stopped before it finished,`
+      + ' and the inputs it was working on are shown again below. Its reasoning and tool results did not carry over.'
+      + ' Before redoing anything, check what it already did: files it may have changed and commands it may have run'
+      + ' (look at their current state), and what it sent.',
+  ];
+  if (shown.length === 0) lines.push('It sent nothing after the first of these inputs.');
+  else {
+    lines.push(`What it sent after the first of these inputs${sent.length > shown.length ? ` (last ${shown.length} of ${sent.length})` : ''}:`,
+      ...shown,
+      'Do not send these again; a line with outcome=uncertain may or may not have arrived.');
+  }
+  return lines.join('\n');
+}
 
 // A switch that only means something to a runtime with Core agent tools
 // (explicitSilence: stay_silent and the turn-end check; stagedReplies: interim
@@ -167,6 +209,45 @@ export class DecisionPolicy {
     }
     if (scopes.size > 0) this.logger.info('stopped_turn_settlement', counts);
     return counts;
+  }
+
+  // A /runtime switch stopped the turn that held these inputs
+  // (AgentRuntime._resumeCut). Each one still without a decision goes on, in
+  // order, in the runtime that stays (the new one, or the old one when the
+  // switch failed), behind a notice of what happened and what was already
+  // sent; an answered one stays answered. Unlike a loop stop, every one of
+  // them is shown: the new session never saw them, and its history ends
+  // before the first. Returns { items, notice }, or null when none is left.
+  resumeInterrupted({ inboundSeqs = [], from, to, failed = false } = {}) {
+    if (this.isStopping()) return null;
+    const rows = [];
+    let decided = 0;
+    for (const seq of new Set(inboundSeqs)) {
+      const row = this.store.inboundBySeq(seq);
+      if (row?.status !== 'DONE' || !row.scopeKey) continue;
+      if (this.store.coveringDecision(row.scopeKey, row.seq)) {
+        decided += 1;
+        continue;
+      }
+      rows.push(row);
+    }
+    rows.sort((a, b) => a.seq - b.seq);
+    this.logger.info('switch_interrupted_settlement', { decided, resumed: rows.length, failed });
+    if (rows.length === 0) return null;
+    const last = rows.at(-1);
+    this.recordActivity('agent.switch_resumed', {
+      summary: failed
+        ? `切换到 ${to} 失败，被打断的 ${rows.length} 条输入交回 ${from} 继续处理`
+        : `${from} 切换到 ${to}，被打断的 ${rows.length} 条输入交给 ${to} 继续处理`,
+      status: failed ? 'RESUMED_ON_PREVIOUS' : 'RESUMED',
+      conversationKey: last.conversationKey,
+      inboundSeq: last.seq,
+      metadata: { from, to, inboundSeqs: rows.map((row) => row.seq), decided },
+    });
+    return {
+      items: rows.map((row) => this.harness.redelivery(row, { seq: row.seq, undecided: false }).item),
+      notice: switchNotice({ from, to, failed, sent: failed ? [] : sentSince(this.store, rows[0].seq) }),
+    };
   }
 
   missing(row, status, runtime, reason = null) {
