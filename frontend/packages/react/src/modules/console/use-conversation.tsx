@@ -46,12 +46,13 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
-  const { references, clearReferences } = useConversationReferences({
-    enabled: enabled && !conversation?.references,
-    requestOptions: options.requestOptions,
-    scopeKey: options.scopeKey,
-    selection: chatOptions?.referenceSelection,
-  });
+  const { references, clearReferences, prepareReferenceClear } =
+    useConversationReferences({
+      enabled: enabled && !conversation?.references,
+      requestOptions: options.requestOptions,
+      scopeKey: options.scopeKey,
+      selection: chatOptions?.referenceSelection,
+    });
   const hitl = useHitl(
     chat,
     enabled && conversation?.interaction === undefined,
@@ -154,9 +155,10 @@ export function useConversation(
       if (!validation.validate(draft)) return;
       const token = ++submission.current;
       const followingUp = chat.status === 'streaming';
+      const clearSubmitted = prepareReferenceClear(draft.references ?? []);
       if (!followingUp) {
         if (uploads.props) uploads.removeSent(draft.attachments);
-        clearReferences(draft.references ?? []);
+        clearSubmitted();
       }
       setDraft((current) =>
         current.trim() === draft.text.trim() ? '' : current,
@@ -169,7 +171,7 @@ export function useConversation(
           return;
         }
         if (followingUp && uploads.props) uploads.removeSent(draft.attachments);
-        if (followingUp) clearReferences(draft.references ?? []);
+        if (followingUp) clearSubmitted();
         if (!followingUp) void sessions.refresh();
       });
     },

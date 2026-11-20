@@ -31,6 +31,7 @@ test('host-controlled directory selection shares the built-in picker and submitt
   };
   const searched = deferred();
   const sent = deferred();
+  const session = deferred();
   const fetch = recordingFetch(({ path }) => {
     if (path === '/api/v1/fs/ls')
       return ok([{ uri: directory.uri, isDir: true }]);
@@ -39,7 +40,7 @@ test('host-controlled directory selection shares the built-in picker and submitt
     return ok({ matches: [file.uri] });
   });
   const service = {
-    createSession: async () => ({ id: 'session', title: 'Session' }),
+    createSession: () => session.promise,
     loadMessages: async () => [],
     listSessions: async () => [],
     removeSession: async () => {},
@@ -92,12 +93,15 @@ test('host-controlled directory selection shares the built-in picker and submitt
         references: view.references.selected,
       }),
     );
+    assert.deepEqual(view.references.selected, []);
+    await act(() => selectReferences([directory]));
     let input;
     await act(async () => {
+      session.resolve({ id: 'session', title: 'Session' });
       input = await sent.promise;
     });
     assert.deepEqual(input.references, [directory, file]);
-    assert.deepEqual(view.references.selected, [directory, file]);
+    assert.deepEqual(view.references.selected, [directory]);
     await act(() => selectReferences([]));
     assert.deepEqual(view.references.selected, []);
     assert.ok(view.references.rows.some((row) => row.uri === file.uri));

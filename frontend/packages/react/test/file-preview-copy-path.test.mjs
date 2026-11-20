@@ -67,3 +67,48 @@ test('path copying is independent of injected actions and host visibility is a m
     await view.unmount();
   }
 });
+
+for (const [path, expected] of [
+  [
+    'viking://resources/%E4%B8%AD%E6%96%87/报告.md',
+    'viking://resources/中文/报告.md',
+  ],
+  [
+    'viking://resources/%E4%B8%AD%2F%23%3F%25%5C.md',
+    'viking://resources/中%2F%23%3F%25%5C.md',
+  ],
+  [
+    'viking://resources/%E4%B8%AD%3A%5B%5d%40%21%24%26%27%28%29%2A%2B%2C%3B%3D.md',
+    'viking://resources/中%3A%5B%5d%40%21%24%26%27%28%29%2A%2B%2C%3B%3D.md',
+  ],
+  ['viking://resources/bad%E4%xx.md', 'viking://resources/bad%E4%xx.md'],
+  ['/tmp/report%20name.md', '/tmp/report%20name.md'],
+]) {
+  test(`copy path formats readable text without changing resource identity: ${path}`, async () => {
+    let copied;
+    let notified;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value) => {
+          copied = value;
+        },
+      },
+    });
+    const view = await mount(
+      tree([], {
+        source: { ...source, path },
+        onCopyPath: (value) => {
+          notified = value;
+        },
+      }),
+    );
+    try {
+      await click(button('Copy path'));
+      assert.equal(copied, expected);
+      assert.equal(notified, expected);
+    } finally {
+      await view.unmount();
+    }
+  });
+}
