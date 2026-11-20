@@ -85,7 +85,7 @@ async fn postgres_snapshot_log_history_scope_width_and_watermark() {
     assert_eq!(latest.1, oid(2));
     let query = vec![paths[2].to_string(), wide.clone(), paths[2].to_string()];
     let hits = store
-        .query_path_commits(&account, &branch, &query, latest.0, 10)
+        .query_path_commits(&account, &branch, &query, latest.0, 0, 10)
         .await
         .unwrap();
     assert_eq!(
@@ -97,7 +97,7 @@ async fn postgres_snapshot_log_history_scope_width_and_watermark() {
     assert!(hits[0].last_id > hits[1].last_id);
     assert_eq!(
         store
-            .query_path_commits(&account, &branch, &query, first_id, 10)
+            .query_path_commits(&account, &branch, &query, first_id, 0, 10)
             .await
             .unwrap()[0]
             .commit_oid,
@@ -105,12 +105,31 @@ async fn postgres_snapshot_log_history_scope_width_and_watermark() {
     );
     assert_eq!(
         store
-            .query_path_commits(&account, &branch, &query, latest.0, 1)
+            .query_path_commits(&account, &branch, &query, latest.0, 0, 1)
             .await
             .unwrap()
             .len(),
         1
     );
+    assert_eq!(
+        store
+            .query_path_commits(&account, &branch, &query, latest.0, 1, 1)
+            .await
+            .unwrap(),
+        hits[1..]
+    );
+    assert!(store
+        .query_path_commits(&account, &branch, &query, latest.0, 2, 1)
+        .await
+        .unwrap()
+        .is_empty());
+    #[cfg(target_pointer_width = "64")]
+    assert!(matches!(
+        store
+            .query_path_commits(&account, &branch, &query, latest.0, usize::MAX, 1)
+            .await,
+        Err(SnapshotLogError::Sql(sqlx::Error::Encode(_)))
+    ));
     for (a, b, p) in [
         (account.to_uppercase(), branch.clone(), query.clone()),
         (account.clone(), "missing".to_string(), query.clone()),
@@ -121,18 +140,18 @@ async fn postgres_snapshot_log_history_scope_width_and_watermark() {
         ),
     ] {
         assert!(store
-            .query_path_commits(&a, &b, &p, i64::MAX, 10)
+            .query_path_commits(&a, &b, &p, i64::MAX, 0, 10)
             .await
             .unwrap()
             .is_empty());
     }
     assert!(store
-        .query_path_commits(&account, &branch, &[], i64::MAX, 10)
+        .query_path_commits(&account, &branch, &[], i64::MAX, 0, 10)
         .await
         .unwrap()
         .is_empty());
     assert!(store
-        .query_path_commits(&account, &branch, &query, i64::MAX, 0)
+        .query_path_commits(&account, &branch, &query, i64::MAX, 0, 0)
         .await
         .unwrap()
         .is_empty());

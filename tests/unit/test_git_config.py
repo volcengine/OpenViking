@@ -78,9 +78,10 @@ class TestGitConfigValidation:
         with pytest.raises(ValidationError):
             GitConfig(backend="ftp")
 
-    def test_unknown_field_rejected(self):
-        with pytest.raises(ValidationError):
-            GitConfig(unknown_thing=True)
+    def test_unknown_field_ignored(self):
+        cfg = GitConfig(unknown_thing=True)
+        assert cfg == GitConfig()
+        assert "unknown_thing" not in cfg.model_dump()
 
     def test_enabled_with_local_backend_ok(self):
         cfg = GitConfig(enabled=True, backend="local", local=GitLocalConfig(base_dir="/tmp/git"))
@@ -264,9 +265,10 @@ class TestGitS3ConfigParsing:
         cfg = GitConfig(enabled=False, backend="s3", s3=None)
         assert cfg.s3 is None
 
-    def test_s3_unknown_field_rejected(self):
-        with pytest.raises(ValidationError):
-            GitS3Config(bucket="b", region="r", unknown="x")
+    def test_s3_unknown_field_ignored(self):
+        cfg = GitS3Config(bucket="b", region="r", unknown="x")
+        assert cfg == GitS3Config(bucket="b", region="r")
+        assert "unknown" not in cfg.model_dump()
 
     def test_invalid_cas_mode_rejected(self):
         with pytest.raises(ValidationError):

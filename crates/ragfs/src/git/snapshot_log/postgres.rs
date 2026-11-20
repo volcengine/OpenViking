@@ -131,23 +131,26 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
         branch: &str,
         paths: &[String],
         max_id: i64,
+        offset: usize,
         limit: usize,
     ) -> Result<Vec<SnapshotLogHit>, SnapshotLogError> {
         if limit == 0 || paths.is_empty() {
             return Ok(Vec::new());
         }
+        let offset = i64::try_from(offset).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
         let rows = sqlx::query_as::<_, (String, i64)>(
             "SELECT commit_oid, MAX(id) AS last_id FROM snapshot_log \
              WHERE account = $1 AND branch = $2 \
                AND md5(path) IN (SELECT md5(p) FROM unnest($3::text[]) AS p) \
                AND path = ANY($3::text[]) AND id <= $4 \
-             GROUP BY commit_oid ORDER BY last_id DESC LIMIT $5",
+             GROUP BY commit_oid ORDER BY last_id DESC LIMIT $5 OFFSET $6",
         )
         .bind(account)
         .bind(branch)
         .bind(paths)
         .bind(max_id)
         .bind(limit.min(i64::MAX as usize) as i64)
+        .bind(offset)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
