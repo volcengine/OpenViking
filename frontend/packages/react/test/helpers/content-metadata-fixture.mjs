@@ -10,6 +10,7 @@ export async function metadataFixture({
   kinds,
   registry,
   taggedTarget,
+  fullRead,
 }) {
   let browser;
   let document = content;
@@ -29,6 +30,7 @@ export async function metadataFixture({
     if (path.endsWith('/ls')) return ok([{ uri: canonical, isDir: false }]);
     if (path.endsWith('/read')) {
       const limit = Number(query.limit);
+      if (limit < 0 && fullRead) return fullRead;
       const lines = document.match(/[^\n]*\n|[^\n]+$/g) ?? [];
       // Deliberately emulate an old server that ignores raw=false.
       return ok(limit < 0 ? document : lines.slice(0, limit).join(''));

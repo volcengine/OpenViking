@@ -8,7 +8,7 @@ import { createPreviewImageResolver } from './fs-preview-images.js';
 import { createFileEditing, type WikiSaveStatus } from './fs-file-editing.js';
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
 import { toFileTab } from './fs-model.js';
-import type { readDashboardHint } from './dashboard-resource.js';
+import type { ReadDashboardHint } from './dashboard-resource.js';
 
 /** 读取正文的行数上限；读满即按截断处理。The line cap; a full read counts as truncated. */
 export const MAX_LINES = 2000;
@@ -30,7 +30,7 @@ export async function readFile(
   onSave?: () => void,
   isWiki = false,
   onWikiSaveStatus?: (status?: WikiSaveStatus) => void,
-  hint?: Awaited<ReturnType<typeof readDashboardHint>>,
+  readHint?: ReadDashboardHint,
 ): Promise<{
   tab: FilePreviewFileTab & { compileOutput?: boolean };
   resolveWikiTab?: () => Promise<
@@ -61,7 +61,7 @@ export async function readFile(
     options,
     MAX_LINES,
     isWiki,
-    hint,
+    readHint,
     true,
   );
   const resolveImage = createPreviewImageResolver(client, uri, false, options);

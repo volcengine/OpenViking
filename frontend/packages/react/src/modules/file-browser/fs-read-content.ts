@@ -4,7 +4,7 @@ import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
 import { joinLines, splitLines } from './fs-lines.js';
 import { splitWikiMetadata } from './wiki-metadata.js';
 import { isCompileOwnedFile } from './dashboard-data.js';
-import type { readDashboardHint } from './dashboard-resource.js';
+import type { ReadDashboardHint } from './dashboard-resource.js';
 import { isOvClientError } from '../../client/errors.js';
 
 /** Read and project text once for preview, editing and Wiki business data. */
@@ -14,7 +14,7 @@ export async function readFileContent(
   options: OvRequestOptions,
   limit = -1,
   isWiki = false,
-  hint?: Awaited<ReturnType<typeof readDashboardHint>>,
+  readHint?: ReadDashboardHint,
   deferWiki = false,
 ) {
   const read = async (lineLimit: number) => {
@@ -39,20 +39,29 @@ export async function readFileContent(
       ? 'yaml'
       : 'text';
 
-  const project = (full: string, wiki: boolean) => {
+  const project = (
+    full: string,
+    wiki: boolean,
+    completeRead = true,
+    hidePending = false,
+  ) => {
     const body = memory ? stripMemoryFieldsTrailer(full, format) : full;
-    const projection = wiki ? splitWikiMetadata(body) : undefined;
+    const projection =
+      wiki || hidePending ? splitWikiMetadata(body) : undefined;
     const visible = projection?.document ?? body;
     const lines = splitLines(visible);
-    const truncated =
-      limit >= 0 && (memory || wiki ? lines.length > limit : reachedCap);
+    const truncated = limit >= 0 && (!completeRead || lines.length > limit);
     return {
       content: truncated ? joinLines(lines.slice(0, limit)) : visible,
       truncated,
       wikiSource: wiki ? body : undefined,
       wiki,
+      hasWikiTrailer: Boolean(projection?.payloads.length),
       compileOutput: Boolean(
-        projection?.complete && projection.payloads.length,
+        wiki &&
+        completeRead &&
+        projection?.complete &&
+        projection.payloads.length,
       ),
     };
   };
@@ -62,12 +71,20 @@ export async function readFileContent(
     return { ...(await readWiki()), resolveWiki: undefined };
   const resolveWiki = async () => {
     try {
-      if (isWiki || (await isCompileOwnedFile(client, uri, options, hint)))
-        return await readWiki();
+      if (
+        isWiki ||
+        (await isCompileOwnedFile(client, uri, options, await readHint?.()))
+      ) {
+        const result = await readWiki();
+        // Directory ownership alone does not turn a manual file into a Wiki draft.
+        if (!deferWiki || isWiki || result.hasWikiTrailer) return result;
+        return;
+      }
     } catch (error) {
-      if (!deferWiki && (!isOvClientError(error) || error.statusCode !== 404))
-        throw error;
+      if (!isOvClientError(error) || error.statusCode !== 404) throw error;
+      return;
     }
+    if (deferWiki && candidate) return project(first, false, !reachedCap);
   };
   const discoverWiki =
     !memory && markdown && (candidate || (deferWiki && reachedCap));
@@ -79,9 +96,9 @@ export async function readFileContent(
     ...project(
       memory && reachedCap ? await read(-1) : first,
       isWiki && markdown,
+      !reachedCap || memory,
+      deferWiki && candidate,
     ),
-    // A capped page can only establish provenance after checking the complete tail.
-    ...(reachedCap ? { compileOutput: false } : {}),
     resolveWiki: discoverWiki && deferWiki ? resolveWiki : undefined,
   };
 }

@@ -6,10 +6,7 @@ import type {
 } from '../../components/file-tree/types.js';
 import { within, type FileBrowserDashboard } from './dashboard-model.js';
 import { normalizeResourceUri } from '../../shared/resource-uri.js';
-import {
-  useDashboardQuery,
-  type DashboardQuery,
-} from './use-dashboard-query.js';
+import { useDashboardQuery } from './use-dashboard-query.js';
 import { readWikiConflictIndex } from './wiki-conflict-index.js';
 import { readDashboardHint } from './dashboard-resource.js';
 
@@ -64,12 +61,9 @@ export function previewDashboardOptions(
   uri: string | null,
   resourceType: 'directory' | 'file' | 'unknown',
   kind: FileBrowserDashboard['kind'] | undefined,
-  hint: Pick<
-    DashboardQuery<Awaited<ReturnType<typeof readDashboardHint>> | undefined>,
-    'loading' | 'data'
-  >,
+  hint: ReturnType<typeof useDashboardHint>['hint'],
 ) {
-  const markdown = resourceType !== 'directory' && /\.md$/i.test(uri ?? '');
+  const markdown = resourceType === 'file' && /\.md$/i.test(uri ?? '');
   const contentKind: 'pending' | 'wiki' | 'plain' =
     markdown && kind === 'wiki'
       ? 'wiki'
@@ -77,7 +71,12 @@ export function previewDashboardOptions(
         ? 'pending'
         : 'plain';
   return {
-    dashboardHint: markdown && contentKind === 'plain' ? hint.data : undefined,
+    readDashboardHint:
+      resourceType !== 'directory' &&
+      /\.md$/i.test(uri ?? '') &&
+      contentKind === 'plain'
+        ? hint.readPending
+        : undefined,
     contentKind,
   };
 }

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { act } from 'react';
+import { deferred, ok, settle } from './helpers/module-dom.mjs';
 import { metadataFixture } from './helpers/content-metadata-fixture.mjs';
 
 const uri = 'viking://user/alice/resources/handbook/policy.md';
@@ -62,6 +64,59 @@ test('another user’s tagged target establishes Wiki editing without a configur
     assert.equal(write.resolve_conflicts, true);
     assert.equal('edit_source' in write, false);
     assert.equal(f.fetch.countOf('/api/v1/compile/configs'), 0);
+  } finally {
+    await f.view.unmount();
+  }
+});
+
+test('background Compile ownership leaves long manual drafts on the ordinary save protocol', async () => {
+  const registry = deferred();
+  const content = 'manual\n'.repeat(2001);
+  const f = await metadataFixture({
+    uri,
+    content,
+    kinds: [],
+    registry: registry.promise,
+  });
+  try {
+    assert.equal(f.tab.source.truncated, true);
+    const draft = f.tab.editing;
+    await act(async () =>
+      registry.resolve(
+        await ok({
+          targets: [{ to: 'viking://user/alice/resources/handbook' }],
+        }),
+      ),
+    );
+    await settle();
+    assert.equal(f.tab.editing, draft);
+    await f.tab.editing.save(content);
+    const write = f.fetch.calls.find((call) => call.path.endsWith('/write'));
+    assert.deepEqual(write.body, { uri, content, mode: 'replace' });
+  } finally {
+    await f.view.unmount();
+  }
+});
+
+test('a known Wiki keeps the truncation hint when its full read fails', async () => {
+  const full = deferred();
+  const content = 'line\n'.repeat(2001);
+  const f = await metadataFixture({
+    uri,
+    content,
+    taggedTarget: uri,
+    fullRead: full.promise,
+  });
+  try {
+    assert.equal(f.tab.source.truncated, true);
+    assert.equal(
+      f.fetch.calls.filter((call) => call.query.limit === '-1').length,
+      1,
+    );
+    await act(async () => full.resolve(new Response(null, { status: 503 })));
+    await settle();
+    assert.equal(f.tab.source.truncated, true);
+    assert.ok(f.browser.previewError);
   } finally {
     await f.view.unmount();
   }

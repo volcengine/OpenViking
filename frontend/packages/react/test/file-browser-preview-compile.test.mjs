@@ -160,7 +160,7 @@ test('late Dashboard attrs do not reload directory summaries or non-Markdown fil
   for (const isDir of [true, false]) {
     const attrs = deferred();
     const uri = isDir
-      ? 'viking://resources/dir'
+      ? 'viking://resources/dir.md'
       : 'viking://resources/notes.txt';
     const fetch = recordingFetch(({ path }) => {
       if (path.endsWith('/fs/ls')) return ok([]);

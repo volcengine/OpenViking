@@ -17,12 +17,12 @@ import { isSystemUri } from '../../shared/resource-uri.js';
 import { readDirectory } from './fs-read-directory.js';
 import { loadingTab } from './fs-preview-loading-tab.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
-import { createPreviewImageResolver } from './fs-preview-images.js';
+import { createPreviewImageResolver as previewImages } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { loadVideoDetails } from './fs-video-details.js';
-import { abortError, readPreviewStat } from './fs-stat.js';
+import { abortError, readPreviewStat, toPreviewError } from './fs-stat.js';
 import { useWikiSaveFeedback } from './use-wiki-save-feedback.js';
-import type { readDashboardHint } from './dashboard-resource.js';
+import type { ReadDashboardHint } from './dashboard-resource.js';
 
 export interface UseFsPreviewOptions {
   client: OvClient | null;
@@ -42,7 +42,7 @@ export interface UseFsPreviewOptions {
    * repeatedly. The three-state value is a stable string, so that cannot happen.
    */
   resourceType?: 'directory' | 'file' | 'unknown';
-  dashboardHint?: Awaited<ReturnType<typeof readDashboardHint>>;
+  readDashboardHint?: ReadDashboardHint;
   contentKind?: 'plain' | 'wiki' | 'pending';
   activeLevelKey?: string;
   onActiveLevelChange?: (key: string) => void;
@@ -84,7 +84,7 @@ export function useFsPreview({
   uri,
   resourceType = 'file',
   contentKind = 'plain',
-  dashboardHint,
+  readDashboardHint,
   activeLevelKey = 'l0',
   onActiveLevelChange,
   labels = resolveSummaryLabels('en-US'),
@@ -183,7 +183,7 @@ export function useFsPreview({
         },
         contentKind === 'wiki',
         onStatus,
-        dashboardHint,
+        readDashboardHint,
       );
     })();
 
@@ -205,22 +205,21 @@ export function useFsPreview({
           setDirectory({
             uri,
             summary: result.summary,
-            resolveImage: createPreviewImageResolver(
-              client,
-              uri,
-              true,
-              options,
-            ),
+            resolveImage: previewImages(client, uri, true, options),
           });
           return;
         }
         const tab = result.tab;
         setTabs([tab]);
-        if ('resolveWikiTab' in result && result.resolveWikiTab) {
-          void result.resolveWikiTab().then((updatedTab) => {
-            if (!signal.aborted && updatedTab) setTabs([updatedTab]);
-          });
-        }
+        if ('resolveWikiTab' in result)
+          void result.resolveWikiTab?.().then(
+            (updatedTab) => {
+              if (!signal.aborted && updatedTab) setTabs([updatedTab]);
+            },
+            (cause: unknown) => {
+              if (!signal.aborted) setError(toPreviewError(cause));
+            },
+          );
         void loadVideoDetails(client, tab, options, (updatedTab) =>
           setTabs([updatedTab]),
         ).catch(() => undefined);
@@ -229,7 +228,7 @@ export function useFsPreview({
         if (isAbort(cause) || signal.aborted) return;
         operation?.fail(cause, 'protocol', signal);
         setTabs([]);
-        setError(cause instanceof Error ? cause : new Error(String(cause)));
+        setError(toPreviewError(cause));
       },
     );
 
@@ -239,7 +238,7 @@ export function useFsPreview({
     uri,
     resourceType,
     contentKind,
-    dashboardHint,
+    readDashboardHint,
     openParent,
     generation,
     saveGeneration,

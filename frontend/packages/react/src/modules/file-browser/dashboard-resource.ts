@@ -68,3 +68,7 @@ export async function findCompileTarget(
     uri = uri.slice(0, separator);
   }
 }
+
+export type ReadDashboardHint = () =>
+  | Promise<Awaited<ReturnType<typeof readDashboardHint>> | undefined>
+  | undefined;
