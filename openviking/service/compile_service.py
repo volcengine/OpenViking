@@ -396,16 +396,28 @@ class CompileAPIClient:
         detail = body.get("detail") if isinstance(body, dict) else None
         error = body.get("error") if isinstance(body, dict) else None
         source = detail if isinstance(detail, dict) else error if isinstance(error, dict) else {}
-        if response.status_code == 424:
+        status = response.status_code
+        runtime_not_found = status == 404 and path in {
+            "/runtime/v1/tasks",
+            "/runtime/v1/tasks/status",
+            "/runtime/v1/tasks/cancel",
+        }
+        if status == 424 or runtime_not_found:
             request_id = (
                 body.get("request_id") if isinstance(body, dict) else None
             ) or headers.get("X-Tt-Logid")
             detail_message = source.get("message") or (detail if isinstance(detail, str) else None)
-            reason = f"HTTP 424 {path}: {detail_message or 'Compile dependency failed'}"
+            default_message = (
+                "Compile Runtime resource not found"
+                if runtime_not_found
+                else "Compile dependency failed"
+            )
+            reason = f"HTTP {status} {path}: {detail_message or default_message}"
             if request_id and str(request_id) not in reason:
                 reason += f" (request_id={request_id})"
+            default_code = "NOT_FOUND" if runtime_not_found else "CompileDependencyFailed"
             raise CompileDependencyFailure(
-                str(source.get("code") or "CompileDependencyFailed"), reason, transient=False
+                str(source.get("code") or default_code), reason, http_status=status
             )
         default_code = "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT"
         code = str(source.get("code") or default_code)
@@ -764,9 +776,13 @@ class CompileService:
         task: TaskRecord,
         snapshot: ExternalTaskSnapshot,
     ) -> ExternalTaskSnapshot:
-        """Return the finalized snapshot; Runtime archival errors only produce a warning."""
+        """Finalize local output and skip archival after a Runtime session 404."""
         session_id = task.auth.get("external_task_id")
-        if session_id and snapshot.status in _TERMINAL_STATUSES:
+        if (
+            session_id
+            and snapshot.status in _TERMINAL_STATUSES
+            and task.meta.get("compile_runtime_http_status") != 404
+        ):
             try:
                 await self._client().archive(
                     session_id,
