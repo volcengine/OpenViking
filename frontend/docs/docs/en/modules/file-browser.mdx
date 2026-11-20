@@ -495,7 +495,7 @@ All fields are optional, and omitted fields follow `locale`.
 - Directories expand on demand and load 200 entries per page; Load more at the end of a directory loads the next page.
 - Under the `viking://` root, directories appear in the order user, session, agent, resources, followed by the rest. With any other `rootUri`, the order the server returns is kept.
 - Click a file to preview its content; click a directory to expand and select it, and the preview shows its L0 summary and L1 overview.
-- Names derived from resource URIs are decoded once for tree rows, preview tabs, search labels and breadcrumbs. Requests, selection and expansion snapshots keep the original URI; malformed escapes remain unchanged.
+- The left directory tree displays the original final segment of each resource URI. Preview tabs, search labels and breadcrumbs decode URI-derived names once and preserve malformed escapes. Requests, selection and expansion snapshots use the original URI.
 - Directories under `viking://system` show no summaries.
 - Use `defaultExpandedUri` on its own to expand the tree to a single location at mount. After the first render, changes to the controlled `uri` [open and reveal the resource](#open-and-reveal-a-resource).
 - To persist tree expansion across mounts, save the complete `onExpansionSnapshotChange` object per account and root and pass it as `defaultExpansionSnapshot` on the next mount. Keep optional `pendingEdits` in their emitted order. After identity resolution, a stored fold takes precedence over an equivalent expanded URI unless a later pending reopen supersedes it. An initial controlled URI is located within the restored open folders.
