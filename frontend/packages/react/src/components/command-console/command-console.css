@@ -935,7 +935,7 @@
   inline-size: 100%;
   min-inline-size: 0;
   min-block-size: 36px;
-  grid-template-columns: minmax(13ch, 23ch) minmax(0, 1fr);
+  grid-template-columns: min(42%, 23ch) minmax(0, 1fr);
   align-items: start;
   gap: 20px;
   border: 1px solid var(--ov-ui-command-console-card-border);
