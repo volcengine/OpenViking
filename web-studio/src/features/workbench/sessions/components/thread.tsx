@@ -23,7 +23,7 @@ interface ThreadProps {
   draft?: boolean
   onPersisted?: () => void
   linkedBotSessionIds?: readonly string[]
-  onExchangeComplete?: () => void
+  onExchangeSettled?: () => void
 }
 
 export function Thread(props: ThreadProps) {
@@ -38,7 +38,7 @@ function SessionThread({
   draft = false,
   onPersisted,
   linkedBotSessionIds,
-  onExchangeComplete,
+  onExchangeSettled,
 }: ThreadProps) {
   const { t } = useTranslation('sessions')
   const service = useStudioService()
@@ -71,7 +71,6 @@ function SessionThread({
     sessionId,
     initialMessages: historyMessages,
     persistMessages: true,
-    onExchangeComplete,
   })
 
   const isStreaming = chat.status === 'streaming'
@@ -100,10 +99,15 @@ function SessionThread({
       const sending = chat.send(message)
       if (chat.status === 'streaming') {
         await sending
+      } else if (onExchangeSettled) {
+        const refresh = () => {
+          if (mounted.current) onExchangeSettled()
+        }
+        void sending.then(refresh, refresh)
       }
       return true
     },
-    [canChat, chat, createSession, sessionId, onPersisted],
+    [canChat, chat, createSession, sessionId, onPersisted, onExchangeSettled],
   )
 
   // ---- Auto-scroll ----

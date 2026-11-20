@@ -54,7 +54,13 @@ export function MemoryImpact({ session, linkedSessionIds }: MemoryImpactProps) {
   const { i18n, t } = useTranslation('sessions')
   const [open, setOpen] = useState(false)
   const [memoryType, setMemoryType] = useState(ALL_MEMORY_TYPES)
-  const diffsQuery = useSessionMemoryDiffs(session, open, linkedSessionIds)
+  const hasMemoryImpact =
+    Boolean(linkedSessionIds?.length) || (session?.commit_count ?? 0) > 0
+  const diffsQuery = useSessionMemoryDiffs(
+    session,
+    open && hasMemoryImpact,
+    linkedSessionIds,
+  )
   const diffs = diffsQuery.data ?? []
   const totals = useMemo(
     () =>
@@ -105,9 +111,7 @@ export function MemoryImpact({ session, linkedSessionIds }: MemoryImpactProps) {
     [activeMemoryType, diffs],
   )
 
-  if (!linkedSessionIds?.length && (!session || session.commit_count <= 0)) {
-    return null
-  }
+  if (!hasMemoryImpact) return null
 
   return (
     <>

@@ -287,23 +287,35 @@ function firstUserTitle(value: unknown): string {
 }
 
 export async function fetchSessionMemoryDiffs(
-  session: SessionMeta,
+  session: SessionMeta | undefined,
+  linkedSessionIds: readonly string[],
 ): Promise<SessionMemoryDiff[]> {
-  const commitCount = Math.max(0, Math.floor(session.commit_count || 0))
-  if (commitCount === 0) return []
-
-  const sessionUri =
-    session.uri?.replace(/\/+$/, '') ||
-    `viking://user/${session.user.user_id}/sessions/${session.session_id}`
-  const archiveIds = Array.from(
-    { length: commitCount },
-    (_, index) => `archive_${String(index + 1).padStart(3, '0')}`,
-  )
-  const results = await mapWithConcurrency(
-    archiveIds,
+  const linkedSessions = await mapWithConcurrency(
+    linkedSessionIds,
     SESSION_ARCHIVE_CONCURRENCY,
-    async (archiveId) => {
-      const archiveUri = `${sessionUri}/history/${archiveId}`
+    async (id) => {
+      try {
+        return await fetchSession(id)
+      } catch (error) {
+        if (isNotFound(error)) return null
+        throw error
+      }
+    },
+  )
+  const archives = [session, ...linkedSessions].flatMap((meta) => {
+    if (!meta || (meta.commit_count || 0) < 1) return []
+    const sessionUri =
+      meta.uri?.replace(/\/+$/, '') ||
+      `viking://user/${meta.user.user_id}/sessions/${meta.session_id}`
+    return Array.from({ length: meta.commit_count }, (_, index) => {
+      const archiveId = `archive_${String(index + 1).padStart(3, '0')}`
+      return { archiveId, archiveUri: `${sessionUri}/history/${archiveId}` }
+    })
+  })
+  const results = await mapWithConcurrency(
+    archives,
+    SESSION_ARCHIVE_CONCURRENCY,
+    async ({ archiveId, archiveUri }) => {
       try {
         const result = await getOvResult<unknown>(
           getContentRead({
@@ -326,38 +338,10 @@ export async function fetchSessionMemoryDiffs(
     },
   )
 
+  const sortField = linkedSessionIds.length > 0 ? 'extractedAt' : 'archiveId'
   return results
-    .flatMap((result) => (result ? [result] : []))
-    .sort((left, right) => right.archiveId.localeCompare(left.archiveId))
-}
-
-export async function fetchConversationMemoryDiffs(
-  session: SessionMeta | undefined,
-  linkedSessionIds: readonly string[],
-): Promise<SessionMemoryDiff[]> {
-  if (linkedSessionIds.length === 0) {
-    return session ? fetchSessionMemoryDiffs(session) : []
-  }
-  const sources = session
-    ? [session.session_id, ...linkedSessionIds]
-    : linkedSessionIds
-  const batches = await mapWithConcurrency(
-    sources,
-    SESSION_ARCHIVE_CONCURRENCY,
-    async (id) => {
-      try {
-        const meta =
-          id === session?.session_id ? session : await fetchSession(id)
-        return await fetchSessionMemoryDiffs(meta)
-      } catch (error) {
-        if (isNotFound(error)) return []
-        throw error
-      }
-    },
-  )
-  return batches
-    .flat()
-    .sort((left, right) => right.extractedAt.localeCompare(left.extractedAt))
+    .filter((diff) => diff !== null)
+    .sort((left, right) => right[sortField].localeCompare(left[sortField]))
 }
 
 export async function addMessage(

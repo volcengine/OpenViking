@@ -5,8 +5,8 @@ import {
   createSession,
   deleteSession,
   fetchBotHealth,
-  fetchConversationMemoryDiffs,
   fetchSession,
+  fetchSessionMemoryDiffs,
   fetchSessionMessages,
   fetchSessions,
 } from '#/features/workbench/sessions/lib/api'
@@ -27,16 +27,6 @@ export function useBotHealth() {
   })
 }
 
-export function useSessionList(includeBotSessionLinks = false) {
-  return useQuery({
-    queryKey: includeBotSessionLinks
-      ? [...SESSIONS_KEY, 'list-with-bot-links']
-      : SESSIONS_KEY,
-    queryFn: () => fetchSessions(includeBotSessionLinks),
-    staleTime: includeBotSessionLinks ? 0 : 30_000,
-  })
-}
-
 /**
  * Session list ordered by recency (newest first).
  *
@@ -45,7 +35,13 @@ export function useSessionList(includeBotSessionLinks = false) {
  * without a timestamp at the bottom.
  */
 export function useSessionListByRecency(includeBotSessionLinks = false) {
-  const query = useSessionList(includeBotSessionLinks)
+  const query = useQuery({
+    queryKey: includeBotSessionLinks
+      ? [...SESSIONS_KEY, 'list-with-bot-links']
+      : SESSIONS_KEY,
+    queryFn: () => fetchSessions(includeBotSessionLinks),
+    staleTime: includeBotSessionLinks ? 0 : 30_000,
+  })
 
   const data = [...(query.data ?? [])].sort((a, b) => {
     const aTime = a.mod_time || ''
@@ -93,7 +89,7 @@ export function useSessionMessages(sessionId: string | undefined) {
 
 export function useSessionMemoryDiffs(
   session: SessionMeta | undefined,
-  enabled = true,
+  enabled: boolean,
   linkedSessionIds: readonly string[] = [],
 ) {
   return useQuery<SessionMemoryDiff[]>({
@@ -105,11 +101,8 @@ export function useSessionMemoryDiffs(
       session?.last_commit_at,
       linkedSessionIds,
     ],
-    queryFn: () => fetchConversationMemoryDiffs(session, linkedSessionIds),
-    enabled:
-      enabled &&
-      (linkedSessionIds.length > 0 ||
-        Boolean(session && session.commit_count > 0)),
+    queryFn: () => fetchSessionMemoryDiffs(session, linkedSessionIds),
+    enabled,
     staleTime: linkedSessionIds.length > 0 ? 0 : 30_000,
   })
 }

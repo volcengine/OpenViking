@@ -29,16 +29,13 @@ export function SessionsPage() {
   const createSession = useCreateSession()
   const { setTitle } = useSessionTitles(identityScopeKey)
   const sessionList = useSessionListByRecency(provider === 'opensource')
-  const { data: sessions, refetch } = sessionList
+  const { data: sessions } = sessionList
   const linkedBotSessionIds = activeSessionId
     ? sessions
         .filter((session) => session.studio_session_id === activeSessionId)
         .map((session) => session.session_id)
         .sort()
     : []
-  const handleExchangeComplete = useCallback(() => {
-    void refetch()
-  }, [refetch])
 
   const handleNewSession = useCallback(async () => {
     const result = await createSession.mutateAsync(undefined)
@@ -94,7 +91,7 @@ export function SessionsPage() {
               <Thread
                 sessionId={activeSessionId}
                 linkedBotSessionIds={linkedBotSessionIds}
-                onExchangeComplete={handleExchangeComplete}
+                onExchangeSettled={sessionList.refetch}
               />
             </div>
           </>
