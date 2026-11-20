@@ -20,7 +20,7 @@ from vikingbot.channels.openapi_models import ChatRequest, ChatResponse, OpenVik
 from vikingbot.compile.models import CompileAccepted
 from vikingbot.config.schema import BotChannelConfig, SessionKey
 from vikingbot.session.manager import Session
-from vikingbot.utils.session_paths import portable_session_name
+from vikingbot.utils.session_paths import openapi_principal_scope, portable_session_name
 
 
 @pytest.fixture
@@ -244,7 +244,7 @@ class TestOpenAPIAuth:
 
         assert created.status_code == 202
         assert status_response.status_code == 200
-        assert service.scope == channel._principal_scope("dev")
+        assert service.scope == openapi_principal_scope("dev")
         assert service.connection is None
         assert runtime_probes == [{}, {}]
 
@@ -264,7 +264,7 @@ class TestOpenAPIAuth:
 
     def test_chat_rejects_second_in_flight_request(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
-        scope = channel._principal_scope("standalone")
+        scope = openapi_principal_scope("standalone")
         storage_key = channel._scoped_session_id(scope, "same-session")
         channel._pending[storage_key] = PendingResponse()
 
@@ -302,7 +302,7 @@ class TestOpenAPIAuth:
             temp_workspace,
             agent_loop=agent_loop,
         )
-        scope = channel._principal_scope("standalone")
+        scope = openapi_principal_scope("standalone")
         storage_key = channel._scoped_session_id(scope, "same-session")
         channel._pending[storage_key] = PendingResponse()
 
@@ -331,7 +331,7 @@ class TestOpenAPIAuth:
             temp_workspace,
             agent_loop=FakeAgentLoop(),
         )
-        scope = channel._principal_scope("standalone")
+        scope = openapi_principal_scope("standalone")
         storage_key = channel._scoped_session_id(scope, "same-session")
         channel._pending[storage_key] = PendingResponse()
         channel._sessions[storage_key] = {
@@ -355,7 +355,7 @@ class TestOpenAPIAuth:
         self, message_bus, temp_workspace
     ):
         channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
-        scope = channel._principal_scope("standalone")
+        scope = openapi_principal_scope("standalone")
         storage_key = channel._scoped_session_id(scope, "order:123")
         session_key = SessionKey(type="cli", channel_id="default", chat_id=storage_key)
 
@@ -371,7 +371,7 @@ class TestOpenAPIAuth:
         channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
         client = _make_client(channel)
         session_id = client.post("/bot/v1/sessions", json={}).json()["session_id"]
-        scope = channel._principal_scope("standalone")
+        scope = openapi_principal_scope("standalone")
         storage_key = channel._scoped_session_id(scope, session_id)
         key = SessionKey(type="cli", channel_id="default", chat_id=storage_key)
         old_session = Session(key=key)
@@ -546,7 +546,7 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
         assert response.json() == {"interrupted": True}
-        expected_scope = channel._principal_scope("standalone")
+        expected_scope = openapi_principal_scope("standalone")
         assert agent_loop.session_key == SessionKey(
             type="cli",
             channel_id="default",
@@ -1521,7 +1521,7 @@ class TestOpenAPIAuth:
 
         async def fake_get_task(task_id, principal_scope):
             assert task_id == "cmp_1"
-            assert principal_scope == channel._principal_scope("openviking:acct:alice")
+            assert principal_scope == openapi_principal_scope(("acct", "alice"))
             return {
                 "task_id": task_id,
                 "status": "running",

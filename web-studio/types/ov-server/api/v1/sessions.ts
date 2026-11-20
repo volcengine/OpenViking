@@ -15,6 +15,7 @@ export type SessionListItem = {
   mod_time: string
   session_id: string
   uri: string
+  studio_session_id?: string
 }
 
 export type SessionDetail = {

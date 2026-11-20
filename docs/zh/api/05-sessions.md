@@ -183,7 +183,7 @@ ov session new
 
 **参数**
 
-无参数。
+- `include_bot_session_links`（可选，默认 `false`）。当 VikingBot 的历史记录和对应的 Studio 会话同时出现在当前用户的列表里时，在 VikingBot 记录上返回 `studio_session_id`。
 
 #### 3. 使用示例
 

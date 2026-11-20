@@ -5,8 +5,8 @@ import {
   createSession,
   deleteSession,
   fetchBotHealth,
+  fetchConversationMemoryDiffs,
   fetchSession,
-  fetchSessionMemoryDiffs,
   fetchSessionMessages,
   fetchSessions,
 } from '#/features/workbench/sessions/lib/api'
@@ -27,11 +27,13 @@ export function useBotHealth() {
   })
 }
 
-export function useSessionList() {
+export function useSessionList(includeBotSessionLinks = false) {
   return useQuery({
-    queryKey: SESSIONS_KEY,
-    queryFn: fetchSessions,
-    staleTime: 30_000,
+    queryKey: includeBotSessionLinks
+      ? [...SESSIONS_KEY, 'list-with-bot-links']
+      : SESSIONS_KEY,
+    queryFn: () => fetchSessions(includeBotSessionLinks),
+    staleTime: includeBotSessionLinks ? 0 : 30_000,
   })
 }
 
@@ -42,8 +44,8 @@ export function useSessionList() {
  * We keep a client-side sort for deterministic display and put sessions
  * without a timestamp at the bottom.
  */
-export function useSessionListByRecency() {
-  const query = useSessionList()
+export function useSessionListByRecency(includeBotSessionLinks = false) {
+  const query = useSessionList(includeBotSessionLinks)
 
   const data = [...(query.data ?? [])].sort((a, b) => {
     const aTime = a.mod_time || ''
@@ -92,6 +94,7 @@ export function useSessionMessages(sessionId: string | undefined) {
 export function useSessionMemoryDiffs(
   session: SessionMeta | undefined,
   enabled = true,
+  linkedSessionIds: readonly string[] = [],
 ) {
   return useQuery<SessionMemoryDiff[]>({
     queryKey: [
@@ -100,10 +103,14 @@ export function useSessionMemoryDiffs(
       'memory-diffs',
       session?.commit_count,
       session?.last_commit_at,
+      linkedSessionIds,
     ],
-    queryFn: () => fetchSessionMemoryDiffs(session!),
-    enabled: Boolean(enabled && session && session.commit_count > 0),
-    staleTime: 30_000,
+    queryFn: () => fetchConversationMemoryDiffs(session, linkedSessionIds),
+    enabled:
+      enabled &&
+      (linkedSessionIds.length > 0 ||
+        Boolean(session && session.commit_count > 0)),
+    staleTime: linkedSessionIds.length > 0 ? 0 : 30_000,
   })
 }
 

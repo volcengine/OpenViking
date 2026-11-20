@@ -184,7 +184,7 @@ List all sessions for the current user. Returns session IDs and URI info for fur
 
 **Parameters**
 
-None.
+- `include_bot_session_links` (optional, default `false`): Include `studio_session_id` on a VikingBot history row when its Studio conversation is also in the current user's list.
 
 #### 3. Usage Examples
 

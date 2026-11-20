@@ -45,6 +45,7 @@ from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
+from vikingbot.utils.session_paths import DEFAULT_OPENAPI_CHANNEL_ID, openapi_principal_scope
 
 DEFAULT_OPENVIKING_AGENT_ID = "web-playground"
 OPENVIKING_AUTH_TIMEOUT_SECONDS = 5.0
@@ -146,7 +147,7 @@ class OpenAPIChannelConfig(BaseChannelConfig):
     type: str = "cli"
     allow_from: list[str] = []
     max_concurrent_requests: int = 100
-    _channel_id: str = "default"
+    _channel_id: str = DEFAULT_OPENAPI_CHANNEL_ID
 
     def channel_id(self) -> str:
         return self._channel_id
@@ -1208,7 +1209,7 @@ class OpenAPIChannel(BaseChannel):
     ) -> tuple[dict[str, Any] | None, str]:
         auth_mode = self._ov_server_auth_mode()
         if not auth_mode:
-            return None, self._principal_scope("standalone")
+            return None, openapi_principal_scope("standalone")
         if auth_mode == "dev":
             if not self._is_safe_dev_boundary():
                 raise HTTPException(
@@ -1216,7 +1217,7 @@ class OpenAPIChannel(BaseChannel):
                     detail="OpenViking dev auth can only be used when gateway and OpenViking server are localhost",
                 )
             await self._assert_runtime_upstream_auth_mode({})
-            return None, self._principal_scope("dev")
+            return None, openapi_principal_scope("dev")
         if auth_mode == "api_key":
             if not self._has_openviking_auth_headers(http_request):
                 raise HTTPException(status_code=401, detail="OpenViking API key header required")
@@ -1243,10 +1244,6 @@ class OpenAPIChannel(BaseChannel):
         _connection, scope = await self._resolve_request_identity(http_request, auth)
         return scope
 
-    @staticmethod
-    def _principal_scope(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
-
     def _connection_principal_scope(self, connection: Any) -> str:
         if isinstance(connection, OpenVikingConnection):
             values = connection.model_dump(exclude_none=True)
@@ -1261,7 +1258,7 @@ class OpenAPIChannel(BaseChannel):
                 status_code=401,
                 detail="OpenViking identity did not include account_id and user_id",
             )
-        return self._principal_scope(f"openviking:{account_id}:{user_id}")
+        return openapi_principal_scope((account_id, user_id))
 
     def _scoped_session_id(self, principal_scope: str, session_id: str) -> str:
         """Resolve the durable storage key for one public session ID."""
@@ -1909,7 +1906,7 @@ class OpenAPIChannel(BaseChannel):
             channel_id=channel_id,
             chat_id=storage_key,
         )
-        if request._principal_scope == self._principal_scope("standalone"):
+        if request._principal_scope == openapi_principal_scope("standalone"):
             legacy_key = SessionKey(
                 type=session_type,
                 channel_id=channel_id,

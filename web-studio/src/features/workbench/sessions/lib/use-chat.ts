@@ -171,6 +171,7 @@ export interface UseChatOptions {
   initialMessages?: Message[]
   /** Whether to persist messages via the sessions API after each exchange. */
   persistMessages?: boolean
+  onExchangeComplete?: () => void
 }
 
 export interface UseChatReturn {
@@ -195,6 +196,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     sessionId,
     initialMessages,
     persistMessages = true,
+    onExchangeComplete,
   } = options
 
   const [messages, setMessages] = useState<Message[]>(initialMessages ?? [])
@@ -908,8 +910,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
         await persistence
 
+        if (!isCurrent()) return
+        onExchangeComplete?.()
+
         // Generate session title on first exchange
-        if (isCurrent() && sessionId && isFirstExchange) {
+        if (sessionId && isFirstExchange) {
           // Immediate: use first user message as temp title
           setSessionTitle(
             identityScopeKey,
@@ -952,7 +957,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
       }
     },
-    [identityScopeKey, persistMessages, queuePersistence, sessionId],
+    [
+      identityScopeKey,
+      onExchangeComplete,
+      persistMessages,
+      queuePersistence,
+      sessionId,
+    ],
   )
 
   return {

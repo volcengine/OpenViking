@@ -22,6 +22,8 @@ interface ThreadProps {
   sessionId: string
   draft?: boolean
   onPersisted?: () => void
+  linkedBotSessionIds?: readonly string[]
+  onExchangeComplete?: () => void
 }
 
 export function Thread(props: ThreadProps) {
@@ -31,7 +33,13 @@ export function Thread(props: ThreadProps) {
   )
 }
 
-function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
+function SessionThread({
+  sessionId,
+  draft = false,
+  onPersisted,
+  linkedBotSessionIds,
+  onExchangeComplete,
+}: ThreadProps) {
   const { t } = useTranslation('sessions')
   const service = useStudioService()
   const canChat = service.ready && service.provider === 'opensource'
@@ -63,6 +71,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
     sessionId,
     initialMessages: historyMessages,
     persistMessages: true,
+    onExchangeComplete,
   })
 
   const isStreaming = chat.status === 'streaming'
@@ -158,7 +167,10 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
             : title || sessionId}
         </h2>
         {service.provider === 'opensource' ? (
-          <MemoryImpact session={session} />
+          <MemoryImpact
+            session={session}
+            linkedSessionIds={linkedBotSessionIds}
+          />
         ) : null}
       </div>
 

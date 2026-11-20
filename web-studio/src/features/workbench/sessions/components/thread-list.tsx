@@ -15,8 +15,8 @@ import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-
 import {
   useCreateSession,
   useDeleteSession,
-  useSessionListByRecency,
 } from '#/features/workbench/sessions/lib/use-sessions'
+import type { useSessionListByRecency } from '#/features/workbench/sessions/lib/use-sessions'
 import { normalizeOvClientError } from '#/shared/api/ov-client/index'
 import { cn } from '#/shared/lib/utils'
 import {
@@ -34,21 +34,29 @@ import { Button } from '#/shared/ui/button'
 interface ThreadListProps {
   activeSessionId?: string
   className?: string
+  sessionList: ReturnType<typeof useSessionListByRecency>
 }
 
-export function ThreadList({ activeSessionId, className }: ThreadListProps) {
+export function ThreadList({
+  activeSessionId,
+  className,
+  sessionList,
+}: ThreadListProps) {
   const { i18n, t } = useTranslation('sessions')
   const { provider } = useStudioService()
   const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
   const {
-    data: sessions,
+    data: sessionRecords,
     error: listError,
     isError,
     isFetching,
     isPending,
     refetch,
-  } = useSessionListByRecency()
+  } = sessionList
+  const sessions = sessionRecords.filter(
+    (session) => !session.studio_session_id,
+  )
   const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()

@@ -11,6 +11,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
+from vikingbot.utils.session_paths import openapi_principal_scope, portable_path_component
 
 from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
@@ -165,13 +166,40 @@ async def test_create_session(client: httpx.AsyncClient, service):
 
 
 async def test_list_sessions(client: httpx.AsyncClient):
-    # Create a session first
-    await client.post("/api/v1/sessions", json={})
+    studio_id = "vikingbot-web-73435d4e-2a19b5d9-f8c3-4397-83fb-a7c20f06b714"
+    prefix = f"cli__default__{openapi_principal_scope('dev')}:"
+    logical_id = prefix + studio_id
+    generated = logical_id + ":00112233445566778899aabbccddeeff"
+    paired = {
+        portable_path_component(logical_id),
+        portable_path_component(generated + "-01234567"),
+        logical_id,
+    }
+    unpaired = {
+        portable_path_component(prefix + "vikingbot-web-00000000-0000-4000-8000-000000000001"),
+        portable_path_component(
+            f"cli__default__{openapi_principal_scope(('other', 'user'))}:{studio_id}"
+        ),
+        portable_path_component(logical_id).split("~")[0] + "~" + "0" * 16,
+        "regular-session",
+    }
+    expected_ids = {studio_id} | paired | unpaired
+    for session_id in expected_ids:
+        created = await client.post("/api/v1/sessions", json={"session_id": session_id})
+        assert created.status_code == 200, created.text
+
     resp = await client.get("/api/v1/sessions")
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert isinstance(body["result"], list)
+    assert {row["session_id"] for row in resp.json()["result"]} == expected_ids
+    assert all("studio_session_id" not in row for row in resp.json()["result"])
+
+    resp = await client.get("/api/v1/sessions", params={"include_bot_session_links": True})
+    assert resp.status_code == 200
+    rows = resp.json()["result"]
+    assert {row["session_id"] for row in rows} == expected_ids
+    assert {
+        row["session_id"]: row["studio_session_id"] for row in rows if "studio_session_id" in row
+    } == dict.fromkeys(paired, studio_id)
 
 
 async def test_get_session(client: httpx.AsyncClient):
@@ -779,8 +807,7 @@ async def test_auto_created_session_uses_default_policy_when_server_default_enab
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert session_resp.status_code == 200
     assert (
-        session_resp.json()["result"]["auto_commit_policy"]
-        == AutoCommitPolicy.default().to_dict()
+        session_resp.json()["result"]["auto_commit_policy"] == AutoCommitPolicy.default().to_dict()
     )
 
 

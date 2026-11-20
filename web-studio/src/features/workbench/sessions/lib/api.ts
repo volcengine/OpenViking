@@ -45,8 +45,16 @@ import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
 // Session CRUD
 // ---------------------------------------------------------------------------
 
-export async function fetchSessions(): Promise<SessionListItem[]> {
-  const result = await getOvResult<SessionListItem[]>(getSessions())
+export async function fetchSessions(
+  includeBotSessionLinks = false,
+): Promise<SessionListItem[]> {
+  const result = await getOvResult<SessionListItem[]>(
+    getSessions(
+      includeBotSessionLinks
+        ? { query: { include_bot_session_links: true } }
+        : undefined,
+    ),
+  )
   return Array.isArray(result) ? result : []
 }
 
@@ -144,7 +152,7 @@ function deduplicateMessages(messages: Message[]): Message[] {
 const SESSION_ARCHIVE_CONCURRENCY = 4
 
 async function mapWithConcurrency<T, TResult>(
-  items: T[],
+  items: readonly T[],
   concurrency: number,
   mapper: (item: T, index: number) => Promise<TResult>,
 ): Promise<TResult[]> {
@@ -165,7 +173,7 @@ async function mapWithConcurrency<T, TResult>(
   return results
 }
 
-function isMissingArchive(error: unknown): boolean {
+function isNotFound(error: unknown): boolean {
   const normalized = normalizeOvClientError(error)
   return normalized.statusCode === 404 || normalized.code === 'NOT_FOUND'
 }
@@ -214,7 +222,7 @@ export async function fetchSessionMessages(
               (await fetchSessionArchive(sessionId, archiveId)).messages,
             )
       } catch (error) {
-        if (isMissingArchive(error)) return null
+        if (isNotFound(error)) return null
         throw error
       }
     },
@@ -251,7 +259,7 @@ export async function fetchSessionFirstTitle(
         const title = firstUserTitle(archive.messages)
         if (title) return title
       } catch (error) {
-        if (!isMissingArchive(error)) throw error
+        if (!isNotFound(error)) throw error
       }
     }
     return firstUserTitle((await fetchSessionContext(sessionId)).messages)
@@ -295,6 +303,7 @@ export async function fetchSessionMemoryDiffs(
     archiveIds,
     SESSION_ARCHIVE_CONCURRENCY,
     async (archiveId) => {
+      const archiveUri = `${sessionUri}/history/${archiveId}`
       try {
         const result = await getOvResult<unknown>(
           getContentRead({
@@ -302,15 +311,16 @@ export async function fetchSessionMemoryDiffs(
               limit: -1,
               offset: 0,
               raw: true,
-              uri: `${sessionUri}/history/${archiveId}/memory_diff.json`,
+              uri: `${archiveUri}/memory_diff.json`,
             } as Parameters<typeof getContentRead>[0]['query'] & {
               raw?: boolean
             },
           }),
         )
-        return parseSessionMemoryDiff(result, archiveId)
+        const diff = parseSessionMemoryDiff(result, archiveId)
+        return diff && { ...diff, archiveUri: diff.archiveUri || archiveUri }
       } catch (error) {
-        if (isMissingArchive(error)) return null
+        if (isNotFound(error)) return null
         throw error
       }
     },
@@ -319,6 +329,35 @@ export async function fetchSessionMemoryDiffs(
   return results
     .flatMap((result) => (result ? [result] : []))
     .sort((left, right) => right.archiveId.localeCompare(left.archiveId))
+}
+
+export async function fetchConversationMemoryDiffs(
+  session: SessionMeta | undefined,
+  linkedSessionIds: readonly string[],
+): Promise<SessionMemoryDiff[]> {
+  if (linkedSessionIds.length === 0) {
+    return session ? fetchSessionMemoryDiffs(session) : []
+  }
+  const sources = session
+    ? [session.session_id, ...linkedSessionIds]
+    : linkedSessionIds
+  const batches = await mapWithConcurrency(
+    sources,
+    SESSION_ARCHIVE_CONCURRENCY,
+    async (id) => {
+      try {
+        const meta =
+          id === session?.session_id ? session : await fetchSession(id)
+        return await fetchSessionMemoryDiffs(meta)
+      } catch (error) {
+        if (isNotFound(error)) return []
+        throw error
+      }
+    },
+  )
+  return batches
+    .flat()
+    .sort((left, right) => right.extractedAt.localeCompare(left.extractedAt))
 }
 
 export async function addMessage(
