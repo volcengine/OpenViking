@@ -35,6 +35,7 @@ function ConsoleView({
   command,
   chatOptions,
   taskService,
+  commandOptions,
   slots,
   labels: overrides,
   className,
@@ -51,6 +52,7 @@ function ConsoleView({
     scopeKey,
     requestOptions,
     taskService,
+    commandOptions,
     onModeChange,
   });
   const commandRecords = useMemo(

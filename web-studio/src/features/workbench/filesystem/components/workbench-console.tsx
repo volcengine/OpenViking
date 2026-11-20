@@ -29,6 +29,7 @@ export function WorkbenchConsole({
   mode,
   onModeChange,
   onOpenResource,
+  onOpenLocalResourceImport,
   onFilesystemWrite,
   toolbar,
 }: {
@@ -36,6 +37,7 @@ export function WorkbenchConsole({
   mode: ConsoleMode
   onModeChange?: (mode: ConsoleMode) => void
   onOpenResource: ResourceOpenHandler
+  onOpenLocalResourceImport?: () => void
   onFilesystemWrite?: () => void
   toolbar: ReactNode
 }) {
@@ -69,6 +71,8 @@ export function WorkbenchConsole({
     [invalidateAll, onFilesystemWrite, queryClient, identityScopeKey],
   )
 
+  const commandOptions = { onOpenLocalResourceImport }
+
   return (
     <OpenVikingProvider baseURL="" fetch={request}>
       <Console
@@ -78,6 +82,7 @@ export function WorkbenchConsole({
         onModeChange={onModeChange}
         conversation={conversation}
         scopeKey={identityScopeKey}
+        commandOptions={commandOptions}
         slots={{ toolbar }}
         onOpenUri={(uri) => {
           if (/^https?:\/\//i.test(uri)) {
