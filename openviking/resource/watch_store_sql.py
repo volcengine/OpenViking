@@ -405,7 +405,7 @@ class SQLWatchStore(WatchStore):
             async with session.begin():
                 yield session
 
-    # 鈹€鈹€ Row mapping 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # ── Row mapping ─────────────────────────────────────────────────────
 
     @property
     def _scope(self) -> Any:
@@ -486,7 +486,7 @@ class SQLWatchStore(WatchStore):
     async def _rows(self, session: Any, statement: Any) -> list[Any]:
         return list((await session.execute(statement)).mappings().all())
 
-    # 鈹€鈹€ API reads and writes 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # ── API reads and writes ────────────────────────────────────────────
 
     async def get_state(self, task_id: str) -> Optional[WatchState]:
         c = self._tasks.c
@@ -835,7 +835,7 @@ class SQLWatchStore(WatchStore):
             )
         )
 
-    # 鈹€鈹€ Run occupancy 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # ── Run occupancy ───────────────────────────────────────────────────
 
     @staticmethod
     def _candidate(row: Any) -> WatchCandidate:
@@ -969,6 +969,7 @@ class SQLWatchStore(WatchStore):
                     update={"run_source_checkpoint_version": task.source_checkpoint_version}
                 ),
                 started_at=started_at,
+                manual=manual,
             )
 
     async def attach_task(
@@ -1042,10 +1043,13 @@ class SQLWatchStore(WatchStore):
             if not rows:
                 return False
             payload = dict(rows[0]["payload"] or {})
-            if result.source_checkpoint is not None and payload.get(
-                "run_source_checkpoint_version"
-            ) == payload.get("source_checkpoint_version", 0):
-                payload["source_checkpoint"] = result.source_checkpoint
+            if payload.get("run_source_checkpoint_version") == payload.get(
+                "source_checkpoint_version", 0
+            ):
+                if result.recovery_attempts is not None:
+                    payload["recovery_attempts"] = result.recovery_attempts
+                if result.source_checkpoint is not None:
+                    payload["source_checkpoint"] = result.source_checkpoint
             payload["run_source_checkpoint_version"] = None
             values["payload"] = payload
             changed = (
@@ -1119,7 +1123,7 @@ class SQLWatchStore(WatchStore):
             )
             return bool(rows)
 
-    # 鈹€鈹€ Target transfers (caller holds the transfer's PathLock) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    # ── Target transfers (caller holds the transfer's PathLock) ─────────
 
     async def _plan_move(
         self,
